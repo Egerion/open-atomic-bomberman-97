@@ -1,0 +1,78 @@
+// Initial match state construction (Simulation constructor backend).
+
+#include <algorithm>
+#include <utility>
+#include <vector>
+
+#include "bomber/sim/rng.hpp"
+#include "bomber/sim/simulation.hpp"
+#include "grid.hpp"
+#include "systems/powerups.hpp"
+
+namespace bomber::sim::detail {
+
+State build_state(const MatchConfig& config) {
+    State s;
+    s.rng = config.seed;
+    s.tuning = config.tuning;
+    s.ticks_left = config.tuning.game_seconds * kTicksPerSecond;
+    s.cells = config.cells;
+    for (auto& row : s.hidden) row.fill(PowerupType::None);
+    for (auto& row : s.floor) row.fill(PowerupType::None);
+
+    PowerupSystem powerups{s};
+
+    for (int i = 0; i < config.player_count && i < kMaxPlayers; ++i) {
+        if (i >= static_cast<int>(config.spawns.size())) break;
+        Player& p = s.players[i];
+        p.present = true;
+        p.alive = true;
+        int tx = std::clamp(config.spawns[i].x, 0, kGridWidth - 1);
+        int ty = std::clamp(config.spawns[i].y, 0, kGridHeight - 1);
+        // The original clears the spawn tile and its orthogonal neighbours
+        // so every player starts with room to move.
+        static constexpr int ndx[] = {0, 1, -1, 0, 0}, ndy[] = {0, 0, 0, 1, -1};
+        for (int n = 0; n < 5; ++n) {
+            int cx2 = tx + ndx[n], cy2 = ty + ndy[n];
+            if (cx2 >= 0 && cx2 < kGridWidth && cy2 >= 0 && cy2 < kGridHeight &&
+                s.cells[cy2][cx2] == Cell::Brick)
+                s.cells[cy2][cx2] = Cell::Blank;
+        }
+        p.x = grid::tile_center_x(tx);
+        p.y = grid::tile_center_y(ty);
+        p.speed = s.tuning.start_speed;
+        p.max_bombs = s.tuning.start_with[static_cast<int>(PowerupType::ExtraBomb)];
+        p.flame = s.tuning.start_with[static_cast<int>(PowerupType::Flame)];
+        for (int k = 0; k < kPowerupKinds; ++k)
+            if (config.born_with[k]) powerups.apply(p, static_cast<PowerupType>(k));
+    }
+
+    // Hide powerups under randomly chosen bricks (seeded RNG — deterministic).
+    std::vector<std::pair<int, int>> bricks;
+    for (int y = 0; y < kGridHeight; ++y)
+        for (int x = 0; x < kGridWidth; ++x)
+            if (s.cells[y][x] == Cell::Brick) bricks.emplace_back(x, y);
+
+    for (int k = 0; k < kPowerupKinds; ++k) {
+        if (config.forbidden[k]) continue;
+        std::int32_t want = config.spawn_override[k] > MatchConfig::kNoOverride
+                                ? config.spawn_override[k]
+                                : s.tuning.spawn_counts[k];
+        std::int32_t count = want;
+        if (want < 0) {
+            // Negative N: |N| attempts, each with a 1-in-10 chance.
+            count = 0;
+            for (int i = 0; i < -want; ++i)
+                if (random_below(s, 10) == 0) ++count;
+        }
+        for (int i = 0; i < count && !bricks.empty(); ++i) {
+            std::uint32_t pick = random_below(s, static_cast<std::uint32_t>(bricks.size()));
+            auto [bx, by] = bricks[pick];
+            bricks.erase(bricks.begin() + pick);
+            s.hidden[by][bx] = static_cast<PowerupType>(k);
+        }
+    }
+    return s;
+}
+
+}  // namespace bomber::sim::detail

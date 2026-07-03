@@ -1,0 +1,55 @@
+# ANI format (`DATA/ANI/*.ANI`)
+
+Custom chunked container, magic `CHFILEANI ` (10 bytes). Derived empirically from all 95 original files (survey: 2327 frames, 249 sequences, zero parse errors) with structural hints from [ab_aniex](https://github.com/mmatyas/ab_aniex). All integers little-endian.
+
+## Layout
+
+```
+File header:  "CHFILEANI " | u32 payload_len | u16 file_id
+Item header:  char tag[4]  | u32 payload_len | u16 item_id      (payload follows)
+```
+
+Top-level items: `HEAD`(48) · `PAL `(8192) · `TPAL`(1028) · `CBOX`(4: u16 cell_w, u16 cell_h) · `FRAM`×N · `SEQ `×M. `PAL `/`TPAL` semantics unknown, unused so far.
+
+### FRAM (top-level) — one frame
+
+Children: `HEAD`(2: `03 64`), `FNAM` (NUL-terminated original TGA name), `CIMG` (image).
+
+### CIMG
+
+```
+u16 type        4 = 16bpp X1R5G5B5 (2299/2327), 11 = 8bpp paletted (28/2327)
+u16 unknown
+u32 additional_size    24 = no palette; >=32: palette block present, palette_size = additional_size - 32
+u32 unknown
+u16 width, height
+u16 hotspot_x, hotspot_y
+u16 key_color          transparent pixel value (type 4) / index (type 11)
+u16 unknown
+[if palette: u32 unknown ×2, then palette_size bytes = 256 × RGBx]
+u16 unknown ×2
+u32 compressed_size    includes these 12 special-header bytes; data = compressed_size - 12
+u32 uncompressed_size  == width*height*bytes_per_pixel
+data[...]              TGA type-10 style RLE, optional 1 terminator byte
+```
+
+RLE: packet header byte `b`; count = `(b & 0x7F) + 1`; if `b & 0x80` one pixel value repeated count times, else count literal pixel values. Pixel = u16 (type 4) or u8 (type 11).
+
+### SEQ — one named animation
+
+Children: `HEAD`(96: NUL-terminated name at offset 0, remainder uninitialized stack garbage + unknown fields), then `STAT`×K (one per animation step).
+
+### STAT — one step
+
+Children: `HEAD`(46: u16 field0 — `0x001E` or `0xFFFF`, timing-related, semantics TBD; rest zero), `FRAM`(12, **leaf**, not the top-level container):
+
+```
+u16 unknown (=1)
+u16 frame_index        into top-level FRAM order
+s16 offset_x, offset_y per-step blit offset
+u32 unknown (=0)
+```
+
+## Rendering a step
+
+Blit `frames[frame_index]` at `pos - hotspot + offset`, treating `key_color` pixels as transparent. X1R5G5B5 → RGB8 via `(c5 << 3) | (c5 >> 2)`.

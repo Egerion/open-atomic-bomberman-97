@@ -1,0 +1,29 @@
+build/
+out/
+.vs/
+.idea/
+.cache/
+*.user
+CMakeUserPresets.json
+
+# Never commit original Atomic Bomberman assets (Interplay/Konami property).
+# The engine reads them from your own game install (see README).
+DATA/
+*.ANI
+*.RSS
+*.PCX
+*.SCH
+extracted/
+
+# Reverse-engineering working material — facts only live in docs/re/*.md.
+# The binary, IDA database, and decompiler output stay out of the repo.
+*.exe
+*.EXE
+*.idb
+*.i64
+*.id0
+*.id1
+*.id2
+*.nam
+*.til
+pseudo.c

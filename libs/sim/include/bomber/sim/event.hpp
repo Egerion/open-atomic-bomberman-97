@@ -1,0 +1,38 @@
+#pragma once
+
+#include <cstdint>
+
+namespace bomber::sim {
+
+// Something noteworthy that happened during a tick. Events are rebuilt every
+// tick and are NOT part of the hashed state — they are derived outputs for
+// the presentation layer (sounds, effects) and for tests.
+struct Event {
+    enum class Type : std::uint8_t {
+        BombPlaced,
+        BombKicked,
+        Explosion,
+        BrickDestroyed,
+        PowerupRevealed,
+        PowerupPicked,
+        PowerupBurned,
+        PlayerDied,
+        TimeUp,
+        Hurry,
+        WallClosed,
+        BombPunched,
+        BombBounced,
+        BombGrabbed,
+        BombThrown,
+        HeadHit,
+        Infected,     // picked up / caught a disease (data = Disease kind)
+        BombStopped,  // kicked bomb hit an obstacle and stopped (SOUNDLST 130)
+        JellyBounced, // jelly bomb reversed off an obstacle while sliding (SOUNDLST 135)
+    };
+    Type type{};
+    std::int8_t player = -1;  // acting/affected player, -1 if n/a
+    std::int8_t x = -1, y = -1;
+    std::int8_t data = 0;  // powerup kind for the powerup events
+};
+
+}  // namespace bomber::sim

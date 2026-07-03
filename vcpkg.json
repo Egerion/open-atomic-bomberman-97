@@ -1,0 +1,8 @@
+{
+  "name": "open-bomberman",
+  "version-string": "0.1.0",
+  "description": "Clean-room modern C++ rewrite of Atomic Bomberman (1997)",
+  "dependencies": [
+    "sdl3"
+  ]
+}

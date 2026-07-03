@@ -1,0 +1,10 @@
+# Matches the project's established style — see CLAUDE.md "Code style".
+BasedOnStyle: Google
+IndentWidth: 4
+ColumnLimit: 100
+AccessModifierOffset: -4
+DerivePointerAlignment: false
+PointerAlignment: Left
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortCaseLabelsOnASingleLine: true
+IncludeBlocks: Preserve
