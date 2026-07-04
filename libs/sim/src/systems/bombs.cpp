@@ -16,21 +16,47 @@ void BombSystem::place(Player& p, std::uint8_t owner, int tx, int ty) {
     b.owner = owner;
     b.x = grid::tile_center_x(tx);
     b.y = grid::tile_center_y(ty);
-    if (p.trigger) {
+    // Bomb kind is exclusive and gated (sub_41EB13): jelly sets kind 2, then the
+    // trigger branch OVERRIDES to kind 1 only while the player still has trigger
+    // allowance (+85 < +86 max_bombs), consuming one (++85). Once the allowance
+    // is spent the trigger flag is ignored and this becomes a normal timed bomb
+    // (#9 Trigger allowance — the original never blocks placement, it downgrades
+    // the bomb). The +85 counter is refilled only by the next Trigger pickup.
+    const bool make_trigger = p.trigger && p.trigger_placed < p.max_bombs;
+    if (make_trigger) {
+        ++p.trigger_placed;
         b.fuse = -1;
     } else {
         b.fuse = s.tuning.fuse_frames;
         if (p.sick(Disease::ShortFuse)) b.fuse = std::max(1, b.fuse / 3);
     }
+    // Flame reach (sub_41EB13 ordering): short-flame forces 1, then goldflame
+    // (+94) OVERRIDES to max(gridW,gridH) — so goldflame beats short-flame. The
+    // literal max(cols,rows) replaces our old flame=99 sentinel (#10 Goldflame).
     b.flame = p.sick(Disease::ShortFlame) ? 1 : p.flame;
-    // Bomb kind is exclusive in the original (sub_41EB13): the trigger branch
-    // overrides the jelly flag, so a trigger bomb never bounces.
-    b.jelly = p.jelly && !p.trigger;
-    b.trigger = p.trigger;
+    if (p.goldflame) b.flame = std::max(kGridWidth, kGridHeight);
+    b.jelly = p.jelly && !make_trigger;
+    b.trigger = make_trigger;
+    // Duds (sub_422EDE): only regular bombs can fizzle, and only while the
+    // global gate is open; the gate re-arms base + rand(spread) ticks ahead
+    // BEFORE the 1-in-N roll (sub_422C13 runs first) — RNG order contract.
+    if (!b.trigger && !b.jelly && s.tick >= s.dud_gate) {
+        s.dud_gate = s.tick + static_cast<std::uint64_t>(s.tuning.dud_gate_base) +
+                     random_below(s, static_cast<std::uint32_t>(
+                                         std::max<std::int32_t>(1, s.tuning.dud_gate_rand)));
+        if (random_below(s, static_cast<std::uint32_t>(
+                                std::max<std::int32_t>(1, s.tuning.dud_chance))) == 0)
+            b.dud_left = s.tuning.dud_frames;
+    }
     ++p.bombs_placed;
     s.bombs.push_back(b);
+    // Diarrhea/super players drop with a wet "poops" splat: sub_41F29B's v112
+    // branch plays a random SOUNDLST 550-554 instead of the normal drop 100/101.
+    // The flag rides in the (unhashed) event data for the SoundDirector.
+    const bool poop = p.sick(Disease::Diarrhea) || p.sick(Disease::Super);
     s.events.push_back({Event::Type::BombPlaced, static_cast<std::int8_t>(owner),
-                        static_cast<std::int8_t>(tx), static_cast<std::int8_t>(ty), 0});
+                        static_cast<std::int8_t>(tx), static_cast<std::int8_t>(ty),
+                        static_cast<std::int8_t>(poop ? 1 : 0)});
 }
 
 void BombSystem::drop(Player& p, std::uint8_t owner) {
@@ -68,12 +94,20 @@ void BombSystem::launch(Bomb& b, Direction d, int tiles, std::int32_t arc) {
 }
 
 void BombSystem::try_punch(Player& p, std::uint8_t who) {
+    // sub_424A50 (the +91 punch-glove handler): the glove ALWAYS swings — the
+    // caller (sub_41F29B) sets the punch anim state 2 whenever this returns,
+    // and it returns unconditionally. Only the bomb launch and the SOUNDLST
+    // 150 SFX (sub_427961(150)) live inside `if (bomb ahead)`. So a press with
+    // no bomb in front still animates, but is silent and launches nothing.
+    // We emit BombPunched every press to drive the swing pose, and flag in the
+    // (unhashed) event data whether a bomb was actually hit so the
+    // SoundDirector only plays the "kbomb" hit sound in that case.
     int tx = p.tile_x() + grid::dir_dx(p.facing), ty = p.tile_y() + grid::dir_dy(p.facing);
     Bomb* b = grid::bomb_at(s_, tx, ty);
-    if (!b) return;
-    launch(*b, p.facing, 3, s_.tuning.punch_arc_first);
+    if (b) launch(*b, p.facing, 3, s_.tuning.punch_arc_first);
     s_.events.push_back({Event::Type::BombPunched, static_cast<std::int8_t>(who),
-                         static_cast<std::int8_t>(tx), static_cast<std::int8_t>(ty), 0});
+                         static_cast<std::int8_t>(tx), static_cast<std::int8_t>(ty),
+                         static_cast<std::int8_t>(b ? 1 : 0)});
 }
 
 bool BombSystem::try_grab(Player& p, int who) {
@@ -122,7 +156,7 @@ bool BombSystem::detonate_triggered(int owner) {
     return false;
 }
 
-void BombSystem::try_kick(Player& p, Direction d) {
+void BombSystem::try_kick(Player& p, Direction d, int who) {
     if (!p.kick) return;
     int tx = p.tile_x() + grid::dir_dx(d), ty = p.tile_y() + grid::dir_dy(d);
     Bomb* b = grid::bomb_at(s_, tx, ty);
@@ -131,8 +165,8 @@ void BombSystem::try_kick(Player& p, Direction d) {
     if (!grid::tile_open(s_, nx, ny) || grid::bomb_at(s_, nx, ny)) return;
     b->moving = true;
     b->dir = d;
-    s_.events.push_back({Event::Type::BombKicked, -1, static_cast<std::int8_t>(tx),
-                         static_cast<std::int8_t>(ty), 0});
+    s_.events.push_back({Event::Type::BombKicked, static_cast<std::int8_t>(who),
+                         static_cast<std::int8_t>(tx), static_cast<std::int8_t>(ty), 0});
 }
 
 void BombSystem::fly(Bomb& b) {
@@ -187,11 +221,21 @@ void BombSystem::fly(Bomb& b) {
     b.flying = false;
 }
 
-void BombSystem::slide(Bomb& b) {
+void BombSystem::slide(std::size_t index) {
     State& s = s_;
+    Bomb& b = s.bombs[index];
+    // Kicked-bomb speed is the fixed VALUELST id 300 (sub_42464B sets bomb
+    // +112 = getvalue(300)); NOT a per-player base — confirmed faithful (#8).
     Fixed dist = s.tuning.kicked_bomb_speed;
     while (dist > 0 && b.moving) {
         int tx = b.tile_x(), ty = b.tile_y();
+        // Sliding into a flame explodes the bomb (sub_42331C checks sub_42708D
+        // per pixel-step; our once-per-tile-entry check catches the same case).
+        // #8 gap 1: previously the bomb just kept sliding through flame.
+        if (grid::in_grid(tx, ty) && s.flame[ty][tx] > 0) {
+            flames_.explode(index);
+            return;
+        }
         Fixed cx = grid::tile_center_x(tx), cy = grid::tile_center_y(ty);
         Fixed axis = (grid::dir_dx(b.dir) != 0) ? b.x : b.y;
         Fixed center = (grid::dir_dx(b.dir) != 0) ? cx : cy;
@@ -199,6 +243,13 @@ void BombSystem::slide(Bomb& b) {
 
         Fixed to_center = (center - axis) * sign;
         if (to_center <= 0) {
+            // NOTE (#8 gap 2): the original's mid-slide re-steer (sub_42331C:
+            // at a tile centre it re-reads sub_405654's actor godir) redirects
+            // the bomb off a DIRARROW / conveyor stage actor, NOT a resting
+            // player (sub_405654 scans the level-actor registry dword_45E0A8 —
+            // type 0 = dirarrow, type 2 = conveyor). We do not model dirarrows
+            // yet, so there is nothing to re-steer from; this belongs to the
+            // conveyor/arrow work (ROADMAP #7). No player re-steer is faithful.
             int nx = tx + grid::dir_dx(b.dir), ny = ty + grid::dir_dy(b.dir);
             bool blocked = !grid::tile_open(s, nx, ny) || grid::bomb_at(s, nx, ny) != nullptr;
             for (const auto& pl : s.players)
@@ -237,17 +288,26 @@ void BombSystem::slide(Bomb& b) {
 }
 
 void BombSystem::advance_bombs() {
-    for (auto& b : s_.bombs) {
+    for (std::size_t i = 0; i < s_.bombs.size(); ++i) {
+        Bomb& b = s_.bombs[i];
         if (!b.active) continue;
         if (b.flying) fly(b);
-        else if (b.moving) slide(b);
+        else if (b.moving) slide(i);  // by index: a slide into flame detonates it
     }
 }
 
 void BombSystem::tick_fuses() {
     for (std::size_t i = 0; i < s_.bombs.size(); ++i) {
         Bomb& b = s_.bombs[i];
-        if (b.active && !b.flying && b.fuse > 0 && --b.fuse == 0) flames_.explode(i);
+        if (!b.active) continue;
+        // A fizzling dud counts down instead of its fuse (the original's dud
+        // window is measured by the always-running anim counter, and the fuse
+        // gate skips state 2 — sub_42331C).
+        if (b.dud_left > 0) {
+            --b.dud_left;
+            continue;
+        }
+        if (!b.flying && b.fuse > 0 && --b.fuse == 0) flames_.explode(i);
     }
 }
 

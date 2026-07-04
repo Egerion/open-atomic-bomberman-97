@@ -10,7 +10,7 @@ namespace bomber::sim {
 // settles back onto the tile centre when blocked past it. There is NO
 // distance threshold — the assist is governed purely by which side of the
 // tile centre the player is on, exactly like the original.
-void MovementSystem::move(Player& p, Direction d) {
+void MovementSystem::move(Player& p, Direction d, std::int32_t extra_budget) {
     State& s = s_;
     p.facing = d;
 
@@ -41,7 +41,10 @@ void MovementSystem::move(Player& p, Direction d) {
     if (p.sick(Disease::Slow)) eff /= 3;
     if (p.sick(Disease::Fast) || p.sick(Disease::Super)) eff = 3 * eff / 2;
 
-    p.move_budget += eff;
+    // The conveyor budget (extra_budget) is added AFTER the disease factors,
+    // exactly as sub_41F29B adds its getvalue(190+idx) term after molasses/
+    // hyper scaling — the belt is not slowed by disease. See stage-actors.md.
+    p.move_budget += eff + extra_budget;
     while (p.move_budget > 0) {
         p.move_budget -= 100;
 

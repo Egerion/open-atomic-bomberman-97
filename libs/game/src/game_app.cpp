@@ -65,8 +65,17 @@ bool GameApp::init() {
 }
 
 void GameApp::start_match(std::uint32_t seed) {
-    sim_ = sim::Simulation(match::build_match_config(scheme_, 2, seed, &values_));
+    sim::MatchConfig cfg = match::build_match_config(scheme_, 2, seed, &values_);
     int stage = match::pick_stage(base_tuning_, seed);
+    // Overlay this board's stage actors (conveyors/trampolines/etc) from
+    // EXTRA<stage>.RES before constructing the sim — the actor layout is a
+    // hashed setup input like the cell grid (docs/re/stage-actors.md). A board
+    // with no EXTRA file simply has none. Random '-T,H' trampolines resolve off
+    // a setup-only RNG inside apply_actors, never the sim's per-tick stream.
+    auto actors = assets::extra::load_for_board(opts_.game_dir, stage, sim::kGridWidth,
+                                                sim::kGridHeight);
+    match::apply_actors(cfg, actors, seed);
+    sim_ = sim::Simulation(cfg);
     if (assets_.load_stage(stage)) {
         seqs_.resolve_stage(assets_, stage);
         audio_.start_music(1100 + stage);  // SOUNDLST: stage music = 1100 + n

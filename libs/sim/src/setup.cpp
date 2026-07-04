@@ -15,10 +15,19 @@ State build_state(const MatchConfig& config) {
     State s;
     s.rng = config.seed;
     s.tuning = config.tuning;
+    s.forbidden = config.forbidden;
     s.ticks_left = config.tuning.game_seconds * kTicksPerSecond;
     s.cells = config.cells;
     for (auto& row : s.hidden) row.fill(PowerupType::None);
     for (auto& row : s.floor) row.fill(PowerupType::None);
+    // Stage actors are a static per-match layer (docs/re/stage-actors.md):
+    // copied verbatim from the parsed EXTRA<N>.RES layout, then hashed. None
+    // (255) is the empty sentinel, so start every tile empty then overlay.
+    for (auto& row : s.actor_type) row.fill(ActorType::None);
+    s.actor_dir = config.actor_dir;
+    for (int y = 0; y < kGridHeight; ++y)
+        for (int x = 0; x < kGridWidth; ++x)
+            s.actor_type[y][x] = config.actor_type[y][x];
 
     PowerupSystem powerups{s};
 
@@ -72,6 +81,12 @@ State build_state(const MatchConfig& config) {
             s.hidden[by][bx] = static_cast<PowerupType>(k);
         }
     }
+
+    // Arm the dud gate (the original arms it once at match init, sub_422C7A
+    // -> sub_422C13): base + rand(spread) ticks from now.
+    s.dud_gate = static_cast<std::uint64_t>(s.tuning.dud_gate_base) +
+                 random_below(s, static_cast<std::uint32_t>(
+                                     std::max<std::int32_t>(1, s.tuning.dud_gate_rand)));
     return s;
 }
 

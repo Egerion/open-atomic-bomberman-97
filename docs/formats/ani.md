@@ -52,4 +52,14 @@ u32 unknown (=0)
 
 ## Rendering a step
 
-Blit `frames[frame_index]` at `pos - hotspot + offset`, treating `key_color` pixels as transparent. X1R5G5B5 → RGB8 via `(c5 << 3) | (c5 >> 2)`.
+Blit `frames[frame_index]` at `pos - hotspot`, treating `key_color` pixels as
+transparent. X1R5G5B5 → RGB8 via `(c5 << 3) | (c5 >> 2)`.
+
+**The per-STAT `offset_x/offset_y` (FRAM-leaf `dx/dy`) is NOT applied by the
+original's standard blit** (`sub_415920` / `sub_415A9F` take only the frame
+index; the offset getter `sub_41DB41` is a separate, rarely-used path). Do NOT
+fold it into the hotspot — these offsets are large (tile 10 brick dy=18, stand
+south dy=19), so applying them shoves sprites that many pixels DOWN (bricks leak
+below their cell, players sink below their shadow; dy=0 sprites like bombs/shadow
+stay correct). Confirmed 2026-07-04 against a live build. Parse `dx/dy` for
+inspection but render by the frame hotspot alone.

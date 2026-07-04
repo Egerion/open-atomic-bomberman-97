@@ -2,10 +2,15 @@
 
 #include "bomber/game/asset_store.hpp"
 #include "bomber/game/sprites.hpp"
+#include "bomber/sim/constants.hpp"
 
 // All sequences the renderer needs, resolved once at startup (and per stage).
 
 namespace bomber::game {
+
+// The 13 direction-independent "cornerhead" idle-fidget variants, spread across
+// CORNER0..7.ANI (sub_41F29B picks rand()%13 while boxed-in).
+inline constexpr int kCornerheadVariants = 13;
 
 // The nine flame pieces of one player-colored set: the epicenter, the four
 // middle arms, and the four tips.
@@ -16,11 +21,24 @@ struct FlameSet {
 struct SequenceSet {
     Anim brick, solid, burn;
     Anim bomb[kLocalPlayers];
+    Anim bomb_dud[kLocalPlayers];      // DUDS.ANI "bomb regular green dud" (fizzle)
+    Anim bomb_trigger[kLocalPlayers];  // TRIGBOMB.ANI "bomb trigger green" (armed remote)
+    // Animated floor-powerup art (POWERS.ANI "power <name>"), indexed by
+    // sim::PowerupType. Shared/uncoloured. Empty entries fall back to POW*.PCX.
+    Anim powerup_anim[sim::kPowerupKinds];
     FlameSet flames[kLocalPlayers];
     Anim stand[kLocalPlayers][4], walk[kLocalPlayers][4];  // [player][direction]
+    Anim kick[kLocalPlayers][4], punch[kLocalPlayers][4];  // action poses, [player][direction]
+    Anim walkbomb[kLocalPlayers][4], standbomb[kLocalPlayers][4];  // carrying a bomb, [player][direction]
+    Anim cornerhead[kLocalPlayers][kCornerheadVariants];   // idle fidgets, direction-independent
     Anim shadow;
     Anim digits;  // KFONT 'numeric font': glyphs 0-9 + colon
     Anim hurry;
+    // Stage-actor floor art (docs/re/stage-actors.md). conveyor indexed by godir
+    // (0=Up/north,1=Right/east,2=Down/south,3=Left/west); trampoline is
+    // direction-independent. Empty entries simply draw nothing.
+    Anim conveyor[4];
+    Anim trampoline;
 
     // Resolves the stage-independent sequences (call again after
     // build_player_sets so the recolored copies get picked up).

@@ -40,11 +40,17 @@ MatchConfig pillars_config() {
 
 }  // namespace
 
+// NOTE 2026-07-03: every constant below was refreshed for the dud-bomb
+// mechanics (docs/re/facts.md "Dud bombs"): state_hash() now mixes the dud
+// gate and each bomb's fizzle counter (layout change → every digest moves),
+// setup arms the gate with one RNG draw, and regular-bomb placements can
+// consume gate/dud rolls.
+
 TEST_CASE("golden A: empty state, 10000 ticks") {
     Simulation a;
     a.state().rng = 42u;
     for (std::uint64_t t = 0; t < 10000; ++t) a.tick(pattern(t));
-    CHECK(a.hash() == 0x7ec4b4ee673caaf0ull);
+    CHECK(a.hash() == 0x553a5944c9e8c0f0ull);
     CHECK(a.state().rng == 0x0000002au);
 }
 
@@ -62,19 +68,15 @@ TEST_CASE("golden B: 4-player brick match with all abilities") {
     cfg.born_with[static_cast<int>(PowerupType::Spooger)] = true;
     cfg.born_with[static_cast<int>(PowerupType::Jelly)] = true;
     Simulation s(cfg);
-    CHECK(s.hash() == 0x27bc1e6963477347ull);  // setup itself is pinned
+    CHECK(s.hash() == 0x99d9e6bd27bd94baull);  // setup itself is pinned
 
-    // Updated 2026-07-03 for the jelly-bomb mechanics (docs/re/facts.md "Bomb
-    // machine", sub_42331C): this scenario grants Jelly, so punched jelly
-    // flights now consume the veer roll RNG and the stream shifts. The setup
-    // hash (B0) is unchanged — only in-match behaviour moved.
     static constexpr std::uint64_t kExpected[6] = {
-        0x0c8d4b271345c89eull,  // tick 500
-        0x81c18f222e5413a5ull,  // tick 1000
-        0x7697b3bc70755075ull,  // tick 1500
-        0x9708ad500001ed59ull,  // tick 2000
-        0xa96be585f6b1e346ull,  // tick 2500
-        0xef7fb91510c92514ull,  // tick 3000
+        0xc996ac6f95e82cd2ull,  // tick 500
+        0x3c85294e01c7b0deull,  // tick 1000
+        0xe412173c0c160dbeull,  // tick 1500
+        0xc0aadf1dda805853ull,  // tick 2000
+        0x29ccd64ac29c978bull,  // tick 2500
+        0xfd18160f1e71e20cull,  // tick 3000
     };
     for (std::uint64_t t = 0; t < 3000; ++t) {
         s.tick(pattern(t));
@@ -92,7 +94,7 @@ TEST_CASE("golden C: trigger bombs and a fast hurry phase") {
     cfg.born_with[static_cast<int>(PowerupType::Trigger)] = true;
     Simulation s(cfg);
     for (std::uint64_t t = 0; t < 1500; ++t) s.tick(pattern(t * 7 + 3));
-    CHECK(s.hash() == 0x94b65ecd7a6992fbull);
+    CHECK(s.hash() == 0xc8f7c61364e80d53ull);
 }
 
 TEST_CASE("golden D: the disease gauntlet") {
@@ -114,13 +116,14 @@ TEST_CASE("golden D: the disease gauntlet") {
         }
 
     static constexpr std::uint64_t kExpectedHash[4] = {
-        0x714da0610f74cae6ull,  // tick 200
-        0xc7508ea61abb6eccull,  // tick 400
-        0x0e10ffb81aa3c605ull,  // tick 600
-        0x40c0e61e78f548a4ull,  // tick 800
+        0xb04eb547a32cdde8ull,  // tick 200
+        0xeb0aa6f87deab8f6ull,  // tick 400
+        0xf787cf0dda55d36cull,  // tick 600
+        0xc12966c5d08061ddull,  // tick 800
     };
-    static constexpr std::uint32_t kExpectedRng[4] = {0xc793e5b2u, 0xdf9afc20u, 0x83c939cfu,
-                                                      0xca47489cu};
+    // The stream parks at D400's value once everyone is dead (no more draws).
+    static constexpr std::uint32_t kExpectedRng[4] = {0xdf9afc20u, 0x83c939cfu, 0x83c939cfu,
+                                                      0x83c939cfu};
     for (std::uint64_t t = 0; t < 800; ++t) {
         TickInputs in = pattern(t);
         for (int p = 0; p < kMaxPlayers; ++p) {
@@ -170,10 +173,10 @@ TEST_CASE("golden E: jelly ping-pong and a veering punched flight") {
     };
 
     static constexpr std::uint64_t kExpected[4] = {
-        0x02592148def2e49dull,  // tick 75
-        0x21710c7884c277ecull,  // tick 150
-        0x2c6f12d1788c3c5aull,  // tick 225
-        0x6c6f5a11a01269f3ull,  // tick 300
+        0x38f5d9ace6f755a5ull,  // tick 75
+        0x33f73e74c214dc70ull,  // tick 150
+        0x78ae22f38a42f5faull,  // tick 225
+        0x5cc40b9ac52d4037ull,  // tick 300
     };
     int bounces = 0;
     for (std::uint64_t t = 0; t < 300; ++t) {

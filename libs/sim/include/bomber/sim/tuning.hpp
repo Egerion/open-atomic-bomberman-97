@@ -42,18 +42,50 @@ struct Tuning {
     // 1150..1160; the original disables hockey rink and coal mine by default).
     std::int32_t level_enabled[11] = {1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1};
 
-    // Not present in VALUELST (hardcoded in BM95.EXE); our tunables, in
-    // original units. Revisit against original feel.
     std::int32_t pickup_pause = 2;         // id 665: movement pause when grabbing, ticks
     std::int32_t powers_lost_min = 1;      // id 670: min powers dropped on a head hit
-    std::int32_t powers_lost_rand = 3;     // id 671: extra random powers dropped
-    std::int32_t head_stun_frames = 20;    // our tunable: daze after a bomb-to-head
+    std::int32_t powers_lost_rand = 3;     // id 671: modulus of the extra random drops
+    std::int32_t head_stun_frames = 16;    // CONFIRMED hardcoded 16 (sub_421F7E sets the
+                                           // +58 countdown; not a VALUELST id)
     std::int32_t punch_arc_first = 65;     // id 660: three-tile punch arc height, px
     std::int32_t punch_arc_hop = 20;       // id 661: subsequent one-tile hops
     std::int32_t jelly_turn_chance = 3;    // id 667: flying jelly veers ±90°, 1-in-N per boundary
+    // Duds (sub_422EDE / sub_422C13): only regular bombs fizzle, gated by a
+    // global timer that re-arms base + rand(spread) ticks ahead.
+    std::int32_t dud_gate_base = 180;      // id 320
+    std::int32_t dud_gate_rand = 180;      // id 321
+    std::int32_t dud_chance = 3;           // id 322: 1-in-N when the gate is open
+    std::int32_t dud_frames = 120;         // id 323: fizzle duration
     std::int32_t flame_frames = 10;        // id 10 (flame anim cycle); confirmed as the
                                            // flame lifetime by disasm of 0x426d06
     std::int32_t brick_burn_frames = 10;   // id 20 (disintegration anim length)
+
+    // Conveyor speeds (VALUELST ids 189..192, sub_41F29B via getvalue(190+idx);
+    // see docs/re/stage-actors.md §3). The belt adds this many 1/100-px units
+    // to a player's move budget per tick (fixed 20 Hz makes the original's
+    // frame/dword_46494C factor == 1). id 189 = how many speeds exist; the
+    // board's conveyor-speed selector (dword_464930, 0..2) picks one:
+    //   190 = 250 (low), 191 = 350 (medium), 192 = 450 (high).
+    std::int32_t conveyor_speed_count = 3; // id 189
+    std::int32_t conveyor_speeds[3] = {250, 350, 450}; // ids 190,191,192
+    // Which of the three the current board uses. OUR TUNABLE: the original
+    // reads dword_464930 (set per-board / editor-cyclable); we have not yet RE'd
+    // where a board persists its index, so we default to "low" (index 0 = 250)
+    // and expose it for MatchConfig to override once the board field is mapped.
+    std::int32_t conveyor_speed_index = 0;
+    // Trampoline in-place bounce length, ticks. OUR TUNABLE: the original times
+    // the hop by the bounce ANI (player state +78==5), not a VALUELST id; 20
+    // ticks (~1s at 20 Hz) is a faithful-feeling placeholder pending the ANI
+    // frame count. During the bounce, movement is ignored (state-gated).
+    std::int32_t trampoline_bounce_frames = 20;
+
+    // The belt contribution actually applied per tick, resolving the selector.
+    std::int32_t conveyor_speed() const {
+        int i = conveyor_speed_index;
+        if (i < 0) i = 0;
+        if (i > 2) i = 2;
+        return conveyor_speeds[i];
+    }
     // Note: player movement (corner assist / lane centering) is not tunable —
     // it is a faithful port of sub_41EC84 and needs no threshold constant.
 
@@ -86,8 +118,16 @@ struct Tuning {
             case 671: powers_lost_rand = v; return true;
             case 661: punch_arc_hop = v; return true;
             case 667: jelly_turn_chance = v; return true;
+            case 320: dud_gate_base = v; return true;
+            case 321: dud_gate_rand = v; return true;
+            case 322: dud_chance = v; return true;
+            case 323: dud_frames = v; return true;
             case 20: brick_burn_frames = v; return true;
             case 10: flame_frames = v; return true;
+            case 189: conveyor_speed_count = v; return true;
+            case 190: conveyor_speeds[0] = v; return true;
+            case 191: conveyor_speeds[1] = v; return true;
+            case 192: conveyor_speeds[2] = v; return true;
             case 121: diseases_time_limited = v != 0; return true;
             case 123: diseases_multiply = v != 0; return true;
             case 124: diseases_curable = v != 0; return true;

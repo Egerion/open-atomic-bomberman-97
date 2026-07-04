@@ -16,9 +16,12 @@
 
 namespace bomber::game {
 
-// Field placement verified against FIELD0.PCX and the original HUD.
+// Field placement — CONFIRMED against the binary (sub_42647A): the play grid
+// origin is ((screenW-600)/2, screenH-412) = (20, 68) for 640x480, tiles 40x36,
+// grid 15x11. Sprites anchor at (tile-centre-x, tile-bottom-y), which the draw
+// code reproduces by adding kTileH/2 to the stored tile-centre position.
 inline constexpr int kFieldOriginX = 20;
-inline constexpr int kFieldOriginY = 64;
+inline constexpr int kFieldOriginY = 68;  // was 64 (4 px too high) — see sub_42647A
 inline constexpr int kScreenW = 640;
 inline constexpr int kScreenH = 480;
 
@@ -52,6 +55,7 @@ private:
         std::uint64_t start = 0;
     };
 
+    void draw_actors(const sim::State& s);  // conveyor/trampoline floor tiles
     void draw_powerups(const sim::State& s);
     void draw_world(const sim::State& s);
     void draw_hud(const sim::State& s);
@@ -68,6 +72,13 @@ private:
     // Cosmetic render-side RNG for the disease colour strobe (never the sim's).
     Uint8 disease_flash_channel();
 
+    // True when all four orthogonal neighbours of (tx,ty) are impassable
+    // (wall/brick/burning brick or a resting bomb); out-of-grid counts blocked.
+    static bool boxed_in(const sim::State& s, int tx, int ty);
+
+    // Cosmetic render-side LCG for the idle-fidget rolls (never the sim's).
+    std::uint32_t panic_roll();
+
     SDL_Renderer* ren_ = nullptr;
     const AssetStore* assets_ = nullptr;
     const SequenceSet* seqs_ = nullptr;
@@ -79,10 +90,20 @@ private:
     std::array<sim::Fixed, sim::kMaxPlayers> last_x_{}, last_y_{};
     std::array<bool, sim::kMaxPlayers> moving_{};
     std::array<std::uint32_t, sim::kMaxPlayers> walk_phase_{};
+    // Action-pose countdowns (ticks): a recent kick/punch shows KICK/PUNCH.ANI
+    // instead of walk/stand. Driven by the (unhashed) BombKicked/BombPunched
+    // events, so this is purely cosmetic and never touches the sim.
+    std::array<int, sim::kMaxPlayers> kick_pose_{}, punch_pose_{};
+    // Idle "cornerhead" fidget: while a player is boxed in and standing still it
+    // cycles random fidgets (sub_41F29B). Purely cosmetic — reads the sim state,
+    // never mutates it, and rolls off the panic LCG below (never State::rng).
+    std::array<int, sim::kMaxPlayers> panic_ticks_{};
+    std::array<int, sim::kMaxPlayers> panic_variant_{};
 
     std::vector<DeathFx> deaths_;
     std::uint64_t hurry_until_ = 0;  // HURRY! banner flashes until this tick
     std::uint32_t flash_lcg_ = 0x2545F491u;
+    std::uint32_t panic_lcg_ = 0x9E3779B9u;
 };
 
 }  // namespace bomber::game

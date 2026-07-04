@@ -102,6 +102,14 @@ a real install: `abtool survey <game_dir>` and `bomber_viewer <game_dir>
 --selftest`. The game auto-detects the install via `BOMBER_GAME_DIR`,
 `gamedir.txt`, or the standard paths (`libs/assets/src/install.cpp`).
 
+A `lefthook` pre-push hook (`lefthook.yml`, `scripts/test.sh`,
+`scripts/lint.sh`) runs the `headless` build+ctest and a repo-wide
+`clang-tidy` pass (`.clang-tidy`) before every push; see README "Git hooks"
+to enable it per clone. `.clang-tidy`'s check list is curated to this
+codebase's terse, faithful-port style (bugprone/performance/clang-analyzer,
+not broad readability/cppcoreguidelines) — extend it there, not by adding
+NOLINTs, unless a specific line is a deliberate one-off.
+
 ## Claude working notes
 
 - Sandbox bash sees a STALE view of files rewritten via Write/Edit in earlier

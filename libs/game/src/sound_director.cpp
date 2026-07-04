@@ -19,17 +19,38 @@ void SoundDirector::on_tick(const sim::State& s) {
 
     for (const auto& ev : s.events) {
         switch (ev.type) {
-            case sim::Event::Type::BombPlaced: audio_.play_one_of({100, 101}); break;
+            case sim::Event::Type::BombPlaced:
+                // Diarrhea/super drop = random "poops" splat (SOUNDLST 550-554,
+                // sub_41F29B v112 branch); a normal drop is 100/101.
+                if (ev.data) audio_.play_random_in_range(550, 554);
+                else audio_.play_one_of({100, 101});
+                break;
             case sim::Event::Type::BombKicked: audio_.play_random_in_range(120, 123); break;
             case sim::Event::Type::Explosion: audio_.play_random_in_range(200, 299); break;
             case sim::Event::Type::TimeUp: audio_.play_random_in_range(1700, 1999); break;
             case sim::Event::Type::WallClosed: audio_.play_one_of({140, 141, 142}); break;
-            case sim::Event::Type::BombPunched: audio_.play_one_of({150, 151}); break;
+            case sim::Event::Type::BombPunched:
+                // The glove swings on every press (the event fires regardless so
+                // the punch pose plays), but the original only plays the "kbomb"
+                // hit SFX when a bomb is actually launched: sub_427961(150) sits
+                // inside sub_424A50's `if (bomb ahead)`. ev.data carries that hit
+                // flag. SOUNDLST 150/151 are "punching a bomb"; sub_427961(150)
+                // random-picks across the contiguously loaded 150,151 slots.
+                if (ev.data) audio_.play_one_of({150, 151});
+                break;
             case sim::Event::Type::BombBounced: audio_.play(160); break;
             case sim::Event::Type::BombStopped: audio_.play(130); break;   // "bombstop"
             case sim::Event::Type::JellyBounced: audio_.play(135); break;  // "bombboun"
             case sim::Event::Type::BombGrabbed: audio_.play(170); break;
-            case sim::Event::Type::BombThrown: audio_.play_one_of({150, 151}); break;
+            case sim::Event::Type::BombThrown:
+                // Silent by design. The carried-bomb release in sub_41F29B
+                // (+37 block) launches the held bomb via sub_424987 with NO
+                // sub_427961 call — throwing plays no sound in the original.
+                // (The unused SOUNDLST "bmbthrw" ids 172-175 are dead assets:
+                // sub_427961 is never invoked with 171-175 anywhere in BM95.)
+                // Previously this borrowed the punch hit sound 150/151, which
+                // produced the spurious "hit" the user reported on throw.
+                break;
             case sim::Event::Type::HeadHit: audio_.play_random_in_range(360, 362); break;
             case sim::Event::Type::Infected: {
                 // Skull voice: 1-in-3 the per-disease line (the 3000+50*idx
@@ -40,11 +61,18 @@ void SoundDirector::on_tick(const sim::State& s) {
                 break;
             }
             case sim::Event::Type::PowerupPicked: {
-                audio_.play_random_in_range(401, 499);
+                // Jelly plays the boing (135) instead of a pickup voice, as in
+                // sub_41E21E case 0xA.
+                if (ev.data == static_cast<std::int8_t>(sim::PowerupType::Jelly))
+                    audio_.play(135);
+                else
+                    audio_.play_random_in_range(401, 499);
                 int n = ++pickups_[ev.player];
-                // "You are now AWESOME": 7th powerup, then every 3rd after.
-                if (n == 7 || (n > 7 && (n - 7) % 3 == 0))
+                // "You are now AWESOME": 7th powerup, then every 5th after;
+                // the counter wraps back to 7 past 50 (sub_41E21E tail).
+                if (n == 7 || (n > 7 && (n - 7) % 5 == 0))
                     pending_.push_back({s.tick + 8, {1400, 1699}});
+                if (n > 50) pickups_[ev.player] = 7;
                 break;
             }
             case sim::Event::Type::PlayerDied: {

@@ -25,7 +25,11 @@ struct SeqStep {
     int frame = -1;  // index into AniFile::frames
     int dx = 0;      // per-step blit offset
     int dy = 0;
-    std::uint16_t head0 = 0;  // STAT HEAD first u16 (0x001E / 0xFFFF), timing-related, TBD
+    // STAT HEAD first u16 (only ever 0x001E or 0xFFFF). CONFIRMED INERT: the
+    // original engine parses but never reads it; pacing is counter % statecnt.
+    // Kept for fidelity/inspection only — must not drive rendering. See
+    // docs/re/facts.md "ANI per-step timing" and game/anim_pace.hpp.
+    std::uint16_t head0 = 0;
 };
 
 struct Sequence {

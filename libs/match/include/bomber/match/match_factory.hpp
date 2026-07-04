@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "bomber/assets/extra.hpp"
 #include "bomber/assets/reslist.hpp"
 #include "bomber/assets/sch.hpp"
 #include "bomber/sim/match_config.hpp"
@@ -48,6 +49,52 @@ inline sim::MatchConfig build_match_config(const assets::sch::Scheme& scheme, in
         if (pr.has_override) cfg.spawn_override[pr.id] = pr.override_value;
     }
     return cfg;
+}
+
+// Overlays parsed EXTRA<N>.RES stage actors onto a MatchConfig
+// (docs/re/stage-actors.md). The layout is a static, hashed sim input like the
+// cell grid. Random '-T,H' trampolines are resolved HERE with a setup-only LCG
+// seeded off the match seed, NOT the sim's per-tick RNG — so the determinism
+// contract (RNG draw order/count per tick) is untouched, while identical seeds
+// still reproduce identical boards. Placement mirrors the original's odd-parity,
+// no-overlap rule for '-T,H'.
+inline void apply_actors(sim::MatchConfig& cfg, const std::vector<assets::extra::Actor>& actors,
+                         std::uint32_t seed) {
+    using assets::extra::Kind;
+    auto occupied = [&](int x, int y) {
+        return cfg.actor_type[y][x] != sim::ActorType::None;
+    };
+    auto place = [&](int x, int y, sim::ActorType t, int dir) {
+        if (x < 0 || x >= sim::kGridWidth || y < 0 || y >= sim::kGridHeight) return;
+        cfg.actor_type[y][x] = t;
+        cfg.actor_dir[y][x] = static_cast<std::uint8_t>(dir & 3);
+    };
+    std::uint32_t lcg = seed ? seed : 0x1234567u;  // setup-only stream
+    auto roll = [&]() { lcg = lcg * 1664525u + 1013904223u; return lcg >> 16; };
+
+    for (const auto& a : actors) {
+        switch (a.kind) {
+            case Kind::Conveyor: place(a.x, a.y, sim::ActorType::Conveyor, a.dir); break;
+            case Kind::DirArrow: place(a.x, a.y, sim::ActorType::DirArrow, a.dir); break;
+            case Kind::Warphole: place(a.x, a.y, sim::ActorType::Warphole, 0); break;
+            case Kind::Trampoline:
+                if (a.random) {
+                    // Odd-parity ((x+y) odd), un-occupied open tile, <=100 tries.
+                    for (int i = 0; i < 100; ++i) {
+                        int x = static_cast<int>(roll() % sim::kGridWidth);
+                        int y = static_cast<int>(roll() % sim::kGridHeight);
+                        if (((x + y) & 1) && !occupied(x, y) &&
+                            cfg.cells[y][x] == sim::Cell::Blank) {
+                            place(x, y, sim::ActorType::Trampoline, 0);
+                            break;
+                        }
+                    }
+                } else {
+                    place(a.x, a.y, sim::ActorType::Trampoline, 0);
+                }
+                break;
+        }
+    }
 }
 
 // Picks a stage from the enabled rotation (VALUELST 1150..1160), seed-based.

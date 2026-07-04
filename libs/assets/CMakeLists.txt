@@ -6,6 +6,7 @@ add_library(bomber_assets STATIC
   src/ani.cpp
   src/pcx.cpp
   src/sch.cpp
+  src/extra.cpp
   src/reslist.cpp
   src/rss.cpp
   src/install.cpp

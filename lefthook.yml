@@ -1,0 +1,10 @@
+# Local push gate — see CLAUDE.md "Build & test" / "Code standards".
+# `lefthook install` wires this into .git/hooks/pre-push (not committed;
+# every clone/worktree must run it once — see README).
+pre-push:
+  parallel: true
+  commands:
+    tests:
+      run: bash scripts/test.sh
+    lint:
+      run: bash scripts/lint.sh

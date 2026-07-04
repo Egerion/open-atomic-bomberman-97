@@ -13,6 +13,7 @@ struct Bomb {
     std::uint8_t owner = 0;
     Fixed x = 0, y = 0;           // center, aligned to tile unless moving
     std::int32_t fuse = 0;        // ticks until detonation (<0: waits for trigger)
+    std::int32_t dud_left = 0;    // fizzle ticks remaining (dud state; fuse frozen)
     std::int32_t flame = 2;
     bool jelly = false;
     bool trigger = false;

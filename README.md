@@ -73,6 +73,23 @@ bomber_viewer <game_dir> --selftest [shot_dir]  # headless CI mode (SDL_VIDEODRI
 
 `ctest` runs the doctest suites: determinism (10k-tick lockstep), gameplay rules, movement (faithful sub_41EC84 port), diseases, spooger, and the golden-hash pins that freeze sim behaviour against accidental change. Full verification against an original install: `abtool survey` and `bomber_viewer --selftest` — both exit non-zero on any failure.
 
+## Git hooks
+
+`lefthook.yml` wires a pre-push gate: full `headless` build + `ctest`, plus a
+repo-wide `clang-tidy` pass (config in `.clang-tidy`). Each clone/worktree
+must enable it once:
+
+```
+winget install evilmartians.lefthook   # if not already installed
+lefthook install
+```
+
+`clang-tidy` itself comes from the "C++ Clang tools for Windows" Visual
+Studio component (or any `clang-tidy` on PATH). Run either check by hand with
+`bash scripts/test.sh` / `bash scripts/lint.sh`, or the whole gate with
+`lefthook run pre-push --force` (the `--force` skips lefthook's "nothing to
+push" short-circuit when HEAD already matches the remote).
+
 ## Legal
 
 This project contains no Interplay/Konami code or assets. It is a from-scratch reimplementation based on observing data formats and behaviour. You need to own the original game to use it.

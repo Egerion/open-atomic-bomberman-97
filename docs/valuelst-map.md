@@ -31,6 +31,7 @@ Powerup kind order (matches scheme `-P` rows and the id blocks above): extra bom
 | 120–138 | disease behavior flags and durations (300 frames each) |
 | 190–192 | conveyor belt speeds |
 | 320–324 | dud-bomb timing and chance |
+| 330 | idle "cornerhead" fidget duration spread — original rolls `20 + rand()%getvalue(330)` ticks while boxed in (`sub_41F29B`); presentation-only, renderer's `kPanicSpread` stands in (=40) until the value is read |
 | 46 | closing wall detonates (1) vs destroys (0) bombs |
 | 660/661, 665, 667 | punched-bomb arcs, pickup pause, jelly craziness |
 | 670/671 | powers lost when a bomb lands on your head |

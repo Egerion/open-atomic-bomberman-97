@@ -16,6 +16,7 @@
 #include "systems/flames.hpp"
 #include "systems/movement.hpp"
 #include "systems/powerups.hpp"
+#include "systems/stage_actors.hpp"
 
 namespace bomber::sim {
 
@@ -28,12 +29,22 @@ namespace {
 // Step 1: one player's turn — stun, movement (with the reversed-controls
 // disease), bomb dropping (edge-gated, spooger, auto-drop diseases), and the
 // action2 priority chain: throw > grab > trigger-detonate > punch.
-void player_turn(State& s, int i, const PlayerInput& in, MovementSystem& movement,
-                 BombSystem& bombs) {
+void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs,
+                 StageActorSystem& stage) {
     Player& p = s.players[i];
 
     if (p.stun > 0) {
         --p.stun;
+        p.prev_action1 = in.action1;
+        p.prev_action2 = in.action2;
+        return;
+    }
+
+    // A trampoline hop is a state-gated in-place bounce (sub_41EC84/sub_41DE63):
+    // movement input and bomb actions are ignored until the hop finishes, and
+    // the player cannot be pushed. Tick it down and skip the rest of the turn.
+    if (stage.bouncing(p)) {
+        stage.tick_bounce(p);
         p.prev_action1 = in.action1;
         p.prev_action2 = in.action2;
         return;
@@ -47,46 +58,89 @@ void player_turn(State& s, int i, const PlayerInput& in, MovementSystem& movemen
         std::swap(left, right);
     }
 
-    Direction want = p.facing;
-    bool moving = true;
-    if (up) want = Direction::Up;
-    else if (down) want = Direction::Down;
-    else if (left) want = Direction::Left;
-    else if (right) want = Direction::Right;
-    else moving = false;
-
-    if (moving) {
-        Fixed bx = p.x, by = p.y;
-        movement.move(p, want);
-        if (p.x == bx && p.y == by) bombs.try_kick(p, want);
+    // Opposite-key resolution, faithful to the original input decoder
+    // (sub_41E61E, LABEL_58): collect the four direction flags in GODIR order
+    // (0=Up,1=Right,2=Down,3=Left); if more than one is pressed and at least
+    // one leads to an open tile, drop the pressed dirs that are blocked; then
+    // the LAST surviving index wins. That last-index bias (Left beats Right,
+    // Down beats Up) plus the per-pixel mover makes a player held against a wall
+    // with two opposite keys vibrate in place — flip facing every tick — which
+    // is the original's beloved "crazy back-and-forth" (only vs a left wall for
+    // L+R or a bottom wall for U+D; the other side just slides off). No RNG, no
+    // new hashed field, but trajectories change → golden must be recaptured.
+    static constexpr int DX[4] = {0, 1, 0, -1};
+    static constexpr int DY[4] = {-1, 0, 1, 0};
+    const bool godir_pressed[4] = {up, right, down, left};
+    bool dir[4] = {up, right, down, left};
+    if (godir_pressed[0] + godir_pressed[1] + godir_pressed[2] + godir_pressed[3] > 1) {
+        const int ptx = p.tile_x(), pty = p.tile_y();
+        auto passable = [&](int g) {
+            return grid::tile_open(s, ptx + DX[g], pty + DY[g]) &&
+                   !grid::bomb_at(s, ptx + DX[g], pty + DY[g]);
+        };
+        int open = 0;
+        for (int g = 0; g < 4; ++g)
+            if (dir[g] && passable(g)) ++open;
+        if (open > 0)
+            for (int g = 0; g < 4; ++g)
+                if (dir[g] && !passable(g)) dir[g] = false;
     }
+    int want_godir = -1;
+    for (int g = 0; g < 4; ++g)
+        if (dir[g]) want_godir = g;
 
-    // Diarrhea and super force a bomb out every tick; constipation blocks
-    // dropping entirely. A manual bomb press is edge-triggered, matching the
-    // original's `+56 && !+54` gate. Spooger sprays a line ahead only when a
-    // bomb is already underfoot — so the first press lays one underfoot and a
-    // second press (while standing on it) fires the run.
+    static constexpr Direction kGodir[4] = {Direction::Up, Direction::Right,
+                                            Direction::Down, Direction::Left};
+    Direction want = want_godir >= 0 ? kGodir[want_godir] : p.facing;
+    bool moving = want_godir >= 0;
+
+    // Movement, with any conveyor under the player folded in: a belt speeds/
+    // slows a walking player and pushes a standing one along its direction
+    // (StageActorSystem::move_on_actor, port of sub_41F29B's actor branches).
+    // The belt-only push (no input) is handled inside move_on_actor.
+    {
+        Fixed bx = p.x, by = p.y;
+        stage.move_on_actor(p, want_godir, moving);
+        // A player pushed head-on into a restable bomb kicks it, same as a
+        // walked-into bomb: only when the (belt-forced or input) move stalled.
+        if (moving && p.x == bx && p.y == by) bombs.try_kick(p, want, i);
+    }
+    // A step that settled on a trampoline tile launches an in-place hop.
+    stage.trampoline_after_move(p, i);
+
+    // The bomb key (action1) is context-sensitive, exactly like the original
+    // (sub_41F29B, gated on +56 && !+54): while carrying a grabbed bomb you
+    // hold it and THROW the instant the key is released (`+37 && !+56`);
+    // otherwise a fresh press on your OWN resting bomb GRABS it (blue glove,
+    // +92) or sprays a SPOOGER line (+93), and on an empty tile it just DROPS.
+    // Grab and spooger are the "double-tap" Ege remembers: press 1 lays a bomb
+    // underfoot, press 2 (now standing on it) grabs or sprays. Diarrhea/super
+    // auto-drop every tick; constipation blocks dropping.
     bool auto_drop = p.sick(Disease::Diarrhea) || p.sick(Disease::Super);
     bool pressed = in.action1 && !p.prev_action1;
     if (!p.sick(Disease::Constipation)) {
-        if (auto_drop) {
+        if (p.carrying) {
+            if (!in.action1) bombs.throw_carried(p, i);  // release to throw
+        } else if (auto_drop) {
             bombs.drop(p, static_cast<std::uint8_t>(i));
         } else if (pressed) {
-            if (p.spooge && grid::bomb_at(s, p.tile_x(), p.tile_y()))
+            const Bomb* under = grid::bomb_at(s, p.tile_x(), p.tile_y());
+            const bool own = under && !under->moving &&
+                             under->owner == static_cast<std::uint8_t>(i);
+            if (p.grab && own)
+                bombs.try_grab(p, i);
+            else if (p.spooge && under)
                 bombs.spooge_ahead(p, static_cast<std::uint8_t>(i));
             else
                 bombs.drop(p, static_cast<std::uint8_t>(i));
         }
     }
+    // The action key (action2) punches the bomb ahead (+91) and/or detonates a
+    // trigger bomb (+95). Grab and throw moved to the bomb key above; the
+    // mutual exclusions mean a player never holds punch and trigger at once.
     if (in.action2 && !p.prev_action2) {
-        bool acted = false;
-        if (p.carrying) {
-            bombs.throw_carried(p, i);
-            acted = true;
-        }
-        if (!acted && p.grab) acted = bombs.try_grab(p, i);
-        if (!acted && p.trigger) acted = bombs.detonate_triggered(i);
-        if (!acted && p.punch) bombs.try_punch(p, static_cast<std::uint8_t>(i));
+        if (p.punch) bombs.try_punch(p, static_cast<std::uint8_t>(i));
+        if (p.trigger) bombs.detonate_triggered(i);
     }
     p.prev_action1 = in.action1;
     p.prev_action2 = in.action2;
@@ -114,7 +168,25 @@ void field_vs_players(State& s, PowerupSystem& powerups, DiseaseSystem& diseases
         PowerupType t = s.floor[ty][tx];
         if (t != PowerupType::None) {
             diseases.maybe_cure_on_pickup(p);
-            if (t == PowerupType::Disease) {
+            if (t == PowerupType::Random) {
+                // Random (sub_41E21E case 0xC): reroll uniformly over the 12
+                // real kinds — Random itself is excluded by the modulus — and
+                // retry (max 200) while the roll is scheme-forbidden; then
+                // dispatch as the rolled kind (a skull is a legal outcome).
+                // One RNG draw per attempt; the count is part of the contract.
+                PowerupType rolled = PowerupType::None;
+                for (int tries = 0; tries < 200; ++tries) {
+                    auto k = static_cast<PowerupType>(random_below(s, 12));
+                    if (!s.forbidden[static_cast<int>(k)]) {
+                        rolled = k;
+                        break;
+                    }
+                }
+                t = rolled;  // None only if every kind is forbidden
+            }
+            if (t == PowerupType::None) {
+                // fully-forbidden Random: the token is consumed with no effect
+            } else if (t == PowerupType::Disease) {
                 diseases.assign_random(i, 1);
             } else if (t == PowerupType::SuperDisease) {
                 diseases.assign_random(i, 3);
@@ -139,13 +211,19 @@ void run_tick(State& s, const TickInputs& inputs) {
     PowerupSystem powerups{s};
     BombSystem bombs{s, flames, powerups};
     MovementSystem movement{s};
+    StageActorSystem stage{s, movement};
     EnclosureSystem enclosure{s, flames};
 
-    // 1. Players: movement, bomb drop, throw/grab/trigger/punch.
+    // 1. Players: movement (with conveyor/trampoline actors), bomb drop,
+    //    throw/grab/trigger/punch. The conveyor push is part of the move budget
+    //    and the trampoline hop is triggered on settling, so both live inside
+    //    the player turn (mirroring sub_41F29B, which does movement + the actor
+    //    branches in one pass). No new tick step: the actor effects are folded
+    //    into step 1 exactly where the original applies them.
     for (int i = 0; i < kMaxPlayers; ++i) {
         Player& p = s.players[i];
         if (!p.present || !p.alive) continue;
-        player_turn(s, i, inputs.players[i], movement, bombs);
+        player_turn(s, i, inputs.players[i], bombs, stage);
     }
 
     // 2. Kicked bombs slide; airborne bombs fly.

@@ -52,21 +52,62 @@ Observed literal-id `getvalue` call sites (28 of them) request only
 evidence they are loaded as a batch into a settings struct through a separate
 path. (Provenance: exhaustive scan of `call 0x4124a4` sites.)
 
-## ANI per-step timing — PARTIALLY DECODED
+## ANI per-step timing (STAT HEAD u16) — CONFIRMED INERT (`sub_41CD03` loader, `sub_41DAA7` player)
 
 Each `STAT` block's `HEAD` (46 bytes) is zero except a leading u16 that only
-ever holds **30 (0x1E)** or **0xFFFF**. It is therefore a two-state flag, not a
-free-form duration. Per-sequence counts:
+ever holds **30 (0x1E)** or **0xFFFF**. Resolved 2026-07-04 ("devam" #6): **the
+engine never reads this field. It is vestigial authoring metadata and has no
+effect on animation pacing.** The old "0x1E = step / 0xFFFF = hold-or-loop"
+guess is wrong.
 
-- `walk north`: 15 steps, all 30
-- `flame center green`: 6× 30 then 1× 0xFFFF
-- `flame tipeast green`: 7× 30
-- `bomb regular green`: 1× 30 then 17× 0xFFFF
-- `die green 1`: 40× 30 and 43× 0xFFFF
+**Loader `sub_41CD03` (0x41CD03).** Parses each `SEQ ` into a 60-byte sequence
+descriptor in the global array based at `dword_461B5C` (bump-allocated 60 bytes
+at a time by `sub_41C7A5`). Descriptor layout: `+52` = statecnt (number of
+`STAT` steps), `+56` = pointer to the step array. Each step is **20 bytes**
+(`sub_41C707` bump-allocates them): `+0` = the STAT HEAD field0 (the 0x1E /
+0xFFFF value), `+4`/`+8` = the next two HEAD u16 (always 0), `+12` = frame
+count, `+16` = pointer to the frame array (each frame is 12 bytes: absolute
+frame index, dx, dy). So the timing u16 lands at **step record +0**.
 
-Best current reading: 0x1E marks a real animation step and 0xFFFF marks a
-hold/tween/loop marker. Fully resolving it needs the exe's ANI player routine,
-not yet located. Tracked as open. (Provenance: `DATA/ANI/*` STAT parse.)
+**Accessors (the whole "ANI player" surface).**
+- `sub_41DA5C(seq)` → statecnt (`descriptor+52`).
+- `sub_41DAA7(seq, counter)` → the frame index of step `counter % statecnt`
+  (reads only step `+16`, the frame pointer). This auto-looping modulo IS the
+  entire frame-selection logic.
+- `sub_41DB41(seq, counter, &dx, &dy)` → the same step's blit offsets.
+
+**Proof it is inert.** Across the full 1134-function decompile, the *only*
+offset ever dereferenced from a 20-byte step record is `+16` (the frame
+pointer). Step `+0` (timing), `+4`, `+8`, and `+12` (frame count) are never
+read by any code path — grep of every `... + 56)` step-array access confirms
+only `+ 16` and the bare pointer (freed in the ANI teardown at `sub_41D3B5`).
+
+**How pacing actually works.** Each entity owns its own animation counter and
+advances it itself; the displayed frame is `counter % statecnt`. The cadence is
+hardcoded per entity type, never data-driven:
+- Movers advance the counter **once per pixel-step** inside the movement budget
+  loop — rover/ghost `sub_401B5C`: `budget += speed*dt/msPerFrame + 100; while
+  (budget>0){ ++entity[+48]; budget-=100; ... }`.
+- Human players (`sub_41F29B`, builds `"walk %s"`/`"stand %s"`/`"kick %s"`)
+  index with a **16.16 fixed-point walk phase shifted `>>16`**, advanced by
+  distance travelled.
+- Stage extras (`sub_401B5C`-area, `"extra arrow %s"` etc.): arrow every frame,
+  **conveyor `counter/3`** (a literal divide-by-three — proof the ANI file does
+  not carry the rate), trampoline plays once then holds.
+
+**Data (all 95 ANI, 249 sequences, 3416 steps).** field0 ∈ {`0x1E` ×2761,
+`0xFFFF` ×655}. 0xFFFF **never appears as a sequence's first step** (0×), and is
+mostly mid-sequence (607 middle, 48 last) — so it is not a terminal/loop marker
+either. Sample sequences: `walk north` all 0x1E; `bomb regular green` 1× 0x1E
+then 17× 0xFFFF; `die green 1` mixes 40× 0x1E / 43× 0xFFFF. (Provenance:
+`DATA/ANI/*` STAT parse; addresses from `pseudo.c`.)
+
+**Port implication.** The renderer must pace animation from a logical counter
+and select `counter % statecnt`; `SeqStep::head0` must never influence pacing.
+`Renderer::draw_anim` already does exactly `steps[counter % steps.size()]` and
+ignores `head0`, so our model matches. Open follow-up (roadmap #13): the human
+walk *phase* is distance-driven (fixed-point) in the original vs our
+once-per-moved-tick increment — a cadence nuance, independent of this field.
 
 ## Function map (from the IDA database + embedded source names)
 
@@ -202,6 +243,36 @@ Ported faithfully into `move_player` (sim.cpp); the old guessed
 10 ticks matches the budget rule; 4-px lean rounds a corner the old 9-px gate
 would have ignored; centred-into-wall stops on the tile centre).
 
+## Screen geometry / field placement — CONFIRMED (`sub_42647A`, `sub_426524`/`sub_42655F`)
+
+The play-field metrics are set in `sub_42647A`: grid `15x11` (dword_4648AC/4648B4),
+tile `40x36` (dword_4648A4/4648A0), and the pixel origin
+`originX = (screenW-600)/2`, `originY = screenH-412` — for 640x480 that is
+**(20, 68)** (dword_464898/4648A8; screen dims dword_464A70/464A6C = 640/480).
+
+Tile→screen converters: `sub_426524(tx) = 40*tx + 20 + originX` = tile-**centre**
+X; `sub_42655F(ty) = 36*ty + 36 - 1 + originY` = tile-**bottom** Y. So sprites
+blit at (tile-centre-x, tile-bottom-y) minus their ANI hotspot — a bottom-centre
+anchor. The inverse sub-tile helpers `sub_426599`/`sub_4265EB` return the offset
+from the tile centre (the movement stepper's `sx`/`sy`).
+
+Port note: our renderer stores the player/bomb position as the tile CENTRE and
+reaches the bottom anchor by adding `kTileH/2`, so the only correction needed was
+`kFieldOriginY` 64 → **68** (`docs`/`renderer.hpp`); originX 20 and the 40x36 /
+15x11 metrics already matched. (Resolved 2026-07-04 while reviewing Ege's
+"graphics shifted down" report — the field was actually 4 px too *high*.)
+
+Per-element blit anchors (all via the draw queue `sub_415920`/`sub_415A9F`,
+which subtract the sprite's ANI hotspot): floor + brick/solid tiles
+(`sub_4022A1`) and bombs (`sub_42331C`) blit at (tile-centre-x, tile-bottom-y);
+**powerups** (`sub_4250DE`-area, seq `"power %s"`) also blit at
+(tile-centre-x, tile-bottom-y) and are ANIMATED (frame = `sub_41DAA7(seq,
+counter+48)`) — our static POW*.PCX tile-fill is a simplification (roadmap #14);
+**the shadow** blits at the player's OWN anchor `(v111+28, v111+32)` with no
+offset (its (14,16) hotspot centres it). Our renderer had a stray `+8` on the
+shadow (removed 2026-07-04) and draws powerups top-left (≈1 px off, animation
+aside). (Resolved while reviewing Ege's "shadow/powerups/bombs a bit too high".)
+
 ## Disease system — CONFIRMED (`sub_41DFB6` assign, `sub_41EB13` bomb params, `sub_41F29B` effects)
 
 The skull powerup calls **`sub_41DFB6`**: pick `rand() % 9` → **exactly 9 diseases**
@@ -299,7 +370,7 @@ budget (same +=speed / spend-100-per-px scheme as the player stepper).
   per-player trigger allowance +85 < +86) OVERRIDES with kind 1. So a
   trigger+jelly player lays trigger (non-bouncy) bombs. The trigger allowance
   counter also means trigger bombs are a limited supply in the original —
-  NOT yet modeled in our sim (roadmap).
+  now modeled (see "Trigger allowance" below).
 - **Fuse pause — CONFIRMED** (closes the last "still guessed" row): the fuse
   only advances when `state != 2 (dud) && motion != 2 (flying) && motion != 3
   (carried) && kind != 1 (trigger)`. Sliding (kicked) bombs DO tick.
@@ -308,7 +379,7 @@ budget (same +=speed / spend-100-per-px scheme as the player stepper).
   (dir + 2) & 3 — reverses and KEEPS its moving state** (sound 135
   "bombboun"), so it ping-pongs off obstacles until something stops it;
   non-jelly: motion state cleared (sound 130 "bombstop"). A bomb sliding
-  into flame explodes (`sub_42708D` check) — not yet in our sim (kick audit).
+  into flame explodes (`sub_42708D` check) — now ported (see "Kick nuances").
 - **Flight (punched/thrown)**: per-tile hops; landing attempts begin once
   +72 >= 3 tiles (matches our 3-tile launch + 1-tile hops). At each landing
   boundary, **a jelly bomb first rolls a random ±90° veer: chance
@@ -322,13 +393,258 @@ budget (same +=speed / spend-100-per-px scheme as the player stepper).
   it (dud chance denominator candidate — verify at the placement site).
 - Goldflame detail: bomb creation reads a goldflame FLAG (player +94) and
   uses max(gridW, gridH) as the reach — our `flame = 99` is observably
-  equivalent but not literal (audit later).
+  equivalent but not literal (now literal — see "Goldflame literalness" below).
 
 Ported: `Tuning::jelly_turn_chance` (id 667), exclusive kind at placement,
 jelly reverse-on-block in `BombSystem::slide`, jelly veer in
 `BombSystem::fly`, events BombStopped (130) / JellyBounced (135). Tests:
 `tests/test_jelly.cpp`. Golden scenario B constants refreshed for this
 deliberate behaviour change (this section is the citation).
+
+## Dud bombs — CONFIRMED (`sub_422EDE` roll, `sub_422C13` gate, `sub_42331C` window)
+
+Read 2026-07-03. Bomb state (+0): 0 dead, 1 live, **2 = dud (fizzling)**.
+
+- **Roll site = bomb creation** (`sub_422EDE`): only when the kind is REGULAR
+  (`!a4` — trigger and jelly never fizzle) and not a network game. Gated by a
+  global timer (`dword_464AF4`): when open, the gate re-arms FIRST
+  (`sub_422C13`: gate += getvalue(320) + rand() % getvalue(321), VALUELST
+  320 = 180, 321 = 180 — one dud opportunity per ~9–18 s) and then the bomb
+  duds on `rand() % max(1, getvalue(322)) == 0` (322 = 3). The gate is also
+  armed once at match init (`sub_422C7A`).
+- **Fizzle window** (`sub_42331C` tail): the "bomb regular green dud"
+  sequence (DUDS.ANI) renders while the always-running anim counter stays
+  within getvalue(323) = 120 ticks (6 s); past it the bomb returns to state 1
+  with its anim reset. The fuse gate skips state 2 entirely, so the fuse
+  RESUMES where it froze — total lifetime = fuse + fizzle.
+- The original's gate compares wall-clock-ish time (why network games skip
+  duds); our deterministic port measures the same 180-frame values in ticks
+  (`State::dud_gate`, hashed) — semantics identical at 20 Hz, and
+  determinism holds where the original had to disable the feature.
+- Chain explosions still set off a fizzling dud (the explosion path ignores
+  the dud state).
+
+Ported: `Bomb::dud_left` (hashed) + `State::dud_gate` (hashed), roll in
+`BombSystem::place`, freeze in `tick_fuses`, DUDS.ANI wired through
+AssetStore/SequenceSet/Renderer. Tests: `tests/test_dud.cpp`. Golden fully
+recaptured (hash layout gained two fields; setup consumes one arm draw).
+
+## Head hit — CONFIRMED (`sub_421F7E`, stun countdown in the player updater)
+
+Read 2026-07-03. When a flying bomb lands on a live player:
+
+- **Stun = hardcoded 16 ticks** (`a1[29] = 16`, the word at +58): the player
+  updater decrements it each tick, blocks the whole turn while positive, and
+  clears action-state 3 when it reaches zero. NOT a VALUELST id — our old
+  `head_stun_frames = 20` guess corrected to 16 and marked confirmed.
+- **Drop count** = getvalue(670) + rand() % max(1, getvalue(671)) — the
+  modulus is 671's value itself (we previously used %(671+1); fixed).
+- **Kind selection**: per drop, up to 200 tries of `kind = rand() % 15`,
+  accepted when the player's per-kind count exceeds the VALUELST start-with
+  baseline (getvalue(50+kind)); the kind is decremented and its token
+  scattered. (Uniform over KINDS with surplus, not over accumulated tokens.)
+- **Scatter placement** (`sub_4255B2` via `sub_425BED`, which discards the
+  position argument): the token lands on a RANDOM tile — `x = rand()%W,
+  y = rand()%H`, inner budget 100 rolls (solid/brick just re-roll), outer
+  budget 100 attempts (flame/powerup/bomb tiles burn an attempt), token LOST
+  if everything fails. Our old nearest-free-spiral was a guess; replaced.
+- Side find: a fully-boxed-in idle player rolls a panic anim state
+  (20 + rand % getvalue(330)) — cosmetic only, not ported into the sim.
+
+Ported in `PowerupSystem::head_hit`/`scatter`; `tests/test_sim.cpp` head-hit
+case still covers stun/scatter. Golden verified UNCHANGED (scenario B never
+lands a bomb on a live head — confirmed with a fresh capture run).
+
+## Powerup pickup dispatcher — CONFIRMED (`sub_41E21E`)
+
+Read 2026-07-03. Flow: cure roll first (curable && 1-in-getvalue(125)), then a
+kind switch over the token's `+4`, then a common tail. Player bytes +86..+96
+are the per-kind counts (86 bombs, 87 flame, 89 kick, 90 skate, 91 punch,
+92 grab, 93 spooger, 94 goldflame, 95 trigger, 96 jelly).
+
+- **Random (case 0xC)**: `token.kind = rand() % 12` — Random itself is
+  excluded by the modulus — retried up to 200 times while
+  `forbidden[kind]` (the scheme -P table), then control jumps BACK into the
+  switch and the rolled kind applies normally (a skull or super-skull is a
+  legal outcome). Ported into the pickup path in `simulation.cpp`
+  (`State::forbidden` now carries the scheme flags; one RNG draw per
+  attempt). Tests: `tests/test_random.cpp`.
+- **Mutual exclusions** via the remove helper `sub_41E16A`: punch removes
+  trigger; grab removes spooger; spooger removes grab; trigger removes punch
+  AND jelly; jelly removes trigger. NOT yet in our sim (roadmap item 11).
+- **Trigger pickup** also zeroes the live-trigger-bomb counter (+85); bomb
+  creation lays trigger kind only while `+85 < +86 (max bombs)`.
+- **AWESOME cadence**: pickup counter +101 (not incremented by skulls):
+  voice at 7, then every 5th; counter wraps to 7 past 50. (Our SoundDirector
+  had "every 3rd" — fixed, with the wrap.)
+- **Pickup sounds**: normal kinds play the 400 voice group; **jelly plays
+  135 ("bombboun")** instead — fixed in SoundDirector.
+- Per-kind limits clamp `player[86+kind]` against getvalue(550+kind) in the
+  common tail — matches our `PowerupSystem::apply` clamping.
+
+## Trigger allowance — CONFIRMED (`sub_41EB13` placement, `sub_41E21E` case 9)
+
+Read 2026-07-04 ("devam" #9). A trigger player may only lay a limited number of
+live trigger bombs, capped by their bomb count.
+
+- **Placement gate** (`sub_41EB13`, the bomb-params function): kind starts 0;
+  jelly (`+96`) sets kind 2; then the trigger branch OVERRIDES only while the
+  allowance holds:
+  `if (player[+95] /*trigger flag*/ && player[+85] /*live count*/ < player[+86]
+  /*max_bombs*/) { kind = 1; ++player[+85]; }`.
+  So the allowance VALUE per state is exactly **max_bombs** (`+86`), and each
+  trigger placement consumes one (`++[+85]`).
+- **Exhaustion behaviour**: when `+85 >= +86` the trigger branch is skipped —
+  the bomb is **NOT blocked**, it simply stays kind 0 = a **normal timed bomb**
+  (fuse from `getvalue(41)`, subject to the dud roll like any regular bomb).
+- **Refill**: the counter `+85` is written in exactly three places across the
+  whole 1134-function decompile — `= 0` at player spawn (`sub_...23910`), the
+  `<` test + `++` at placement (`sub_41EB13`), and `= 0` on **Trigger pickup**
+  (`sub_41E21E` case 9, first statement: `*(_BYTE*)(a1+85) = 0`). There is **NO
+  decrement anywhere** — not on detonation. So the budget is a per-pickup
+  lifetime allowance: a Trigger pickup refills it to a fresh `max_bombs`
+  trigger placements; once spent, further placements are normal bombs until the
+  next Trigger token is collected. (Provenance: exhaustive `+ 85)` grep.)
+- Trigger pickup (case 9) also `++[+95]` (flag) and evicts punch (`sub_41E16A(_,5)`)
+  and jelly (`sub_41E16A(_,10)`) — matches our existing mutual-exclusion port.
+
+Ported: `Player::trigger_placed` (hashed), gated in `BombSystem::place`
+(`make_trigger = trigger && trigger_placed < max_bombs`, then `++trigger_placed`;
+exhausted ⇒ normal timed bomb), refilled in `PowerupSystem::apply` Trigger case.
+No new RNG draws. Tests: `tests/test_trigger_allowance.cpp`. Golden must be
+recaptured (new hashed field; a downgraded trigger bomb now also participates in
+the dud roll it previously skipped).
+
+## Goldflame literalness — CONFIRMED (`sub_41E21E` case 8, `sub_41EB13` reach)
+
+Read 2026-07-04 ("devam" #10). Goldflame is a **flag**, and the giant blast is
+computed at drop time — it is not a stored flame stat.
+
+- **Pickup** (`sub_41E21E` case 8): `++player[+94]` sets the goldflame flag
+  (byte +94), plays voice 400, and is otherwise a normal pickup (its `550+8`
+  limit clamps the byte in the common tail).
+- **Drop-time reach** (`sub_41EB13`): the flame reach `v9` is derived per bomb —
+  `v9 = player[+87] /*flame stat*/; if (player[+136] /*short-flame*/) v9 = 1;
+  if (player[+94] /*goldflame*/) v9 = (gridW <= gridH) ? gridH : gridW;`. So the
+  reach is literally **max(cols, rows)** (`dword_4648AC`/`dword_4648B4` = 15/11 ⇒
+  15). **Ordering matters**: short-flame sets 1 FIRST, then goldflame OVERRIDES
+  it — goldflame **beats** short-flame.
+
+Ported: `Player::goldflame` (hashed) replaces the old `flame = 99` sentinel; set
+in `PowerupSystem::apply` Goldflame case; `BombSystem::place` computes
+`b.flame = short_flame ? 1 : flame; if (goldflame) b.flame = max(kGridWidth,
+kGridHeight);`. Tests: `tests/test_goldflame.cpp`. Golden must be recaptured
+(stored `flame` value 99 → 15, plus the new flag).
+
+Deferred (deliberately, to keep the RNG stream unperturbed without a build to
+verify): the original also rolls goldflame as a droppable kind on a head hit
+(kind 8 = byte +94, accepted when +94 > start-with). Our `head_hit` still skips
+it. Wiring it in (surplus/remove for kind 8) is a one-line follow-up but shifts
+the head-hit kind-roll ACCEPTANCE (hence the draw count per hit) — do it with a
+fresh golden capture.
+
+## Kick nuances — AUDIT (`sub_42331C` kicked-slide, `sub_42708D`, `sub_42464B`)
+
+Read 2026-07-04 ("devam" #8). Three gaps audited against the kicked-slide loop.
+
+1. **Slide into flame explodes — CONFIRMED, FIXED.** The per-pixel slide loop
+   in `sub_42331C` calls `sub_42708D(x,y)` (flame-at: returns the flame cell
+   ptr if `cell[+0] != 0`) at the stepped position; on a hit (and the flame is
+   not the "just-placed guard" kind 9) it queues the bomb's detonation
+   (`sub_423209(bomb, 0)`) and stops. Our slide previously sailed through fire.
+   Ported: `BombSystem::slide` now detonates via `FlameSystem::explode(index)`
+   when the bomb occupies a lit tile (`slide` takes the bomb index for this).
+2. **Mid-slide "re-steer" is a DIRARROW/conveyor, NOT a player — NO CHANGE.**
+   The slide's re-steer (`v70 = sub_405654(tileX,tileY); if (v70 && !v70[1])
+   bomb[+44] = v70[+44]`) reads the **level-actor registry** `dword_45E0A8`
+   (allocated 152×100 at `sub_404D16`), whose entries are stage objects parsed
+   from the level file: **type 0 = DIRARROW**, type 2 = conveyor, type 3 =
+   trampoline, type 1 = warphole (registration at `sub_...6970-7086`, strings
+   "dirarrow"/"conveyor"/"trampoline"/"warphole"; godir at actor `+44`). It is
+   **not** the human-player array (`dword_461BC4`). So the original has no
+   player-based bomb re-steer — a sliding bomb adopts a **directional-arrow
+   tile's** direction. We do not model dirarrows/conveyors yet, so there is
+   nothing faithful to add; this belongs to ROADMAP #7 (conveyors/trampolines).
+   (This corrects the task's "resting player re-reads godir" premise.)
+   Sidenote: `sub_4230A5` (the slide passability check) tests walls, bombs,
+   bricks, powerups and the warphole actor (type 1) — it does **not** test for
+   players, so in the original a sliding bomb passes THROUGH players. Our slide
+   currently treats a live player on the next tile as a blocker; left as-is
+   (pre-existing, out of this audit's scope) and noted for a future pass.
+3. **Kicked-bomb speed = fixed VALUELST id 300 — CONFIRMED faithful.** The kick
+   handler `sub_42464B` sets bomb `+112 = getvalue(300)` (id 300 = 1000; punch
+   `sub_...25943` sets `+112 = getvalue(301)` = 1300). The `getvalue(base+190)`
+   seen at pseudo.c ~23422/23447 is the **conveyor** contribution to *player*
+   movement (id 190 = 250, "low"), gated on actor type 2 — unrelated to kicked
+   bombs. Our `Tuning::kicked_bomb_speed` (id 300) already matches; no change.
+
+Ported: flame-into-explode in `BombSystem::slide` (now index-based). Tests:
+`tests/test_kick_nuances.cpp`. Golden: the flame-explode path only triggers when
+a kicked bomb meets flame; golden scenarios that never do stay byte-identical,
+but recapture after the trigger/goldflame hash-layout change regardless.
+
+## Punch glove feedback — CONFIRMED (`sub_424A50` handler, `sub_41F29B` dispatch)
+
+Read 2026-07-04 ("devam" #23, control/audio fidelity). The punch glove is the
+per-player action flag **+91** (set by `sub_41E21E` case 5). Its handler is
+`sub_424A50`, dispatched from the player updater `sub_41F29B` at the action
+edge-gate `if (+57 && !+55)` (button down this frame, not last = one fire per
+press) via `if (+91 && !+56 && sub_424A50(p)) { p[+0x4e] = 2; }` — setting the
+punch anim state 2.
+
+- **The glove ALWAYS swings.** `sub_424A50` returns **1 unconditionally**, so
+  the caller sets punch anim state 2 on **every** press regardless of whether a
+  bomb is in front. This is the key fact: pressing punch with an empty tile
+  ahead still plays the full swing animation.
+- **Launch + SFX are gated on a bomb being present.** Inside `sub_424A50`:
+  `v9 = sub_422E48(tileAheadX, tileAheadY)` (scan the 100-slot bomb array for a
+  resting/kicked bomb on the tile ahead — excludes motion states 2 flying / 3
+  carried); **`if (v9) { sub_424987(v9, facing); sub_427961(150); }`**. So the
+  bomb is thrown (`sub_424987` → `sub_41013F` spawns the flying-bomb actor 0x36)
+  and SOUNDLST 150 ("punching a bomb") plays **only when a bomb is actually
+  hit**. An empty swing is animated but **silent** and launches nothing.
+- `sub_427961(id)` random-picks across the contiguously loaded slots from `id`
+  up (it scans forward while the slot ptr is non-zero); with 150/151 both
+  loaded, `sub_427961(150)` plays a random of {150,151}. (Provenance:
+  `sub_427961` @ 0x427961.)
+
+Ported: `BombSystem::try_punch` now emits `BombPunched` on **every** press to
+drive the swing pose, sets `launch()` only when a bomb is ahead, and flags the
+hit in the (unhashed) event `data` (1 = bomb launched, 0 = empty swing).
+`SoundDirector` plays 150/151 only when `ev.data` is set — mirroring the SFX
+being inside `if (bomb ahead)`. Previously `try_punch` returned early when no
+bomb was ahead, giving no pose and no sound on an empty swing (the reported
+bug). **No golden impact** — this only adds/moves event emissions and reads
+`data` in the presentation layer; `State`/`Player` are unchanged and events are
+not hashed.
+
+## Throw is silent — CONFIRMED (`sub_41F29B` +37 carried-release block; SOUNDLST scan)
+
+Read 2026-07-04 ("devam" #23). Throwing a carried (grab-glove) bomb plays **no
+sound** in the original.
+
+- **Throw path.** A carried bomb rides in the player actor pointer field **+37**
+  (dword). Each tick `sub_41F29B` releases it (LABEL_246 block): `if (p[+37]) {
+  v73 = p[+37]; if (notBlocked) { reposition actor at player x/y; sub_424987(v73,
+  facing); p[+37] = 0; } }`. `sub_424987` is the SAME launch primitive the punch
+  uses — but here there is **NO `sub_427961` call anywhere in the block**. The
+  throw is silent.
+- **The "bmbthrw" sounds are dead assets.** SOUNDLST lists `172,bmbthrw1`,
+  `173,bmbthrw3`, `174,bmbthrw4`, `175,bmbthrw5` (right after grab `170,grab1` /
+  `171,grab2`). An exhaustive scan of every `sub_427961(N)` literal call site in
+  the whole decompile shows the audio player is **never** invoked with any of
+  171–175 (nor 172): the only glove-family sound calls are `sub_427961(150)`
+  (punch hit, `sub_424A50`), `sub_427961(160)` (flying-bomb hop, "bmdrop3"), and
+  `sub_427961(170)` (grab attach, `sub_424AF4`). So grab2 and all four throw
+  sounds are loaded but never played. (Provenance: `grep sub_427961(` over
+  `pseudo.c`; SOUNDLST.RES text listing.)
+
+Ported: removed the `BombThrown → play_one_of({150,151})` mapping in
+`SoundDirector` (throwing now plays nothing). Previously it borrowed the punch
+**hit** sound 150/151 — the spurious "hit" the user reported on throw. Grab
+(170) and punch-hit (150/151) mappings are unchanged and confirmed correct.
+**No golden impact** — sound-mapping change only; the sim and its hash are
+untouched.
 
 ## Still guessed — not yet extracted from the binary
 

@@ -24,9 +24,23 @@ struct State {
     std::int32_t enclose_index = 0;
     std::int32_t enclose_timer = 0;
     std::int32_t enclose_interval = 0;
+    // Next tick a dud roll may fire (global rate limiter, dword_464AF4 in
+    // the original — armed at setup, re-armed on every open-gate placement).
+    std::uint64_t dud_gate = 0;
     Tuning tuning;
+    // Per-scheme forbidden powerups (-P rows). Static per-match config like
+    // tuning — excluded from state_hash(). The Random powerup consults it
+    // when rerolling (sub_41E21E case 0xC).
+    std::array<bool, kPowerupKinds> forbidden{};
 
     std::array<std::array<Cell, kGridWidth>, kGridHeight> cells{};
+    // Stage "extra" actors (EXTRA<N>.RES → docs/re/stage-actors.md). A static
+    // per-match layer like cells: parsed at setup, never mutated by the sim,
+    // but gameplay-affecting (conveyors push, trampolines bounce) so it IS
+    // mixed into state_hash(). actor_dir is a godir (0=Up,1=Right,2=Down,
+    // 3=Left) and is only meaningful where actor_type is Conveyor/DirArrow.
+    std::array<std::array<ActorType, kGridWidth>, kGridHeight> actor_type{};
+    std::array<std::array<std::uint8_t, kGridWidth>, kGridHeight> actor_dir{};
     // Powerup hidden under a brick (revealed when the brick burns away).
     std::array<std::array<PowerupType, kGridWidth>, kGridHeight> hidden{};
     // Powerup lying revealed on the floor.

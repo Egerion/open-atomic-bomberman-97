@@ -28,6 +28,10 @@ struct Event {
         Infected,     // picked up / caught a disease (data = Disease kind)
         BombStopped,  // kicked bomb hit an obstacle and stopped (SOUNDLST 130)
         JellyBounced, // jelly bomb reversed off an obstacle while sliding (SOUNDLST 135)
+        // Stage actors (docs/re/stage-actors.md). SoundDirector maps these:
+        // TrampolineBounce -> SOUNDLST 350, WarpUsed -> SOUNDLST 1330.
+        TrampolineBounce, // player stepped onto a trampoline and launched a hop
+        WarpUsed,         // player entered a warphole (reserved; warphole deferred)
     };
     Type type{};
     std::int8_t player = -1;  // acting/affected player, -1 if n/a

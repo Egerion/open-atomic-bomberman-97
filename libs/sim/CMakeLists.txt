@@ -11,6 +11,7 @@ add_library(bomber_sim STATIC
   src/systems/powerups.cpp
   src/systems/diseases.cpp
   src/systems/enclosure.cpp
+  src/systems/stage_actors.cpp
 )
 add_library(bomber::sim ALIAS bomber_sim)
 

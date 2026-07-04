@@ -17,12 +17,12 @@ public:
     // Removes one accumulated upgrade of kind t (inverse of apply).
     void remove(Player& p, PowerupType t);
 
-    // Drops a powerup token onto the nearest free floor cell, spiralling
-    // outward from (cx, cy).
-    void scatter(int cx, int cy, PowerupType t);
+    // Drops a powerup token onto a RANDOM free floor tile (sub_4255B2);
+    // the token is lost when placement keeps failing, as in the original.
+    void scatter(PowerupType t);
 
-    // A bomb bonks a player on the head: daze them and scatter some of their
-    // accumulated powerups (VALUELST ids 670/671).
+    // A bomb bonks a player on the head (sub_421F7E): 16-tick stun and
+    // powers_lost_min + rand % powers_lost_rand kind-rolled drops.
     void head_hit(int victim, int tx, int ty);
 
 private:

@@ -13,6 +13,17 @@ namespace bomber::sim {
 
 enum class Cell : std::uint8_t { Blank, Brick, Solid };
 
+// Stage "extra" actors placed from EXTRA<N>.RES (see docs/re/stage-actors.md).
+// The integer values MIRROR the original's actor+4 type field so tables and
+// hashes stay legible: 0=DirArrow, 1=Warphole, 2=Conveyor, 3=Trampoline.
+enum class ActorType : std::uint8_t {
+    None = 255,
+    DirArrow = 0,
+    Warphole = 1,
+    Conveyor = 2,
+    Trampoline = 3,
+};
+
 // Order matches the scheme -P table and VALUELST id blocks (50/400/550).
 enum class PowerupType : std::uint8_t {
     ExtraBomb, Flame, Disease, Kick, Skate, Punch, Grab, Spooger,

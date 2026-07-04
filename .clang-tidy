@@ -1,0 +1,25 @@
+# Curated for this codebase's terse, faithful-port style (CLAUDE.md: single-
+# line ifs, short loop-index names, fixed-size C arrays, deliberate int/fixed-
+# point narrowing). Broad readability-*/cppcoreguidelines-* rulesets fight
+# that style directly, so this stays scoped to real-bug and performance
+# classes instead of house style. Naming conventions (lower_snake, PascalCase,
+# kCamelCase, member_) are enforced by review, not by identifier-naming here.
+Checks: >
+  -*,
+  bugprone-*,
+  performance-*,
+  clang-analyzer-*,
+  modernize-use-nullptr,
+  modernize-use-override,
+  modernize-use-equals-default,
+  modernize-use-equals-delete,
+  readability-redundant-smartptr-get,
+  readability-delete-null-pointer,
+  readability-static-accessed-through-instance,
+  readability-container-size-empty,
+  -bugprone-inc-dec-in-conditions,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions
+WarningsAsErrors: '*'
+HeaderFilterRegex: '(libs|apps)[\\/].*\.hpp$'
+FormatStyle: none

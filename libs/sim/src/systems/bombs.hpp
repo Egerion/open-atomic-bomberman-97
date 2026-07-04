@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 #include "bomber/sim/state.hpp"
@@ -26,8 +27,10 @@ public:
     // spooge branch — the whole run is laid within a single frame).
     void spooge_ahead(Player& p, std::uint8_t owner);
 
-    // Kicks the resting bomb ahead of the player if the path is clear.
-    void try_kick(Player& p, Direction d);
+    // Kicks the resting bomb ahead of the player if the path is clear. `who`
+    // is the kicking player (recorded in the BombKicked event for the kick
+    // animation; events are unhashed so this does not affect determinism).
+    void try_kick(Player& p, Direction d, int who);
 
     // Punches the bomb ahead three tiles into the air.
     void try_punch(Player& p, std::uint8_t who);
@@ -62,8 +65,10 @@ private:
     // makes another one-tile hop (wrapping around the field edges).
     void fly(Bomb& b);
 
-    // Advances a kicked bomb, stopping tile-aligned when blocked ahead.
-    void slide(Bomb& b);
+    // Advances a kicked bomb, stopping tile-aligned when blocked ahead. Takes
+    // the bomb's index so it can detonate the bomb (via FlameSystem) when it
+    // slides onto a flaming tile (sub_42331C flame check, sub_42708D).
+    void slide(std::size_t index);
 
     State& s_;
     FlameSystem& flames_;

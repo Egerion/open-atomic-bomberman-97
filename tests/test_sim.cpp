@@ -267,26 +267,33 @@ TEST_CASE("grab picks the bomb up, throw launches it, fuse resumes") {
     Simulation s(test_config());
     Player& p = s.state().players[0];
     p.grab = true;
-    s.tick(press1(0));  // drop own bomb at (0,0), standing on it
+    // Grab/throw live on the BOMB key now (sub_41F29B): a fresh press onto your
+    // own resting bomb grabs it; releasing the key while carrying throws it.
+    s.tick(press1(0));       // drop own bomb at (0,0), standing on it
     CHECK(s.state().bombs.size() == 1);
-    s.tick(press2(0));  // pick it up
+    s.tick(TickInputs{});    // release, so the next press is a fresh edge
+    s.tick(press1(0));       // press again while standing on it -> pick it up
     CHECK(s.state().bombs.empty());
     CHECK(p.carrying);
     CHECK(p.bombs_placed == 1);  // slot stays reserved while held
     CHECK(p.stun == s.state().tuning.pickup_pause);
-    // Pickup pause: movement input does nothing while stunned.
+    // Pickup pause: movement does nothing while stunned. HOLD the bomb key the
+    // whole time so the bomb stays carried (releasing it would throw).
     Fixed before = p.y;
-    TickInputs down;
-    down.players[0].down = true;
-    run(s, s.state().tuning.pickup_pause, down);
+    TickInputs carry_down;
+    carry_down.players[0].down = true;
+    carry_down.players[0].action1 = true;  // keep holding -> keep carrying
+    run(s, s.state().tuning.pickup_pause, carry_down);
     CHECK(p.y == before);
-    run(s, 6, down);  // free again; ends on row 2 (no pillars on even rows)
+    run(s, 6, carry_down);  // free again; ends on row 2 (no pillars on even rows)
     CHECK(p.y > before);
     CHECK(p.tile_y() == 2);
-    // Throw east: lands three tiles from the throw tile, then explodes.
+    CHECK(p.carrying);       // still holding (key never released)
+    // Throw east: RELEASE the bomb key while carrying -> launch in the facing
+    // dir. Lands three tiles from the throw tile, then explodes.
     p.facing = Direction::Right;
     int from_tx = p.tile_x();
-    s.tick(press2(0));
+    s.tick(TickInputs{});    // release -> throw
     CHECK(!p.carrying);
     CHECK(s.state().bombs.size() == 1);
     CHECK(s.state().bombs[0].flying);
