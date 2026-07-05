@@ -179,17 +179,37 @@ TEST_CASE("the match clock counts down to a TimeUp event") {
 }
 
 TEST_CASE("hurry walls spiral in, crush, and detonate bombs") {
+    // CONFIRMED enclosure timing (sub_426818, docs/re/enclosure.md): the "HURRY!"
+    // banner/sound fires at remaining <= hurry_seconds, but the WALLS start
+    // closing 5 s later (remaining <= hurry_seconds - 5) and drop ONE tile every
+    // 250 ms = 5 ticks at 20 Hz.
     MatchConfig cfg = test_config();
-    cfg.tuning.game_seconds = 4;
-    cfg.tuning.hurry_seconds = 3;  // hurry after 20 ticks, then 1 wall per tick
+    cfg.tuning.game_seconds = 10;  // 200 ticks
+    cfg.tuning.hurry_seconds = 8;  // banner at remaining<=8s (tick 40); walls at 3s (tick 140)
     cfg.tuning.enclosement_depth = 1;
     Simulation s(cfg);
-    run(s, 21);
-    CHECK(s.state().hurry);
-    run(s, 2);
+    run(s, 40);
+    CHECK(s.state().hurry);                // banner fired at moment 1 (tick 40)
+    CHECK(s.state().enclose_index == 0);   // ...but the walls have NOT begun
+    CHECK(s.state().cells[0][0] != Cell::Solid);
+    run(s, 99);                            // up to tick 139: still just the banner
+    CHECK(s.state().enclose_index == 0);
+    run(s, 1);                             // tick 140: walls arm (remaining 3s)
+    CHECK(s.state().enclose_index == 0);   // arm frame drops nothing (gate shut)
+    run(s, 4);
+    CHECK(s.state().enclose_index == 0);   // still nothing at arm+4
+    run(s, 1);                             // arm+5: first wall drops
+    CHECK(s.state().enclose_index == 1);
     CHECK(s.state().cells[0][0] == Cell::Solid);  // spiral starts top-left
     CHECK(!s.state().players[0].alive);           // player 0 spawned there: crushed
-    // A parked bomb in the wall's path must detonate, not linger.
+    // Cadence: exactly one more wall every 5 ticks.
+    run(s, 4);
+    CHECK(s.state().enclose_index == 1);
+    run(s, 1);
+    CHECK(s.state().enclose_index == 2);          // (1,0) closed at arm+10
+    CHECK(s.state().cells[0][1] == Cell::Solid);
+    // A parked bomb in the wall's path must detonate, not linger. Tile (4,0) is
+    // the 5th outer-ring cell (index 4), so it closes at arm + 5*(4+1) = arm+25.
     Bomb b;
     b.active = true;
     b.owner = 1;
@@ -199,14 +219,59 @@ TEST_CASE("hurry walls spiral in, crush, and detonate bombs") {
     b.flame = 1;
     s.state().bombs.push_back(b);
     s.state().players[1].bombs_placed = 1;
-    run(s, 6);
+    run(s, 20);                                   // reach and pass (4,0)'s drop
     CHECK(s.state().bombs.empty());
     CHECK(s.state().cells[0][4] == Cell::Solid);
-    // Depth 1 closes two rings and leaves the interior open.
-    run(s, 100);
+    // Depth 1 closes two rings and leaves the interior open. 88 cells * 5 ticks.
+    run(s, 88 * 5);
     CHECK(s.state().cells[1][1] == Cell::Solid);
     CHECK(s.state().cells[2][2] == Cell::Blank);
     CHECK(s.state().enclose_index == enclose_total(1));
+}
+
+TEST_CASE("enclosure interval is a fixed 5 ticks (250 ms at 20 Hz)") {
+    // Pins the CONFIRMED cadence directly: independent of depth/ring count, the
+    // per-wall interval is 250 ms / (1000/20) = 5 ticks (sub_426818 `+= 250`,
+    // NOT a spread-to-fit heuristic). docs/re/enclosure.md §3.
+    MatchConfig cfg = test_config();
+    cfg.tuning.game_seconds = 20;   // 400 ticks
+    cfg.tuning.hurry_seconds = 20;  // banner at 20s (tick 0); walls at 15s -> tick 100
+    cfg.tuning.enclosement_depth = 3;  // all rings — proves interval != f(n)
+    Simulation s(cfg);
+    run(s, 100);                    // reach the wall-start (remaining 15s)
+    REQUIRE(s.state().enclose_interval == 5);   // armed with the fixed interval
+    // Walk the index forward and confirm it steps exactly once per 5 ticks.
+    int last = s.state().enclose_index;
+    for (int k = 0; k < 6; ++k) {
+        run(s, 4);
+        CHECK(s.state().enclose_index == last);   // no drop in the first 4
+        run(s, 1);
+        CHECK(s.state().enclose_index == last + 1);  // one drop on the 5th
+        ++last;
+    }
+}
+
+TEST_CASE("the HURRY banner precedes the walls by 5 seconds (two distinct moments)") {
+    // The banner/sound (Hurry event) fires at remaining <= hurry_seconds; the
+    // walls do not start dropping until remaining <= hurry_seconds - 5.
+    // Confirmed: HUD block ~29533 (dword_464984) vs sub_426818 (dword_45BE9C).
+    MatchConfig cfg = test_config();
+    cfg.tuning.game_seconds = 10;   // 200 ticks
+    cfg.tuning.hurry_seconds = 8;   // banner at remaining<=8s (tick 40); walls at 3s (tick 140)
+    cfg.tuning.enclosement_depth = 1;
+    Simulation s(cfg);
+    run(s, 40);                     // remaining 8s: the banner window opens
+    CHECK(s.state().hurry);         // banner/sound event fired
+    bool hurry_evt = false;
+    for (const auto& e : s.state().events)
+        if (e.type == Event::Type::Hurry) hurry_evt = true;
+    CHECK(hurry_evt);               // the Hurry event fired on this exact tick
+    run(s, 60);                     // remaining 5s: still inside the banner window
+    CHECK(s.state().enclose_index == 0);          // ...but no wall has dropped
+    CHECK(s.state().cells[0][0] != Cell::Solid);
+    run(s, 45);                     // past tick 145: walls have started
+    CHECK(s.state().enclose_index >= 1);
+    CHECK(s.state().cells[0][0] == Cell::Solid);
 }
 
 TEST_CASE("punch lofts a bomb three tiles, hopping and wrapping") {
@@ -343,4 +408,43 @@ TEST_CASE("a bomb landing on a head stuns and scatters powerups") {
     up.players[1].up = true;
     run(s, 1, up);
     CHECK(v.y == by);
+}
+
+TEST_CASE("a head hit can drop goldflame (kind 8)") {
+    // sub_421F7E rolls rand()%15 over ALL kinds and accepts any whose per-kind
+    // count exceeds getvalue(50+kind). Goldflame (kind 8, start-with id 58 = 0)
+    // is a valid droppable kind when the flag is set. Set the victim's ONLY
+    // surplus to goldflame (every other stat at its baseline) and force enough
+    // drops that the uniform roll lands on kind 8 (200 tries/drop, so missing is
+    // astronomically unlikely when it is the sole accepted kind).
+    MatchConfig cfg = test_config();
+    cfg.tuning.powers_lost_min = 4;  // several drops → the roll certainly hits kind 8
+    Simulation s(cfg);
+    Player& v = s.state().players[1];
+    v.max_bombs = s.state().tuning.start_with[0];  // baseline: no surplus
+    v.flame = s.state().tuning.start_with[1];      // baseline: no surplus
+    v.kick = false;
+    v.goldflame = true;  // the sole surplus kind
+    int vx = v.tile_x(), vy = v.tile_y();
+    s.state().players[0].punch = true;
+    s.state().players[0].x = (vx - 4) * kTileWF + kTileWF / 2;
+    s.state().players[0].y = vy * kTileHF + kTileHF / 2;
+    s.state().players[0].facing = Direction::Right;
+    Bomb b;
+    b.active = true;
+    b.owner = 0;
+    b.flame = 1;
+    b.fuse = 10000;
+    b.x = (vx - 3) * kTileWF + kTileWF / 2;
+    b.y = vy * kTileHF + kTileHF / 2;
+    s.state().bombs.push_back(b);
+    s.tick(press2(0));  // punch → flight
+    run(s, 12);         // land on the victim's head
+    CHECK(v.stun > 0);
+    CHECK(!v.goldflame);  // the goldflame flag was removed as a dropped power
+    bool gold_on_floor = false;
+    for (int y = 0; y < kGridHeight; ++y)
+        for (int x = 0; x < kGridWidth; ++x)
+            if (s.state().floor[y][x] == PowerupType::Goldflame) gold_on_floor = true;
+    CHECK(gold_on_floor);  // scattered as a Goldflame token
 }

@@ -5,6 +5,7 @@
 #include <string>
 #include <utility>
 
+#include "bomber/assets/bmfont.hpp"
 #include "bomber/assets/pcx.hpp"
 
 namespace bomber::game {
@@ -62,6 +63,30 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
             if (fs::exists(p)) trigbomb_.load(ren, p);
         } catch (const std::exception& e) {
             std::fprintf(stderr, "TRIGBOMB.ANI load failed: %s\n", e.what());
+        }
+
+        // Front-end screen-transition wipe (HEADWIPE.ANI, single "HEAD"
+        // sequence). Presentation-only and optional: a missing/broken file must
+        // NOT abort the load — the Transition primitive falls back to a fade.
+        // (docs/re/frontend-flow.md.)
+        try {
+            auto p = ani_dir / "HEADWIPE.ANI";
+            if (fs::exists(p)) headwipe_.load(ren, p);
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "HEADWIPE.ANI load failed: %s\n", e.what());
+        }
+
+        // Front-end bitmap font for the .BM help/credits screens. The engine
+        // draws every text string through the active font, which graphics-init
+        // pins to FONT6 (sub_431E9C(6), BM95.EXE @ 0x417600). The FONT<n>.FON
+        // files live in the install ROOT, not under DATA/. Presentation-only and
+        // optional: a missing/broken font must NOT abort the load — the BM
+        // viewer then simply renders no glyphs. (docs/formats/fon.md.)
+        try {
+            auto p = game_dir / "FONT6.FON";
+            if (fs::exists(p)) frontend_font_ = assets::bmfont::load(p);
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "FONT6.FON load failed: %s\n", e.what());
         }
 
         // Idle "cornerhead" fidgets (CORNER0..7.ANI). Cosmetic and optional:
@@ -161,6 +186,22 @@ const std::vector<Anim>& AssetStore::deaths_for(int player) const {
     if (player >= 0 && player < kLocalPlayers && !deaths_c_[player].empty())
         return deaths_c_[player];
     return deaths_;
+}
+
+const Sprite& AssetStore::frontend_pcx(const std::string& name) const {
+    if (auto it = front_pcx_.find(name); it != front_pcx_.end()) return it->second;
+    // Cache an entry for every request (even failures) so a missing file logs
+    // once and thereafter returns the same empty Sprite the Screen skips.
+    Sprite sp{};
+    try {
+        auto img = assets::pcx::load(game_dir_ / "DATA" / "RES" / (name + ".PCX"));
+        sdl::TexturePtr tex{make_texture(ren_, img)};
+        sp = {tex.get(), img.width, img.height, 0, 0};
+        front_textures_.push_back(std::move(tex));
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "front-end PCX '%s' load failed: %s\n", name.c_str(), e.what());
+    }
+    return front_pcx_.emplace(name, sp).first->second;
 }
 
 }  // namespace bomber::game

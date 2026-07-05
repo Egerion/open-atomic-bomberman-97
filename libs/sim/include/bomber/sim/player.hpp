@@ -35,11 +35,47 @@ struct Player {
     // the next Trigger pickup refills the budget.
     std::int32_t trigger_placed = 0;
     std::int32_t stun = 0;        // ticks of enforced pause (bomb pickup, head hits)
-    // Trampoline bounce (player state +78==5, sub_41EC84/sub_41DE63): a step
-    // onto a trampoline tile launches an in-place hop for this many ticks,
-    // during which movement input is ignored and the player is invulnerable to
-    // being pushed. See docs/re/stage-actors.md §4.
+    // Trampoline hop (player state +78==5, sub_41F29B state 5 / sub_41DE63): a
+    // step onto a trampoline launches a FLIGHT lasting tuning
+    // .trampoline_bounce_frames ticks (VALUELST id 680 = 30). During the flight
+    // movement input is ignored and the player is invulnerable to being pushed;
+    // at the APEX (frame count == 680/2 == 15) it is TELEPORTED to a random nearby
+    // open tile (StageActorSystem::tick_bounce, the confirmed 0x4203a7 loop). This
+    // is a countdown (30→0); the apex fires once at bounce == 15. Hashed. §4.
     std::int32_t bounce = 0;
+    // Trampoline one-shot latch: set when a bounce fires, cleared once the player
+    // leaves the trampoline tile — so a player parked on the centre bounces once,
+    // not every tick (the original re-fires only on the stepper's centring).
+    bool tramp_latch = false;
+    // Warphole two-phase warp (player states 6=warp-out, 7=warp-in in the
+    // original, sub_41F29B ~23155/23215; step-on in sub_41EC84 ~22590). CONFIRMED
+    // timing: warp-out animates until its frame counter passes 8 (9 ticks), then
+    // the player is relocated to the linked exit and enters warp-in, which also
+    // runs 9 ticks before returning to normal. So the whole warp is 18 ticks,
+    // during which the player is state-gated (no movement/input) and invulnerable
+    // to being pushed (sub_41DE63 returns 0 for states 6/7). This countdown drives
+    // that: kWarpTicks..(kWarpTicks/2+1) = warp-out, then relocate at the midpoint,
+    // then (kWarpTicks/2)..1 = warp-in. No RNG — the exit is pre-resolved into
+    // State::warp_dest_* at setup. Hashed (it gates movement every active tick).
+    // Replaces the prior instantaneous-teleport model, which left the player
+    // stuck by never running the out/in phases the renderer expects. §5.
+    std::int32_t warp = 0;
+    // Pending warp destination tile, captured at step-on (original +20/+24,
+    // stored by sub_41EC84 right when it sets warp state 6). tick_warp relocates
+    // the player HERE at the out→in midpoint. Capturing at step-on (not re-
+    // reading warp_dest at the midpoint) is faithful and robust: the original's
+    // per-pixel loop can slide the player a few px OFF the warphole within the
+    // trigger tick, so a midpoint tile lookup would miss the entry tile. Hashed
+    // (part of the in-flight warp). Stays 0 until the first warp and retains the
+    // last dest afterward — always 0 on boards with no warpholes, so it does not
+    // perturb the golden (no-actor) scenarios. See stage-actors.md §5.
+    std::int32_t warp_to_x = 0, warp_to_y = 0;
+    // Warphole one-shot latch (docs/re/stage-actors.md §5). Set when a warp
+    // STARTS; while set the player will NOT re-warp, and it clears the moment the
+    // player is no longer centred on a warphole tile (the exit is itself a
+    // warphole, so without this it would ping-pong). Together with `warp` this
+    // gives exactly one warp per entry.
+    bool warp_latch = false;
     // Carried bomb (picked up with the grab glove); its fuse is frozen.
     bool carrying = false;
     std::int32_t carried_fuse = 0, carried_flame = 2;

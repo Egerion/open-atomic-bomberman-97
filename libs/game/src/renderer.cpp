@@ -13,10 +13,25 @@ namespace bomber::game {
 // KICK/PUNCH sequences are short, so ~8 ticks (~0.4 s) reads cleanly.
 constexpr int kActionPoseTicks = 8;
 
-// Spread of the idle-fidget duration: the original rolls 20 + rand()%getvalue(330)
-// ticks per fidget (sub_41F29B). getvalue id 330 is not yet read from VALUELST —
-// this stands in for it and stays tunable. See docs/valuelst-map.md id 330.
-constexpr int kPanicSpread = 40;
+// Trampoline hop height per elapsed frame. CONFIRMED VALUELST id 681 = 35
+// ("how many pixels vertically do you move each frame?"), read by sub_41F29B
+// state 5 to blit the flying body at y - 35*min(c, len-c). Presentation-only —
+// the integer sim omits it; see docs/re/stage-actors.md §4.
+constexpr int kHopPixelsPerFrame = 35;
+
+// Total warp duration in sim ticks (9 warp-out + 9 warp-in). Mirrors
+// StageActorSystem::kWarpTicks (a private sim header); the "spin" warp animation
+// (WALK.ANI, sub_41F29B states 6/7) advances by elapsed = kWarpTicks - warp.
+constexpr int kWarpTicks = 18;
+
+// Spread of the idle-fidget duration: the boxed-in "cornerhead" fidget rolls
+// `20 + rand()%getvalue(330)` ticks per fidget (sub_41F29B ~23011, guarded so
+// the modulus is >= 1). VALUELST id 330 = 13 (CONFIRMED — the file labels it
+// "how many cornerhead animations there are"; it is BOTH the fidget-duration
+// spread and the number of cornerhead sequences, so it equals
+// kCornerheadVariants above, not a coincidence). Presentation-only: the roll
+// comes off panic_lcg_, never State::rng, so there is no golden impact.
+constexpr int kPanicSpread = 13;  // getvalue(330)
 
 void Renderer::draw_sprite(const Sprite& sp, float x, float y, Uint8 r, Uint8 g, Uint8 b) {
     if (!sp.tex) return;
@@ -171,29 +186,59 @@ void Renderer::sample_movement(const sim::State& s) {
 }
 
 void Renderer::draw_actors(const sim::State& s) {
-    // Conveyor + trampoline floor tiles, drawn UNDER powerups and entities (the
-    // lowest floor layer above the field). Anchored bottom-centre like every
-    // other tile. The conveyor scroll advances at counter/3 (a slow belt, per
-    // the original's actor animator sub_4056CA); the trampoline rides the tick
-    // pulse. Missing sequences simply draw nothing. See docs/re/stage-actors.md.
+    // Conveyor / dirarrow / warphole / trampoline floor tiles, drawn UNDER
+    // powerups and entities (the lowest floor layer above the field). Anchored
+    // bottom-centre like every other tile. The original's actor animator
+    // (sub_4056CA) advances each actor's own frame counter (+48) once PER DRAW
+    // and blits sub_41DAA7(seq, counter): dirarrows (case 0) and warpholes
+    // (case 1) animate at the full per-frame rate, the conveyor (case 2) at
+    // counter/3 (a slow belt), and the trampoline (case 3) only while a player
+    // is bouncing on it (else frame 0 — the resting mat). Drawing a warphole/
+    // arrow at a fixed frame 0 froze its dormant "closed" frame — the bug Ege
+    // caught. See docs/re/stage-actors.md §3-5.
     const SequenceSet& q = *seqs_;
     const std::size_t belt_step = static_cast<std::size_t>(s.tick / 3);
-    const std::size_t pulse = static_cast<std::size_t>(s.tick);
+    const std::size_t full_step = static_cast<std::size_t>(s.tick);
+
+    // How far into its hop the trampoline at (x,y) is — driven by the hashed
+    // Player::bounce of whoever is centred on it, so the mat rests until (and
+    // only while) it is actually bounced. The bounce counts down from
+    // tuning.trampoline_bounce_frames (VALUELST 680); frame 0 = resting mat. The
+    // "extra trampoline" ANI is 12 frames, so draw_anim's `% statecnt` maps the
+    // 30-tick bounce onto the 12 art frames.
+    const std::int32_t bounce_len = s.tuning.trampoline_bounce_frames;
+    auto tramp_frame = [&](int x, int y) -> std::size_t {
+        for (const auto& p : s.players) {
+            if (!p.present || !p.alive || p.bounce <= 0) continue;
+            if (p.tile_x() == x && p.tile_y() == y)
+                return static_cast<std::size_t>(bounce_len - p.bounce);
+        }
+        return 0;  // no one bouncing here: the resting frame
+    };
+
     for (int y = 0; y < sim::kGridHeight; ++y) {
         for (int x = 0; x < sim::kGridWidth; ++x) {
             sim::ActorType at = s.actor_type[y][x];
             if (at == sim::ActorType::None) continue;
             float sx = tile_screen_x(x) + sim::kTileW / 2.0f;
             float sy = tile_screen_y(y) + sim::kTileH - 1.0f;
-            if (at == sim::ActorType::Conveyor) {
-                int g = s.actor_dir[y][x] & 3;
-                if (!q.conveyor[g].steps.empty()) draw_anim(q.conveyor[g], belt_step, sx, sy);
-            } else if (at == sim::ActorType::Trampoline) {
-                if (!q.trampoline.steps.empty()) draw_anim(q.trampoline, pulse, sx, sy);
+            const int g = s.actor_dir[y][x] & 3;
+            switch (at) {
+                case sim::ActorType::Conveyor:
+                    if (!q.conveyor[g].steps.empty()) draw_anim(q.conveyor[g], belt_step, sx, sy);
+                    break;
+                case sim::ActorType::DirArrow:
+                    if (!q.dirarrow[g].steps.empty()) draw_anim(q.dirarrow[g], full_step, sx, sy);
+                    break;
+                case sim::ActorType::Warphole:
+                    if (!q.warphole.steps.empty()) draw_anim(q.warphole, full_step, sx, sy);
+                    break;
+                case sim::ActorType::Trampoline:
+                    if (!q.trampoline.steps.empty())
+                        draw_anim(q.trampoline, tramp_frame(x, y), sx, sy);
+                    break;
+                default: break;
             }
-            // DirArrow (0) / Warphole (1) floor art is deferred with their
-            // mechanics (stage-actors.md §5); their sequences ("extra arrow
-            // <dir>", "extra warp 1") are already resolvable when wired.
         }
     }
 }
@@ -319,10 +364,34 @@ void Renderer::draw_world(const sim::State& s) {
         float sx = kFieldOriginX + p.x / static_cast<float>(sim::kScale);
         float sy =
             kFieldOriginY + p.y / static_cast<float>(sim::kScale) + sim::kTileH / 2.0f - 1.0f;
+        // Trampoline flight lift. CONFIRMED arc from sub_41F29B state 5 (raw
+        // disasm 0x4204b3..0x420517): the body is blitted at y - v80 where
+        //   v80 = getvalue(681) * (c < len/2 ? c : len - c)
+        // i.e. a linear tent peaking at the apex (c == len/2). c = elapsed frames
+        // (the original's +80 up-counter); our Player::bounce is the equivalent
+        // down-counter, already decremented for this tick, so c = len - bounce.
+        // getvalue(681) = 35 px/frame (VALUELST id 681, presentation-only — the
+        // integer sim omits it). len = getvalue(680) = 30, peak = 35*15 = 525 px:
+        // the player rockets high off the top of the field and lands on the random
+        // apex tile, exactly the game's "fly". (The shadow is suppressed entirely
+        // during the flight — see below.)
+        float lift = 0.0f;
+        if (p.bounce > 0) {
+            const int len = s.tuning.trampoline_bounce_frames;
+            const int c = len - p.bounce;  // elapsed frames: 0 at launch .. len-1
+            const int tent = c < len - c ? c : len - c;  // min(c, len-c)
+            lift = static_cast<float>(kHopPixelsPerFrame * tent);
+        }
         // Shadow ellipse at the player's ground anchor. The original blits it
         // at the SAME (x,y) as the player (sub_41F29B: shadow then body at
         // v111+28/+32), its own hotspot doing the centring — no extra offset.
-        draw_anim(q.shadow, 0, sx, sy);
+        // EXCEPTION: the trampoline flight (state 5) skips the shadow entirely
+        // (the state-5 block jmps to LABEL_246 at 0x420870, past the LABEL_239
+        // shadow blit) — the player is high in the air with no ground contact.
+        // The warp (states 6/7) DOES draw the shadow (it lands at 0x42071e, which
+        // blits "shadow" @0x45a242), so only a bounce suppresses it.
+        if (p.bounce <= 0) draw_anim(q.shadow, 0, sx, sy);
+        sy -= lift;  // raise the body (and anything anchored to it) by the hop arc
         int pv = i < kLocalPlayers ? i : 0;
         const Anim* a = moving_[i] ? &q.walk[pv][dir] : &q.stand[pv][dir];
         std::size_t ph = moving_[i] ? walk_phase_[i] : 0;
@@ -356,6 +425,17 @@ void Renderer::draw_world(const sim::State& s) {
                 a = c;
                 ph = moving_[i] ? walk_phase_[i] : 0;
             }
+        }
+        // Warp/teleport pose wins over everything: while warping the player is
+        // fully state-gated (states 6/7, no walk/kick/carry), and the original
+        // draws the "spin" sequence (sub_41F29B strcpy'd @0x45a213) both phases,
+        // advancing its frame by the per-phase counter (+80). Player::warp counts
+        // 18→0, so elapsed = kWarpTicks - warp drives the frame; draw_anim's
+        // `% statecnt` cycles the spin art across the 9-out + 9-in ticks. Falls
+        // back to the pose already selected if WALK.ANI has no "spin".
+        if (p.warp > 0 && !q.spin[pv].steps.empty()) {
+            a = &q.spin[pv];
+            ph = static_cast<std::size_t>(kWarpTicks - p.warp);
         }
         // A diseased player's sprite strobes through random colours — the
         // original redraws it with rand()%10 while a disease-age bit is set

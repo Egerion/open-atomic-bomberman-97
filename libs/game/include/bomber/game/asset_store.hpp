@@ -4,8 +4,11 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <map>
+#include <string>
 #include <vector>
 
+#include "bomber/assets/bmfont.hpp"
 #include "bomber/game/sdl.hpp"
 #include "bomber/game/sprites.hpp"
 #include "bomber/sim/constants.hpp"
@@ -78,6 +81,28 @@ public:
     const AniTextures& extras() const { return extras_; }
     SDL_Texture* field() const { return field_.get(); }
 
+    // Front-end full-screen art (docs/re/frontend-flow.md), loaded lazily on
+    // first request so the match path pays nothing for it and a missing file
+    // just yields an empty Sprite the Screen skips. Keyed by the same base name
+    // the original passes to its screen primitive (sub_42A088): "IPLOGO",
+    // "HSLOGO", "MAINMENU", "DRAW", "BONUS", "CREDBAR", etc. Cached by name.
+    const Sprite& frontend_pcx(const std::string& name) const;
+
+    // HEADWIPE.ANI — the screen-to-screen wipe overlay (single "HEAD" sequence,
+    // stepped counter % statecnt like every ANI, sub_41DAA7). Empty when the
+    // file is missing, in which case the Transition falls back to a fade.
+    const AniTextures& headwipe() const { return headwipe_; }
+
+    // The install ROOT (parent of DATA) — where the `.BM` help/credits screens
+    // and the `FONT<n>.FON` fonts live (not under DATA/RES). Used by the BM
+    // screen viewer to resolve those install-root files.
+    const std::filesystem::path& game_dir() const { return game_dir_; }
+
+    // The front-end bitmap font (FONT6.FON, the font graphics-init pins via
+    // sub_431E9C(6)). Empty when the file is missing/broken (the BM viewer then
+    // draws no glyphs). Loaded once in load().
+    const assets::bmfont::Font& frontend_font() const { return frontend_font_; }
+
 private:
     const AniTextures& pick(const AniTextures& base,
                             const AniTextures (&colored)[kLocalPlayers], int player) const {
@@ -120,6 +145,14 @@ private:
     Sprite powerups_[sim::kPowerupKinds]{};
     std::vector<sdl::TexturePtr> powerup_textures_;    // owners for powerups_
     sdl::TexturePtr field_;
+
+    AniTextures headwipe_;  // screen-transition wipe (HEADWIPE.ANI), shared
+    assets::bmfont::Font frontend_font_;  // FONT6.FON, the .BM screen font
+    // Front-end full-screen PCX, loaded and cached on demand by base name.
+    // mutable: frontend_pcx() is a const accessor but populates the cache
+    // lazily. Owners live in front_textures_ to keep the Sprites' tex valid.
+    mutable std::map<std::string, Sprite> front_pcx_;
+    mutable std::vector<sdl::TexturePtr> front_textures_;
 };
 
 }  // namespace bomber::game

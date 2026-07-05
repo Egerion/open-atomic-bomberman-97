@@ -25,6 +25,8 @@ State build_state(const MatchConfig& config) {
     // (255) is the empty sentinel, so start every tile empty then overlay.
     for (auto& row : s.actor_type) row.fill(ActorType::None);
     s.actor_dir = config.actor_dir;
+    s.warp_dest_x = config.warp_dest_x;  // pre-resolved warphole exits (no sim RNG)
+    s.warp_dest_y = config.warp_dest_y;
     for (int y = 0; y < kGridHeight; ++y)
         for (int x = 0; x < kGridWidth; ++x)
             s.actor_type[y][x] = config.actor_type[y][x];

@@ -41,6 +41,12 @@ struct State {
     // 3=Left) and is only meaningful where actor_type is Conveyor/DirArrow.
     std::array<std::array<ActorType, kGridWidth>, kGridHeight> actor_type{};
     std::array<std::array<std::uint8_t, kGridWidth>, kGridHeight> actor_dir{};
+    // Warphole exit tile, one entry per Warphole cell (docs/re/stage-actors.md
+    // §5): the partner resolved by sub_405A81's idno/linkto scan, pre-computed
+    // at setup so the sim draws no RNG for a warp. A static, hashed per-match
+    // input like actor_type; meaningless (0) where actor_type != Warphole.
+    std::array<std::array<std::uint8_t, kGridWidth>, kGridHeight> warp_dest_x{};
+    std::array<std::array<std::uint8_t, kGridWidth>, kGridHeight> warp_dest_y{};
     // Powerup hidden under a brick (revealed when the brick burns away).
     std::array<std::array<PowerupType, kGridWidth>, kGridHeight> hidden{};
     // Powerup lying revealed on the floor.

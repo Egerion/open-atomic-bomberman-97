@@ -34,11 +34,16 @@ std::uint64_t state_hash(const State& s) {
     }
     // Stage-actor layout (docs/re/stage-actors.md): static per match but
     // gameplay-affecting like cells, so it must be hashed. Packed one word per
-    // tile: low byte = actor_type, next byte = actor_dir.
+    // tile: low byte = actor_type, next = actor_dir, then the warphole exit
+    // tile (warp_dest_x, warp_dest_y). The warp bytes are 0 on non-warp tiles,
+    // so a board with no warpholes hashes identically to before this field
+    // existed (the golden scenarios place no actors → unchanged).
     for (int y = 0; y < kGridHeight; ++y) {
         for (int x = 0; x < kGridWidth; ++x) {
             mix(static_cast<std::uint64_t>(static_cast<std::uint8_t>(s.actor_type[y][x])) |
-                (static_cast<std::uint64_t>(s.actor_dir[y][x]) << 8));
+                (static_cast<std::uint64_t>(s.actor_dir[y][x]) << 8) |
+                (static_cast<std::uint64_t>(s.warp_dest_x[y][x]) << 16) |
+                (static_cast<std::uint64_t>(s.warp_dest_y[y][x]) << 24));
         }
     }
     for (const auto& p : s.players) {
@@ -60,14 +65,35 @@ std::uint64_t state_hash(const State& s) {
             (static_cast<std::uint64_t>(p.goldflame) << 53) |
             (static_cast<std::uint64_t>(p.trigger) << 54) |
             (static_cast<std::uint64_t>(p.jelly) << 55) |
-            (static_cast<std::uint64_t>(p.bombs_placed) << 56));
+            (static_cast<std::uint64_t>(p.bombs_placed) << 56) |
+            // Stage-actor re-entry latches (#7): gameplay state (they gate re-
+            // warp / re-bounce), so hashed. Both 0 on boards with no warpholes/
+            // trampolines → golden scenarios unchanged. See stage-actors.md §4-5.
+            (static_cast<std::uint64_t>(p.tramp_latch) << 62) |
+            (static_cast<std::uint64_t>(p.warp_latch) << 63));
         // Trigger-bomb allowance (player byte +85): its own word so the counter
         // is not truncated. Part of the hashed contract now that #9 caps it.
         mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.trigger_placed)));
+        // Trampoline bounce countdown (Player::bounce, #7), warp countdown
+        // (Player::warp) and the pending warp destination tile (warp_to_x/y,
+        // captured at step-on): all gate/drive an in-flight warp or bounce, so
+        // they are gameplay state and MUST be hashed. Packed into one word —
+        // bounce (≤30) / warp (≤18) / dest x,y (≤14) each fit a byte. ALL are 0
+        // on boards with no trampolines/warpholes, so this word is mix(0) there,
+        // byte-identical to before warp_to_* existed → golden scenarios (no
+        // actors) unchanged. See docs/re/stage-actors.md §4-5.
+        mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.bounce) & 0xFF) |
+            (static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.warp) & 0xFF) << 8) |
+            (static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.warp_to_x) & 0xFF) << 16) |
+            (static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.warp_to_y) & 0xFF) << 24));
         if (p.carrying)
             mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.carried_fuse)) |
                 (static_cast<std::uint64_t>(p.carried_flame) << 32) |
-                (static_cast<std::uint64_t>(p.carried_owner) << 48));
+                (static_cast<std::uint64_t>(p.carried_owner) << 48) |
+                // Carried bomb kind (set on the thrown bomb in throw_carried) —
+                // hashed state while held, not just at throw time.
+                (static_cast<std::uint64_t>(p.carried_jelly) << 56) |
+                (static_cast<std::uint64_t>(p.carried_trigger) << 57));
         mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.stun)) |
             (static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.move_budget)) << 32));
         std::uint32_t dbits = 0;
@@ -84,6 +110,9 @@ std::uint64_t state_hash(const State& s) {
             (static_cast<std::uint64_t>(b.flame) << 32) |
             (static_cast<std::uint64_t>(b.moving) << 40) |
             (static_cast<std::uint64_t>(b.flying) << 41) |
+            // Bomb warphole latch (stage-actors.md §6): 0 on non-warp boards →
+            // golden E (no warpholes) unchanged.
+            (static_cast<std::uint64_t>(b.warp_latch) << 42) |
             (static_cast<std::uint64_t>(b.owner) << 48) |
             (static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.fly_ticks) & 0x3F) << 56));
         mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.dud_left)));

@@ -265,13 +265,51 @@ reaches the bottom anchor by adding `kTileH/2`, so the only correction needed wa
 Per-element blit anchors (all via the draw queue `sub_415920`/`sub_415A9F`,
 which subtract the sprite's ANI hotspot): floor + brick/solid tiles
 (`sub_4022A1`) and bombs (`sub_42331C`) blit at (tile-centre-x, tile-bottom-y);
-**powerups** (`sub_4250DE`-area, seq `"power %s"`) also blit at
-(tile-centre-x, tile-bottom-y) and are ANIMATED (frame = `sub_41DAA7(seq,
-counter+48)`) — our static POW*.PCX tile-fill is a simplification (roadmap #14);
+**powerups** (`sub_424F89`, seq `"power %s"` via `off_45BE50[type]`) also blit
+at (tile-centre-x, tile-bottom-y) and are ANIMATED (frame = `sub_41DAA7(seq,
+counter)` where `counter` is the powerup's OWN per-tile word at struct `+48`,
+bumped once per draw — NOT a global tick or a fixed +48 offset). The type→name
+table `off_45BE50` = {bomb, flame, disease, kicker, skate, punch, grab, spooge,
+goldflame, trigger, jelly, disease3, random, clog, ...} — our `kPowerNames[]`
+matches it 1:1 (verified 2026-07-04). Floor art is POWERS.ANI (40x36, hotspot
+(20,35), CIMG type 4, cyan-tile background — no red frame; the red border on the
+POW*.PCX menu icons is that format's transparent key, and red is also used for
+interior detail so the PCX must not be raw-blitted on the floor). Our animated
+path draws POWERS.ANI; the static POW*.PCX tile-fill is a robustness fallback;
 **the shadow** blits at the player's OWN anchor `(v111+28, v111+32)` with no
 offset (its (14,16) hotspot centres it). Our renderer had a stray `+8` on the
 shadow (removed 2026-07-04) and draws powerups top-left (≈1 px off, animation
 aside). (Resolved while reviewing Ege's "shadow/powerups/bombs a bit too high".)
+
+## Player colour remap — CONFIRMED (`sub_414A65`, builds the `.rmp` tables)
+
+The green armour of every pre-rendered player sprite (walk/stand/bombs/flames/
+deaths, all authored in "green") is retargeted per player at load time by
+**`sub_414A65`** (0x414A65), which bakes a 256-entry remap table (`%u.rmp`,
+`dword_460564[player]`). Init loops all ten players building the args from
+VALUELST: `getvalue(200+5k)=R%`, `getvalue(201+5k)=G%`, `getvalue(202+5k)=B%`,
+then `sub_414A65(k, R%, B%, G%, 0)` (arg order a2=R%, a3=B%, a4=G%). Per source
+palette entry `[R,G,B]`:
+
+```
+if (G > R && G > B) {                 // green-dominant (strict, no margin)
+    lum      = G;
+    baseline = (R + B) / 2;           // v33
+    excess   = lum - baseline;        // v32 - v33
+    outR = R% * excess / 100 + baseline;   // then snap to nearest palette entry
+    outG = G% * excess / 100 + baseline;
+    outB = B% * excess / 100 + baseline;
+} else outC = C;                      // non-green pixels unchanged
+```
+
+The **baseline `(R+B)/2` is preserved**, so the sprite's casing/shading survives
+the tint — a white player {100,100,100} yields a *shaded* light bomb, not a flat
+white one. Ported to `libs/game/src/sprites.cpp recolor_image` (truecolour, so
+the nearest-palette snap is dropped). Fixes the trigger-bomb "white blob": the
+desaturated TRIGBOMB art (mean 58,150,41, baseline ~49) exposed our earlier
+approximation (lum=G, no baseline, fabricated glint) which blew it to pure white
+for the white player. Render-only; no golden impact. (Resolved 2026-07-04 from
+Ege's white-blob trigger-bomb photo.)
 
 ## Disease system — CONFIRMED (`sub_41DFB6` assign, `sub_41EB13` bomb params, `sub_41F29B` effects)
 
@@ -440,20 +478,31 @@ Read 2026-07-03. When a flying bomb lands on a live player:
 - **Drop count** = getvalue(670) + rand() % max(1, getvalue(671)) — the
   modulus is 671's value itself (we previously used %(671+1); fixed).
 - **Kind selection**: per drop, up to 200 tries of `kind = rand() % 15`,
-  accepted when the player's per-kind count exceeds the VALUELST start-with
-  baseline (getvalue(50+kind)); the kind is decremented and its token
-  scattered. (Uniform over KINDS with surplus, not over accumulated tokens.)
+  accepted when the player's per-kind count `player[+86+kind]` exceeds the
+  VALUELST start-with baseline (getvalue(50+kind)); the kind is decremented
+  (`--player[+86+kind]`) and its token scattered. Uniform over KINDS with
+  surplus, not over accumulated tokens. The `+86+kind` byte layout maps kind
+  directly (86 bombs, 87 flame, 89 kick, 90 skate, 91 punch, 92 grab, 93
+  spooger, **94 goldflame**, 95 trigger, 96 jelly) — the SAME order as our
+  `PowerupType` enum, so a kind cast is faithful. **Goldflame (kind 8)
+  IS included** (start-with id 58 = 0 ⇒ a set flag is surplus) — see 2026-07-04
+  update below.
 - **Scatter placement** (`sub_4255B2` via `sub_425BED`, which discards the
   position argument): the token lands on a RANDOM tile — `x = rand()%W,
   y = rand()%H`, inner budget 100 rolls (solid/brick just re-roll), outer
   budget 100 attempts (flame/powerup/bomb tiles burn an attempt), token LOST
   if everything fails. Our old nearest-free-spiral was a guess; replaced.
 - Side find: a fully-boxed-in idle player rolls a panic anim state
-  (20 + rand % getvalue(330)) — cosmetic only, not ported into the sim.
+  `20 + rand % getvalue(330)` — cosmetic (presentation `panic_lcg_`, not the
+  sim). getvalue(330) = 13, CONFIRMED 2026-07-04 (see "Final in-game 1:1 gaps").
 
-Ported in `PowerupSystem::head_hit`/`scatter`; `tests/test_sim.cpp` head-hit
-case still covers stun/scatter. Golden verified UNCHANGED (scenario B never
-lands a bomb on a live head — confirmed with a fresh capture run).
+Ported in `PowerupSystem::head_hit`/`scatter`; `tests/test_sim.cpp` covers
+stun/scatter and (new) the goldflame drop. **UPDATE 2026-07-04:** goldflame
+(kind 8) added to the `surplus()` roll — the previous "skipped for now" note is
+resolved. This changes the per-hit RNG draw count ONLY when the victim has
+goldflame, so **golden B must be recaptured**; A/C/D/E stay byte-identical (see
+"Final in-game 1:1 gaps" §4 for the per-scenario reasoning). The earlier
+"Golden verified UNCHANGED" claim held only while goldflame was excluded.
 
 ## Powerup pickup dispatcher — CONFIRMED (`sub_41E21E`)
 
@@ -536,12 +585,13 @@ in `PowerupSystem::apply` Goldflame case; `BombSystem::place` computes
 kGridHeight);`. Tests: `tests/test_goldflame.cpp`. Golden must be recaptured
 (stored `flame` value 99 → 15, plus the new flag).
 
-Deferred (deliberately, to keep the RNG stream unperturbed without a build to
-verify): the original also rolls goldflame as a droppable kind on a head hit
-(kind 8 = byte +94, accepted when +94 > start-with). Our `head_hit` still skips
-it. Wiring it in (surplus/remove for kind 8) is a one-line follow-up but shifts
-the head-hit kind-roll ACCEPTANCE (hence the draw count per hit) — do it with a
-fresh golden capture.
+RESOLVED 2026-07-04 (the deferred head-hit follow-up, see "Goldflame on a head
+hit" below): the original also rolls goldflame as a droppable kind on a head hit
+(kind 8 = byte +94, accepted when +94 > start-with). Now wired into
+`head_hit`'s `surplus()`; `remove()`/`scatter()` already handled Goldflame. This
+shifts the head-hit kind-roll ACCEPTANCE only for a victim that HAS goldflame —
+so golden B (players can pick up hidden goldflame and be head-hit) must be
+recaptured; A/C/D/E are byte-identical (no goldflame victim on a head hit).
 
 ## Kick nuances — AUDIT (`sub_42331C` kicked-slide, `sub_42708D`, `sub_42464B`)
 
@@ -645,6 +695,252 @@ Ported: removed the `BombThrown → play_one_of({150,151})` mapping in
 (170) and punch-hit (150/151) mappings are unchanged and confirmed correct.
 **No golden impact** — sound-mapping change only; the sim and its hash are
 untouched.
+
+## Per-match brick fill — CONFIRMED (`sub_4260F5`, pseudo.c ~26928)
+
+Read 2026-07-04. The destructible-brick layout is RANDOMISED every match; the
+.SCH grid only marks brick *candidates*.
+
+- **The `:` grid cells are candidates, not final bricks.** The scheme header
+  documents the grid as *"# is solid, : is brick, . is blank"* and carries a
+  separate *"scheme brick density (0-100 percent)"* line (`-B,<n>`). BASIC.SCH
+  ships `-B,90`.
+- **Fill routine** (`sub_4260F5`, non-editor branch): walk the board ROW-MAJOR
+  (`for y in 0..rows: for x in 0..cols`), read the scheme cell
+  `v3 = sub_404852(x,y)` (0=blank, 1=solid, **2=brick candidate**), and
+  `if (v3 == 2 && rand_() % 100 >= dword_4647A0) v3 = 0;` then write it. So each
+  brick candidate becomes a real brick with **`brick_density`%** probability;
+  `>=` density knocks it back to blank. `#`/`.` cells copy verbatim and, thanks
+  to the `&&` short-circuit (`v3==2` tested before `rand_()`), draw **no** rand.
+  `dword_4647A0` is the density, parsed from `-B` and clamped to [0,100]
+  (pseudo.c 5673-5677), default 90 (pseudo.c 6691).
+- **RNG source.** The fill runs during the per-board load (`sub_410B6E` →
+  `sub_4260F5`), off the program's `rand_()`, which is seeded from the WALL CLOCK
+  (`time_(); srand_();` in the init `sub_41095A`, and again right after). So the
+  original's layout is genuinely non-reproducible run-to-run. It is NOT tied to
+  any per-match seed.
+
+**Port + regression.** Our `build_match_config` (the pre-sim match layer) was
+copying every `:` to `Cell::Brick` unconditionally — the fill was skipped, so
+every match on a scheme got the SAME fixed brick layout (the reported
+regression). Fixed: `build_match_config` now performs the exact row-major,
+per-candidate `rand()%100 >= density` fill, driven by a SETUP-ONLY LCG seeded off
+the match seed — **never the sim's per-tick `State::rng`** (mirroring how
+`apply_actors` resolves `-T,H` trampolines). This is a pre-sim randomisation
+producing the static `cells` grid the sim treats as a fixed input, so the
+per-tick RNG draw contract is untouched, while identical seeds reproduce
+identical boards (the game advances the seed every round, so successive matches
+now vary). **No golden impact**: the golden scenarios build `MatchConfig.cells`
+by hand and never call `build_match_config`; `build_state`'s setup RNG
+(powerup-hide, dud-gate arm) is unchanged. Tests: `tests/test_match.cpp`.
+
+## Throw/punch flight lands with a sound — CORRECTED (`sub_42331C` case 2 ~25441)
+
+Read 2026-07-04. A previous note said the THROW is silent. That is true of the
+throw *instant* (no `sub_427961` in the `+37` release block, see "Throw is
+silent") — but the resulting FLIGHT is not. A thrown or punched bomb is a flying
+actor (motion state 2, `sub_424987` → `sub_41013F`); its per-tile flight block
+`sub_42331C case 2` calls **`sub_427961(160)`** ("bmdrop3") at EVERY tile
+boundary once it has travelled `>= 3` tiles — UNCONDITIONALLY, *before* the
+head-hit / settle / re-hop branch. So the bomb plays 160 on each hop AND on its
+final landing.
+
+- Our `BombSystem::fly` previously emitted `BombBounced` (→ 160) only when the
+  landing tile was occupied (a re-hop), and settled silently on a clear tile —
+  so the throw arc was missing its landing sound (the "more sounds" the user
+  remembered). Fixed: `fly` now emits `BombBounced` once at every landing
+  boundary, before the occupancy branch, matching the single `sub_427961(160)`
+  call site. **No golden impact** — events are not hashed and no RNG draw
+  changed (the jelly-veer roll is untouched). Tests: existing punch/throw and
+  jelly suites still hold; `test_golden` E's `bounces`/`rng` count `JellyBounced`
+  and are unaffected.
+
+## Diarrhea/super auto-drop × grab-glove = serial throw — CONFIRMED (`sub_41F29B` LABEL_246)
+
+Read 2026-07-04. The auto-drop diseases and the grab/throw glove interact through
+three INDEPENDENT blocks that all run in one pass (LABEL_246), which the earlier
+port had collapsed into a carrying-vs-not if/else.
+
+- **(1) Auto-drop flag.** `if (+135 /*diarrhea*/ || +137 /*super*/) { +56 = 1;
+  +54 = 0; v112 = 1; }` — forces the bomb-key edge (`+56` down, `+54` not-last)
+  every frame so the drop block fires each tick, and raises `v112`.
+- **(2) Throw block.** `if (+37 /*carried bomb*/) { if (v112 || !+56) { launch it
+  (sub_424987); +37 = 0; } }`. Not gated by constipation. So a carried bomb is
+  released on key-up normally, but **`v112` (auto-drop) forces the throw EVERY
+  frame**.
+- **(3) Action2 block** (`+57 && !+55`): punch (+91), trigger (+95). Unchanged.
+- **(4) Drop block.** `if (+56 && !+54 && !+134 /*constipation*/)`: GRAB your own
+  resting bomb underfoot (`+92`), else SPOOGER line (`+93 && !v112` — suppressed
+  during auto-drop), else normal DROP (`sub_41EB13`). Only THIS block is gated by
+  constipation.
+
+Net effect with **diarrhea + grab**: each tick the drop block grabs the bomb
+underfoot, the next eligible tick the throw block force-throws it (v112), the
+drop block then drops a fresh bomb, which is grabbed again — a grab→throw→drop
+loop = the **serial throwing** the user observed. It is the ORIGINAL's behaviour,
+not a bug to suppress. Constipation blocks the DROP but a carried bomb can still
+be thrown (block 2 has no `+134` gate).
+
+Ported into `player_turn` (simulation.cpp) as the same four blocks with the
+forced-edge semantics (`a1_now/a1_last/drop_edge` override under auto-drop; throw
+outside the constipation gate; spooger `!auto_drop`). Tests:
+`tests/test_diarrhea_throw.cpp`. **Golden: scenario B must be recaptured** — its
+players have the grab glove and can pick up skulls, so the grab-during-auto-drop
+path (new: grab instead of a plain drop) and the every-frame carried-throw now
+run, which changes both the hash and the RNG consumption (a grab draws no dud
+RNG where the old plain drop did). Scenarios A/C/D/E are unaffected: A has no
+players; C/D players have no grab/spooger so the drop block still just drops
+(identical calls + RNG); E hides no skulls so no player is ever diseased.
+
+## "HURRY!" callout plays SOUNDLST 2700 — CONFIRMED (`sub_42A191` ~0x42A2C4)
+
+Read 2026-07-04. When the round timer runs low and the walls begin closing, the
+original flashes a "hurry" banner AND plays a one-shot voice callout. Both live
+in the per-frame game loop `sub_42A191` (~line 29487; the hurry block is around
+0x42A2C4):
+
+```c
+if (v5 < sub_412135(101)) {          // timer past the hurry threshold
+    ... if (sub_410578() > v7 - 5) {
+        if (!dword_464984) {         // one-shot latch
+            dword_464984 = 1;
+            sub_427961(2700);        // <-- the "HURRY!" voice, fires ONCE
+        }
+        v10 = sub_41D957((int)aHurry);   // then draws the "hurry" banner
+        ... sub_415920(..., v11);        // flashes it (every 4th frame: &4)
+    }
+}
+```
+
+- **The sound is SOUNDLST 2700.** SOUNDLST.RES labels `2700,hurry` with the
+  comments *"plays when \"hurry\" flashes across the screen."* and *"2799 is last
+  \"hurry up!\" sound"* — so 2700..2799 is a contiguous "hurry up!" voice block.
+  `sub_427961(2700)` random-picks across the contiguously loaded slots from 2700
+  (it scans forward while the slot ptr is non-zero), so the callout varies across
+  the whole 2700–2799 block. `sub_427961(2700)` is the ONLY call with id ≥ 2700
+  except `sub_427BFB(2800)` (a different block). (Provenance: `sub_42A191`,
+  `sub_427961` @ 0x427961, SOUNDLST.RES text listing.)
+- **One-shot.** `dword_464984` latches the sound to the first hurry frame; it is
+  reset (`dword_464984 = 0`) when a new round starts (line 14792). Our
+  `EnclosureSystem` emits `Event::Type::Hurry` once behind the `s.hurry` latch,
+  which mirrors this exactly.
+
+Ported: `SoundDirector` maps `Event::Type::Hurry → play_random_in_range(2700,
+2799)` (previously the event drove only the visual banner and was unmapped).
+**No golden impact** — SoundDirector reads unhashed events; no sim state, RNG
+draw, or hash field changed.
+
+## Wall-slam SFX (SOUNDLST 140–146) — UNCONFIRMABLE in this decompilation
+
+Read 2026-07-04. SOUNDLST.RES loads `140,clikplat` / `141,sqrdrop2` /
+`142,sqrdrop4` … `146,sqrdrop8`, commented *"a solid tile slamming in place
+(after \"hurry\" is displayed)"* — clearly the per-tile wall-drop SFX. **But an
+exhaustive scan of every `sub_427961(N)` / `sub_427ABB(N)` / `sub_427BFB(N)`
+literal call site in `pseudo.c` finds NO call that plays 140–146.** The only
+literal `140` in the file is `sub_4278F2(dword_462244 + 140)` — pointer
+arithmetic on an unrelated base, not a SOUNDLST id. So in this Hex-Rays output
+the wall-slam is never triggered through the sound dispatchers.
+
+- Two honest possibilities: (a) the wall-drop sound is dispatched through a path
+  this decompilation didn't surface as a literal (inlined / indirect), or (b) it
+  genuinely isn't wired in this build. I could not distinguish them from the
+  available pseudo.c, so per the strict-1:1 / no-guessing rule I did **not**
+  change our existing `WallClosed → play_one_of({140,141,142})` mapping (it is a
+  faithful choice of the labelled block if the sound does play, and removing it
+  on incomplete evidence would be a guess in the other direction). Flagged here
+  as the one remaining unconfirmed sound point in the enclosure arc; a deeper
+  (Ghidra) pass on the enclosure/wall-drop function would settle it.
+
+## Final in-game 1:1 gaps — CONFIRMED (2026-07-04, "devam" #39)
+
+Four small fidelity gaps that finish the in-game layer at 100% 1:1.
+
+### 1. Warphole knocks out one random adjacent tile (`sub_4056CA` case 1)
+
+The actor updater's warphole branch runs a ONE-TIME block gated by a per-actor
+latch byte `+146` (`if (!*(v23+146)) { *(v23+146)=1; … }`). On first activation,
+outside the editor (`sub_40C06A() != 1`), it:
+
+1. Clears the warphole's OWN tile: `sub_425E9B(x, y, 0)` (write cell type 0 =
+   Blank via `sub_425E36`, bounds-checked).
+2. Picks ONE random adjacent tile and clears it too:
+   ```c
+   do { do { v21 = rand()%4;
+             nx = dword_45BECC[v21] + x;
+             ny = dword_45BEDC[v21] + y; }
+        while (nx < 0); }
+   while (nx >= dword_4648AC /*W=15*/ || ny < 0 || ny >= dword_4648B4 /*H=11*/);
+   sub_42C0C8("knocking out %u,%u");   // debug print
+   sub_425E9B(nx, ny, 0);              // clear the neighbour
+   ```
+   `dword_45BECC={0,1,0,-1}` (dx), `dword_45BEDC={-1,0,1,0}` (dy) — the cos/sin
+   dir tables. Both are never 0 together, so the centre is NEVER a candidate (no
+   explicit skip needed). The nested `do/while` just retries a fresh cardinal
+   direction until the neighbour is in-bounds, then sets that tile to Blank
+   UNCONDITIONALLY (brick OR solid, whatever sat there). One knockout per
+   warphole (the `+146` latch).
+
+Port: `match::apply_actors` (match_factory.hpp) now calls a `knockout_neighbour`
+lambda when it places a warphole, driven by the SAME setup-only LCG the `-T,H`
+trampoline placement uses (`roll()`), NEVER `State::rng`. It only mutates the
+static `cfg.cells` grid (→ Blank), so the per-tick RNG contract is untouched.
+GOLDEN: no golden scenario has warpholes (they build `cells` by hand and never
+call `apply_actors`) ⇒ UNCHANGED. Tests: `tests/test_match.cpp` (own tile + one
+cardinal neighbour cleared, per-seed determinism, edge warphole never writes out
+of bounds).
+
+### 2. options.ini `conveyor_speed=` parsing (`sub_406238` reader)
+
+The Conveyor Speed game option is `dword_464930`. The binary hardcodes its
+default to **1 (medium)** at init (pseudo.c 14652: `dword_464930 = 1`), and the
+install-root `options.ini` overrides it. The reader `sub_406238` (called from
+`sub_406086` when the file opens) parses `key=value` lines: split on the first
+`=`, `stricmp` the key, `sub_4516C1(value)` (atoi). The `conveyor_speed` key
+stores into `dword_464930`, then clamps it: `if (<0) =0; if (getvalue(189) <= it)
+= getvalue(189)-1` (pseudo.c 7862-7865). The write side (`sub_405DE3`, format
+`"conveyor_speed=%u\n"`, string @0x…1375) confirms the key order = 4th
+(levelno, num_to_win_match, enclosement_depth, conveyor_speed).
+
+Downstream: `getvalue(dword_464930 + 190)` is the conveyor's player-move budget
+contribution (pseudo.c 23422/23447/23449) and `getvalue(dword_464930 + 295)` its
+sprite variant (9129); the options menu cycles the index `[0, getvalue(189)-1]`
+(9321-9425). VALUELST **189 = 3** (speed count), **190/191/192 = 250/350/450**
+(low/med/high, 1/100 px). THIS INSTALL's options.ini carries **`conveyor_speed=2`
+⇒ high = 450**.
+
+Port: new `assets::Options` + `assets::load_options(path)` (install.hpp/cpp) — a
+faithful skim of the line parser, surfacing `conveyor_speed` as
+`std::optional<int>` (empty when the key/file is absent so the caller keeps the
+default). `game_app::init` reads `<game_dir>/options.ini` and
+`game_app::start_match` sets `cfg.tuning.conveyor_speed_index` from it (empty ⇒
+keeps the confirmed default 1). GOLDEN: config-only, no per-tick RNG ⇒
+UNCHANGED. Tests: `tests/test_options.cpp` (present/absent key, missing file,
+case-insensitive, comments ignored).
+
+### 3. getvalue(330) idle-fidget spread = 13 (`sub_41F29B` ~23011)
+
+The boxed-in "cornerhead" fidget: when a standing player has `<4` walkable
+neighbours (`v99 >= 4` blocked) and its fidget counter `+39` is idle, it rolls
+`v111[39] = rand() % v95 + 20; v111[40] = 0;` where `v95 = getvalue(330)` guarded
+to be ≥1 (`if (getvalue(330) <= 1) v95 = 1; else v95 = getvalue(330)`). VALUELST
+**330 = 13** — the file labels it "how many cornerhead animations there are", so
+id 330 is BOTH the number of cornerhead sequences and the fidget-duration
+spread; it equals our `kCornerheadVariants = 13` by construction. Port:
+`renderer.cpp` `kPanicSpread` 40-stub → **13**. Presentation-only (the roll comes
+off `panic_lcg_`, never `State::rng`) ⇒ no GOLDEN impact.
+
+### 4. Goldflame dropped on a head hit — see "Goldflame literalness" RESOLVED note
+
+`sub_421F7E` rolls `rand()%15` UNIFORMLY over all kinds and accepts any whose
+per-kind count `player[+86+kind]` exceeds getvalue(50+kind); goldflame (kind 8 =
+byte +94, start-with id 58 = 0) is a valid droppable kind when the flag is set.
+Added to `PowerupSystem::head_hit`'s `surplus()` (`have = p.goldflame ? 1 : 0`);
+`remove()`/`scatter()` already handled Goldflame. The RNG draw count per head hit
+changes ONLY for a victim that HAS goldflame — so **golden B must be recaptured**
+(its players can pick up hidden goldflame tokens and be head-hit); **A/C/D/E are
+byte-identical** (A no players; C no punch/grab ⇒ no flying bombs; D forces no
+actions; E hides no powerups ⇒ no player ever has goldflame). Test:
+`tests/test_sim.cpp` "a head hit can drop goldflame (kind 8)".
 
 ## Still guessed — not yet extracted from the binary
 

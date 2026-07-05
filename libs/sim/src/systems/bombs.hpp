@@ -67,8 +67,17 @@ private:
 
     // Advances a kicked bomb, stopping tile-aligned when blocked ahead. Takes
     // the bomb's index so it can detonate the bomb (via FlameSystem) when it
-    // slides onto a flaming tile (sub_42331C flame check, sub_42708D).
-    void slide(std::size_t index);
+    // slides onto a flaming tile (sub_42331C flame check, sub_42708D). Also
+    // applies the stage-actor reactions at each tile centre: a DIRARROW re-steers
+    // the bomb (sub_42331C ~25532) and a WARPHOLE teleports it (stage-actors.md
+    // §6). `belt` is the per-tick move budget (belt speed for a conveyor-carried
+    // bomb, else kicked_bomb_speed).
+    void slide(std::size_t index, std::int32_t budget);
+
+    // A resting bomb sitting on a conveyor tile is pushed along the belt at the
+    // belt speed (sub_42331C case 0, getvalue(190+idx)). Sets it moving in the
+    // belt direction so slide() carries it; a bomb already moving is left alone.
+    void conveyor_carry(std::size_t index);
 
     State& s_;
     FlameSystem& flames_;

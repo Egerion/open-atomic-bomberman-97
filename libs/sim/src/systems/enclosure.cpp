@@ -91,24 +91,55 @@ void EnclosureSystem::drop_wall(int wx, int wy) {
                         static_cast<std::int8_t>(wy), 0});
 }
 
+// CONFIRMED cadence (sub_426818, the enclosure stepper): one wall tile drops
+// every 250 ms of wall clock, gated by timeGetTime() — `dword_46223C += 250`.
+// At the locked 20 Hz tick rate (50 ms/tick, dword_46494C = 1000/getvalue(30))
+// that is exactly ONE wall per 5 ticks. It is a HARDCODED constant, NOT a
+// VALUELST getvalue (the only enclosure getvalues are id 27 = depth and
+// id 101 = the hurry threshold). The original's up-to-5-drops-per-frame
+// catch-up (`v22 = 5`) only fires when a frame ran long; in deterministic
+// lockstep every frame is 50 ms, so the cadence is a clean 5 ticks. See
+// docs/re/enclosure.md.
+static constexpr int kEncloseIntervalTicks = 250 / (1000 / kTicksPerSecond);  // = 5
+
 void EnclosureSystem::update() {
     State& s = s_;
     int depth = s.tuning.enclosement_depth;
 
-    // Arm at the threshold; the interval is chosen so the last wall lands
-    // just before time-up.
-    if (!s.hurry && s.ticks_left > 0 &&
-        s.ticks_left <= s.tuning.hurry_seconds * kTicksPerSecond) {
+    // TWO distinct moments in the original, kept separate here:
+    //  1. The "HURRY!" banner + voice callout: remaining <= getvalue(101)
+    //     (the HUD block ~29533, latched on dword_464984, sub_427961(2700)).
+    //     `s.hurry` + the Hurry EVENT model this — the presentation (banner,
+    //     sound_director) rides the event, so it fires at this moment.
+    //  2. The walls actually START closing: remaining <= getvalue(101) - 5, i.e.
+    //     5 s LATER (the enclosure stepper sub_426818 ~27170 arms on
+    //     `sub_410578() <= getvalue(101) - 5`). The tile DROPS are gated on this.
+    // Conflating the two (drop at moment 1) closed the walls 5 s too early; this
+    // decouples them. ticks_left/20 is our seconds-remaining; the -5/-0 are
+    // whole-second offsets in tick units. See docs/re/enclosure.md §2.
+    const bool warn = s.ticks_left > 0 &&
+                      s.ticks_left <= s.tuning.hurry_seconds * kTicksPerSecond;
+    const bool closing = s.ticks_left > 0 &&
+                         s.ticks_left <= (s.tuning.hurry_seconds - 5) * kTicksPerSecond;
+
+    // Moment 1: fire the banner/sound once (edge on `hurry`).
+    if (!s.hurry && warn) {
         s.hurry = true;
         s.events.push_back({Event::Type::Hurry, -1, -1, -1, 0});
-        int n = total(depth);
-        s.enclose_interval =
-            std::max(1, s.tuning.hurry_seconds * kTicksPerSecond / (n + 1));
-        s.enclose_timer = s.enclose_interval;
-        s.enclose_index = 0;
     }
 
-    if (s.hurry && depth > 0 && s.enclose_index < total(depth) && --s.enclose_timer <= 0) {
+    // Moment 2: arm the drop machinery once, on the first tick the walls close.
+    // enclose_interval stays 0 until then, so it doubles as the "armed" flag.
+    if (closing && s.enclose_interval == 0) {
+        s.enclose_interval = kEncloseIntervalTicks;
+        s.enclose_timer = s.enclose_interval;
+        s.enclose_index = 0;
+        return;  // NO drop on the arm tick (original: dword_46223C==now, gate shut);
+                 // the first wall lands exactly one interval (5 ticks) later.
+    }
+
+    if (closing && s.enclose_interval > 0 && depth > 0 && s.enclose_index < total(depth) &&
+        --s.enclose_timer <= 0) {
         s.enclose_timer = s.enclose_interval;
         int wx = 0, wy = 0;
         if (position(s.enclose_index++, depth, &wx, &wy)) drop_wall(wx, wy);

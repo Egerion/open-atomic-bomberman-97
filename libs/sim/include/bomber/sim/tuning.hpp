@@ -62,32 +62,43 @@ struct Tuning {
 
     // Conveyor speeds (VALUELST ids 189..192, sub_41F29B via getvalue(190+idx);
     // see docs/re/stage-actors.md §3). The belt adds this many 1/100-px units
-    // to a player's move budget per tick (fixed 20 Hz makes the original's
-    // frame/dword_46494C factor == 1). id 189 = how many speeds exist; the
-    // board's conveyor-speed selector (dword_464930, 0..2) picks one:
+    // to a player's move budget per tick — the SAME budget units as player speed
+    // (id 42), spent 100-per-pixel, because the original scales both the walk
+    // and the belt by the identical dword_464958/dword_46494C frame ratio which
+    // is ~1 at the locked 20 Hz. id 189 = how many speeds exist:
     //   190 = 250 (low), 191 = 350 (medium), 192 = 450 (high).
     std::int32_t conveyor_speed_count = 3; // id 189
     std::int32_t conveyor_speeds[3] = {250, 350, 450}; // ids 190,191,192
-    // Which of the three the current board uses. OUR TUNABLE: the original
-    // reads dword_464930 (set per-board / editor-cyclable); we have not yet RE'd
-    // where a board persists its index, so we default to "low" (index 0 = 250)
-    // and expose it for MatchConfig to override once the board field is mapped.
-    std::int32_t conveyor_speed_index = 0;
-    // Trampoline in-place bounce length, ticks. OUR TUNABLE: the original times
-    // the hop by the bounce ANI (player state +78==5), not a VALUELST id; 20
-    // ticks (~1s at 20 Hz) is a faithful-feeling placeholder pending the ANI
-    // frame count. During the bounce, movement is ignored (state-gated).
-    std::int32_t trampoline_bounce_frames = 20;
+    // The "Conveyor Speed" GAME OPTION selector (dword_464930, 0/1/2), NOT a
+    // per-board field. CONFIRMED: the binary's hardcoded default is 1 (medium)
+    // (pseudo.c 14652); it is otherwise loaded from the options struct
+    // (pseudo.c 12655 <- options.ini "conveyor_speed=") or editor-cycled. This
+    // install's options.ini sets 2 (high). Default 1 here; MatchConfig overrides
+    // it from parsed options. Clamped to [0, count-1] by conveyor_speed().
+    std::int32_t conveyor_speed_index = 1;
 
     // The belt contribution actually applied per tick, resolving the selector.
+    // The original clamps dword_464930 to [0, getvalue(189)-1]; getvalue(189)=3,
+    // so the index is in [0,2] and always addresses the 3-element speed table.
     std::int32_t conveyor_speed() const {
+        int hi = conveyor_speed_count - 1;
+        if (hi > 2) hi = 2;   // never index past the 3-slot 190/191/192 table
+        if (hi < 0) hi = 0;
         int i = conveyor_speed_index;
         if (i < 0) i = 0;
-        if (i > 2) i = 2;
+        if (i > hi) i = hi;
         return conveyor_speeds[i];
     }
     // Note: player movement (corner assist / lane centering) is not tunable —
     // it is a faithful port of sub_41EC84 and needs no threshold constant.
+
+    // Trampoline in-place bounce length, frames. CONFIRMED VALUELST id 680 = 30
+    // ("how many frames do you bounce on a trampoline?"), read by the bounce-
+    // state branch of sub_41F29B (player state +78==5, pseudo.c ~23160: the +40
+    // frame counter resets at getvalue(680); the hop apex is at getvalue(680)/2).
+    // id 681 (=35, "pixels vertically per frame") is the hop arc height — a
+    // PRESENTATION value the integer sim doesn't need. See stage-actors.md §4.
+    std::int32_t trampoline_bounce_frames = 30;  // id 680
 
     // Diseases (VALUELST 120..138; see docs/re/facts.md "Disease system").
     // Nine diseases, one duration each at ids 130..138.
@@ -128,6 +139,7 @@ struct Tuning {
             case 190: conveyor_speeds[0] = v; return true;
             case 191: conveyor_speeds[1] = v; return true;
             case 192: conveyor_speeds[2] = v; return true;
+            case 680: trampoline_bounce_frames = v; return true;  // trampoline bounce frames
             case 121: diseases_time_limited = v != 0; return true;
             case 123: diseases_multiply = v != 0; return true;
             case 124: diseases_curable = v != 0; return true;

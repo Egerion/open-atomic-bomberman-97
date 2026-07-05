@@ -23,6 +23,11 @@ struct MatchConfig {
     // verbatim into State at setup; actor_dir is a godir where meaningful.
     std::array<std::array<ActorType, kGridWidth>, kGridHeight> actor_type{};
     std::array<std::array<std::uint8_t, kGridWidth>, kGridHeight> actor_dir{};
+    // Warphole exit tile per Warphole cell (sub_405A81 idno/linkto resolution),
+    // pre-computed by apply_actors so the sim needs no RNG for a warp. 0 where
+    // actor_type != Warphole. Copied into State::warp_dest_* at setup.
+    std::array<std::array<std::uint8_t, kGridWidth>, kGridHeight> warp_dest_x{};
+    std::array<std::array<std::uint8_t, kGridWidth>, kGridHeight> warp_dest_y{};
     std::vector<SpawnPoint> spawns;   // indexed by player number
     int player_count = 2;
     std::uint32_t seed = 0x12345678;

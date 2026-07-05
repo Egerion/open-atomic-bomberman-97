@@ -10,7 +10,17 @@ namespace bomber::sim {
 // settles back onto the tile centre when blocked past it. There is NO
 // distance threshold — the assist is governed purely by which side of the
 // tile centre the player is on, exactly like the original.
-void MovementSystem::move(Player& p, Direction d, std::int32_t extra_budget) {
+//
+// on_center (if non-null) fires the instant a per-pixel step lands the player
+// exactly on a tile centre — the port of the original's in-loop `v35 == -1`
+// step-on check. The original tests this at the START of each pixel iteration
+// (position at centre-1 about to become centre); measured post-step it is the
+// same physical event (arrival at the centre pixel), and because steps are
+// exactly ±1px along the axis, every centre crossing is caught. This fixes the
+// warp/trampoline "stuck": a walking player's budget steps OVER the exact
+// centre pixel, so a post-walk-only test almost never fired. See §5.
+void MovementSystem::move(Player& p, Direction d, std::int32_t extra_budget, StepOnFn on_center,
+                          void* ctx) {
     State& s = s_;
     p.facing = d;
 
@@ -91,6 +101,25 @@ void MovementSystem::move(Player& p, Direction d, std::int32_t extra_budget) {
 
         p.x = (px + mdx) * kScale;
         p.y = (py + mdy) * kScale;
+
+        // sub_41EC84 `v35 == -1`: fire the step-on the moment this pixel step
+        // brings the player to the tile centre ALONG THE TRAVEL AXIS. The
+        // original rotates the offset by the facing (v35 = along-axis offset)
+        // and tests only that axis — the perpendicular (v36) is not required to
+        // be centred — and looks the actor up at the player's CURRENT tile. So
+        // match that: horizontal travel fires at the x-centre (any row),
+        // vertical at the y-centre (any column). Whole-pixel positions make the
+        // centre exactly representable (20 px in x, 18 px in y within a tile);
+        // 1-px axis steps guarantee every centre crossing is caught. The callee
+        // filters by actor type + latch, so crossings of ordinary tiles are
+        // harmless no-ops.
+        if (on_center) {
+            const int nx = p.x / kScale, ny = p.y / kScale;
+            const bool at_x_centre = ((nx % kTileW) + kTileW) % kTileW == kTileW / 2;
+            const bool at_y_centre = ((ny % kTileH) + kTileH) % kTileH == kTileH / 2;
+            if ((dxg != 0 && at_x_centre) || (dyg != 0 && at_y_centre))
+                on_center(ctx, p, nx / kTileW, ny / kTileH);
+        }
     }
 }
 

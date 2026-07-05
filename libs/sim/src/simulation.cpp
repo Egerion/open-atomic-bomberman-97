@@ -40,11 +40,28 @@ void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs,
         return;
     }
 
-    // A trampoline hop is a state-gated in-place bounce (sub_41EC84/sub_41DE63):
-    // movement input and bomb actions are ignored until the hop finishes, and
-    // the player cannot be pushed. Tick it down and skip the rest of the turn.
+    // A trampoline hop is a state-gated flight (sub_41F29B state 5 / sub_41DE63):
+    // movement input and bomb actions are ignored until the hop finishes, and the
+    // player cannot be pushed. tick_bounce ticks it down AND, at the apex, teleports
+    // the player to a random nearby open tile (the "fly + random land" — it is NOT
+    // an in-place bounce; see docs/re/stage-actors.md §4). The apex relocation draws
+    // RNG, so it runs here inside the state gate, before any other per-tick draw.
     if (stage.bouncing(p)) {
-        stage.tick_bounce(p);
+        stage.tick_bounce(p, i);
+        p.prev_action1 = in.action1;
+        p.prev_action2 = in.action2;
+        return;
+    }
+
+    // A warp is likewise state-gated (player states 6=warp-out, 7=warp-in): the
+    // original ignores movement/input and makes the player invulnerable for the
+    // whole 18-tick warp, relocating it to the exit at the out→in midpoint. Tick
+    // it down (which performs the midpoint relocation) and skip the turn. This is
+    // the fix for the "stuck on entering a warp" report: the prior instantaneous
+    // teleport skipped these phases; now the player warps and, once warp==0, moves
+    // again. See docs/re/stage-actors.md §5.
+    if (stage.warping(p)) {
+        stage.tick_warp(p);
         p.prev_action1 = in.action1;
         p.prev_action2 = in.action2;
         return;
@@ -105,42 +122,62 @@ void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs,
         // walked-into bomb: only when the (belt-forced or input) move stalled.
         if (moving && p.x == bx && p.y == by) bombs.try_kick(p, want, i);
     }
-    // A step that settled on a trampoline tile launches an in-place hop.
+    // A settle on a trampoline centre launches an in-place hop; a settle on a
+    // warphole centre teleports to the linked exit (no RNG). Both use a one-shot
+    // latch (cleared on leaving the tile) so a player parked on the tile fires
+    // exactly once, mirroring the original's centring trigger (v35 == -1).
     stage.trampoline_after_move(p, i);
+    stage.warphole_after_move(p, i);
 
-    // The bomb key (action1) is context-sensitive, exactly like the original
-    // (sub_41F29B, gated on +56 && !+54): while carrying a grabbed bomb you
-    // hold it and THROW the instant the key is released (`+37 && !+56`);
-    // otherwise a fresh press on your OWN resting bomb GRABS it (blue glove,
-    // +92) or sprays a SPOOGER line (+93), and on an empty tile it just DROPS.
-    // Grab and spooger are the "double-tap" Ege remembers: press 1 lays a bomb
-    // underfoot, press 2 (now standing on it) grabs or sprays. Diarrhea/super
-    // auto-drop every tick; constipation blocks dropping.
-    bool auto_drop = p.sick(Disease::Diarrhea) || p.sick(Disease::Super);
-    bool pressed = in.action1 && !p.prev_action1;
-    if (!p.sick(Disease::Constipation)) {
-        if (p.carrying) {
-            if (!in.action1) bombs.throw_carried(p, i);  // release to throw
-        } else if (auto_drop) {
-            bombs.drop(p, static_cast<std::uint8_t>(i));
-        } else if (pressed) {
-            const Bomb* under = grid::bomb_at(s, p.tile_x(), p.tile_y());
-            const bool own = under && !under->moving &&
-                             under->owner == static_cast<std::uint8_t>(i);
-            if (p.grab && own)
-                bombs.try_grab(p, i);
-            else if (p.spooge && under)
-                bombs.spooge_ahead(p, static_cast<std::uint8_t>(i));
-            else
-                bombs.drop(p, static_cast<std::uint8_t>(i));
-        }
+    // The bomb key (action1) drives THREE independent blocks, in the original's
+    // exact order (sub_41F29B LABEL_246). We mirror the byte semantics: +56 =
+    // "bomb key down this frame", +54 = "…last frame"; the drop block is edge-
+    // gated on `+56 && !+54`; +37 = a carried (grabbed) bomb.
+    //
+    // (1) Auto-drop diseases (diarrhea +135 / super +137): the original FORCES an
+    //     edge every frame — `+56 = 1; +54 = 0; v112 = 1` — so the drop block
+    //     below fires each tick. We reproduce that by overriding the effective
+    //     key state under auto-drop. v112 also unconditionally releases a carried
+    //     bomb (block 2) and suppresses the spooger (block 4).
+    const bool auto_drop = p.sick(Disease::Diarrhea) || p.sick(Disease::Super);
+    const bool a1_now = auto_drop ? true : in.action1;    // +56
+    const bool a1_last = auto_drop ? false : p.prev_action1;  // +54
+    const bool drop_edge = a1_now && !a1_last;             // the +56 && !+54 gate
+
+    // (2) Throw block (`+37`): a carried bomb is thrown when auto-drop forces it
+    //     (v112) OR the key is released (`!+56`). NOT gated by constipation — a
+    //     constipated player can still throw what it holds. This is why diarrhea
+    //     + grab THROWS serially: v112 fires the throw every frame, then the drop
+    //     block (below) re-grabs the next bomb underfoot — the original's loop.
+    if (p.carrying) {
+        if (auto_drop || !a1_now) bombs.throw_carried(p, i);
     }
-    // The action key (action2) punches the bomb ahead (+91) and/or detonates a
-    // trigger bomb (+95). Grab and throw moved to the bomb key above; the
-    // mutual exclusions mean a player never holds punch and trigger at once.
+    // (3) Action key (action2): punch the bomb ahead (+91) and/or detonate a
+    //     trigger bomb (+95). Edge-gated (`+57 && !+55`). In the original PUNCH
+    //     additionally requires `!+56` (the bomb key not down) so it never swings
+    //     mid-drop / mid-auto-drop; TRIGGER has no such gate and fires regardless.
+    //     Grab/throw live on action1. This block runs BEFORE the drop block (4),
+    //     matching LABEL_246's order (the old port had drop before this — a
+    //     trigger detonation now precedes a same-tick drop, as in the binary).
     if (in.action2 && !p.prev_action2) {
-        if (p.punch) bombs.try_punch(p, static_cast<std::uint8_t>(i));
+        if (p.punch && !a1_now) bombs.try_punch(p, static_cast<std::uint8_t>(i));
         if (p.trigger) bombs.detonate_triggered(i);
+    }
+    // (4) Drop block (`+56 && !+54 && !+134`): constipation (+134) blocks it. On
+    //     the edge, GRAB your own resting bomb underfoot (+92), else spray a
+    //     SPOOGER line (+93, suppressed while auto-dropping — `!v112`), else DROP.
+    //     Grab/spooger are the "double-tap": press 1 drops a bomb underfoot,
+    //     press 2 (now standing on it) grabs or sprays.
+    if (drop_edge && !p.sick(Disease::Constipation)) {
+        const Bomb* under = grid::bomb_at(s, p.tile_x(), p.tile_y());
+        const bool own = under && !under->moving &&
+                         under->owner == static_cast<std::uint8_t>(i);
+        if (p.grab && own)
+            bombs.try_grab(p, i);
+        else if (p.spooge && !auto_drop && under)
+            bombs.spooge_ahead(p, static_cast<std::uint8_t>(i));
+        else
+            bombs.drop(p, static_cast<std::uint8_t>(i));
     }
     p.prev_action1 = in.action1;
     p.prev_action2 = in.action2;

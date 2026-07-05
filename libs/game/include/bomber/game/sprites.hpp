@@ -32,10 +32,11 @@ struct Anim {
 // Uploads an RGBA8 image as a nearest-neighbour SDL texture (nullptr on error).
 SDL_Texture* make_texture(SDL_Renderer* ren, const assets::Image& img);
 
-// Retargets the green armour of the pre-rendered player sprites: pixels whose
-// green channel clearly dominates get their intensity scaled into the target
-// color (percent RGB from VALUELST 200-247). Visor/outline pixels stay put;
-// specular glints survive so dark targets (black player) stay readable.
+// Retargets the green armour of the pre-rendered player sprites, a faithful
+// port of the engine's remap-table builder sub_414A65 (0x414A65): a
+// green-dominant pixel (G > R && G > B) has its green EXCESS over the (R+B)/2
+// baseline scaled into the target percent-RGB (VALUELST 200-247) and the
+// baseline added back, so casing/shading survive; other pixels stay put.
 assets::Image recolor_image(assets::Image img, const std::int32_t rgb[3]);
 
 // An ANI file with all frames uploaded as textures. Move-only RAII.

@@ -9,6 +9,8 @@ add_library(bomber_assets STATIC
   src/extra.cpp
   src/reslist.cpp
   src/rss.cpp
+  src/bmtext.cpp
+  src/bmfont.cpp
   src/install.cpp
 )
 add_library(bomber::assets ALIAS bomber_assets)

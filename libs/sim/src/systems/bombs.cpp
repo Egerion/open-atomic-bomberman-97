@@ -199,6 +199,16 @@ void BombSystem::fly(Bomb& b) {
         }
     }
 
+    // Landing sound (sub_42331C case 2, ~25441): the flight block calls
+    // sub_427961(160) ("bmdrop3") at EVERY tile boundary once the bomb has
+    // travelled >= 3 tiles — UNCONDITIONALLY, before the head-hit/settle/re-hop
+    // branch. So a thrown or punched bomb plays 160 on its final landing too,
+    // not only when it has to hop onward. (#8 gap 3: the throw arc was missing
+    // this settle sound — the "more sounds" the user remembered.) Emitted here,
+    // once per boundary, matching the single call site; BombBounced maps to 160.
+    s.events.push_back({Event::Type::BombBounced, -1, static_cast<std::int8_t>(tx),
+                        static_cast<std::int8_t>(ty), 0});
+
     // A live player on the landing tile gets bonked on the head.
     int victim = -1;
     for (int i = 0; i < kMaxPlayers; ++i) {
@@ -210,23 +220,23 @@ void BombSystem::fly(Bomb& b) {
     }
     if (victim >= 0) powerups_.head_hit(victim, tx, ty);
 
+    // Blocked landing tile ⇒ hop onward (the sound already fired above); a clear
+    // tile ⇒ settle to rest. The original's occupancy test is the same set:
+    // solid/brick (sub_425FB9), a bomb (sub_422E48), a powerup (sub_42542D), or
+    // a player head (sub_421CB5, which takes the head-hit path above).
     bool occupied = victim >= 0 || !grid::tile_open(s, tx, ty) ||
                     grid::bomb_at(s, tx, ty) != nullptr;
     if (occupied) {
         launch(b, b.dir, 1, s.tuning.punch_arc_hop);
-        s.events.push_back({Event::Type::BombBounced, -1, static_cast<std::int8_t>(tx),
-                            static_cast<std::int8_t>(ty), 0});
         return;
     }
     b.flying = false;
 }
 
-void BombSystem::slide(std::size_t index) {
+void BombSystem::slide(std::size_t index, std::int32_t budget) {
     State& s = s_;
     Bomb& b = s.bombs[index];
-    // Kicked-bomb speed is the fixed VALUELST id 300 (sub_42464B sets bomb
-    // +112 = getvalue(300)); NOT a per-player base — confirmed faithful (#8).
-    Fixed dist = s.tuning.kicked_bomb_speed;
+    Fixed dist = budget;
     while (dist > 0 && b.moving) {
         int tx = b.tile_x(), ty = b.tile_y();
         // Sliding into a flame explodes the bomb (sub_42331C checks sub_42708D
@@ -243,13 +253,42 @@ void BombSystem::slide(std::size_t index) {
 
         Fixed to_center = (center - axis) * sign;
         if (to_center <= 0) {
-            // NOTE (#8 gap 2): the original's mid-slide re-steer (sub_42331C:
-            // at a tile centre it re-reads sub_405654's actor godir) redirects
-            // the bomb off a DIRARROW / conveyor stage actor, NOT a resting
-            // player (sub_405654 scans the level-actor registry dword_45E0A8 —
-            // type 0 = dirarrow, type 2 = conveyor). We do not model dirarrows
-            // yet, so there is nothing to re-steer from; this belongs to the
-            // conveyor/arrow work (ROADMAP #7). No player re-steer is faithful.
+            // Stage-actor reactions fire ONLY when the bomb is EXACTLY on the
+            // tile centre (both axes) — the original's `!v79 && !v80` gate
+            // (sub_42331C ~25532). Testing only the move axis would re-fire every
+            // pixel as the bomb slides away from a dirarrow, snapping it back
+            // forever. dirarrow (type 0) turns the bomb to the arrow's godir;
+            // warphole (type 1) teleports it to the linked exit (no RNG) and
+            // latches against an immediate re-warp at the exit.
+            const bool at_centre = (b.x == cx && b.y == cy);
+            if (at_centre && grid::in_grid(tx, ty)) {
+                const ActorType at = s.actor_type[ty][tx];
+                if (at == ActorType::DirArrow) {
+                    b.dir = grid::from_godir(s.actor_dir[ty][tx]);
+                    b.warp_latch = false;
+                    // recompute the axis/centre/sign for the new direction
+                    axis = (grid::dir_dx(b.dir) != 0) ? b.x : b.y;
+                    center = (grid::dir_dx(b.dir) != 0) ? cx : cy;
+                    sign = grid::dir_dx(b.dir) + grid::dir_dy(b.dir);
+                } else if (at == ActorType::Warphole) {
+                    if (!b.warp_latch) {
+                        const int dx = s.warp_dest_x[ty][tx], dy = s.warp_dest_y[ty][tx];
+                        b.x = grid::tile_center_x(dx);
+                        b.y = grid::tile_center_y(dy);
+                        b.warp_latch = true;
+                        s.events.push_back({Event::Type::WarpUsed, -1,
+                                            static_cast<std::int8_t>(dx),
+                                            static_cast<std::int8_t>(dy), 0});
+                        return;  // resume next tick from the exit tile
+                    }
+                } else {
+                    b.warp_latch = false;  // left a warphole: allow future warps
+                }
+            } else if (!at_centre && grid::in_grid(tx, ty) &&
+                       s.actor_type[ty][tx] != ActorType::Warphole) {
+                // moved off a non-warp tile mid-slide: allow future warps
+                b.warp_latch = false;
+            }
             int nx = tx + grid::dir_dx(b.dir), ny = ty + grid::dir_dy(b.dir);
             bool blocked = !grid::tile_open(s, nx, ny) || grid::bomb_at(s, nx, ny) != nullptr;
             for (const auto& pl : s.players)
@@ -287,12 +326,42 @@ void BombSystem::slide(std::size_t index) {
     }
 }
 
+void BombSystem::conveyor_carry(std::size_t index) {
+    Bomb& b = s_.bombs[index];
+    if (b.flying || b.moving) return;  // already in motion: leave it
+    const int tx = b.tile_x(), ty = b.tile_y();
+    if (!grid::in_grid(tx, ty)) return;
+    if (s_.actor_type[ty][tx] != ActorType::Conveyor) return;
+    // sub_42331C case 0: a resting bomb on a conveyor is pushed along the belt.
+    // Set it sliding in the belt direction; slide() then carries it at belt
+    // speed. It stops (and, if jelly, ping-pongs) at obstacles exactly like a
+    // kicked bomb, but at getvalue(190+idx) instead of getvalue(300).
+    const int nx = tx + grid::dir_dx(grid::from_godir(s_.actor_dir[ty][tx]));
+    const int ny = ty + grid::dir_dy(grid::from_godir(s_.actor_dir[ty][tx]));
+    if (!grid::tile_open(s_, nx, ny) || grid::bomb_at(s_, nx, ny)) return;  // blocked: stay put
+    b.moving = true;
+    b.dir = grid::from_godir(s_.actor_dir[ty][tx]);
+}
+
 void BombSystem::advance_bombs() {
     for (std::size_t i = 0; i < s_.bombs.size(); ++i) {
         Bomb& b = s_.bombs[i];
         if (!b.active) continue;
-        if (b.flying) fly(b);
-        else if (b.moving) slide(i);  // by index: a slide into flame detonates it
+        // A resting bomb on a belt starts sliding along it (belt speed).
+        conveyor_carry(i);
+        if (b.flying) {
+            fly(b);
+        } else if (b.moving) {
+            // Belt speed if the bomb is currently on a conveyor tile, else the
+            // kicked-bomb speed (VALUELST 300). Mirrors sub_42331C, where a
+            // conveyor push uses getvalue(190+idx) and a kick uses getvalue(300).
+            const int tx = b.tile_x(), ty = b.tile_y();
+            const bool on_belt = grid::in_grid(tx, ty) &&
+                                 s_.actor_type[ty][tx] == ActorType::Conveyor;
+            const std::int32_t budget =
+                on_belt ? s_.tuning.conveyor_speed() : s_.tuning.kicked_bomb_speed;
+            slide(i, budget);  // by index: a slide into flame detonates it
+        }
     }
 }
 

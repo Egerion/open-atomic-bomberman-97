@@ -18,6 +18,10 @@ struct Bomb {
     bool jelly = false;
     bool trigger = false;
     bool moving = false;          // kicked
+    // Warphole one-shot latch (docs/re/stage-actors.md §6): set when a sliding
+    // bomb teleports through a warp, cleared once it leaves the warp tile — the
+    // bomb analogue of Player::warp_latch, preventing a warp-to-warp ping-pong.
+    bool warp_latch = false;
     Direction dir = Direction::Up;
     // Airborne (punched/thrown): travels from_* -> to_* in fly_total ticks.
     // While flying it doesn't block, can't chain, and its fuse is paused.

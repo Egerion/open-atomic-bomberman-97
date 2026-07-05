@@ -17,17 +17,33 @@ SDL_Texture* make_texture(SDL_Renderer* ren, const assets::Image& img) {
 }
 
 assets::Image recolor_image(assets::Image img, const std::int32_t rgb[3]) {
+    // Faithful port of the original's remap-table builder sub_414A65 (0x414A65),
+    // the per-palette-entry green-armour recolor the engine bakes into each
+    // player's `.rmp` table. For a green-dominant source colour it scales the
+    // green EXCESS over the red/blue baseline into the target percent-RGB and
+    // adds the baseline back, so the shading/casing survives; non-green pixels
+    // are left untouched. rgb[] is the percent-RGB from VALUELST 200/201/202
+    // (id 200+5k = R%, 201 = G%, 202 = B%; sub_414A65 args a2=R%, a4=G%, a3=B%).
+    //
+    // Our earlier approximation used lum=G (not the excess), dropped the
+    // (R+B)/2 baseline, added a fabricated "glint" and a +24 test margin. On the
+    // vivid regular bomb (R~12,B~2) the error was small, but on the DESATURATED
+    // trigger bomb (mean 58,150,41) it discarded the ~49 baseline and blew the
+    // bright pixels to pure white via the glint -> a featureless white blob for
+    // the white player {100,100,100}. The original snaps to the nearest 8-bit
+    // palette entry afterwards; we are truecolour so we keep the computed RGB.
     for (std::size_t i = 0; i + 3 < img.rgba.size(); i += 4) {
-        std::uint8_t r = img.rgba[i], g = img.rgba[i + 1], b = img.rgba[i + 2];
         if (img.rgba[i + 3] == 0) continue;
-        if (g > r + 24 && g > b + 24) {
-            int lum = g;
-            // Keep specular glints alive on dark target colors (black player
-            // must stay readable on dark stages).
-            int glint = lum > 176 ? (lum - 176) : 0;
-            img.rgba[i + 0] = static_cast<std::uint8_t>(std::min(255, lum * rgb[0] / 100 + glint));
-            img.rgba[i + 1] = static_cast<std::uint8_t>(std::min(255, lum * rgb[1] / 100 + glint));
-            img.rgba[i + 2] = static_cast<std::uint8_t>(std::min(255, lum * rgb[2] / 100 + glint));
+        const int r = img.rgba[i], g = img.rgba[i + 1], b = img.rgba[i + 2];
+        if (g > r && g > b) {
+            const int baseline = (r + b) / 2;   // sub_414A65 v33
+            const int excess = g - baseline;    // (v32 - v33)
+            img.rgba[i + 0] =
+                static_cast<std::uint8_t>(std::clamp(rgb[0] * excess / 100 + baseline, 0, 255));
+            img.rgba[i + 1] =
+                static_cast<std::uint8_t>(std::clamp(rgb[1] * excess / 100 + baseline, 0, 255));
+            img.rgba[i + 2] =
+                static_cast<std::uint8_t>(std::clamp(rgb[2] * excess / 100 + baseline, 0, 255));
         }
     }
     return img;

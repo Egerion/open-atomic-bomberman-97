@@ -19,6 +19,10 @@ Units: speeds are hundredths of a pixel per frame; probabilities are 1-in-N; fra
 | 50–62 | starting inventory per powerup kind | 1 bomb, 2 flame, rest 0 |
 | 400–412 | powerups hidden under bricks per match (negative N = \|N\| tries at 1-in-10) | 10,10,3,4,8,2,2,1,−2,−4,1,−4,−2 |
 | 550–562 | per-player accumulation caps (0 = uncapped) | 8,8,0,1,4,1,1,1,1,1,1,0,0 |
+| 31 | elapsed-ms clamp per frame (`dword_464958`) — defines the ~1.0 frame/tick budget ratio at 20 Hz | 150 |
+| 189 | number of conveyor speeds (count) | 3 |
+| 190–192 | conveyor belt speeds low/med/high (1/100 px, same budget units as id 42); selected by the "Conveyor Speed" game option (default 1=medium; this install's options.ini=2) | 250 / 350 / 450 |
+| 680 | trampoline bounce length, frames ("how many frames do you bounce"; `sub_41F29B` ~23160) | 30 |
 
 Powerup kind order (matches scheme `-P` rows and the id blocks above): extra bomb, flame, disease, kick, skate, punch, grab, spooger, goldflame, trigger, jelly, super-disease, random.
 
@@ -29,13 +33,12 @@ Powerup kind order (matches scheme `-P` rows and the id blocks above): extra bom
 | 91 | clogs (speed-down roulette effect) |
 | 101, 102 | "hurry" timing and late-game powerup gating |
 | 120–138 | disease behavior flags and durations (300 frames each) |
-| 190–192 | conveyor belt speeds |
 | 320–324 | dud-bomb timing and chance |
-| 330 | idle "cornerhead" fidget duration spread — original rolls `20 + rand()%getvalue(330)` ticks while boxed in (`sub_41F29B`); presentation-only, renderer's `kPanicSpread` stands in (=40) until the value is read |
+| 330 | **= 13 (CONFIRMED).** File comment: "how many cornerhead animations there are" — id 330 is BOTH the number of cornerhead sequences AND the idle "cornerhead" fidget duration spread (`sub_41F29B` ~23011 rolls `20 + rand()%getvalue(330)`, guarded so the modulus ≥1). Presentation-only (renderer `panic_lcg_`, never `State::rng`); renderer's `kPanicSpread` now = 13 (was the 40 stub). Equals `kCornerheadVariants` by construction, not coincidence |
 | 46 | closing wall detonates (1) vs destroys (0) bombs |
 | 660/661, 665, 667 | punched-bomb arcs, pickup pause, jelly craziness |
 | 670/671 | powers lost when a bomb lands on your head |
-| 680/681 | trampoline timing |
+| 681 | trampoline hop arc height (px/frame) — presentation-only; id 680 (bounce frames) is now consumed above |
 | 340–350 | per-level tile regeneration |
 | 450–460 | per-level ice (input lag) in ms |
 | 900–920 | AI behavior knobs |

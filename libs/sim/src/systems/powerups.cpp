@@ -126,15 +126,19 @@ void PowerupSystem::head_hit(int victim, int tx, int ty) {
             case PowerupType::Punch: have = p.punch ? 1 : 0; break;
             case PowerupType::Grab: have = p.grab ? 1 : 0; break;
             case PowerupType::Spooger: have = p.spooge ? 1 : 0; break;
+            // Goldflame (kind 8, byte +94) IS a droppable head-hit kind in the
+            // original: sub_421F7E rolls `rand()%15` uniformly over ALL kinds and
+            // accepts any whose per-kind count `player[+86+kind]` exceeds the
+            // VALUELST start-with baseline getvalue(50+kind). id 58 (goldflame
+            // start-with) = 0, so a set goldflame flag counts as surplus and the
+            // token scatters like the others (remove() clears +94, scatter()
+            // drops a Goldflame token). Confirmed against sub_421F7E; enabling it
+            // shifts the head-hit kind-roll acceptance (hence the per-hit RNG
+            // draw count) → GOLDEN.
+            case PowerupType::Goldflame: have = p.goldflame ? 1 : 0; break;
             case PowerupType::Trigger: have = p.trigger ? 1 : 0; break;
             case PowerupType::Jelly: have = p.jelly ? 1 : 0; break;
-            // NOTE: the original ALSO rolls goldflame (kind 8, byte +94) as a
-            // droppable head-hit kind. We intentionally leave it out here to
-            // keep this change scoped to the pickup/reach fix — adding it would
-            // change the head-hit kind-roll acceptance and thus the RNG stream
-            // (draw count per hit), which cannot be re-verified without a build.
-            // Follow-up: wire goldflame into surplus()/remove() and recapture.
-            default: return false;  // disease/goldflame/random & pad kinds: no count
+            default: return false;  // disease/random & pad kinds: no count
         }
         return kind < kPowerupKinds && have > s.tuning.start_with[kind];
     };

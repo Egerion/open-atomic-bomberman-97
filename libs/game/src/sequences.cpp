@@ -41,6 +41,10 @@ void SequenceSet::resolve(const AssetStore& a) {
 
     static constexpr const char* kDirs[4] = {"north", "south", "west", "east"};
     for (int p = 0; p < kLocalPlayers; ++p) {
+        // Warp/teleport pose: WALK.ANI "spin" (sub_41F29B warp states 6/7, the
+        // strcpy'd literal @0x45a213). Empty if absent -> the warp draw falls back
+        // to walk/stand so the player never blanks out mid-warp.
+        spin[p] = resolve_sequence(a.walk(p), "spin");
         for (int d = 0; d < 4; ++d) {
             stand[p][d] = resolve_sequence(a.stand(p), std::string("stand ") + kDirs[d]);
             walk[p][d] = resolve_sequence(a.walk(p), std::string("walk ") + kDirs[d]);
@@ -96,13 +100,19 @@ void SequenceSet::resolve(const AssetStore& a) {
     for (int k = 0; k < sim::kPowerupKinds; ++k)
         powerup_anim[k] = resolve_sequence(a.powers(), kPowerNames[k]);
 
-    // Stage-actor floor art (docs/re/stage-actors.md). Conveyor sequence names
-    // are compass words indexed by godir (0=north,1=east,2=south,3=west) to
-    // match actor_dir; the trampoline is a single direction-independent seq.
+    // Stage-actor floor art (docs/re/stage-actors.md). Sequence names use compass
+    // words indexed by godir (0=north,1=east,2=south,3=west) to match actor_dir.
+    // Conveyors live in CONVEYOR.ANI; arrows/warp/trampoline in EXTRAS.ANI. The
+    // original spellings (sub_4056CA) are "extra conveyor <dir>", "extra arrow
+    // <dir>", "extra warp 1" (the parsed arg, always 1 in the shipped files) and
+    // "extra trampoline" (no direction suffix). Missing entries draw nothing.
     static constexpr const char* kGodirCompass[4] = {"north", "east", "south", "west"};
-    for (int g = 0; g < 4; ++g)
+    for (int g = 0; g < 4; ++g) {
         conveyor[g] = resolve_sequence(a.conveyor(),
                                        std::string("extra conveyor ") + kGodirCompass[g]);
+        dirarrow[g] = resolve_sequence(a.extras(), std::string("extra arrow ") + kGodirCompass[g]);
+    }
+    warphole = resolve_sequence(a.extras(), "extra warp 1");
     trampoline = resolve_sequence(a.extras(), "extra trampoline");
 }
 

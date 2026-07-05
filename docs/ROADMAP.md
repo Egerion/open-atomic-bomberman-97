@@ -48,25 +48,53 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       mostly mid-sequence). Our `Renderer::draw_anim` already matched; made it
       explicit via `game/anim_pace.hpp` (`anim_step_index`, mirrors
       `sub_41DAA7`), documented `SeqStep::head0` as inert, `tests/test_anim.cpp`.
-- [x] 7. Stage specials: conveyors and trampolines — DONE 2026-07-04
-      (docs/re/stage-actors.md). Key RE: actor placement is NOT a .SCH grid
-      flag — it comes from text `DATA/RES/EXTRA<N>.RES` files parsed by
-      `sub_404E99` into the actor registry `dword_45E0A8` (type at +4:
-      0=dirarrow,1=warphole,2=conveyor,3=trampoline; dir at +44). Conveyor
-      (`sub_41F29B`, VALUELST 190/191/192 = 250/350/450) is a move-budget
-      contribution: pushes a standing player along the belt, and adds/subtracts
-      a bonus for walking with/against it (never overrides input). Trampoline
-      (`sub_41EC84` step-on, `sub_41DE63` guard) launches an in-place bounce
-      that ignores input and can't be pushed until it ends (sound 350). Ported:
-      hashed `State::actor_type`/`actor_dir` grids, `StageActorSystem` folded
-      into the player turn, `libs/assets` EXTRA<N>.RES parser wired through
-      `match::apply_actors`, `CONVEYOR.ANI`/`EXTRAS.ANI` floor rendering
-      (`Renderer::draw_actors`). Tests: `tests/test_conveyor.cpp`,
-      `tests/test_trampoline.cpp`. Follow-ups documented (bombs.cpp:
-      bomb-on-conveyor/dirarrow re-steer/tramp/warp; sound_director: 350/1330;
-      dirarrow + warphole PLAYER paths). GOLDEN RECAPTURE NEEDED (hash layout
-      grew by the actor grids; behaviour unchanged for actor-free scenarios so
-      RNG-stream assertions stay).
+- [x] 7. Stage specials: conveyors, trampolines, dirarrows, warpholes +
+      bomb interactions — DONE 2026-07-04, CORRECTED+COMPLETED (strict 1:1),
+      (docs/re/stage-actors.md). Actor placement is NOT a .SCH flag — it comes
+      from text `DATA/RES/EXTRA<N>.RES` (`sub_404E99` → registry `dword_45E0A8`,
+      type at +4: 0=dirarrow,1=warphole,2=conveyor,3=trampoline; godir at +44).
+      CONFIRMED constants (no tunables/guesses): VALUELST 30=20 (tick), 42=923
+      (walk speed), 189=3, 190/191/192=250/350/450; the belt and the walk share
+      the SAME 1/100-px budget units (both scaled by `dword_464958/dword_46494C`
+      ≈1 at 20 Hz), so the belt's per-tick budget IS getvalue(190+idx). CONVEYOR
+      SPEED is a game OPTION (`dword_464930`, default 1=medium hardcoded pseudo.c
+      14652; options.ini `conveyor_speed=` overrides — this install = 2=high);
+      the prior default-0 (=250) was the "too fast/slow" bug → now defaults to 1
+      (=350). TRAMPOLINE bounce = VALUELST id 680 = 30 frames ("how many frames
+      do you bounce on a trampoline?", read by `sub_41F29B` ~23160; id 681=35 is
+      the hop px/frame), wired via `Tuning::apply(680)`, replacing the OUR-TUNABLE
+      20 (and a mistaken ANI-derived 12, which was the cosmetic belt-frame count).
+      DIRARROWS are
+      BOMB-ONLY (the player mover `sub_41F29B` has no type-0 branch; confirmed);
+      a sliding bomb turns to the arrow godir at a tile centre (`sub_42331C`
+      ~25532). WARPHOLES teleport via `sub_405A81` (idno/linkto scan, ZERO RNG),
+      pre-resolved to a hashed `warp_dest` grid at setup, sound 1330; player &
+      bomb both warp, latched against ping-pong. Bomb-on-conveyor slides at belt
+      speed (`sub_42331C` case 0). Bombs do NOT bounce on trampolines (confirmed:
+      sound 350 fires from the player stepper only). Ported: hashed
+      `actor_type`/`actor_dir`/`warp_dest_*` + `Player::warp_latch`/`Bomb::
+      warp_latch`; `StageActorSystem::{move_on_actor,trampoline_after_move,
+      warphole_after_move}`; `BombSystem::{slide(budget),conveyor_carry}`;
+      `match::apply_actors` warphole link resolution; sound_director 350/1330;
+      `Renderer::draw_actors` (dirarrow/warp art + trampoline gated on bounce
+      state). Tests: `test_conveyor.cpp`, `test_trampoline.cpp`,
+      `test_stage_actors.cpp` (new; register in tests/CMakeLists.txt). GOLDEN:
+      NO recapture needed — the hash for actor-free / no-warp / no-latch states
+      is byte-identical (verified) and no new RNG draws, so golden A-E and their
+      RNG-stream assertions are unchanged.
+      CORRECTION 2026-07-04 (fly + random land, warp anim): the trampoline is
+      NOT an in-place bounce — RE'd `sub_41F29B` state 5 (raw disasm) shows a
+      FLIGHT that at the APEX (frame counter == getvalue(680)/2 == 15) teleports
+      the player to a RANDOM nearby open tile (loop @0x4203a7: 2×`rand()%5` per
+      attempt, both always drawn, up to 100, must differ on BOTH axes, `!solid`
+      = `!sub_425FB9`≡`grid::tile_open`, `!bomb` = `!sub_422E48`≡`grid::bomb_at`).
+      Hop arc CONFIRMED linear tent `35*min(c,30-c)` (peak 525 px, id 681=35).
+      Ported in `StageActorSystem::tick_bounce` (relocation on `State::rng`) +
+      renderer lift/shadow-skip. WARP animation: states 6/7 draw the `strcpy`'d
+      literal `"spin"` (@0x45a213, in WALK.ANI) — `SequenceSet::spin[player]`,
+      drawn while `Player::warp>0`. GOLDEN STILL UNCHANGED: the relocation is the
+      only new RNG and runs only in the state-5 gate (needs a trampoline); golden
+      places no actors → never entered → byte-identical. No new hashed field.
 - [x] 8. Kick nuances audit — DONE 2026-07-04 (facts.md "Kick nuances").
       (1) A bomb sliding onto a lit tile now EXPLODES (`sub_42331C` runs the
       `sub_42708D` flame check per pixel-step) — ported in `BombSystem::slide`
@@ -92,8 +120,8 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       short-flame (which sets 1 first). Ported `Player::goldflame` (hashed),
       set in the pickup case, applied in `BombSystem::place` (replaces the old
       flame=99 sentinel). `tests/test_goldflame.cpp`; golden recaptured
-      (flame 99 → 15 + flag). (Deferred: the original also drops goldflame on a
-      head hit — left out to avoid an unverifiable RNG-stream shift; see facts.)
+      (flame 99 → 15 + flag). (The deferred head-hit goldflame drop is now DONE
+      in item 15 §4.)
 - [x] 11. Powerup mutual exclusions — DONE 2026-07-04 (`sub_41E21E` via
       `sub_41E16A`): punch↔trigger, grab↔spooger, trigger↔jelly evict each
       other (trigger also drops punch). Added `remove()` calls in
@@ -116,6 +144,28 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       are single-frame, so most powerups still look static — the pipeline is
       correct, the data is 1-frame. `AssetStore::powers` (shared, uncoloured) +
       `SequenceSet::powerup_anim[]`; no golden impact.
+- [x] 15. Final in-game 1:1 gaps — DONE 2026-07-04 (facts.md "Final in-game 1:1
+      gaps"; strict RE, no guesses). Closes the last four in-game fidelity gaps:
+      **(1) Warphole knockout** (`sub_4056CA` case 1, `+146` latch): on first
+      activation a warphole clears its own tile AND one RANDOM adjacent tile
+      (`rand()%4` cardinal, retry-until-in-bounds, set to Blank). Ported into
+      `match::apply_actors` off the SETUP-only LCG (never `State::rng`); mutates
+      only `cfg.cells`. **(2) options.ini `conveyor_speed=`** (`sub_406238`
+      reader → `dword_464930`, clamp `[0,getvalue(189)-1]`; this install = 2 high
+      = 450). New `assets::load_options()` (install.hpp/cpp), wired through
+      `game_app` init + `start_match`; absent key ⇒ keeps the confirmed default 1.
+      **(3) getvalue(330) idle-fidget spread = 13** (`sub_41F29B` ~23011, "how
+      many cornerhead animations there are"): renderer `kPanicSpread` 40-stub →
+      13. Presentation `panic_lcg_`, not `State::rng`. **(4) Goldflame on a head
+      hit** (`sub_421F7E`, kind 8 = byte +94, start-with id 58 = 0): added to
+      `head_hit`'s `surplus()`. Tests: `test_match.cpp` (warp knockout — register
+      unchanged, same suite), `test_options.cpp` (NEW — register in
+      tests/CMakeLists.txt), `test_sim.cpp` (goldflame head-hit case). GOLDEN:
+      gaps 1/2/3 no impact (setup-LCG / config / presentation); gap 4 shifts the
+      head-hit RNG draw count ONLY for a goldflame victim ⇒ **scenario B must be
+      recaptured** (already required for items 9/10 + diarrhea-throw), A/C/D/E
+      byte-identical (A no players; C no punch/grab; D no actions; E hides no
+      powerups so no goldflame). REMAINING guess: none new.
 
 ## Phase 2 — AI
 
@@ -124,8 +174,57 @@ behaviour changes (cite the facts.md entry) → tick the box here.
 
 ## Phase 3 — Front-end
 
-- [ ] Menus (title/menu music 1000/1010, MAINMENU ANIs), win/draw screens,
-      match settings; campaign later.
+- [~] Screen-flow SPINE — DONE 2026-07-04 (docs/adr/0004-frontend-screen-flow.md,
+      docs/re/frontend-flow.md). RE'd the real boot path: `sub_42B060` runs
+      IPLOGO -> HSLOGO -> TITLE (each `sub_42A088(name, wait)`: name-derived
+      `.plt` palette + full-screen image, waits for a key OR the getvalue(12)
+      attract timeout), then falls through to the `sub_42B9CE` (noreturn) menu
+      loop; results via `sub_42A088(aDraw, 0)`; screen changes covered by
+      HEADWIPE.ANI on the standard `counter % statecnt` pacer (no `headwipe`
+      string — loaded generically). No FMV ships; the whole front-end is
+      PCX+ANI+RSS the pipeline already parses (RSS tracks are SOUNDLST ids:
+      title 1000, menu 1010, menuexit 10). Built an SDL-free flow core
+      (`libs/game/app_flow.hpp`, pure `next(state,input)`) + a data-driven
+      `Screen` primitive + a `Transition` (HEADWIPE wipe / fade fallback);
+      `GameApp` now boots Boot->Logo->Title->Menu(stub)->Match->Results(stub)
+      ->Menu (dev fast-path `--match` / `BOMBER_BOOT_MATCH`). AssetStore gained
+      front-end PCX + HEADWIPE loaders (guarded). `tests/test_frontend.cpp`
+      pins the flow graph. libs/sim untouched — no golden impact.
+- [~] Polished screens — Title/attract + Results + navigable Menu DONE
+      2026-07-04 (docs/re/frontend-flow.md "main-menu items" + "results flow").
+      RE'd the real menu loop `sub_42B9CE`: seven rows (v10 0..6 = Play, two
+      setup screens, Editor, Credits `.BM`, Roulette, Quit) with an animated
+      bomb-trigger cursor over MAINMENU.PCX; the results tail of the Play handler
+      `sub_42A3F6` is three-tier — DRAW.PCX (no survivor, sting 1700) / RESULTS
+      tally (a survivor) / VICTORY%u.PCX (match winner, voice 2000); BONUS.PCX is
+      NOT in that path (spine's round=BONUS guess corrected to VICTORY<player>).
+      Built: attract loop (title timeout re-runs IPLOGO->HSLOGO->TITLE rather
+      than dead-ending, `run_boot_attract`); a navigable menu (up/down highlight
+      wrap, Enter select, Esc quit; nav blip 20 / accept 10; `present_menu`);
+      real Results (`round_winner()` -> DRAW or VICTORY<player>). Added four
+      `.BM`-backed leaf AppStates (Options/Controllers/Network/Credits) as the
+      hub's stub leaves + edges; `tests/test_frontend.cpp` pins the hub graph.
+      libs/sim untouched — no golden impact.
+- [x] `.BM` text-screen leaves + menu/results polish (#40) — the four leaves now
+      render their real text via the `.BM` viewer (`sub_41302D`, `bmscreen.cpp`):
+      Credits→CREDITS.BM (inline CREDBAR/JERM/KURT/BOMBDUDE/QALOGO images),
+      Options/Network/Controllers→OPTIONS/NETWORK/INPUT.BM help. Font =
+      **FONT6.FON** (active font pinned by `sub_431E9C(6)`), decoded by the new
+      `bomber::assets::bmfont` parser (1bpp glyphs, `docs/formats/fon.md`). Layout
+      is faithful: 34px top/left inset, `344/line_height` visible rows, **keyboard
+      line/page scroll (no auto-scroll)**, Enter/Esc dismiss. Menu cursor PINNED to
+      the confirmed `getvalue(700/701/702)` = row-700 columns `{332,140,38}`
+      (x=332, y=140+38·row), drawn as the animated "bomb trigger green" sprite
+      (`ValueList::column_or`, VALUELST multi-column support added parallel to the
+      sim's first-column `values`). Draw sting fixed to a one-shot 1700 group pick
+      (was looping via music_id). libs/sim untouched — no golden impact.
+- [ ] Interactive front-end (DEFERRED, hooks in place): the real Options screen
+      (Team Play/Random Start/Conveyor Speed → options.ini) + controller key-remap
+      UI (`sub_42B0CE`/`sub_42B47D`) — the `.BM` help overlays render now, the
+      settings/remap widgets are the next chunk. Also the RESULTS.PCX cumulative
+      tally tier (needs a multi-round match loop + scoreboard) and the map
+      editor/roulette screens (menu rows are inert documented stubs).
+- [ ] Match settings; campaign later.
 
 ## Done (highlights)
 

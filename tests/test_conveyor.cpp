@@ -39,8 +39,8 @@ TEST_CASE("a standing player on a conveyor is pushed along the belt") {
     run(s, 10, TickInputs{});  // NO input: only the belt acts
 
     const int moved = (p.x - x0) / 100;
-    // The belt adds conveyor_speed (250) to the move budget each tick, spent
-    // 100/px — so ~250/100 = 2.5 px/tick, accumulating the remainder.
+    // The belt adds conveyor_speed to the move budget each tick, spent 100/px,
+    // accumulating the remainder — the SAME budget units as walking (id 42).
     long budget = 0, expected = 0;
     for (int t = 0; t < 10; ++t) {
         budget += st.tuning.conveyor_speed();
@@ -49,7 +49,11 @@ TEST_CASE("a standing player on a conveyor is pushed along the belt") {
     CHECK(moved == static_cast<int>(expected));
     CHECK(p.tile_y() == 0);                 // stayed on the belt lane
     CHECK(p.facing == Direction::Right);    // the belt forced its facing
-    CHECK(st.tuning.conveyor_speed() == 250);
+    // The conveyor-speed OPTION defaults to the binary's hardcoded 1 (medium =
+    // getvalue(191) = 350), NOT the low tier — the "too fast/slow" fix. The
+    // per-tick belt budget shares the same 1/100-px units as walking speed.
+    CHECK(st.tuning.conveyor_speed_index == 1);
+    CHECK(st.tuning.conveyor_speed() == 350);
 }
 
 TEST_CASE("a conveyor push stalls against a wall and leaves facing untouched") {
