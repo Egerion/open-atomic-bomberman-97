@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "bomber/sim/bomb.hpp"
+#include "bomber/sim/brain.hpp"
 #include "bomber/sim/constants.hpp"
 #include "bomber/sim/event.hpp"
 #include "bomber/sim/player.hpp"
@@ -59,6 +60,11 @@ struct State {
     std::array<std::array<std::uint8_t, kGridWidth>, kGridHeight> burning{};
 
     std::array<Player, kMaxPlayers> players{};
+    // Per-player computer-AI brains (ADR-0005 §3), one slot per player, indexed
+    // in lockstep with `players`. All zero on a non-AI/absent player, so hashing
+    // them is a no-op for non-AI scenarios (golden unchanged apart from the
+    // one-time hash-layout growth). Filled by AISystem::decide before movement.
+    std::array<Brain, kMaxPlayers> brains{};
     std::vector<Bomb> bombs;
 
     // Cleared at the start of every tick; excluded from state_hash().

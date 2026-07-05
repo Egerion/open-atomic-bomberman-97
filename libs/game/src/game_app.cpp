@@ -211,6 +211,10 @@ constexpr int kMenuCursorStepFallback = 38;    // getvalue(702)
 
 void GameApp::start_match(std::uint32_t seed) {
     sim::MatchConfig cfg = match::build_match_config(scheme_, 2, seed, &values_);
+    // DEV hook (temporary): make player 1 a computer opponent so the AI
+    // (ADR-0005) is visible in-game before the match-setup UI exists. Player 0
+    // stays keyboard-driven. Remove when the setup screen can pick AI slots.
+    cfg.ai[1] = true;
     // Override the Conveyor Speed index from options.ini if present (this
     // install = 2 high); otherwise Tuning keeps the confirmed default (1
     // medium). conveyor_speed() clamps to [0, count-1], so a raw index is safe.

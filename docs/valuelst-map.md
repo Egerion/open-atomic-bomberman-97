@@ -23,6 +23,10 @@ Units: speeds are hundredths of a pixel per frame; probabilities are 1-in-N; fra
 | 189 | number of conveyor speeds (count) | 3 |
 | 190–192 | conveyor belt speeds low/med/high (1/100 px, same budget units as id 42); selected by the "Conveyor Speed" game option (default 1=medium; this install's options.ini=2) | 250 / 350 / 450 |
 | 680 | trampoline bounce length, frames ("how many frames do you bounce"; `sub_41F29B` ~23160) | 30 |
+| 900 | number of predefined AI personalities (brain-init spread `rand()%900`; =1 ⇒ every brain is personality 0) — `docs/re/ai.md` §1/§6 | 1 |
+| 910 | closing-wall ("fire-god") danger look-ahead, tiles — the AI danger grid marks the next 910 spiral bricks with a decaying threat (`docs/re/ai.md` §4.3) | 15 |
+| 915 | blast-bricks drop chance, 1-in-N (behaviour 3 `sub_40AD8D`, Stage 4) — `docs/re/ai.md` §3.3 | 5 |
+| 920 | powerup-seek range/BFS depth (behaviour 5 `sub_40BAF5`, Stage 3) — how close a powerup must be for an AI to chase it | 4 |
 
 Powerup kind order (matches scheme `-P` rows and the id blocks above): extra bomb, flame, disease, kick, skate, punch, grab, spooger, goldflame, trigger, jelly, super-disease, random.
 
@@ -41,7 +45,7 @@ Powerup kind order (matches scheme `-P` rows and the id blocks above): extra bom
 | 681 | trampoline hop arc height (px/frame) — presentation-only; id 680 (bounce frames) is now consumed above |
 | 340–350 | per-level tile regeneration |
 | 450–460 | per-level ice (input lag) in ms |
-| 900–920 | AI behavior knobs |
+| 905 | reserved/unused AI slot — no `getvalue(905)` call exists in the binary and VALUELST has no `905,<n>` line; only the editor's label writer touches it (`docs/re/ai.md` §9.5) |
 | 1100–1110 | net protocol retransmit timing |
 
 ## Not in VALUELST (hardcoded in BM95.EXE — our own tunables)

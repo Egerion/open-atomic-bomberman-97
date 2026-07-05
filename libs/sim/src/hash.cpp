@@ -66,6 +66,10 @@ std::uint64_t state_hash(const State& s) {
             (static_cast<std::uint64_t>(p.trigger) << 54) |
             (static_cast<std::uint64_t>(p.jelly) << 55) |
             (static_cast<std::uint64_t>(p.bombs_placed) << 56) |
+            // Computer-AI flag (ADR-0005): a gameplay input source, so hashed.
+            // 0 on every non-AI player → golden scenarios unchanged (bit was
+            // previously a constant 0). bits 56..60 hold bombs_placed (small).
+            (static_cast<std::uint64_t>(p.ai) << 61) |
             // Stage-actor re-entry latches (#7): gameplay state (they gate re-
             // warp / re-bounce), so hashed. Both 0 on boards with no warpholes/
             // trampolines → golden scenarios unchanged. See stage-actors.md §4-5.
@@ -102,6 +106,36 @@ std::uint64_t state_hash(const State& s) {
         mix(static_cast<std::uint64_t>(dbits) |
             (static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.disease_timer)) << 16) |
             (static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.disease_fresh)) << 40));
+    }
+    // Computer-AI brains (ADR-0005 §3 / docs/re/ai.md §1.1). Hashed in one
+    // clean block, parallel to `players`: every gameplay field of every Brain is
+    // mixed. A non-AI/absent player's Brain is zero-initialised, so this is a
+    // run of mix(0) words for the golden (no-AI) scenarios — byte-identical to
+    // before this block existed apart from those added zero words (the one-time
+    // hash-layout growth called out in ADR-0005 §7). The danger/obstacle grids
+    // are per-tick scratch (like s.events) and are NEVER hashed.
+    for (const auto& br : s.brains) {
+        // Scalars + the two flags. personality/state_flag/wander_dir are small;
+        // has_path_target packs alongside them.
+        mix(static_cast<std::uint64_t>(br.personality) |
+            (static_cast<std::uint64_t>(br.state_flag) << 8) |
+            (static_cast<std::uint64_t>(static_cast<std::uint8_t>(br.wander_dir)) << 16) |
+            (static_cast<std::uint64_t>(br.has_path_target) << 24) |
+            (static_cast<std::uint64_t>(static_cast<std::uint16_t>(br.path_target_x)) << 32) |
+            (static_cast<std::uint64_t>(static_cast<std::uint16_t>(br.path_target_y)) << 48));
+        mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(br.path_target_cost)));
+        // Powerup-seek sub-struct (+24/+28/+32/+36).
+        mix(static_cast<std::uint64_t>(br.pow_seek.active) |
+            (static_cast<std::uint64_t>(static_cast<std::uint16_t>(br.pow_seek.tile_x)) << 8) |
+            (static_cast<std::uint64_t>(static_cast<std::uint16_t>(br.pow_seek.tile_y)) << 24) |
+            (static_cast<std::uint64_t>(static_cast<std::uint8_t>(br.pow_seek.step_dir)) << 40) |
+            (static_cast<std::uint64_t>(static_cast<std::uint32_t>(br.pow_seek.timer) & 0xFFFF)
+             << 48));
+        // Enemy-seek sub-struct (+10/+12/+16/+20).
+        mix(static_cast<std::uint64_t>(br.enemy_seek.active) |
+            (static_cast<std::uint64_t>(static_cast<std::uint8_t>(br.enemy_seek.target_slot)) << 8) |
+            (static_cast<std::uint64_t>(static_cast<std::uint8_t>(br.enemy_seek.step_dir)) << 16) |
+            (static_cast<std::uint64_t>(static_cast<std::uint32_t>(br.enemy_seek.timer)) << 32));
     }
     for (const auto& b : s.bombs) {
         mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.x)) |

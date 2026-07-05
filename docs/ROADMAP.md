@@ -169,8 +169,34 @@ behaviour changes (cite the facts.md entry) → tick the box here.
 
 ## Phase 2 — AI
 
-- [ ] Port ai.c behaviour (VALUELST 900-series). AI must produce PlayerInput
-      through the normal TickInputs path so determinism holds.
+- [x] Port ai.c behaviour (VALUELST 900-series). AI must produce PlayerInput
+      through the normal TickInputs path so determinism holds. Staged per
+      docs/adr/0005-ai-architecture.md §8 / docs/re/ai.md. COMPLETE 2026-07-05 —
+      all 8 behaviours live (Stages 2-5) in libs/sim/src/systems/ai.{hpp,cpp}.
+      - [x] Stage 1 — exhaustive RE (docs/re/ai.md) + determinism ADR (0005).
+      - [x] Stage 2 — `Player::ai` + hashed `State::brains`, `AISystem`
+            dispatcher (draws A/B), danger+obstacle grids, flee BFS (sub_40970B),
+            flame veto (sub_40A76E), wander (sub_40A81F); wired before each
+            player's `player_turn`. One-time golden hash-layout recapture.
+      - [x] Stage 3 — directed BFS (sub_4092A1) + behaviour 2 directed branch,
+            powerup scan (sub_409C1F) + seek-powerup (behaviour 5 sub_40BAF5,
+            getvalue(920)=4). Corrected sub_40A59D (does NOT reject powerup
+            tiles). NO new hashed field ⇒ golden FROZEN. tests/test_ai.cpp +3.
+      - [x] Stage 4 — blast-bricks (sub_40AD8D, getvalue(915)=5) + grab-glove
+            (sub_40BD44). Both DROP via the bomb-key edge (action1) → normal
+            BombSystem in player_turn. RE corrections: sub_423188 = drop-tile
+            CLEARANCE (not escape search); grab-carry = grab-then-LOB (not hold).
+            NO new hashed field ⇒ golden FROZEN. tests/test_ai.cpp +5.
+      - [x] Stage 5 — DONE 2026-07-05 (AI COMPLETE). enemy targeting
+            (sub_422718 two-pass rand%10 / sub_40B8C2 behaviour 6), bomb-near-
+            enemy (sub_40ABED behaviour 4, with the byte-confirmed OOB cross-table
+            {-1,0,0,0,1}+{0,-1,0,1,0} and the stale +20/+24 Manhattan gate), punch
+            (sub_40BE02 behaviour 1), and the safe-branch remote-detonation whim
+            (sub_40B20F trigger && !punch && rand%10). TEAM reduces to slot!=self
+            (no Player::team; team wiring = documented follow-up). NO new hashed
+            field ⇒ golden FROZEN (proven byte-identical via a Stage-5-disabled
+            differential build). tests/test_ai.cpp +6; one Stage-3 emergent seed
+            refreshed for the new draw stream.
 
 ## Phase 3 — Front-end
 

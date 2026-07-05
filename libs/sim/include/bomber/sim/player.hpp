@@ -14,6 +14,12 @@ namespace bomber::sim {
 struct Player {
     bool present = false;
     bool alive = false;
+    // Computer-controlled (the original's player-type byte +16 == 1; ADR-0005).
+    // When set, AISystem fills this player's PlayerInput before player_turn;
+    // otherwise the externally-supplied (human/replay) input passes through.
+    // Hashed: a gameplay input source. Defaults false, so every existing test
+    // and golden scenario leaves the AI path untaken. See docs/re/ai.md §7.
+    bool ai = false;
     Fixed x = 0, y = 0;  // center position in field pixels * 100
     Direction facing = Direction::Down;
     std::int32_t speed = 0;       // movement budget added per tick (VALUELST id 42 + skates)

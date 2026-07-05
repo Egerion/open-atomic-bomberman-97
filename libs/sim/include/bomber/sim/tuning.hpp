@@ -100,6 +100,15 @@ struct Tuning {
     // PRESENTATION value the integer sim doesn't need. See stage-actors.md §4.
     std::int32_t trampoline_bounce_frames = 30;  // id 680
 
+    // Computer-AI tunables (VALUELST 900..920; see docs/re/ai.md §6 and
+    // docs/adr/0005). These feed ONLY the AI decision/danger paths, which are
+    // per-tick scratch and non-AI-inert — Tuning is excluded from state_hash(),
+    // so they never touch the golden. Defaults are the confirmed VALUELST values.
+    std::int32_t ai_personalities = 1;     // id 900: brain-init spread (=1 -> personality 0)
+    std::int32_t fire_god_lookahead = 15;  // id 910: closing-wall danger look-ahead tiles
+    std::int32_t ai_blast_chance = 5;      // id 915: blast-bricks drop 1-in-N (Stage 4)
+    std::int32_t ai_powerup_range = 4;     // id 920: powerup-seek BFS depth+range (Stage 3)
+
     // Diseases (VALUELST 120..138; see docs/re/facts.md "Disease system").
     // Nine diseases, one duration each at ids 130..138.
     std::int32_t disease_frames[kDiseaseKinds] = {300, 300, 300, 300, 300, 300, 300, 300, 300};
@@ -140,6 +149,10 @@ struct Tuning {
             case 191: conveyor_speeds[1] = v; return true;
             case 192: conveyor_speeds[2] = v; return true;
             case 680: trampoline_bounce_frames = v; return true;  // trampoline bounce frames
+            case 900: ai_personalities = v; return true;   // AI tunables (docs/re/ai.md §6)
+            case 910: fire_god_lookahead = v; return true;
+            case 915: ai_blast_chance = v; return true;
+            case 920: ai_powerup_range = v; return true;
             case 121: diseases_time_limited = v != 0; return true;
             case 123: diseases_multiply = v != 0; return true;
             case 124: diseases_curable = v != 0; return true;

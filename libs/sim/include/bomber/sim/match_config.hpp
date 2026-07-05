@@ -30,6 +30,9 @@ struct MatchConfig {
     std::array<std::array<std::uint8_t, kGridWidth>, kGridHeight> warp_dest_y{};
     std::vector<SpawnPoint> spawns;   // indexed by player number
     int player_count = 2;
+    // Per-player computer-AI flag (ADR-0005): true → the AISystem drives this
+    // slot's PlayerInput instead of a human. Copied to Player::ai at setup.
+    std::array<bool, kMaxPlayers> ai{};
     std::uint32_t seed = 0x12345678;
     Tuning tuning;
     // Per-scheme powerup overrides (-P rows): >= -999 replaces the spawn count.

@@ -10,6 +10,7 @@
 
 #include "bomber/sim/rng.hpp"
 #include "grid.hpp"
+#include "systems/ai.hpp"
 #include "systems/bombs.hpp"
 #include "systems/diseases.hpp"
 #include "systems/enclosure.hpp"
@@ -250,6 +251,7 @@ void run_tick(State& s, const TickInputs& inputs) {
     MovementSystem movement{s};
     StageActorSystem stage{s, movement};
     EnclosureSystem enclosure{s, flames};
+    AISystem ai{s};
 
     // 1. Players: movement (with conveyor/trampoline actors), bomb drop,
     //    throw/grab/trigger/punch. The conveyor push is part of the move budget
@@ -260,7 +262,18 @@ void run_tick(State& s, const TickInputs& inputs) {
     for (int i = 0; i < kMaxPlayers; ++i) {
         Player& p = s.players[i];
         if (!p.present || !p.alive) continue;
-        player_turn(s, i, inputs.players[i], bombs, stage);
+        // A computer player resolves its own input here (ADR-0005 §5): AISystem
+        // runs at the TOP of the loop, immediately before this player's
+        // player_turn — the exact slot where the original calls sub_40A1C6
+        // instead of reading DirectInput (sub_41F29B, gated on the +16==1 tag).
+        // This keeps the AI's RNG draws interleaved with movement in slot order,
+        // as the original interleaves the brain and the mover per player. Humans
+        // and replays pass their externally-supplied input through unchanged.
+        // No new tick STEP: this is a refinement of step 1 only, so no golden
+        // step-order dependency shifts (steps 2..7 below are untouched).
+        PlayerInput in = inputs.players[i];
+        if (p.ai) ai.decide(i, in);
+        player_turn(s, i, in, bombs, stage);
     }
 
     // 2. Kicked bombs slide; airborne bombs fly.
