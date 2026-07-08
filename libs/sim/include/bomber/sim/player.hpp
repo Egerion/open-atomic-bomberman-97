@@ -39,6 +39,13 @@ struct Player {
     std::int32_t flame = 2;       // cells beyond the epicenter
     bool goldflame = false;       // Goldflame flag (+94): reach = max(gridW,gridH) at drop time
     std::int32_t skates = 0;
+    // Clogs (Goldman wheel booby prize, inventory slot 13, docs/re/
+    // goldman-roulette.md §9): a speed-penalty count, the mirror image of
+    // `skates`. Born-with only — there is no PowerupSystem::apply/remove
+    // case (no normal-play pickup path exists for this kind, §9.2). Set at
+    // setup.cpp from MatchConfig::born_with_clogs and folded into `speed`
+    // there the same way skates folds in via PowerupSystem::apply.
+    std::int32_t clogs = 0;
     bool kick = false;
     bool punch = false;
     bool grab = false;

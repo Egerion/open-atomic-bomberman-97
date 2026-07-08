@@ -67,6 +67,15 @@ State build_state(const MatchConfig& config) {
         // existing config (golden hashes unaffected).
         for (int k = 0; k < kPowerupKinds; ++k)
             if (config.born_with_extra[i][k]) powerups.apply(p, static_cast<PowerupType>(k));
+        // Goldman wheel clogs award (docs/re/goldman-roulette.md §9): outside
+        // the kPowerupKinds/PowerupSystem::apply space (§9.2), so folded into
+        // speed directly here, mirroring skates' own `start_speed +
+        // skates*bonus` term with clogs SUBTRACTED (sub_41F29B's `v20 -
+        // v22*v21`, §9.1). Order: skates first (via powerups.apply above),
+        // then clogs, matching the original's single combined expression.
+        // Default 0 -> no-op, golden hashes unaffected.
+        p.clogs = config.born_with_clogs[i];
+        p.speed -= p.clogs * s.tuning.clogs_speed_penalty;
     }
 
     // Hide powerups under randomly chosen bricks (seeded RNG — deterministic).

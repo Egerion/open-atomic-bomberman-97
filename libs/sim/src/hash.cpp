@@ -86,6 +86,14 @@ std::uint64_t state_hash(const State& s) {
         // gameplay, only the digest layout shifted (CLAUDE.md determinism
         // contract rule 5; tests/test_golden.cpp recaptured in the same commit).
         mix(static_cast<std::uint64_t>(p.team));
+        // Clogs count (Goldman wheel booby prize, docs/re/goldman-roulette.md
+        // §9): a gameplay input to `speed` (already hashed), so hashed itself
+        // like `skates`. Own word — a ONE-TIME hash-layout growth (CLAUDE.md
+        // determinism contract rule 5; tests/test_golden.cpp recaptured in
+        // the same commit). 0 on every existing scenario (no config sets
+        // born_with_clogs), so this is mix(0) for every golden/test player ->
+        // byte-identical gameplay, only the digest layout shifted.
+        mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.clogs)));
         // Trampoline bounce countdown (Player::bounce, #7), warp countdown
         // (Player::warp) and the pending warp destination tile (warp_to_x/y,
         // captured at step-on): all gate/drive an in-flight warp or bounce, so

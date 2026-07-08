@@ -15,6 +15,12 @@ struct Tuning {
     std::int32_t fuse_frames = 40;         // id 41
     std::int32_t start_speed = 923;        // id 42, 1/100 px per frame
     std::int32_t skate_speed_bonus = 150;  // id 90
+    // Clogs (Goldman wheel booby prize, inventory slot 13) speed PENALTY:
+    // subtracted per clogs count in the same walk-speed term as skate_speed_
+    // bonus is added, before disease scaling (sub_41F29B, docs/re/
+    // goldman-roulette.md §9.1: "v20 - v22*v21"). Wheel-only — never a
+    // normal-play pickup (§9.2).
+    std::int32_t clogs_speed_penalty = 150;  // id 91
     std::int32_t kicked_bomb_speed = 1000; // id 300
     std::int32_t punched_bomb_speed = 1300;// id 301
     std::int32_t game_seconds = 150;       // id 100
@@ -141,6 +147,7 @@ struct Tuning {
             case 41: fuse_frames = v; return true;
             case 42: start_speed = v; return true;
             case 90: skate_speed_bonus = v; return true;
+            case 91: clogs_speed_penalty = v; return true;
             case 300: kicked_bomb_speed = v; return true;
             case 301: punched_bomb_speed = v; return true;
             case 100: game_seconds = v; return true;

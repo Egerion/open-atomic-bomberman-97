@@ -67,3 +67,62 @@ TEST_CASE("a centred player walking into a wall stops dead on the centre") {
     CHECK(p.x == kTileWF / 2);  // clamped exactly at the tile centre
     CHECK(p.tile_y() == 1);     // did not drift off the row
 }
+
+// Goldman wheel clogs (docs/re/goldman-roulette.md §9.1): a speed PENALTY,
+// the skate bonus's mirror image, folded into Player::speed at setup — so it
+// reduces per-tick displacement exactly like a lower start_speed would, with
+// no separate movement-code path (movement.cpp's `eff = p.speed` already
+// covers whatever speed carries in).
+TEST_CASE("clogs reduces per-tick walking distance, mirroring the skate speed bonus") {
+    MatchConfig cfg = open_config();
+    cfg.born_with_clogs[0] = 1;
+    Simulation s(cfg);
+    Player& p = s.state().players[0];
+    REQUIRE(p.speed == cfg.tuning.start_speed - cfg.tuning.clogs_speed_penalty);
+    TickInputs right;
+    right.players[0].right = true;
+    int x0 = p.x;
+    run(s, 10, right);
+    int moved = (p.x - x0) / 100;
+
+    long budget = 0, expected = 0;
+    for (int t = 0; t < 10; ++t) {
+        budget += p.speed;  // the clogs-reduced speed
+        while (budget > 0) {
+            budget -= 100;
+            ++expected;
+        }
+    }
+    CHECK(moved == static_cast<int>(expected));
+    // Strictly slower than a clean run at start_speed (same tick count).
+    CHECK(moved < 10 * cfg.tuning.start_speed / 100 + 1);
+}
+
+TEST_CASE("clogs and molasses disease compose in the pinned order: clogs folds into speed, then disease scales") {
+    // sub_41F29B (§9.1): the clogs subtraction happens in the SAME base term
+    // skates/base-speed do, THEN disease scaling (molasses /3) applies to the
+    // WHOLE total — so (start_speed - clogs*penalty) gets divided by 3, not
+    // just start_speed.
+    MatchConfig cfg = open_config();
+    cfg.born_with_clogs[0] = 1;
+    Simulation s(cfg);
+    Player& p = s.state().players[0];
+    int clogged_speed = p.speed;
+    REQUIRE(clogged_speed == cfg.tuning.start_speed - cfg.tuning.clogs_speed_penalty);
+    infect(p, Disease::Slow);
+    TickInputs right;
+    right.players[0].right = true;
+    int x0 = p.x;
+    run(s, 20, right);
+    int moved = (p.x - x0) / 100;
+
+    long budget = 0, expected = 0;
+    for (int t = 0; t < 20; ++t) {
+        budget += clogged_speed / 3;  // clogs folded in BEFORE the /3, matching sub_41F29B
+        while (budget > 0) {
+            budget -= 100;
+            ++expected;
+        }
+    }
+    CHECK(moved == static_cast<int>(expected));
+}

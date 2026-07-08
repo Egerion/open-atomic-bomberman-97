@@ -26,6 +26,13 @@ struct SequenceSet {
     // Animated floor-powerup art (POWERS.ANI "power <name>"), indexed by
     // sim::PowerupType. Shared/uncoloured. Empty entries fall back to POW*.PCX.
     Anim powerup_anim[sim::kPowerupKinds];
+    // Goldman wheel clogs icon (POWERS.ANI "power clog", CONFIRMED present in
+    // the shipped file) — outside sim::PowerupType/kPowerupKinds (clogs is
+    // never a sim inventory kind, docs/re/goldman-roulette.md §8/§9.2), so it
+    // gets its own slot rather than an extra powerup_anim entry. The original
+    // draws this uniformly with the other 5 wheel-slot icons (sub_4034BC
+    // pseudo.c 6022-6031, no special-case skip for slot 13, §9.4).
+    Anim clogs_anim;
     FlameSet flames[kLocalPlayers];
     Anim stand[kLocalPlayers][4], walk[kLocalPlayers][4];  // [player][direction]
     // Warp/teleport animation. CONFIRMED from the binary: sub_41F29B warp states

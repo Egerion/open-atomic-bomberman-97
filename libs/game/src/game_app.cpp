@@ -378,28 +378,41 @@ void GameApp::start_match(std::uint32_t seed) {
     // zero every slot's team here (sim team 0 = solo side) — MatchConfig::
     // team[] stays the single source of truth for the hashed Player::team.
     if (!team_play_) cfg.team.fill(0);
-    // Goldman wheel award (docs/re/goldman-roulette.md §4): sub_4214BC grants
-    // the last spin's prize to the gold player EVERY round of the following
-    // match, not just the round right after the spin — build_match_config
-    // runs at every start_match() call (including RoundContinue's re-init),
-    // so re-applying gold_prize_/gold_player_ here reproduces that "persists
-    // until the next spin" behaviour for free. A no-op (all-false overlay)
-    // whenever gold_prize_ < 0 (no successful spin yet) or the mapped
-    // sim::PowerupType is None (clogs, doc §8 — no sim kind exists yet).
+    // Goldman wheel award (docs/re/goldman-roulette.md §4/§9): sub_4214BC
+    // grants the last spin's prize to the gold player EVERY round of the
+    // following match, not just the round right after the spin —
+    // build_match_config runs at every start_match() call (including
+    // RoundContinue's re-init), so re-applying gold_prize_/gold_player_ here
+    // reproduces that "persists until the next spin" behaviour for free. A
+    // no-op (all-false/all-zero overlay) whenever gold_prize_ < 0 (no
+    // successful spin yet).
     if (gold_player_ >= 0 && gold_prize_ >= 0) {
-        sim::PowerupType pt = wheel_prize_to_powerup(gold_prize_);
-        if (pt != sim::PowerupType::None) {
+        // Clogs (prize 13) is NOT a sim::PowerupType (doc §8/§9.2 — never a
+        // scheme/spawn kind) — it routes to MatchConfig::born_with_clogs
+        // instead of wheel_prize_to_powerup/born_with_extra, alongside (not
+        // instead of) the normal-kind branch below.
+        bool is_clogs = gold_prize_ == kClogsPrizeId;
+        sim::PowerupType pt =
+            is_clogs ? sim::PowerupType::None : wheel_prize_to_powerup(gold_prize_);
+        if (pt != sim::PowerupType::None || is_clogs) {
             auto kind = static_cast<int>(pt);
             if (team_play_) {
                 // Team mode: the doc's "team id encoded as 0 or 2" compares
                 // against the RAW +84 byte, i.e. our setup_team_[] before the
                 // +1 shift above — every member of the gold TEAM gets the
                 // bump (doc §4 "every member of the gold team").
-                for (int i = 0; i < sim::kMaxPlayers; ++i)
-                    if (cfg.active[i] && setup_team_[i] == gold_player_)
+                for (int i = 0; i < sim::kMaxPlayers; ++i) {
+                    if (!cfg.active[i] || setup_team_[i] != gold_player_) continue;
+                    if (is_clogs)
+                        cfg.born_with_clogs[i] = 1;  // reset-then-+1 every round, §9.3 — not accumulated
+                    else
                         cfg.born_with_extra[i][kind] = true;
+                }
             } else if (gold_player_ < sim::kMaxPlayers && cfg.active[gold_player_]) {
-                cfg.born_with_extra[gold_player_][kind] = true;
+                if (is_clogs)
+                    cfg.born_with_clogs[gold_player_] = 1;  // reset-then-+1 every round, §9.3
+                else
+                    cfg.born_with_extra[gold_player_][kind] = true;
             }
         }
     }

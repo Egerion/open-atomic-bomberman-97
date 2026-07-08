@@ -72,3 +72,70 @@ TEST_CASE("born_with_extra stacks with multiple applications like the original's
     CHECK(s1.state().players[0].skates == 1);
     CHECK(s2.state().players[0].skates == 1);  // re-applying the SAME config each round-init
 }
+
+// Clogs (Goldman wheel booby prize, docs/re/goldman-roulette.md §9): a
+// speed-penalty count fed via MatchConfig::born_with_clogs, OUTSIDE the
+// kPowerupKinds/PowerupSystem::apply space (§9.2 — never a normal pickup).
+
+TEST_CASE("born_with_clogs defaults to 0: setup speed is unaffected") {
+    MatchConfig cfg = open_config();
+    Simulation s(cfg);
+    CHECK(s.state().players[0].clogs == 0);
+    CHECK(s.state().players[0].speed == cfg.tuning.start_speed);
+}
+
+TEST_CASE("born_with_clogs subtracts clogs_speed_penalty from start_speed, mirroring skate's addition") {
+    // §9.1's pinned arithmetic: base + skates*skate_speed_bonus -
+    // clogs*clogs_speed_penalty. One clogs count with default tuning (923
+    // start_speed, 150 clogs_speed_penalty) -> 773.
+    MatchConfig cfg = open_config();
+    cfg.born_with_clogs[0] = 1;
+    Simulation s(cfg);
+    CHECK(s.state().players[0].clogs == 1);
+    CHECK(s.state().players[0].speed ==
+          cfg.tuning.start_speed - cfg.tuning.clogs_speed_penalty);
+    CHECK(s.state().players[0].speed == 773);
+    // Player 1 (not gold) is unaffected.
+    CHECK(s.state().players[1].clogs == 0);
+    CHECK(s.state().players[1].speed == cfg.tuning.start_speed);
+}
+
+TEST_CASE("born_with_clogs and born_with_extra Skate compose additively (skate then clogs, §9.1 order)") {
+    // A player who is simultaneously the wheel's gold player for skate AND
+    // clogs in the same round (not reachable via the real wheel, which grants
+    // exactly one prize per spin, but the sim-level composition must still
+    // match the pinned `base + skates*90 - clogs*91` formula regardless of
+    // provenance).
+    MatchConfig cfg = open_config();
+    cfg.born_with_extra[0][static_cast<int>(PowerupType::Skate)] = true;
+    cfg.born_with_clogs[0] = 1;
+    Simulation s(cfg);
+    CHECK(s.state().players[0].skates == 1);
+    CHECK(s.state().players[0].clogs == 1);
+    CHECK(s.state().players[0].speed ==
+          cfg.tuning.start_speed + cfg.tuning.skate_speed_bonus -
+              cfg.tuning.clogs_speed_penalty);
+}
+
+TEST_CASE("born_with_clogs stacking is a plain overlay value, not an accumulator (§9.3)") {
+    // Unlike a persistent counter, the caller (game_app.cpp) SETS this to 1
+    // each round for the gold player/team (sub_4214BC resets the whole
+    // inventory to baseline before granting, so clogs is always exactly 0-or-1
+    // per round, never a growing total, §9.3). Re-applying the SAME config
+    // across two round-inits must yield the SAME clogs=1, not 2.
+    MatchConfig cfg = open_config();
+    cfg.born_with_clogs[0] = 1;
+    Simulation s1(cfg);
+    Simulation s2(cfg);
+    CHECK(s1.state().players[0].clogs == 1);
+    CHECK(s2.state().players[0].clogs == 1);
+}
+
+TEST_CASE("born_with_clogs on an inactive/absent slot is a no-op (no OOB write)") {
+    MatchConfig cfg = open_config();
+    cfg.player_count = 2;
+    cfg.born_with_clogs[5] = 1;  // slot 5 has no spawn (beyond player_count)
+    Simulation s(cfg);
+    CHECK(s.state().players[0].clogs == 0);
+    CHECK(s.state().players[1].clogs == 0);
+}

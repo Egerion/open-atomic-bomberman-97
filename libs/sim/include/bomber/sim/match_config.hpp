@@ -61,6 +61,20 @@ struct MatchConfig {
     // with no goldman award behaves byte-identical to before this field
     // existed (golden hashes unaffected).
     std::array<std::array<bool, kPowerupKinds>, kMaxPlayers> born_with_extra{};
+    // Per-player Goldman wheel CLOGS overlay (docs/re/goldman-roulette.md
+    // §9): clogs (wheel prize id 13) is outside the kPowerupKinds space (it
+    // is never a scheme/-P/spawn/forbid kind, §9.2), so it is NOT part of
+    // born_with_extra — a separate per-player COUNT (not a bool), because
+    // sub_4214BC's per-round inventory RESET (baseline getvalue(50+j), id 63
+    // = 0 for slot 13) runs before the `++player_byte[86+13]` grant, so the
+    // gold player's clogs count is always exactly 0-or-1 EACH round, never a
+    // cross-round running total (§9.3 — "reset-then-+1", NOT accumulation).
+    // game_app.cpp SETS this to 1 for the gold player/team on every
+    // build_match_config call (a fresh MatchConfig each time, so this is a
+    // plain overlay like born_with_extra, not an increment). Default 0
+    // everywhere: a config with no goldman clogs award behaves byte-
+    // identical to before this field existed (golden hashes unaffected).
+    std::array<std::int32_t, kMaxPlayers> born_with_clogs{};
 
     MatchConfig() {
         spawn_override.fill(kNoOverride);
