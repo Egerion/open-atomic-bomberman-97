@@ -327,10 +327,46 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       = solo). Frontend maps the setup 0/1 byte to sim teams 1/2 under Team
       Play (both +84 values are real teams, sub_4141F8). tests/test_team.cpp
       (9 cases); suite 28/28.
-- [ ] Remaining front-end: kills column + win_by_kills clinch (in-flight),
-      Goldman Roulette wheel port (sub_4034BC — RE in-flight), Network screen
-      (netplay itself deferred per ADR-0003), menu row 3 truth (RE in-flight;
-      "editor" label was wrong).
+- [x] Kill attribution + win_by_kills — DONE 2026-07-08. PlayerDied events
+      carry the killer slot (unhashed Event::data, contract rule 4 — golden
+      byte-identical, proven); frontend kill tally (self-kills excluded, "our
+      semantics") + the §1 v73 win_by_kills clinch (unique-leader tie-break)
+      shared between run_app and present_scoreboard via results.hpp.
+- [x] Goldman Roulette wheel — DONE 2026-07-08 (docs/re/goldman-roulette.md,
+      port 1:1: 5-draw setup, 420/6×70 Lissajous, boundary-decel landing,
+      prize table incl. the clogs booby slot as a documented no-op gap;
+      per-player born_with_extra config overlay, golden untouched). Gold-player
+      assignment = the RESULTS tier's v73 clinch write (§2, pinned + ported).
+- [x] Hidden scheme editor — DONE 2026-07-08 (results-and-options.md §5):
+      Ctrl+E ×6 menu trigger, chooser + 15×11 mouse editor + powerup-rules
+      sub-editor, .SCH writer with parse(write(s))==s round-trip; detail pass
+      pinned the brush truth (single-cell), override widget, picker layout,
+      new-scheme defaults, and the real TILES0/MISC.ANI canvas art.
+- [x] In-round shell — RE'd + ported 2026-07-08 (docs/re/in-match-shell.md):
+      NO pause exists (Ctrl+Q instant forfeit added; Esc kept as a documented
+      port convenience), MM:SS clock HUD (getvalue 110-112, msg 281, KFONT
+      "numeric font", ∞ when untimed, ≤30 s warning ink), hurry flash/2700
+      reconciled, stage music 1100+level (fallback 1120), results tier all
+      under track 1130 (1020 = setup screens only). F1 mid-round help browser
+      = TODO (needs the generic .BM glob browser, same as menu row 5).
+- [x] Options toggles into the sim — DONE 2026-07-08 (facts.md "Options
+      toggles"): stomped_bombs_detonate = the CLOSING WALL detonates (default
+      getvalue(46)=1; airborne exempt) — wall-vs-bomb behaviour aligned;
+      diseases_destroyable (getvalue(120)=1; OFF ⇒ skull relocates via
+      sub_4255B2) incl. the sliding-bomb powerup squash; random_start's real
+      200-swap shuffle replaced our Fisher-Yates guess. Golden byte-identical
+      (defaults match the original; proven before/after).
+- [x] Faithful screen inks — DONE 2026-07-08: the ink "globals" are RGB555
+      LUT offsets (0x495390 table); decoded to exact RGBs (white/grey/cyan/
+      team-red) and applied in present_scoreboard incl. the real two-ink team
+      split (results-and-options.md §1).
+- [ ] Remaining front-end: the generic .BM help BROWSER (menu row 5 + the
+      in-round F1 modal — one widget), attract-mode demo match (partial work
+      parked in a worktree; task was user-stopped), Network screen (netplay
+      deferred per ADR-0003), win_by_kills Options row already live.
+- [ ] Known parked fidelity gaps (need their own golden recaptures, flagged as
+      task chips): flame-arm stops, flying-bomb landing on powerups, scatter
+      occupancy test.
 - [ ] Campaign later.
 
 ## Done (highlights)
