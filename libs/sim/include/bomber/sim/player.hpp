@@ -20,6 +20,16 @@ struct Player {
     // Hashed: a gameplay input source. Defaults false, so every existing test
     // and golden scenario leaves the AI path untaken. See docs/re/ai.md §7.
     bool ai = false;
+    // Team id (the original's player byte +84, sub_4223E7/sub_422437; toggled
+    // by 'T' on the PLAYER INPUT screen — docs/re/setup-screens.md). Copied
+    // verbatim from MatchConfig::team[] at setup (setup.cpp). Hashed: it now
+    // gates AI targeting (docs/re/ai.md §3.4/§5.3) and round-end (a gameplay
+    // decision), so it is deterministic state, not just presentation config.
+    // Convention (our semantics — not RE'd beyond the +84 byte's existence):
+    // team is only meaningful when at least two ACTIVE players share the same
+    // nonzero-or-zero value; a fully-distinct/all-zero roster (every existing
+    // scenario) behaves exactly as before this field existed.
+    std::uint8_t team = 0;
     Fixed x = 0, y = 0;  // center position in field pixels * 100
     Direction facing = Direction::Down;
     std::int32_t speed = 0;       // movement budget added per tick (VALUELST id 42 + skates)

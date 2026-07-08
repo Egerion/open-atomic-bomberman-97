@@ -8,14 +8,18 @@ pseudocode are flagged **[VERIFY]** and repeated in the closing checklist.
 
 Companion design doc: `docs/adr/0005-ai-architecture.md`.
 
-**IMPLEMENTATION STATUS: COMPLETE (2026-07-05).** All 8 behaviours are ported and
-live in `libs/sim/src/systems/ai.{hpp,cpp}` (Stages 2-5). The `sub_40ABED` OOB
-X-table (§3.4/§9.4) and the enemy-finder's two `rand()%10` passes (§5.3) were
-pinned from the shipped binary. TEAM mode reduces to `slot != self` in a no-team
-match (no `Player::team` field yet — a documented follow-up; the `.sch` `extra`
-field is the likely team source when wired). No new hashed field landed after
-Stage 2, so the golden hashes are frozen (the one-time Stage-2 hash-layout
-recapture on MSVC is the only golden movement).
+**IMPLEMENTATION STATUS: COMPLETE (2026-07-05); TEAM WIRING LANDED (2026-07-08).**
+All 8 behaviours are ported and live in `libs/sim/src/systems/ai.{hpp,cpp}`
+(Stages 2-5). The `sub_40ABED` OOB X-table (§3.4/§9.4) and the enemy-finder's
+two `rand()%10` passes (§5.3) were pinned from the shipped binary. TEAM mode
+originally reduced to `slot != self` because there was no `Player::team` field;
+that follow-up has since landed — `Player::team` (hashed, copied verbatim from
+`MatchConfig::team[]` at setup, itself fed by the setup screen's 'T' toggle,
+docs/re/setup-screens.md) now gates the enemy scans (`AISystem::same_team`,
+§3.4/§5.3) and round-end ("one team left", our semantics — see the round-end
+note below). This grew the hash layout by one word per player, so
+`tests/test_golden.cpp` needed a one-time constant recapture (see that file's
+own note); the untamed (all-zero-team) RNG stream and gameplay are unchanged.
 
 ## 0. One-paragraph shape
 

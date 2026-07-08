@@ -44,6 +44,26 @@ bool tile_blocked(const State& state, int tx, int ty);  // walls/bricks/burning
 bool tile_has_bomb(const State& state, int tx, int ty);
 int alive_count(const State& state);
 
+// Round-end, team-aware (our semantics — not RE'd beyond the +84 byte's
+// existence; docs/re/ai.md TEAM follow-up / docs/re/setup-screens.md). Players
+// with the same NONZERO Player::team value count as one side; team 0 never
+// merges with another team-0 player, so every player is its own side on an
+// all-zero roster — identical to the old "one player left" rule. Use these
+// instead of alive_count() for round-over / winner decisions so a match with
+// teammates does not end the round while two teammates are the only survivors.
+//
+// sides_remaining: the number of distinct alive sides still present. A round
+// is over when this is <= 1, exactly where alive_count() <= 1 used to gate it
+// (and identical to it on an all-zero roster, since side == player there).
+int sides_remaining(const State& state);
+
+// The representative player slot of the sole remaining side (the lowest slot
+// index on that side), or -1 if the round is not decided as a win (zero or
+// more than one side alive — mutual wipe-out or an ongoing round). Mirrors
+// GameApp::round_winner()'s single-survivor contract, generalised to sides:
+// solo players are their own side, so a solo match's winner is unchanged.
+int winning_side(const State& state);
+
 // Enclosement spiral: how many wall tiles a depth closes, and the grid cell
 // the index-th tile lands on (clockwise rings from the outside in).
 int enclose_total(int depth);

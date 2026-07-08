@@ -6,6 +6,7 @@
 #include "bomber/sim/simulation.hpp"
 
 #include <algorithm>
+#include <array>
 #include <utility>
 
 #include "bomber/sim/rng.hpp"
@@ -323,6 +324,47 @@ int alive_count(const State& s) {
     for (const auto& p : s.players)
         if (p.present && p.alive) ++n;
     return n;
+}
+
+// Shared "which side is slot i on" helper for sides_remaining/winning_side.
+// Our semantics (docs/re/ai.md TEAM follow-up): team 0 is "no team" and never
+// merges with another team-0 player, so team 0 players are always distinct
+// sides — an all-zero roster degenerates to exactly alive_count()'s behaviour.
+namespace {
+bool on_same_side(const Player& a, const Player& b) {
+    return a.team != 0 && a.team == b.team;
+}
+}  // namespace
+
+int sides_remaining(const State& s) {
+    int sides = 0;
+    std::array<bool, kMaxPlayers> counted{};
+    for (int i = 0; i < kMaxPlayers; ++i) {
+        const Player& p = s.players[i];
+        if (!p.present || !p.alive || counted[i]) continue;
+        ++sides;
+        counted[i] = true;
+        for (int j = i + 1; j < kMaxPlayers; ++j) {
+            const Player& q = s.players[j];
+            if (q.present && q.alive && on_same_side(p, q)) counted[j] = true;
+        }
+    }
+    return sides;
+}
+
+int winning_side(const State& s) {
+    int winner = -1;
+    for (int i = 0; i < kMaxPlayers; ++i) {
+        const Player& p = s.players[i];
+        if (!p.present || !p.alive) continue;
+        if (winner == -1) {
+            winner = i;
+            continue;
+        }
+        // Another live player: only still a win if they share the winner's side.
+        if (!on_same_side(s.players[winner], p)) return -1;
+    }
+    return winner;  // -1 if nobody is alive (mutual wipe-out -> draw)
 }
 
 int enclose_total(int depth) { return EnclosureSystem::total(depth); }

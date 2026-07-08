@@ -352,18 +352,19 @@ keep `pick_stage`.
 level index → `start_match` overrides the stage (specific level) or keeps
 `pick_stage` (RANDOM). The committed win target → `win_target_` (best-of).
 
-## Determinism / golden — NO IMPACT
+## Determinism / golden — UPDATE (2026-07-08): team mode landed, one-time recapture
 
-All presentation + config. `libs/sim` is **untouched**: no new hashed field.
-Roster/colour/team/level feed `MatchConfig` (config, not per-tick RNG); colour
-is `Tuning::color_rgb` (already there); team is a new **non-hashed**
-`MatchConfig::team[]` that is NOT copied into any hashed `Player` field, so
-`state_hash()` is byte-identical and **`tests/test_golden.cpp` is unchanged —
-no recapture**. Full team MODE (a hashed `Player::team` + sim win/friendly-fire/
-AI-target logic) remains the deferred follow-up already tracked in
-`docs/re/ai.md` ("no `Player::team` field yet"); when it lands it will need the
-one-time golden recapture — flagged there, not here. The random glue pick uses a
-presentation LCG, never `State::rng`.
+At the time this doc was first written, `MatchConfig::team[]` was config-only
+and not copied into any hashed `Player` field. That follow-up (tracked in
+`docs/re/ai.md`) has since landed: `Player::team` is now a hashed field, copied
+verbatim from `MatchConfig::team[]` at setup (`setup.cpp`), and gates AI
+targeting (`docs/re/ai.md` §3.4/§5.3) and round-end ("one team left"). This grew
+the hash layout by one word per player (`hash.cpp`), so `tests/test_golden.cpp`
+needed a one-time constant recapture — see that file's own note and the commit
+that landed `Player::team`. Every golden scenario leaves every slot's team at 0
+(the default), so gameplay is byte-identical; only the digest layout shifted.
+Roster/colour/level are still pure `MatchConfig`/presentation as described
+above. The random glue pick uses a presentation LCG, never `State::rng`.
 
 Sources: `sub_42B47D` (0x42B47D), `sub_42B0CE` (0x42B0CE), `sub_4124A4`
 (getstring), `sub_42741E(0x410)` (music 1040), the glue-pick at ~17335,
