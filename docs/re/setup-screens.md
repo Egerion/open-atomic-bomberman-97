@@ -168,13 +168,24 @@ pane (team play, etc.) — lower priority than screen B for a playable roster.
 
 ## COMPLETE RE (2026-07-05): the two pre-match screens end-to-end
 
-The Play path is **`sub_42A3F6` → `sub_410F81` (player-input screen) →
-`sub_410B6E` (match init) → `sub_406DDE` (level/rounds screen) → the round
-loop**. (`sub_410B6E` is called at 29701 right after `sub_410F81` returns; it in
-turn runs the level-select screen `sub_406DDE` @ 8045 as part of the "options"
-sequence, then falls into the match.) The two net-game screens `sub_42B0CE`/
-`sub_42B47D` above are a SEPARATE flow (JOIN/START NET GAME, VALUELST legend
-750-778) — NOT reproduced here.
+The Play path is **`sub_42A3F6` → `sub_410F81` (player-input screen, which
+then runs `sub_406DDE`, the level/rounds screen, from its own tail) →
+`sub_410B6E` (match init) → the round loop**. CORRECTED (2026-07-08): the
+level screen call is at `sub_410F81`'s tail (pseudo.c 15516, on the
+non-aborted exit path), NOT inside `sub_410B6E` as first written;
+`sub_410B6E` (called at 29700, after `sub_410F81` returns) is pure match
+init. The two net-game screens `sub_42B0CE`/`sub_42B47D` above are a
+SEPARATE flow (JOIN/START NET GAME, VALUELST legend 750-778) — NOT
+reproduced here.
+
+**Follow-up (2026-07-08): `sub_410F81` hosts two more things at its head.**
+(a) The **Goldman Roulette Wheel** pre-roll: before drawing anything, the
+function calls `sub_4034BC` when goldman is on, the game is local, attract
+is off, and a gold player is pending — full RE in
+`docs/re/goldman-roulette.md`. (b) The **attract-mode short-circuit**: when
+the menu idle timeout fired (`dword_464938`), the function skips both setup
+screens entirely and auto-fills a random all-CPU roster + random level —
+see frontend-flow.md "Attract mode".
 
 ### Screen 1 — PLAYER INPUT TYPE SELECTION (`sub_410F81` @0x410F81)
 
