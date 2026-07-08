@@ -33,6 +33,7 @@ bomber_add_test(bomber_conveyor_tests   conveyor     test_conveyor.cpp)
 bomber_add_test(bomber_trampoline_tests trampoline   test_trampoline.cpp)
 bomber_add_test(bomber_stageactors_tests stage_actors test_stage_actors.cpp)
 bomber_add_test(bomber_golden_tests   golden       test_golden.cpp)
+bomber_add_test(bomber_stompdisease_tests stomped_diseases test_stomped_diseases.cpp)
 bomber_add_test(bomber_ai_tests       ai           test_ai.cpp)
 bomber_add_test(bomber_team_tests     team         test_team.cpp)
 

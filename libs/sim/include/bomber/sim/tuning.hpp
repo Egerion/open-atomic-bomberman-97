@@ -21,6 +21,13 @@ struct Tuning {
     std::int32_t taunt_chance = 5;         // id 95, 1-in-N post-death taunt
     std::int32_t hurry_seconds = 60;       // id 101, walls start closing in
     std::int32_t enclosement_depth = 1;    // id 27: 0 none, 1 = 2 rings, 2 = 4, 3 = all
+    // id 46 ("when a wall segment closes in on a bomb, does it set the bomb
+    // off? 0 - destroy, 1 - detonate ... this is a default; otherwise the
+    // settings override it") = the OPTIONS-screen "Stomped Bombs Detonate"
+    // toggle's seed value: dword_464940 = getvalue(46) at init (sub_41095A),
+    // then options.ini "stomped_bombs_detonate=" / the Options row overrides.
+    // Consumed by EnclosureSystem::drop_wall. See docs/re/facts.md
+    // "Options toggles: stomped_bombs_detonate / diseases_destroyable".
     std::int32_t wall_detonates = 1;       // id 46: closing wall detonates (1) or eats (0) bombs
 
     // Starting inventory (ids 50..62), indexed by PowerupType.
@@ -117,6 +124,15 @@ struct Tuning {
     bool diseases_time_limited = true;     // id 121: wears off after its duration
     bool diseases_multiply = true;         // id 123: on contact both keep it
     bool diseases_curable = true;          // id 124: a fresh powerup can cure
+    // id 120 ("can diseases be blown up like all other powerups?",
+    // gbl_diseases_can_be_destroyed) = the OPTIONS-screen "Diseases Can Be
+    // Destroyed" toggle's seed value: dword_464990 = getvalue(120) at init
+    // (sub_41095A), then options.ini "diseases_destroyable=" / the Options row
+    // overrides. When FALSE a destroyed floor skull is not lost — a fresh one
+    // relocates to a random free tile (sub_4255B2(2)); the destruction itself
+    // is unconditional. Consumed by FlameSystem::spread_to and
+    // BombSystem::slide. See docs/re/facts.md "Options toggles".
+    bool diseases_destroyable = true;      // id 120
 
     // Feeds one parsed VALUELST pair. Returns true if the id was consumed.
     bool apply(int id, std::int64_t value) {
@@ -153,6 +169,7 @@ struct Tuning {
             case 910: fire_god_lookahead = v; return true;
             case 915: ai_blast_chance = v; return true;
             case 920: ai_powerup_range = v; return true;
+            case 120: diseases_destroyable = v != 0; return true;
             case 121: diseases_time_limited = v != 0; return true;
             case 123: diseases_multiply = v != 0; return true;
             case 124: diseases_curable = v != 0; return true;

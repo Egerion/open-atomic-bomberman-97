@@ -47,14 +47,25 @@ bool GameApp::init() {
         // the OPTIONS game-type screen, OFF by default").
         team_play_ = loaded_opts.team_play.value_or(false);
         options_.team_play = team_play_;
-        options_.random_start = loaded_opts.random_start.value_or(false);
+        // Absent-key defaults for the sim-consumed toggles come from VALUELST,
+        // mirroring sub_41095A's init order exactly: dword_464AE8=getvalue(40)
+        // ("do we randomize player starting positions?" = 1), dword_464940 =
+        // getvalue(46) ("wall segment closes in on a bomb ... 1 - detonate" =
+        // 1), dword_464990 = getvalue(120) ("can diseases be blown up like
+        // all other powerups?" = 1) — and options.ini then overrides (the
+        // shipped file sets all three to 1 as well). docs/re/facts.md
+        // "Options toggles: stomped_bombs_detonate / diseases_destroyable".
+        options_.random_start =
+            loaded_opts.random_start.value_or(values_.at_or(40, 1) != 0);
         options_.conveyor_speed_index = conveyor_speed_index_.value_or(1);
-        options_.stomped_bombs_detonate = loaded_opts.stomped_bombs_detonate.value_or(false);
+        options_.stomped_bombs_detonate =
+            loaded_opts.stomped_bombs_detonate.value_or(values_.at_or(46, 1) != 0);
         options_.win_by_kills = loaded_opts.win_by_kills.value_or(false);
         options_.goldman = loaded_opts.goldman.value_or(false);
         options_.enclosement_depth = loaded_opts.enclosement_depth.value_or(1);
         options_.playtime_seconds = loaded_opts.playtime.value_or(150);
-        options_.diseases_destroyable = loaded_opts.diseases_destroyable.value_or(false);
+        options_.diseases_destroyable =
+            loaded_opts.diseases_destroyable.value_or(values_.at_or(120, 1) != 0);
         options_.disable_game_music = loaded_opts.disable_game_music.value_or(false);
         // "keydef=" -> KeyboardMapper's two live key-sets (docs/re/results-and-
         // options.md §2). A KeyDef triple with scancode == -1 (never written)
@@ -291,9 +302,9 @@ constexpr int kMenuCursorStepFallback = 38;    // getvalue(702)
 void GameApp::start_match(std::uint32_t seed) {
     // Random Start (options.ini "random_start=" / Options row 1, §3):
     // shuffles which of the scheme's own spawn slots each player index gets
-    // (match_factory.hpp's own doc comment has the full clean-room rationale
-    // — no exact placement algorithm is pinned in the RE brief, only the
-    // toggle + key).
+    // — CONFIRMED as the original's 200-pair-swap over the 10 start slots
+    // (sub_421793; match_factory.hpp mirrors the loop, docs/re/facts.md
+    // "Options toggles").
     sim::MatchConfig cfg = match::build_match_config(scheme_, sim::kMaxPlayers, seed, &values_,
                                                       options_.random_start);
     // Roster from the PLAYER INPUT screen (present_setup): OFF slots are inactive,
@@ -315,6 +326,21 @@ void GameApp::start_match(std::uint32_t seed) {
     // install = 2 high); otherwise Tuning keeps the confirmed default (1
     // medium). conveyor_speed() clamps to [0, count-1], so a raw index is safe.
     if (conveyor_speed_index_) cfg.tuning.conveyor_speed_index = *conveyor_speed_index_;
+    // Stomped Bombs Detonate (options.ini "stomped_bombs_detonate=" / Options
+    // row 4, §3 — dword_464940): whether a closing enclosement wall landing
+    // on a grounded bomb DETONATES it (queued full explosion) or silently
+    // eats it. The enclosure site reads the merged global directly
+    // (sub_426818 ~27260), so the Options value overrides the VALUELST id 46
+    // seed unconditionally — options_ was itself seeded from getvalue(46)
+    // at init, mirroring sub_41095A. Consumer: EnclosureSystem::drop_wall.
+    cfg.tuning.wall_detonates = options_.stomped_bombs_detonate ? 1 : 0;
+    // Diseases Can Be Destroyed (options.ini "diseases_destroyable=" /
+    // Options row 11, §3 — dword_464990): OFF makes a destroyed floor skull
+    // relocate to a random free tile instead of being lost (sub_4230A5 /
+    // sub_42331C flame walk -> sub_4255B2(2)). Same merged-global override
+    // as above (seed = getvalue(120), sub_41095A). Consumers:
+    // FlameSystem::spread_to and BombSystem::slide.
+    cfg.tuning.diseases_destroyable = options_.diseases_destroyable;
     // Enclosement Depth (options.ini "enclosement_depth=" / Options row 7,
     // §3): a REAL Tuning consumer (enclosure.cpp/ai.cpp). base_tuning_ already
     // carries the VALUELST default; the Options screen's live edit overrides

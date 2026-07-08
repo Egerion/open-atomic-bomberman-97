@@ -23,19 +23,24 @@
 //   0  Team Play                    — LIVE toggle, persisted (team_play=)
 //   1  Random Start                 — LIVE toggle, persisted (random_start=);
 //                                      wired into match::build_match_config's
-//                                      new `random_start` param (spawn-slot
-//                                      shuffle, our clean-room reading — see
-//                                      that function's doc comment)
+//                                      `random_start` param — CONFIRMED as the
+//                                      original's 200-pair-swap spawn shuffle
+//                                      (sub_421793; docs/re/facts.md "Options
+//                                      toggles"); absent-key default =
+//                                      getvalue(40) = 1 (ON)
 //   2  Node Name                    — OMITTED: net identity string, no
 //                                      network play in this port and §3
 //                                      explicitly notes it is not one of the
 //                                      22 options.ini keys
 //   3  Conveyor Speed               — LIVE cycle, persisted (conveyor_speed=)
 //   4  Stomped Bombs Detonate       — LIVE toggle, persisted
-//                                      (stomped_bombs_detonate=); NO sim
-//                                      consumer yet (kick/stomp-bomb collision
-//                                      is not implemented) — shown+persisted,
-//                                      consumer TODO cited in the row comment
+//                                      (stomped_bombs_detonate=); REAL sim
+//                                      consumer: Tuning::wall_detonates ->
+//                                      EnclosureSystem::drop_wall (a closing
+//                                      wall landing on a bomb detonates vs
+//                                      silently eats it — sub_426818, docs/
+//                                      re/facts.md "Options toggles");
+//                                      absent-key default = getvalue(46) = 1
 //   5  Win Matches By Kill Total    — LIVE toggle, persisted (win_by_kills=),
 //                                      forced off with Team Play (§3); NO
 //                                      match-clinch consumer yet (RESULTS
@@ -63,9 +68,14 @@
 //                                      what present_setup's KEYBOARD 0/1
 //                                      slot picker already does
 //   11 Diseases Can Be Destroyed     — LIVE toggle, persisted
-//                                      (diseases_destroyable=); NO sim
-//                                      consumer yet (disease system has no
-//                                      "destroy on flame" path) — TODO
+//                                      (diseases_destroyable=); REAL sim
+//                                      consumer: Tuning::diseases_destroyable
+//                                      -> FlameSystem::spread_to + BombSystem
+//                                      ::slide (OFF relocates a destroyed
+//                                      floor skull to a random free tile —
+//                                      sub_4230A5/sub_42331C -> sub_4255B2,
+//                                      docs/re/facts.md "Options toggles");
+//                                      absent-key default = getvalue(120) = 1
 //   12 Lost net players revert to AI — OMITTED: no network play
 //   13 Disable music during gameplay — LIVE toggle, persisted
 //                                      (disable_game_music=); REAL consumer —
@@ -108,14 +118,18 @@ enum class OptionRow {
 // tripled from the Team Play/Conveyor Speed original.
 struct OptionsSnapshot {
     bool team_play = false;
-    bool random_start = false;
+    // The three VALUELST-seeded toggles default to the original's getvalue
+    // seeds (sub_41095A: ids 40/46/120, all = 1 in the shipped install);
+    // GameApp::init re-seeds them from the live VALUELST + options.ini, so
+    // these literals only matter for a snapshot never fed through init.
+    bool random_start = true;            // getvalue(40) = 1
     int conveyor_speed_index = 1;    // 0 low / 1 medium / 2 high
-    bool stomped_bombs_detonate = false;
+    bool stomped_bombs_detonate = true;  // getvalue(46) = 1
     bool win_by_kills = false;
     bool goldman = false;
     int enclosement_depth = 1;       // 0..3
     int playtime_seconds = 150;      // one of kPlayTimeChoices, or 1001 = unlimited
-    bool diseases_destroyable = false;
+    bool diseases_destroyable = true;    // getvalue(120) = 1
     bool disable_game_music = false;
 };
 
