@@ -140,13 +140,19 @@ private:
 
     int menu_index_ = 0;  // highlighted main-menu row (persists across visits)
 
-    // Multi-round match state (sub_42A3F6): best-of-getvalue(310) = 2 rounds.
-    // win_count_ tallies round wins per player; reaching win_target_ ends the
-    // MATCH (VICTORY). A draw scores nobody and replays. match_continues_ routes
-    // Results -> the next round instead of the menu.
+    // Multi-round match state (sub_42A3F6): best-of-N. win_count_ tallies round
+    // wins per player; reaching win_target_ ends the MATCH (VICTORY). A draw
+    // scores nobody and replays. Presentation-only state — never sim::State,
+    // never hashed. win_target_ is seeded from getvalue(310) by
+    // reset_match_scores() and then owned by the LEVEL & ROUNDS screen
+    // (present_map_select, WINS row 1..100, docs/re/setup-screens.md); the
+    // in-class 2 only covers the dev fast-path (--match / BOMBER_BOOT_MATCH),
+    // which skips the pre-match screens entirely. A round that does not decide
+    // the match routes Results -> Match via AppInput::RoundContinue through the
+    // pure flow graph (app_flow.hpp) — run_app folds the scoreboard/draw
+    // dismissal into that event; there is no side-channel state override.
     std::array<int, sim::kMaxPlayers> win_count_{};
     int win_target_ = 2;
-    bool match_continues_ = false;
 
     // Per-slot input type chosen in the PLAYER INPUT screen (sub_410F81):
     // 0 = OFF, 1 = COMPUTER, 2 = KEYBOARD, 3 = JOYSTICK (human) — the original's

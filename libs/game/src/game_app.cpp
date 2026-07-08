@@ -665,7 +665,6 @@ AppInput GameApp::present_menu() {
 
 void GameApp::reset_match_scores() {
     win_count_.fill(0);
-    match_continues_ = false;
     // getvalue(310) "how many wins to win a match?" (first-column value, else 2).
     auto it = values_.values.find(310);
     win_target_ = it != values_.values.end() ? static_cast<int>(it->second) : 2;
@@ -1093,12 +1092,17 @@ int GameApp::run_app() {
                 ev = run_match();
                 break;
             case AppState::Results: {
-                // One survivor -> VICTORY<player> naming the winner; no survivor
-                // or time-up -> DRAW (round_winner() folds both cases). The
-                // winner voice group (2000) was already played by run_match on
-                // match-over (sub_427BFB(2000)); on a DRAW we fire the tie-game
-                // sting once here (sub_427BFB(1700)) — a one-shot group pick, not
-                // looped music.
+                // The three-tier sub_42A3F6 results tail (docs/re/frontend-flow.md
+                // "results flow"): a round win bumps that player's tally; the
+                // match is decided (VICTORY<n>) once the tally reaches
+                // win_target_ (the LEVEL & ROUNDS screen's WINS row); otherwise
+                // a survivor shows the RESULTS cumulative scoreboard, a draw
+                // (round_winner() folds no-survivor and time-up) shows DRAW —
+                // and both replay the next round. The winner voice group (2000)
+                // was already played by run_match on match-over
+                // (sub_427BFB(2000)); on a DRAW we fire the tie-game sting once
+                // here (sub_427BFB(1700)) — a one-shot group pick, not looped
+                // music.
                 //
                 // Results MUSIC (sub_42A3F6): the handler starts the looping "win"
                 // track sub_42741E(0x3FC)=1020 at entry (under the VICTORY screen),
@@ -1119,18 +1123,25 @@ int GameApp::run_app() {
                     audio_.start_music(kWinMusicId);  // 1020 win track under VICTORY
                     ev = present_screen(victory_screen(w));
                 } else if (w >= 0) {
-                    // Round win, match not over: show the running scores, then
-                    // loop into the next round (handled after the switch).
+                    // Round win, match not over: show the running scores.
                     audio_.start_music(kWinMusicId);
                     ev = present_scoreboard();
-                    match_continues_ = ev != AppInput::Quit && ev != AppInput::Back;
                 } else {
                     // DRAW (no survivor / time-up): nobody scores; replay a round.
                     audio_.start_music(kDrawMusicId);  // 1130 draw track under DRAW
                     audio_.play_random_in_range(kDrawStingLo, kDrawStingHi);
                     ev = present_screen(draw_screen());
-                    match_continues_ = ev != AppInput::Quit && ev != AppInput::Back;
                 }
+                // Fold the screen's dismissal into the flow-graph event: an
+                // undecided round's Advance becomes RoundContinue, so
+                // next(Results, RoundContinue) loops straight back into Match
+                // (sub_42A3F6's round loop) — the next round reuses the SAME
+                // roster/level/win-target members the pre-match screens set;
+                // only run_match's start_match reruns (fresh sim, next seed).
+                // Back (Escape) abandons the match to the menu; a decided
+                // match's Advance ends it there too. next() stays the single
+                // authority over the state walk — no side-channel override.
+                if (!match_over && ev == AppInput::Advance) ev = AppInput::RoundContinue;
                 break;
             }
             // The .BM-backed leaves render their real help/credits text
@@ -1155,14 +1166,7 @@ int GameApp::run_app() {
             case AppState::Quit:
                 break;
         }
-        // Multi-round: a round that did not decide the match loops back into the
-        // next round rather than returning to the menu (sub_42A3F6's round loop).
-        if (state == AppState::Results && match_continues_) {
-            match_continues_ = false;
-            state = AppState::Match;
-        } else {
-            state = next(state, ev);
-        }
+        state = next(state, ev);
     }
     return 0;
 }

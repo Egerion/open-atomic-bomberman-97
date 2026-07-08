@@ -12,9 +12,19 @@
 namespace bomber::game {
 
 // The application-level states. Ordered along the nominal boot path
-// (Boot -> Logo -> Title -> Menu -> Match -> Results -> Menu). The menu is a
-// HUB: selecting an item routes to one leaf state and every leaf returns to the
-// menu. `Quit` is the terminal state; `next()` is a fixed point there.
+// (Boot -> Logo -> Title -> Menu -> Match -> Results -> Menu|Match). The menu
+// is a HUB: selecting an item routes to one leaf state and every leaf returns
+// to the menu. `Quit` is the terminal state; `next()` is a fixed point there.
+//
+// Match/Results form a best-of-N LOOP, not a single pass: a match is a
+// sequence of ROUNDS (each a fresh sim, docs/re/frontend-flow.md "results
+// flow"). Results is the three-tier `sub_42A3F6` tail — DRAW (no survivor,
+// replay), the RESULTS cumulative tally (a survivor but nobody has reached
+// win_target_ yet, replay), or VICTORY<n> (a player reached win_target_,
+// return to Menu). Which of those three renders is a presentation-side
+// decision (round_winner() + the win tally) fed as the input to next(); the
+// graph itself only distinguishes "decided" (Advance/Back -> Menu) from
+// "not decided" (RoundContinue -> Match).
 //
 // The four .BM-backed leaves (Options/Controllers/Network/Credits) mirror the
 // deep menu items `sub_42B9CE` dispatches into — `sub_42B0CE`/`sub_42B47D`
@@ -27,8 +37,8 @@ enum class AppState {
     Logo,         // IPLOGO then HSLOGO (skippable / timed)
     Title,        // TITLE.PCX + title sting (wait-for-key or 7 s timeout -> menu)
     Menu,         // navigable main menu (MAINMENU.PCX): the hub
-    Match,        // the existing deterministic match loop runs
-    Results,      // DRAW / VICTORY end-of-round screen (key returns to Menu)
+    Match,        // one ROUND of the deterministic sim (best-of-N loop)
+    Results,      // DRAW / RESULTS tally / VICTORY end-of-round screen
     Options,      // OPTIONS.BM help viewer (interactive settings UI = deferred)
     Controllers,  // INPUT.BM help viewer (key-remap UI = deferred)
     Network,      // NETWORK.BM help viewer
@@ -42,7 +52,13 @@ enum class AppState {
 //                (the original synthesizes Enter on the getvalue(12) timeout,
 //                sub_42A088, so accept and timeout are the same event here).
 //   Back       — Escape / cancel.
-//   MatchOver  — the running match ended (one player left or time up).
+//   MatchOver  — the running round ended (one player left or time up); always
+//                lands on Results, whether or not the MATCH is decided.
+//   RoundContinue — leaving Results when the match is NOT yet decided: a draw
+//                (replay unconditionally) or a survivor whose cumulative win
+//                tally is still below win_target_ (docs/re/frontend-flow.md
+//                "results flow" middle tier). Routes Results -> Match for the
+//                next round (same roster/settings, sim reconstructed fresh).
 //   StartMatch — the menu's Start/Play item was chosen (Menu -> Match).
 //   OpenOptions/OpenControllers/OpenNetwork/OpenCredits — the menu opened a
 //                deep leaf; each routes Menu -> the matching leaf state.
@@ -51,6 +67,7 @@ enum class AppInput {
     Advance,
     Back,
     MatchOver,
+    RoundContinue,
     StartMatch,
     OpenOptions,
     OpenControllers,
@@ -105,13 +122,17 @@ constexpr AppState next(AppState state, AppInput input) {
             }
 
         case AppState::Match:
-            // Only the match ending moves us on; stray Advance/Back inside a
-            // running match do not change the app state (the match owns input).
+            // Only the round ending moves us on; stray Advance/Back inside a
+            // running round do not change the app state (the match owns input).
             return input == AppInput::MatchOver ? AppState::Results : AppState::Match;
 
         case AppState::Results:
-            // Any accept (or Back) returns to the menu — the round is over.
-            return AppState::Menu;
+            // RoundContinue (draw, or a survivor below win_target_) starts the
+            // NEXT round with the same roster/settings; any other event (a
+            // decided match's Advance, or Back) returns to the menu. The SDL
+            // shell computes which applies (round_winner() + the win tally)
+            // BEFORE feeding this event — the graph itself is data-driven.
+            return input == AppInput::RoundContinue ? AppState::Match : AppState::Menu;
 
         // The .BM leaves all return to the menu on any accept or Back — a
         // dismissable text/help screen has nowhere else to go (sub_42B9CE
