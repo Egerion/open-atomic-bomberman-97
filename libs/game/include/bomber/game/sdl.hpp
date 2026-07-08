@@ -29,10 +29,13 @@ using WindowPtr = std::unique_ptr<SDL_Window, WindowDeleter>;
 using RendererPtr = std::unique_ptr<SDL_Renderer, RendererDeleter>;
 using TexturePtr = std::unique_ptr<SDL_Texture, TextureDeleter>;
 
-// Owns SDL video initialization; SDL_Quit runs on destruction.
+// Owns SDL video initialization; SDL_Quit runs on destruction. Gamepad support
+// is initialized alongside video (SDL_INIT_GAMEPAD) so GamepadMapper can
+// enumerate/open sticks and the setup screen can hotplug-detect them without a
+// separate subsystem lifetime to manage.
 class VideoSubsystem {
 public:
-    VideoSubsystem() : ok_(SDL_Init(SDL_INIT_VIDEO)) {}
+    VideoSubsystem() : ok_(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {}
     ~VideoSubsystem() {
         if (ok_) SDL_Quit();
     }

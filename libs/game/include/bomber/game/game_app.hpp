@@ -13,6 +13,7 @@
 #include "bomber/game/asset_store.hpp"
 #include "bomber/game/audio_engine.hpp"
 #include "bomber/game/bmscreen.hpp"
+#include "bomber/game/gamepad.hpp"
 #include "bomber/game/input.hpp"
 #include "bomber/game/renderer.hpp"
 #include "bomber/game/screen.hpp"
@@ -112,8 +113,16 @@ private:
     // Shared by both pre-match screens; uses the presentation LCG, not State::rng.
     std::string pick_glue();
     // Advance a slot's input type one step in the setup cycle (sub_421E80):
-    // OFF -> COMPUTER -> KEYBOARD sub 0 -> KEYBOARD sub 1 -> OFF.
+    // OFF -> COMPUTER -> KEYBOARD sub 0 -> KEYBOARD sub 1 -> JOY0..JOY<n-1> ->
+    // OFF, where n = gamepads_.count() (docs/re/setup-screens.md). Delegates to
+    // the pure cycle_slot_input_type (input.hpp) so the wrap order is unit-
+    // tested without SDL.
     void cycle_input_type(int slot);
+    // A slot bound to JOYSTICK sub reads GamepadMapper::read(sub); a slot bound
+    // to KEYBOARD sub 0/1 reads the shared KeyboardMapper's player 0/1 half;
+    // OFF/COMPUTER slots get neutral input (AI/absent drives them elsewhere).
+    // Assembles the full TickInputs for sim_.tick() each match tick.
+    sim::TickInputs collect_inputs() const;
     // GENERIC fallback name for built-in level `idx` (the real names load from the
     // user's MESSAGES.TXT via getstring(150+idx); these are ours, never committed).
     static const char* level_fallback(int idx);
@@ -129,11 +138,13 @@ private:
     bool match_continues_ = false;
 
     // Per-slot input type chosen in the PLAYER INPUT screen (sub_410F81):
-    // 0 = OFF, 1 = COMPUTER, 2 = KEYBOARD (human) — the original's player byte
-    // +16 (docs/re/setup-screens.md). Default: P1 keyboard + P2 computer.
+    // 0 = OFF, 1 = COMPUTER, 2 = KEYBOARD, 3 = JOYSTICK (human) — the original's
+    // player byte +16 (docs/re/setup-screens.md). Default: P1 keyboard + P2
+    // computer. SlotInputType (input.hpp) names these.
     std::array<int, sim::kMaxPlayers> setup_type_{2, 1};
-    // Per-slot input SUB-index (the original's +17): for a KEYBOARD slot, which
-    // key-set (0 or 1). Cosmetic/label for now — the port binds one keyboard.
+    // Per-slot input SUB-index (the original's +17): for KEYBOARD, which key-set
+    // (0 or 1, both bound to the single physical KeyboardMapper); for JOYSTICK,
+    // which CONNECTED gamepad index (GamepadMapper::read(sub)).
     std::array<int, sim::kMaxPlayers> setup_sub_{};
     // Per-slot TEAM (the original's +84, toggled by 'T'): 0 or 1. Fed into the
     // config's non-hashed MatchConfig::team[]; team MODE itself is deferred.
@@ -165,6 +176,10 @@ private:
     SoundDirector sounds_{audio_};
     std::optional<Renderer> renderer_;
     KeyboardMapper keyboard_;
+    // JOYSTICK <n> slots (docs/re/setup-screens.md type==3). Refreshed once
+    // after SDL_INIT_GAMEPAD in init() and again on every hotplug event so the
+    // setup screen's joystick pane / type-cycle count stays live.
+    GamepadMapper gamepads_;
 
     // Front-end presentation (constructed after assets_ is loaded in init()).
     std::optional<Screen> screen_;

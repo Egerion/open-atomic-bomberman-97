@@ -9,11 +9,14 @@
 #include <doctest/doctest.h>
 
 #include "bomber/game/app_flow.hpp"
+#include "bomber/game/input.hpp"
 
 using bomber::game::AppInput;
 using bomber::game::AppState;
+using bomber::game::cycle_slot_input_type;
 using bomber::game::is_terminal;
 using bomber::game::next;
+using bomber::game::SlotInputType;
 
 TEST_CASE("the nominal boot path walks Boot->Logo->Title->Menu->Match->Results->Menu") {
     // Boot/Logo/Title accept on the same event (Advance) — a keypress OR the
@@ -112,4 +115,62 @@ TEST_CASE("Logo always yields the title regardless of which accept arrives") {
     // Whether the key or the timeout fires, a logo leads only to the title.
     CHECK(next(AppState::Logo, AppInput::Advance) == AppState::Title);
     CHECK(next(AppState::Logo, AppInput::Back) == AppState::Title);
+}
+
+// Locks the PLAYER INPUT TYPE SELECTION slot-type cycle (sub_421E80 @0x421E80,
+// docs/re/setup-screens.md "Input-type cycle helpers"): off -> computer ->
+// keyboard 0 -> keyboard 1 -> joystick 0..(n-1) -> off, where n is the number
+// of CONNECTED gamepads at cycle time (GamepadMapper::count(), passed in — the
+// helper itself is SDL-free so this doctest exercises it without a window or a
+// physical pad).
+TEST_CASE("cycle_slot_input_type walks OFF -> COMPUTER -> KBD0 -> KBD1 -> OFF with no pads") {
+    int type = 0, sub = 0;
+    const int joysticks = 0;
+    cycle_slot_input_type(type, sub, joysticks);
+    CHECK(type == static_cast<int>(SlotInputType::Computer));
+    cycle_slot_input_type(type, sub, joysticks);
+    CHECK(type == static_cast<int>(SlotInputType::Keyboard));
+    CHECK(sub == 0);
+    cycle_slot_input_type(type, sub, joysticks);
+    CHECK(type == static_cast<int>(SlotInputType::Keyboard));
+    CHECK(sub == 1);
+    // No sticks connected: keyboard 1 wraps straight back to OFF, skipping the
+    // joystick leg entirely (sub_429628 finds none present).
+    cycle_slot_input_type(type, sub, joysticks);
+    CHECK(type == static_cast<int>(SlotInputType::Off));
+    CHECK(sub == 0);
+}
+
+TEST_CASE("cycle_slot_input_type walks through every present joystick before wrapping") {
+    int type = static_cast<int>(SlotInputType::Keyboard), sub = 1;
+    const int joysticks = 2;  // two pads connected
+    cycle_slot_input_type(type, sub, joysticks);
+    CHECK(type == static_cast<int>(SlotInputType::Joystick));
+    CHECK(sub == 0);
+    cycle_slot_input_type(type, sub, joysticks);  // joystick 0 -> joystick 1
+    CHECK(type == static_cast<int>(SlotInputType::Joystick));
+    CHECK(sub == 1);
+    cycle_slot_input_type(type, sub, joysticks);  // last present stick -> off
+    CHECK(type == static_cast<int>(SlotInputType::Off));
+    CHECK(sub == 0);
+}
+
+TEST_CASE("cycle_slot_input_type reacts to the live joystick count, not a stale one") {
+    // If a pad is unplugged between visits to the cycle (joystick count drops
+    // to 0 after the slot already landed on JOYSTICK 0), the next Right press
+    // must not get stuck cycling a stick that no longer exists — it wraps off.
+    int type = static_cast<int>(SlotInputType::Joystick), sub = 0;
+    cycle_slot_input_type(type, sub, /*joystick_count=*/0);
+    CHECK(type == static_cast<int>(SlotInputType::Off));
+    CHECK(sub == 0);
+}
+
+TEST_CASE("a full lap of the cycle returns to OFF, for any joystick count") {
+    for (int joysticks : {0, 1, 3}) {
+        int type = 0, sub = 0;
+        int steps = 4 + joysticks;  // off->cpu->kbd0->kbd1->(joy0..joy(n-1))->off
+        for (int i = 0; i < steps; ++i) cycle_slot_input_type(type, sub, joysticks);
+        CHECK(type == static_cast<int>(SlotInputType::Off));
+        CHECK(sub == 0);
+    }
 }

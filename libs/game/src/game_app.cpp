@@ -62,6 +62,11 @@ bool GameApp::init() {
     if (!assets_.load(ren, game)) return false;
     seqs_.resolve(assets_);
 
+    // Initial joystick enumeration (docs/re/setup-screens.md joystick pane,
+    // sub_429628). Hotplug events refresh this again in present_setup/run_match
+    // so a stick plugged in after boot still shows up without a restart.
+    gamepads_.refresh();
+
     if (!opts_.demo && !audio_.init(game))
         std::fprintf(stderr, "audio unavailable, continuing silent\n");
 
@@ -654,18 +659,13 @@ std::string GameApp::pick_glue() {
                                                     static_cast<unsigned>(glue_n)));
 }
 
-// Cycle a slot's input type FORWARD one step (sub_421E80 @0x421E80): the original
-// walks 0 off -> 1 computer -> 2 keyboard sub 0 -> 2 keyboard sub 1 -> (3 joystick
-// per present stick) -> back to 0. We support OFF / COMPUTER / KEYBOARD sub 0 /
-// KEYBOARD sub 1 and wrap to OFF (joystick detect is a deferred controller pass);
-// type 4 (OTHER) never enters the cycle in the original either.
+// Cycle a slot's input type FORWARD one step (sub_421E80 @0x421E80): 0 off ->
+// 1 computer -> 2 keyboard sub 0 -> 2 keyboard sub 1 -> 3 joystick per present
+// stick -> back to 0. The pure wrap-order logic lives in cycle_slot_input_type
+// (input.hpp, unit-tested); this just supplies the live connected-gamepad
+// count so the cycle offers exactly the sticks in gamepads_ right now.
 void GameApp::cycle_input_type(int slot) {
-    int& t = setup_type_[slot];
-    int& sub = setup_sub_[slot];
-    if (t == 0) { t = 1; sub = 0; }         // off -> computer
-    else if (t == 1) { t = 2; sub = 0; }    // computer -> keyboard set 0
-    else if (t == 2 && sub == 0) { sub = 1; }        // keyboard 0 -> keyboard 1
-    else { t = 0; sub = 0; }                // keyboard 1 (or beyond) -> off (joystick TODO)
+    cycle_slot_input_type(setup_type_[slot], setup_sub_[slot], gamepads_.count());
 }
 
 // The PLAYER INPUT TYPE SELECTION screen (sub_410F81 @0x410F81, VALUELST
@@ -684,12 +684,17 @@ AppInput GameApp::present_setup() {
     audio_.start_music(kWinMusicId);  // 1020, the Play-handler track (sub_42A3F6)
     const std::string glue = pick_glue();
     // Layout (VALUELST X,Y,YS,colour -> consecutive getvalue ids): header 705,
-    // list 710. column_or reads column c of the multi-value row (== getvalue).
+    // list 710, joystick pane heading 715, joystick pane list 720.
     const float hx = static_cast<float>(values_.column_or(705, 0, 40));
     const float hy = static_cast<float>(values_.column_or(705, 1, 140));
     const float lx = static_cast<float>(values_.column_or(710, 0, 70));
     const float ly = static_cast<float>(values_.column_or(710, 1, 170));
     const float lys = static_cast<float>(values_.column_or(710, 2, 24));
+    const float jhx = static_cast<float>(values_.column_or(715, 0, 300));
+    const float jhy = static_cast<float>(values_.column_or(715, 1, 140));
+    const float jlx = static_cast<float>(values_.column_or(720, 0, 320));
+    const float jly = static_cast<float>(values_.column_or(720, 1, 170));
+    const float jlys = static_cast<float>(values_.column_or(720, 2, 24));
 
     int cursor = 0;
     bool waiting = true;
@@ -697,6 +702,14 @@ AppInput GameApp::present_setup() {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
+            // Hotplug (sub_429628 "joystick present" is polled live in the
+            // original; SDL3 gives us an event instead): rescan so the pane
+            // and the Right-cycle's joystick count reflect what's plugged in
+            // right now, without needing a restart.
+            if (ev.type == SDL_EVENT_GAMEPAD_ADDED || ev.type == SDL_EVENT_GAMEPAD_REMOVED) {
+                gamepads_.refresh();
+                continue;
+            }
             if (ev.type != SDL_EVENT_KEY_DOWN) continue;
             const SDL_Keycode k = ev.key.key;
             if (k == SDLK_ESCAPE) { audio_.play(20); audio_.play(10); return AppInput::Back; }
@@ -754,6 +767,25 @@ AppInput GameApp::present_setup() {
             };
             front_font_.draw(sdl_renderer_.get(), line, lx, ly + lys * static_cast<float>(i),
                              boost(sc[0]), boost(sc[1]), boost(sc[2]));
+        }
+        // Joystick pane (getvalue 715/720): heading msg 40, then one line per
+        // detected stick (msg 41 + index, from GamepadMapper::name) or, if none
+        // are connected, the single "none" line (msg 42) — sub_429628(i)'s
+        // present/absent branch collapsed to "any present at all" since we
+        // enumerate rather than poll per-index.
+        front_font_.draw(sdl_renderer_.get(), assets_.getstring(40, "JOYSTICKS"), jhx, jhy, 255,
+                         255, 255);
+        const int joy_count = gamepads_.count();
+        if (joy_count == 0) {
+            front_font_.draw(sdl_renderer_.get(), assets_.getstring(42, "none"), jlx, jly, 150,
+                             150, 150);
+        } else {
+            for (int j = 0; j < joy_count; ++j) {
+                std::string jline =
+                    fmt_u(assets_.getstring(41, "JOYSTICK %u"), j) + " " + gamepads_.name(j);
+                front_font_.draw(sdl_renderer_.get(), jline, jlx,
+                                 jly + jlys * static_cast<float>(j), 200, 200, 200);
+            }
         }
         front_font_.draw(sdl_renderer_.get(),
                          "UP/DN PICK  RIGHT CYCLE  0 OFF  T TEAM  ENTER NEXT", lx,
@@ -850,6 +882,32 @@ AppInput GameApp::present_map_select() {
     return AppInput::Advance;
 }
 
+// Assembles one tick's TickInputs across every roster slot (docs/re/setup-
+// screens.md: OFF/COMPUTER slots contribute neutral input — AISystem drives
+// COMPUTER from Player::ai, OFF is simply absent — KEYBOARD slots read the
+// shared KeyboardMapper's player 0/1 half by sub-index, JOYSTICK slots read
+// GamepadMapper::read(sub). A disconnected pad (index now out of range, or
+// still indexed but closed) falls through GamepadMapper::read's own
+// out-of-range/null guard to neutral input, so a mid-match unplug degrades
+// gracefully instead of crashing or freezing that slot's last input.
+sim::TickInputs GameApp::collect_inputs() const {
+    sim::TickInputs in;
+    const sim::TickInputs kb = keyboard_.read();
+    for (int i = 0; i < sim::kMaxPlayers; ++i) {
+        switch (static_cast<SlotInputType>(setup_type_[i])) {
+            case SlotInputType::Keyboard:
+                in.players[i] = kb.players[setup_sub_[i] == 0 ? 0 : 1];
+                break;
+            case SlotInputType::Joystick:
+                in.players[i] = gamepads_.read(setup_sub_[i]);
+                break;
+            default:
+                break;  // Off/Computer/Other: neutral — AI or absence owns the slot
+        }
+    }
+    return in;
+}
+
 AppInput GameApp::run_match() {
     start_match(next_seed_++);
     const std::uint64_t tick_ms = 1000 / sim::kTicksPerSecond;
@@ -862,6 +920,12 @@ AppInput GameApp::run_match() {
             if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
             if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_ESCAPE)
                 return AppInput::MatchOver;  // Esc bails out of the match to the menu
+            // A pad unplugged/plugged mid-match: rescan so a disconnect drops
+            // that slot to neutral input (via collect_inputs' range check)
+            // rather than leaving it wedged, and a reconnect resumes control at
+            // its old index without needing a trip back to the setup screen.
+            if (ev.type == SDL_EVENT_GAMEPAD_ADDED || ev.type == SDL_EVENT_GAMEPAD_REMOVED)
+                gamepads_.refresh();
         }
 
         std::uint64_t now = SDL_GetTicks();
@@ -869,7 +933,7 @@ AppInput GameApp::run_match() {
         last = now;
         while (acc >= tick_ms) {
             acc -= tick_ms;
-            sim_.tick(keyboard_.read());
+            sim_.tick(collect_inputs());
             sounds_.on_tick(sim_.state());
             renderer_->on_events(sim_.state());
 

@@ -42,10 +42,14 @@ target_link_libraries(bomber_anim_tests PRIVATE doctest::doctest bomber::warning
 target_include_directories(bomber_anim_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
 add_test(NAME anim COMMAND bomber_anim_tests)
 
-# Front-end flow core is SDL-free (app_flow.hpp): pure next(state,input). Own
-# target linking only the game include dir, like bomber_anim_tests.
+# Front-end flow core is SDL-free (app_flow.hpp, input.hpp's slot-type cycle):
+# pure next(state,input) plus cycle_slot_input_type. Own target linking only
+# the game include dir, like bomber_anim_tests; input.hpp pulls in
+# bomber/sim/types.hpp (PlayerInput/TickInputs), so link bomber::sim too — it's
+# a header-only pull here, not a build of the sim library into this SDL-free
+# binary.
 add_executable(bomber_frontend_tests test_frontend.cpp)
-target_link_libraries(bomber_frontend_tests PRIVATE doctest::doctest bomber::warnings)
+target_link_libraries(bomber_frontend_tests PRIVATE bomber::sim doctest::doctest bomber::warnings)
 target_include_directories(bomber_frontend_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
 add_test(NAME frontend COMMAND bomber_frontend_tests)
 

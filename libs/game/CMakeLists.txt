@@ -10,6 +10,7 @@ add_library(bomber_game_core STATIC
   src/audio_engine.cpp
   src/sound_director.cpp
   src/input.cpp
+  src/gamepad.cpp
   src/screen.cpp
   src/bmscreen.cpp
   src/transition.cpp
