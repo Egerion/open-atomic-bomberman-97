@@ -19,6 +19,7 @@
 
 using bomber::game::AppInput;
 using bomber::game::AppState;
+using bomber::game::assign_gold_player;
 using bomber::game::cycle_slot_input_type;
 using bomber::game::is_terminal;
 using bomber::game::KeyAction;
@@ -303,4 +304,33 @@ TEST_CASE("win_by_kills_clinch requires reaching the target AND a unique leader"
     std::array<int, kMaxPlayers> zero_kills{};
     present[1] = false;  // only player 0 is active now
     CHECK(win_by_kills_clinch(zero_kills, present, /*target=*/0) == 0);
+}
+
+// docs/re/goldman-roulette.md §2 (pseudo.c 30004-30022): dword_46492C ==
+// v73, the MATCH-CLINCH winner, gated on goldman being on; -1 otherwise. In
+// team mode the stored value is the clinching player's raw team id.
+TEST_CASE("assign_gold_player mirrors dword_46492C's RESULTS-tier write") {
+    std::array<int, kMaxPlayers> team_of{};
+    team_of[0] = 0;
+    team_of[1] = 1;
+    team_of[2] = 1;
+
+    // goldman off: always -1, regardless of who clinched or team mode.
+    CHECK(assign_gold_player(/*goldman_on=*/false, /*team_mode=*/false, /*clinched=*/2, team_of) ==
+          -1);
+    CHECK(assign_gold_player(false, true, 2, team_of) == -1);
+
+    // goldman on, solo: the clinching player's own index passes through
+    // untouched (v73 IS a player index outside team mode).
+    CHECK(assign_gold_player(true, false, 2, team_of) == 2);
+    // No clinch yet this RESULTS pass (v73 == -1): no pending gold player.
+    CHECK(assign_gold_player(true, false, -1, team_of) == -1);
+
+    // goldman on, team mode: dword_46492C stores the clinching player's team
+    // (sub_4223E7's raw team byte; our port keeps it 0/1, not the original's
+    // 0/2 internal encoding — doc §2).
+    CHECK(assign_gold_player(true, true, 2, team_of) == 1);  // player 2 -> team 1
+    CHECK(assign_gold_player(true, true, 0, team_of) == 0);  // player 0 -> team 0
+    // No clinch yet: -1 passes straight through, never indexed into team_of.
+    CHECK(assign_gold_player(true, true, -1, team_of) == -1);
 }

@@ -44,11 +44,47 @@ drawn**, whenever a gold player is pending from a previous match's rounds.
 Rounds within one match re-init through `sub_410B6E` only (call sites
 29700/29805/30112) and never respin the wheel.
 
-**Who becomes the gold player:** `sub_42A3F6`'s RESULTS tier (pseudo.c
-30004-30022) sets `dword_46492C` after every round — only when goldman is on
-and the game is local: winner's player index, or in team mode
-(`dword_464964`) the winner's **team id encoded as 0 or 2** (via
-`sub_4223E7`); everywhere else (goldman off, networked) it writes -1.
+**Who becomes the gold player (PINNED, pseudo.c 30004-30022):**
+`sub_42A3F6`'s RESULTS tier writes `dword_46492C` unconditionally on every
+RESULTS pass — i.e. whenever `sub_4219B0(...) != -1` (a round SURVIVOR
+exists, pseudo.c 29823) and the tier is entered at `LABEL_102`; a no-survivor
+round instead falls straight into the separate DRAW.PCX branch and never
+reaches this write at all, so `dword_46492C` is left untouched on a draw —
+using `v73` — **NOT the round winner**, but the **match-clinch winner**: `v73` is
+reset to -1 at the top of every RESULTS pass (pseudo.c 29890) and only set
+inside the per-player/per-team tally loop when that slot's cumulative match
+tally (`sub_421AC8`, the win count) reaches `dword_464A7C`
+(`num_to_win_match`) — or, in team mode with `win_by_kills`
+(`dword_46497C`) on, when `sub_421B0F`'s round-kill count reaches the target
+AND uniquely leads (`v78 == 1`). This is the exact same `v73` already ported
+as `GameApp::match_clinch()` (`docs/re/results-and-options.md` §1) — the
+"we have a winner" match-over check, not the per-round survivor. So the gold
+player only changes **when a match is actually clinched** (VICTORY screen),
+never on an ordinary mid-match round win:
+
+```
+if ( sub_40C06A() )            // networked, non-host: no-op (not ported)
+  dword_46492C = -1;
+else if ( dword_4648BC )       // goldman on
+{
+  if ( dword_464964 )          // team mode
+    dword_46492C = sub_4223E7(v73) ? 2 : 0;   // v73's team id, encoded 0/2
+  else
+    dword_46492C = v73;        // v73's player index (-1 if not yet clinched)
+}
+else
+  dword_46492C = -1;           // goldman off
+```
+
+`sub_4223E7(v73)` (pseudo.c, already cited in `results-and-options.md` §1)
+maps a **player index** to its raw 0/1 team-slot byte; the encoding `? 2 : 0`
+is the original's own internal representation for `dword_46492C` (a single
+global reused as both a player index and a doubled team id elsewhere in the
+engine) — the port stores the equivalent **raw 0/1 team id** instead (see
+`GameApp::gold_player_`'s doc comment and the award consumer in
+`build_match_config`, which already compares it against `setup_team_[i]`
+directly), since our team-id space is 0/1 throughout, not 0/2.
+
 Cleared to -1 by: Esc on the wheel (6091), Esc on the player-setup screen,
 the Options-screen Gold Bomberman toggle, Ctrl+Q mid-round abort
 (`LABEL_34`, pseudo.c 29737), the net-game screens (30280/30504), and boot

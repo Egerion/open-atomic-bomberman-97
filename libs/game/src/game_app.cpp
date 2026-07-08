@@ -1535,6 +1535,27 @@ int GameApp::run_app() {
                 // returns, not `w`.
                 int clinched = w >= 0 ? match_clinch() : -1;
                 bool match_over = clinched >= 0;
+                // Gold player assignment (docs/re/goldman-roulette.md §2,
+                // pseudo.c 30004-30022, LABEL_102): sub_42A3F6 only reaches
+                // the RESULTS tier (and its unconditional dword_46492C
+                // write) when sub_4219B0(...) != -1, i.e. a ROUND SURVIVOR
+                // exists (`w >= 0` below) — a DRAW falls through to the
+                // separate DRAW.PCX branch instead and never touches
+                // dword_46492C at all, so a pending gold player survives a
+                // draw round unchanged. When RESULTS does run, v73 (== our
+                // `clinched` above) is the MATCH-CLINCH winner, never the
+                // per-round winner `w` — so the gold player only changes
+                // when a match is actually decided, and reverts to "none
+                // pending" on every other clinch-less RESULTS pass (v73's
+                // own -1 reset at the top of every RESULTS pass). Team mode
+                // stores the raw team id (setup_team_[]), matching the wheel
+                // award consumer in build_match_config and
+                // present_scoreboard's own clinched_player -> setup_team_[]
+                // lookup.
+                if (w >= 0) {
+                    gold_player_ =
+                        assign_gold_player(options_.goldman, is_team_mode(), clinched, setup_team_);
+                }
                 if (match_over) {
                     // MATCH win: the target was reached -> VICTORY, then
                     // back to the menu (next(Results, Advance) = Menu).

@@ -241,15 +241,21 @@ private:
 
     // The Goldman wheel's pending gold player (dword_46492C, docs/re/goldman-
     // roulette.md §2): -1 = none pending, else a player index (solo) or a
-    // team id encoded 0/2 (team mode, doc §2's sub_4223E7 note) whose match-
-    // win, under the goldman option, arms the next Play entry's wheel spin.
-    // Default -1 (boot init, doc's "Cleared to -1 by ... boot init 14661").
-    // ASSIGNMENT (who becomes gold player after a round) is the RESULTS
-    // tier's concern (present_scoreboard/run_match, doc §2 pseudo.c
-    // 30004-30022) — not written here; this class only CONSUMES the pending
-    // value at the Play-entry trigger site and clears it on the documented
-    // events this file owns (Esc on the wheel, Esc on present_setup, the
-    // Options-screen Gold Bomberman toggle).
+    // RAW 0/1 team id (team mode — our port's team-id space, unlike the
+    // original's internal 0/2 encoding; see doc §2) whose match-win, under
+    // the goldman option, arms the next Play entry's wheel spin. Default -1
+    // (boot init, doc's "Cleared to -1 by ... boot init 14661").
+    //
+    // ASSIGNMENT (doc §2, pseudo.c 30004-30022): written in run_app's
+    // Results case on every SURVIVOR round (w >= 0 — a draw never reaches
+    // the original's dword_46492C write and leaves this untouched), from
+    // match_clinch()'s v73 — the MATCH-CLINCH winner (win_target_/
+    // win_by_kills reached), NOT the per-round winner `w`. In team mode it's
+    // setup_team_[clinched], the raw team byte of the clinching player
+    // (mirrors present_scoreboard's own clinched_player -> setup_team_[]
+    // lookup). Cleared here on the documented events this file owns (Esc on
+    // the wheel, Esc on present_setup, the Options-screen Gold Bomberman
+    // toggle).
     int gold_player_ = -1;
     // The prize awarded by the last successful (non-aborted) wheel spin, or
     // -1 (doc §4: "dword_45E02C is never reset on consumption"). Consumed by
