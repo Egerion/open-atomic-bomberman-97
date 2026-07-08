@@ -33,15 +33,46 @@ bool GameApp::init() {
         values_ = assets::res::load_values(game / "DATA" / "RES" / "VALUELST.RES");
         if (const char* env = std::getenv("BOMBER_GAME_SECONDS"); env && *env)
             values_.values[100] = std::atoi(env);  // testing hook
-        // The install-root options.ini (sub_406238) carries the Conveyor Speed
-        // game option ("conveyor_speed="). Absent key/file ⇒ empty optional ⇒
-        // the sim keeps the binary default (1=medium). This install sets 2=high.
-        assets::Options loaded_opts = assets::load_options(game / "options.ini");
+        // The install-root options.ini (sub_406238) — ALL 22 keys, docs/re/
+        // results-and-options.md §3. Loaded ONCE here into options_; every
+        // Options-screen edit thereafter mutates options_ in memory only
+        // (write-on-exit, §2 — flush_options() is the sole writer).
+        options_path_ = game / "options.ini";
+        assets::Options loaded_opts = assets::load_options(options_path_);
         conveyor_speed_index_ = loaded_opts.conveyor_speed;
         // Team Play ("team_play="): absent key ⇒ OFF, matching the confirmed
         // team-mode default (docs/re/setup-screens.md: "Team mode is toggled on
         // the OPTIONS game-type screen, OFF by default").
         team_play_ = loaded_opts.team_play.value_or(false);
+        options_.team_play = team_play_;
+        options_.random_start = loaded_opts.random_start.value_or(false);
+        options_.conveyor_speed_index = conveyor_speed_index_.value_or(1);
+        options_.stomped_bombs_detonate = loaded_opts.stomped_bombs_detonate.value_or(false);
+        options_.win_by_kills = loaded_opts.win_by_kills.value_or(false);
+        options_.goldman = loaded_opts.goldman.value_or(false);
+        options_.enclosement_depth = loaded_opts.enclosement_depth.value_or(1);
+        options_.playtime_seconds = loaded_opts.playtime.value_or(150);
+        options_.diseases_destroyable = loaded_opts.diseases_destroyable.value_or(false);
+        options_.disable_game_music = loaded_opts.disable_game_music.value_or(false);
+        // "keydef=" -> KeyboardMapper's two live key-sets (docs/re/results-and-
+        // options.md §2). A KeyDef triple with scancode == -1 (never written)
+        // keeps that action's compiled-in default (input.hpp's
+        // default_key_set) rather than binding to scancode 0.
+        if (loaded_opts.keydef) {
+            for (int set = 0; set < assets::KeyDef::kSets; ++set) {
+                KeySet ks = keyboard_.key_set(set);
+                for (int action = 0; action < kKeyActionCount; ++action) {
+                    int sc = loaded_opts.keydef->scancode[set][action];
+                    if (sc >= 0) ks.scancode[action] = sc;
+                }
+                keyboard_.set_key_set(set, ks);
+            }
+        }
+        // "num_to_win_match=" seeds win_target_'s default (task item 5, §5):
+        // reset_match_scores() falls back to this when getvalue(310) is
+        // absent/invalid, and the LEVEL & ROUNDS screen's WINS row still
+        // overrides per-match on top of whichever default won.
+        num_to_win_match_ = loaded_opts.num_to_win_match;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "%s\n", e.what());
         return false;
@@ -255,7 +286,13 @@ constexpr int kMenuCursorStepFallback = 38;    // getvalue(702)
 }  // namespace
 
 void GameApp::start_match(std::uint32_t seed) {
-    sim::MatchConfig cfg = match::build_match_config(scheme_, sim::kMaxPlayers, seed, &values_);
+    // Random Start (options.ini "random_start=" / Options row 1, §3):
+    // shuffles which of the scheme's own spawn slots each player index gets
+    // (match_factory.hpp's own doc comment has the full clean-room rationale
+    // — no exact placement algorithm is pinned in the RE brief, only the
+    // toggle + key).
+    sim::MatchConfig cfg = match::build_match_config(scheme_, sim::kMaxPlayers, seed, &values_,
+                                                      options_.random_start);
     // Roster from the PLAYER INPUT screen (present_setup): OFF slots are inactive,
     // COMPUTER slots are AI-driven, KEYBOARD slots are local human(s). The per-slot
     // team goes into MatchConfig::team[] (config-only, non-hashed — team MODE is a
@@ -269,6 +306,18 @@ void GameApp::start_match(std::uint32_t seed) {
     // install = 2 high); otherwise Tuning keeps the confirmed default (1
     // medium). conveyor_speed() clamps to [0, count-1], so a raw index is safe.
     if (conveyor_speed_index_) cfg.tuning.conveyor_speed_index = *conveyor_speed_index_;
+    // Enclosement Depth (options.ini "enclosement_depth=" / Options row 7,
+    // §3): a REAL Tuning consumer (enclosure.cpp/ai.cpp). base_tuning_ already
+    // carries the VALUELST default; the Options screen's live edit overrides
+    // it per match, same pattern as Conveyor Speed above.
+    cfg.tuning.enclosement_depth = options_.enclosement_depth;
+    // Play Time (options.ini "playtime=" / Options row 9, §3): a REAL Tuning
+    // consumer (setup.cpp's ticks_left = game_seconds * kTicksPerSecond). The
+    // "unlimited" sentinel (1001) has no sim meaning yet — a very long but
+    // finite clock is the closest faithful stand-in without inventing a
+    // separate "no clock" sim mode (out of scope: PRESENTATION/CONFIG ONLY).
+    cfg.tuning.game_seconds =
+        options_.playtime_seconds == 1001 ? 99999 : options_.playtime_seconds;
     // Team Play (options.ini "team_play=" / the interactive Options screen):
     // the game-type-level team-mode GATE (docs/re/setup-screens.md
     // `dword_464964`), separate from each slot's own +84 team byte. OFF means
@@ -301,7 +350,11 @@ void GameApp::start_match(std::uint32_t seed) {
     sim_ = sim::Simulation(cfg);
     if (assets_.load_stage(stage)) {
         seqs_.resolve_stage(assets_, stage);
-        audio_.start_music(1100 + stage);  // SOUNDLST: stage music = 1100 + n
+        // Disable music during gameplay (options.ini "disable_game_music=" /
+        // Options row 13, §3): a REAL consumer — simply don't start the
+        // in-match track. Menu/results music is untouched (the option is
+        // specifically "during gameplay").
+        if (!options_.disable_game_music) audio_.start_music(1100 + stage);  // SOUNDLST 1100+n
     }
     renderer_->reset_match();
     sounds_.reset();
@@ -408,17 +461,17 @@ AppInput GameApp::present_bm_screen(const std::string& bm_name) {
 }
 
 AppInput GameApp::present_options_screen() {
-    // The interactive Options screen (options_screen.hpp/.cpp): Team Play +
-    // Conveyor Speed, over a random GLUE<n> backdrop like present_setup's
-    // documented convention (docs/re/setup-screens.md). F1 layers the
-    // original's OPTIONS.BM help text on top, same content the row used to
-    // open exclusively. Music left untouched here — unlike present_setup this
-    // screen is reached straight from the main menu (not the Play handler
-    // sub_42A3F6), so there is no confirmed "inherits 1020" citation; it plays
-    // on under whatever the menu already started (1010, kMenuMusicId).
+    // The interactive Options screen (options_screen.hpp/.cpp): the full
+    // §3 19-item list's LIVE subset, over a random GLUE<n> backdrop like
+    // present_setup's documented convention (docs/re/setup-screens.md). F1
+    // layers the original's OPTIONS.BM help text on top, same content the row
+    // used to open exclusively. Music left untouched here — unlike
+    // present_setup this screen is reached straight from the main menu (not
+    // the Play handler sub_42A3F6), so there is no confirmed "inherits 1020"
+    // citation; it plays on under whatever the menu already started (1010,
+    // kMenuMusicId).
     OptionsScreen opt(assets_, front_font_);
-    opt.enter(team_play_, conveyor_speed_index_.value_or(base_tuning_.conveyor_speed_index),
-              pick_glue());
+    opt.enter(options_, pick_glue());
     AppInput result = AppInput::Advance;
     while (!opt.done()) {
         SDL_Event ev;
@@ -435,6 +488,12 @@ AppInput GameApp::present_options_screen() {
             }
             if (ev.key.key == SDLK_ESCAPE) result = AppInput::Back;
             opt.on_key(ev.key.key, audio_);
+            // "Define keyboard layouts" (row 15, §3): push the key-remap
+            // sub-screen (§2) modally, exactly like the F1 help overlay
+            // above, then resume the Options screen with its in-progress
+            // edits untouched (present_keyremap_screen owns its own loop and
+            // applies its own result to keyboard_/options_dirty_ directly).
+            if (opt.open_keyremap()) present_keyremap_screen();
         }
         audio_.update_music();
         SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
@@ -444,21 +503,59 @@ AppInput GameApp::present_options_screen() {
         SDL_Delay(2);
     }
 
-    // Persist ONLY on an actual change (task requirement 3), read-modify-write
-    // so the rest of the user's options.ini survives untouched.
+    // Edit the in-memory snapshot ONLY on an actual change (task requirement
+    // 3's write-on-exit semantics, §2's CONFIRMED "held in memory ... only
+    // flushed ... when the application exits normally") — options.ini itself
+    // is untouched here; flush_options() (run()'s tail) is the sole writer.
     if (opt.changed()) {
-        team_play_ = opt.team_play();
-        conveyor_speed_index_ = opt.conveyor_speed_index();
-        assets::Options to_write;
-        to_write.team_play = team_play_;
-        to_write.conveyor_speed = conveyor_speed_index_;
-        try {
-            assets::save_options(opts_.game_dir / "options.ini", to_write);
-        } catch (const std::exception& e) {
-            std::fprintf(stderr, "options.ini save failed: %s\n", e.what());
-        }
+        options_ = opt.snapshot();
+        team_play_ = options_.team_play;
+        conveyor_speed_index_ = options_.conveyor_speed_index;
+        options_dirty_ = true;
     }
     return result;
+}
+
+void GameApp::present_keyremap_screen() {
+    // The key-remap UI (docs/re/results-and-options.md §2, sub_407B9D): a
+    // 2x6 scancode-capture grid drawn OVER whatever the caller already
+    // painted this frame (present_options_screen's Options backdrop — §2
+    // "no new backdrop call"). Draws its own frame here rather than sharing
+    // the caller's SDL_RenderPresent, since it needs its own event pump to
+    // capture raw scancodes without those keys also driving the Options
+    // cursor underneath.
+    KeyRemapScreen remap(assets_, front_font_);
+    std::array<KeySet, kKeyboardSets> current{keyboard_.key_set(0), keyboard_.key_set(1)};
+    remap.enter(current);
+    while (!remap.done()) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_EVENT_QUIT) { remap.on_key(SDLK_ESCAPE, SDL_SCANCODE_ESCAPE, audio_); return; }
+            if (ev.type != SDL_EVENT_KEY_DOWN) continue;
+            remap.on_key(ev.key.key, ev.key.scancode, audio_);
+        }
+        audio_.update_music();
+        SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
+        SDL_RenderClear(sdl_renderer_.get());
+        // §2: "no new backdrop call — sub_407B9D draws directly over the
+        // Options screen's own frame". This screen has its own event pump
+        // (to capture raw scancodes without leaking into the Options cursor
+        // underneath), so there is no single shared frame to draw "over" —
+        // a plain dark panel is the simplest faithful stand-in, since
+        // sub_407B9D's own drawing (the grid + header) is self-contained and
+        // legible against any backdrop.
+        SDL_SetRenderDrawColor(sdl_renderer_.get(), 20, 20, 30, 255);
+        SDL_RenderClear(sdl_renderer_.get());
+        remap.draw(sdl_renderer_.get());
+        SDL_RenderPresent(sdl_renderer_.get());
+        SDL_Delay(2);
+    }
+    // Apply live (KeyboardMapper reads collect_inputs() every match tick) and
+    // mark dirty for the write-on-exit flush — never write options.ini here.
+    const auto& edited = remap.edited();
+    keyboard_.set_key_set(0, edited[0]);
+    keyboard_.set_key_set(1, edited[1]);
+    options_dirty_ = true;
 }
 
 int GameApp::round_winner() const {
@@ -665,9 +762,17 @@ AppInput GameApp::present_menu() {
 
 void GameApp::reset_match_scores() {
     win_count_.fill(0);
-    // getvalue(310) "how many wins to win a match?" (first-column value, else 2).
+    // getvalue(310) "how many wins to win a match?" (first-column value, else
+    // options.ini's num_to_win_match= if the VALUELST key is absent, else our
+    // own fallback of 2 (task item 5 / §5: "num_to_win_match ... should seed
+    // the frontend's win_target_ default"). The LEVEL & ROUNDS screen's WINS
+    // row (present_map_select) still overrides on top of whichever default
+    // wins here — this only affects the value shown before the player edits it.
     auto it = values_.values.find(310);
-    win_target_ = it != values_.values.end() ? static_cast<int>(it->second) : 2;
+    if (it != values_.values.end())
+        win_target_ = static_cast<int>(it->second);
+    else
+        win_target_ = num_to_win_match_.value_or(2);
     if (win_target_ < 1) win_target_ = 1;
 }
 
@@ -1171,14 +1276,59 @@ int GameApp::run_app() {
     return 0;
 }
 
+void GameApp::flush_options() {
+    // Write-on-exit (docs/re/results-and-options.md §2 "Persistence —
+    // CONFIRMED via an exit-time write-back": sub_405DE3, the writer, is only
+    // ever reached through sub_410EBF's atexit-style hook on a NORMAL app
+    // exit — never per-edit). Guarded so a run that never touched an Options
+    // row, or a run that never resolved a game_dir (init() already bailed),
+    // does nothing.
+    if (!options_dirty_ || options_path_.empty()) return;
+    assets::Options to_write;
+    to_write.team_play = options_.team_play;
+    to_write.random_start = options_.random_start;
+    to_write.conveyor_speed = options_.conveyor_speed_index;
+    to_write.stomped_bombs_detonate = options_.stomped_bombs_detonate;
+    to_write.win_by_kills = options_.win_by_kills;
+    to_write.goldman = options_.goldman;
+    to_write.enclosement_depth = options_.enclosement_depth;
+    to_write.playtime = options_.playtime_seconds;
+    to_write.assign_keyboards = std::nullopt;  // row omitted — never edited by this port
+    to_write.diseases_destroyable = options_.diseases_destroyable;
+    to_write.disable_game_music = options_.disable_game_music;
+    // keydef=: always write the live KeyboardMapper bindings (both sets, all
+    // 6 UI-exposed actions) so a rebind through the remap screen survives a
+    // restart. Slots 6-9 per set (no in-game UI, §2) are left at -1/absent
+    // here — save_options skips a -1 scancode, so any pre-existing keydef=
+    // line for those slots (from a hand-edit or a future feature) is left
+    // untouched by the read-modify-write rather than being clobbered blank.
+    assets::KeyDef kd;
+    for (int set = 0; set < assets::KeyDef::kSets; ++set) {
+        const KeySet& ks = keyboard_.key_set(set);
+        for (int action = 0; action < kKeyActionCount; ++action)
+            kd.scancode[set][action] = ks.scancode[action];
+    }
+    to_write.keydef = kd;
+    try {
+        assets::save_options(options_path_, to_write);
+        options_dirty_ = false;
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "options.ini save failed: %s\n", e.what());
+    }
+}
+
 int GameApp::run() {
     if (const char* env = std::getenv("BOMBER_BOOT_MATCH"); env && *env) opts_.boot_match = true;
     if (!init()) return opts_.game_dir.empty() ? 2 : 1;
     if (opts_.demo) {
         start_match(0xB0BB1E5);
-        return run_demo();
+        int rc = run_demo();
+        flush_options();
+        return rc;
     }
-    return run_app();
+    int rc = run_app();
+    flush_options();
+    return rc;
 }
 
 }  // namespace bomber::game

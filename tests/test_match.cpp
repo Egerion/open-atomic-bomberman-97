@@ -178,6 +178,62 @@ TEST_CASE("warphole knockout: deterministic per seed, varies across seeds") {
     CHECK(distinct >= 2);
 }
 
+// Random Start (docs/re/results-and-options.md §3 row 1, `random_start=`):
+// build_match_config's clean-room reading (see that function's doc comment) —
+// shuffle WHICH of the scheme's own fixed spawn slots each player index gets,
+// off a setup-only LCG (never sim::State::rng).
+namespace {
+
+assets::sch::Scheme make_spawn_scheme(int count) {
+    assets::sch::Scheme s;
+    s.version = 2;
+    s.name = "spawns";
+    s.brick_density = 0;
+    for (int y = 0; y < sim::kGridHeight; ++y) s.rows.push_back(std::string(sim::kGridWidth, '.'));
+    for (int i = 0; i < count; ++i) {
+        assets::sch::Spawn sp;
+        sp.player = i;
+        sp.x = i + 1;  // distinct, easily identified positions
+        sp.y = 1;
+        s.spawns.push_back(sp);
+    }
+    return s;
+}
+
+}  // namespace
+
+TEST_CASE("random_start=false (default): spawns keep the scheme's own player order") {
+    auto cfg = match::build_match_config(make_spawn_scheme(4), 4, 0x1234u);
+    for (int i = 0; i < 4; ++i) CHECK(cfg.spawns[i].x == i + 1);
+}
+
+TEST_CASE("random_start=true: spawns are a permutation of the scheme's own slots") {
+    auto cfg = match::build_match_config(make_spawn_scheme(4), 4, 0x1234u, nullptr,
+                                         /*random_start=*/true);
+    // Every original x (1..4) appears exactly once, just possibly reassigned.
+    bool seen[5] = {};
+    for (int i = 0; i < 4; ++i) {
+        int x = cfg.spawns[i].x;
+        REQUIRE(x >= 1);
+        REQUIRE(x <= 4);
+        CHECK_FALSE(seen[x]);
+        seen[x] = true;
+    }
+}
+
+TEST_CASE("random_start=true: deterministic per seed, varies across seeds") {
+    auto a = match::build_match_config(make_spawn_scheme(4), 4, 0xABCDu, nullptr, true);
+    auto b = match::build_match_config(make_spawn_scheme(4), 4, 0xABCDu, nullptr, true);
+    for (int i = 0; i < 4; ++i) CHECK(a.spawns[i].x == b.spawns[i].x);  // same seed -> same shuffle
+
+    bool differ = false;
+    for (std::uint32_t seed : {1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u}) {
+        auto cfg = match::build_match_config(make_spawn_scheme(4), 4, seed, nullptr, true);
+        if (cfg.spawns[0].x != 1) { differ = true; break; }
+    }
+    CHECK(differ);  // at least one seed actually reorders player 0's slot
+}
+
 TEST_CASE("warphole knockout: an edge warphole never clears out of bounds") {
     // A warphole in the top-left corner: only Right(1)/Down(2) are in-bounds, so
     // the retry loop must reject Up/Left and land on one of the two valid tiles.
