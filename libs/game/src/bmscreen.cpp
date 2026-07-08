@@ -1,8 +1,11 @@
 #include "bomber/game/bmscreen.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <cstdio>
 #include <exception>
+#include <system_error>
 
 #include "bomber/assets/image.hpp"
 #include "bomber/game/sprites.hpp"
@@ -37,6 +40,13 @@ constexpr float kPanelH = 380.0f;
 // the dark panel. This is a cosmetic port choice (paletted VGA -> RGBA), noted
 // in docs/re/frontend-flow.md; layout/advance are the faithful part.
 constexpr Uint8 kInkR = 230, kInkG = 230, kInkB = 210;
+
+// HelpBrowser's list dialog ink — the general white draw colour byte_49D38F
+// (docs/re/results-and-options.md §4/§5, the SAME ink SchemeFilePicker's own
+// list dialog uses at the identical (100, 100) sub_41485A call site).
+constexpr Uint8 kListInkR = 255, kListInkG = 255, kListInkB = 255;
+constexpr Uint8 kListSelR = 255, kListSelG = 220, kListSelB = 80;
+constexpr Uint8 kListHintR = 160, kListHintG = 160, kListHintB = 160;
 
 }  // namespace
 
@@ -210,6 +220,125 @@ void BmScreen::draw(SDL_Renderer* ren) const {
             }
         }
     }
+}
+
+// --- HelpBrowser ------------------------------------------------------------
+
+void HelpBrowser::enter() {
+    entries_.clear();
+    row_ = 0;
+    top_ = 0;
+    viewing_ = false;
+    done_ = false;
+    if (!assets_) return;
+    // sub_41404B: DOS findfirst/findnext glob of "*.BM" over the install
+    // ROOT (not DATA/), qsort_-sorted. std::filesystem::directory_iterator +
+    // a case-insensitive extension check is the faithful modern equivalent
+    // (§4) — the original glob is case-insensitive on the FAT install media.
+    std::error_code ec;
+    const std::filesystem::path& root = assets_->game_dir();
+    if (!std::filesystem::is_directory(root, ec)) return;
+    for (const auto& entry : std::filesystem::directory_iterator(root, ec)) {
+        if (!entry.is_regular_file()) continue;
+        std::string ext = entry.path().extension().string();
+        for (auto& c : ext) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        if (ext == ".BM") entries_.push_back(entry.path());
+    }
+    std::sort(entries_.begin(), entries_.end());  // qsort_(sub_41400F, count)
+}
+
+void HelpBrowser::on_key(SDL_Keycode key, AudioEngine& audio) {
+    if (viewing_) {
+        bm_.on_key(key);
+        return;
+    }
+    if (entries_.empty()) {
+        // §4's "no .BM files found" error dialog (getstring(4)/getstring(95)):
+        // any dismiss key closes the whole browser, same as SchemeFilePicker's
+        // empty-glob path.
+        if (key == SDLK_ESCAPE || key == SDLK_RETURN || key == SDLK_SPACE) done_ = true;
+        return;
+    }
+    int count = static_cast<int>(entries_.size());
+    switch (key) {
+        case SDLK_UP:
+        case SDLK_W:
+            row_ = (row_ + count - 1) % count;
+            audio.play(20);
+            break;
+        case SDLK_DOWN:
+        case SDLK_S:
+            row_ = (row_ + 1) % count;
+            audio.play(20);
+            break;
+        case SDLK_RETURN:
+        case SDLK_KP_ENTER:
+        case SDLK_SPACE:
+            audio.play(10);
+            // sub_41302D(v12[v14]): open the selected topic through the same
+            // .BM viewer; the list re-shows once close_viewer() is called
+            // (the caller drives that on bm_.done(), matching sub_414235's
+            // do/while loop-back over the same glob array).
+            bm_.enter(entries_[static_cast<std::size_t>(row_)].stem().string());
+            viewing_ = true;
+            break;
+        case SDLK_ESCAPE:
+            audio.play(10);
+            done_ = true;
+            break;
+        default:
+            break;
+    }
+    if (row_ < top_) top_ = row_;
+    if (row_ >= top_ + kVisibleRows) top_ = row_ - kVisibleRows + 1;
+}
+
+void HelpBrowser::draw(SDL_Renderer* ren) const {
+    if (!ren) return;
+    if (viewing_) {
+        // The .BM viewer paints its own dark panel over whatever is already
+        // on screen (BmScreen::draw); the caller is expected to have drawn
+        // the persistent backdrop first, same as present_bm_screen.
+        bm_.draw(ren);
+        return;
+    }
+    // No backdrop paint here (class doc): sub_41485A's list is a floating
+    // panel, not a screen cut. A small scrim behind the text keeps it legible
+    // over whatever the caller drew (the menu art, or the frozen match
+    // field) — a cosmetic RGBA concession, same rationale as BmScreen's own
+    // dark panel (paletted VGA -> truecolour, docs/re/frontend-flow.md).
+    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(ren, 0, 0, 0, 190);
+    SDL_FRect panel{84.0f, 84.0f, 460.0f,
+                     124.0f + static_cast<float>(kVisibleRows) * 20.0f + 24.0f - 84.0f};
+    SDL_RenderFillRect(ren, &panel);
+    if (!font_ || !font_->loaded()) return;
+    // sub_41485A at (100, 100), header getstring(600) — the SAME dialog
+    // primitive/coordinates SchemeFilePicker's *.SCH picker uses (§4/§5).
+    const std::string header = assets_ ? assets_->getstring(600, "Available help files:")
+                                        : std::string("Available help files:");
+    font_->draw(ren, header, 100.0f, 100.0f, kListInkR, kListInkG, kListInkB);
+    if (entries_.empty()) {
+        // §4: getstring(4)="No help files found!" / getstring(95) — no *.BM
+        // in the install root.
+        const std::string err = assets_ ? assets_->getstring(4, "No help files found!")
+                                         : std::string("No help files found!");
+        font_->draw(ren, err, 100.0f, 124.0f, kListHintR, kListHintG, kListHintB);
+        return;
+    }
+    int count = static_cast<int>(entries_.size());
+    int last = std::min(count, top_ + kVisibleRows);
+    for (int i = top_; i < last; ++i) {
+        bool sel = (i == row_);
+        Uint8 r = sel ? kListSelR : kListInkR, g = sel ? kListSelG : kListInkG,
+              b = sel ? kListSelB : kListInkB;
+        std::string line =
+            (sel ? "> " : "  ") + entries_[static_cast<std::size_t>(i)].filename().string();
+        font_->draw(ren, line, 100.0f, 124.0f + static_cast<float>(i - top_) * 20.0f, r, g, b);
+    }
+    font_->draw(ren, "UP/DOWN SELECT   ENTER OPEN   ESC CANCEL", 100.0f,
+                124.0f + static_cast<float>(kVisibleRows) * 20.0f + 8.0f, kListHintR, kListHintG,
+                kListHintB);
 }
 
 }  // namespace bomber::game

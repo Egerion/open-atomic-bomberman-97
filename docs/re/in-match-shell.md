@@ -170,8 +170,15 @@ path (contrast the main menu's Quit row, which does pop one).
 the original's **Ctrl+Q** (instant, unconfirmed forfeit) rather than like
 the original's literal Esc (inert). Functionally the port's Esc gives
 players a working "quit to menu" affordance the original also has — just
-bound to a different key and, unlike the original, with no F1/288/etc.
-auxiliary keys alongside it. Faithfully matching the original key-for-key
+bound to a different key. Of the auxiliary keys, **F1 is now wired**
+(2026-07-08): `run_match` opens the generic `.BM` help browser
+(`GameApp::present_help_browser_modal`) with the sim tick loop suspended for
+the modal's duration, mirroring this doc's `sub_42A16F(1)/(0)` bracket — with
+ONE deliberate deviation: on close the frame accumulator is reset, so the
+round clock does NOT absorb the modal's wall-clock duration (the original's
+documented lump-sum clock burn under "Pause negative finding" point 2 is a
+bug we chose not to reproduce). The 288 debug window and the other
+debug-gated keys remain unwired. Faithfully matching the original key-for-key
 would mean binding forfeit to Ctrl+Q and leaving Esc inert, which would be a
 worse player experience than what we have; this is flagged as a fact, not a
 recommendation to regress the binding.
