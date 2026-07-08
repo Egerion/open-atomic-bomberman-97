@@ -131,6 +131,38 @@ TEST_CASE("throwing a carried bomb emits BombThrown") {
     CHECK(!s.state().players[0].carrying);  // the carried bomb was released
 }
 
+// docs/re/facts.md "Flying-bomb landing on powerups": the landing check
+// (sub_42331C ~25443, `!sub_425FB9 && !sub_422E48 && !sub_42542D`) treats ANY
+// floor powerup as an occupied tile, exactly like a wall or another bomb — a
+// flying bomb hops over it instead of landing on (or destroying) it. This
+// differs from the sliding-bomb cell-entry probe (sub_4230A5), which plows
+// through a visible powerup and squashes it as a side effect.
+TEST_CASE("a punched bomb hops over a floor powerup instead of landing on it") {
+    Simulation s(open_config());
+    s.state().players[1].alive = false;
+    Player& p = s.state().players[0];
+    p.punch = true;
+    p.facing = Direction::Right;
+    push_resting_bomb(s, 1, 0);          // directly ahead of (0,0)
+    s.state().floor[0][4] = PowerupType::ExtraBomb;  // the 3-tile launch's landing tile
+
+    s.tick(press2(0));                   // punch -> 3-tile launch to (4,0)
+    REQUIRE(s.state().bombs.size() == 1);
+    REQUIRE(s.state().bombs[0].flying);
+
+    // The powerup must never be consumed while the bomb is still airborne.
+    for (int i = 0; i < 40 && s.state().bombs[0].flying; ++i) {
+        run(s, 1);
+        CHECK(s.state().floor[0][4] == PowerupType::ExtraBomb);
+    }
+    // It settles somewhere other than the powerup tile (hopped past/around it).
+    REQUIRE(!s.state().bombs.empty());
+    CHECK_FALSE(s.state().bombs[0].flying);
+    CHECK_FALSE((s.state().bombs[0].tile_x() == 4 && s.state().bombs[0].tile_y() == 0));
+    // The powerup token itself is untouched: not destroyed, not picked up.
+    CHECK(s.state().floor[0][4] == PowerupType::ExtraBomb);
+}
+
 TEST_CASE("punch/throw feedback stays deterministic across replays") {
     MatchConfig cfg = open_config();
     Simulation a(cfg), b(cfg);
