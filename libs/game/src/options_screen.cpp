@@ -34,15 +34,7 @@ const char* conveyor_label(int idx) {
 
 }  // namespace
 
-std::uint32_t OptionsScreen::next_rand() {
-    // Same LCG shape as Renderer's flash_lcg_/panic_lcg_ (renderer.cpp):
-    // presentation-only, never bomber::sim::State::rng — this screen has no
-    // bearing on the determinism contract (ADR-0003).
-    lcg_ = lcg_ * 1664525u + 1013904223u;
-    return lcg_ >> 16;
-}
-
-void OptionsScreen::enter(bool team_play, int conveyor_speed_index) {
+void OptionsScreen::enter(bool team_play, int conveyor_speed_index, std::string backdrop) {
     row_ = 0;
     done_ = false;
     changed_ = false;
@@ -50,17 +42,11 @@ void OptionsScreen::enter(bool team_play, int conveyor_speed_index) {
     conveyor_speed_index_ = conveyor_speed_index;
     if (conveyor_speed_index_ < 0) conveyor_speed_index_ = 0;
     if (conveyor_speed_index_ > 2) conveyor_speed_index_ = 2;
-
     // Random GLUE<n> backdrop (docs/re/setup-screens.md "Backdrop — a RANDOM
-    // glue picture", CONFIRMED sub_4148E5): getvalue(16) = how many GLUE<n>.PCX
-    // backdrops ship (this install = 7), idx = rand() % count. VALUELST id 16
-    // is not yet in docs/valuelst-map.md as a Tuning field (it is a frontend
-    // asset count, not a gameplay id), so it is read directly off the raw
-    // ValueList the same way the main menu cursor reads row 700.
-    std::int64_t count = values_ ? values_->at_or(16, 7) : 7;
-    if (count <= 1) count = 1;
-    int idx = static_cast<int>(next_rand() % static_cast<std::uint32_t>(count));
-    backdrop_ = "GLUE" + std::to_string(idx);
+    // glue picture", CONFIRMED sub_4148E5) — picked by the caller's shared
+    // pick_glue() (GameApp), the same helper present_setup/present_map_select
+    // use, so there is exactly one presentation LCG for this pick.
+    backdrop_ = std::move(backdrop);
 }
 
 void OptionsScreen::on_key(SDL_Keycode key, AudioEngine& audio) {

@@ -7,6 +7,7 @@
 
 #include "bomber/assets/bmfont.hpp"
 #include "bomber/assets/pcx.hpp"
+#include "bomber/assets/rmp.hpp"
 
 namespace bomber::game {
 
@@ -89,6 +90,40 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
             std::fprintf(stderr, "FONT6.FON load failed: %s\n", e.what());
         }
 
+        // The MESSAGES.TXT string table (getstring / sub_4124A4): the setup and
+        // net-game screens format their labels from it. Install ROOT, like the
+        // fonts. Optional — a missing file leaves getstring() returning fallbacks.
+        try {
+            auto p = game_dir / "MESSAGES.TXT";
+            if (fs::exists(p)) messages_ = assets::res::load_messages(p);
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "MESSAGES.TXT load failed: %s\n", e.what());
+        }
+
+        // The ten player-colour remap tables 0.RMP..9.RMP (install ROOT), the
+        // authentic per-colour index remap the original blit applies to the
+        // "green" player sprites (sub_415A1C via dword_460564[colour] —
+        // docs/re/player-colour.md). Each is loaded in isolation and guarded:
+        // a missing/short file just marks that colour rmp_ok_=false, and
+        // build_player_sets then falls back to the truecolour recolour for that
+        // slot. Never fatal — a slot without a .RMP still renders (approximately).
+        for (int i = 0; i < kColors; ++i) {
+            auto p = game_dir / (std::to_string(i) + ".RMP");
+            try {
+                if (fs::exists(p)) {
+                    auto rt = assets::res::load_rmp(p);
+                    rmp_[i] = rt.map;
+                    rmp_rgb_[i] = rt.rgb;  // authoritative slot colour (setup screen)
+                    rmp_ok_[i] = true;
+                } else {
+                    std::fprintf(stderr, "%d.RMP missing; using fallback recolour\n", i);
+                }
+            } catch (const std::exception& e) {
+                std::fprintf(stderr, "%d.RMP load failed (%s); using fallback recolour\n", i,
+                             e.what());
+            }
+        }
+
         // Idle "cornerhead" fidgets (CORNER0..7.ANI). Cosmetic and optional:
         // a missing/broken CORNER file must NOT abort the whole load, so each
         // is loaded in isolation — resolution just falls back to stand.
@@ -145,25 +180,47 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
 
 void AssetStore::build_player_sets(const std::int32_t colors[][3]) {
     for (int p = 0; p < kLocalPlayers; ++p) {
-        walk_c_[p] = walk_.recolored(ren_, colors[p]);
-        stand_c_[p] = stand_.recolored(ren_, colors[p]);
-        kick_c_[p] = kick_.recolored(ren_, colors[p]);
-        punch_c_[p] = punch_.recolored(ren_, colors[p]);
+        // Player slot p's intrinsic colour index is p itself (slot 0 = white /
+        // 0.RMP, slot 1 = black / 1.RMP; docs/re/setup-screens.md — colour is
+        // keyed by slot index, there is no picker). Prefer the authentic p.RMP
+        // index remap; fall back to the truecolour recolour(color_rgb) only when
+        // that colour's .RMP was missing/short (rmp_ok_[p] == false).
+        const bool use_rmp = (p < kColors) && rmp_ok_[p];
+        auto recolor = [&](const AniTextures& src) {
+            return use_rmp ? src.recolored(ren_, rmp_[p]) : src.recolored(ren_, colors[p]);
+        };
+
+        walk_c_[p] = recolor(walk_);
+        stand_c_[p] = recolor(stand_);
+        kick_c_[p] = recolor(kick_);
+        punch_c_[p] = recolor(punch_);
         for (int f = 0; f < kCornerFiles; ++f)
-            if (corner_[f].loaded()) corner_c_[f][p] = corner_[f].recolored(ren_, colors[p]);
+            if (corner_[f].loaded()) corner_c_[f][p] = recolor(corner_[f]);
         for (int f = 0; f < kBwalkFiles; ++f)
-            if (bwalk_[f].loaded()) bwalk_c_[f][p] = bwalk_[f].recolored(ren_, colors[p]);
-        bombs_c_[p] = bombs_.recolored(ren_, colors[p]);
-        duds_c_[p] = duds_.recolored(ren_, colors[p]);
-        if (trigbomb_.loaded()) trigbomb_c_[p] = trigbomb_.recolored(ren_, colors[p]);
-        flame_c_[p] = flame_.recolored(ren_, colors[p]);
+            if (bwalk_[f].loaded()) bwalk_c_[f][p] = recolor(bwalk_[f]);
+        bombs_c_[p] = recolor(bombs_);
+        duds_c_[p] = recolor(duds_);
+        if (trigbomb_.loaded()) trigbomb_c_[p] = recolor(trigbomb_);
+        flame_c_[p] = recolor(flame_);
         deaths_c_[p].clear();
         xplode_c_[p].clear();
         for (const auto& src : xplode_) {
-            AniTextures colored = src.recolored(ren_, colors[p]);
+            AniTextures colored = recolor(src);
             collect_death_anims(colored, deaths_c_[p]);
             xplode_c_[p].push_back(std::move(colored));
         }
+    }
+}
+
+void AssetStore::set_color_fallbacks(const std::int32_t colors[][3], int n) {
+    // Fill in the slot colour for any colour index that had no .RMP tail, from
+    // the VALUELST percent table. A loaded .RMP already set rmp_rgb_[i] from its
+    // own (authoritative) tail, so only touch the ones that failed to load.
+    for (int i = 0; i < kColors && i < n; ++i) {
+        if (rmp_ok_[i]) continue;  // keep the .RMP tail
+        rmp_rgb_[i][0] = static_cast<std::uint8_t>(colors[i][0]);
+        rmp_rgb_[i][1] = static_cast<std::uint8_t>(colors[i][1]);
+        rmp_rgb_[i][2] = static_cast<std::uint8_t>(colors[i][2]);
     }
 }
 

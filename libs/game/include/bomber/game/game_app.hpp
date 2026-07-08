@@ -1,8 +1,10 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <string>
 #include <utility>
 
 #include "bomber/assets/reslist.hpp"
@@ -97,7 +99,61 @@ private:
     // screen's DRAW-vs-VICTORY choice and the "player N wins" naming.
     int round_winner() const;
 
+    // Reset the per-match win tally + read the win target getvalue(310) at the
+    // start of a fresh match (Menu -> StartMatch). Best-of-N, N = 2 by default.
+    void reset_match_scores();
+    // The between-round RESULTS scoreboard (sub_42A3F6): RESULTS.PCX + the
+    // running per-player win counts at the getvalue(785) list positions. Shown
+    // after a round that did not end the match; returns the dismiss input.
+    AppInput present_scoreboard();
+    // Screen 1 of the pre-match flow — PLAYER INPUT TYPE SELECTION (sub_410F81):
+    // the 10-slot input-type list (OFF / COMPUTER / KEYBOARD) at getvalue 705-713,
+    // each slot tinted with its intrinsic colour (VALUELST 200-247), a per-slot
+    // team flag ('T'). Right cycles a slot's type, Left/'0' set it OFF. Returns
+    // Advance to go on to the level screen, Back to cancel to the menu, Quit on
+    // window close. (docs/re/setup-screens.md.)
+    AppInput present_setup();
+    // Screen 2 — LEVEL & ROUNDS (sub_406DDE, the VALUELST "OPTIONS SCREEN"): the
+    // RANDOM + 11 named levels and the win target, at getvalue 735-738. Left/Right
+    // cycle the highlighted row, Up/Down switch rows, Enter commits the level
+    // (selected_level_) + win target (win_target_), Escape backs to present_setup.
+    // Returns Advance to start the match, Back to the player screen, Quit on close.
+    AppInput present_map_select();
+    // A random GLUE<n> backdrop name (sub_4148E5: getvalue(16) count, rand()%%n).
+    // Shared by both pre-match screens; uses the presentation LCG, not State::rng.
+    std::string pick_glue();
+    // Advance a slot's input type one step in the setup cycle (sub_421E80):
+    // OFF -> COMPUTER -> KEYBOARD sub 0 -> KEYBOARD sub 1 -> OFF.
+    void cycle_input_type(int slot);
+    // GENERIC fallback name for built-in level `idx` (the real names load from the
+    // user's MESSAGES.TXT via getstring(150+idx); these are ours, never committed).
+    static const char* level_fallback(int idx);
+
     int menu_index_ = 0;  // highlighted main-menu row (persists across visits)
+
+    // Multi-round match state (sub_42A3F6): best-of-getvalue(310) = 2 rounds.
+    // win_count_ tallies round wins per player; reaching win_target_ ends the
+    // MATCH (VICTORY). A draw scores nobody and replays. match_continues_ routes
+    // Results -> the next round instead of the menu.
+    std::array<int, sim::kMaxPlayers> win_count_{};
+    int win_target_ = 2;
+    bool match_continues_ = false;
+
+    // Per-slot input type chosen in the PLAYER INPUT screen (sub_410F81):
+    // 0 = OFF, 1 = COMPUTER, 2 = KEYBOARD (human) — the original's player byte
+    // +16 (docs/re/setup-screens.md). Default: P1 keyboard + P2 computer.
+    std::array<int, sim::kMaxPlayers> setup_type_{2, 1};
+    // Per-slot input SUB-index (the original's +17): for a KEYBOARD slot, which
+    // key-set (0 or 1). Cosmetic/label for now — the port binds one keyboard.
+    std::array<int, sim::kMaxPlayers> setup_sub_{};
+    // Per-slot TEAM (the original's +84, toggled by 'T'): 0 or 1. Fed into the
+    // config's non-hashed MatchConfig::team[]; team MODE itself is deferred.
+    std::array<int, sim::kMaxPlayers> setup_team_{};
+    // The level chosen on the LEVEL screen (sub_406DDE dword_45E0B8/464998):
+    // -1 = RANDOM (keep pick_stage over the enabled rotation), else 0..10 = a
+    // specific built-in level whose stage index start_match uses directly.
+    int selected_level_ = -1;
+    std::uint32_t setup_lcg_ = 0x5E7C0DE5u;  // presentation RNG for the glue pick
 
     Options opts_;
 

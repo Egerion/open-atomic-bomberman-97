@@ -244,28 +244,51 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       (`ValueList::column_or`, VALUELST multi-column support added parallel to the
       sim's first-column `values`). Draw sting fixed to a one-shot 1700 group pick
       (was looping via music_id). libs/sim untouched — no golden impact.
+- [x] Pre-match SETUP screens + authentic player colour — DONE 2026-07-05
+      (docs/re/setup-screens.md, docs/re/player-colour.md). RE'd the real Play
+      path `sub_42A3F6` → `sub_410F81` (PLAYER INPUT TYPE, getvalue 705-723) →
+      `sub_406DDE` (LEVEL & ROUNDS, getvalue 730-738): `present_setup` (10-slot
+      roster, Right cycles OFF→CPU→KBD0→KBD1, Left/'0' off, 'T' team toggle,
+      random GLUE<n> backdrop via getvalue(16), music 1020) + `present_map_select`
+      (RANDOM + 11 named levels via getstring(150+n), wins 1..100, PgUp/PgDn ±5).
+      Strings come from the install's MESSAGES.TXT via the new `assets::messages`
+      parser; roster/team/level/wins feed `MatchConfig` (`active[]`, non-hashed
+      `team[]`) and `start_match`. Player colour replaced the truecolour-tint
+      guess with the original's `.RMP` palette-INDEX remap (`sub_414A65` apply/
+      backfill + `sub_415A1C` blit): new `assets::load_rmp` (259-byte format),
+      `recolor_image_rmp`/`AniTextures::recolored(rmp)`, tint kept only as the
+      missing-file fallback; setup slots inked via `slot_color` (= `sub_41672F`).
+      Tests: `test_messages.cpp`, `test_rmp.cpp` (registered). GOLDEN: no impact —
+      config/presentation only, `active` defaults all-true so hand-built configs
+      are unchanged; sim hash byte-identical.
 - [x] Interactive Options screen (Team Play / Conveyor Speed → options.ini) —
       `libs/game/src/options_screen.cpp`. The menu's Options row now opens a
-      real editable screen (random `GLUE<n>` backdrop, FONT6 text, Up/Down
-      select, Left/Right change, Enter/Esc leave; SFX 20 nav / 10 accept) in
-      place of the `.BM` help overlay; F1 on the screen still reaches
-      OPTIONS.BM. `bomber::assets::save_options` is a read-modify-write
-      writer (preserves unknown lines) added alongside `load_options`, and
-      writes ONLY when a setting actually changed. Random Start was left OUT —
-      it is not RE'd/documented anywhere in `docs/re/`, and the task rules
-      said not to guess it; a `team_play=` key IS synthesized (this install's
-      shipped `options.ini` already carries that exact key) but the flag is a
-      config-only `MatchConfig::team_play` with no sim/roster consumer yet, since
-      the player-roster/team-mode DISPLAY screen described in
-      `docs/re/setup-screens.md` (`present_setup`) was never actually built —
-      that remains a separate, larger effort. libs/sim untouched — no golden
-      impact (`MatchConfig` is never read by `state_hash()`).
+      real editable screen (random `GLUE<n>` backdrop via the same `pick_glue`
+      convention as `present_setup`, FONT6 text, Up/Down select, Left/Right
+      change, Enter/Esc leave; SFX 20 nav / 10 accept) in place of the `.BM`
+      help overlay; F1 on the screen still reaches OPTIONS.BM.
+      `bomber::assets::save_options` is a read-modify-write writer (preserves
+      unknown lines) added alongside `load_options`, and writes ONLY when a
+      setting actually changed. Random Start was left OUT — it is not
+      RE'd/documented anywhere in `docs/re/`, and the task rules said not to
+      guess it. Team Play is the confirmed screen-level team-mode GATE
+      (`dword_464964`, docs/re/setup-screens.md: "Team mode is toggled on the
+      OPTIONS game-type screen, OFF by default") layered on top of
+      `present_setup`'s existing per-slot `team[]`/'T' toggle: turning it OFF
+      zeroes every slot's `MatchConfig::team[]` at `start_match` (so a stray
+      'T' press has no effect until Team Play is back ON), turning it ON lets
+      each slot's own team stand. Persisted via a `team_play=` key (this
+      install's shipped `options.ini` already carries that exact key).
+      libs/sim untouched — no golden impact (`MatchConfig` is never read by
+      `state_hash()`; full team MODE — a hashed `Player::team` + sim win/
+      friendly-fire/AI-target logic — remains the documented follow-up in
+      docs/re/ai.md).
 - [ ] Interactive front-end remainder (DEFERRED, hooks in place): controller
-      key-remap UI (`sub_42B0CE`/`sub_42B47D`) and the player-roster/team-mode
-      setup screen (`present_setup`, docs/re/setup-screens.md) — the `.BM` help
-      overlay still renders for Network/Controllers. Also the RESULTS.PCX
-      cumulative tally tier (needs a multi-round match loop + scoreboard) and
-      the map editor/roulette screens (menu rows are inert documented stubs).
+      key-remap UI (`sub_42B0CE`/`sub_42B47D`) — the `.BM` help overlay still
+      renders for Network/Controllers. Also the RESULTS.PCX cumulative tally
+      tier (needs a multi-round match loop + scoreboard, now partly covered by
+      `present_scoreboard`/`win_count_`) and the map editor/roulette screens
+      (menu rows are inert documented stubs).
 - [ ] Match settings; campaign later.
 
 ## Done (highlights)

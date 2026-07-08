@@ -55,6 +55,11 @@ add_executable(bomber_bmtext_tests test_bmtext.cpp)
 target_link_libraries(bomber_bmtext_tests PRIVATE bomber::assets doctest::doctest bomber::warnings)
 add_test(NAME bmtext COMMAND bomber_bmtext_tests)
 
+# .RMP player-colour remap parser (bomber::assets, SDL-free), like bmtext.
+add_executable(bomber_rmp_tests test_rmp.cpp)
+target_link_libraries(bomber_rmp_tests PRIVATE bomber::assets doctest::doctest bomber::warnings)
+add_test(NAME rmp COMMAND bomber_rmp_tests)
+
 bomber_add_test(bomber_diarrhea_tests diarrhea_throw test_diarrhea_throw.cpp)
 
 # Per-match brick fill lives in bomber::match (header-only); link the match lib.
@@ -76,3 +81,7 @@ add_test(NAME bmfont COMMAND bomber_bmfont_tests)
 add_executable(bomber_valuelst_tests test_valuelst.cpp)
 target_link_libraries(bomber_valuelst_tests PRIVATE bomber::assets doctest::doctest bomber::warnings)
 add_test(NAME valuelst COMMAND bomber_valuelst_tests)
+
+add_executable(bomber_messages_tests test_messages.cpp)
+target_link_libraries(bomber_messages_tests PRIVATE bomber::assets doctest::doctest bomber::warnings)
+add_test(NAME messages COMMAND bomber_messages_tests)

@@ -1,6 +1,7 @@
 #include "bomber/game/sprites.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <utility>
 
 namespace bomber::game {
@@ -49,6 +50,36 @@ assets::Image recolor_image(assets::Image img, const std::int32_t rgb[3]) {
     return img;
 }
 
+assets::Image recolor_image_rmp(assets::Image img, const std::array<std::uint8_t, 256>& rmp) {
+    // The authentic recolour (docs/re/player-colour.md). The original stores each
+    // player sprite as an 8-bit paletted image; the blit sub_415A1C rewrites each
+    // pixel's palette index through the colour's remap table dword_460564[colour]
+    // and then does the palette lookup. We reproduce that here directly on the
+    // frame's retained indices + palette: dst = rmp[src], colour = palette[dst].
+    //
+    // The table is total after the load-time backfill (0 entries -> identity, so
+    // shadow/casing/transparent indices map to themselves), which is why only the
+    // colour band actually changes and the rest of the sprite is untouched. The
+    // key-colour transparency is already baked into rgba's alpha by the ANI
+    // loader, so we preserve alpha and only rewrite the RGB.
+    if (!img.paletted()) return img;  // 16bpp CIMG (type 4): no indices to remap
+    const std::size_t px = static_cast<std::size_t>(img.width) * static_cast<std::size_t>(img.height);
+    // Defensive: the ANI loader sizes indices == px and palette == 1024 for every
+    // type-11 frame, but 1997 files are untrusted — bail rather than run past a
+    // short buffer (leaves the frame as its base colour).
+    if (img.indices.size() < px || img.palette.size() < 256 * 4 || img.rgba.size() < px * 4)
+        return img;
+    for (std::size_t i = 0; i < px; ++i) {
+        if (img.rgba[i * 4 + 3] == 0) continue;  // transparent: leave as-is
+        const std::uint8_t dst = rmp[img.indices[i]];
+        img.rgba[i * 4 + 0] = img.palette[dst * 4 + 0];
+        img.rgba[i * 4 + 1] = img.palette[dst * 4 + 1];
+        img.rgba[i * 4 + 2] = img.palette[dst * 4 + 2];
+        // rgba[i*4+3] (alpha) preserved.
+    }
+    return img;
+}
+
 void AniTextures::load(SDL_Renderer* ren, const std::filesystem::path& path) {
     reset();
     data_ = assets::ani::load(path);
@@ -66,6 +97,20 @@ AniTextures AniTextures::recolored(SDL_Renderer* ren, const std::int32_t rgb[3])
         auto& f = out.data_.frames[i];
         if (f.image.empty()) continue;
         f.image = recolor_image(std::move(f.image), rgb);
+        out.textures_[i] = make_texture(ren, f.image);
+    }
+    return out;
+}
+
+AniTextures AniTextures::recolored(SDL_Renderer* ren,
+                                   const std::array<std::uint8_t, 256>& rmp) const {
+    AniTextures out;
+    out.data_ = data_;
+    out.textures_.assign(out.data_.frames.size(), nullptr);
+    for (std::size_t i = 0; i < out.data_.frames.size(); ++i) {
+        auto& f = out.data_.frames[i];
+        if (f.image.empty()) continue;
+        f.image = recolor_image_rmp(std::move(f.image), rmp);
         out.textures_[i] = make_texture(ren, f.image);
     }
     return out;

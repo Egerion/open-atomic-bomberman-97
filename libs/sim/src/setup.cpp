@@ -34,7 +34,8 @@ State build_state(const MatchConfig& config) {
     PowerupSystem powerups{s};
 
     for (int i = 0; i < config.player_count && i < kMaxPlayers; ++i) {
-        if (i >= static_cast<int>(config.spawns.size())) break;
+        if (i >= static_cast<int>(config.spawns.size())) continue;  // no spawn -> skip
+        if (!config.active[i]) continue;                            // OFF slot (setup screen)
         Player& p = s.players[i];
         p.present = true;
         p.alive = true;

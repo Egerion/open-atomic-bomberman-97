@@ -71,6 +71,10 @@ bool GameApp::init() {
         std::fprintf(stderr, "audio unavailable, continuing silent\n");
 
     base_tuning_ = match::build_match_config(scheme_, 2, 0, &values_).tuning;
+    // Seed setup-screen slot colours from VALUELST for any colour without a .RMP
+    // tail (a loaded .RMP keeps its own authoritative tail), then build the
+    // per-player recolored sprite sets (authentic .RMP remap where available).
+    assets_.set_color_fallbacks(base_tuning_.color_rgb, 10);
     assets_.build_player_sets(base_tuning_.color_rgb);
     seqs_.resolve(assets_);  // re-resolve: player sprite sets exist now
 
@@ -143,6 +147,35 @@ ScreenDef title_screen() {
 // in attract" loop (sub_42A3F6); we model it as a normal Screen with a bounded
 // dwell so an unattended machine returns to the menu on its own.
 constexpr std::uint32_t kResultsDwellMs = 6000;  // sub_42A3F6 attract auto-advance
+// Format a MESSAGES.TXT label that carries a single %u/%d/%i with `v`, safely:
+// the format string is the user's own file, so ignore any %s/%% (leave literal)
+// rather than risk a wrong-type sprintf. A minimal, crash-proof getstring format.
+std::string fmt_u(const std::string& f, int v) {
+    auto p = f.find('%');
+    if (p == std::string::npos) return f;
+    std::size_t q = p + 1;
+    while (q < f.size() && f[q] != 'u' && f[q] != 'd' && f[q] != 'i' && f[q] != 's' &&
+           f[q] != '%')
+        ++q;
+    if (q < f.size() && (f[q] == 'u' || f[q] == 'd' || f[q] == 'i'))
+        return f.substr(0, p) + std::to_string(v) + f.substr(q + 1);
+    return f;
+}
+
+// Same crash-proof single-specifier substitution for a %s label (the level-line
+// getstring(210)): splice `v` in for the first %s, leave any other specifier
+// literal. The format string is the user's own MESSAGES.TXT entry.
+std::string fmt_s(const std::string& f, const std::string& v) {
+    auto p = f.find('%');
+    if (p == std::string::npos) return f;
+    std::size_t q = p + 1;
+    while (q < f.size() && f[q] != 'u' && f[q] != 'd' && f[q] != 'i' && f[q] != 's' &&
+           f[q] != '%')
+        ++q;
+    if (q < f.size() && f[q] == 's') return f.substr(0, p) + v + f.substr(q + 1);
+    return f;
+}
+
 ScreenDef draw_screen() {
     // DRAW.PCX. The draw sting is a ONE-SHOT group play (sub_427BFB(1700) picks a
     // random member of the contiguous "tie game/draw game" SOUNDLST run at 1700),
@@ -217,19 +250,41 @@ constexpr int kMenuCursorStepFallback = 38;    // getvalue(702)
 }  // namespace
 
 void GameApp::start_match(std::uint32_t seed) {
-    sim::MatchConfig cfg = match::build_match_config(scheme_, 2, seed, &values_);
-    // DEV hook (temporary): make player 1 a computer opponent so the AI
-    // (ADR-0005) is visible in-game before the match-setup UI exists. Player 0
-    // stays keyboard-driven. Remove when the setup screen can pick AI slots.
-    cfg.ai[1] = true;
+    sim::MatchConfig cfg = match::build_match_config(scheme_, sim::kMaxPlayers, seed, &values_);
+    // Roster from the PLAYER INPUT screen (present_setup): OFF slots are inactive,
+    // COMPUTER slots are AI-driven, KEYBOARD slots are local human(s). The per-slot
+    // team goes into MatchConfig::team[] (config-only, non-hashed — team MODE is a
+    // deferred sim effort, so this does not perturb the golden).
+    for (int i = 0; i < sim::kMaxPlayers; ++i) {
+        cfg.active[i] = setup_type_[i] != 0;
+        cfg.ai[i] = setup_type_[i] == 1;
+        cfg.team[i] = static_cast<std::uint8_t>(setup_team_[i]);
+    }
     // Override the Conveyor Speed index from options.ini if present (this
     // install = 2 high); otherwise Tuning keeps the confirmed default (1
     // medium). conveyor_speed() clamps to [0, count-1], so a raw index is safe.
     if (conveyor_speed_index_) cfg.tuning.conveyor_speed_index = *conveyor_speed_index_;
-    // Team Play (config-only — see MatchConfig::team_play's doc comment; no
-    // sim/hash consumer yet, so this has no golden impact).
-    cfg.team_play = team_play_;
-    int stage = match::pick_stage(base_tuning_, seed);
+    // Team Play (options.ini "team_play=" / the interactive Options screen):
+    // the game-type-level team-mode GATE (docs/re/setup-screens.md
+    // `dword_464964`), separate from each slot's own +84 team byte. OFF means
+    // team mode is off regardless of what a slot's 'T' toggle left behind, so
+    // zero every slot's team here rather than adding a second config field —
+    // MatchConfig::team[] stays the single source of truth. Config-only, no
+    // sim/hash consumer yet (present_setup's marker draw is the only reader,
+    // gated below), so this has no golden impact.
+    if (!team_play_) cfg.team.fill(0);
+    // Level from the LEVEL screen (present_map_select -> dword_464998): the match
+    // init (sub_410B6E) resolves it to a stage index dword_46499C. RANDOM (-1) ->
+    // keep pick_stage over the enabled rotation (VALUELST 1150-1160, the same
+    // 200-try random loop the original runs); a specific level (0..10) -> use that
+    // index directly. Clamp to the valid stage range defensively.
+    int stage;
+    if (selected_level_ < 0) {
+        stage = match::pick_stage(base_tuning_, seed);
+    } else {
+        stage = selected_level_;
+        if (stage > 10) stage = 10;
+    }
     // Overlay this board's stage actors (conveyors/trampolines/etc) from
     // EXTRA<stage>.RES before constructing the sim — the actor layout is a
     // hashed setup input like the cell grid (docs/re/stage-actors.md). A board
@@ -352,9 +407,13 @@ AppInput GameApp::present_options_screen() {
     // Conveyor Speed, over a random GLUE<n> backdrop like present_setup's
     // documented convention (docs/re/setup-screens.md). F1 layers the
     // original's OPTIONS.BM help text on top, same content the row used to
-    // open exclusively.
-    OptionsScreen opt(assets_, front_font_, values_);
-    opt.enter(team_play_, conveyor_speed_index_.value_or(base_tuning_.conveyor_speed_index));
+    // open exclusively. Music left untouched here — unlike present_setup this
+    // screen is reached straight from the main menu (not the Play handler
+    // sub_42A3F6), so there is no confirmed "inherits 1020" citation; it plays
+    // on under whatever the menu already started (1010, kMenuMusicId).
+    OptionsScreen opt(assets_, front_font_);
+    opt.enter(team_play_, conveyor_speed_index_.value_or(base_tuning_.conveyor_speed_index),
+              pick_glue());
     AppInput result = AppInput::Advance;
     while (!opt.done()) {
         SDL_Event ev;
@@ -599,6 +658,268 @@ AppInput GameApp::present_menu() {
     }
 }
 
+void GameApp::reset_match_scores() {
+    win_count_.fill(0);
+    match_continues_ = false;
+    // getvalue(310) "how many wins to win a match?" (first-column value, else 2).
+    auto it = values_.values.find(310);
+    win_target_ = it != values_.values.end() ? static_cast<int>(it->second) : 2;
+    if (win_target_ < 1) win_target_ = 1;
+}
+
+// The between-round RESULTS scoreboard (sub_42A3F6): RESULTS.PCX backdrop with
+// each present player's running win count drawn at the getvalue(785) list
+// positions (origin 150,210, +20 px per row). Any key (or the results dwell)
+// dismisses it; the caller then starts the next round.
+AppInput GameApp::present_scoreboard() {
+    const float x0 = static_cast<float>(values_.column_or(785, 0, 150));
+    const float y0 = static_cast<float>(values_.column_or(785, 1, 210));
+    const float ystep = static_cast<float>(values_.column_or(785, 2, 20));
+    const std::uint64_t start = SDL_GetTicks();
+    AppInput result = AppInput::Advance;
+    bool waiting = true;
+    while (waiting) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
+            if (ev.type == SDL_EVENT_KEY_DOWN) {
+                audio_.play(20);  // any-key blip then accept sting (sub_42A088)
+                audio_.play(10);
+                result = ev.key.key == SDLK_ESCAPE ? AppInput::Back : AppInput::Advance;
+                waiting = false;
+            }
+        }
+        if (SDL_GetTicks() - start >= kResultsDwellMs) waiting = false;  // attract auto-advance
+        audio_.update_music();
+        SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
+        SDL_RenderClear(sdl_renderer_.get());
+        const Sprite& bg = assets_.frontend_pcx("RESULTS");
+        if (bg.tex) {
+            SDL_FRect dst{0.0f, 0.0f, static_cast<float>(bg.w), static_cast<float>(bg.h)};
+            SDL_RenderTexture(sdl_renderer_.get(), bg.tex, nullptr, &dst);
+        }
+        const sim::State& s = sim_.state();
+        int row = 0;
+        for (int i = 0; i < sim::kMaxPlayers; ++i) {
+            if (!s.players[i].present) continue;
+            std::string line = "P" + std::to_string(i + 1) + ": " + std::to_string(win_count_[i]);
+            front_font_.draw(sdl_renderer_.get(), line, x0, y0 + ystep * static_cast<float>(row),
+                             255, 255, 255);
+            ++row;
+        }
+        SDL_RenderPresent(sdl_renderer_.get());
+        SDL_Delay(2);
+    }
+    return result;
+}
+
+// A random GLUE<n> backdrop (sub_4148E5 @0x4148E5): getvalue(16) = glue count,
+// rand() % count, load GLUE<n>.PCX. Both pre-match screens share it. The pick is
+// a presentation LCG (setup_lcg_), never State::rng.
+std::string GameApp::pick_glue() {
+    setup_lcg_ = setup_lcg_ * 1664525u + 1013904223u;
+    int glue_n = static_cast<int>(values_.column_or(16, 0, 7));  // getvalue(16)
+    if (glue_n < 1) glue_n = 1;
+    return "GLUE" + std::to_string(static_cast<int>((setup_lcg_ >> 16) %
+                                                    static_cast<unsigned>(glue_n)));
+}
+
+// Cycle a slot's input type FORWARD one step (sub_421E80 @0x421E80): the original
+// walks 0 off -> 1 computer -> 2 keyboard sub 0 -> 2 keyboard sub 1 -> (3 joystick
+// per present stick) -> back to 0. We support OFF / COMPUTER / KEYBOARD sub 0 /
+// KEYBOARD sub 1 and wrap to OFF (joystick detect is a deferred controller pass);
+// type 4 (OTHER) never enters the cycle in the original either.
+void GameApp::cycle_input_type(int slot) {
+    int& t = setup_type_[slot];
+    int& sub = setup_sub_[slot];
+    if (t == 0) { t = 1; sub = 0; }         // off -> computer
+    else if (t == 1) { t = 2; sub = 0; }    // computer -> keyboard set 0
+    else if (t == 2 && sub == 0) { sub = 1; }        // keyboard 0 -> keyboard 1
+    else { t = 0; sub = 0; }                // keyboard 1 (or beyond) -> off (joystick TODO)
+}
+
+// The PLAYER INPUT TYPE SELECTION screen (sub_410F81 @0x410F81, VALUELST
+// "PLAYER INPUT TYPE SELECTION" getvalue 705-713). Screen 1 of the pre-match
+// flow reached from Play. A random GLUE<n> backdrop under the 1020 track
+// (inherited from the Play handler sub_42A3F6 — this screen starts no music),
+// header getstring(50), and the 10-slot list: each slot's input type via
+// getstring(220..224), PREFIXED by getstring(51) (Player %u) and TINTED with the
+// slot's intrinsic colour (VALUELST 200-247 = Tuning::color_rgb — there is no
+// colour picker; colour is fixed per slot index, applied in-game via i.rmp), plus
+// a team marker when the slot's team flag is set. Keys mirror the confirmed table
+// (docs/re/setup-screens.md): Up/Down pick a slot, Right cycles its type
+// (OFF->CPU->KBD0->KBD1->OFF), Left/'0' set it OFF, 'T' toggles its team, Enter
+// goes on to the LEVEL screen, Escape cancels to the menu. Presentation only.
+AppInput GameApp::present_setup() {
+    audio_.start_music(kWinMusicId);  // 1020, the Play-handler track (sub_42A3F6)
+    const std::string glue = pick_glue();
+    // Layout (VALUELST X,Y,YS,colour -> consecutive getvalue ids): header 705,
+    // list 710. column_or reads column c of the multi-value row (== getvalue).
+    const float hx = static_cast<float>(values_.column_or(705, 0, 40));
+    const float hy = static_cast<float>(values_.column_or(705, 1, 140));
+    const float lx = static_cast<float>(values_.column_or(710, 0, 70));
+    const float ly = static_cast<float>(values_.column_or(710, 1, 170));
+    const float lys = static_cast<float>(values_.column_or(710, 2, 24));
+
+    int cursor = 0;
+    bool waiting = true;
+    while (waiting) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
+            if (ev.type != SDL_EVENT_KEY_DOWN) continue;
+            const SDL_Keycode k = ev.key.key;
+            if (k == SDLK_ESCAPE) { audio_.play(20); audio_.play(10); return AppInput::Back; }
+            // Enter (< 0x20 branch in sub_410F81) leaves this screen and proceeds
+            // to match init / the LEVEL screen.
+            if (k == SDLK_RETURN || k == SDLK_KP_ENTER) { audio_.play(10); waiting = false; break; }
+            audio_.play(20);  // any real key blips first (sub_427961(20))
+            if (k == SDLK_UP) cursor = (cursor + 9) % 10;               // 328
+            else if (k == SDLK_DOWN) cursor = (cursor + 1) % 10;        // 336
+            else if (k == SDLK_RIGHT) cycle_input_type(cursor);         // 333 sub_421E80
+            else if (k == SDLK_LEFT || k == SDLK_0) {                   // 331 / '0'
+                setup_type_[cursor] = 0;                                // sub_421E33(i,0,0)
+                setup_sub_[cursor] = 0;
+            } else if (k == SDLK_T) {                                   // 'T' team toggle (+84)
+                setup_team_[cursor] = setup_team_[cursor] ? 0 : 1;
+            }
+        }
+        audio_.update_music();
+        SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
+        SDL_RenderClear(sdl_renderer_.get());
+        const Sprite& bg = assets_.frontend_pcx(glue);
+        if (bg.tex) {
+            SDL_FRect dst{0.0f, 0.0f, static_cast<float>(bg.w), static_cast<float>(bg.h)};
+            SDL_RenderTexture(sdl_renderer_.get(), bg.tex, nullptr, &dst);
+        }
+        front_font_.draw(sdl_renderer_.get(), assets_.getstring(50, "PLAYER SETUP"), hx, hy, 255,
+                         255, 255);
+        for (int i = 0; i < 10; ++i) {
+            const std::string label = fmt_u(assets_.getstring(51, "Player %u - "), i + 1);
+            const int t = setup_type_[i];
+            std::string type;
+            switch (t) {
+                case 1: type = assets_.getstring(221, "COMPUTER"); break;
+                case 2: type = fmt_u(assets_.getstring(222, "KEYBOARD %u"), setup_sub_[i]); break;
+                case 3: type = fmt_u(assets_.getstring(223, "JOYSTICK %u"), setup_sub_[i]); break;
+                case 4: type = assets_.getstring(224, "OTHER"); break;
+                default: type = assets_.getstring(220, "OFF"); break;
+            }
+            std::string line = label + type;
+            if (setup_team_[i]) line += "  " + fmt_u(assets_.getstring(230, "[T%u]"), setup_team_[i]);
+            // Tint the label with the slot's authentic on-screen colour: the
+            // original inks each slot line via sub_41672F(i), which quantises the
+            // slot's stored RGB (the .RMP tail) to 5 bits/channel and looks it up
+            // in the palette. AssetStore::slot_color reproduces that (truecolour
+            // expand5 of the quantised channels) from the loaded .RMP tail, so a
+            // slot reads as its real in-game colour. The selected row is nudged
+            // brighter so the cursor is legible over any colour (ours; the
+            // original moves a separate cursor glyph, sub_413BD6).
+            std::uint8_t sc[3];
+            assets_.slot_color(i, sc);
+            const bool sel = i == cursor;
+            auto boost = [sel](std::uint8_t v) {
+                int x = v + (sel ? 70 : 0);
+                return static_cast<Uint8>(x > 255 ? 255 : x);
+            };
+            front_font_.draw(sdl_renderer_.get(), line, lx, ly + lys * static_cast<float>(i),
+                             boost(sc[0]), boost(sc[1]), boost(sc[2]));
+        }
+        front_font_.draw(sdl_renderer_.get(),
+                         "UP/DN PICK  RIGHT CYCLE  0 OFF  T TEAM  ENTER NEXT", lx,
+                         ly + lys * 11.0f, 150, 150, 150);
+        SDL_RenderPresent(sdl_renderer_.get());
+        SDL_Delay(2);
+    }
+    return AppInput::Advance;
+}
+
+// The 11 built-in level names (VALUELST 450-460 / getvalue(150+n)); RANDOM is
+// getstring(149). These GENERIC fallbacks are ours — the real names live in the
+// user's MESSAGES.TXT and load at runtime via getstring, never committed.
+const char* GameApp::level_fallback(int idx) {
+    static const char* kNames[] = {
+        "NEW TRADITIONALIST",  "CLASSIC GREEN ACRES", "HOCKEY RINK",   "ANCIENT EGYPT",
+        "COAL MINE",           "BEACH",               "ALIENS",        "HAUNTED HOUSE",
+        "UNDER THE OCEAN",     "DEEP FOREST GREEN",   "INNER CITY TRASH"};
+    return (idx >= 0 && idx < static_cast<int>(std::size(kNames))) ? kNames[idx] : "LEVEL";
+}
+
+// The LEVEL & ROUNDS screen (sub_406DDE @0x406DDE, the VALUELST "OPTIONS SCREEN"
+// getvalue 730/735). Screen 2 of the pre-match flow. A 2-row list on a random
+// GLUE<n> backdrop (1020 track inherited): row 0 = LEVEL (-1 RANDOM else 0..10 of
+// getvalue(35)=11 built-ins, named getstring(150+n) / getstring(149)); row 1 =
+// NUMBER OF WINS (1..100). Left/Right cycle the highlighted row's value (level
+// wraps [-1 .. 10]; wins +-1 or +-5 on PgUp/PgDn), Up/Down switch rows. Enter
+// commits the level (selected_level_ -> dword_464998) and win target (win_target_
+// -> dword_464A7C) and starts; Escape backs to the player screen. Presentation
+// only — the committed level drives start_match's stage choice.
+AppInput GameApp::present_map_select() {
+    const std::string glue = pick_glue();
+    const int level_count = static_cast<int>(values_.column_or(35, 0, 11));  // getvalue(35)
+    const float lx = static_cast<float>(values_.column_or(735, 0, 55));
+    const float ly = static_cast<float>(values_.column_or(735, 1, 170));
+    const float lys = static_cast<float>(values_.column_or(735, 2, 24));
+
+    int row = 0;  // 0 = level, 1 = wins (v34 = 2 rows in sub_406DDE)
+    bool waiting = true;
+    while (waiting) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
+            if (ev.type != SDL_EVENT_KEY_DOWN) continue;
+            const SDL_Keycode k = ev.key.key;
+            if (k == SDLK_ESCAPE) { audio_.play(20); return AppInput::Back; }  // back to setup
+            if (k == SDLK_RETURN || k == SDLK_KP_ENTER) {  // commit + start (LABEL_101)
+                audio_.play(10);
+                waiting = false;
+                break;
+            }
+            audio_.play(20);
+            if (k == SDLK_UP) row = (row + 1) % 2;
+            else if (k == SDLK_DOWN) row = (row + 1) % 2;
+            else if (row == 0 && k == SDLK_LEFT) {         // --level, wrap below -1
+                if (--selected_level_ < -1) selected_level_ = level_count - 1;
+            } else if (row == 0 && k == SDLK_RIGHT) {      // ++level, wrap above count-1 to -1
+                if (++selected_level_ >= level_count) selected_level_ = -1;
+            } else if (row == 1 && (k == SDLK_LEFT)) {     // wins -1
+                if (--win_target_ < 1) win_target_ = 1;
+            } else if (row == 1 && (k == SDLK_RIGHT)) {    // wins +1
+                if (++win_target_ > 100) win_target_ = 100;
+            } else if (row == 1 && k == SDLK_PAGEUP) {     // wins +5 (sub_406DDE 0x174)
+                if ((win_target_ += 5) > 100) win_target_ = 100;
+            } else if (row == 1 && k == SDLK_PAGEDOWN) {   // wins -5 (371)
+                if ((win_target_ -= 5) < 1) win_target_ = 1;
+            }
+        }
+        audio_.update_music();
+        SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
+        SDL_RenderClear(sdl_renderer_.get());
+        const Sprite& bg = assets_.frontend_pcx(glue);
+        if (bg.tex) {
+            SDL_FRect dst{0.0f, 0.0f, static_cast<float>(bg.w), static_cast<float>(bg.h)};
+            SDL_RenderTexture(sdl_renderer_.get(), bg.tex, nullptr, &dst);
+        }
+        // Row 0: LEVEL. getstring(210) is the level-line format (%s = name);
+        // name = getstring(150+n) for a specific level, getstring(149) for RANDOM.
+        const std::string level_name = selected_level_ < 0
+            ? assets_.getstring(149, "RANDOM")
+            : assets_.getstring(150 + selected_level_, level_fallback(selected_level_));
+        const std::string level_line = fmt_s(assets_.getstring(210, "LEVEL: %s"), level_name);
+        front_font_.draw(sdl_renderer_.get(), level_line, lx, ly, row == 0 ? 255 : 180,
+                         row == 0 ? 220 : 180, row == 0 ? 60 : 180);
+        // Row 1: NUMBER OF WINS. getstring(211) is the rounds-line format (%u).
+        const std::string wins_line = fmt_u(assets_.getstring(211, "WINS TO WIN: %u"), win_target_);
+        front_font_.draw(sdl_renderer_.get(), wins_line, lx, ly + lys, row == 1 ? 255 : 180,
+                         row == 1 ? 220 : 180, row == 1 ? 60 : 180);
+        front_font_.draw(sdl_renderer_.get(), "UP/DN ROW  LEFT/RIGHT CHANGE  ENTER START", lx,
+                         ly + lys * 3.0f, 150, 150, 150);
+        SDL_RenderPresent(sdl_renderer_.get());
+        SDL_Delay(2);
+    }
+    return AppInput::Advance;
+}
+
 AppInput GameApp::run_match() {
     start_match(next_seed_++);
     const std::uint64_t tick_ms = 1000 / sim::kTicksPerSecond;
@@ -677,9 +998,33 @@ int GameApp::run_app() {
                 // on to the menu (keeps next() authoritative over the boot hops).
                 ev = AppInput::Advance;
                 break;
-            case AppState::Menu:
+            case AppState::Menu: {
                 ev = present_menu();  // navigable; resolves the selected row
+                if (ev == AppInput::StartMatch) {
+                    // The pre-match flow reached from Play (sub_42A3F6): the PLAYER
+                    // INPUT screen (sub_410F81) then the LEVEL & ROUNDS screen
+                    // (sub_406DDE), then the match. Escape backs up ONE step at
+                    // each screen: cancel on the level screen -> back to the player
+                    // screen; cancel on the player screen -> back to the menu.
+                    // reset_match_scores() clears the tally; the level screen owns
+                    // the win target so we reset FIRST, then let the level screen
+                    // adjust win_target_.
+                    reset_match_scores();
+                    bool started = false;
+                    while (!started) {
+                        AppInput setup = present_setup();
+                        if (setup == AppInput::Quit) return 0;
+                        if (setup == AppInput::Back) { ev = AppInput::Advance; break; }
+                        // Player screen accepted -> the LEVEL screen.
+                        AppInput lvl = present_map_select();
+                        if (lvl == AppInput::Quit) return 0;
+                        if (lvl == AppInput::Back) continue;  // back to the player screen
+                        started = true;  // both screens confirmed -> start the match
+                    }
+                    if (!started) ev = AppInput::Advance;  // cancelled all the way out
+                }
                 break;
+            }
             case AppState::Match:
                 ev = run_match();
                 break;
@@ -699,13 +1044,28 @@ int GameApp::run_app() {
                 // previously our DRAW/VICTORY screens played under whatever music
                 // was left running, a silent-vs-original gap now closed.
                 int w = round_winner();
+                bool match_over = false;
                 if (w >= 0) {
+                    ++win_count_[w];                          // tally the round win
+                    match_over = win_count_[w] >= win_target_;  // best-of getvalue(310)
+                }
+                if (w >= 0 && match_over) {
+                    // MATCH win: the winner reached the target -> VICTORY, then
+                    // back to the menu (next(Results, Advance) = Menu).
                     audio_.start_music(kWinMusicId);  // 1020 win track under VICTORY
                     ev = present_screen(victory_screen(w));
+                } else if (w >= 0) {
+                    // Round win, match not over: show the running scores, then
+                    // loop into the next round (handled after the switch).
+                    audio_.start_music(kWinMusicId);
+                    ev = present_scoreboard();
+                    match_continues_ = ev != AppInput::Quit && ev != AppInput::Back;
                 } else {
+                    // DRAW (no survivor / time-up): nobody scores; replay a round.
                     audio_.start_music(kDrawMusicId);  // 1130 draw track under DRAW
                     audio_.play_random_in_range(kDrawStingLo, kDrawStingHi);
                     ev = present_screen(draw_screen());
+                    match_continues_ = ev != AppInput::Quit && ev != AppInput::Back;
                 }
                 break;
             }
@@ -731,7 +1091,14 @@ int GameApp::run_app() {
             case AppState::Quit:
                 break;
         }
-        state = next(state, ev);
+        // Multi-round: a round that did not decide the match loops back into the
+        // next round rather than returning to the menu (sub_42A3F6's round loop).
+        if (state == AppState::Results && match_continues_) {
+            match_continues_ = false;
+            state = AppState::Match;
+        } else {
+            state = next(state, ev);
+        }
     }
     return 0;
 }

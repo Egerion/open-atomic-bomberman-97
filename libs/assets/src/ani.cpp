@@ -124,6 +124,12 @@ Frame parse_cimg(BinaryReader& r, const Item& cimg, const std::filesystem::path&
             f.image.rgba[i * 4 + 2] = palette[idx * 4 + 2];
             f.image.rgba[i * 4 + 3] = (idx == (f.key_color & 0xFF)) ? 0 : 255;
         }
+        // Retain the source indices + palette so player recolour can apply a
+        // .RMP remap at index level, exactly like the original blit
+        // (sub_415A1C, docs/re/player-colour.md). rgba's alpha already encodes
+        // the key-colour transparency; the recolour preserves it.
+        f.image.indices.assign(px.begin(), px.end());
+        f.image.palette.assign(palette.begin(), palette.end());
     } else {
         fail(path, "CIMG unknown type " + std::to_string(f.cimg_type));
     }

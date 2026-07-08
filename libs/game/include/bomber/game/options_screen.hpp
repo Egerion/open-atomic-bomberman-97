@@ -3,8 +3,8 @@
 #include <SDL3/SDL.h>
 
 #include <cstdint>
+#include <string>
 
-#include "bomber/assets/reslist.hpp"
 #include "bomber/game/asset_store.hpp"
 #include "bomber/game/audio_engine.hpp"
 #include "bomber/game/bmscreen.hpp"
@@ -20,10 +20,12 @@
 // sub_XXXX citation, this screen is a clean-room minimal list consistent with
 // the documented glue-screen conventions that ARE confirmed elsewhere
 // (docs/re/setup-screens.md "Backdrop", "Music"): a random GLUE<n> backdrop
-// via getvalue(16), FONT6 text, Up/Down to pick a row, Left/Right to change
-// its value, Enter accepts (SFX 10) and Esc cancels (SFX 10) — mirroring
-// present_setup's SFX 20 nav / 10 accept convention. Every literal screen
-// coordinate below is OUR OWN layout, flagged inline.
+// (the SAME `GameApp::pick_glue()` helper `present_setup`/`present_map_select`
+// share — one presentation LCG, never State::rng), FONT6 text, Up/Down to pick
+// a row, Left/Right to change its value, Enter accepts (SFX 10) and Esc
+// cancels (SFX 10) — mirroring present_setup's SFX 20 nav / 10 accept
+// convention. Every literal screen coordinate below is OUR OWN layout,
+// flagged inline.
 namespace bomber::game {
 
 // Row model: what the screen can edit. Kept tiny and explicit rather than a
@@ -37,14 +39,14 @@ enum class OptionRow {
 
 class OptionsScreen {
 public:
-    OptionsScreen(const AssetStore& assets, const FontTextures& font, const assets::res::ValueList& values)
-        : assets_(&assets), font_(&font), values_(&values) {}
+    OptionsScreen(const AssetStore& assets, const FontTextures& font)
+        : assets_(&assets), font_(&font) {}
 
     // (Re)enter the screen with the current settings (loaded from options.ini /
-    // Tuning defaults by the caller). Picks a fresh random GLUE<n> backdrop
-    // (docs/re/setup-screens.md "Backdrop", getvalue(16) = how many; a
-    // presentation LCG, never State::rng — mirrors the original's rand()).
-    void enter(bool team_play, int conveyor_speed_index);
+    // Tuning defaults by the caller) and a backdrop name already picked by the
+    // caller's pick_glue() (docs/re/setup-screens.md "Backdrop" — the same
+    // random-GLUE<n> convention present_setup/present_map_select use).
+    void enter(bool team_play, int conveyor_speed_index, std::string backdrop);
 
     // Feed one SDL keycode. Returns true once Enter/Escape ends the screen;
     // check changed()/confirmed() to see what the caller should persist.
@@ -64,18 +66,14 @@ public:
 private:
     const AssetStore* assets_ = nullptr;
     const FontTextures* font_ = nullptr;
-    const assets::res::ValueList* values_ = nullptr;
 
-    std::string backdrop_;   // "GLUE<n>", picked fresh in enter()
-    std::uint32_t lcg_ = 0xC0FFEE42u;  // presentation-only RNG (renderer.cpp's panic_lcg_ pattern)
+    std::string backdrop_;   // "GLUE<n>", supplied by the caller's pick_glue()
 
     int row_ = 0;  // OptionRow, as an int for the wrap arithmetic
     bool team_play_ = false;
     int conveyor_speed_index_ = 1;  // 0 low / 1 medium / 2 high (Tuning default)
     bool changed_ = false;
     bool done_ = false;
-
-    std::uint32_t next_rand();
 };
 
 }  // namespace bomber::game
