@@ -78,6 +78,14 @@ std::uint64_t state_hash(const State& s) {
         // Trigger-bomb allowance (player byte +85): its own word so the counter
         // is not truncated. Part of the hashed contract now that #9 caps it.
         mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.trigger_placed)));
+        // Team id (player byte +84, docs/re/setup-screens.md; docs/re/ai.md TEAM
+        // follow-up): a gameplay input to AI targeting and round-end, so hashed.
+        // Own word (not packed into the flags word above, which is full) — a
+        // ONE-TIME hash-layout growth. 0 on every existing scenario (default),
+        // so this is mix(0) for every golden/test player -> byte-identical
+        // gameplay, only the digest layout shifted (CLAUDE.md determinism
+        // contract rule 5; tests/test_golden.cpp recaptured in the same commit).
+        mix(static_cast<std::uint64_t>(p.team));
         // Trampoline bounce countdown (Player::bounce, #7), warp countdown
         // (Player::warp) and the pending warp destination tile (warp_to_x/y,
         // captured at step-on): all gate/drive an in-flight warp or bounce, so

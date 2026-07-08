@@ -38,12 +38,13 @@ struct MatchConfig {
     // that only set player_count keep their contiguous 0..count-1 roster.
     std::array<bool, kMaxPlayers> active{};
     // Per-player team, from the PLAYER INPUT screen's +84 byte (sub_4223E7,
-    // toggled by 'T'; docs/re/setup-screens.md). CONFIG ONLY and deliberately
-    // NOT copied into any hashed Player field: team MODE (win/friendly-fire/AI
-    // logic on a hashed Player::team) is a separate deferred effort (docs/re/
-    // ai.md), so this stays out of state_hash() — golden byte-identical. Default
-    // 0 (single team) everywhere; captured now so the roster is complete and the
-    // sim side can be wired later without another setup-screen pass.
+    // toggled by 'T'; docs/re/setup-screens.md). Copied verbatim into the
+    // hashed Player::team at setup (setup.cpp) — team mode now gates AI
+    // targeting (docs/re/ai.md §3.4/§5.3) and round-end (docs/re/ai.md TEAM
+    // follow-up). Default 0 everywhere; every existing hand-built config
+    // (tests/golden) leaves every slot at 0, so a fully-zeroed roster behaves
+    // exactly as before this field was wired (our semantics: team mode only
+    // engages when two ACTIVE players share a value).
     std::array<std::uint8_t, kMaxPlayers> team{};
     std::uint32_t seed = 0x12345678;
     Tuning tuning;

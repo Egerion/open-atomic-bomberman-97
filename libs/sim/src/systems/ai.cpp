@@ -796,8 +796,9 @@ bool AISystem::behave_punch(int i, PlayerInput& out) {
 //   3. scan the 5-tile plus/cross (kEnemyScanX/Y, the OOB tables) for a live,
 //      unstunned ENEMY player (sub_421CB5), self excluded (the original zeroes
 //      its own actor +0 across the probe; we skip the self slot);
-//   4. per hit: in team mode skip a teammate (dword_464964 gate — no teams here,
-//      so it reduces to slot != self, already guaranteed by the self-skip); the
+//   4. per hit: in team mode skip a teammate (dword_464964 gate; same_team()
+//      below — see docs/re/ai.md §3.4/§5.3, "our semantics" note at same_team's
+//      definition for what counts as a team on an all-zero roster); the
 //      standing tile must be clear to drop on (sub_423188); then drop on a 1-in-5
 //      whim (rand()%5==0).
 // It does NOT flee here — behaviour 2 (higher priority) paths the AI out of the
@@ -834,10 +835,13 @@ bool AISystem::behave_bomb_enemy(int i, PlayerInput& out) {
         }
         if (who < 0) continue;
 
-        // (4) Team gate (dword_464964 && me.team == cell.team -> skip). No teams
-        // in our sim: reduces to slot != self, already enforced by the self-skip
-        // above (docs/re/ai.md §3.4/§5.3) — nothing to check. Then the standing
-        // tile must be clear to drop on (sub_423188), and the 1-in-5 whim.
+        // (4) Team gate (dword_464964 && me.team == cell.team -> skip; §3.4). A
+        // same-team hit is not an enemy: the ORIGINAL's `return 0` here ends the
+        // whole behaviour (it does NOT continue scanning the rest of the cross),
+        // so we mirror that exactly. On an all-zero roster same_team() is always
+        // false, so this never fires there (byte-identical to before). Then the
+        // standing tile must be clear to drop on (sub_423188), and the 1-in-5 whim.
+        if (same_team(i, who)) return false;
         if (!drop_tile_clear(px, py)) return false;  // matches the original's return 0
         if (random_below(s_, 5) != 0) return false;  // rand()%5 != 0 -> pass
         press_bomb(out);  // bomb-key edge -> BombSystem::drop in player_turn
@@ -847,22 +851,37 @@ bool AISystem::behave_bomb_enemy(int i, PlayerInput& out) {
 }
 
 // ---------------------------------------------------------------------------
+// A same-team player is not an enemy (docs/re/ai.md §5.3: "in team mode only
+// if its team +84 differs"; the +84 wiring itself is the documented follow-up
+// this change lands). Our semantics (not RE'd beyond the byte's existence,
+// see Player::team): two ACTIVE players are teammates when their team values
+// are equal, INCLUDING both-zero — so a fully-zeroed roster (every existing
+// scenario) has i.team==j.team for every pair and would wrongly call every
+// player a teammate of every other. To keep the untamed (all-zero) path
+// byte-identical to "team mode off", we special-case team==0 as "no team" on
+// both sides: zero never matches zero. Only a nonzero, shared value is a team.
+bool AISystem::same_team(int a, int b) const {
+    const std::uint8_t ta = s_.players[a].team, tb = s_.players[b].team;
+    return ta != 0 && ta == tb;
+}
+
 // Enemy finder — sub_422718 (docs/re/ai.md §5.3). Picks a live opponent to
 // pursue, starting the scan at a random slot so targeting is random (not
 // nearest). Two passes, byte-exact:
 //   pass 1: start = rand()%10, scan 10 slots forward (wrapping); accept the
 //           first that is NOT self, present (+16 != 0), NOT another AI/computer
-//           (+16 != 1), active (+0), and not stunned (+8). In a no-team match
-//           this returns that slot; in team mode it also requires a different
-//           team. This pass draws ONE rand()%10 for its start index.
+//           (+16 != 1), active (+0), not stunned (+8), and (team mode) not a
+//           teammate. This pass draws ONE rand()%10 for its start index.
 //   pass 2 (only if pass 1 finds nothing): start = a SECOND rand()%10; the same
 //           scan but RELAXED to include other AI players (drops the +16 != 1
-//           test). Returns the first live opponent, else -1.
+//           test). Returns the first live, non-teammate opponent, else -1.
 // Returns the chosen slot index, or -1 if no live opponent exists. The team
-// filter reduces to "slot != self" with no teams (we have no Player::team; team
-// wiring is a documented follow-up, docs/re/ai.md §5.3). Both rand()%10 draws
-// are part of the RNG contract (they sit inside behaviour 6's acquire, between
-// its rand()%50 and the timer/BFS steps — §8 lists only the outer draws).
+// filter (same_team above) reduces to "never true" on an all-zero roster, so
+// this is exactly "slot != self" there, byte-identical to before Player::team
+// existed. Both rand()%10 draws are part of the RNG contract regardless of
+// whether a hit is found (they sit inside behaviour 6's acquire, between its
+// rand()%50 and the timer/BFS steps — §8 lists only the outer draws), so the
+// team filter changes WHO is picked, never HOW MANY draws happen.
 // ---------------------------------------------------------------------------
 int AISystem::pick_live_enemy(int self) {
     // Pass 1: prefer a live human opponent (skip other AI, +16==1 -> ai==true).
@@ -874,7 +893,8 @@ int AISystem::pick_live_enemy(int self) {
         if (!q.present) continue;                // !+16 (absent)
         if (q.ai) continue;                      // +16 == 1 (another computer player)
         if (!q.alive || q.stun != 0) continue;   // !+0 (inactive) || +8 (stunned)
-        return j;  // no-team match: the first live human opponent (slot != self)
+        if (same_team(self, j)) continue;        // team mode: skip a teammate
+        return j;  // the first live, non-teammate human opponent (slot != self)
     }
     // Pass 2: fall back to ANY live opponent (incl. other AI) — the relaxed scan.
     const int start2 = static_cast<int>(random_below(s_, 10));
@@ -884,7 +904,8 @@ int AISystem::pick_live_enemy(int self) {
         const Player& q = s_.players[j];
         if (!q.present) continue;                // !+16 (absent)
         if (!q.alive || q.stun != 0) continue;   // !+0 (inactive) || +8 (stunned)
-        return j;  // any live opponent
+        if (same_team(self, j)) continue;        // team mode: skip a teammate
+        return j;  // any live, non-teammate opponent
     }
     return -1;  // no live opponent
 }

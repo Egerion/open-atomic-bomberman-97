@@ -39,7 +39,8 @@ State build_state(const MatchConfig& config) {
         Player& p = s.players[i];
         p.present = true;
         p.alive = true;
-        p.ai = config.ai[i];  // computer-driven slot (ADR-0005); default false
+        p.ai = config.ai[i];      // computer-driven slot (ADR-0005); default false
+        p.team = config.team[i];  // setup-screen +84 byte (docs/re/setup-screens.md); default 0
         int tx = std::clamp(config.spawns[i].x, 0, kGridWidth - 1);
         int ty = std::clamp(config.spawns[i].y, 0, kGridHeight - 1);
         // The original clears the spawn tile and its orthogonal neighbours

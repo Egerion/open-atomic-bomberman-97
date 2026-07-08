@@ -462,20 +462,17 @@ AppInput GameApp::present_options_screen() {
 }
 
 int GameApp::round_winner() const {
-    // A round win is exactly one survivor with the clock still running; a
-    // mutual wipe-out or a time-out is a draw. Mirrors sub_42A3F6, which shows
-    // DRAW when the survivor query (sub_4219B0) returns none and VICTORY<idx>
-    // for the lone survivor.
+    // A round win is exactly one SIDE of survivors with the clock still
+    // running; a mutual wipe-out or a time-out is a draw. Mirrors sub_42A3F6,
+    // which shows DRAW when the survivor query (sub_4219B0) returns none and
+    // VICTORY<idx> for the lone survivor. Team-aware via sim::winning_side
+    // (docs/re/ai.md TEAM follow-up, "our semantics"): teammates count as one
+    // side, so a solo match (every team byte 0) is unchanged — the returned
+    // slot is still the sole survivor, just resolved through the same-side
+    // rule instead of a raw single-player check.
     const sim::State& s = sim_.state();
     if (s.ticks_left == 0) return -1;  // time up -> draw
-    int winner = -1;
-    for (int i = 0; i < sim::kMaxPlayers; ++i) {
-        if (s.players[i].present && s.players[i].alive) {
-            if (winner != -1) return -1;  // more than one alive -> not decided as a win
-            winner = i;
-        }
-    }
-    return winner;  // -1 if nobody is alive (mutual wipe-out -> draw)
+    return sim::winning_side(s);
 }
 
 AppInput GameApp::run_boot_attract() {
@@ -1007,7 +1004,11 @@ AppInput GameApp::run_match() {
             renderer_->on_events(sim_.state());
 
             const sim::State& s = sim_.state();
-            if (over_ticks < 0 && (sim::alive_count(s) <= 1 || s.ticks_left == 0)) {
+            // Team-aware round-over: "one SIDE left", not "one player left"
+            // (docs/re/ai.md TEAM follow-up). sides_remaining() degenerates to
+            // alive_count() when every team byte is 0 (the default), so a solo
+            // match's timing is unchanged.
+            if (over_ticks < 0 && (sim::sides_remaining(s) <= 1 || s.ticks_left == 0)) {
                 // Linger a few seconds on the final frame, then hand back to the
                 // flow so the Results screen can come up.
                 over_ticks = 3 * sim::kTicksPerSecond;

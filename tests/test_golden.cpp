@@ -65,6 +65,18 @@ MatchConfig pillars_config() {
 // including golden A, which has no AI and no players at all — without
 // recapturing this file, growing the hash layout out from under the pinned
 // constants a second time.
+//
+// UPDATE 2026-07-08 (TEAM wiring, docs/re/ai.md TEAM follow-up /
+// docs/re/setup-screens.md +84 byte): hash.cpp now mixes a `Player::team` word
+// per present player (one new mix() call per player, right after
+// trigger_placed). Every golden scenario's players default team=0 (no config
+// sets MatchConfig::team[]), so gameplay is byte-identical — this is a
+// one-time HASH-LAYOUT recapture only (CLAUDE.md determinism contract rule 5),
+// same shape as the b0dc533 brains-block growth above. Golden A is unaffected
+// (0 players -> 0 new mix words). Golden D's pinned RNG-stream values
+// (kExpectedRng) are UNCHANGED by this commit — verified byte-for-byte before
+// recapturing the hashes below — confirming the team wiring adds no new RNG
+// draws on the untamed (all-zero-team) path.
 // Two test-fixture-only fixes ride along (no sim behaviour change, just
 // removing an accidental dependency on the ticks_left==0 "no clock" edge
 // case that the enclosure fix above turned into "sudden death from tick 0"):
@@ -102,15 +114,15 @@ TEST_CASE("golden B: 4-player brick match with all abilities") {
     cfg.born_with[static_cast<int>(PowerupType::Spooger)] = true;
     cfg.born_with[static_cast<int>(PowerupType::Jelly)] = true;
     Simulation s(cfg);
-    CHECK(s.hash() == 0x29767e9a0fb9015dull);  // setup itself is pinned
+    CHECK(s.hash() == 0x7bb2faa299a9dfbdull);  // setup itself is pinned
 
     static constexpr std::uint64_t kExpected[6] = {
-        0x1b61c952778af4dcull,  // tick 500
-        0xc5f9885e29217370ull,  // tick 1000
-        0x7c5c67d283cb4af4ull,  // tick 1500
-        0xd814aaacbb607abbull,  // tick 2000
-        0x6c85b763bed7304cull,  // tick 2500
-        0x487099769e2b1fa9ull,  // tick 3000
+        0xda15a41550e9063cull,  // tick 500
+        0x6403965535b92850ull,  // tick 1000
+        0x04d0c964cba38454ull,  // tick 1500
+        0x9d807c0fa62005dbull,  // tick 2000
+        0x6ac54d08725422acull,  // tick 2500
+        0xd757156294d60149ull,  // tick 3000
     };
     for (std::uint64_t t = 0; t < 3000; ++t) {
         s.tick(pattern(t));
@@ -128,7 +140,7 @@ TEST_CASE("golden C: trigger bombs and a fast hurry phase") {
     cfg.born_with[static_cast<int>(PowerupType::Trigger)] = true;
     Simulation s(cfg);
     for (std::uint64_t t = 0; t < 1500; ++t) s.tick(pattern(t * 7 + 3));
-    CHECK(s.hash() == 0x5bb60583007053ccull);
+    CHECK(s.hash() == 0xeb7ccb190e3122ecull);
 }
 
 TEST_CASE("golden D: the disease gauntlet") {
@@ -150,10 +162,10 @@ TEST_CASE("golden D: the disease gauntlet") {
         }
 
     static constexpr std::uint64_t kExpectedHash[4] = {
-        0x0c9effed70cf0a1aull,  // tick 200
-        0x9b283e18b2f43340ull,  // tick 400
-        0x025cfdece8460bc9ull,  // tick 600
-        0x4d4b78dee2abfeccull,  // tick 800
+        0x917fd0daca6a23baull,  // tick 200
+        0x0e7f1c307c8235c0ull,  // tick 400
+        0xd6651053635e6029ull,  // tick 600
+        0xba564b2cc526e62cull,  // tick 800
     };
     static constexpr std::uint32_t kExpectedRng[4] = {0xca47489cu, 0x49cffff6u, 0x2abb3268u,
                                                       0xd72904d8u};
@@ -206,10 +218,10 @@ TEST_CASE("golden E: jelly ping-pong and a veering punched flight") {
     };
 
     static constexpr std::uint64_t kExpected[4] = {
-        0x5f8c43ccaf3a33eaull,  // tick 75
-        0x7fa0475d876d88ffull,  // tick 150
-        0xef415129ce500f41ull,  // tick 225
-        0x01a39b23c37bc668ull,  // tick 300
+        0x9f35de7774cdb72aull,  // tick 75
+        0xcf0451a465a2833full,  // tick 150
+        0xac5945f3c6d87d01ull,  // tick 225
+        0x08b0705d6b25cfa8ull,  // tick 300
     };
     int bounces = 0;
     for (std::uint64_t t = 0; t < 300; ++t) {

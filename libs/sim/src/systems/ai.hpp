@@ -120,10 +120,12 @@ private:
 
     // Behaviour 4 (sub_40ABED) — drop a bomb next to an enemy (Stage 5). Scans a
     // 5-tile cross (the sub_40ABED offset tables — see the OOB note in the .cpp)
-    // for a live enemy player (sub_421CB5, self excluded); if one is found and
-    // the column guard + drop-tile clearance gates pass, drop a bomb on a 1-in-5
-    // whim (rand()%5==0). Sits below behaviour 3, above behaviour 5. Returns true
-    // if it acted. The bomb-key edge routes to the normal BombSystem::drop.
+    // for a live enemy player (sub_421CB5, self excluded); a same-team hit ends
+    // the behaviour without dropping (same_team, docs/re/ai.md TEAM follow-up);
+    // otherwise, if the column guard + drop-tile clearance gates pass, drop a
+    // bomb on a 1-in-5 whim (rand()%5==0). Sits below behaviour 3, above
+    // behaviour 5. Returns true if it acted. The bomb-key edge routes to the
+    // normal BombSystem::drop.
     bool behave_bomb_enemy(int i, PlayerInput& out);
 
     // Behaviour 6 (sub_40B8C2) — seek an enemy (Stage 5). On a 1/50 whim it
@@ -137,16 +139,25 @@ private:
     // Behaviour 7 (sub_40A81F) — wander fallback. Returns true if it acted.
     bool behave_wander(int i, PlayerInput& out);
 
-    // Enemy finder (sub_422718): pick a live opponent (slot != self) to pursue,
-    // starting the scan at a random slot (rand()%10) so targeting is random, not
-    // nearest. Two passes exactly as the original: pass 1 prefers a live HUMAN
-    // opponent (skips other AI, +16==1) and draws ONE rand()%10 for its start;
-    // if it finds none, pass 2 relaxes to ANY live opponent (incl. AI) and draws
-    // a SECOND rand()%10 for its own start. Returns the chosen slot, or -1 if no
-    // live opponent exists. In a no-team match the team filter reduces to
-    // slot != self (docs/re/ai.md §5.3). The rand()%10 draw(s) are part of the
-    // RNG contract even though §8's table lists only behaviour 6's outer draws.
+    // Enemy finder (sub_422718): pick a live opponent (slot != self, not a
+    // teammate) to pursue, starting the scan at a random slot (rand()%10) so
+    // targeting is random, not nearest. Two passes exactly as the original:
+    // pass 1 prefers a live HUMAN opponent (skips other AI, +16==1) and draws
+    // ONE rand()%10 for its start; if it finds none, pass 2 relaxes to ANY live
+    // opponent (incl. AI) and draws a SECOND rand()%10 for its own start.
+    // Returns the chosen slot, or -1 if no live opponent exists. The team
+    // filter (same_team) is always false on an all-zero roster, so this reduces
+    // to slot != self there (docs/re/ai.md §5.3). The rand()%10 draw(s) are part
+    // of the RNG contract even though §8's table lists only behaviour 6's outer
+    // draws, and fire regardless of whether the team filter excludes the hit.
     int pick_live_enemy(int self);
+
+    // A same-team player is not an enemy (docs/re/ai.md TEAM follow-up, §3.4/
+    // §5.3). Our semantics: two ACTIVE players are teammates when Player::team
+    // is equal AND nonzero — team 0 never matches team 0, so an all-zero roster
+    // (every existing scenario) never has teammates, matching pre-team-mode
+    // behaviour exactly. See Player::team's doc comment.
+    bool same_team(int a, int b) const;
 
     // Flee BFS (sub_40970B): from (sx,sy), a 100-node wavefront scored by
     // danger_at; returns the godir (0..3) of the first step toward the lowest-
