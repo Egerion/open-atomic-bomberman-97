@@ -13,6 +13,7 @@ void SequenceSet::resolve_stage(const AssetStore& a, int stage) {
 
 void SequenceSet::resolve(const AssetStore& a) {
     digits = resolve_sequence(a.kfont(), "numeric font");
+    infinity = resolve_sequence(a.kfont(), "infinity");
     hurry = resolve_sequence(a.hurry(), "hurry");
 
     // Every original sequence name ends in "green" — the engine recolors the

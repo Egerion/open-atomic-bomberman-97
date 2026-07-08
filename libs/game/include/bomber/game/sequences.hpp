@@ -37,7 +37,9 @@ struct SequenceSet {
     Anim walkbomb[kLocalPlayers][4], standbomb[kLocalPlayers][4];  // carrying a bomb, [player][direction]
     Anim cornerhead[kLocalPlayers][kCornerheadVariants];   // idle fidgets, direction-independent
     Anim shadow;
-    Anim digits;  // KFONT 'numeric font': glyphs 0-9 + colon
+    Anim digits;    // KFONT 'numeric font': glyphs 0-9 + colon
+    Anim infinity;  // KFONT 'infinity' — drawn instead of digits on an untimed round
+                    // (docs/re/in-match-shell.md §3: dword_4601A8 == 1001, aInfinity)
     Anim hurry;
     // Stage-actor floor art (docs/re/stage-actors.md). conveyor/dirarrow indexed
     // by godir (0=Up/north,1=Right/east,2=Down/south,3=Left/west); trampoline

@@ -26,6 +26,13 @@ public:
     // Starts (or switches) looping background music by SOUNDLST id.
     void start_music(int id);
 
+    // True when SOUNDLST names this id (regardless of whether its .RSS file
+    // actually loads) — lets a caller pick a documented fallback id (e.g. the
+    // in-round per-level stage track 1100+level falling back to 1120,
+    // docs/re/in-match-shell.md §2) the way sub_4293E5 does, instead of
+    // start_music() silently going quiet on an unnamed id.
+    bool has_track(int id) const { return names_.names.contains(id); }
+
     // Call regularly: re-queues the track shortly before it runs out (loop).
     void update_music();
 

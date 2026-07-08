@@ -4,8 +4,10 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 
 #include "bomber/game/anim_pace.hpp"
+#include "bomber/game/hud_format.hpp"
 
 namespace bomber::game {
 
@@ -93,10 +95,11 @@ bool Renderer::boxed_in(const sim::State& s, int tx, int ty) {
     return true;
 }
 
-void Renderer::reset_match() {
+void Renderer::reset_match(bool untimed) {
     deaths_.clear();
     last_tick_ = ~0ull;
     hurry_until_ = 0;
+    untimed_ = untimed;
     kick_pose_.fill(0);
     punch_pose_.fill(0);
     panic_ticks_.fill(0);
@@ -472,22 +475,59 @@ void Renderer::draw_world(const sim::State& s) {
 }
 
 void Renderer::draw_hud(const sim::State& s) {
-    // HURRY! banner flashes center-screen (every-4-ticks blink).
+    // HURRY! banner flashes center-screen (every-4-ticks blink). The sim's
+    // enclosure system already reconciles the "60s-remaining, fires once"
+    // predicate (docs/re/in-match-shell.md §3's getvalue(101) window) into a
+    // single Hurry event on the edge (enclosure.cpp); on_events just latches
+    // it here for the flash duration, and SoundDirector fires SFX 2700..2799
+    // off the same event (sound_director.cpp) — one source of truth, no
+    // duplicated threshold math on the presentation side.
     if (s.tick < hurry_until_ && ((s.tick >> 2) & 1) == 0)
         draw_anim(seqs_->hurry, 0, kScreenW / 2.0f, kScreenH / 2.0f);
 
-    // Match clock at the original HUD position (VALUELST ids 110/111/112).
+    // Match clock at the original HUD position — CONFIRMED VALUELST ids
+    // 110/111/112 (docs/re/in-match-shell.md §3, docs/valuelst-map.md):
+    // x/y of the first digit and the extra per-digit spacing. Read live so a
+    // modified VALUELST still repositions the HUD; fallbacks are the
+    // confirmed 525/36/4.
+    const float x0 = static_cast<float>(values_ ? values_->column_or(110, 0, 525) : 525);
+    const float y = static_cast<float>(values_ ? values_->column_or(111, 0, 36) : 36);
+    const float spacing = static_cast<float>(values_ ? values_->column_or(112, 0, 4) : 4);
+
+    if (untimed_) {
+        // Untimed round (options_.playtime_seconds == 1001, the port's
+        // presentation-side stand-in for dword_4601A8 == 1001 — see
+        // Renderer::reset_match's doc comment): draw the KFONT "infinity"
+        // glyph in place of the digit string, same anchor as the clock.
+        const Anim& inf = seqs_->infinity;
+        if (!inf.steps.empty()) draw_sprite(inf.steps[0], x0 + inf.steps[0].hx, y);
+        return;
+    }
+
     const Anim& d = seqs_->digits;
     if (d.steps.size() < 11) return;
-    int total = (s.ticks_left + sim::kTicksPerSecond - 1) / sim::kTicksPerSecond;
-    int minutes = total / 60, seconds = total % 60;
-    char text[16];
-    std::snprintf(text, sizeof(text), "%d:%02d", minutes, seconds);
-    float x = 525.0f;
-    for (const char* ch = text; *ch; ++ch) {
-        const Sprite& g = d.steps[*ch == ':' ? 10 : static_cast<std::size_t>(*ch - '0')];
-        draw_sprite(g, x + g.hx, 36.0f);
-        x += g.w + 4.0f;  // VALUELST 112: extra spacing between digits
+    int seconds_left = (s.ticks_left + sim::kTicksPerSecond - 1) / sim::kTicksPerSecond;
+    // MESSAGES.TXT id 281 = "%u:%02u" (sub_4105D2's v13/60, v13%60 split);
+    // getstring falls back to the literal format when the install's own
+    // MESSAGES.TXT lacks the id (asset_store.hpp's getstring convention).
+    std::string text = format_clock(assets_->getstring(281, "%u:%02u"), seconds_left);
+
+    // <=30s remaining: swap the digit ink from the normal colour to a
+    // warning one (byte_49D38F -> byte_49A390 in the original, docs/re/
+    // in-match-shell.md §3 point 4). The exact palette index isn't resolvable
+    // without the original's LUT (out of scope, matching frontend-flow.md's
+    // byte_49D38F precedent) — a clear red stand-in reads as "warning" the
+    // same way; layout/timing are the faithful part.
+    bool warn = clock_warning(seconds_left);
+    Uint8 r = 255, g = warn ? 40 : 255, b = warn ? 40 : 255;
+
+    float x = x0;
+    for (char ch : text) {
+        std::size_t idx = ch == ':' ? 10 : static_cast<std::size_t>(ch - '0');
+        if (idx > 10) continue;  // ignore anything format_clock couldn't map to a glyph
+        const Sprite& sp = d.steps[idx];
+        draw_sprite(sp, x + sp.hx, y, r, g, b);
+        x += sp.w + spacing;  // VALUELST 112: extra spacing between digits
     }
 }
 
