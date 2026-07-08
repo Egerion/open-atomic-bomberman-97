@@ -260,12 +260,18 @@ void GameApp::start_match(std::uint32_t seed) {
     sim::MatchConfig cfg = match::build_match_config(scheme_, sim::kMaxPlayers, seed, &values_);
     // Roster from the PLAYER INPUT screen (present_setup): OFF slots are inactive,
     // COMPUTER slots are AI-driven, KEYBOARD slots are local human(s). The per-slot
-    // team goes into MatchConfig::team[] (config-only, non-hashed — team MODE is a
-    // deferred sim effort, so this does not perturb the golden).
+    // team feeds MatchConfig::team[] -> the hashed Player::team.
+    //
+    // Mapping: the original's +84 byte is 0 or 1 and IN TEAM MODE BOTH values
+    // are real teams (sub_4141F8 inks team 1 vs "the rest" — two sides), while
+    // the sim's convention reserves team 0 for "no team / solo side"
+    // (simulation.cpp on_same_side). So shift the setup byte up by one when
+    // team play is on: +84==0 -> sim team 1, +84==1 -> sim team 2. Without the
+    // shift every un-toggled slot would wrongly fight solo.
     for (int i = 0; i < sim::kMaxPlayers; ++i) {
         cfg.active[i] = setup_type_[i] != 0;
         cfg.ai[i] = setup_type_[i] == 1;
-        cfg.team[i] = static_cast<std::uint8_t>(setup_team_[i]);
+        cfg.team[i] = static_cast<std::uint8_t>(setup_team_[i] + 1);
     }
     // Override the Conveyor Speed index from options.ini if present (this
     // install = 2 high); otherwise Tuning keeps the confirmed default (1
@@ -275,10 +281,8 @@ void GameApp::start_match(std::uint32_t seed) {
     // the game-type-level team-mode GATE (docs/re/setup-screens.md
     // `dword_464964`), separate from each slot's own +84 team byte. OFF means
     // team mode is off regardless of what a slot's 'T' toggle left behind, so
-    // zero every slot's team here rather than adding a second config field —
-    // MatchConfig::team[] stays the single source of truth. Config-only, no
-    // sim/hash consumer yet (present_setup's marker draw is the only reader,
-    // gated below), so this has no golden impact.
+    // zero every slot's team here (sim team 0 = solo side) — MatchConfig::
+    // team[] stays the single source of truth for the hashed Player::team.
     if (!team_play_) cfg.team.fill(0);
     // Level from the LEVEL screen (present_map_select -> dword_464998): the match
     // init (sub_410B6E) resolves it to a stage index dword_46499C. RANDOM (-1) ->
