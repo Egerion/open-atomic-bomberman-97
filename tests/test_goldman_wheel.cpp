@@ -117,8 +117,8 @@ TEST_CASE("wheel_prize_to_powerup maps 0/1/3/4/8 onto our PowerupType and 13 (cl
     CHECK(wheel_prize_to_powerup(3) == PowerupType::Kick);
     CHECK(wheel_prize_to_powerup(4) == PowerupType::Skate);
     CHECK(wheel_prize_to_powerup(8) == PowerupType::Goldflame);
-    // Clogs: no sim::PowerupType kind exists yet (doc §8) — the port's
-    // documented gap, not a silent misrouting to some other kind.
+    // Clogs is PERMANENTLY not a sim::PowerupType (doc §8/§9.2) — its effect
+    // is ported via MatchConfig::born_with_clogs instead (test_goldman_award.cpp).
     CHECK(wheel_prize_to_powerup(kClogsPrizeId) == PowerupType::None);
 }
 

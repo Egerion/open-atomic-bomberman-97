@@ -108,13 +108,21 @@ public:
         // The 6 prize icons at angles wheel + k*segment_steps (doc §3), drawn
         // with the shared floor-powerup ANI (SequenceSet::powerup_anim) — the
         // wheel reuses the normal in-game icons, no roulette-specific art.
-        // Clogs (13) has no sim::PowerupType mapping (goldman_wheel.hpp), so
-        // that slot draws nothing rather than a wrong icon.
+        // Clogs (13) draws its OWN icon (POWERS.ANI "power clog",
+        // SequenceSet::clogs_anim) — CONFIRMED the original draws all 6 slots
+        // uniformly via sub_425C7F(x,y,kind), no special-case skip for slot 13
+        // (docs/re/goldman-roulette.md §9.4); it is simply not a
+        // sim::PowerupType (never a sim inventory kind, §8).
         for (int k = 0; k < kWheelSegments; ++k) {
             int angle = wheel_.wheel.pos + k * segment_steps_;
             float x = 0, y = 0;
             lissajous_xy(angle, circle_steps_, cx, cy, rx, ry, freq_x, freq_y, x, y);
-            sim::PowerupType pt = wheel_prize_to_powerup(kWheelPrizeIds[static_cast<std::size_t>(k)]);
+            int prize_id = kWheelPrizeIds[static_cast<std::size_t>(k)];
+            if (prize_id == kClogsPrizeId) {
+                draw_anim_step(ren, seqs_->clogs_anim, x, y);
+                continue;
+            }
+            sim::PowerupType pt = wheel_prize_to_powerup(prize_id);
             if (pt == sim::PowerupType::None) continue;
             const Anim& a = seqs_->powerup_anim[static_cast<int>(pt)];
             draw_anim_step(ren, a, x, y);

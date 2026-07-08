@@ -12,6 +12,7 @@ Units: speeds are hundredths of a pixel per frame; probabilities are 1-in-N; fra
 | 41 | bomb fuse length, frames | 40 (= 2 s) |
 | 42 | starting walk speed | 923 |
 | 90 | speed added per skate | 150 |
+| 91 | clogs speed penalty — the file's legend calls it the "special roulette power-down"; subtracted per clogs count in the SAME walk-speed term as id 90 (mirror image, `sub_41F29B` pseudo.c 23430-23440), before disease scaling. Inventory slot 13, the Goldman wheel's booby prize — wheel-only, never a normal pickup (`docs/re/goldman-roulette.md` §9) | 150 |
 | 300 | kicked bomb speed | 1000 |
 | 301 | punched bomb speed | 1300 |
 | 100 | match length, seconds | 150 |
@@ -37,7 +38,6 @@ Powerup kind order (matches scheme `-P` rows and the id blocks above): extra bom
 
 | id(s) | area |
 |---|---|
-| 91 | clogs speed penalty — the file's legend calls it the "special roulette power-down"; inventory slot 13, the Goldman wheel's booby prize (`docs/re/goldman-roulette.md` §3) |
 | 92 | menu attract-mode delay, seconds (30; legend: < 5 disables attract) — after it, `sub_42B9CE` runs a live all-CPU demo match (frontend-flow.md "Attract mode") |
 | 40 | "do we randomize player starting positions?" — the DEFAULT seed of the Random Start option (dword_464AE8 = getvalue(40) = 1 at `sub_41095A`, overridden by options.ini `random_start=`); consumed by the game layer as the absent-key default, `docs/re/facts.md` "Options toggles" |
 | 101, 102 | 101 **= 60 (CONFIRMED)**: in-round "hurry" threshold, seconds remaining — when the round clock enters the (getvalue(101)−5, getvalue(101)) window the tick callback one-shots SFX 2700 and flashes the "hurry" ANI at screen centre on alternating `frame & 4` ticks (`sub_42A191` ~29531-29549, `docs/re/in-match-shell.md` "hurry flash"); 102 = late-game powerup gating, still unpinned |

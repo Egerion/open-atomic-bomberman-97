@@ -269,14 +269,142 @@ scheme's `-P bornwith` column). Two mapping notes for the port:
   Skate, Goldflame);
 - prize id **13 (clogs)** is outside our 13-kind scheme space
   (`kPowerupKinds`): in the original it is inventory slot 13 whose effect
-  subtracts getvalue(91) speed (the skate's mirror image). Porting it needs
-  either a 14th inventory kind or a per-player "clogs count" in
-  `MatchConfig` feeding a speed debit at setup. This was deferred pending the
-  wheel screen itself; the wheel screen has since shipped (ROADMAP "Goldman
-  Roulette wheel — DONE 2026-07-08"), so the decision is no longer blocked —
-  it remains open and actionable (`goldman_wheel.hpp`'s
-  `wheel_prize_to_powerup` still returns `PowerupType::None` for id 13 as a
-  documented no-op pending that choice).
+  subtracts getvalue(91) speed (the skate's mirror image). RESOLVED
+  2026-07-08 (§9 below): ported as a dedicated `Player::clogs` count +
+  `MatchConfig::born_with_clogs` overlay, NOT a 14th `PowerupType` — clogs
+  is never a scheme-configurable/spawnable/forbiddable kind (§9.2), so it
+  does not belong in the `kPowerupKinds`-wide tables (`start_with`,
+  `limits`, `spawn_counts`, `forbidden`, `born_with`/`born_with_extra`).
+  `wheel_prize_to_powerup` keeps returning `PowerupType::None` for id 13 —
+  that mapping is correct and permanent (clogs never was a `PowerupType`);
+  the wheel's award path now branches on `prize_id == kClogsPrizeId`
+  separately instead of routing through `wheel_prize_to_powerup`.
+
+## 9. Clogs effect — pinned (RESOLVED 2026-07-08)
+
+### 9.1 The arithmetic — mover function `sub_41F29B` @ 0x41F29B
+
+The per-tick player mover (pseudo.c 22740-23498, cited by `movement.cpp` for
+its disease-scaling order) computes the walk budget added each tick in its
+non-trigger-carrying branch (pseudo.c 23430-23440, the `else` of
+`*((int*)v111+11)>>16 == -1`):
+
+```c
+v18 = sub_412135(90);                       // getvalue(90) = "speed added per skate"
+v20 = v18 * v19 + *((_DWORD *)v111 + 28);   // v19 = skate count; +28*4=+112 = base speed (getvalue(42))
+v21 = sub_412135(91);                       // getvalue(91) = clogs speed penalty
+v91 = v20 - v22 * v21;                      // v22 = clogs count (player_byte[86+13])
+if ( *((_BYTE *)v111 + 132) )               // Slow (molasses) disease flag
+  v91 /= 3;
+if ( *((_BYTE *)v111 + 133) || *((_BYTE *)v111 + 137) )  // Fast/Super disease flags
+  v91 = 3 * v91 / 2;
+v91 = dword_464958 * v91 / (unsigned int)dword_46494C;   // frame-ratio scale (~1 at 20 Hz)
+```
+
+(`v19`/`v22` are IDA "possibly undefined" register temporaries at this
+address — the decompiler lost their producer across an earlier branch/goto
+in this large state-machine function — but the positional pairing with
+getvalue(90)="speed added per skate"/getvalue(91)="clogs speed penalty"
+(`docs/valuelst-map.md` ids 90/91) and the identical shape to the port's own
+`skates * skate_speed_bonus` term pins them unambiguously as the skate and
+clogs counts respectively.)
+
+Pinned rule: **base speed (getvalue 42) + skates·getvalue(90) −
+clogs·getvalue(91)**, THEN disease scaling (molasses /3 first, then
+hyper/super ×3/2) — clogs and skates are mirror-image LINEAR terms folded
+into the SAME pre-disease base, added/subtracted in that order, before any
+disease multiplier touches the total. No separate duration or decay: like
+skates, the count is a per-round-reset inventory value (born-with only,
+§9.2), not a timed effect. No floor: the arithmetic does not clamp `v91` to
+a minimum before disease scaling (matches the port's existing unclamped
+`p.speed` for skates); in practice clogs is capped at exactly 0 or 1 per
+round (§9.3 — no cross-round stacking), so `base + 0 - 1*150 = 923-150 =
+773` is the only non-zero case, well above zero.
+
+### 9.2 Reachability — wheel-only, confirmed by the pickup dispatcher gap
+
+The per-kind pickup dispatcher `sub_41E21E` @ 0x41E21E (pseudo.c 22148-22265)
+switches on `kind` for cases 0 through 0xC (0..12) only; kind 13 (clogs) and
+14 fall to `default: break` — picking up a floor-scattered clogs/kind-14
+token has **no effect through the normal pickup path** (no increment, no
+per-kind side effect). The ONLY site that increments `player_byte[86+13]` is
+the wheel's born-with grant in `sub_4214BC` (§4). So despite `sub_421F7E`'s
+head-hit drop roll (`rand()%15`, pseudo.c 24363) and `sub_4255B2`'s general
+scatter machinery nominally covering kind 13 in their index range, clogs can
+only ever be **granted** by the Goldman wheel; it is not a spawnable/
+scheme/-P-forbiddable/pickup-through-play kind. (This also means our
+`PowerupSystem::head_hit`/`scatter` need no clogs case: our port's `surplus()`
+switch already `default: return false`s for kinds outside its explicit list,
+which is the correct behaviour for clogs — a player can never legitimately
+have clogs > 0 via anything but the wheel overlay, and the head-hit roll
+should not be able to strip/drop it either, matching the original's dead
+code path for kind 13 there.)
+
+### 9.3 No cross-round stacking — reset-then-+1 every round, skate interaction
+
+`sub_4214BC`'s FULL per-round sequence (§4, pseudo.c 23932-23951) is: first
+`player_byte[86+j] = getvalue(50+j)` for j=0..14 (the whole 15-byte inventory,
+RESET to the VALUELST baseline — id 63 = "not used yet" = 0 is slot 13's
+baseline, confirmed against the shipped VALUELST.RES), THEN, goldman only,
+`++player_byte[86+prize]` on top of that fresh reset. So the gold player's
+clogs count is baseline(0) + 1 = **exactly 1 every round they hold gold**,
+never 2, 3, ... — an unbroken gold streak does NOT accumulate a growing
+clogs count; each round-init independently re-derives "1 clogs, or 0" from
+scratch (mirrors §4's "receives the prize AGAIN at each round start", not a
+persistent running total). The SAME reset-then-+1 shape applies to every
+other wheel prize (skate/bomb/flame/kick/goldflame) — `born_with_extra`
+already models this correctly (a plain overlay re-applied fresh each
+`build_match_config` call, §8/`match_config.hpp`); `born_with_clogs` must
+follow the identical "set, not accumulate across calls" contract.
+
+Skates and clogs are independent counters (`+90` vs `+99` in the original)
+that both fold linearly into the same `v91` expression — no interaction
+beyond both terms being present in the sum (a player who is simultaneously
+the wheel's gold player AND has picked up real skates in-round nets `base +
+skates*90 - clogs*91`, exactly the port's formula, §9.4).
+
+### 9.4 Port
+
+- `Player::clogs` (new `std::int32_t`, mirrors `Player::skates`): the
+  born-with-only clogs count. No `PowerupSystem::apply/remove` case (there
+  is no normal-play pickup/drop path, §9.2) — it is set ONLY at `setup.cpp`
+  from `MatchConfig::born_with_clogs[i]` (a per-player count, not a
+  `kPowerupKinds`-wide bool array like `born_with_extra`, since clogs is
+  outside that space per §8).
+- Speed formula (`setup.cpp` and `PowerupSystem::apply/remove` for Skate)
+  becomes `start_speed + skates * skate_speed_bonus - clogs *
+  clogs_speed_penalty`, mirroring §9.1's `v20 - v22*v21` exactly (skate term
+  added, clogs term subtracted, both before the per-tick disease scaling
+  already ported in `movement.cpp`).
+- `Tuning::clogs_speed_penalty` (VALUELST id 91) added alongside the
+  existing `skate_speed_bonus` (id 90).
+- Hashed: `Player::clogs` is new gameplay state (a born-with-only counter
+  that changes `p.speed`, itself already hashed) — added to `hash.cpp` as
+  its own mixed word, a one-time hash-layout growth (CLAUDE.md determinism
+  contract rule 5, same pattern as `Player::team`'s addition). Defaults to 0
+  on every existing scenario/golden config (no config sets
+  `born_with_clogs`), so `mix(0)` at that new word for every player in every
+  golden scenario — the digest LAYOUT shifts (recaptured in the same
+  commit) but no scenario's GAMEPLAY (positions/timings/outcomes) changes,
+  since clogs was unreachable before this port existed.
+- Wheel wiring (`goldman_wheel.hpp`/`game_app.cpp`): `wheel_prize_to_powerup`
+  is left returning `None` for id 13 (correct — clogs never was a
+  `PowerupType`, §8); the award site in `game_app.cpp`'s `build_match_config`
+  gains a parallel branch: `prize_id == kClogsPrizeId` sets
+  `cfg.born_with_clogs[i]` (or `+= 1` — see `MatchConfig::born_with_clogs`'s
+  doc comment for the exact accumulation semantics) for the gold
+  player/team, alongside the existing `wheel_prize_to_powerup` branch, not
+  instead of it.
+- Wheel icon (`sub_4034BC`'s prize-icon drawer, pseudo.c ~6043, calls
+  `sub_425C7F(x, y, kind)` for k=0..5 uniformly over ALL SIX slots including
+  clogs (§3) — the icon name table `off_45BE50` (pseudo.c 26718-26735) is
+  indexed by kind up to at least 13 (`"power %s"` sequence name), so the
+  original DOES draw a real clogs icon on the wheel, not a blank/missing
+  slot; nothing in `sub_4034BC` special-cases slot 13's drawing (only its
+  RESULT-line message id (800+13) and settle SFX (1320 vs 1310, §3) differ).
+  So the port's wheel rendering needs a "clogs" ANI icon resolved the same
+  `"power %s"` way as the other five, not a documented no-op — see
+  `goldman_wheel.hpp`/`goldman_screen.hpp` TODOs.
 
 (Provenance: `sub_4034BC` @ 0x4034BC pseudo.c 5921-6110; helpers
 `sub_403382`/`sub_40341F` pseudo.c 5876-5919; wheel slots `dword_45B7BC`
@@ -284,5 +412,9 @@ pseudo.c 1934; accessor `sub_403A9C` pseudo.c 6133-6136; award site
 `sub_4214BC` pseudo.c 23864-23962; twinkle `sub_420F07`/`sub_420D4E`
 pseudo.c 23627-23716/23549-23585; trigger `sub_410F81` head pseudo.c
 15043-15057 (def 14924), caller `sub_42A3F6` pseudo.c 29696-29697; gold
-player assignment pseudo.c 30004-30022; VALUELST rows 91/805/1000-1010;
-SOUNDLST 1300/1310/1320; MESSAGES ids 790/791/800-813.)
+player assignment pseudo.c 30004-30022; mover speed arithmetic `sub_41F29B`
+pseudo.c 23430-23440 (function def 22740, "possibly undefined" v19/v22
+flagged at pseudo.c-relative 41FD13/41FD30 in the disassembly listing);
+pickup dispatcher `sub_41E21E` pseudo.c 22148-22265 (no case 13/14); head-hit
+drop roll `sub_421F7E` pseudo.c 24332-24378; VALUELST rows 90/91/805/
+1000-1010; SOUNDLST 1300/1310/1320; MESSAGES ids 790/791/800-813.)

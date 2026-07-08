@@ -100,6 +100,10 @@ void SequenceSet::resolve(const AssetStore& a) {
     };
     for (int k = 0; k < sim::kPowerupKinds; ++k)
         powerup_anim[k] = resolve_sequence(a.powers(), kPowerNames[k]);
+    // Goldman wheel clogs icon (POWERS.ANI "power clog", CONFIRMED present in
+    // the shipped file — outside the 13-kind loop above since clogs is not a
+    // sim::PowerupType, docs/re/goldman-roulette.md §9.4).
+    clogs_anim = resolve_sequence(a.powers(), "power clog");
 
     // Stage-actor floor art (docs/re/stage-actors.md). Sequence names use compass
     // words indexed by godir (0=north,1=east,2=south,3=west) to match actor_dir.

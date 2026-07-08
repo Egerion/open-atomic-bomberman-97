@@ -28,14 +28,14 @@ inline constexpr int wheel_circle_steps(int segment_steps = kWheelSegmentSteps) 
 inline constexpr int kClogsPrizeId = 13;
 inline constexpr std::array<int, kWheelSegments> kWheelPrizeIds = {0, 1, 3, 8, 4, 13};
 
-// Maps a wheel prize id (0/1/3/4/8/13) onto our sim::PowerupType, when one
-// exists. Returns sim::PowerupType::None for 13 (clogs) — our port still has
-// no speed-penalty inventory kind. The wheel screen itself has since shipped
-// (ROADMAP "Goldman Roulette wheel — DONE 2026-07-08"), so this is no longer
-// blocked on a prerequisite — it is an open, actionable decision (doc §8: a
-// 14th PowerupType vs. a MatchConfig-level per-player clogs count). Callers
-// must treat None as "no sim consumer, award nothing" rather than silently
-// dropping a valid mapping.
+// Maps a wheel prize id (0/1/3/4/8) onto our sim::PowerupType. Returns
+// sim::PowerupType::None for 13 (clogs) PERMANENTLY — clogs is not, and
+// never will be, a sim::PowerupType (it is not a scheme/-P/spawn/forbid
+// kind, doc §8/§9.2); it is ported instead as MatchConfig::born_with_clogs
+// feeding Player::clogs directly (doc §9.4). Callers must route prize id ==
+// kClogsPrizeId to that separate path BEFORE calling this (see
+// game_app.cpp's build_match_config award site) — None here is not "not yet
+// ported", it is "not a PowerupType by design".
 constexpr bomber::sim::PowerupType wheel_prize_to_powerup(int prize_id) {
     switch (prize_id) {
         case 0: return bomber::sim::PowerupType::ExtraBomb;
