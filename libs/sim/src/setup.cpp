@@ -59,6 +59,14 @@ State build_state(const MatchConfig& config) {
         p.flame = s.tuning.start_with[static_cast<int>(PowerupType::Flame)];
         for (int k = 0; k < kPowerupKinds; ++k)
             if (config.born_with[k]) powerups.apply(p, static_cast<PowerupType>(k));
+        // Goldman wheel award (docs/re/goldman-roulette.md §4/§8): a per-
+        // player overlay applied AFTER the global born_with loop, through the
+        // same PowerupSystem::apply path — sub_4214BC's `++player_byte[86 +
+        // prize]` is exactly one more born-with unit, not a distinct grant
+        // mechanism. Default all-false, so this is a no-op for every
+        // existing config (golden hashes unaffected).
+        for (int k = 0; k < kPowerupKinds; ++k)
+            if (config.born_with_extra[i][k]) powerups.apply(p, static_cast<PowerupType>(k));
     }
 
     // Hide powerups under randomly chosen bricks (seeded RNG — deterministic).

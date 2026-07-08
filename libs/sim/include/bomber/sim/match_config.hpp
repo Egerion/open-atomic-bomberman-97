@@ -52,6 +52,15 @@ struct MatchConfig {
     std::array<std::int32_t, kPowerupKinds> spawn_override;
     std::array<bool, kPowerupKinds> forbidden{};
     std::array<bool, kPowerupKinds> born_with{};
+    // Per-player born-with OVERLAY (docs/re/goldman-roulette.md §4/§8): the
+    // Goldman wheel's +1 starting-inventory award for the gold player (whole
+    // team in team mode), applied at setup.cpp AFTER the global born_with
+    // loop above via the same PowerupSystem::apply path. Unlike born_with
+    // (global, every player), this is per-SLOT so only the gold
+    // player/team receives the bump. Default all-false everywhere: a config
+    // with no goldman award behaves byte-identical to before this field
+    // existed (golden hashes unaffected).
+    std::array<std::array<bool, kPowerupKinds>, kMaxPlayers> born_with_extra{};
 
     MatchConfig() {
         spawn_override.fill(kNoOverride);

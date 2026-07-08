@@ -106,6 +106,15 @@ public:
     // file is missing, in which case the Transition falls back to a fade.
     const AniTextures& headwipe() const { return headwipe_; }
 
+    // The Goldman wheel's "ring" pointer sequence (docs/re/goldman-roulette.md
+    // §3/§7, aRing) — the doc pins the SEQUENCE NAME only, not its containing
+    // ANI file (no `sub_41D957` file-table entry was recovered), so load()
+    // probes a small set of plausible frontend ANI files the same way
+    // cornerhead/bwalk probe multiple files for a named sequence. Empty when
+    // none of them own "ring" — GoldmanScreen then draws no pointer sprite
+    // (the wheel itself still works; see that class's fallback note).
+    const AniTextures& ring() const { return ring_; }
+
     // The install ROOT (parent of DATA) — where the `.BM` help/credits screens
     // and the `FONT<n>.FON` fonts live (not under DATA/RES). Used by the BM
     // screen viewer to resolve those install-root files.
@@ -188,6 +197,7 @@ private:
     sdl::TexturePtr field_;
 
     AniTextures headwipe_;  // screen-transition wipe (HEADWIPE.ANI), shared
+    AniTextures ring_;      // Goldman wheel pointer ("ring" seq), shared — see ring() doc comment
     assets::bmfont::Font frontend_font_;  // FONT6.FON, the .BM screen font
     assets::res::Messages messages_;      // MESSAGES.TXT string table (install root)
 

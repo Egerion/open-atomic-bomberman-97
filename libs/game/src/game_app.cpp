@@ -333,6 +333,31 @@ void GameApp::start_match(std::uint32_t seed) {
     // zero every slot's team here (sim team 0 = solo side) — MatchConfig::
     // team[] stays the single source of truth for the hashed Player::team.
     if (!team_play_) cfg.team.fill(0);
+    // Goldman wheel award (docs/re/goldman-roulette.md §4): sub_4214BC grants
+    // the last spin's prize to the gold player EVERY round of the following
+    // match, not just the round right after the spin — build_match_config
+    // runs at every start_match() call (including RoundContinue's re-init),
+    // so re-applying gold_prize_/gold_player_ here reproduces that "persists
+    // until the next spin" behaviour for free. A no-op (all-false overlay)
+    // whenever gold_prize_ < 0 (no successful spin yet) or the mapped
+    // sim::PowerupType is None (clogs, doc §8 — no sim kind exists yet).
+    if (gold_player_ >= 0 && gold_prize_ >= 0) {
+        sim::PowerupType pt = wheel_prize_to_powerup(gold_prize_);
+        if (pt != sim::PowerupType::None) {
+            auto kind = static_cast<int>(pt);
+            if (team_play_) {
+                // Team mode: the doc's "team id encoded as 0 or 2" compares
+                // against the RAW +84 byte, i.e. our setup_team_[] before the
+                // +1 shift above — every member of the gold TEAM gets the
+                // bump (doc §4 "every member of the gold team").
+                for (int i = 0; i < sim::kMaxPlayers; ++i)
+                    if (cfg.active[i] && setup_team_[i] == gold_player_)
+                        cfg.born_with_extra[i][kind] = true;
+            } else if (gold_player_ < sim::kMaxPlayers && cfg.active[gold_player_]) {
+                cfg.born_with_extra[gold_player_][kind] = true;
+            }
+        }
+    }
     // Level from the LEVEL screen (present_map_select -> dword_464998): the match
     // init (sub_410B6E) resolves it to a stage index dword_46499C. RANDOM (-1) ->
     // keep pick_stage over the enabled rotation (VALUELST 1150-1160, the same
@@ -514,6 +539,11 @@ AppInput GameApp::present_options_screen() {
     // flushed ... when the application exits normally") — options.ini itself
     // is untouched here; flush_options() (run()'s tail) is the sole writer.
     if (opt.changed()) {
+        // doc §2: "Cleared to -1 by: ... the Options-screen Gold Bomberman
+        // toggle" — ANY edit of that row (on or off) forfeits a pending gold
+        // player, checked before options_ is overwritten with the new
+        // snapshot so this compares old vs new.
+        if (opt.snapshot().goldman != options_.goldman) gold_player_ = -1;
         options_ = opt.snapshot();
         team_play_ = options_.team_play;
         conveyor_speed_index_ = options_.conveyor_speed_index;
@@ -980,6 +1010,74 @@ std::string GameApp::pick_glue() {
                                                     static_cast<unsigned>(glue_n)));
 }
 
+// The Goldman Roulette wheel (docs/re/goldman-roulette.md), sub_4034BC. Run
+// from run_app's Menu/StartMatch handler, BEFORE present_setup — the exact
+// gate order at the head of sub_410F81 (doc §2): !attract (this port has no
+// attract-mode match yet, so that leg is always true) && goldman option on
+// && local game (always true, no network play) && a gold player pending
+// (gold_player_ >= 0 — doc's re-entry check re-derived from sub_4034BC's own
+// internal guard, "with no pending gold player the function is a silent
+// no-op"). The caller (run_app) is expected to have already checked
+// options_.goldman && gold_player_ >= 0 before calling this, matching the
+// doc's gate order; this function itself only runs the spin/award, plus the
+// Esc-abort's gold_player_ clear (doc §2 "Cleared to -1 by: Esc on the
+// wheel").
+AppInput GameApp::present_goldman_wheel() {
+    audio_.start_music(kWinMusicId);  // 1020 inherits from the Play handler (doc §7); no new music
+    const int segment_steps = static_cast<int>(values_.column_or(1004, 0, kWheelSegmentSteps));
+    const int cx = static_cast<int>(values_.column_or(1000, 0, 320));
+    const int cy = static_cast<int>(values_.column_or(1000, 1, 240));
+    const int rx = static_cast<int>(values_.column_or(1002, 0, 200));
+    const int ry = static_cast<int>(values_.column_or(1002, 1, 150));
+    const int freq_x = static_cast<int>(values_.column_or(1006, 0, 1));
+    const int freq_y = static_cast<int>(values_.column_or(1006, 1, 1));
+
+    GoldmanScreen wheel(assets_, seqs_, front_font_);
+    // Advance a dedicated presentation LCG seed per spin (never State::rng) —
+    // same shape as setup_lcg_/panic_lcg_ elsewhere in this file.
+    goldman_lcg_ = goldman_lcg_ * 1664525u + 1013904223u;
+    wheel.enter(goldman_lcg_, segment_steps);
+
+    AppInput result = AppInput::Advance;
+    while (!wheel.done()) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
+            if (ev.type != SDL_EVENT_KEY_DOWN) continue;
+            const SDL_Keycode k = ev.key.key;
+            if (k == SDLK_F1) {
+                // doc §5: F1 opens the help browser (local host); our port has
+                // no separate ROULETTE.BM help text, so this reaches the same
+                // OPTIONS.BM viewer the rest of the front end falls back to
+                // rather than doing nothing on the key.
+                AppInput help = present_bm_screen("OPTIONS");
+                if (help == AppInput::Quit) return AppInput::Quit;
+                continue;
+            }
+            wheel.on_key(k, audio_);
+        }
+        wheel.tick(audio_);
+        audio_.update_music();
+        SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
+        SDL_RenderClear(sdl_renderer_.get());
+        wheel.draw(sdl_renderer_.get(), cx, cy, rx, ry, freq_x, freq_y);
+        SDL_RenderPresent(sdl_renderer_.get());
+        SDL_Delay(2);
+    }
+
+    if (wheel.aborted()) {
+        // doc §2/§5: Esc aborts the WHOLE Play flow and forfeits the gold
+        // player — the caller must skip present_setup/present_map_select and
+        // return to the menu on AppInput::Back.
+        gold_player_ = -1;
+        return AppInput::Back;
+    }
+    // doc §4: the prize persists (gold_prize_) until the NEXT spin; start_match
+    // re-applies it every round of the following match via born_with_extra.
+    gold_prize_ = wheel.prize();
+    return result;
+}
+
 // Cycle a slot's input type FORWARD one step (sub_421E80 @0x421E80): 0 off ->
 // 1 computer -> 2 keyboard sub 0 -> 2 keyboard sub 1 -> 3 joystick per present
 // stick -> back to 0. The pure wrap-order logic lives in cycle_slot_input_type
@@ -1033,7 +1131,15 @@ AppInput GameApp::present_setup() {
             }
             if (ev.type != SDL_EVENT_KEY_DOWN) continue;
             const SDL_Keycode k = ev.key.key;
-            if (k == SDLK_ESCAPE) { audio_.play(20); audio_.play(10); return AppInput::Back; }
+            if (k == SDLK_ESCAPE) {
+                audio_.play(20);
+                audio_.play(10);
+                // doc §2: "Cleared to -1 by: ... Esc on the player-setup
+                // screen" — cancelling the whole Play flow here also forfeits
+                // any gold player pending from an earlier match.
+                gold_player_ = -1;
+                return AppInput::Back;
+            }
             // Enter (< 0x20 branch in sub_410F81) leaves this screen and proceeds
             // to match init / the LEVEL screen.
             if (k == SDLK_RETURN || k == SDLK_KP_ENTER) { audio_.play(10); waiting = false; break; }
@@ -1333,6 +1439,20 @@ int GameApp::run_app() {
                     // the win target so we reset FIRST, then let the level screen
                     // adjust win_target_.
                     reset_match_scores();
+                    // The Goldman wheel (docs/re/goldman-roulette.md §2): at
+                    // the head of every Play entry, before present_setup —
+                    // gated on not-attract (always true here, no attract
+                    // match yet), the goldman option, local-only (always
+                    // true), and a gold player actually pending from a
+                    // previous match's rounds. An Esc abort forfeits the
+                    // whole Play flow (skip straight back to the menu,
+                    // mirroring sub_410F81's post-call `if (dword_464A68)
+                    // return`).
+                    if (options_.goldman && gold_player_ >= 0) {
+                        AppInput wheelResult = present_goldman_wheel();
+                        if (wheelResult == AppInput::Quit) return 0;
+                        if (wheelResult == AppInput::Back) { ev = AppInput::Advance; break; }
+                    }
                     bool started = false;
                     while (!started) {
                         AppInput setup = present_setup();
