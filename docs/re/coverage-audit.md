@@ -53,8 +53,8 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 | 17 | Attract mode boot-loop restart (no attract on boot) | pinned | ported | frontend-flow.md "boot flow is STRAIGHT-LINE" | — | done |
 | 18 | Attract mode: menu-idle LIVE AI-only demo match | pinned | **absent** (parked) | frontend-flow.md "menu-idle attract match... documented gap"; ROADMAP "attract-mode demo match (partial work parked in a worktree; task was user-stopped)" | resume the parked worktree or restart: wire `dword_464938` attract flag equivalent, roster/level save-restore, AI-only dispatch, suppress DRAW/RESULTS/VICTORY screens | **high** — largest known fully-RE'd-but-unported feature |
 | 19 | Main menu (7 rows, cursor, navigation) | pinned | ported | frontend-flow.md "main-menu items", `present_menu` | — | done |
-| 20 | Results tail: DRAW/RESULTS/VICTORY tiers | pinned | ported | frontend-flow.md, ROADMAP "Multi-round best-of-N loop + RESULTS tally 1:1 — DONE 2026-07-08" | — | done (frontend-flow.md's older "port still DEFERRED" note is now stale — superseded by later ROADMAP entry; **fix the stale note in frontend-flow.md §RESULTS tally tier**) | low (doc hygiene) |
-| 21 | VICTORY music using track 1020 instead of 1130 | pinned | **bug, unfixed** | frontend-flow.md: "tracked follow-up, not yet fixed" (0x3FC=1020, 0x46A=1130) | one-line fix in SoundDirector once triaged; add regression note | medium — small, cheap, already fully diagnosed |
+| 20 | Results tail: DRAW/RESULTS/VICTORY tiers | pinned | ported | frontend-flow.md, ROADMAP "Multi-round best-of-N loop + RESULTS tally 1:1 — DONE 2026-07-08" | — | done — frontend-flow.md's older "port still DEFERRED" note fixed to match (§RESULTS tally tier) | done |
+| 21 | VICTORY music using track 1020 instead of 1130 | pinned | **RESOLVED** | `game_app.cpp`: `kDrawMusicId` (1130) is started for DRAW, RESULTS, **and** VICTORY/TEAM (`audio_.start_music(kDrawMusicId)` in every outcome branch); `kWinMusicId` (1020) is scoped to the Play/setup path only. frontend-flow.md's "Results MUSIC" section and the 1020/1130 tunables rows updated to match — this audit's snapshot was stale on this row | — | done |
 | 22 | `.BM` generic help browser (menu row 5 + in-round F1) | pinned | ported | ROADMAP "The generic .BM help BROWSER — DONE 2026-07-08" | — | done |
 | 23 | Controllers/INPUT.BM menu-row binding | pinned | **absent** | frontend-flow.md: "no menu-row binding, documented gap" | wire INPUT.BM leaf to its real menu entry point (currently reachable only as a stub leaf?) — verify against `app_flow.hpp`'s `Controllers` state | low |
 | 24 | Pre-match SETUP screens (player input type, level/rounds) | pinned | ported | setup-screens.md, ROADMAP "Pre-match SETUP screens... DONE 2026-07-05" | — | done |
@@ -132,32 +132,49 @@ below aren't misread as gaps.
   start IS now RE'd and ported (facts.md "Options toggles", `random_start=`).
   **Stale ROADMAP phrasing, not an open gap** — worth a ROADMAP cleanup pass.
 
-## 6. Documentation staleness found during this audit (fix opportunistically)
+## 6. Documentation staleness found during this audit — FIXED
+
+All five spots below have been corrected in place (worktree
+`worktree-agent-a2dd02d9c78d8e344`); kept here as a record of what was stale
+and what superseded it.
 
 1. `CLAUDE.md` "Currently the only known guess: fuse pause while a bomb is
-   airborne" — **stale**. `facts.md`'s "Still guessed" table shows this
-   resolved 2026-07-03; the table is now empty.
+   airborne" — was **stale**. `facts.md`'s "Still guessed" table shows this
+   resolved 2026-07-03; the table is now empty. **Fixed**: the note now says
+   the guess was confirmed against `sub_42331C`.
 2. `docs/valuelst-map.md` "Not in VALUELST — our own tunables: Flame linger
-   duration (we use 10)... corner-assist threshold (we use 900)" — **stale**.
-   `facts.md` now confirms flame lifetime = 10 frames from `sub_426d06` and
-   states the corner_threshold guess was deleted in favor of `sub_41EC84`'s
-   per-pixel resolution.
+   duration (we use 10)... corner-assist threshold (we use 900)" — was
+   **stale**. `facts.md` confirms flame lifetime = 10 frames from
+   `sub_426d06` and states the corner_threshold guess was deleted in favor of
+   `sub_41EC84`'s per-pixel resolution. **Fixed**: section reworded to state
+   both are confirmed/resolved, no open tunables remain there.
 3. `docs/re/frontend-flow.md` "RESULTS tally tier — RE'd, port still
-   DEFERRED" — **stale**, superseded by ROADMAP's later "Multi-round best-of-N
-   loop + RESULTS tally 1:1 — DONE 2026-07-08".
-4. `docs/re/in-match-shell.md` "HUD ... a confirmed gap" — **stale**,
+   DEFERRED" — was **stale**, superseded by ROADMAP's later "Multi-round
+   best-of-N loop + RESULTS tally 1:1 — DONE 2026-07-08". **Fixed**: section
+   now reads "port DONE"; the adjacent "Results MUSIC" paragraph and the
+   1020/1130 tunables-table rows (which carried the same VICTORY-music
+   staleness as gap #4 below) were corrected in the same pass.
+4. `docs/re/in-match-shell.md` "HUD ... a confirmed gap" — was **stale**,
    superseded by ROADMAP's "MM:SS clock HUD ... reconciled" (also DONE
-   2026-07-08).
+   2026-07-08). **Fixed**: section now reads "DONE — no longer a gap", citing
+   `game_app.cpp`'s clock/warning-ink/hurry-flash/SFX-2700 implementation;
+   the cross-reference section's stale "deferred" phrasing was fixed too.
 5. `libs/game/include/bomber/game/goldman_wheel.hpp` §8 "decision deferred
    until the wheel screen itself is built" — the wheel screen **is now
    built** (ROADMAP "Goldman Roulette wheel — DONE"), so the deferral's own
-   precondition has been met; this is now an actionable decision, not a
-   blocked one (see table row #30).
+   precondition had been met; this was an actionable decision, not a blocked
+   one (see table row #30). **Fixed**: comment reworded to say the
+   precondition is met and the decision is open/actionable, not resolved
+   (the clogs mapping itself is still `PowerupType::None` — this was a
+   doc-only fix, not a feature implementation). `docs/re/goldman-roulette.md`
+   §8 updated to match.
 
-None of these are gameplay bugs — they're doc/comment lag behind later
-ROADMAP entries in the same repo. Cheap to fix in the same pass as whichever
-ticket touches that file next; not worth a dedicated task on their own unless
-bundled.
+None of these were gameplay bugs — they were doc/comment lag behind later
+ROADMAP entries in the same repo.
+
+Note: `docs/re/facts.md` was intentionally left untouched by this pass (a
+concurrent task was working near it) even though it is cited as the
+superseding source for items 1 and 2 above.
 
 ---
 
@@ -167,7 +184,8 @@ Counting the 39 numbered subsystem rows (§1+§2) + the asset-format rows in
 §3 that represent a distinct format (14 formats, excluding pure-tooling
 extensions marked N/A):
 
-- **Covered (RE pinned + ported, "done"):** 30 subsystem rows, 11 asset
+- **Covered (RE pinned + ported, "done"):** 31 subsystem rows (includes #21,
+  VICTORY music — RESOLVED, see §6/top-open-items update), 11 asset
   formats — the large majority of 1:1 gameplay and front-end fidelity.
 - **Partial (RE pinned/partial, port absent or partial):** 7 subsystem rows
   (flame-arm stops, flying-bomb-on-powerup, scatter occupancy, attract-mode
@@ -177,7 +195,8 @@ extensions marked N/A):
   clogs prize).
 - **N/A / excluded (netplay per ADR-0003, or non-gameplay tooling):** ~9
   functions/screens + several tooling file extensions.
-- **Doc staleness (no code gap, just needs a note fixed):** 5 items (§6).
+- **Doc staleness (no code gap, just needs a note fixed):** 5 items (§6) —
+  all fixed by this pass.
 
 ## Top open items, priority order
 
@@ -187,8 +206,9 @@ extensions marked N/A):
    RE yet.
 3. **Flying-bomb landing on a powerup tile** (§1 #4) — core mechanic
    correctness gap, no RE yet.
-4. **VICTORY music track bug** (§2 #21) — already fully diagnosed (1020 vs
-   1130), trivial fix, just needs to be scheduled.
+4. ~~**VICTORY music track bug** (§2 #21)~~ — **RESOLVED**: `kDrawMusicId`
+   (1130) already plays under DRAW/RESULTS/VICTORY in `game_app.cpp`; this
+   audit's snapshot was stale on that row (fixed above).
 5. **Goldman wheel clogs prize (id 13)** (§2 #30) — decision was blocked on
    the wheel screen shipping; it has, so this is now unblocked and small.
 

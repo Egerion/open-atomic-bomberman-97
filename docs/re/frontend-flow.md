@@ -463,12 +463,13 @@ SOUNDLST id `1100+level`, fallback 1120/0x460; suppressed entirely by the
 Options "Disable music during gameplay" toggle `dword_4648C0`, which frees
 the music instead — `sub_410B6E` pseudo.c 14847-14850). Full call-site-
 exhaustive model in `docs/re/in-match-shell.md` "round-end shell" step 2.
-The port currently calls `start_music(1130)` for DRAW (correct) and
-`start_music(1020)` for VICTORY (**not faithful** — should also be 1130,
-with 1020 moved to the setup screens and `1100+level` under the round) —
-a tracked follow-up, not yet fixed. (0x3FC=1020, 0x46A=1130 — hex
-confirmed; the SOUNDLST labels `win`/`draw` describe the clips, not where
-the code plays them.)
+**RESOLVED.** The port now matches: `game_app.cpp`'s `kDrawMusicId` (1130)
+is started for DRAW, RESULTS, **and** VICTORY/TEAM alike, and `kWinMusicId`
+(1020) is scoped to the Play/setup path only (never started for VICTORY).
+See the `kDrawMusicId`/`kWinMusicId` comment block and every
+`audio_.start_music(kDrawMusicId)` call in the outcome branches of
+`run_match`/`run_app`. (0x3FC=1020, 0x46A=1130 — hex confirmed; the SOUNDLST
+labels `win`/`draw` describe the clips, not where the code plays them.)
 
 **SFX 40 (enrt1, "you can't do that here") — NETWORK-ONLY, N/A to our build.**
 The results/draw wait loops fire `sub_427961(40)` when a key is pressed but
@@ -494,18 +495,17 @@ which *loops* the track — a wrong, repeating sting. It is now a **one-shot**:
 and the DRAW `ScreenDef` has `music_id = -1` (no looping music). The winner path
 was already a one-shot (2000-group in `run_match`).
 
-**RESULTS tally tier — RE'd, port still DEFERRED.** The middle tier (a survivor
+**RESULTS tally tier — RE'd, port DONE.** The middle tier (a survivor
 exists but nobody has clinched the match: `sub_42A3F6` loads RESULTS.PCX and
 prints each player's cumulative win tally against `dword_464A7C` = wins-needed)
-is now fully RE'd — layout, getvalue ids, message ids, the two independent
+is fully RE'd — layout, getvalue ids, message ids, the two independent
 packed win/kill counters (`sub_421AC8`/`sub_421B0F`), and the clinch/outcome
-logic — in `docs/re/results-and-options.md` §1. It still needs a
-**multi-round match structure with a running scoreboard** the spine does
-not have yet — `run_app` plays a single round then returns to the menu. Adding it
-faithfully means tracking per-player cumulative wins + the match-win threshold
-across rounds and rendering the tally on RESULTS.PCX (with the FONT6 glyph draw,
-below). Left as the next chunk; the per-round DRAW/VICTORY screens + their stings
-are correct today.
+logic — in `docs/re/results-and-options.md` §1. It now has the **multi-round
+match structure with a running scoreboard** it needed: ROADMAP "Multi-round
+best-of-N loop + RESULTS tally 1:1 — DONE 2026-07-08" tracks per-player
+cumulative wins + the match-win threshold across rounds and renders the tally
+on RESULTS.PCX (with the FONT6 glyph draw, below). The per-round DRAW/VICTORY
+screens + their stings are correct today.
 
 ## The `.BM` text-screen viewer — `sub_41302D` (CONFIRMED) + the FON font
 
@@ -625,8 +625,8 @@ randomness (SFX group pick) uses `AudioEngine`'s own LCG, never `State::rng`.
 | `getvalue(700/701/702)` | main-menu cursor x / y-base / y-step | **332 / 140 / 38** (VALUELST `700,332,140,38,0`) | CONFIRMED anchor + values (`sub_42B9CE`): x=getvalue(700), y=getvalue(701)+getvalue(702)·row |
 | SOUNDLST 1000 | boot/title music (`title`), looping, started ONCE in `sub_42B060`, continuous across logos+title | TITLE.RSS | CONFIRMED (`sub_42741E(0x3E8)` @ boot, loop 0xFFFF) |
 | SOUNDLST 1010 | main-menu music (`menu`), looping, started on menu entry (`sub_42741E(0x3F2)`, v14-gated) — replaces the boot track | MENU.RSS | CONFIRMED (`sub_42B9CE`); NOT 0x3FC/1020 (that is `sub_42A3F6`'s round "win" track) |
-| SOUNDLST 1020 | **setup-screens music** (label `win`), looping, started at `sub_42A3F6` entry (`sub_42741E(0x3FC)`) — CORRECTED: plays under player/level setup, replaced at round init by the stage track; it does NOT underlie VICTORY | WIN.RSS | CONFIRMED (corrected 2026-07-08); port still starts it for VICTORY — tracked follow-up (see "Results MUSIC") |
-| SOUNDLST 1130 | **outcome-tier music** (label `draw`), looping, started unconditionally at round end (`sub_42741E(0x46A)` BEFORE the survivor test) — under DRAW **and** RESULTS **and** VICTORY | DRAW.RSS | CONFIRMED (corrected 2026-07-08); port starts it for DRAW only — VICTORY half is the same follow-up |
+| SOUNDLST 1020 | **setup-screens music** (label `win`), looping, started at `sub_42A3F6` entry (`sub_42741E(0x3FC)`) — CORRECTED: plays under player/level setup, replaced at round init by the stage track; it does NOT underlie VICTORY | WIN.RSS | CONFIRMED (corrected 2026-07-08); port fixed — `game_app.cpp`'s `kWinMusicId` (1020) is now scoped to the Play/setup path only, never started for VICTORY (see "Results MUSIC") |
+| SOUNDLST 1130 | **outcome-tier music** (label `draw`), looping, started unconditionally at round end (`sub_42741E(0x46A)` BEFORE the survivor test) — under DRAW **and** RESULTS **and** VICTORY | DRAW.RSS | CONFIRMED (corrected 2026-07-08); port fixed — `game_app.cpp`'s `kDrawMusicId` (1130) now starts under DRAW, RESULTS, **and** VICTORY/TEAM alike (`audio_.start_music(kDrawMusicId)` in every outcome branch) |
 | SOUNDLST 1100+level, 1120 | per-level in-round stage music (`sub_4293E5` @ 0x4293E5, called from `sub_410B6E` round init unless the "Disable music during gameplay" option frees the music instead); 1120 (0x460) is the fallback when the level has no entry | per-level RSS | CONFIRMED (`docs/re/in-match-shell.md` step 2); port plays no in-round music — gap |
 | SOUNDLST 10 | menu-exit / accept sting (`menuexit`), one-shot | MENUEXIT.RSS | CONFIRMED (`sub_427961(10)` accept path in `sub_42A088` + every menu select in `sub_42B9CE`) |
 | SOUNDLST 20 | nav blip (`letter1`), one-shot, on ANY key | LETTER1.RSS | CONFIRMED (`sub_427961(20)` in `sub_42A088`/`sub_42B9CE`/`sub_42A3F6`) |

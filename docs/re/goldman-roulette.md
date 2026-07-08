@@ -271,8 +271,12 @@ scheme's `-P bornwith` column). Two mapping notes for the port:
   (`kPowerupKinds`): in the original it is inventory slot 13 whose effect
   subtracts getvalue(91) speed (the skate's mirror image). Porting it needs
   either a 14th inventory kind or a per-player "clogs count" in
-  `MatchConfig` feeding a speed debit at setup — decision deferred until
-  the wheel screen itself is built.
+  `MatchConfig` feeding a speed debit at setup. This was deferred pending the
+  wheel screen itself; the wheel screen has since shipped (ROADMAP "Goldman
+  Roulette wheel — DONE 2026-07-08"), so the decision is no longer blocked —
+  it remains open and actionable (`goldman_wheel.hpp`'s
+  `wheel_prize_to_powerup` still returns `PowerupType::None` for id 13 as a
+  documented no-op pending that choice).
 
 (Provenance: `sub_4034BC` @ 0x4034BC pseudo.c 5921-6110; helpers
 `sub_403382`/`sub_40341F` pseudo.c 5876-5919; wheel slots `dword_45B7BC`

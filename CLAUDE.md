@@ -67,8 +67,9 @@ The sim is deterministic lockstep (`docs/adr/0003`). Rules:
 - Every ported mechanic needs: a facts.md entry → a faithful port (mirror the
   original's arithmetic, don't paraphrase it) → tests.
 - Constants not yet confirmed against the binary are marked "our tunable" in
-  `tuning.hpp` and listed as remaining guesses in facts.md. Currently the
-  only known guess: fuse pause while a bomb is airborne.
+  `tuning.hpp` and listed as remaining guesses in facts.md. The former only
+  known guess, fuse pause while a bomb is airborne, was confirmed 2026-07-03
+  against `sub_42331C`; facts.md's "Still guessed" table is currently empty.
 - VALUELST-driven values go through `Tuning::apply(id, value)`; document ids
   in `docs/valuelst-map.md`.
 

@@ -61,8 +61,14 @@ Powerup kind order (matches scheme `-P` rows and the id blocks above): extra bom
 | 810, 815 | map editor menu layout: header pos and item x/y0/ystep (`sub_403184`, `docs/re/results-and-options.md` §5) |
 | 1100–1140 | key-remap UI (`sub_407B9D`) labels: screen header, per-slot "press key for", action names, bound-key display |
 
-## Not in VALUELST (hardcoded in BM95.EXE — our own tunables)
+## Not in VALUELST (hardcoded in BM95.EXE, now confirmed — no open tunables)
 
-Flame linger duration (`flame_frames`, we use 10) and the corner-assist threshold (`corner_threshold`, we use 900 = 9 px). Tune against original feel.
+Both former "our own tunable" guesses here are resolved: flame linger
+duration (`flame_frames`) is CONFIRMED = 10 frames, read directly from the
+per-tick flame-grid update at `sub_426d06` (facts.md "Flame lifetime —
+CONFIRMED = 10 frames"). The old `corner_threshold` guess (900 = 9 px) was
+deleted outright — corner-assist is not a distance threshold at all; it
+resolves per-pixel via `sub_41EC84`'s movement budget (facts.md "no distance
+threshold" note, verified by `tests/test_move.cpp`).
 
 Parsing notes: `;` starts a comment; the file ends with a DOS EOF byte (0x1A); a few ids hold coordinate pairs (`id,x,y`) — the current parser keeps the first value only, which is fine for the ids the sim reads.

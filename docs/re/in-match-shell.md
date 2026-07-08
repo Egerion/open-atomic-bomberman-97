@@ -249,14 +249,13 @@ blits the string `aHurry` ("hurry") centred at `dword_464A70/2,
 dword_464A6C/2` (screen centre). This is a one-time warning flash near
 60 s remaining, independent of the clock-colour change at ≤30 s.
 
-**Port status: `run_match` draws no clock, no colour warning, no "hurry"
-flash, and no SFX 2700 — a confirmed gap.** `sim::State::ticks_left` already
-carries the exact data the HUD would need (`game_app.cpp` comment at
-line ~324-327 already notes the sim's countdown exists); nothing currently
-renders it. This document does not implement the HUD (DOCS-ONLY task); it
-pins the facts a future port pass would need: `getvalue(110)/(111)/(112)` for
-position/spacing, `getvalue(101)` for the hurry threshold, message 281 for
-the `MM:SS` format, and SOUNDLST id 2700 for the hurry sting.
+**Port status: DONE — no longer a gap.** ROADMAP "In-round shell — RE'd +
+ported 2026-07-08" reconciled this: `game_app.cpp` now draws the MM:SS clock
+HUD (`getvalue(110)/(111)/(112)` for position/spacing, message 281 for the
+format, showing infinity when untimed, warning ink at ≤30 s) and the "hurry"
+flash + SFX 2700 at the `getvalue(101)` = 60 s threshold, driven off
+`sim::State::ticks_left`. This document pinned the facts the port pass used;
+they are now implemented, not just recorded.
 
 (Provenance: `sub_4105D2` @ 0x4105D2, pseudo.c 14456-14552; `sub_41087D`
 @ 0x41087D pseudo.c 14565-14572; `sub_410522` @ 0x410522 pseudo.c
@@ -431,15 +430,18 @@ shippable-binary developer cheats, not decompiler artifacts.
 ## Cross-reference
 
 - `docs/re/frontend-flow.md` — the menu/boot/results screen flow this
-  round loop is nested inside; its "RESULTS tally tier" section already
-  flags the multi-round match structure and per-round scoreboard as
-  deferred — this document's round-end shell section is the missing
-  connective tissue between that gap and `sub_42A3F6`'s full control flow.
+  round loop is nested inside; its "RESULTS tally tier" section documents
+  the multi-round match structure and per-round scoreboard, which shipped
+  via ROADMAP "Multi-round best-of-N loop + RESULTS tally 1:1 — DONE
+  2026-07-08" — this document's round-end shell section is the connective
+  tissue between that tier and `sub_42A3F6`'s full control flow.
   Its "Results MUSIC" paragraph and the 1020/1130 tunables rows were
   CORRECTED by this pass (1130 under all outcome screens; 1020 = setup
-  music; per-level stage music `1100+level` discovered).
+  music; per-level stage music `1100+level` discovered) and are now ported.
 - `docs/valuelst-map.md` — new ids `101`, `110`, `111`, `112` added by this
   pass (clock HUD); id `101` was already loosely noted as "hurry timing", now
   pinned to an exact value and formula.
 - `libs/game/src/game_app.cpp` — `run_match` (`~line 1545`) is the port's
-  in-round loop; this document's Esc finding and HUD gap both apply there.
+  in-round loop; this document's Esc finding, HUD, and hurry-flash facts are
+  all implemented there (ROADMAP "In-round shell — RE'd + ported
+  2026-07-08").
