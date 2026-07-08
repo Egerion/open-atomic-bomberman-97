@@ -407,14 +407,22 @@ parser + the new `bmfont` parser):
   `byte_49D38F` index → a fixed light ink on a dark panel — a cosmetic port
   choice, layout/advance are faithful).
 
-**Interactive settings + controller-remap — DEFERRED (documented).** These `.BM`
-files are the **HELP overlays** for their menu items, and are what the spine
-renders now. The fully-interactive **Options screen** (toggling Team Play /
-Random Start / Conveyor Speed, persisting to `options.ini`) and the
-**controller key-remap UI** (`sub_42B0CE`/`sub_42B47D` setup screens) are large
-separate efforts. The `AppState` hooks (`Options`, `Network`, `Controllers`) are
-in place and currently show the help text; the interactive widgets are the next
-chunk.
+**Interactive settings — Options screen BUILT, controller-remap still DEFERRED.**
+These `.BM` files are the **HELP overlays** for their menu items; Network and
+Controllers still show that help text as-is. The **Options screen**
+(`libs/game/src/options_screen.cpp`) is now the fully-interactive Team Play /
+Conveyor Speed editor, persisting to `options.ini` (read-modify-write,
+`bomber::assets::save_options`); its own F1 key still reaches OPTIONS.BM. Its
+exact on-screen layout is NOT RE'd (no `sub_XXXX` pins the local game-type
+screen's coordinates — see the TODO(RE) note in options_screen.hpp), so it is a
+clean-room minimal list following the confirmed glue-screen conventions
+(random `GLUE<n>` backdrop, FONT6 text, SFX 20 nav / 10 accept). Random Start
+was intentionally left off this screen — no `docs/re/` entry documents it, so
+it is not guessed. The **controller key-remap UI** (`sub_42B0CE`/`sub_42B47D`
+setup screens) and the player-roster/team-mode `present_setup` screen
+(docs/re/setup-screens.md) remain a large separate effort — the `AppState`
+hooks (`Network`, `Controllers`) are in place and currently show the help
+text.
 
 ## The transition — HEADWIPE.ANI, driven by the standard ANI pacer
 

@@ -12,6 +12,7 @@ add_library(bomber_game_core STATIC
   src/input.cpp
   src/screen.cpp
   src/bmscreen.cpp
+  src/options_screen.cpp
   src/transition.cpp
   src/game_app.cpp
 )

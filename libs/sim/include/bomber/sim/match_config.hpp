@@ -33,6 +33,15 @@ struct MatchConfig {
     // Per-player computer-AI flag (ADR-0005): true → the AISystem drives this
     // slot's PlayerInput instead of a human. Copied to Player::ai at setup.
     std::array<bool, kMaxPlayers> ai{};
+    // Team Play toggle, set from the interactive Options screen / options.ini
+    // ("team_play="). CONFIG-ONLY, like the rest of MatchConfig: build_state()
+    // does not read it and it is never mixed into state_hash() (docs/re/
+    // setup-screens.md notes the confirmed CONSUMER is the roster/setup
+    // screen's team-mode display, dword_464964, which this codebase has not
+    // built yet — see that doc's "Determinism / golden — NO IMPACT" section).
+    // A full team MODE (hashed Player::team + sim win/friendly-fire/AI-target
+    // logic) remains the documented follow-up in docs/re/ai.md.
+    bool team_play = false;
     std::uint32_t seed = 0x12345678;
     Tuning tuning;
     // Per-scheme powerup overrides (-P rows): >= -999 replaces the spawn count.

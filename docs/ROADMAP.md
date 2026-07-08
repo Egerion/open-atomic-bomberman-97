@@ -244,12 +244,28 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       (`ValueList::column_or`, VALUELST multi-column support added parallel to the
       sim's first-column `values`). Draw sting fixed to a one-shot 1700 group pick
       (was looping via music_id). libs/sim untouched — no golden impact.
-- [ ] Interactive front-end (DEFERRED, hooks in place): the real Options screen
-      (Team Play/Random Start/Conveyor Speed → options.ini) + controller key-remap
-      UI (`sub_42B0CE`/`sub_42B47D`) — the `.BM` help overlays render now, the
-      settings/remap widgets are the next chunk. Also the RESULTS.PCX cumulative
-      tally tier (needs a multi-round match loop + scoreboard) and the map
-      editor/roulette screens (menu rows are inert documented stubs).
+- [x] Interactive Options screen (Team Play / Conveyor Speed → options.ini) —
+      `libs/game/src/options_screen.cpp`. The menu's Options row now opens a
+      real editable screen (random `GLUE<n>` backdrop, FONT6 text, Up/Down
+      select, Left/Right change, Enter/Esc leave; SFX 20 nav / 10 accept) in
+      place of the `.BM` help overlay; F1 on the screen still reaches
+      OPTIONS.BM. `bomber::assets::save_options` is a read-modify-write
+      writer (preserves unknown lines) added alongside `load_options`, and
+      writes ONLY when a setting actually changed. Random Start was left OUT —
+      it is not RE'd/documented anywhere in `docs/re/`, and the task rules
+      said not to guess it; a `team_play=` key IS synthesized (this install's
+      shipped `options.ini` already carries that exact key) but the flag is a
+      config-only `MatchConfig::team_play` with no sim/roster consumer yet, since
+      the player-roster/team-mode DISPLAY screen described in
+      `docs/re/setup-screens.md` (`present_setup`) was never actually built —
+      that remains a separate, larger effort. libs/sim untouched — no golden
+      impact (`MatchConfig` is never read by `state_hash()`).
+- [ ] Interactive front-end remainder (DEFERRED, hooks in place): controller
+      key-remap UI (`sub_42B0CE`/`sub_42B47D`) and the player-roster/team-mode
+      setup screen (`present_setup`, docs/re/setup-screens.md) — the `.BM` help
+      overlay still renders for Network/Controllers. Also the RESULTS.PCX
+      cumulative tally tier (needs a multi-round match loop + scoreboard) and
+      the map editor/roulette screens (menu rows are inert documented stubs).
 - [ ] Match settings; campaign later.
 
 ## Done (highlights)
