@@ -7,11 +7,16 @@
 
 namespace bomber::sim {
 
+class PowerupSystem;
+
 // Explosions and their aftermath: flame spread, chain reactions, brick
 // burning, and the per-tick fade of flames / crumbling bricks.
 class FlameSystem {
 public:
-    explicit FlameSystem(State& s) : s_(s) {}
+    // powerups: the skull-relocation compensation when a flame destroys a
+    // Disease token while diseases_destroyable is off reuses
+    // PowerupSystem::scatter (the same sub_4255B2 the head-hit drop uses).
+    FlameSystem(State& s, PowerupSystem& powerups) : s_(s), powerups_(powerups) {}
 
     // Detonates the bomb at bombs[bomb_index] (no-op if already inactive):
     // frees the owner's slot, spreads flame in all four directions, and chains
@@ -26,6 +31,7 @@ private:
     bool spread_to(int tx, int ty, std::uint8_t owner);
 
     State& s_;
+    PowerupSystem& powerups_;
 };
 
 }  // namespace bomber::sim

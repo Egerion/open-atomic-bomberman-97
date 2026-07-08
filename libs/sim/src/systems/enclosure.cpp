@@ -58,10 +58,19 @@ bool EnclosureSystem::position(int index, int depth, int* x, int* y) {
 
 void EnclosureSystem::drop_wall(int wx, int wy) {
     State& s = s_;
-    // A bomb on the tile detonates or is eaten, per VALUELST id 46.
+    // A grounded bomb on the tile detonates or is eaten — the "Stomped Bombs
+    // Detonate" option (dword_464940; VALUELST id 46 seeds it, options.ini
+    // stomped_bombs_detonate= / Options row 4 override it). The original's
+    // stepper (sub_426818 ~27257): finds the bomb via the grounded-bomb scan
+    // (sub_422E48, motion != flying/carried); ON -> sub_423209(bomb, -1)
+    // queues a PROPER detonation (drained as a real explosion, chains); OFF
+    // -> sub_424841 zeroes the bomb in place, no explosion, no effect. See
+    // docs/re/facts.md "Options toggles".
     for (std::size_t bi = 0; bi < s.bombs.size(); ++bi) {
         Bomb& b = s.bombs[bi];
-        if (!b.active || b.tile_x() != wx || b.tile_y() != wy) continue;
+        // Airborne bombs are exempt: sub_422E48 skips motion states 2/3
+        // (flying/carried), so a bomb arcing over the tile sails on.
+        if (!b.active || b.flying || b.tile_x() != wx || b.tile_y() != wy) continue;
         if (s.tuning.wall_detonates) {
             flames_.explode(bi);
         } else {

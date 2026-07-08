@@ -27,6 +27,9 @@ Units: speeds are hundredths of a pixel per frame; probabilities are 1-in-N; fra
 | 910 | closing-wall ("fire-god") danger look-ahead, tiles — the AI danger grid marks the next 910 spiral bricks with a decaying threat (`docs/re/ai.md` §4.3) | 15 |
 | 915 | blast-bricks drop chance, 1-in-N (behaviour 3 `sub_40AD8D`, Stage 4) — `docs/re/ai.md` §3.3 | 5 |
 | 920 | powerup-seek range/BFS depth (behaviour 5 `sub_40BAF5`, Stage 3) — how close a powerup must be for an AI to chase it | 4 |
+| 46 | closing enclosement wall lands on a grounded bomb: 1 = detonate (queued full explosion), 0 = silently destroy (`sub_426818` ~27260). The DEFAULT seed of the "Stomped Bombs Detonate" option: `sub_41095A` sets dword_464940 = getvalue(46), then options.ini `stomped_bombs_detonate=` / the Options row override it — `docs/re/facts.md` "Options toggles" | 1 |
+| 120 | "can diseases be blown up like all other powerups?" (`gbl_diseases_can_be_destroyed`). DEFAULT seed of the "Diseases Can Be Destroyed" option (dword_464990 = getvalue(120), overridden by `diseases_destroyable=`); 0 ⇒ a destroyed floor skull relocates via `sub_4255B2(2)` instead of being lost — `docs/re/facts.md` "Options toggles" | 1 |
+| 121, 123–125, 129, 130–138 | disease behavior flags, cure chance, freshness, per-disease durations (`docs/re/facts.md` "Disease system") | 1/1/1/10/10/300×9 |
 
 Powerup kind order (matches scheme `-P` rows and the id blocks above): extra bomb, flame, disease, kick, skate, punch, grab, spooger, goldflame, trigger, jelly, super-disease, random.
 
@@ -36,12 +39,12 @@ Powerup kind order (matches scheme `-P` rows and the id blocks above): extra bom
 |---|---|
 | 91 | clogs speed penalty — the file's legend calls it the "special roulette power-down"; inventory slot 13, the Goldman wheel's booby prize (`docs/re/goldman-roulette.md` §3) |
 | 92 | menu attract-mode delay, seconds (30; legend: < 5 disables attract) — after it, `sub_42B9CE` runs a live all-CPU demo match (frontend-flow.md "Attract mode") |
+| 40 | "do we randomize player starting positions?" — the DEFAULT seed of the Random Start option (dword_464AE8 = getvalue(40) = 1 at `sub_41095A`, overridden by options.ini `random_start=`); consumed by the game layer as the absent-key default, `docs/re/facts.md` "Options toggles" |
 | 101, 102 | 101 **= 60 (CONFIRMED)**: in-round "hurry" threshold, seconds remaining — when the round clock enters the (getvalue(101)−5, getvalue(101)) window the tick callback one-shots SFX 2700 and flashes the "hurry" ANI at screen centre on alternating `frame & 4` ticks (`sub_42A191` ~29531-29549, `docs/re/in-match-shell.md` "hurry flash"); 102 = late-game powerup gating, still unpinned |
 | 110, 111, 112 | in-round countdown-clock HUD (**CONFIRMED**, `sub_4105D2` @ 0x4105D2, drawn every tick): 110/111 **= 525/36** = x/y of the MM:SS digits (drawn glyph-by-glyph with the `numeric font` ANI, message 281 `"%u:%02u"`; an "∞" glyph when the round is untimed), 112 **= 4** = extra px between digits (the file's own comment). Ink switches to the warning colour at ≤30 s remaining — the 30 is hardcoded, not a VALUELST id (`docs/re/in-match-shell.md` "in-round HUD") |
-| 120–138 | disease behavior flags and durations (300 frames each) |
+| 120–138 | disease behavior flags and durations (300 frames each); 122 = diseases_will_recycle (0) — not yet consumed |
 | 320–324 | dud-bomb timing and chance |
 | 330 | **= 13 (CONFIRMED).** File comment: "how many cornerhead animations there are" — id 330 is BOTH the number of cornerhead sequences AND the idle "cornerhead" fidget duration spread (`sub_41F29B` ~23011 rolls `20 + rand()%getvalue(330)`, guarded so the modulus ≥1). Presentation-only (renderer `panic_lcg_`, never `State::rng`); renderer's `kPanicSpread` now = 13 (was the 40 stub). Equals `kCornerheadVariants` by construction, not coincidence |
-| 46 | closing wall detonates (1) vs destroys (0) bombs |
 | 660/661, 665, 667 | punched-bomb arcs, pickup pause, jelly craziness |
 | 670/671 | powers lost when a bomb lands on your head |
 | 681 | trampoline hop arc height (px/frame) — presentation-only; id 680 (bounce frames) is now consumed above |

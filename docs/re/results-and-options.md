@@ -255,8 +255,8 @@ reader's `stricmp` chain (same count, same order, same globals assigned).
 | `enclosement_depth` | `dword_464974` | `< 0 → 0`; `>= getvalue(28) → getvalue(28)-1` |
 | `conveyor_speed` | `dword_464930` | `< 0 → 0`; `>= getvalue(189) → getvalue(189)-1` |
 | `team_play` | `dword_464964` | normalized to 0/1; forces `win_by_kills=0` when set |
-| `random_start` | `dword_464940` | normalized to 0/1 |
-| `stomped_bombs_detonate` | `dword_464AE8` | normalized to 0/1 |
+| `random_start` | `dword_464AE8` | normalized to 0/1 — CORRECTED 2026-07-08: the reader's `stricmp` chain does NOT bind these two keys in the writer's fprintf order; the Options screen's own draw/switch (msg 251 ↔ `dword_464AE8`, msg 254 ↔ `dword_464940`) and the gameplay reads settle it (`docs/re/facts.md` "Options toggles") |
+| `stomped_bombs_detonate` | `dword_464940` | normalized to 0/1 — CORRECTED 2026-07-08, see the `random_start` row |
 | `win_by_kills` | `dword_46497C` | normalized to 0/1 |
 | `goldman` | `dword_4648BC` | normalized to 0/1 |
 | `schemefilename` | (string buffer) | `strcpy_`, no numeric clamp |

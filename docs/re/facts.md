@@ -942,6 +942,114 @@ byte-identical** (A no players; C no punch/grab ⇒ no flying bombs; D forces no
 actions; E hides no powerups ⇒ no player ever has goldflame). Test:
 `tests/test_sim.cpp` "a head hit can drop goldflame (kind 8)".
 
+## Options toggles: stomped_bombs_detonate / diseases_destroyable / random_start — CONFIRMED (2026-07-08)
+
+The two Options-screen toggles that had no sim consumer, plus the Random
+Start shuffle, pinned end to end. **Ground truth for the key↔global mapping
+is the Options screen itself** (`sub_4080DC`): its draw pass pairs each row's
+message id with the global it renders (`getstring(<global>+25)`), and its
+row switch toggles the same global — no elided strings involved. This
+CORRECTS the `docs/re/results-and-options.md` §3 bottom key table for two
+rows (see below); the §3 per-row table was right all along.
+
+- msg **251** ("Random Start") renders/toggles **`dword_464AE8`** (draw
+  ~9107, switch case 1 @ 9316/9417);
+- msg **254** ("Stomped Bombs Detonate") renders/toggles **`dword_464940`**
+  (draw ~9140, switch case 4 @ 9326/9428);
+- msg **261** ("Diseases Can Be Destroyed") renders/toggles
+  **`dword_464990`** (draw ~9216, switch case 11 @ 9351/9454).
+
+So in the §3 22-key list, `random_start=` ↔ `dword_464AE8` and
+`stomped_bombs_detonate=` ↔ `dword_464940` (the doc had them swapped: the
+options.ini reader's `stricmp` chain — whose literal keys Hex-Rays elided —
+does NOT bind in the writer's fprintf order for these two; positional
+matching was a wrong assumption there, and the corresponding gameplay reads
+below confirm the UI mapping).
+
+**Defaults (all three): VALUELST-seeded at init, THEN options.ini
+overrides.** `sub_41095A` @ 0x41095A (pseudo.c 14641-14658) runs
+`dword_464990 = getvalue(120); … dword_464940 = getvalue(46);
+dword_464AE8 = getvalue(40); …` and only then calls `sub_406A2A` → the
+options.ini reader. Shipped VALUELST: **40 = 1** ("default value of 'do we
+randomize player starting positions?'"), **46 = 1** ("when a wall segment
+closes in on a bomb, does it set the bomb off? 0 - destroy the bomb, 1 -
+detonate the bomb (this is a default; otherwise the settings override
+it)"), **120 = 1** ("can diseases be blown up like all other powerups?
+gbl_diseases_can_be_destroyed"). The shipped options.ini also carries all
+three keys as `1`. So every default is ON.
+
+**stomped_bombs_detonate (`dword_464940`) — the closing wall IS the
+"stomp".** Its ONLY gameplay read is the enclosure stepper `sub_426818`
+(pseudo.c 27257-27300): each dropped border wall probes its tile — any
+player is crushed (`sub_421D3F`→`sub_41DE63`), the floor/hidden powerup
+record is destroyed unconditionally (`sub_42542D`→`sub_4254F3`, no skull
+relocation here), and a GROUNDED bomb (`sub_422E48`, which skips motion
+states 2/3 = flying/carried, so airborne bombs sail over) hits the flag:
+**ON → `sub_423209(bomb, -1)` queues a proper detonation** (the 100-slot
+pending queue `dword_4621F8/FC`, drained as a real explosion that chains);
+**OFF → `sub_424841(bomb)` zeroes it in place** — no explosion, no effect.
+Port: `Tuning::wall_detonates` (id 46) consumed by
+`EnclosureSystem::drop_wall` already matched; the flying-bomb exemption
+and the Options-screen override (`GameApp::start_match` sets it from the
+merged option, seeded from getvalue(46) exactly like the original's
+global) are new. No RNG on either branch.
+
+**diseases_destroyable (`dword_464990`) — OFF means a destroyed skull
+RELOCATES, the destruction itself is unconditional.** Gameplay reads:
+1. the explosion flame walk (`sub_42331C` tail, epicentre arm @ 25626-25635
+   and per-tile arm @ 25653-25661): a VISIBLE floor powerup on the flame
+   tile (`sub_42542D`, state +0 == 2 = on-floor; 1 = still hidden under a
+   brick) is destroyed (`sub_4254F3`), then `if (kind == 2 /* disease,
+   off_45BE50 order */ && !dword_464990) sub_4255B2(2)` — respawn a fresh
+   skull at a random free tile;
+2. the sliding-bomb cell-entry probe `sub_4230A5` @ 0x4230A5 (pseudo.c
+   25155-25179, called from the kicked/conveyor slide @ 25555): probe order
+   is grounded bomb → player (both block first), then a visible powerup on
+   the probed cell is destroyed AS A SIDE EFFECT (kicked bombs plow through
+   powerups) with the SAME skull-relocation compensation, then the
+   tile-type verdict (`sub_425FB9` == 0 blank) decides enterability.
+`sub_4255B2` is the SAME random-free-tile scatter the head-hit drop uses
+(already ported 1:1 as `PowerupSystem::scatter`, RNG pairs `rand()%W`,
+`rand()%H`). Port: `Tuning::diseases_destroyable` (id 120, default true),
+consumed in `FlameSystem::spread_to` and the new powerup-squash in
+`BombSystem::slide`; both call `scatter(Disease)` only when the flag is
+off. With the flag ON (default) no draw happens.
+
+**random_start (`dword_464AE8`) — the shuffle is 200 random pair-swaps.**
+Round init (`sub_421793` @ 0x421793, pseudo.c 23996-24012; repeated
+verbatim in the demo-replay stepper `sub_40133F` @ 4472-4488): when the
+flag is set, `for i in 0..199 { a = rand()%10; b = rand()%10; if (a != b)
+swap(startX[a], startX[b]), swap(startY[a], startY[b]) }` over the 10-slot
+spawn-coordinate arrays `dword_46460C/dword_46465C`. Port:
+`match::build_match_config` now mirrors this loop (was a clean-room
+Fisher-Yates, flagged as unpinned) on a SETUP-ONLY LCG — the original's
+rand() is wall-clock seeded, so the deterministic seed substitution is the
+same policy the brick fill uses. The absent-key default getvalue(40) = 1
+(ON) is now honoured by `GameApp::init`.
+
+**GOLDEN: byte-identical.** wall_detonates=1 was already the sim default
+and the enclosure consumer predates this entry (no default-path change);
+diseases_destroyable=true (the original default) makes both new relocation
+calls dead on the default path, and the new slide-probe powerup squash
+only fires when a moving bomb's next cell holds a floor powerup — no
+golden scenario produces that (proved by running the suite before/after:
+all 32 tests, including `golden`, pass unchanged). The flying-bomb
+exemption in drop_wall likewise touched no scenario. Known remaining
+fidelity gaps deliberately NOT taken here (each changes default-path
+behaviour and needs its own golden recapture): the original's flame arm
+STOPS at the powerup it burns and at the bomb it chain-detonates (ours
+continues), and a flying bomb treats a floor powerup as an occupied
+landing tile (ours lands on it).
+
+(Provenance: `sub_4080DC` draw/switch pseudo.c 9097-9454; `sub_41095A`
+14641-14658; `sub_426818` 27166-27310; `sub_422E48` 25031-25052;
+`sub_423209` 25195-25204; `sub_424841` 25899-25904; `sub_42331C` flame walk
+25586-25682; `sub_4230A5` 25155-25179; `sub_4255B2` 26443-26483;
+`sub_425383` 26353-26375; `sub_421793` 23978-24013; `sub_40133F`
+4443-4499; VALUELST.RES lines "40,1" / "46,1" / "120,1" with the quoted
+authored comments; shipped options.ini `random_start=1`,
+`stomped_bombs_detonate=1`, `diseases_destroyable=1`.)
+
 ## Still guessed — not yet extracted from the binary
 
 | Constant | Current value | Status |

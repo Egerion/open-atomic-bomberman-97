@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "grid.hpp"
+#include "systems/powerups.hpp"
 
 namespace bomber::sim {
 
@@ -26,10 +27,20 @@ bool FlameSystem::spread_to(int tx, int ty, std::uint8_t owner) {
     s.flame_owner[ty][tx] = owner;
 
     if (s.floor[ty][tx] != PowerupType::None) {
+        const PowerupType burned = s.floor[ty][tx];
         s.events.push_back({Event::Type::PowerupBurned, -1, static_cast<std::int8_t>(tx),
                             static_cast<std::int8_t>(ty),
-                            static_cast<std::int8_t>(s.floor[ty][tx])});
+                            static_cast<std::int8_t>(burned)});
         s.floor[ty][tx] = PowerupType::None;
+        // "Diseases Can Be Destroyed" OFF (dword_464990=0, options.ini
+        // diseases_destroyable= / VALUELST 120): a burned skull is not lost —
+        // a fresh one relocates to a random free tile. The flame walk's
+        // powerup branch (sub_42331C ~25626/25653) runs `if (kind == 2 &&
+        // !dword_464990) sub_4255B2(2)` right after the destruction;
+        // scatter() IS our sub_4255B2, so order and count of the RNG draws
+        // mirror the original. Destroying the token itself is unconditional.
+        if (burned == PowerupType::Disease && !s.tuning.diseases_destroyable)
+            powerups_.scatter(PowerupType::Disease);
     }
 
     // Chain reaction: bombs caught in the blast go off in the same tick.

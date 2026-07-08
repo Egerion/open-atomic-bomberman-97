@@ -252,9 +252,9 @@ void run_tick(State& s, const TickInputs& inputs) {
 
     // Systems are cheap stack objects wired to the shared state; their
     // construction order is irrelevant, the CALL order below is not.
-    FlameSystem flames{s};
     DiseaseSystem diseases{s};
     PowerupSystem powerups{s};
+    FlameSystem flames{s, powerups};
     BombSystem bombs{s, flames, powerups};
     MovementSystem movement{s};
     StageActorSystem stage{s, movement};

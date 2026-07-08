@@ -75,28 +75,30 @@ inline sim::MatchConfig build_match_config(const assets::sch::Scheme& scheme, in
     }
 
     // "Random Start" (options.ini `random_start=`, dword_464AE8, Options
-    // screen row 1 — docs/re/results-and-options.md §3). The RE brief pins
-    // the toggle and its options.ini key but not the exact placement
-    // algorithm (no sub_XXXX site walked for the shuffle itself), so this is
-    // OUR clean-room reading of "random start": shuffle WHICH of the
-    // scheme's own fixed spawn slots each player index lands on, rather than
-    // inventing new board positions — every player still starts at one of
-    // the scheme's authored (and therefore brick-cleared-safe, see
-    // setup.cpp's neighbour-clear) spawn points, just reassigned. Driven by
-    // a SETUP-ONLY LCG seeded off the match seed (decorrelated from the
-    // brick-fill/actor streams above/below), never sim::State::rng, so the
-    // per-tick RNG draw contract is untouched and identical seeds still
-    // reproduce identical starts.
+    // screen row 1 — docs/re/results-and-options.md §3). CONFIRMED shuffle
+    // (docs/re/facts.md "Options toggles"): the original shuffles its two
+    // 10-slot start-coordinate arrays (dword_46460C/dword_46465C) with 200
+    // random pair-swaps — `a = rand() % 10; b = rand() % 10; if (a != b)
+    // swap(x[a],x[b]), swap(y[a],y[b])` — at round init (sub_421793
+    // pseudo.c 23996-24012; the demo-replay stepper sub_40133F 4472-4488
+    // repeats it verbatim). Every player still starts at one of the scheme's
+    // authored spawn points, just reassigned. Mirrored here 1:1 (the %10 is
+    // the arrays' fixed size; ours is spawns.size(), 10 for a full .SCH).
+    // Driven by a SETUP-ONLY LCG seeded off the match seed (decorrelated
+    // from the brick-fill/actor streams above/below), never sim::State::rng
+    // (the original's rand() is wall-clock seeded), so the per-tick RNG draw
+    // contract is untouched and identical seeds reproduce identical starts.
     if (random_start && cfg.spawns.size() > 1) {
         std::uint32_t start_lcg = seed ^ 0x2545F491u;
         auto start_roll = [&start_lcg](std::uint32_t n) {
             start_lcg = start_lcg * 1664525u + 1013904223u;
             return (start_lcg >> 16) % n;
         };
-        // Fisher-Yates over the scheme's own spawn slots.
-        for (std::size_t i = cfg.spawns.size(); i > 1; --i) {
-            std::size_t j = start_roll(static_cast<std::uint32_t>(i));
-            std::swap(cfg.spawns[i - 1], cfg.spawns[j]);
+        const auto n = static_cast<std::uint32_t>(cfg.spawns.size());
+        for (int i = 0; i < 200; ++i) {
+            std::uint32_t a = start_roll(n);
+            std::uint32_t b = start_roll(n);
+            if (a != b) std::swap(cfg.spawns[a], cfg.spawns[b]);
         }
     }
 

@@ -179,9 +179,9 @@ TEST_CASE("warphole knockout: deterministic per seed, varies across seeds") {
 }
 
 // Random Start (docs/re/results-and-options.md §3 row 1, `random_start=`):
-// build_match_config's clean-room reading (see that function's doc comment) —
-// shuffle WHICH of the scheme's own fixed spawn slots each player index gets,
-// off a setup-only LCG (never sim::State::rng).
+// CONFIRMED as the original's 200-random-pair-swap shuffle over the spawn
+// slots (sub_421793 / sub_40133F; docs/re/facts.md "Options toggles"),
+// mirrored in build_match_config off a setup-only LCG (never sim::State::rng).
 namespace {
 
 assets::sch::Scheme make_spawn_scheme(int count) {

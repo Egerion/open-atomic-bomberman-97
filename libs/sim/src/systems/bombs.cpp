@@ -290,10 +290,29 @@ void BombSystem::slide(std::size_t index, std::int32_t budget) {
                 b.warp_latch = false;
             }
             int nx = tx + grid::dir_dx(b.dir), ny = ty + grid::dir_dy(b.dir);
-            bool blocked = !grid::tile_open(s, nx, ny) || grid::bomb_at(s, nx, ny) != nullptr;
+            // The cell-entry probe mirrors sub_4230A5's order: a bomb or a
+            // player on the probed cell blocks FIRST (and shields anything
+            // else there); only then a visible floor powerup on the cell is
+            // destroyed outright — kicked/conveyor bombs plow through
+            // powerups — and the tile-type verdict decides enterability.
+            bool blocked = grid::bomb_at(s, nx, ny) != nullptr;
             for (const auto& pl : s.players)
                 if (pl.present && pl.alive && pl.tile_x() == nx && pl.tile_y() == ny)
                     blocked = true;
+            if (!blocked && grid::in_grid(nx, ny) && s.floor[ny][nx] != PowerupType::None) {
+                const PowerupType squashed = s.floor[ny][nx];
+                s.events.push_back({Event::Type::PowerupBurned, -1,
+                                    static_cast<std::int8_t>(nx), static_cast<std::int8_t>(ny),
+                                    static_cast<std::int8_t>(squashed)});
+                s.floor[ny][nx] = PowerupType::None;
+                // Same skull compensation as the flame walk (sub_4230A5:
+                // `if (kind == 2 && !dword_464990) sub_4255B2(2)`) — a
+                // squashed Disease token relocates when diseases cannot be
+                // destroyed. scatter() is our sub_4255B2 (RNG order/count).
+                if (squashed == PowerupType::Disease && !s.tuning.diseases_destroyable)
+                    powerups_.scatter(PowerupType::Disease);
+            }
+            if (!grid::tile_open(s, nx, ny)) blocked = true;
             if (blocked) {
                 b.x = cx;
                 b.y = cy;
