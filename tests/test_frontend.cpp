@@ -106,6 +106,45 @@ TEST_CASE("Quit short-circuits from every state and is terminal") {
     CHECK(next(AppState::Quit, AppInput::Back) == AppState::Quit);
     CHECK(next(AppState::Quit, AppInput::MatchOver) == AppState::Quit);
     CHECK(next(AppState::Quit, AppInput::StartMatch) == AppState::Quit);
+    CHECK(next(AppState::Quit, AppInput::RoundContinue) == AppState::Quit);
+}
+
+TEST_CASE("best-of-N: a not-yet-decided round loops Results -> Match again") {
+    // docs/re/frontend-flow.md "results flow": a survivor exists but nobody has
+    // reached win_target_ yet (the RESULTS tally tier) -- and a draw (no
+    // survivor) -- both replay the next round with the same roster/settings.
+    // The SDL shell resolves round_winner() + the win tally into RoundContinue
+    // BEFORE calling next(); the pure graph just loops on that event.
+    AppState s = AppState::Match;
+    s = next(s, AppInput::MatchOver);
+    CHECK(s == AppState::Results);
+
+    // Not decided (RESULTS tally tier, or a DRAW): loop straight back to Match
+    // for the next round -- no detour through the menu.
+    s = next(s, AppInput::RoundContinue);
+    CHECK(s == AppState::Match);
+
+    // The loop can repeat for as many rounds as the match needs.
+    s = next(s, AppInput::MatchOver);
+    CHECK(s == AppState::Results);
+    s = next(s, AppInput::RoundContinue);
+    CHECK(s == AppState::Match);
+}
+
+TEST_CASE("best-of-N: a decided match (VICTORY) or an explicit Back leaves Results for the menu") {
+    // A player reaching win_target_ (VICTORY<n>) or a draw are both round-
+    // ending outcomes shown on Results; when the match IS decided the shell
+    // feeds a plain Advance (or the player hits Back/Escape), which returns to
+    // the menu and ends the match, exactly like the pre-existing single-round
+    // flow this loop extends.
+    CHECK(next(AppState::Results, AppInput::Advance) == AppState::Menu);
+    CHECK(next(AppState::Results, AppInput::Back) == AppState::Menu);
+
+    // Reaching the menu from Results resets nothing in the pure graph itself
+    // (tallies are GameApp state, not part of AppState) -- but the app is back
+    // at the hub, ready for a fresh StartMatch.
+    AppState s = next(AppState::Results, AppInput::Advance);
+    CHECK(next(s, AppInput::StartMatch) == AppState::Match);
 }
 
 TEST_CASE("Logo always yields the title regardless of which accept arrives") {
