@@ -29,9 +29,12 @@ inline constexpr int kClogsPrizeId = 13;
 inline constexpr std::array<int, kWheelSegments> kWheelPrizeIds = {0, 1, 3, 8, 4, 13};
 
 // Maps a wheel prize id (0/1/3/4/8/13) onto our sim::PowerupType, when one
-// exists. Returns sim::PowerupType::None for 13 (clogs) — our port has no
-// speed-penalty inventory kind yet (doc §8 "decision deferred"); callers must
-// treat None as "no sim consumer, award nothing" rather than silently
+// exists. Returns sim::PowerupType::None for 13 (clogs) — our port still has
+// no speed-penalty inventory kind. The wheel screen itself has since shipped
+// (ROADMAP "Goldman Roulette wheel — DONE 2026-07-08"), so this is no longer
+// blocked on a prerequisite — it is an open, actionable decision (doc §8: a
+// 14th PowerupType vs. a MatchConfig-level per-player clogs count). Callers
+// must treat None as "no sim consumer, award nothing" rather than silently
 // dropping a valid mapping.
 constexpr bomber::sim::PowerupType wheel_prize_to_powerup(int prize_id) {
     switch (prize_id) {
