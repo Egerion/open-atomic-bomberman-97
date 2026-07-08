@@ -244,6 +244,23 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       (`ValueList::column_or`, VALUELST multi-column support added parallel to the
       sim's first-column `values`). Draw sting fixed to a one-shot 1700 group pick
       (was looping via music_id). libs/sim untouched — no golden impact.
+- [x] Pre-match SETUP screens + authentic player colour — DONE 2026-07-05
+      (docs/re/setup-screens.md, docs/re/player-colour.md). RE'd the real Play
+      path `sub_42A3F6` → `sub_410F81` (PLAYER INPUT TYPE, getvalue 705-723) →
+      `sub_406DDE` (LEVEL & ROUNDS, getvalue 730-738): `present_setup` (10-slot
+      roster, Right cycles OFF→CPU→KBD0→KBD1, Left/'0' off, 'T' team toggle,
+      random GLUE<n> backdrop via getvalue(16), music 1020) + `present_map_select`
+      (RANDOM + 11 named levels via getstring(150+n), wins 1..100, PgUp/PgDn ±5).
+      Strings come from the install's MESSAGES.TXT via the new `assets::messages`
+      parser; roster/team/level/wins feed `MatchConfig` (`active[]`, non-hashed
+      `team[]`) and `start_match`. Player colour replaced the truecolour-tint
+      guess with the original's `.RMP` palette-INDEX remap (`sub_414A65` apply/
+      backfill + `sub_415A1C` blit): new `assets::load_rmp` (259-byte format),
+      `recolor_image_rmp`/`AniTextures::recolored(rmp)`, tint kept only as the
+      missing-file fallback; setup slots inked via `slot_color` (= `sub_41672F`).
+      Tests: `test_messages.cpp`, `test_rmp.cpp` (registered). GOLDEN: no impact —
+      config/presentation only, `active` defaults all-true so hand-built configs
+      are unchanged; sim hash byte-identical.
 - [ ] Interactive front-end (DEFERRED, hooks in place): the real Options screen
       (Team Play/Random Start/Conveyor Speed → options.ini) + controller key-remap
       UI (`sub_42B0CE`/`sub_42B47D`) — the `.BM` help overlays render now, the

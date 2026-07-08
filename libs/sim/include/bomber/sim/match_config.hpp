@@ -33,6 +33,18 @@ struct MatchConfig {
     // Per-player computer-AI flag (ADR-0005): true → the AISystem drives this
     // slot's PlayerInput instead of a human. Copied to Player::ai at setup.
     std::array<bool, kMaxPlayers> ai{};
+    // Per-player active flag (setup screen): false = OFF (slot excluded from the
+    // match). Filled all-true in the ctor so hand-built configs (tests/golden)
+    // that only set player_count keep their contiguous 0..count-1 roster.
+    std::array<bool, kMaxPlayers> active{};
+    // Per-player team, from the PLAYER INPUT screen's +84 byte (sub_4223E7,
+    // toggled by 'T'; docs/re/setup-screens.md). CONFIG ONLY and deliberately
+    // NOT copied into any hashed Player field: team MODE (win/friendly-fire/AI
+    // logic on a hashed Player::team) is a separate deferred effort (docs/re/
+    // ai.md), so this stays out of state_hash() — golden byte-identical. Default
+    // 0 (single team) everywhere; captured now so the roster is complete and the
+    // sim side can be wired later without another setup-screen pass.
+    std::array<std::uint8_t, kMaxPlayers> team{};
     std::uint32_t seed = 0x12345678;
     Tuning tuning;
     // Per-scheme powerup overrides (-P rows): >= -999 replaces the spawn count.
@@ -42,6 +54,7 @@ struct MatchConfig {
 
     MatchConfig() {
         spawn_override.fill(kNoOverride);
+        active.fill(true);  // default roster = contiguous player_count (tests/golden)
         // ActorType::None is 255, not the zero-initialised DirArrow(0).
         for (auto& row : actor_type) row.fill(ActorType::None);
     }

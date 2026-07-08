@@ -8,7 +8,11 @@
 #include <string>
 #include <vector>
 
+#include <array>
+
 #include "bomber/assets/bmfont.hpp"
+#include "bomber/assets/messages.hpp"
+#include "bomber/assets/rmp.hpp"
 #include "bomber/game/sdl.hpp"
 #include "bomber/game/sprites.hpp"
 #include "bomber/sim/constants.hpp"
@@ -26,8 +30,17 @@ public:
     bool load(SDL_Renderer* ren, const std::filesystem::path& game_dir);
 
     // Builds per-player recolored copies of the player-facing sprite sets
-    // (walk/stand/bombs/flames/deaths) from the VALUELST 200..247 colors.
+    // (walk/stand/bombs/flames/deaths). Prefers each slot's authentic .RMP index
+    // remap; `colors` (VALUELST 200..247) is the truecolour fallback for a slot
+    // whose .RMP was missing.
     void build_player_sets(const std::int32_t colors[][3]);
+
+    // Seed the setup-screen slot colours (rmp_rgb_) for every colour whose .RMP
+    // was absent, from the VALUELST 200..247 percent table (Tuning::color_rgb),
+    // so slot_color() has an authoritative value for all 10 slots even without a
+    // full set of .RMP files. A loaded .RMP's own tail is kept (it wins). `n` =
+    // number of rows in `colors` (== 10). Presentation-only.
+    void set_color_fallbacks(const std::int32_t colors[][3], int n);
 
     // Loads the per-stage art (FIELDn.PCX + TILESn.ANI + XBRICKn.ANI).
     bool load_stage(int stage);
@@ -103,6 +116,34 @@ public:
     // draws no glyphs). Loaded once in load().
     const assets::bmfont::Font& frontend_font() const { return frontend_font_; }
 
+    // The install's MESSAGES.TXT string table (the original's getstring /
+    // sub_4124A4): the setup/net screens format these labels by id. Loaded once
+    // in load() from the install root; the text stays in the user's own file.
+    std::string getstring(int id, const std::string& fallback = std::string()) const {
+        return messages_.get_or(id, fallback);
+    }
+
+    // The on-screen RGB888 colour of player-slot `i`, the faithful equivalent of
+    // the original setup screen's per-slot label ink `sub_41672F(i)` (@0x41672F):
+    // it quantises the slot's stored RGB (byte_460BD0/BDA/BE4[i], == the .RMP
+    // tail) to 5 bits each (`min(v/3, 31)`), packs RGB555, and looks it up in the
+    // palette LUT. We are truecolour, so instead of the LUT we expand the 5-bit
+    // channels back to 8 bits (the same expand5 the ANI 16bpp path uses). Using
+    // the .RMP tail (authoritative) through the game's own quantisation is what
+    // makes each setup-screen slot read as its true in-game colour. `out[3]` gets
+    // R,G,B. Falls back to a mid grey if the colour index is out of range.
+    void slot_color(int i, std::uint8_t out[3]) const {
+        auto q = [](std::uint8_t v) -> std::uint8_t {
+            int f = v / 3;
+            if (f > 31) f = 31;  // sub_41672F clamp to 5 bits
+            return static_cast<std::uint8_t>((f << 3) | (f >> 2));  // expand5
+        };
+        if (i < 0 || i >= kColors) { out[0] = out[1] = out[2] = 128; return; }
+        out[0] = q(rmp_rgb_[i][0]);
+        out[1] = q(rmp_rgb_[i][1]);
+        out[2] = q(rmp_rgb_[i][2]);
+    }
+
 private:
     const AniTextures& pick(const AniTextures& base,
                             const AniTextures (&colored)[kLocalPlayers], int player) const {
@@ -148,6 +189,23 @@ private:
 
     AniTextures headwipe_;  // screen-transition wipe (HEADWIPE.ANI), shared
     assets::bmfont::Font frontend_font_;  // FONT6.FON, the .BM screen font
+    assets::res::Messages messages_;      // MESSAGES.TXT string table (install root)
+
+    // The ten player-colour remap tables (0.RMP..9.RMP, install root). The
+    // original recolours player i's sprites by rewriting each pixel's palette
+    // index through i.rmp at blit time (sub_415A1C, dword_460564[colour] —
+    // docs/re/player-colour.md); build_player_sets does the same via
+    // recolored(rmp). rmp_ok_[i] is false when the file is missing/short, in
+    // which case that slot falls back to the truecolour recolour(color_rgb).
+    static constexpr int kColors = 10;
+    std::array<std::array<std::uint8_t, 256>, kColors> rmp_{};
+    std::array<bool, kColors> rmp_ok_{};
+    // The 3 tail bytes (R,G,B percent) of each colour's .RMP. When a .RMP is
+    // absent the tail falls back to VALUELST color_rgb (set in load()). This is
+    // the authoritative per-slot colour for the setup screen's label tint, the
+    // same bytes the original stores in byte_460BD0/BDA/BE4 (sub_414A65). Empty
+    // (zero) only if neither the .RMP nor a colour table was available.
+    std::array<std::array<std::uint8_t, 3>, kColors> rmp_rgb_{};
     // Front-end full-screen PCX, loaded and cached on demand by base name.
     // mutable: frontend_pcx() is a const accessor but populates the cache
     // lazily. Owners live in front_textures_ to keep the Sprites' tex valid.
