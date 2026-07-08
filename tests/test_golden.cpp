@@ -161,11 +161,19 @@ TEST_CASE("golden D: the disease gauntlet") {
             else if (m == 3) s.state().floor[y][x] = PowerupType::Flame;
         }
 
+    // Ticks 600/800 recaptured (docs/re/facts.md "Flame-arm stops"): the
+    // scenario's flame reaches a floor powerup between tick 400 and 600. The
+    // arm now stops there instead of burning through, so the state — and
+    // hence the hash — diverges from that point on. Ticks 200/400 are BYTE-
+    // IDENTICAL to before the fix (proved by running both revisions), and the
+    // RNG stream (kExpectedRng below) is completely unaffected at every
+    // checkpoint: the fix adds no RNG draws, it only changes which tile the
+    // arm's blank-tile ignite loop reaches next.
     static constexpr std::uint64_t kExpectedHash[4] = {
-        0x917fd0daca6a23baull,  // tick 200
-        0x0e7f1c307c8235c0ull,  // tick 400
-        0xd6651053635e6029ull,  // tick 600
-        0xba564b2cc526e62cull,  // tick 800
+        0x917fd0daca6a23baull,  // tick 200 (unchanged)
+        0x0e7f1c307c8235c0ull,  // tick 400 (unchanged)
+        0x2377e4143b5e6227ull,  // tick 600 (recaptured)
+        0xe8872ea331d37c3eull,  // tick 800 (recaptured)
     };
     static constexpr std::uint32_t kExpectedRng[4] = {0xca47489cu, 0x49cffff6u, 0x2abb3268u,
                                                       0xd72904d8u};
