@@ -228,10 +228,24 @@ Enter/keys dispatch it (Provenance: `sub_42B9CE` @ 0x42B9CE):
 | 0 | `sub_42A3F6` | 0x42A3F6 | **Play/Start** — runs a match then the results flow (owns DRAW/RESULTS/VICTORY, below) | no |
 | 1 | `sub_42B0CE` | 0x42B0CE | setup screen A (`sub_42741E(0x410)`) | no |
 | 2 | `sub_42B47D` | 0x42B47D | setup screen B (sibling, same `sub_42741E(0x410)`) | no |
-| 3 | `sub_4080DC` | 0x4080DC | **map editor** (EDITOR.BM; the "Ctrl+E ×6" easter egg lands here) | (BM) |
+| 3 | `sub_4080DC` | 0x4080DC | **CORRECTED: the Options screen** (19-item settings list — team play, random start, key-remap, …), NOT a map editor; see `docs/re/results-and-options.md` §3 | no |
 | 4 | `sub_41302D(aCreditsBm)` | — | **Credits** — the `.BM` text viewer on `credits.bm` | **yes** |
-| 5 | `sub_41431C` | 0x41431C | roulette/help (`sub_4124A4(610)`; ROULETTE.BM ships) | (BM) |
+| 5 | `sub_41431C` | 0x41431C | **CORRECTED: a generic HELP FILE BROWSER**, not Roulette — lists every `*.BM` in the install (incl. ROULETTE.BM as one topic among ~10) via a real DOS glob; see `docs/re/results-and-options.md` §4 | (BM) |
 | 6 | `sub_412987` | 0x412987 | **Quit** — exit confirm + exit sting `sub_427BFB(2600)` | no |
+
+**Row 3 and row 5 corrected (2026-07-08).** A prior pass mislabeled
+`sub_4080DC` as the map editor and `sub_41431C` as "roulette" — reading
+their bodies shows neither is true. `sub_4080DC` has no editor code and
+never references `EDITOR.BM`; it is the interactive Options screen (team
+play / random start / conveyor speed / key-remap / …), fully RE'd in
+`docs/re/results-and-options.md`. `sub_41431C` has no roulette-wheel
+drawing code either; it globs `*.BM` and opens whichever the player picks
+in the existing `.BM` viewer — ROULETTE.BM is just one of ~10 listed help
+topics. The **real** Goldman Roulette Wheel mini-game is a separate,
+menu-unreachable routine (`sub_4034BC`) invoked automatically during round
+setup when the `goldman=1` option is on — see the same doc. The map editor
+entry point (and the "Ctrl+E ×6" easter egg's real target) remains
+unlocated; treat both as open, not confirmed, until found.
 
 **Menu key → sound → action table (raw `sub_4102B7` codes, EXHAUSTIVE, CONFIRMED
 `sub_42B9CE`).** The nav blip fires *first* for every real key, then the dispatch:
@@ -291,12 +305,16 @@ timeout is `getvalue(92)`, not the waited-screen `getvalue(12)`.)
 
 **Spine mapping.** The polished menu keeps the seven rows in the original v10
 order so the cursor anchor lands on the baked labels: Play→`Match`,
-setup A→Options `.BM` help, setup B→Network `.BM` help, Editor→inert stub,
-Credits→Credits `.BM`, Roulette→inert stub, Quit→app exit. **Play, Credits, Quit
-are live**; the editor/roulette rows are documented inert stubs (their real
-screens are separate efforts). The cursor is now the actual animated `"bomb
-trigger green"` sprite (TRIGBOMB.ANI) at the pinned anchor, read live from
-VALUELST row 700's columns (`ValueList::column_or`), with `{332,140,38}` as the
+setup A→Options `.BM` help, setup B→Network `.BM` help, row 3 (Options,
+corrected above)→inert stub, Credits→Credits `.BM`, row 5 (Help browser,
+corrected above)→inert stub, Quit→app exit. **Play, Credits, Quit are live**;
+rows 3 and 5 are documented inert stubs — row 3's real screen is the RE'd
+Options screen (`docs/re/results-and-options.md` §3, a separate
+implementation effort) and row 5's real screen is the RE'd `.BM` help
+browser (same doc §4), not a map editor / roulette wheel respectively as an
+earlier pass assumed. The cursor is now the actual animated `"bomb trigger
+green"` sprite (TRIGBOMB.ANI) at the pinned anchor, read live from VALUELST
+row 700's columns (`ValueList::column_or`), with `{332,140,38}` as the
 fallback; it falls back to a highlight bar only if TRIGBOMB.ANI is absent. The
 Controllers/INPUT.BM help has no dedicated main-menu row in the original (it
 hangs off the interactive controller-setup screen), so its `OpenControllers`
@@ -369,10 +387,13 @@ which *loops* the track — a wrong, repeating sting. It is now a **one-shot**:
 and the DRAW `ScreenDef` has `music_id = -1` (no looping music). The winner path
 was already a one-shot (2000-group in `run_match`).
 
-**RESULTS tally tier — DEFERRED (documented).** The middle tier (a survivor
+**RESULTS tally tier — RE'd, port still DEFERRED.** The middle tier (a survivor
 exists but nobody has clinched the match: `sub_42A3F6` loads RESULTS.PCX and
 prints each player's cumulative win tally against `dword_464A7C` = wins-needed)
-needs a **multi-round match structure with a running scoreboard** the spine does
+is now fully RE'd — layout, getvalue ids, message ids, the two independent
+packed win/kill counters (`sub_421AC8`/`sub_421B0F`), and the clinch/outcome
+logic — in `docs/re/results-and-options.md` §1. It still needs a
+**multi-round match structure with a running scoreboard** the spine does
 not have yet — `run_app` plays a single round then returns to the menu. Adding it
 faithfully means tracking per-player cumulative wins + the match-win threshold
 across rounds and rendering the tally on RESULTS.PCX (with the FONT6 glyph draw,
@@ -407,22 +428,25 @@ parser + the new `bmfont` parser):
   `byte_49D38F` index → a fixed light ink on a dark panel — a cosmetic port
   choice, layout/advance are faithful).
 
-**Interactive settings — Options screen BUILT, controller-remap still DEFERRED.**
-These `.BM` files are the **HELP overlays** for their menu items; Network and
-Controllers still show that help text as-is. The **Options screen**
-(`libs/game/src/options_screen.cpp`) is now the fully-interactive Team Play /
-Conveyor Speed editor, persisting to `options.ini` (read-modify-write,
-`bomber::assets::save_options`); its own F1 key still reaches OPTIONS.BM. Its
-exact on-screen layout is NOT RE'd (no `sub_XXXX` pins the local game-type
-screen's coordinates — see the TODO(RE) note in options_screen.hpp), so it is a
-clean-room minimal list following the confirmed glue-screen conventions
-(random `GLUE<n>` backdrop, FONT6 text, SFX 20 nav / 10 accept). Random Start
-was intentionally left off this screen — no `docs/re/` entry documents it, so
-it is not guessed. The **controller key-remap UI** (`sub_42B0CE`/`sub_42B47D`
-setup screens) and the player-roster/team-mode `present_setup` screen
-(docs/re/setup-screens.md) remain a large separate effort — the `AppState`
-hooks (`Network`, `Controllers`) are in place and currently show the help
-text.
+**Interactive settings — Options screen BUILT (clean-room) and now RE'd;
+controller-remap RE'd, port still DEFERRED.** These `.BM` files are the **HELP
+overlays** listed by the help browser (`sub_41431C`, corrected above). The
+**Options screen** (`libs/game/src/options_screen.cpp`) is a fully-interactive
+Team Play / Conveyor Speed editor persisting to `options.ini`
+(read-modify-write, `bomber::assets::save_options`); its F1 key still reaches
+OPTIONS.BM. It was built clean-room against the glue-screen conventions
+(random `GLUE<n>` backdrop, FONT6 text, SFX 20 nav / 10 accept) BEFORE the
+real screen was RE'd; the original (`sub_4080DC` — a 19-item list including
+team play, random start, conveyor speed, "Define keyboard layouts", persisting
+to `options.ini` only on app exit via `sub_405DE3`/`sub_410EBF`) is now fully
+pinned in `docs/re/results-and-options.md` §3 (+ the complete 22-key
+`options.ini` table), so aligning our screen's item list/layout/write-timing
+to it is a tracked follow-up. The **key-remap UI** (`sub_407B9D`, reached from
+the Options screen's "Define keyboard layouts" row — NOT the
+`sub_42B0CE`/`sub_42B47D` net-game screens) is RE'd in the same doc §2;
+porting that widget is still a separate implementation effort. The `AppState`
+hooks (`Options`, `Network`, `Controllers`) are in place; Network/Controllers
+currently show the help text.
 
 ## The transition — HEADWIPE.ANI, driven by the standard ANI pacer
 

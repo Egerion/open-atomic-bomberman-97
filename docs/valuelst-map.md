@@ -47,6 +47,13 @@ Powerup kind order (matches scheme `-P` rows and the id blocks above): extra bom
 | 450–460 | per-level ice (input lag) in ms |
 | 905 | reserved/unused AI slot — no `getvalue(905)` call exists in the binary and VALUELST has no `905,<n>` line; only the editor's label writer touches it (`docs/re/ai.md` §9.5) |
 | 1100–1110 | net protocol retransmit timing |
+| 15 | "is the online manual enabled?" flag gating the main-menu help browser (`docs/re/results-and-options.md` §4) |
+| 27, 28 | enclosement-depth option: `27` = default depth, `28` = count of depths (4: None/A Little/A Lot/All the way) — Options screen row 7 |
+| 745–748 | Options/Settings screen layout: x, y0, ystep, colour for the 19-item list (`docs/re/results-and-options.md` §3) |
+| 780–788 | RESULTS scoreboard layout: header (780–783) and per-player row (785–788) (`docs/re/results-and-options.md` §1) |
+| 790, 795, 800–803 | RESULTS screen "press F1", "continue with same net game?", and outcome-line (won/not-yet-clinched) coordinates |
+| 805, 1000–1010 | Goldman Roulette Wheel geometry — centre, radii, circle resolution, Lissajous params, twinkle duration (`sub_4034BC`, `docs/re/results-and-options.md` §4) |
+| 1100–1140 | key-remap UI (`sub_407B9D`) labels: screen header, per-slot "press key for", action names, bound-key display |
 
 ## Not in VALUELST (hardcoded in BM95.EXE — our own tunables)
 
