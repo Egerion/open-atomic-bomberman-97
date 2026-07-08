@@ -36,7 +36,13 @@ struct Event {
     Type type{};
     std::int8_t player = -1;  // acting/affected player, -1 if n/a
     std::int8_t x = -1, y = -1;
-    std::int8_t data = 0;  // powerup kind for the powerup events
+    // Powerup kind for the powerup events. For PlayerDied (docs/re/
+    // results-and-options.md §1, sub_421B0F's per-round kill tally): the
+    // KILLER's player index, or -1 when there is no attributable killer
+    // (enclosure/warphole crush). `data == player` is an explicit SELF-kill
+    // (died to their own flame) — the frontend excludes these from the kill
+    // tally ("our semantics"; §1 does not pin whether a self-kill counts).
+    std::int8_t data = 0;
 };
 
 }  // namespace bomber::sim

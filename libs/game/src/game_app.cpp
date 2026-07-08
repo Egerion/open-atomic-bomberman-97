@@ -578,6 +578,47 @@ int GameApp::round_winner() const {
     return sim::winning_side(s);
 }
 
+bool GameApp::is_team_mode() const {
+    // Team mode (docs/re/setup-screens.md dword_464964): any two ACTIVE
+    // players sharing a MatchConfig team means team rows/strings apply.
+    // setup_team_[] is the frontend's per-slot +84 byte; team_play_ is the
+    // game-type gate (start_match zeroes every slot's team when it is off,
+    // so gating on team_play_ here keeps this in lockstep with the roster
+    // actually built for the match in progress).
+    if (!team_play_) return false;
+    const sim::State& s = sim_.state();
+    std::array<bool, sim::kMaxPlayers> team_seen{};
+    for (int i = 0; i < sim::kMaxPlayers; ++i) {
+        if (!s.players[i].present) continue;
+        int t = setup_team_[i];
+        if (t < 0 || t >= sim::kMaxPlayers) continue;
+        if (team_seen[t]) return true;
+        team_seen[t] = true;
+    }
+    return false;
+}
+
+int GameApp::match_clinch() const {
+    // §1 v73: the default win-count clinch, or — in team mode with
+    // win_by_kills set (§1's "in team mode with win_by_kills set, the clinch
+    // instead compares the highest round-kill total against ... the target,
+    // breaking ties by requiring a single unique leader") — the kill-count
+    // clinch via results.hpp's win_by_kills_clinch(), so both call sites
+    // (run_app's Results handler and present_scoreboard) agree on whether
+    // the match is over.
+    const sim::State& s = sim_.state();
+    if (is_team_mode() && options_.win_by_kills) {
+        std::array<bool, sim::kMaxPlayers> present{};
+        for (int i = 0; i < sim::kMaxPlayers; ++i) present[i] = s.players[i].present;
+        return win_by_kills_clinch(kill_count_, present, win_target_);
+    }
+    for (int i = 0; i < sim::kMaxPlayers; ++i) {
+        if (!s.players[i].present) continue;
+        if (win_count_[i] >= win_target_) return i;
+    }
+    return -1;
+}
+
 AppInput GameApp::run_boot_attract() {
     // The boot presentation (sub_42B060 @0x42B060) — STRAIGHT-LINE, no loop.
     // The original's exact order:
@@ -808,39 +849,17 @@ AppInput GameApp::present_scoreboard() {
 
     // Outcome line — getvalue(800/801/803); string 120/121 "still need N" vs
     // 35/36 "wins the match" depending on team mode (§1's dword_46497C /
-    // win_by_kills branch is a documented TODO below — our options do not
-    // expose win_by_kills yet, so the clinch check always uses the win-count
-    // path, which is the CONFIRMED non-team default).
+    // win_by_kills branch, wired below via options_.win_by_kills).
     const float ox = static_cast<float>(values_.column_or(800, 0, 150));
     const float oy = static_cast<float>(values_.column_or(800, 1, 94));
 
-    // Team mode (docs/re/setup-screens.md dword_464964): any two ACTIVE
-    // players sharing a MatchConfig team means team rows/strings apply.
-    // setup_team_[] is the frontend's per-slot +84 byte; team_play_ is the
-    // game-type gate (start_match zeroes every slot's team when it is off,
-    // so gating on team_play_ here keeps this in lockstep with the roster
-    // actually built for the match in progress).
-    bool team_mode = false;
-    if (team_play_) {
-        std::array<bool, sim::kMaxPlayers> team_seen{};
-        for (int i = 0; i < sim::kMaxPlayers; ++i) {
-            if (!s.players[i].present) continue;
-            int t = setup_team_[i];
-            if (t < 0 || t >= sim::kMaxPlayers) continue;
-            if (team_seen[t]) { team_mode = true; break; }
-            team_seen[t] = true;
-        }
-    }
-
-    // The match-clinch check (§1 v73): the first player/team whose win_count_
-    // reaches win_target_. win_by_kills (team mode comparing round-kill totals
-    // instead) is NOT wired — our Options screen does not expose that toggle
-    // yet (docs/re/results-and-options.md §3 row 5); TODO(§1) once it is.
-    int clinched_player = -1;
-    for (int i = 0; i < sim::kMaxPlayers; ++i) {
-        if (!s.players[i].present) continue;
-        if (win_count_[i] >= win_target_) { clinched_player = i; break; }
-    }
+    // Team mode + the §1 v73 match-clinch check — factored into is_team_mode()
+    // / match_clinch() (game_app.hpp) so run_app's Results handler (the
+    // VICTORY-vs-scoreboard decision) and this render agree on the exact same
+    // predicate, including the win_by_kills branch (docs/re/
+    // results-and-options.md §3 row 5, now live).
+    bool team_mode = is_team_mode();
+    int clinched_player = match_clinch();
 
     // Header text (getstring(30), "Game Winner was %s !"), drawn once per
     // round on entry — the winner named is this ROUND's winner (round_winner()),
@@ -944,7 +963,13 @@ AppInput GameApp::present_scoreboard() {
             std::string outcome;
             std::uint8_t oc[3];
             if (clinched_player < 0) {
-                int needed = win_target_ - *std::max_element(win_count_.begin(), win_count_.end());
+                // "Still needs N" reports against whichever tally the active
+                // clinch mode actually compares (§1): kill_count_ under
+                // win_by_kills, win_count_ otherwise — keeps this line
+                // consistent with what clinched_player was decided from.
+                const auto& lead_tally =
+                    (team_mode && options_.win_by_kills) ? kill_count_ : win_count_;
+                int needed = win_target_ - *std::max_element(lead_tally.begin(), lead_tally.end());
                 if (needed < 0) needed = 0;
                 std::string fmt = team_mode ? assets_.getstring(121, "Team still needs %u to win")
                                             : assets_.getstring(120, "Still need %u to win");
@@ -1257,6 +1282,12 @@ AppInput GameApp::run_match() {
             sim_.tick(collect_inputs());
             sounds_.on_tick(sim_.state());
             renderer_->on_events(sim_.state());
+            // §1's kill tally (sub_421B0F): a GameApp-side pass over this
+            // tick's events, separate from the renderer's own on_events walk
+            // (renderer_ never mutates GameApp state — CLAUDE.md's libs/game
+            // boundary). Cumulative for the whole match (see kill_count_'s
+            // doc comment); reset only in reset_match_scores().
+            tally_kills(sim_.state().events, kill_count_);
 
             const sim::State& s = sim_.state();
             // Team-aware round-over: "one SIDE left", not "one player left"
@@ -1373,17 +1404,23 @@ int GameApp::run_app() {
                 // previously our DRAW/VICTORY screens played under whatever music
                 // was left running, a silent-vs-original gap now closed.
                 int w = round_winner();
-                bool match_over = false;
-                if (w >= 0) {
-                    ++win_count_[w];                          // tally the round win
-                    match_over = win_count_[w] >= win_target_;  // best-of getvalue(310)
-                }
-                if (w >= 0 && match_over) {
-                    // MATCH win: the winner reached the target -> VICTORY, then
+                if (w >= 0) ++win_count_[w];  // tally the round win
+                // The match-over check (§1 v73): the default win-count target,
+                // or (team mode + win_by_kills) the kill-count clinch —
+                // match_clinch() (game_app.hpp) so this agrees with
+                // present_scoreboard's own clinch/outcome-line render. The
+                // clinching slot can differ from the round winner `w` under
+                // win_by_kills (a team's kill leader need not be this round's
+                // sole survivor), so VICTORY names whoever match_clinch()
+                // returns, not `w`.
+                int clinched = w >= 0 ? match_clinch() : -1;
+                bool match_over = clinched >= 0;
+                if (match_over) {
+                    // MATCH win: the target was reached -> VICTORY, then
                     // back to the menu (next(Results, Advance) = Menu).
                     audio_.start_music(kWinMusicId);  // 1020 win track under VICTORY
                     audio_.play_random_in_range(2000, 2299);  // "we have a winner", under VICTORY
-                    ev = present_screen(victory_screen(w));
+                    ev = present_screen(victory_screen(clinched));
                 } else if (w >= 0) {
                     // Round win, match not over: show the running scores. The
                     // winner sting plays under THIS screen too (§1) — the

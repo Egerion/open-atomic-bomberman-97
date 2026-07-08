@@ -8,8 +8,14 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
+#include <array>
+#include <vector>
+
 #include "bomber/game/app_flow.hpp"
 #include "bomber/game/input.hpp"
+#include "bomber/game/results.hpp"
+#include "bomber/sim/constants.hpp"
+#include "bomber/sim/event.hpp"
 
 using bomber::game::AppInput;
 using bomber::game::AppState;
@@ -21,6 +27,10 @@ using bomber::game::kKeyboardSets;
 using bomber::game::KeySet;
 using bomber::game::next;
 using bomber::game::SlotInputType;
+using bomber::game::tally_kills;
+using bomber::game::win_by_kills_clinch;
+using bomber::sim::Event;
+using bomber::sim::kMaxPlayers;
 
 TEST_CASE("the nominal boot path walks Boot->Logo->Title->Menu->Match->Results->Menu") {
     // Boot/Logo/Title accept on the same event (Advance) — a keypress OR the
@@ -243,4 +253,54 @@ TEST_CASE("KeySet/KeyAction shape: 2 keyboard sets, 6 actions each") {
     ks.scancode[static_cast<int>(KeyAction::Action1)] = 57;
     CHECK(ks.scancode[static_cast<int>(KeyAction::Up)] == 200);
     CHECK(ks.scancode[static_cast<int>(KeyAction::Action1)] == 57);
+}
+
+// The §1 kill tally (results.hpp's tally_kills): counts PlayerDied.data
+// (event.hpp's killer-index convention) into a per-player counter, excluding
+// both "no killer" (-1) and self-kills (data == player) — see results.hpp's
+// doc comment for why self-kills are excluded ("our semantics", §1 does not
+// pin this).
+TEST_CASE("tally_kills counts an owner kill, skips a self-kill and a no-killer death") {
+    std::array<int, kMaxPlayers> kills{};
+    std::vector<Event> events;
+    events.push_back({Event::Type::PlayerDied, /*player=*/1, 0, 0, /*data=killer*/ 0});
+    events.push_back({Event::Type::PlayerDied, /*player=*/2, 0, 0, /*data=killer*/ 2});   // self
+    events.push_back({Event::Type::PlayerDied, /*player=*/3, 0, 0, /*data=killer*/ -1});  // crush
+    events.push_back({Event::Type::Explosion, 0, 0, 0, 0});  // unrelated event type, ignored
+    tally_kills(events, kills);
+    CHECK(kills[0] == 1);
+    for (int i = 1; i < kMaxPlayers; ++i) CHECK(kills[i] == 0);
+
+    // Tallying is additive across ticks/calls — a second bomb-owner kill by
+    // the same player accumulates (cumulative for the whole match, §1's
+    // "carried across rounds within one match").
+    std::vector<Event> more{{Event::Type::PlayerDied, 4, 0, 0, 0}};
+    tally_kills(more, kills);
+    CHECK(kills[0] == 2);
+}
+
+// §1's v78==1 tie-break: "the clinch instead compares the highest round-kill
+// total against the target, breaking ties by requiring a single unique
+// leader". win_by_kills_clinch (results.hpp) mirrors that predicate exactly.
+TEST_CASE("win_by_kills_clinch requires reaching the target AND a unique leader") {
+    std::array<bool, kMaxPlayers> present{};
+    present[0] = present[1] = true;
+
+    std::array<int, kMaxPlayers> kills{};
+    kills[0] = 5;
+    kills[1] = 2;
+    CHECK(win_by_kills_clinch(kills, present, /*target=*/5) == 0);  // unique leader, at target
+
+    kills[0] = 4;  // below target: no clinch yet even with a unique leader
+    CHECK(win_by_kills_clinch(kills, present, /*target=*/5) == -1);
+
+    kills[0] = 5;
+    kills[1] = 5;  // tied at the target: v78 != 1, no clinch
+    CHECK(win_by_kills_clinch(kills, present, /*target=*/5) == -1);
+
+    // An absent slot's always-0 kill count must not fake a tie against a
+    // real player who also happens to have 0 kills.
+    std::array<int, kMaxPlayers> zero_kills{};
+    present[1] = false;  // only player 0 is active now
+    CHECK(win_by_kills_clinch(zero_kills, present, /*target=*/0) == 0);
 }

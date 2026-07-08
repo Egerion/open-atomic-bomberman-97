@@ -200,8 +200,15 @@ void field_vs_players(State& s, PowerupSystem& powerups, DiseaseSystem& diseases
                 if (s.players[p.carried_owner].bombs_placed > 0)
                     --s.players[p.carried_owner].bombs_placed;
             }
+            // Killer attribution (docs/re/results-and-options.md §1): the
+            // flame that killed this player was stamped with its owner in
+            // FlameSystem::spread_to (s.flame_owner), still valid here since
+            // this runs the same tick the flame is present. Self-kill (owner
+            // == victim) is left explicit in the event, not collapsed to -1 —
+            // event.hpp's convention distinguishes "no killer" from "self".
             s.events.push_back({Event::Type::PlayerDied, static_cast<std::int8_t>(i),
-                                static_cast<std::int8_t>(tx), static_cast<std::int8_t>(ty), 0});
+                                static_cast<std::int8_t>(tx), static_cast<std::int8_t>(ty),
+                                static_cast<std::int8_t>(s.flame_owner[ty][tx])});
             continue;
         }
         PowerupType t = s.floor[ty][tx];

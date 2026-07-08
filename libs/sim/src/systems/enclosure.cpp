@@ -83,8 +83,11 @@ void EnclosureSystem::drop_wall(int wx, int wy) {
                 if (s.players[p.carried_owner].bombs_placed > 0)
                     --s.players[p.carried_owner].bombs_placed;
             }
+            // No attributable killer for a wall crush (event.hpp's PlayerDied
+            // convention: data == -1 means "no killer", distinct from a
+            // self-kill where data == the victim's own index).
             s.events.push_back({Event::Type::PlayerDied, static_cast<std::int8_t>(i),
-                                static_cast<std::int8_t>(wx), static_cast<std::int8_t>(wy), 0});
+                                static_cast<std::int8_t>(wx), static_cast<std::int8_t>(wy), -1});
         }
     }
     s.events.push_back({Event::Type::WallClosed, -1, static_cast<std::int8_t>(wx),

@@ -448,3 +448,70 @@ TEST_CASE("a head hit can drop goldflame (kind 8)") {
             if (s.state().floor[y][x] == PowerupType::Goldflame) gold_on_floor = true;
     CHECK(gold_on_floor);  // scattered as a Goldflame token
 }
+
+// Kill attribution on PlayerDied (docs/re/results-and-options.md §1's
+// sub_421B0F kill tally; event.hpp's PlayerDied.data convention). Events are
+// derived, unhashed per-tick outputs (CLAUDE.md determinism contract rule 4)
+// — enriching them cannot move a golden hash, only carry more information
+// out for the presentation layer to consume.
+TEST_CASE("PlayerDied carries the flame owner as the killer (bomb-owner kill)") {
+    Simulation s(test_config());
+    // Player 0's bomb reaches player 1's spawn tile (14,10): drop a bomb with
+    // enough flame reach right next to player 1 instead of moving them across
+    // the whole board — place player 0 one tile west of player 1 and let its
+    // blast reach east.
+    Player& victim = s.state().players[1];
+    int vx = victim.tile_x(), vy = victim.tile_y();
+    s.state().players[0].x = (vx - 1) * kTileWF + kTileWF / 2;
+    s.state().players[0].y = vy * kTileHF + kTileHF / 2;
+    s.state().players[0].flame = 2;  // reach far enough to cover the victim
+    s.tick(press1(0));               // player 0 drops a bomb on its own tile
+    run(s, s.state().tuning.fuse_frames - 1);  // exactly at the fuse (see the "bomb explodes" test)
+    REQUIRE(!victim.alive);
+    bool found = false;
+    for (const Event& e : s.state().events) {
+        if (e.type != Event::Type::PlayerDied || e.player != 1) continue;
+        found = true;
+        CHECK(e.data == 0);  // killed by player 0's flame, not a self-kill
+    }
+    CHECK(found);
+}
+
+TEST_CASE("PlayerDied marks a self-kill: data equals the victim's own index") {
+    Simulation s(test_config());
+    // Player 0 stands on its own bomb; test_config's default flame reach
+    // covers the epicenter, so it dies in its own blast (mirrors the "bomb
+    // explodes at its fuse" test's incidental self-kill, but asserts the
+    // event explicitly here).
+    s.tick(press1(0));
+    run(s, s.state().tuning.fuse_frames - 1);
+    REQUIRE(!s.state().players[0].alive);
+    bool found = false;
+    for (const Event& e : s.state().events) {
+        if (e.type != Event::Type::PlayerDied || e.player != 0) continue;
+        found = true;
+        CHECK(e.data == 0);         // self-kill: data == the victim's own index
+        CHECK(e.data == e.player);  // event.hpp's explicit self-kill convention
+    }
+    CHECK(found);
+}
+
+TEST_CASE("PlayerDied from an enclosure wall crush has no killer (data == -1)") {
+    // Mirrors "hurry walls spiral in, crush, and detonate bombs": depth-1
+    // enclosure crushes player 0 (spawned at the top-left corner, the
+    // spiral's first cell) with no attributable killer.
+    MatchConfig cfg = test_config();
+    cfg.tuning.game_seconds = 10;
+    cfg.tuning.hurry_seconds = 8;
+    cfg.tuning.enclosement_depth = 1;
+    Simulation s(cfg);
+    run(s, 40 + 99 + 1 + 4 + 1);  // banner, walls arm, first wall drops (see enclosure test)
+    REQUIRE(!s.state().players[0].alive);
+    bool found = false;
+    for (const Event& e : s.state().events) {
+        if (e.type != Event::Type::PlayerDied || e.player != 0) continue;
+        found = true;
+        CHECK(e.data == -1);  // no killer: a wall crush, not a flame
+    }
+    CHECK(found);
+}
