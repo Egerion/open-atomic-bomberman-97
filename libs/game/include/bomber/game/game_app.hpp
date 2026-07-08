@@ -90,14 +90,20 @@ private:
     // The generic help-file browser (sub_41431C -> sub_414235, docs/re/
     // results-and-options.md §4): globs every `*.BM` in the install root and
     // lists them via HelpBrowser (bmscreen.hpp), opening the selection
-    // through the same BmScreen viewer present_bm_screen uses. Called from
-    // TWO sites, both bracketed per the RE facts: the main menu's row 5
-    // (present_menu's Enter case, no wipe — mirrors sub_42B9CE's `case 5:
-    // sub_41431C(); break;`) and the in-round F1 key (run_match, with the
-    // sim tick loop suspended for the duration — docs/re/in-match-shell.md
-    // §1's sub_42A16F(1)/(0) bracket). Owns its own nested SDL event loop,
-    // same shape as present_bm_screen/present_editor. Returns Quit on window
-    // close, else Advance (the browser was cancelled/closed normally).
+    // through the same BmScreen viewer present_bm_screen uses. sub_41431C is
+    // ONE routine the original wires to F1/row-5 everywhere — CONFIRMED
+    // (2026-07-08) called from FOUR sites in our port, all sharing this one
+    // non-modal entry point: the main menu's row 5 (present_menu's Enter
+    // case, no wipe — mirrors sub_42B9CE's `case 5: sub_41431C(); break;`),
+    // the Options screen's F1 (sub_4080DC, present_options_screen — §3), and
+    // the editor chooser's F1 (sub_403184, present_editor — §5); the in-round
+    // F1 key uses the separate present_help_browser_modal() below instead,
+    // since it must freeze the sim rather than draw over MAINMENU (docs/re/
+    // in-match-shell.md §1's sub_42A16F(1)/(0) bracket). Gated on getvalue(15)
+    // ahead of the glob (HelpBrowser::enter's manual_enabled param). Owns its
+    // own nested SDL event loop, same shape as present_bm_screen/
+    // present_editor. Returns Quit on window close, else Advance (the browser
+    // was cancelled/closed normally).
     AppInput present_help_browser();
     // The same browser, opened mid-round by run_match's F1 key (docs/re/
     // in-match-shell.md §1): identical widget/loop, but the backdrop is the
@@ -112,10 +118,12 @@ private:
     // its value, Enter/Esc leave (docs/re/frontend-flow.md "Interactive
     // settings ... DEFERRED" — this is that follow-up). Persists to
     // options.ini via bomber::assets::save_options only when a setting
-    // actually changed. F1 opens the original OPTIONS.BM help overlay on top
-    // (present_bm_screen), same as the rest of the front end. Returns Advance
-    // (both Enter/Esc route the leaf back to the menu, mirroring the other
-    // .BM-backed leaves) or Quit on window close.
+    // actually changed. F1 opens the generic *.BM help browser
+    // (present_help_browser) — CORRECTED 2026-07-08: sub_4080DC's own F1
+    // dispatch calls sub_41431C (§4), the SAME browser row 5 opens, not a
+    // fixed OPTIONS.BM cut. Returns Advance (both Enter/Esc route the leaf
+    // back to the menu, mirroring the other .BM-backed leaves) or Quit on
+    // window close.
     AppInput present_options_screen();
     // The key-remap sub-screen (docs/re/results-and-options.md §2,
     // sub_407B9D): a 2x6 scancode-capture grid, reached from the Options

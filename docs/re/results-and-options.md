@@ -157,6 +157,13 @@ against; the RGB555 → palette-index → RGB round-trip only matters for the
 original's paletted framebuffer, and the target RGB triple IS the intended
 colour once nearest-match is resolved to an exact/near-exact hit as above.
 
+`byte_49D0DA`'s second use, §4's `HelpBrowser` error dialog ink, is now also
+hardcoded from this same table (`kErrorInkR/G/B` = (252, 80, 80),
+`libs/game/src/bmscreen.cpp`) rather than a placeholder grey — the two call
+sites (team-1 player ink here, and the "manual disabled"/"no help files"
+dialogs in §4) are confirmed the SAME LUT element, not independently-tuned
+reds that merely resemble each other.
+
 (Provenance: `sub_4141F8` @ 0x4141F8 pseudo.c 16920-16930; `sub_41672F`
 @ 0x41672F pseudo.c 18464-18492 [`docs/re/player-colour.md`]; `byte_495390`
 LUT sibling stride `0x465390`/`0x475390`/`0x485390`/`0x495390` each
@@ -298,11 +305,16 @@ end — Up/Down (328/336) move the cursor with wrap; Left (0x14B) and Right
 cyclers step forward on Right, backward with wraparound on Left); Enter/
 Space activate the highlighted row's handler directly; any real key fires
 SFX 20; F1 (`0x13B`) opens the help browser (§4) without leaving the
-screen; leaving the screen calls `sub_410494(dword_464948)` (re-applies the
-play-time tunable) — no explicit Esc branch is visible in the excerpted
-tail, consistent with this screen being dismissed the same way as its
-siblings (a `< 0x1B` / `<= 0x1B` early-exit already covered by the generic
-list-screen pattern used throughout `sub_42B9CE`'s children).
+screen — CONFIRMED directly against `sub_4080DC`'s F1 dispatch (pseudo.c,
+`if (v165 <= 0x13B) sub_41431C();`), i.e. the generic browser, NOT a fixed
+OPTIONS.BM open (`GameApp::present_options_screen` was calling
+`present_bm_screen("OPTIONS")` until 2026-07-08 — corrected to
+`present_help_browser()`, this screen's F1 site); leaving the screen calls
+`sub_410494(dword_464948)` (re-applies the play-time tunable) — no explicit
+Esc branch is visible in the excerpted tail, consistent with this screen
+being dismissed the same way as its siblings (a `< 0x1B` / `<= 0x1B`
+early-exit already covered by the generic list-screen pattern used
+throughout `sub_42B9CE`'s children).
 
 ### The full options.ini key list — CONFIRMED via the writer/reader positional match
 
@@ -432,14 +444,26 @@ the directory is only re-read on the browser's NEXT top-level open. The list
 finally frees via `sub_414173` when the dialog itself returns -1 (its own
 Esc/cancel). The two gated error paths (`getvalue(15)==0` "manual disabled"
 and an empty glob) both draw through `sub_414340` in ink `byte_49D0DA`
-(a distinct global from the list's own white `byte_49D38F` — not yet
-decoded, presumably a warning/red tint) with `getstring(5)`/`getstring(4)`
+(a distinct global from the list's own white `byte_49D38F` — DECODED in §1's
+LUT table: RGB (252, 80, 80), the SAME LUT element as `sub_4141F8`'s team-1
+ink, confirmed identical, not merely similar) with `getstring(5)`/`getstring(4)`
 (disabled) or `getstring(4)`/`getstring(95)` (empty) — CORRECTION: reading
 the exact call order, the "disabled" branch is `getstring(5)` then
 `getstring(95)`, and the "empty glob" branch (inside the `v12==0` arm) is
 `getstring(4)` then `getstring(95)` — i.e. only the FIRST string differs
 between the two error cases (5 vs 4), both share the `95` second line and
 the `414340` two-line dialog shape.
+
+**Port status (2026-07-08):** `HelpBrowser` (`libs/game/src/bmscreen.cpp`)
+now wires both facts: `enter(bool manual_enabled)` gates on the caller's
+`getvalue(15)` reading BEFORE the glob (both `GameApp::present_help_browser`
+and `present_help_browser_modal` pass `values_.at_or(15, 1) != 0`), and its
+`draw()` renders the disabled/empty error pair in the decoded `byte_49D0DA`
+RGB (252, 80, 80) rather than a placeholder grey. The Options screen's F1
+(`sub_4080DC`) and the editor chooser's F1 (`sub_403184`) were also corrected
+to open this SAME generic browser instead of a fixed OPTIONS.BM/EDITOR.BM
+cut — see §3's and §5's own F1 rows below, both of which already documented
+`sub_41431C` as the target; the port had drifted from that fact until now.
 
 (Provenance: `sub_41431C` @ 0x41431C pseudo.c 16996-17001; `sub_414235`
 @ 0x414235 pseudo.c 16933-16995; `sub_41404B` @ 0x41404B pseudo.c
@@ -478,7 +502,10 @@ Call chain, all confirmed by body reads:
   @ 0x407582, a `findfirst` glob like the help browser's, then the `.SCH`
   parser `sub_403EEE` @ 0x403EEE); **'2' (50)** → `sub_4028D2(1)` (new
   scheme); **Esc/'Q'(81)/'q'(113)** exit; **315 (F1)** → help browser
-  `sub_41431C`. SFX 20 blip on any key.
+  `sub_41431C` — i.e. the SAME generic browser row 5/Options-F1 open, NOT a
+  fixed EDITOR.BM cut (`GameApp::present_editor`'s chooser-level F1 was
+  calling `present_bm_screen("EDITOR")` until 2026-07-08, contradicting this
+  very fact; corrected to `present_help_browser()`). SFX 20 blip on any key.
 - **`sub_4028D2` @ 0x4028D2** (pseudo.c 5429-5716) — **the editor
   screen**. Draws the tile grid with the `tile %d blank` / `tile %d solid`
   / `tile %d brick` ANI sequences (§5d) and the 10 player-start markers

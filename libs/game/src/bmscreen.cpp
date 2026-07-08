@@ -48,6 +48,17 @@ constexpr Uint8 kListInkR = 255, kListInkG = 255, kListInkB = 255;
 constexpr Uint8 kListSelR = 255, kListSelG = 220, kListSelB = 80;
 constexpr Uint8 kListHintR = 160, kListHintG = 160, kListHintB = 160;
 
+// The browser's two error dialogs (§4: "manual disabled" getstring(5)/(95),
+// "no .BM files found" getstring(4)/(95)) draw in byte_49D0DA — PINNED in
+// docs/re/results-and-options.md §1's LUT decode table: LUT offset 0x7D4A =
+// r5,g5,b5(31,10,10), nearest-palette RGB (252, 80, 80). The doc separately
+// confirms byte_49D0DA IS sub_4141F8's team-1 ink (its ELSE branch returns
+// byte_49D38F/white; the non-ELSE branch returns this SAME global) — i.e.
+// the error ink and the team-1 player ink are the identical LUT element, not
+// a coincidence of similar reds. Faithful hardcode, same rationale as §1's
+// scoreboard inks (no "active palette" concept in the truecolour renderer).
+constexpr Uint8 kErrorInkR = 252, kErrorInkG = 80, kErrorInkB = 80;
+
 }  // namespace
 
 void FontTextures::reset() {
@@ -224,12 +235,20 @@ void BmScreen::draw(SDL_Renderer* ren) const {
 
 // --- HelpBrowser ------------------------------------------------------------
 
-void HelpBrowser::enter() {
+void HelpBrowser::enter(bool manual_enabled) {
     entries_.clear();
     row_ = 0;
     top_ = 0;
     viewing_ = false;
     done_ = false;
+    // sub_414235's own first act: gate on getvalue(15) ("is the online manual
+    // enabled?", default 1) BEFORE the *.BM glob even runs (docs/re/
+    // results-and-options.md §4). When disabled, the browser never lists
+    // anything — it shows the pinned getstring(5)/getstring(95) error pair
+    // instead (draw() below), same as the "no files found" case but with the
+    // "disabled" first line.
+    disabled_ = !manual_enabled;
+    if (disabled_) return;
     if (!assets_) return;
     // sub_41404B: DOS findfirst/findnext glob of "*.BM" over the install
     // ROOT (not DATA/), qsort_-sorted. std::filesystem::directory_iterator +
@@ -252,10 +271,11 @@ void HelpBrowser::on_key(SDL_Keycode key, AudioEngine& audio) {
         bm_.on_key(key);
         return;
     }
-    if (entries_.empty()) {
-        // §4's "no .BM files found" error dialog (getstring(4)/getstring(95)):
-        // any dismiss key closes the whole browser, same as SchemeFilePicker's
-        // empty-glob path.
+    if (disabled_ || entries_.empty()) {
+        // §4's two gated error dialogs — "manual disabled" (getstring(5)/(95))
+        // and "no .BM files found" (getstring(4)/(95)) — share the same
+        // sub_414340 two-line dismiss shape: any dismiss key closes the whole
+        // browser, same as SchemeFilePicker's empty-glob path.
         if (key == SDLK_ESCAPE || key == SDLK_RETURN || key == SDLK_SPACE) done_ = true;
         return;
     }
@@ -313,19 +333,29 @@ void HelpBrowser::draw(SDL_Renderer* ren) const {
                      124.0f + static_cast<float>(kVisibleRows) * 20.0f + 24.0f - 84.0f};
     SDL_RenderFillRect(ren, &panel);
     if (!font_ || !font_->loaded()) return;
+    if (disabled_ || entries_.empty()) {
+        // §4's two gated error dialogs, both drawn through sub_414340 in ink
+        // byte_49D0DA (PINNED, kErrorInk* above — the RGB (252,80,80) team-1
+        // red, decoded from the RGB555 LUT and confirmed to be the SAME
+        // global sub_4141F8 returns for team-1 players). Only the first line
+        // differs: "manual disabled" = getstring(5), "no .BM files found" =
+        // getstring(4); both share the getstring(95) second line ("NOTE!").
+        const std::string first =
+            assets_ ? assets_->getstring(disabled_ ? 5 : 4,
+                                          disabled_ ? "Online manual disabled."
+                                                    : "No help files found!")
+                    : std::string(disabled_ ? "Online manual disabled." : "No help files found!");
+        const std::string second =
+            assets_ ? assets_->getstring(95, "NOTE!") : std::string("NOTE!");
+        font_->draw(ren, first, 100.0f, 100.0f, kErrorInkR, kErrorInkG, kErrorInkB);
+        font_->draw(ren, second, 100.0f, 124.0f, kErrorInkR, kErrorInkG, kErrorInkB);
+        return;
+    }
     // sub_41485A at (100, 100), header getstring(600) — the SAME dialog
     // primitive/coordinates SchemeFilePicker's *.SCH picker uses (§4/§5).
     const std::string header = assets_ ? assets_->getstring(600, "Available help files:")
                                         : std::string("Available help files:");
     font_->draw(ren, header, 100.0f, 100.0f, kListInkR, kListInkG, kListInkB);
-    if (entries_.empty()) {
-        // §4: getstring(4)="No help files found!" / getstring(95) — no *.BM
-        // in the install root.
-        const std::string err = assets_ ? assets_->getstring(4, "No help files found!")
-                                         : std::string("No help files found!");
-        font_->draw(ren, err, 100.0f, 124.0f, kListHintR, kListHintG, kListHintB);
-        return;
-    }
     int count = static_cast<int>(entries_.size());
     int last = std::min(count, top_ + kVisibleRows);
     for (int i = top_; i < last; ++i) {
