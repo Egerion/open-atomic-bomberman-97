@@ -1,5 +1,6 @@
 #include "bomber/game/game_app.hpp"
 
+#include <algorithm>  // std::max_element
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
@@ -198,7 +199,8 @@ constexpr int kDrawStingHi = 1999;
 ScreenDef victory_screen(int player) {
     // VICTORY<player>.PCX — the original resolves "victory%u" against the winner
     // index (sub_42A3F6 aVictoryU); the install ships VICTORY0..VICTORY9. The
-    // "we have a winner" voice group (2000) is played by run_match already.
+    // "we have a winner" voice group (2000) is played by run_app's Results
+    // handler, under this screen, per §1 (fires as soon as v73 is computed).
     // (ScreenDef.background owns its own std::string copy, so this is safe.)
     return ScreenDef{"VICTORY" + std::to_string(player), {}, kResultsDwellMs,
                      /*skippable*/ true};
@@ -665,20 +667,83 @@ AppInput GameApp::present_menu() {
 
 void GameApp::reset_match_scores() {
     win_count_.fill(0);
+    kill_count_.fill(0);
     // getvalue(310) "how many wins to win a match?" (first-column value, else 2).
     auto it = values_.values.find(310);
     win_target_ = it != values_.values.end() ? static_cast<int>(it->second) : 2;
     if (win_target_ < 1) win_target_ = 1;
 }
 
-// The between-round RESULTS scoreboard (sub_42A3F6): RESULTS.PCX backdrop with
-// each present player's running win count drawn at the getvalue(785) list
-// positions (origin 150,210, +20 px per row). Any key (or the results dwell)
-// dismisses it; the caller then starts the next round.
+// The between-round RESULTS cumulative-tally screen (sub_42A3F6 tail,
+// docs/re/results-and-options.md §1): RESULTS.PCX backdrop, a header drawn
+// once per round, one row per active player/team with a win-count + kill-
+// count tally in per-player ink, and an outcome line reporting either "still
+// need N" (match not yet clinched) or "wins the match" (clinched). Any key
+// (or the 6 s idle dwell) dismisses it; the caller then starts the next round
+// or, if the outcome line reports a clinch, the flow instead shows the
+// VICTORY screen and never reaches this scoreboard (run_app's Results case).
 AppInput GameApp::present_scoreboard() {
-    const float x0 = static_cast<float>(values_.column_or(785, 0, 150));
-    const float y0 = static_cast<float>(values_.column_or(785, 1, 210));
-    const float ystep = static_cast<float>(values_.column_or(785, 2, 20));
+    const sim::State& s = sim_.state();
+
+    // Header — getstring(30) "Game Winner was %s !", getvalue(780/781/783).
+    const float hx = static_cast<float>(values_.column_or(780, 0, 150));
+    const float hy = static_cast<float>(values_.column_or(780, 1, 140));
+    // getvalue(783) is a colour index in the original (palette LUT); we have
+    // no general colour-index -> RGB table outside the per-slot .RMP path, so
+    // the header (not tied to any one player) draws in a fixed light ink —
+    // documented simplification, the POSITION is exact.
+    constexpr Uint8 kHeaderR = 255, kHeaderG = 255, kHeaderB = 255;
+
+    // Per-player row — getstring(31) non-team "Player %u score: %u (kills: %d)"
+    // / getstring(38) team "Team %u score: %u", getvalue(785/786/787/788).
+    const float rx = static_cast<float>(values_.column_or(785, 0, 150));
+    const float ry0 = static_cast<float>(values_.column_or(785, 1, 210));
+    const float rystep = static_cast<float>(values_.column_or(785, 2, 20));
+
+    // Outcome line — getvalue(800/801/803); string 120/121 "still need N" vs
+    // 35/36 "wins the match" depending on team mode (§1's dword_46497C /
+    // win_by_kills branch is a documented TODO below — our options do not
+    // expose win_by_kills yet, so the clinch check always uses the win-count
+    // path, which is the CONFIRMED non-team default).
+    const float ox = static_cast<float>(values_.column_or(800, 0, 150));
+    const float oy = static_cast<float>(values_.column_or(800, 1, 94));
+
+    // Team mode (docs/re/setup-screens.md dword_464964): any two ACTIVE
+    // players sharing a MatchConfig team means team rows/strings apply.
+    // setup_team_[] is the frontend's per-slot +84 byte; team_play_ is the
+    // game-type gate (start_match zeroes every slot's team when it is off,
+    // so gating on team_play_ here keeps this in lockstep with the roster
+    // actually built for the match in progress).
+    bool team_mode = false;
+    if (team_play_) {
+        std::array<bool, sim::kMaxPlayers> team_seen{};
+        for (int i = 0; i < sim::kMaxPlayers; ++i) {
+            if (!s.players[i].present) continue;
+            int t = setup_team_[i];
+            if (t < 0 || t >= sim::kMaxPlayers) continue;
+            if (team_seen[t]) { team_mode = true; break; }
+            team_seen[t] = true;
+        }
+    }
+
+    // The match-clinch check (§1 v73): the first player/team whose win_count_
+    // reaches win_target_. win_by_kills (team mode comparing round-kill totals
+    // instead) is NOT wired — our Options screen does not expose that toggle
+    // yet (docs/re/results-and-options.md §3 row 5); TODO(§1) once it is.
+    int clinched_player = -1;
+    for (int i = 0; i < sim::kMaxPlayers; ++i) {
+        if (!s.players[i].present) continue;
+        if (win_count_[i] >= win_target_) { clinched_player = i; break; }
+    }
+
+    // Header text (getstring(30), "Game Winner was %s !"), drawn once per
+    // round on entry — the winner named is this ROUND's winner (round_winner()),
+    // not necessarily the player who clinched the whole match.
+    const int round_w = round_winner();
+    const std::string header =
+        fmt_s(assets_.getstring(30, "Game Winner was %s !"),
+              round_w >= 0 ? "P" + std::to_string(round_w + 1) : std::string("-"));
+
     const std::uint64_t start = SDL_GetTicks();
     AppInput result = AppInput::Advance;
     bool waiting = true;
@@ -702,15 +767,96 @@ AppInput GameApp::present_scoreboard() {
             SDL_FRect dst{0.0f, 0.0f, static_cast<float>(bg.w), static_cast<float>(bg.h)};
             SDL_RenderTexture(sdl_renderer_.get(), bg.tex, nullptr, &dst);
         }
-        const sim::State& s = sim_.state();
-        int row = 0;
-        for (int i = 0; i < sim::kMaxPlayers; ++i) {
-            if (!s.players[i].present) continue;
-            std::string line = "P" + std::to_string(i + 1) + ": " + std::to_string(win_count_[i]);
-            front_font_.draw(sdl_renderer_.get(), line, x0, y0 + ystep * static_cast<float>(row),
-                             255, 255, 255);
-            ++row;
+
+        // Header, drawn once per round (this screen IS one round's worth of
+        // display, so we always draw it — sub_42A3F6's "!dword_464AEC" gate is
+        // about not re-drawing across frames of the SAME round, which our
+        // per-round call already satisfies).
+        front_font_.draw(sdl_renderer_.get(), header, hx, hy, kHeaderR, kHeaderG, kHeaderB);
+
+        // Per-player / per-team tally rows, each in that player's/team's ink
+        // (AssetStore::slot_color, docs/re/player-colour.md). Team ink uses
+        // the lowest-indexed active player on that team as a stand-in for the
+        // original's fixed 2-colour sub_4141F8 helper (byte_49D0DA/byte_49D38F),
+        // which we have not ported as an independent constant.
+        if (team_mode) {
+            std::array<bool, sim::kMaxPlayers> team_drawn{};
+            int row = 0;
+            for (int i = 0; i < sim::kMaxPlayers; ++i) {
+                if (!s.players[i].present) continue;
+                int t = setup_team_[i];
+                if (t < 0 || t >= sim::kMaxPlayers || team_drawn[t]) continue;
+                team_drawn[t] = true;
+                std::string line = fmt_u(assets_.getstring(38, "Team %u score: %u"),
+                                          static_cast<unsigned>(t + 1));
+                // getstring(38) carries one %u (team number); splice the score
+                // in after it manually since fmt_u only substitutes the first.
+                line += " " + std::to_string(win_count_[i]);
+                std::uint8_t c[3];
+                assets_.slot_color(i, c);
+                front_font_.draw(sdl_renderer_.get(), line, rx,
+                                 ry0 + rystep * static_cast<float>(row), c[0], c[1], c[2]);
+                ++row;
+            }
+        } else {
+            int row = 0;
+            for (int i = 0; i < sim::kMaxPlayers; ++i) {
+                if (!s.players[i].present) continue;
+                // getstring(31) "Player %u score: %u (kills: %d)" — two
+                // independent counters (§1): win_count_ (match score) and
+                // kill_count_ (round kills; TODO(§1) — see kill_count_'s
+                // declaration in game_app.hpp for why this is 0 for now).
+                std::string line = assets_.getstring(31, "Player %u score: %u (kills: %d)");
+                line = fmt_u(line, i + 1);
+                // fmt_u only substitutes the FIRST specifier; splice the
+                // remaining two (score, kills) in by hand so the RE'd format
+                // string still reads naturally with real fallback text.
+                auto splice_next = [](std::string& f, int v) {
+                    auto p = f.find('%');
+                    if (p == std::string::npos) return;
+                    std::size_t q = p + 1;
+                    while (q < f.size() && f[q] != 'u' && f[q] != 'd' && f[q] != 'i') ++q;
+                    if (q < f.size()) f = f.substr(0, p) + std::to_string(v) + f.substr(q + 1);
+                };
+                splice_next(line, win_count_[i]);
+                splice_next(line, kill_count_[i]);
+                std::uint8_t c[3];
+                assets_.slot_color(i, c);
+                front_font_.draw(sdl_renderer_.get(), line, rx,
+                                 ry0 + rystep * static_cast<float>(row), c[0], c[1], c[2]);
+                ++row;
+            }
         }
+
+        // Outcome line: "still need N" (not yet clinched, ink byte_49A624 —
+        // approximated with a distinct amber "still playing" tone) vs "wins
+        // the match" (clinched, ink byte_497F8F — approximated with a
+        // distinct bright "match over" tone). Both approximations keep the
+        // POSITION and STRING selection exact; only the literal RGB triples
+        // are our own since the palette-index bytes are not yet ported.
+        {
+            std::string outcome;
+            std::uint8_t oc[3];
+            if (clinched_player < 0) {
+                int needed = win_target_ - *std::max_element(win_count_.begin(), win_count_.end());
+                if (needed < 0) needed = 0;
+                std::string fmt = team_mode ? assets_.getstring(121, "Team still needs %u to win")
+                                            : assets_.getstring(120, "Still need %u to win");
+                outcome = fmt_u(fmt, needed);
+                oc[0] = 255; oc[1] = 200; oc[2] = 60;  // "still playing" amber
+            } else {
+                if (team_mode) {
+                    std::string fmt = assets_.getstring(36, "TEAM %u WINS THE MATCH!");
+                    outcome = fmt_u(fmt, static_cast<unsigned>(setup_team_[clinched_player] + 1));
+                } else {
+                    std::string fmt = assets_.getstring(35, "%s WINS THE MATCH!");
+                    outcome = fmt_s(fmt, "P" + std::to_string(clinched_player + 1));
+                }
+                oc[0] = 255; oc[1] = 255; oc[2] = 255;  // "match over" bright white
+            }
+            front_font_.draw(sdl_renderer_.get(), outcome, ox, oy, oc[0], oc[1], oc[2]);
+        }
+
         SDL_RenderPresent(sdl_renderer_.get());
         SDL_Delay(2);
     }
@@ -1014,7 +1160,11 @@ AppInput GameApp::run_match() {
                 if (s.ticks_left == 0) {
                     std::printf("time up — draw!\n");
                 } else {
-                    audio_.play_random_in_range(2000, 2299);  // "we have a winner"
+                    // The "we have a winner" voice group (2000) fires under the
+                    // RESULTS scoreboard itself once v73 is computed (§1), NOT
+                    // here during the match's own end-of-round linger — moved to
+                    // run_app's Results handler (present_scoreboard/victory_screen
+                    // call site) so it plays under the right screen.
                     for (int i = 0; i < sim::kMaxPlayers; ++i)
                         if (s.players[i].present && s.players[i].alive)
                             std::printf("player %d wins!\n", i);
@@ -1099,10 +1249,11 @@ int GameApp::run_app() {
                 // a survivor shows the RESULTS cumulative scoreboard, a draw
                 // (round_winner() folds no-survivor and time-up) shows DRAW —
                 // and both replay the next round. The winner voice group (2000)
-                // was already played by run_match on match-over
-                // (sub_427BFB(2000)); on a DRAW we fire the tie-game sting once
-                // here (sub_427BFB(1700)) — a one-shot group pick, not looped
-                // music.
+                // fires here, as soon as v73 (the round winner / match-over
+                // check) is computed (§1) — i.e. under BOTH the scoreboard and
+                // the VICTORY screen, not only the latter. On a DRAW we fire the
+                // tie-game sting instead (sub_427BFB(1700)) — a one-shot group
+                // pick, not looped music.
                 //
                 // Results MUSIC (sub_42A3F6): the handler starts the looping "win"
                 // track sub_42741E(0x3FC)=1020 at entry (under the VICTORY screen),
@@ -1121,10 +1272,15 @@ int GameApp::run_app() {
                     // MATCH win: the winner reached the target -> VICTORY, then
                     // back to the menu (next(Results, Advance) = Menu).
                     audio_.start_music(kWinMusicId);  // 1020 win track under VICTORY
+                    audio_.play_random_in_range(2000, 2299);  // "we have a winner", under VICTORY
                     ev = present_screen(victory_screen(w));
                 } else if (w >= 0) {
-                    // Round win, match not over: show the running scores.
+                    // Round win, match not over: show the running scores. The
+                    // winner sting plays under THIS screen too (§1) — the
+                    // original fires it as soon as the round decision is known,
+                    // regardless of whether that decision also clinches the match.
                     audio_.start_music(kWinMusicId);
+                    audio_.play_random_in_range(2000, 2299);  // "we have a winner", under RESULTS
                     ev = present_scoreboard();
                 } else {
                     // DRAW (no survivor / time-up): nobody scores; replay a round.
