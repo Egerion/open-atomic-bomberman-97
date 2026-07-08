@@ -65,13 +65,20 @@ TEST_CASE("plain diarrhea (no grab) only drops — never throws") {
     infect(p, Disease::Diarrhea);
 
     bool ever_thrown = false;
+    bool ever_placed = false;
     for (int t = 0; t < 40; ++t) {
         s.tick(TickInputs{});
         if (thrown_events(s) > 0) ever_thrown = true;
+        // Sample DURING the loop, not just after: the auto-drop places on tick 0
+        // and its fuse (tuning.fuse_frames == 40) can expire on the loop's very
+        // last iteration, clearing bombs_placed back to 0 right as the loop ends
+        // (same same-tick place+fuse-tick ordering as elsewhere — see
+        // simulation.cpp's step 1/3 and test_trigger_allowance.cpp).
+        if (p.bombs_placed >= 1) ever_placed = true;
     }
     CHECK_FALSE(ever_thrown);      // without the glove there is nothing to throw
     // It did auto-drop: a bomb (or its blast aftermath) exists / was placed.
-    CHECK(p.bombs_placed >= 1);
+    CHECK(ever_placed);
 }
 
 TEST_CASE("constipation blocks the drop but still lets a carried bomb be thrown") {

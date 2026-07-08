@@ -20,7 +20,7 @@ namespace bomber::sim {
 // warp/trampoline "stuck": a walking player's budget steps OVER the exact
 // centre pixel, so a post-walk-only test almost never fired. See §5.
 void MovementSystem::move(Player& p, Direction d, std::int32_t extra_budget, StepOnFn on_center,
-                          void* ctx) {
+                          void* ctx, bool use_player_speed) {
     State& s = s_;
     p.facing = d;
 
@@ -47,9 +47,15 @@ void MovementSystem::move(Player& p, Direction d, std::int32_t extra_budget, Ste
 
     // Disease speed factors, applied in the original's order (sub_41F29B):
     // molasses divides by 3 first, then hyper/super multiplies by 3/2.
-    std::int32_t eff = p.speed;
-    if (p.sick(Disease::Slow)) eff /= 3;
-    if (p.sick(Disease::Fast) || p.sick(Disease::Super)) eff = 3 * eff / 2;
+    // Only folded in when the player actually supplied the move (case (b) in
+    // sub_41F29B); a conveyor forcing an idle player (case (a)) contributes
+    // ONLY its own term — see the use_player_speed doc comment in the header.
+    std::int32_t eff = 0;
+    if (use_player_speed) {
+        eff = p.speed;
+        if (p.sick(Disease::Slow)) eff /= 3;
+        if (p.sick(Disease::Fast) || p.sick(Disease::Super)) eff = 3 * eff / 2;
+    }
 
     // The conveyor budget (extra_budget) is added AFTER the disease factors,
     // exactly as sub_41F29B adds its getvalue(190+idx) term after molasses/
