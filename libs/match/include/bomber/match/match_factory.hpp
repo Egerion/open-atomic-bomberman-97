@@ -17,7 +17,8 @@ namespace bomber::match {
 
 inline sim::MatchConfig build_match_config(const assets::sch::Scheme& scheme, int player_count,
                                            std::uint32_t seed,
-                                           const assets::res::ValueList* values = nullptr) {
+                                           const assets::res::ValueList* values = nullptr,
+                                           bool random_start = false) {
     sim::MatchConfig cfg;
     cfg.player_count = player_count;
     cfg.seed = seed;
@@ -71,6 +72,32 @@ inline sim::MatchConfig build_match_config(const assets::sch::Scheme& scheme, in
             cfg.spawns.resize(sp.player + 1);
         cfg.spawns[sp.player] = {std::clamp(sp.x, 0, sim::kGridWidth - 1),
                                  std::clamp(sp.y, 0, sim::kGridHeight - 1)};
+    }
+
+    // "Random Start" (options.ini `random_start=`, dword_464AE8, Options
+    // screen row 1 — docs/re/results-and-options.md §3). The RE brief pins
+    // the toggle and its options.ini key but not the exact placement
+    // algorithm (no sub_XXXX site walked for the shuffle itself), so this is
+    // OUR clean-room reading of "random start": shuffle WHICH of the
+    // scheme's own fixed spawn slots each player index lands on, rather than
+    // inventing new board positions — every player still starts at one of
+    // the scheme's authored (and therefore brick-cleared-safe, see
+    // setup.cpp's neighbour-clear) spawn points, just reassigned. Driven by
+    // a SETUP-ONLY LCG seeded off the match seed (decorrelated from the
+    // brick-fill/actor streams above/below), never sim::State::rng, so the
+    // per-tick RNG draw contract is untouched and identical seeds still
+    // reproduce identical starts.
+    if (random_start && cfg.spawns.size() > 1) {
+        std::uint32_t start_lcg = seed ^ 0x2545F491u;
+        auto start_roll = [&start_lcg](std::uint32_t n) {
+            start_lcg = start_lcg * 1664525u + 1013904223u;
+            return (start_lcg >> 16) % n;
+        };
+        // Fisher-Yates over the scheme's own spawn slots.
+        for (std::size_t i = cfg.spawns.size(); i > 1; --i) {
+            std::size_t j = start_roll(static_cast<std::uint32_t>(i));
+            std::swap(cfg.spawns[i - 1], cfg.spawns[j]);
+        }
     }
 
     for (const auto& pr : scheme.powerups) {

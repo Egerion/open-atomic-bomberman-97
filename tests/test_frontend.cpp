@@ -15,6 +15,10 @@ using bomber::game::AppInput;
 using bomber::game::AppState;
 using bomber::game::cycle_slot_input_type;
 using bomber::game::is_terminal;
+using bomber::game::KeyAction;
+using bomber::game::kKeyActionCount;
+using bomber::game::kKeyboardSets;
+using bomber::game::KeySet;
 using bomber::game::next;
 using bomber::game::SlotInputType;
 
@@ -212,4 +216,31 @@ TEST_CASE("a full lap of the cycle returns to OFF, for any joystick count") {
         CHECK(type == static_cast<int>(SlotInputType::Off));
         CHECK(sub == 0);
     }
+}
+
+// Locks the key-remap UI's data shape (docs/re/results-and-options.md §2,
+// sub_407B9D's "2x6 button grid"): 2 keyboard sets, 6 bindable actions each,
+// in the CONFIRMED action-name id order (1120 Move Up .. 1125 Action 2).
+// input.hpp keeps KeySet/KeyAction SDL-free (plain `int` scancodes) exactly
+// so this shape is testable here without linking SDL3 (see input.hpp's file
+// doc) — the SDL_Scancode interpretation itself (default_key_set(),
+// KeyboardMapper::read()) lives in input.cpp, part of the SDL-linked
+// bomber_game_core target, and is exercised only via the live app/manual QA.
+TEST_CASE("KeySet/KeyAction shape: 2 keyboard sets, 6 actions each") {
+    CHECK(kKeyboardSets == 2);
+    CHECK(kKeyActionCount == 6);
+    CHECK(static_cast<int>(KeyAction::Up) == 0);
+    CHECK(static_cast<int>(KeyAction::Right) == 1);
+    CHECK(static_cast<int>(KeyAction::Down) == 2);
+    CHECK(static_cast<int>(KeyAction::Left) == 3);
+    CHECK(static_cast<int>(KeyAction::Action1) == 4);
+    CHECK(static_cast<int>(KeyAction::Action2) == 5);
+
+    // A KeySet is exactly 6 plain-int scancode slots, one per KeyAction —
+    // round-trips through assignment like any POD.
+    KeySet ks{};
+    ks.scancode[static_cast<int>(KeyAction::Up)] = 200;
+    ks.scancode[static_cast<int>(KeyAction::Action1)] = 57;
+    CHECK(ks.scancode[static_cast<int>(KeyAction::Up)] == 200);
+    CHECK(ks.scancode[static_cast<int>(KeyAction::Action1)] == 57);
 }

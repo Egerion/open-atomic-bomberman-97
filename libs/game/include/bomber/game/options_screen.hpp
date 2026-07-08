@@ -9,33 +9,122 @@
 #include "bomber/game/audio_engine.hpp"
 #include "bomber/game/bmscreen.hpp"
 
-// The interactive Options screen — Team Play + Conveyor Speed. Real gameplay
-// options here are toggled by the player, not just described in the OPTIONS.BM
-// help overlay (docs/re/frontend-flow.md "Interactive settings ... DEFERRED").
+// The interactive Options screen — sub_4080DC @0x4080DC (docs/re/results-and-
+// options.md §3, CONFIRMED: a 19-item interactive settings list; the doc
+// corrects frontend-flow.md's earlier "map editor" mislabel). Every row below
+// mirrors §3's table by POSITION (row 0..18); the on-select handler and
+// backing options.ini key match that table. Layout is the CONFIRMED
+// `745,55,40,22,500` VALUELST block (x=55, y0=40, ystep=22, colour=500);
+// backdrop is the same random GLUE<n> convention present_setup/
+// present_map_select share (docs/re/setup-screens.md "Backdrop", sub_4148E5).
 //
-// TODO(RE): the original's exact Options/game-type screen layout is NOT pinned
-// in docs/re/setup-screens.md — that doc only confirms `sub_42B0CE` as *A*
-// game-options screen (net-game flow, VALUELST 765-778), not the local Team
-// Play / Conveyor Speed pane this task asks for. Rather than invent a
-// sub_XXXX citation, this screen is a clean-room minimal list consistent with
-// the documented glue-screen conventions that ARE confirmed elsewhere
-// (docs/re/setup-screens.md "Backdrop", "Music"): a random GLUE<n> backdrop
-// (the SAME `GameApp::pick_glue()` helper `present_setup`/`present_map_select`
-// share — one presentation LCG, never State::rng), FONT6 text, Up/Down to pick
-// a row, Left/Right to change its value, Enter accepts (SFX 10) and Esc
-// cancels (SFX 10) — mirroring present_setup's SFX 20 nav / 10 accept
-// convention. Every literal screen coordinate below is OUR OWN layout,
-// flagged inline.
+// Per-row disposition (see options_screen.cpp's kRows table for the same
+// list inline with the handlers):
+//   0  Team Play                    — LIVE toggle, persisted (team_play=)
+//   1  Random Start                 — LIVE toggle, persisted (random_start=);
+//                                      wired into match::build_match_config's
+//                                      new `random_start` param (spawn-slot
+//                                      shuffle, our clean-room reading — see
+//                                      that function's doc comment)
+//   2  Node Name                    — OMITTED: net identity string, no
+//                                      network play in this port and §3
+//                                      explicitly notes it is not one of the
+//                                      22 options.ini keys
+//   3  Conveyor Speed               — LIVE cycle, persisted (conveyor_speed=)
+//   4  Stomped Bombs Detonate       — LIVE toggle, persisted
+//                                      (stomped_bombs_detonate=); NO sim
+//                                      consumer yet (kick/stomp-bomb collision
+//                                      is not implemented) — shown+persisted,
+//                                      consumer TODO cited in the row comment
+//   5  Win Matches By Kill Total    — LIVE toggle, persisted (win_by_kills=),
+//                                      forced off with Team Play (§3); NO
+//                                      match-clinch consumer yet (RESULTS
+//                                      tally, docs/re/results-and-options.md
+//                                      §1, is a separate deferred effort) —
+//                                      shown+persisted, consumer TODO
+//   6  Gold Bomberman                — LIVE toggle, persisted (goldman=); NO
+//                                      roulette-wheel consumer yet (§4's
+//                                      sub_4034BC is a separate deferred
+//                                      feature) — shown+persisted, TODO
+//   7  Enclosement Depth             — LIVE cycle, persisted
+//                                      (enclosement_depth=); Tuning::
+//                                      enclosement_depth has a REAL sim
+//                                      consumer (enclosure.cpp/ai.cpp)
+//   8  Scheme File                   — OMITTED: no on-disk .SCH browser/
+//                                      stepper UI exists in this port yet
+//                                      (present_setup/map_select don't expose
+//                                      one either); the key still round-trips
+//                                      via Options::schemefilename
+//   9  Play Time                     — LIVE cycle (60s/120s/180s/300s/
+//                                      unlimited), persisted (playtime=);
+//                                      Tuning::game_seconds has a REAL sim
+//                                      consumer (setup.cpp's ticks_left)
+//   10 Assign Keyboard Player        — OMITTED: no distinct consumer beyond
+//                                      what present_setup's KEYBOARD 0/1
+//                                      slot picker already does
+//   11 Diseases Can Be Destroyed     — LIVE toggle, persisted
+//                                      (diseases_destroyable=); NO sim
+//                                      consumer yet (disease system has no
+//                                      "destroy on flame" path) — TODO
+//   12 Lost net players revert to AI — OMITTED: no network play
+//   13 Disable music during gameplay — LIVE toggle, persisted
+//                                      (disable_game_music=); REAL consumer —
+//                                      GameApp gates start_match's
+//                                      audio_.start_music(stage) call on it
+//   14 Modem: P/I/B/#                — OMITTED: no modem/net play
+//   15 Define keyboard layouts       — LIVE: opens KeyRemapScreen (§2)
+//   16 Set Default Network Protocol  — OMITTED: no network play
+//   17 Use Enhanced Memory Model     — OMITTED: no memory-model concept in a
+//                                      modern build
+//   18 Adjust Audio                  — OMITTED: no nested volume sub-screen
+//                                      exists (AudioEngine has no volume
+//                                      control to adjust)
+// Rows 2/8/10/12/14/16/17/18 (net/gfx/legacy/unbuilt-UI rows) are therefore
+// not drawn at all rather than shown greyed — the row list below is the
+// 11-entry LIVE subset, in the original's row order, so the cursor still
+// walks the same relative sequence.
 namespace bomber::game {
 
-// Row model: what the screen can edit. Kept tiny and explicit rather than a
-// generic key-value list, since only two settings are documented enough to
-// expose (see the class doc + the task's Random Start note below).
+// The live-row subset, in the original 19-row order (see the file doc above
+// for the full disposition and the omitted rows).
 enum class OptionRow {
-    TeamPlay,
-    ConveyorSpeed,
+    TeamPlay,        // row 0
+    RandomStart,     // row 1
+    ConveyorSpeed,   // row 3
+    StompedBombs,    // row 4
+    WinByKills,      // row 5
+    GoldBomberman,   // row 6
+    EnclosementDepth,// row 7
+    PlayTime,        // row 9
+    DiseasesDestroy, // row 11
+    DisableMusic,    // row 13
+    KeyRemap,        // row 15 — opens the key-remap sub-screen
     kCount,
 };
+
+// Snapshot of every editable setting, passed in on enter() and read back via
+// the matching accessor once done(). Kept as one struct (rather than growing
+// OptionsScreen's own ad hoc fields per row) since the row count roughly
+// tripled from the Team Play/Conveyor Speed original.
+struct OptionsSnapshot {
+    bool team_play = false;
+    bool random_start = false;
+    int conveyor_speed_index = 1;    // 0 low / 1 medium / 2 high
+    bool stomped_bombs_detonate = false;
+    bool win_by_kills = false;
+    bool goldman = false;
+    int enclosement_depth = 1;       // 0..3
+    int playtime_seconds = 150;      // one of kPlayTimeChoices, or 1001 = unlimited
+    bool diseases_destroyable = false;
+    bool disable_game_music = false;
+};
+
+// The Play Time cycle's choices (§3 row 9: `sub_4076FE`, no exact value list
+// pinned — this is our own reasonable stepper set). 1001 is the CONFIRMED
+// "unlimited" sentinel (Options::playtime's clamp note, §3).
+inline constexpr int kPlayTimeChoices[] = {60, 120, 180, 300, 600, 1001};
+inline constexpr int kPlayTimeChoiceCount =
+    static_cast<int>(sizeof(kPlayTimeChoices) / sizeof(kPlayTimeChoices[0]));
 
 class OptionsScreen {
 public:
@@ -46,22 +135,30 @@ public:
     // Tuning defaults by the caller) and a backdrop name already picked by the
     // caller's pick_glue() (docs/re/setup-screens.md "Backdrop" — the same
     // random-GLUE<n> convention present_setup/present_map_select use).
-    void enter(bool team_play, int conveyor_speed_index, std::string backdrop);
+    void enter(const OptionsSnapshot& current, std::string backdrop);
 
     // Feed one SDL keycode. Returns true once Enter/Escape ends the screen;
-    // check changed()/confirmed() to see what the caller should persist.
+    // check changed()/confirmed() to see what the caller should persist. A
+    // Right/Enter on the "Define keyboard layouts" row instead sets
+    // open_keyremap() so the caller can push the KeyRemapScreen on top
+    // (§2 — that sub-screen is not part of this class, it edits
+    // KeyboardMapper's live bindings directly via the caller).
     void on_key(SDL_Keycode key, AudioEngine& audio);
 
     void draw(SDL_Renderer* ren) const;
 
     bool done() const { return done_; }
     // True if any setting differs from what enter() was called with — the
-    // caller only writes options.ini when this is true (task requirement 3:
-    // "write ONLY when the user changes a setting").
+    // caller only writes options.ini when this is true.
     bool changed() const { return changed_; }
+    // True for exactly one frame's worth of on_key() calls: the highlighted
+    // row was "Define keyboard layouts" and Enter/Right was pressed. The
+    // caller checks this AFTER on_key(), pushes the key-remap screen, then
+    // must clear it is not needed — enter() resets it, and it is only ever
+    // read once per press in the app's own loop (see game_app.cpp).
+    bool open_keyremap() const { return open_keyremap_; }
 
-    bool team_play() const { return team_play_; }
-    int conveyor_speed_index() const { return conveyor_speed_index_; }
+    const OptionsSnapshot& snapshot() const { return snap_; }
 
 private:
     const AssetStore* assets_ = nullptr;
@@ -70,10 +167,10 @@ private:
     std::string backdrop_;   // "GLUE<n>", supplied by the caller's pick_glue()
 
     int row_ = 0;  // OptionRow, as an int for the wrap arithmetic
-    bool team_play_ = false;
-    int conveyor_speed_index_ = 1;  // 0 low / 1 medium / 2 high (Tuning default)
+    OptionsSnapshot snap_;
     bool changed_ = false;
     bool done_ = false;
+    bool open_keyremap_ = false;
 };
 
 }  // namespace bomber::game
