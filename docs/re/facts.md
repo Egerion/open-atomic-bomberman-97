@@ -490,8 +490,10 @@ Read 2026-07-03. When a flying bomb lands on a live player:
 - **Scatter placement** (`sub_4255B2` via `sub_425BED`, which discards the
   position argument): the token lands on a RANDOM tile — `x = rand()%W,
   y = rand()%H`, inner budget 100 rolls (solid/brick just re-roll), outer
-  budget 100 attempts (flame/powerup/bomb tiles burn an attempt), token LOST
-  if everything fails. Our old nearest-free-spiral was a guess; replaced.
+  budget 100 attempts (a bomb, ANY powerup record, or a live PLAYER on the
+  tile burns an attempt — see "Scatter occupancy test" below for the exact
+  predicate; flame does NOT block placement), token LOST if everything
+  fails. Our old nearest-free-spiral was a guess; replaced.
 - Side find: a fully-boxed-in idle player rolls a panic anim state
   `20 + rand % getvalue(330)` — cosmetic (presentation `panic_lcg_`, not the
   sim). getvalue(330) = 13, CONFIRMED 2026-07-04 (see "Final in-game 1:1 gaps").
@@ -1034,12 +1036,16 @@ calls dead on the default path, and the new slide-probe powerup squash
 only fires when a moving bomb's next cell holds a floor powerup — no
 golden scenario produces that (proved by running the suite before/after:
 all 32 tests, including `golden`, pass unchanged). The flying-bomb
-exemption in drop_wall likewise touched no scenario. Known remaining
-fidelity gaps deliberately NOT taken here (each changes default-path
-behaviour and needs its own golden recapture): the original's flame arm
-STOPS at the powerup it burns and at the bomb it chain-detonates (ours
-continues), and a flying bomb treats a floor powerup as an occupied
-landing tile (ours lands on it).
+exemption in drop_wall likewise touched no scenario. Three fidelity gaps
+were deliberately NOT taken here (each changes default-path behaviour and
+needs its own golden treatment) and are now RESOLVED in dedicated entries
+below: **"Flame-arm stops"** (the arm STOPS at the powerup it burns and at
+the bomb it chain-detonates instead of burning through), **"Flying-bomb
+landing on powerups"** (a flying bomb treats a floor powerup as an occupied
+landing tile instead of landing on it), and **"Scatter occupancy test"**
+(the head-hit/dud scatter's occupancy predicate: player blocks placement,
+flame does not — this entry's own "flame/powerup/bomb tiles burn an
+attempt" phrasing above was imprecise and is corrected there).
 
 (Provenance: `sub_4080DC` draw/switch pseudo.c 9097-9454; `sub_41095A`
 14641-14658; `sub_426818` 27166-27310; `sub_422E48` 25031-25052;
@@ -1049,6 +1055,180 @@ landing tile (ours lands on it).
 4443-4499; VALUELST.RES lines "40,1" / "46,1" / "120,1" with the quoted
 authored comments; shipped options.ini `random_start=1`,
 `stomped_bombs_detonate=1`, `diseases_destroyable=1`.)
+
+## Flame-arm stops — CONFIRMED (`sub_42331C` per-direction arm loop, pseudo.c 25637-25678)
+
+Read 2026-07-08, resolving the "Options toggles" flagged gap. The exploding
+bomb's own tile (the epicentre, pseudo.c 25619-25636) is unconditionally
+ignited, then any powerup on it destroyed — no stop/occupancy test applies
+there (placement rules mean no second bomb can ever share that tile). The
+EXTENDING ARM is a different, gated loop: for each of the 4 directions, for
+`m` in `0 .. bomb.flame-1`, the arm advances one tile and runs THREE checks
+**in this order, each BEFORE the ignite call**:
+
+1. **A grounded bomb here** (`sub_422E48` @ 25641; excludes motion states 2
+   flying / 3 carried, same as everywhere else) → queue its detonation
+   (`sub_423209(bomb, dir_byte)`), **`break`** — the arm stops. The tile is
+   **never ignited by this arm at all** (no `sub_426FCC` call on that
+   branch); the chained bomb's OWN explosion (same tick) flames it via ITS
+   epicentre instead.
+2. **A visible floor powerup here** (`sub_42542D` @ 25653, state == 2 — a
+   hidden/state-1 record under a still-standing brick can't occur on a
+   reachable arm tile, since a brick tile fails the cell-type check below
+   before this point could even be reached along that arm in a later step)
+   → destroy it (`sub_4254F3`), relocate a fresh skull when
+   `diseases_destroyable` is off (`sub_4255B2(2)`, same as the epicentre and
+   the sliding-bomb squash), **`break`**. Also never ignited.
+3. Only past both: the cell-type verdict (`sub_425FB9`). **1 (solid)** →
+   `break`, never ignited. **2 (brick)** → ignite as "brick burning"
+   (orientation 9), increment the brick-destroyed counter, run the
+   brick-destroy/reveal path (`sub_425EFC`, `sub_425107`), `break`. **0
+   (blank)** → ignite normally (`sub_426FCC`, orientation `k`/`k+4` by
+   whether this is the arm's last tile) and the arm CONTINUES to the next
+   tile.
+
+**The bug this corrects:** our previous `FlameSystem::spread_to` ignited
+every non-solid/non-brick tile unconditionally (destroying any powerup or
+chain-detonating any bomb found there) and then continued the arm past it —
+so a flame arm burned straight through bombs and powerups instead of
+stopping at them, extending its visible reach one tile further than the
+original on that ray. Fixed: `FlameSystem::ignite_epicentre` (new, the
+epicentre-only always-ignite path) is now distinct from `FlameSystem::
+spread_to` (the arm), which checks bomb-then-powerup-then-cell-type BEFORE
+igniting and returns `false` (stop, no ignite) on the first hit — mirroring
+the original's per-tile order and its "no `sub_426FCC` call on that branch"
+detail. Tests: `tests/test_sim.cpp` ("flame arm stops at a floor powerup,
+without igniting its tile", "flame arm stops at a bomb it chain-detonates,
+without igniting past it").
+
+**GOLDEN IMPACT: scenario D only.** Proved by running the full suite before
+and after: golden A/B/C/E are byte-identical (no scenario in them ever has a
+flame arm reach a bomb or powerup tile before this fix). Golden D (floor
+seeded with Disease/SuperDisease/Skate/Flame tokens) diverges starting
+between tick 400 and 600 — its ticks-200/400 checkpoint hashes are
+UNCHANGED (the arm hasn't reached a powerup yet at that point), and its
+pinned RNG stream (`kExpectedRng`) is completely unaffected at every
+checkpoint (the fix adds no RNG draws — it only changes which tile the
+blank-tile ignite loop reaches next, and whether/when the existing
+`scatter()` skull-relocation call fires, which was already in the RNG
+stream). Recaptured: `tests/test_golden.cpp` "golden D" ticks 600/800.
+
+(Provenance: `sub_42331C` epicentre block pseudo.c 25601-25636, arm loop
+25637-25682; `sub_422E48` 25031-25052; `sub_42542D` 26380-26389; `sub_4254F3`
+26406-26417; `sub_425FB9` 26863-26871; `sub_426FCC` 27478-27504 (writes
+`dword_46224C`, the same flame array `sub_42708D` reads).)
+
+## Flying-bomb landing on powerups — CONFIRMED (`sub_42331C` flight-landing check, pseudo.c ~25443-25469)
+
+Read 2026-07-08, resolving the "Options toggles" flagged gap. A thrown or
+punched bomb (motion state 2, `sub_42331C case 2`) resolves each landing
+boundary with `if (!sub_425FB9(x,y) && !sub_422E48(x,y) && !sub_42542D(x,y))`
+— the tile must be blank (not solid/brick), have no grounded bomb, AND have
+**no powerup record at all** (`sub_42542D` returns the record regardless of
+state — hidden or visible; both count). Only when ALL three hold does the
+original even test for a player (`sub_421CB5`) at that tile — the player
+(head-hit) check is NESTED INSIDE the "clear" branch, not evaluated
+independently. If the tile fails the three-way test, the bomb just falls
+through to the un-settled tail (`continue`), i.e. it hops onward exactly as
+it does off a wall or another bomb — the powerup is left completely
+untouched (no destruction, no pickup, no compensation draw).
+
+This differs from the SIBLING mechanic, the sliding/kicked-bomb cell-entry
+probe `sub_4230A5` (see "Kick nuances"): a sliding bomb PLOWS THROUGH a
+visible powerup, destroying it as a side effect (with the same
+diseases_destroyable skull-relocation compensation) and continuing to enter
+the tile. A flying bomb does neither — it cannot land there and does not
+touch the powerup. The two mechanics are deliberately inconsistent with
+each other because the binary itself is: `sub_42331C`'s flight branch and
+slide branch call different helpers (`sub_42542D` raw vs. `sub_4230A5`'s
+destroy-then-continue) with different outcomes, and the port must match the
+binary, not internal consistency.
+
+**The bug this corrects:** `BombSystem::fly`'s landing-occupancy check
+(`grid::tile_open` + `grid::bomb_at`) never consulted `State::floor`, so a
+flying bomb would land on (and coexist with) a powerup tile instead of
+hopping past it. The player check also ran unconditionally instead of being
+nested inside the "clear" verdict — unobservable in practice (a player can't
+normally coexist with an unclaimed powerup on the same tile, since walking
+onto one picks it up the same tick) but not the literal control flow.
+
+Fixed: `BombSystem::fly` now computes `clear = tile_open && !bomb_at &&
+floor[ty][tx] == None` first, and only checks for a player (head-hit) inside
+`clear`; the hop-vs-settle branch checks `!clear || victim >= 0`. Tests:
+`tests/test_punch_throw.cpp` "a punched bomb hops over a floor powerup
+instead of landing on it" (asserts the powerup survives the whole flight
+untouched and the bomb settles elsewhere).
+
+**GOLDEN IMPACT: none.** Proved by running the full suite before and after:
+all golden scenarios A-E are byte-identical. No golden scenario has a flying
+bomb's landing tile carrying a floor powerup, so the new `floor[ty][tx] ==
+None` branch of `clear` never evaluates false on any existing path — the RNG
+stream and every hashed field are untouched.
+
+(Provenance: `sub_42331C` flight-landing check pseudo.c 25443-25469;
+`sub_422E48` 25031-25052; `sub_42542D` 26380-26389; `sub_421CB5`
+24196-24212; `sub_4230A5` 25155-25179 (the sliding-bomb sibling, contrast).)
+
+## Scatter occupancy test — CONFIRMED (`sub_4255B2` re-roll predicate, pseudo.c 26458-26479)
+
+Read 2026-07-08, resolving the "Options toggles" flagged gap and correcting
+this file's own earlier "flame/powerup/bomb tiles burn an attempt" phrasing
+(under "Head hit" and "Options toggles" above). The head-hit/dud scatter
+(`sub_4255B2`, used 1:1 by `PowerupSystem::scatter`) draws `x = rand()%W, y
+= rand()%H` per roll (inner budget 100 rolls/outer attempt, 100 outer
+attempts, token lost if both are exhausted). Per roll:
+
+1. `sub_425FB9(x,y)` must be **0 (blank)** — solid (1) or brick (2) tiles are
+   silently re-rolled, burning NEITHER an inner-guard-relevant attempt nor an
+   outer attempt (the `&&` short-circuits before the outer-budget branch).
+2. Past that, the tile is REJECTED — burning ONE outer attempt — when
+   **`sub_422E48(x,y)` (a grounded bomb) OR `sub_42542D(x,y)` (ANY powerup
+   record, hidden or visible — same raw check as the flying-bomb landing
+   test above) OR `sub_421CB5(x,y)` (a live player)** is true. Passing all
+   three places the token there immediately.
+
+**Flame is NEVER checked.** `sub_42708D`'s flame array (`dword_46224C`) is
+entirely separate storage from the cell-type grid (`dword_46222C`,
+`sub_425FB9`) and the powerup array (`dword_462214`, `sub_42542D`) — the
+scatter predicate has no call to `sub_42708D` anywhere. A scattered token
+CAN land on a tile that is actively burning.
+
+**The bug this corrects:** `PowerupSystem::scatter` rejected a candidate
+tile when `s.flame[y][x] > 0` (checking something the original never
+checks) and never checked for a live player on the tile (something the
+original DOES check) — an exact swap of what should and shouldn't block.
+The missing player check is easy to miss end-to-end: when the scatter lands
+a token on a tile a player is standing on, powerup pickup runs later in the
+same tick and the player immediately reclaims it, so the token never
+visibly rests on the floor either way — inspecting `State::floor` after a
+full tick cannot distinguish "rejected at scatter" from "placed then
+instantly picked up". The distinguishing signal is whether a
+`Event::Type::PowerupPicked` fires at all.
+
+Fixed: `PowerupSystem::scatter`'s reject condition is now `grid::bomb_at ||
+floor != None || grid::player_at` (flame dropped, player added). Added
+`grid::player_at` (`libs/sim/src/grid.hpp`) mirroring `sub_421CB5`. A hidden
+powerup (state 1, under a standing brick) needs no separate check: `cells !=
+Blank` already excludes Brick tiles before the occupancy branch runs, so
+`floor != None` alone is equivalent to "any record" on a reachable (blank)
+candidate. Tests: `tests/test_sim.cpp` "scattered token CAN land on a
+burning (flamed) tile" and "scattered token NEVER lands on a tile a live
+player occupies" (the latter asserts no `PowerupPicked` event fires, per the
+masking behaviour above — checking `floor` alone would not have caught the
+missing player check).
+
+**GOLDEN IMPACT: none.** Proved by running the full suite before and after:
+all golden scenarios A-E are byte-identical. No golden scenario's scatter
+draws ever land on a currently-flaming tile (so removing that reject never
+flips a reject to an accept) or on a player-occupied tile before this fix
+(so adding that reject never flips an accept to a reject) — every draw's
+accept/reject verdict is unchanged, so the RNG stream and hashed state are
+untouched.
+
+(Provenance: `sub_4255B2` pseudo.c 26443-26483; `sub_425FB9` 26863-26871;
+`sub_422E48` 25031-25052; `sub_42542D` 26380-26389; `sub_421CB5`
+24196-24212; `sub_42708D` 27511-27519 (separate array, never called from
+`sub_4255B2`).)
 
 ## Still guessed — not yet extracted from the binary
 

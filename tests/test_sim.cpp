@@ -47,6 +47,56 @@ TEST_CASE("flame reach stops at range and solids") {
     CHECK(s.state().flame[3][0] == 0);  // flame length 2 -> no further
 }
 
+// docs/re/facts.md "Flame-arm stops": the arm's per-tile occupancy checks
+// (sub_42331C 25637-25678) run BEFORE the ignite call, and a hit STOPS the
+// arm without igniting that tile at all — it does not burn through.
+TEST_CASE("flame arm stops at a floor powerup, without igniting its tile") {
+    Simulation s(test_config());
+    s.state().floor[0][1] = PowerupType::ExtraBomb;  // one tile right of (0,0)
+    s.tick(press1(0));
+    run(s, s.state().tuning.fuse_frames - 1);
+    CHECK(s.state().flame[0][0] > 0);          // epicentre still burns
+    CHECK(s.state().flame[0][1] == 0);         // powerup tile NOT ignited
+    CHECK(s.state().floor[0][1] == PowerupType::None);  // but destroyed
+    bool burned_event = false;
+    for (const auto& e : s.state().events)
+        if (e.type == Event::Type::PowerupBurned && e.x == 1 && e.y == 0) burned_event = true;
+    CHECK(burned_event);  // events are current-tick only: check right after the blast
+}
+
+TEST_CASE("flame arm stops at a bomb it chain-detonates, without igniting past it") {
+    Simulation s(open_config());
+    s.state().cells[0][1] = Cell::Blank;  // clear path for the arm to reach x=1
+    Bomb victim;
+    victim.active = true;
+    victim.owner = 1;
+    victim.x = kTileWF + kTileWF / 2;  // tile (1,0)
+    victim.y = kTileHF / 2;
+    victim.fuse = 30000;  // never fires on its own within this test
+    victim.flame = 0;     // its own chain explosion covers ONLY its own tile
+    s.state().bombs.push_back(victim);
+    ++s.state().players[1].bombs_placed;
+
+    Bomb igniter;
+    igniter.active = true;
+    igniter.owner = 0;
+    igniter.x = kTileWF / 2;  // tile (0,0)
+    igniter.y = kTileHF / 2;
+    igniter.fuse = 1;
+    igniter.flame = 3;  // would reach tile (3,0) if the arm sailed through
+    s.state().bombs.push_back(igniter);
+    ++s.state().players[0].bombs_placed;
+
+    run(s, 1);  // igniter's fuse expires this tick
+    CHECK(s.state().bombs.empty());          // both chain-detonated
+    CHECK(s.state().flame[0][1] > 0);        // victim's tile burns (its OWN epicentre)
+    CHECK(s.state().flame[0][2] == 0);       // the igniter's arm did NOT continue past it
+    int explosion_count = 0;
+    for (const auto& e : s.state().events)
+        if (e.type == Event::Type::Explosion) ++explosion_count;
+    CHECK(explosion_count == 2);  // igniter + chained victim
+}
+
 TEST_CASE("burned brick reveals its powerup, players pick it up") {
     Simulation s(test_config());
     s.state().hidden[0][2] = PowerupType::ExtraBomb;  // plant under the brick
@@ -447,6 +497,118 @@ TEST_CASE("a head hit can drop goldflame (kind 8)") {
         for (int x = 0; x < kGridWidth; ++x)
             if (s.state().floor[y][x] == PowerupType::Goldflame) gold_on_floor = true;
     CHECK(gold_on_floor);  // scattered as a Goldflame token
+}
+
+// docs/re/facts.md "Scatter occupancy test" (sub_4255B2, pinned from
+// pseudo.c 26458-26479): the re-roll predicate rejects a bomb, ANY powerup
+// record, or a live PLAYER on the candidate tile — but NOT flame. A scattered
+// token can land on a tile that is currently on fire, and never lands on a
+// tile a player is standing on. Both cases isolated via a grid where every
+// tile is Solid except: the victim's own tile at (5,5) (where the head hit
+// happens), the bomb owner's tile at (7,7) (kept apart from the victim so it
+// is never mistaken for the head-hit target), and exactly one OTHER blank
+// tile at (3,3) whose contents this test controls — the sole legal (or
+// contested) scatter candidate.
+TEST_CASE("scattered token CAN land on a burning (flamed) tile") {
+    MatchConfig cfg;
+    for (int y = 0; y < kGridHeight; ++y)
+        for (int x = 0; x < kGridWidth; ++x) cfg.cells[y][x] = Cell::Solid;
+    cfg.cells[5][5] = Cell::Blank;  // victim's tile
+    cfg.cells[7][7] = Cell::Blank;  // bomb owner's tile (apart from the victim)
+    cfg.cells[3][3] = Cell::Blank;  // the ONLY other legal candidate tile
+    cfg.spawns = {{7, 7}, {5, 5}};
+    cfg.player_count = 2;
+    cfg.seed = 1;  // this scatter draw sequence lands on (3,3) within budget
+    cfg.tuning.powers_lost_min = 1;
+    cfg.tuning.powers_lost_rand = 1;
+    for (auto& c : cfg.tuning.spawn_counts) c = 0;
+    Simulation s(cfg);
+    s.state().flame[3][3] = 50;  // candidate tile is ON FIRE
+    Player& v = s.state().players[1];
+    v.kick = true;  // sole surplus kind: guarantees a droppable hit
+    // Force a head hit on the victim: a flying bomb landing on its tile
+    // (isolates scatter() from the flight/landing machinery already covered
+    // by other tests).
+    Bomb b;
+    b.active = true;
+    b.owner = 0;
+    b.flame = 1;
+    b.fuse = 10000;
+    b.flying = true;
+    b.from_x = b.x = 5 * kTileWF + kTileWF / 2;
+    b.from_y = b.y = 5 * kTileHF + kTileHF / 2;
+    b.to_x = b.x;
+    b.to_y = b.y;
+    b.dir = Direction::Right;
+    b.fly_total = 1;
+    b.fly_ticks = 1;
+    s.state().bombs.push_back(b);
+    run(s, 1);  // the single fly() step lands immediately on the victim's tile
+    CHECK(v.stun > 0);
+    CHECK(!v.kick);  // the surplus kind was dropped
+    // The ONLY legal candidate tile is (3,3): with 100 outer attempts and a
+    // board that is Solid everywhere else, the token can ONLY end up there
+    // (or be lost) — and since flame does not block placement, it lands.
+    CHECK(s.state().floor[3][3] == PowerupType::Kick);
+}
+
+TEST_CASE("scattered token NEVER lands on a tile a live player occupies") {
+    // Regression-precise setup (seed=1 verified against BOTH revisions of
+    // PowerupSystem::scatter): the ONLY three blank tiles are the victim's
+    // (5,5), the bomb owner's (7,7), and a third player's (3,3) — all three
+    // occupied by a live player. Without the player check, this exact seed
+    // places the Kick token on the BOMB OWNER's own tile (7,7); because
+    // powerup pickup runs later the same tick, the owner immediately picks
+    // it back up — a PowerupPicked event fires and the token never reaches
+    // the floor, silently masking the bug if you only inspect `floor`. The
+    // fix must show NEITHER a floor token NOR a PowerupPicked event: the
+    // token has to be rejected at the SCATTER step, not merely reclaimed.
+    MatchConfig cfg;
+    for (int y = 0; y < kGridHeight; ++y)
+        for (int x = 0; x < kGridWidth; ++x) cfg.cells[y][x] = Cell::Solid;
+    cfg.cells[5][5] = Cell::Blank;  // victim's tile
+    cfg.cells[7][7] = Cell::Blank;  // bomb owner's tile
+    cfg.cells[3][3] = Cell::Blank;  // candidate tile, occupied by a THIRD player
+    cfg.spawns = {{7, 7}, {5, 5}, {3, 3}};
+    cfg.player_count = 3;
+    cfg.seed = 1;
+    cfg.tuning.powers_lost_min = 1;
+    cfg.tuning.powers_lost_rand = 1;
+    for (auto& c : cfg.tuning.spawn_counts) c = 0;
+    Simulation s(cfg);
+    Player& v = s.state().players[1];
+    v.kick = true;
+    REQUIRE(s.state().players[2].present);
+    REQUIRE(s.state().players[2].alive);
+    REQUIRE(s.state().players[2].tile_x() == 3);
+    REQUIRE(s.state().players[2].tile_y() == 3);
+
+    Bomb b;
+    b.active = true;
+    b.owner = 0;
+    b.flame = 1;
+    b.fuse = 10000;
+    b.flying = true;
+    b.from_x = b.x = 5 * kTileWF + kTileWF / 2;
+    b.from_y = b.y = 5 * kTileHF + kTileHF / 2;
+    b.to_x = b.x;
+    b.to_y = b.y;
+    b.dir = Direction::Right;
+    b.fly_total = 1;
+    b.fly_ticks = 1;
+    s.state().bombs.push_back(b);
+    run(s, 1);
+    CHECK(v.stun > 0);
+    CHECK(!v.kick);  // the surplus kind was still dropped from the victim
+    // The token is truly LOST: every one of the three blank tiles is a
+    // player's own tile, so every scatter roll either hits Solid (re-roll,
+    // no attempt burned) or a player tile (attempt burned, rejected) —
+    // never placed, never picked up.
+    for (int y = 0; y < kGridHeight; ++y)
+        for (int x = 0; x < kGridWidth; ++x)
+            CHECK(s.state().floor[y][x] != PowerupType::Kick);
+    for (const auto& e : s.state().events)
+        CHECK(e.type != Event::Type::PowerupPicked);  // never landed to be picked up
 }
 
 // Kill attribution on PlayerDied (docs/re/results-and-options.md §1's

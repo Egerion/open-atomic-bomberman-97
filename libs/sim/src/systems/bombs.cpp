@@ -209,24 +209,41 @@ void BombSystem::fly(Bomb& b) {
     s.events.push_back({Event::Type::BombBounced, -1, static_cast<std::int8_t>(tx),
                         static_cast<std::int8_t>(ty), 0});
 
-    // A live player on the landing tile gets bonked on the head.
-    int victim = -1;
-    for (int i = 0; i < kMaxPlayers; ++i) {
-        const Player& pl = s.players[i];
-        if (pl.present && pl.alive && pl.tile_x() == tx && pl.tile_y() == ty) {
-            victim = i;
-            break;
-        }
-    }
-    if (victim >= 0) powerups_.head_hit(victim, tx, ty);
+    // Landing-tile verdict (sub_42331C ~25443): `!sub_425FB9 && !sub_422E48 &&
+    // !sub_42542D` — wall/brick, a grounded bomb, AND a floor powerup (hidden
+    // OR visible; sub_42542D returns the record regardless of state) are ALL
+    // treated as an occupied landing tile. This is facts.md's flagged gap:
+    // our previous port never consulted `floor` here, so a flying bomb would
+    // land on (and coexist with) a powerup instead of hopping past it like it
+    // does past a wall or another bomb. Unlike the sliding-bomb cell-entry
+    // probe (sub_4230A5), which squashes a visible powerup as a side effect,
+    // the flight path does NOT touch the powerup at all — it just can't land
+    // there.
+    //
+    // The player check (sub_421CB5, head-hit) is nested INSIDE that clear
+    // verdict in the original — it never runs when the tile is otherwise
+    // occupied. A player can't normally coexist with an unclaimed powerup on
+    // the same tile (walking onto one picks it up same-tick), so this nesting
+    // is mostly unobservable, but it IS the literal control flow: preserved
+    // here rather than checking the player unconditionally.
+    bool clear = grid::tile_open(s, tx, ty) && grid::bomb_at(s, tx, ty) == nullptr &&
+                 (!grid::in_grid(tx, ty) || s.floor[ty][tx] == PowerupType::None);
 
-    // Blocked landing tile ⇒ hop onward (the sound already fired above); a clear
-    // tile ⇒ settle to rest. The original's occupancy test is the same set:
-    // solid/brick (sub_425FB9), a bomb (sub_422E48), a powerup (sub_42542D), or
-    // a player head (sub_421CB5, which takes the head-hit path above).
-    bool occupied = victim >= 0 || !grid::tile_open(s, tx, ty) ||
-                    grid::bomb_at(s, tx, ty) != nullptr;
-    if (occupied) {
+    int victim = -1;
+    if (clear) {
+        for (int i = 0; i < kMaxPlayers; ++i) {
+            const Player& pl = s.players[i];
+            if (pl.present && pl.alive && pl.tile_x() == tx && pl.tile_y() == ty) {
+                victim = i;
+                break;
+            }
+        }
+        if (victim >= 0) powerups_.head_hit(victim, tx, ty);
+    }
+
+    // Blocked landing tile (or a player head-hit, which never settles the
+    // bomb) ⇒ hop onward (the sound already fired above); otherwise settle.
+    if (!clear || victim >= 0) {
         launch(b, b.dir, 1, s.tuning.punch_arc_hop);
         return;
     }

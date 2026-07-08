@@ -58,4 +58,11 @@ inline const Bomb* bomb_at(const State& s, int tx, int ty) {
     return bomb_at(const_cast<State&>(s), tx, ty);
 }
 
+// A live, present player standing on (tx,ty), if any (sub_421CB5).
+inline bool player_at(const State& s, int tx, int ty) {
+    for (const auto& pl : s.players)
+        if (pl.present && pl.alive && pl.tile_x() == tx && pl.tile_y() == ty) return true;
+    return false;
+}
+
 }  // namespace bomber::sim::grid

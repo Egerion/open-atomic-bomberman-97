@@ -27,8 +27,19 @@ public:
     void age_flames_and_bricks();
 
 private:
-    // A flame reaches (tx,ty). Returns true if it continues past this cell.
+    // Ignites the exploding bomb's own tile unconditionally (sub_42331C
+    // epicentre block). Distinct from spread_to: no bomb/powerup occupancy
+    // stop applies here, only to the extending arm.
+    bool ignite_epicentre(int tx, int ty, std::uint8_t owner);
+
+    // A flame ARM reaches (tx,ty) (sub_42331C per-direction loop). Returns
+    // true if the arm continues past this cell, false if it stops here
+    // (bomb chain-detonated, powerup burned, solid wall, or brick ignited).
     bool spread_to(int tx, int ty, std::uint8_t owner);
+
+    // Destroys any floor powerup at (tx,ty), with the diseases_destroyable
+    // skull-relocation compensation. Shared by the epicentre and the arm.
+    void burn_powerup_here(int tx, int ty);
 
     State& s_;
     PowerupSystem& powerups_;
