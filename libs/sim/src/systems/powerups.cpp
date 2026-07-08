@@ -81,10 +81,19 @@ void PowerupSystem::remove(Player& p, PowerupType t) {
 
 // Faithful port of the token drop (sub_4255B2): the token lands on a RANDOM
 // tile — up to 100 placement attempts, each with an inner budget of 100
-// coordinate rolls. Solid/brick tiles just re-roll; a tile holding flame, a
-// powerup, or a bomb burns one placement attempt. Two RNG draws per roll —
-// the draw pattern is part of the contract. The token is LOST if everything
-// fails, exactly like the original.
+// coordinate rolls. Two RNG draws per roll (x then y) — the draw pattern is
+// part of the contract. The token is LOST if everything fails.
+//
+// Occupancy predicate (docs/re/facts.md "Scatter occupancy test", pinned
+// from sub_4255B2 @ pseudo.c 26458-26479): a re-rolled tile first needs
+// sub_425FB9(x,y) == 0 (blank cell type; solid/brick just re-roll silently,
+// burning NO placement attempt). Past that, the tile is rejected — burning
+// ONE placement attempt — when it holds a GROUNDED bomb (sub_422E48), ANY
+// powerup record (sub_42542D, hidden or visible), OR a live player
+// (sub_421CB5). This is facts.md's flagged fidelity gap: our previous port
+// also rejected on FLAME (never checked by the original — a scattered token
+// can land on burning ground) and never checked for a PLAYER standing on the
+// tile (the original does). Fixed to match the binary predicate exactly.
 void PowerupSystem::scatter(PowerupType t) {
     State& s = s_;
     int outer = 0;
@@ -95,8 +104,8 @@ void PowerupSystem::scatter(PowerupType t) {
             int y = static_cast<int>(random_below(s, kGridHeight));
             if (--guard <= 0) return;  // give up entirely (token lost)
             if (s.cells[y][x] != Cell::Blank || s.burning[y][x] > 0) continue;
-            if (s.flame[y][x] > 0 || s.floor[y][x] != PowerupType::None ||
-                grid::bomb_at(s, x, y)) {
+            if (grid::bomb_at(s, x, y) || s.floor[y][x] != PowerupType::None ||
+                grid::player_at(s, x, y)) {
                 ++outer;  // occupied floor tile: burn one placement attempt
                 break;
             }
