@@ -68,4 +68,24 @@ inline int win_by_kills_clinch(const std::array<int, sim::kMaxPlayers>& kill_cou
     return best;
 }
 
+// The Goldman Roulette gold-player assignment (docs/re/goldman-roulette.md
+// §2, pseudo.c 30004-30022): sub_42A3F6's RESULTS tier writes dword_46492C
+// from v73 (the MATCH-CLINCH winner, i.e. match_clinch()'s return — NOT the
+// per-round winner) whenever goldman is on, else -1. In team mode the stored
+// value is the clinching player's raw team id (our port's 0/1 space; see the
+// doc's note on the original's internal 0/2 encoding), matching both the
+// wheel-award consumer in GameApp::build_match_config and
+// present_scoreboard's own clinched_player -> team_of[] lookup.
+//
+// Call ONLY when the RESULTS tier itself runs, i.e. the round had a survivor
+// (round_winner() >= 0) — a DRAW never reaches sub_42A3F6's RESULTS tier in
+// the original, so a pending gold player must be left untouched on a draw
+// round (the caller simply skips calling this, not passing a sentinel).
+inline int assign_gold_player(bool goldman_on, bool team_mode, int clinched_player,
+                               const std::array<int, sim::kMaxPlayers>& team_of) {
+    if (!goldman_on) return -1;
+    if (team_mode && clinched_player >= 0) return team_of[static_cast<std::size_t>(clinched_player)];
+    return clinched_player;
+}
+
 }  // namespace bomber::game
