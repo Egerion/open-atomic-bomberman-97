@@ -15,6 +15,7 @@
 #include "bomber/game/bmscreen.hpp"
 #include "bomber/game/gamepad.hpp"
 #include "bomber/game/input.hpp"
+#include "bomber/game/options_screen.hpp"
 #include "bomber/game/renderer.hpp"
 #include "bomber/game/screen.hpp"
 #include "bomber/game/sdl.hpp"
@@ -69,6 +70,16 @@ private:
     // exits on Enter/Escape (sub_41302D). Returns Back on Escape else Advance
     // (both route the leaf back to the menu), or Quit on window close.
     AppInput present_bm_screen(const std::string& bm_name);
+    // The interactive Options screen (Team Play / Conveyor Speed): random
+    // GLUE<n> backdrop, FONT6 text, Up/Down select a row, Left/Right change
+    // its value, Enter/Esc leave (docs/re/frontend-flow.md "Interactive
+    // settings ... DEFERRED" — this is that follow-up). Persists to
+    // options.ini via bomber::assets::save_options only when a setting
+    // actually changed. F1 opens the original OPTIONS.BM help overlay on top
+    // (present_bm_screen), same as the rest of the front end. Returns Advance
+    // (both Enter/Esc route the leaf back to the menu, mirroring the other
+    // .BM-backed leaves) or Quit on window close.
+    AppInput present_options_screen();
     // The IPLOGO -> HSLOGO -> TITLE boot presentation (sub_42B060). LINEAR — no
     // attract re-run: each screen advances on a key OR the getvalue(12) = 7 s
     // timeout, and the title's Advance (key or timeout) returns so run_app drops
@@ -165,6 +176,11 @@ private:
     // which case the sim keeps the binary's confirmed default (1 = medium). See
     // start_match() and docs/re/stage-actors.md §3.
     std::optional<int> conveyor_speed_index_;
+    // Team Play toggle, loaded from options.ini ("team_play=") at startup and
+    // editable live from the interactive Options screen (present_options_screen).
+    // Threaded into MatchConfig::team_play at start_match() (config-only, not
+    // consumed by build_state() yet — see MatchConfig::team_play's doc comment).
+    bool team_play_ = false;
 
     std::optional<sdl::VideoSubsystem> video_;
     sdl::WindowPtr window_;

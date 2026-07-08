@@ -36,7 +36,12 @@ bool GameApp::init() {
         // The install-root options.ini (sub_406238) carries the Conveyor Speed
         // game option ("conveyor_speed="). Absent key/file ⇒ empty optional ⇒
         // the sim keeps the binary default (1=medium). This install sets 2=high.
-        conveyor_speed_index_ = assets::load_options(game / "options.ini").conveyor_speed;
+        assets::Options loaded_opts = assets::load_options(game / "options.ini");
+        conveyor_speed_index_ = loaded_opts.conveyor_speed;
+        // Team Play ("team_play="): absent key ⇒ OFF, matching the confirmed
+        // team-mode default (docs/re/setup-screens.md: "Team mode is toggled on
+        // the OPTIONS game-type screen, OFF by default").
+        team_play_ = loaded_opts.team_play.value_or(false);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "%s\n", e.what());
         return false;
@@ -213,7 +218,9 @@ struct MenuItem {
 // Seven rows in the ORIGINAL's v10 order (sub_42B9CE), so the cursor anchor
 // (getvalue 700-702) lands on the labels baked into MAINMENU.PCX:
 //   0 Play           -> StartMatch   (live)
-//   1 setup A        -> OpenOptions  (help overlay live; interactive UI = TODO)
+//   1 setup A        -> OpenOptions  (interactive Team Play / Conveyor Speed
+//                                     screen; F1 on it reaches the OPTIONS.BM
+//                                     help text)
 //   2 setup B        -> OpenNetwork  (help overlay live; interactive UI = TODO)
 //   3 Editor         -> stub         (map editor not built — inert, documented)
 //   4 Credits        -> OpenCredits  (live: CREDITS.BM viewer)
@@ -262,6 +269,15 @@ void GameApp::start_match(std::uint32_t seed) {
     // install = 2 high); otherwise Tuning keeps the confirmed default (1
     // medium). conveyor_speed() clamps to [0, count-1], so a raw index is safe.
     if (conveyor_speed_index_) cfg.tuning.conveyor_speed_index = *conveyor_speed_index_;
+    // Team Play (options.ini "team_play=" / the interactive Options screen):
+    // the game-type-level team-mode GATE (docs/re/setup-screens.md
+    // `dword_464964`), separate from each slot's own +84 team byte. OFF means
+    // team mode is off regardless of what a slot's 'T' toggle left behind, so
+    // zero every slot's team here rather than adding a second config field —
+    // MatchConfig::team[] stays the single source of truth. Config-only, no
+    // sim/hash consumer yet (present_setup's marker draw is the only reader,
+    // gated below), so this has no golden impact.
+    if (!team_play_) cfg.team.fill(0);
     // Level from the LEVEL screen (present_map_select -> dword_464998): the match
     // init (sub_410B6E) resolves it to a stage index dword_46499C. RANDOM (-1) ->
     // keep pick_stage over the enabled rotation (VALUELST 1150-1160, the same
@@ -388,6 +404,60 @@ AppInput GameApp::present_bm_screen(const std::string& bm_name) {
     // No wipe out: the .BM viewer (sub_41302D) dismisses back to the menu by a
     // cut, like every sub_42A088-style screen — the menu is redrawn from scratch
     // on the next frame. No screen-to-screen transition here.
+    return result;
+}
+
+AppInput GameApp::present_options_screen() {
+    // The interactive Options screen (options_screen.hpp/.cpp): Team Play +
+    // Conveyor Speed, over a random GLUE<n> backdrop like present_setup's
+    // documented convention (docs/re/setup-screens.md). F1 layers the
+    // original's OPTIONS.BM help text on top, same content the row used to
+    // open exclusively. Music left untouched here — unlike present_setup this
+    // screen is reached straight from the main menu (not the Play handler
+    // sub_42A3F6), so there is no confirmed "inherits 1020" citation; it plays
+    // on under whatever the menu already started (1010, kMenuMusicId).
+    OptionsScreen opt(assets_, front_font_);
+    opt.enter(team_play_, conveyor_speed_index_.value_or(base_tuning_.conveyor_speed_index),
+              pick_glue());
+    AppInput result = AppInput::Advance;
+    while (!opt.done()) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
+            if (ev.type != SDL_EVENT_KEY_DOWN) continue;
+            if (ev.key.key == SDLK_F1) {
+                // Keep the .BM help reachable without leaving the interactive
+                // screen: present it modally, then resume with the same
+                // in-progress edits (present_bm_screen owns its own loop).
+                AppInput help = present_bm_screen("OPTIONS");
+                if (help == AppInput::Quit) return AppInput::Quit;
+                continue;
+            }
+            if (ev.key.key == SDLK_ESCAPE) result = AppInput::Back;
+            opt.on_key(ev.key.key, audio_);
+        }
+        audio_.update_music();
+        SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
+        SDL_RenderClear(sdl_renderer_.get());
+        opt.draw(sdl_renderer_.get());
+        SDL_RenderPresent(sdl_renderer_.get());
+        SDL_Delay(2);
+    }
+
+    // Persist ONLY on an actual change (task requirement 3), read-modify-write
+    // so the rest of the user's options.ini survives untouched.
+    if (opt.changed()) {
+        team_play_ = opt.team_play();
+        conveyor_speed_index_ = opt.conveyor_speed_index();
+        assets::Options to_write;
+        to_write.team_play = team_play_;
+        to_write.conveyor_speed = conveyor_speed_index_;
+        try {
+            assets::save_options(opts_.game_dir / "options.ini", to_write);
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "options.ini save failed: %s\n", e.what());
+        }
+    }
     return result;
 }
 
@@ -1063,13 +1133,15 @@ int GameApp::run_app() {
                 }
                 break;
             }
-            // The .BM-backed leaves render their real help/credits text now
-            // (sub_41302D via BmScreen). Options/Network/Controllers show the
-            // HELP overlays for those menu items (the fully-interactive settings
-            // and controller-remap UIs remain a documented TODO — see below);
-            // Credits shows CREDITS.BM with its inline CREDBAR/JERM/KURT images.
+            // The .BM-backed leaves render their real help/credits text
+            // (sub_41302D via BmScreen). Network/Controllers still show the HELP
+            // overlays for those menu items (the controller-remap UI remains a
+            // documented TODO); Credits shows CREDITS.BM with its inline
+            // CREDBAR/JERM/KURT images. Options is now the fully-interactive
+            // Team Play / Conveyor Speed screen (present_options_screen); its
+            // own F1 key still reaches the original OPTIONS.BM help text.
             case AppState::Options:
-                ev = present_bm_screen("OPTIONS");
+                ev = present_options_screen();
                 break;
             case AppState::Controllers:
                 ev = present_bm_screen("INPUT");
