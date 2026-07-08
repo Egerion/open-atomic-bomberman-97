@@ -31,6 +31,13 @@ Simulation open_arena(int tx, int ty, bool ai) {
     for (auto& row : st.cells) row.fill(Cell::Blank);
     for (auto& row : st.floor) row.fill(PowerupType::None);
     for (auto& row : st.hidden) row.fill(PowerupType::None);
+    // The bare ctor also leaves ticks_left at its zero-init value. In a real
+    // match that means "time's up" (sudden death: EnclosureSystem keeps the
+    // wall spiral closing forever once armed — see docs/re/enclosure.md §2, the
+    // original's remaining-seconds predicate clamps at 0 and never re-freezes).
+    // These AI sandboxes were never meant to exercise the match clock at all,
+    // so give them a real, generous countdown to keep the enclosure dormant.
+    st.ticks_left = 9999 * kTicksPerSecond;
     Player& p = st.players[0];
     p.present = true;
     p.alive = true;

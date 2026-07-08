@@ -285,7 +285,7 @@ TEST_CASE("punch lofts a bomb three tiles, hopping and wrapping") {
     b.owner = 1;
     b.x = kTileWF + kTileWF / 2;
     b.y = kTileHF / 2;  // tile (1,0)
-    b.fuse = 10;
+    b.fuse = 10000;  // long enough to survive the punch flight + landing checks below
     b.flame = 1;
     s.state().bombs.push_back(b);
     p.facing = Direction::Right;

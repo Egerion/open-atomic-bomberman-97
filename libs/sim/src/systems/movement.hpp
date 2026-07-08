@@ -35,7 +35,14 @@ public:
     // Full form: `on_center(ctx, p, tx, ty)` fires each per-pixel step that
     // settles the player exactly on tile (tx,ty)'s centre — the faithful
     // step-on trigger point (sub_41EC84 v35 == -1). Pass nullptr to skip it.
-    void move(Player& p, Direction d, std::int32_t extra_budget, StepOnFn on_center, void* ctx);
+    //
+    // use_player_speed selects whether the player's own speed (p.speed, disease-
+    // scaled) is folded into the budget. sub_41F29B only adds it when the player
+    // HAS a movement input (its case (b)); when the conveyor FORCES movement with
+    // no input (case (a)) the budget is exactly getvalue(190+idx), no speed term
+    // at all. Defaults to true for every ordinary (player-initiated) move.
+    void move(Player& p, Direction d, std::int32_t extra_budget, StepOnFn on_center, void* ctx,
+              bool use_player_speed = true);
 
 private:
     State& s_;

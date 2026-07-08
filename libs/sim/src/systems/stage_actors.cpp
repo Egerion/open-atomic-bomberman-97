@@ -153,10 +153,14 @@ bool StageActorSystem::move_on_actor(Player& p, int want_godir, bool moving) {
         // Case (a) — no input. The belt FORCES its direction and pushes. If the
         // step is fully blocked (wall ahead) the original reverts godir to -1
         // (no facing change, no visible push); our stepper simply produces no
-        // shift, and we leave facing untouched to match that revert.
+        // shift, and we leave facing untouched to match that revert. The budget
+        // is EXACTLY conveyor_speed here — sub_41F29B's case (a) never reads the
+        // player's own speed (that only happens in case (b), on player input),
+        // so use_player_speed=false (docs/re/stage-actors.md §3).
         const Fixed fx = p.x, fy = p.y;
         const Direction saved_facing = p.facing;
-        movement_.move(p, grid::from_godir(belt_dir), belt, &on_step_center, &sctx);
+        movement_.move(p, grid::from_godir(belt_dir), belt, &on_step_center, &sctx,
+                       /*use_player_speed=*/false);
         if (p.x == fx && p.y == fy)
             p.facing = saved_facing;  // blocked: revert the forced facing
     }

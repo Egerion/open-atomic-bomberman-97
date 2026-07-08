@@ -117,10 +117,18 @@ void EnclosureSystem::update() {
     // Conflating the two (drop at moment 1) closed the walls 5 s too early; this
     // decouples them. ticks_left/20 is our seconds-remaining; the -5/-0 are
     // whole-second offsets in tick units. See docs/re/enclosure.md §2.
-    const bool warn = s.ticks_left > 0 &&
-                      s.ticks_left <= s.tuning.hurry_seconds * kTicksPerSecond;
-    const bool closing = s.ticks_left > 0 &&
-                         s.ticks_left <= (s.tuning.hurry_seconds - 5) * kTicksPerSecond;
+    //
+    // NO `ticks_left > 0` guard: sub_410578's remaining-seconds is CLAMPED to >=
+    // 0 (never negative), so once the threshold predicate goes true it stays
+    // true forever — the original keeps closing walls through and past TimeUp
+    // (sudden death), it never freezes the spiral. Our ticks_left similarly
+    // floors at 0 (simulation.cpp's `if (ticks_left > 0) --ticks_left`), so
+    // dropping the guard here is the direct, monotonic equivalent — gating on
+    // ticks_left > 0 instead froze enclose_index the instant the match clock
+    // hit zero, stranding the spiral mid-ring on any match that runs out of
+    // time before all rings close.
+    const bool warn = s.ticks_left <= s.tuning.hurry_seconds * kTicksPerSecond;
+    const bool closing = s.ticks_left <= (s.tuning.hurry_seconds - 5) * kTicksPerSecond;
 
     // Moment 1: fire the banner/sound once (edge on `hurry`).
     if (!s.hurry && warn) {

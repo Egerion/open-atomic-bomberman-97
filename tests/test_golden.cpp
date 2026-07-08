@@ -40,17 +40,51 @@ MatchConfig pillars_config() {
 
 }  // namespace
 
-// NOTE 2026-07-03: every constant below was refreshed for the dud-bomb
-// mechanics (docs/re/facts.md "Dud bombs"): state_hash() now mixes the dud
-// gate and each bomb's fizzle counter (layout change → every digest moves),
-// setup arms the gate with one RNG draw, and regular-bomb placements can
-// consume gate/dud rolls.
+// NOTE 2026-07-08: every constant below was recaptured. Root-cause: commit
+// 21f6187 ("Phase 1 mechanic-fidelity sweep") shipped this file's constants
+// ALREADY WRONG — even checked out at that exact commit, none of the five
+// scenarios reproduce their own pinned hashes (verified byte-for-byte; the
+// "tests green" claim in that commit's message was never true). Two genuine
+// sim bugs rode along on top of that broken baseline and are fixed here:
+//   1. Conveyor "no input" push (StageActorSystem::move_on_actor case (a))
+//      added the player's own speed on top of conveyor_speed, contradicting
+//      sub_41F29B's case (a) pseudocode (docs/re/stage-actors.md §3), which
+//      never reads the player's speed when there is no input. Fixed by a new
+//      MovementSystem::move(..., use_player_speed) parameter, false only for
+//      the belt-forced/no-input case.
+//   2. EnclosureSystem::update() gated `warn`/`closing` on `ticks_left > 0`,
+//      so the wall spiral froze solid the instant the match clock hit zero.
+//      The original's remaining-seconds predicate (sub_410578, clamped >= 0)
+//      never re-freezes once armed — the walls keep closing through sudden
+//      death (docs/re/enclosure.md §2, which already documented golden A/D/E
+//      as relying on never reaching the clock at all). Fixed by dropping the
+//      guard; our ticks_left is likewise clamped at 0 so the predicate stays
+//      monotonic.
+// Also, commit b0dc533 (AI port) added a `brains` hash block (hash.cpp) that
+// mixes kMaxPlayers Brain-sized zero words into EVERY scenario's digest —
+// including golden A, which has no AI and no players at all — without
+// recapturing this file, growing the hash layout out from under the pinned
+// constants a second time.
+// Two test-fixture-only fixes ride along (no sim behaviour change, just
+// removing an accidental dependency on the ticks_left==0 "no clock" edge
+// case that the enclosure fix above turned into "sudden death from tick 0"):
+// golden A and tests/test_ai.cpp's open_arena() now set an explicit, large
+// ticks_left so these clock-free scratch scenarios stay clock-free, matching
+// this file's own "empty state"/"no clock" framing.
 
 TEST_CASE("golden A: empty state, 10000 ticks") {
     Simulation a;
     a.state().rng = 42u;
+    // The bare ctor also zero-inits ticks_left, which the enclosure system reads
+    // as "time's up" (sudden death: EnclosureSystem now correctly keeps closing
+    // walls past TimeUp instead of freezing — see docs/re/enclosure.md §2/§6,
+    // which already documents golden A as having "no clock (empty sim)").
+    // Without a real match clock this scenario was never meant to exercise the
+    // wall spiral at all, so give it a generous countdown to keep it dormant,
+    // matching that documented intent.
+    a.state().ticks_left = 9999 * kTicksPerSecond;
     for (std::uint64_t t = 0; t < 10000; ++t) a.tick(pattern(t));
-    CHECK(a.hash() == 0x553a5944c9e8c0f0ull);
+    CHECK(a.hash() == 0xa99c2999b7246564ull);
     CHECK(a.state().rng == 0x0000002au);
 }
 
@@ -68,15 +102,15 @@ TEST_CASE("golden B: 4-player brick match with all abilities") {
     cfg.born_with[static_cast<int>(PowerupType::Spooger)] = true;
     cfg.born_with[static_cast<int>(PowerupType::Jelly)] = true;
     Simulation s(cfg);
-    CHECK(s.hash() == 0x99d9e6bd27bd94baull);  // setup itself is pinned
+    CHECK(s.hash() == 0x29767e9a0fb9015dull);  // setup itself is pinned
 
     static constexpr std::uint64_t kExpected[6] = {
-        0xc996ac6f95e82cd2ull,  // tick 500
-        0x3c85294e01c7b0deull,  // tick 1000
-        0xe412173c0c160dbeull,  // tick 1500
-        0xc0aadf1dda805853ull,  // tick 2000
-        0x29ccd64ac29c978bull,  // tick 2500
-        0xfd18160f1e71e20cull,  // tick 3000
+        0x1b61c952778af4dcull,  // tick 500
+        0xc5f9885e29217370ull,  // tick 1000
+        0x7c5c67d283cb4af4ull,  // tick 1500
+        0xd814aaacbb607abbull,  // tick 2000
+        0x6c85b763bed7304cull,  // tick 2500
+        0x487099769e2b1fa9ull,  // tick 3000
     };
     for (std::uint64_t t = 0; t < 3000; ++t) {
         s.tick(pattern(t));
@@ -94,7 +128,7 @@ TEST_CASE("golden C: trigger bombs and a fast hurry phase") {
     cfg.born_with[static_cast<int>(PowerupType::Trigger)] = true;
     Simulation s(cfg);
     for (std::uint64_t t = 0; t < 1500; ++t) s.tick(pattern(t * 7 + 3));
-    CHECK(s.hash() == 0xc8f7c61364e80d53ull);
+    CHECK(s.hash() == 0x5bb60583007053ccull);
 }
 
 TEST_CASE("golden D: the disease gauntlet") {
@@ -116,14 +150,13 @@ TEST_CASE("golden D: the disease gauntlet") {
         }
 
     static constexpr std::uint64_t kExpectedHash[4] = {
-        0xb04eb547a32cdde8ull,  // tick 200
-        0xeb0aa6f87deab8f6ull,  // tick 400
-        0xf787cf0dda55d36cull,  // tick 600
-        0xc12966c5d08061ddull,  // tick 800
+        0x0c9effed70cf0a1aull,  // tick 200
+        0x9b283e18b2f43340ull,  // tick 400
+        0x025cfdece8460bc9ull,  // tick 600
+        0x4d4b78dee2abfeccull,  // tick 800
     };
-    // The stream parks at D400's value once everyone is dead (no more draws).
-    static constexpr std::uint32_t kExpectedRng[4] = {0xdf9afc20u, 0x83c939cfu, 0x83c939cfu,
-                                                      0x83c939cfu};
+    static constexpr std::uint32_t kExpectedRng[4] = {0xca47489cu, 0x49cffff6u, 0x2abb3268u,
+                                                      0xd72904d8u};
     for (std::uint64_t t = 0; t < 800; ++t) {
         TickInputs in = pattern(t);
         for (int p = 0; p < kMaxPlayers; ++p) {
@@ -173,10 +206,10 @@ TEST_CASE("golden E: jelly ping-pong and a veering punched flight") {
     };
 
     static constexpr std::uint64_t kExpected[4] = {
-        0x38f5d9ace6f755a5ull,  // tick 75
-        0x33f73e74c214dc70ull,  // tick 150
-        0x78ae22f38a42f5faull,  // tick 225
-        0x5cc40b9ac52d4037ull,  // tick 300
+        0x5f8c43ccaf3a33eaull,  // tick 75
+        0x7fa0475d876d88ffull,  // tick 150
+        0xef415129ce500f41ull,  // tick 225
+        0x01a39b23c37bc668ull,  // tick 300
     };
     int bounces = 0;
     for (std::uint64_t t = 0; t < 300; ++t) {
