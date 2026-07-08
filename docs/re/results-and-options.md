@@ -93,6 +93,80 @@ render pass above. No sim/determinism impact (presentation tally only,
 `Player` kill/win counters for this purpose are not part of `libs/sim`'s
 hashed state and would live in `libs/game`/`libs/match` match-scope data).
 
+### The screen-ink byte globals — PINNED (RGB555 offsets into the shared LUT)
+
+The five palette-index globals this doc's render pass cites
+(`byte_49D38F`/`byte_49A624`/`byte_497F8F`/`byte_495390[0]`/`byte_49D0DA`,
+plus `sub_4141F8`'s team-ink pair) are **never assigned anywhere in the
+decompile** — every other confirmed-runtime-written byte array in the same
+region (e.g. `byte_460BD0`/`BDA`/`BE4`, the `.RMP` tail bytes,
+`docs/re/player-colour.md`) has visible store sites; these do not. The
+resolution: they are not independent bytes at all. IDA's array-bounds
+heuristic under-sized `byte_495390[8456]` — the true buffer is a **65536-byte
+RGB555 → palette-index LUT** (three sibling buffers at `0x465390`/
+`0x475390`/`0x485390`, each exactly `0x10000` apart, confirm the stride; this
+is the SAME LUT `sub_41672F` indexes as `byte_495390[b5 | (g5<<5) |
+(r5<<10)]`, `docs/re/player-colour.md` §"Setup-screen slot ink"). Every
+"byte_49XXXX" ink global is simply a **fixed-offset element of that one LUT**
+— IDA only gave it its own name because call sites happen to reference it by
+a literal address instead of a computed index. Decoding `addr - 0x495390` as
+an `r5|g5<<5|b5` RGB555 packed index (same bit layout `sub_41672F` builds)
+yields clean primary/secondary colours:
+
+| global | LUT offset | r5,g5,b5 | RGB555 target | role |
+|---|---|---|---|---|
+| `byte_49D38F` | 0x7FFF | 31,31,31 | white | general draw ink (header, most UI text) |
+| `byte_49D0DA` | 0x7D4A | 31,10,10 | red-ish | `sub_4141F8`'s team-1 ink |
+| `byte_49D37A` | 0x7FEA | 31,31,10 | yellow-ish | (seen alongside 49D38F in the editor's powerup sub-screen, §5) |
+| `byte_49A624` | 0x5294 | 20,20,20 | mid-grey | "still playing" outcome ink |
+| `byte_497F8F` | 0x2BFF | 10,31,31 | cyan-ish | "match over" ink |
+| `byte_495390[0]` | 0x0000 | 0,0,0 | black | background ink (trivial: offset 0) |
+
+**Verified against the install's own PCX palettes** (runtime data inspection,
+not committed): the LUT is a nearest-colour map from a *target* RGB to
+whatever palette is active, so `byte_49D38F` (say) resolves to "the active
+palette's nearest entry to pure white". `present_scoreboard`'s RESULTS tier
+draws directly into the still-active GAME surface without installing
+RESULTS.PCX's own embedded palette (`sub_4151CC` @ 29889 decodes pixels into
+`dword_460BC4` only — no `sub_42C534` hardware-palette-install call, unlike
+its sibling `sub_41522D` which does call it after `sub_415150`). So the
+palette in effect for this tier's ink lookups is whatever the just-finished
+ROUND left active — a `FIELD<n>.PCX`-family stage palette. Querying
+`DATA/RES/FIELD0.PCX`, `FIELD5.PCX`, `FIELD10.PCX`, and `MAINMENU.PCX`'s
+embedded 256-colour trailers (`tail -c 768`, PCX's standard 0x0C-marked
+VGA palette block) for the nearest entry to each RGB555 target above gives
+**byte-identical results across all four files** (idx 255/254/178/97/182,
+confirming a shared "reserved UI colours" region of the master palette, not
+per-stage noise):
+
+- **general ink (`byte_49D38F`) = RGB (255, 255, 255)** — exact hit (dist²=0).
+- **team-1 ink (`byte_49D0DA`) = RGB (252, 80, 80)** — dist²=17, effectively exact.
+- **"still playing" (`byte_49A624`) = RGB (168, 168, 164)** — dist²=32, effectively exact.
+- **"match over" (`byte_497F8F`) = RGB (96, 252, 252)** — dist²=214, close.
+- **background (`byte_495390[0]`) = RGB (0, 0, 0)** — trivial (offset 0 decodes to black regardless of the active palette; every checked PCX also has a literal (0,0,0) at index 0 as the VGA authoring convention).
+
+`sub_4141F8`'s ELSE branch (non-team-1, i.e. team 0 or non-team mode) is
+`byte_49D38F` (general/white ink) — confirmed directly from its body
+(`return a1 ? byte_49D0DA : byte_49D38F;`, pseudo.c 16920-16930).
+
+These are FIXED engine-chrome colours (not per-slot/per-player data), so the
+port hardcodes the resolved RGB triples as named constants in
+`present_scoreboard` rather than routing through `AssetStore` — there is no
+"active palette" concept in the truecolour renderer for this LUT to look up
+against; the RGB555 → palette-index → RGB round-trip only matters for the
+original's paletted framebuffer, and the target RGB triple IS the intended
+colour once nearest-match is resolved to an exact/near-exact hit as above.
+
+(Provenance: `sub_4141F8` @ 0x4141F8 pseudo.c 16920-16930; `sub_41672F`
+@ 0x41672F pseudo.c 18464-18492 [`docs/re/player-colour.md`]; `byte_495390`
+LUT sibling stride `0x465390`/`0x475390`/`0x485390`/`0x495390` each
+`0x10000` apart, pseudo.c global-declaration block ~3455-3480; `sub_4151CC`
+@ 0x4151CC pseudo.c 17691-17703 [no `sub_42C534` call, contrast
+`sub_41522D` @ 17713-17736 which does]; `sub_42C534` @ 0x42C534 [hardware
+active-palette install]; palette query against the install's
+`DATA/RES/FIELD0.PCX`/`FIELD5.PCX`/`FIELD10.PCX`/`MAINMENU.PCX` trailers,
+2026-07-08.)
+
 (Provenance: `sub_42A3F6` @ 0x42A3F6 tail, pseudo.c 29886-30106; `sub_421AC8`
 @ 0x421AC8, `sub_421B0F` @ 0x421B0F, pseudo.c 24112-24129; VALUELST
 `; WINNER SCREEN` block 780/785/790/795/800; MESSAGES.TXT ids 30/31/35/36/
@@ -387,50 +461,176 @@ Call chain, all confirmed by body reads:
   scheme); **Esc/'Q'(81)/'q'(113)** exit; **315 (F1)** → help browser
   `sub_41431C`. SFX 20 blip on any key.
 - **`sub_4028D2` @ 0x4028D2** (pseudo.c 5429-5716) — **the editor
-  screen**. Draws the tile grid with the current level's `tile %u solid` /
-  `tile %u brick` sequences and the 10 player-start markers (slot number in
-  the slot's colour `sub_41672F`/`sub_416867`, plus a `teamring%u` ANI
-  sprite showing each start's team flag — `aTeamringU`, pseudo.c 1325).
-  Interactions (verified against the body, incl. the key `switch`):
+  screen**. Draws the tile grid with the `tile %d blank` / `tile %d solid`
+  / `tile %d brick` ANI sequences (§5d) and the 10 player-start markers
+  (slot number in the slot's colour `sub_41672F`/`sub_416867`, plus a
+  `teamring%u` ANI sprite showing each start's team flag — `aTeamringU`,
+  pseudo.c 1325). Interactions (verified against the body, incl. the key
+  `switch`):
   - **left mouse** — paint the hovered cell with the current brush
     (`sub_4048EB(gx, gy, brush)` via the pixel→cell mappers
-    `sub_42665C`/`sub_4266A3`);
+    `sub_42665C`/`sub_4266A3`). PINNED: exactly ONE cell per click — the
+    brush has only a TYPE (`v53` ∈ 0/1/2); **no multi-cell brush exists**,
+    closing the earlier "brush sizes 1/2/3, even-size anchor?" question by
+    removal. `sub_4048EB` writes the cell chars directly: `'#'` (35)
+    solid, `':'` (58) brick, `'.'` (46) blank — the `-R` row alphabet;
   - **right mouse** — MOVE the currently-selected player-start marker to
-    the hovered cell (writes `dword_46481C[12*slot]`/`+4`);
-  - **'1'/'2'/'3'** select the brush (blank/solid/brick — the status line
-    uses the `tile %d blank/solid/brick` strings); **Tab/Enter/Space**
-    cycle it;
-  - **Ctrl+F (6)** — flood-fill the whole grid with the brush;
+    the hovered cell (writes `dword_46481C[12*slot]`/`+4`, clamped);
+  - **'1'/'2'/'3'** select the brush (blank/solid/brick); **Tab/Enter/
+    Space** cycle it (`++v53 > 2 → 0`);
+  - **Ctrl+F (6)** — flood-fill the whole grid with the brush, gated by a
+    **`getstring(760)`/`getstring(97)` yes/no confirm** first (then a
+    plain j/k double loop over `sub_4048EB` — a full-board fill);
+  - **Ctrl+B (2)** — reset the board to the new-scheme defaults
+    (`sub_4049C0`, §5a), with a `getstring(740)`/97 confirm when dirty;
+  - **'0' (48)** — toggles the tile-art set number `dword_45B7B8` between
+    0 and -1 (`if (++v > 0) v = -1`). A dead-end feature: no TILES ANI
+    ships a `tile -1 *` sequence, so the editor's art is effectively
+    always tileset 0;
   - **'+'/'='/'-'/'_'** cycle the selected start slot; **'T'/'t'** toggle
     that start's team flag;
-  - **'D'/'d'** — brick-density prompt (text entry, clamped 0-100 into
-    `dword_4647A0` — the scheme `-B` field);
-  - **'N'/'n'** — scheme-name prompt (the `-N` field);
+  - **'D'/'d'** — brick-density prompt (text entry `sub_42E938`, atoi,
+    clamped 0-100 into `dword_4647A0` — the scheme `-B` field; the ONLY
+    clamped numeric prompt in the editor);
+  - **'N'/'n'** — scheme-name prompt (the `-N` field, `getstring(728)`);
   - **'P'/'p'** — `sub_402595` @ 0x402595 (pseudo.c 5275-5413), the
-    13-row powerup-rules sub-editor (bornwith / override / forbidden per
-    powerup — the `-P` rows);
+    13-row powerup-rules sub-editor (§5b);
   - **Esc/'Q'/'q'** — exit with a save-changes confirm (`getstring(735)`),
-    writing through **`sub_403C16` @ 0x403C16** (pseudo.c 6182-6250) — a
-    real `.SCH` serializer emitting the exact shipped format: header
-    comment lines, `-V` version, `-N` name, `-B` density, the `-R` row
-    array, 10 `-S` player starts, and 13 `-P` powerup rows whose trailing
-    comment text is `getstring(800+i)` — the same 800-block strings the
-    roulette result screen uses (`docs/re/goldman-roulette.md` §7).
+    then a filename prompt (`getstring(736)`), writing through
+    **`sub_403C16` @ 0x403C16** (pseudo.c 6182-6250) — a real `.SCH`
+    serializer emitting the exact shipped format: header comment lines,
+    `-V,%u` version (every shipped scheme is **`-V,2`**), `-N,%s` name,
+    `-B,%u` density, `-R,%2u,%s` rows, 10 `-S,%u,%d,%d,%d` starts, and 13
+    `-P,%2u,%2d,%d,%2d,%2d,%s` powerup rows whose trailing comment text is
+    `getstring(800+i)` — the same 800-block strings the roulette result
+    screen uses (`docs/re/goldman-roulette.md` §7). (Writer format-string
+    literals pseudo.c 1335-1349.)
   - **315 (F1)** — help browser.
 
-So the binary contains a full in-game scheme editor (mouse tile painting,
-start-marker placement with teams, density/name metadata, powerup rules,
-and `.SCH` load/save round-tripping the same format `docs/formats/sch.md`
-covers). MESSAGES ids: 730-733 (editor menu), 735-739 (save-confirm,
-filename prompt, F1 hint, "Player %u" marker label, density prompt).
-VALUELST: 810/815 (editor menu layout). For the port this is a documented,
-low-priority feature: our toolchain edits schemes as plain text, so
-reproducing the in-game editor is optional fidelity, not a gameplay gap.
+### §5a. New-scheme defaults — `sub_4049C0` @ 0x4049C0 (PINNED)
+
+`sub_4028D2(1)` ("new scheme") and the Ctrl+B reset both run `sub_4049C0`
+(pseudo.c 6681-6737), then the caller sets the default name from
+**`getstring(729)`**. The "blank" board is NOT blank:
+
+- density `dword_4647A0` = **90**;
+- rows: even rows are memcpy'd from **`":::::::::::::::"`** (all brick),
+  odd rows from **`":#:#:#:#:#:#:#:"`** (brick/solid alternating) — the
+  classic pillar field, fully bricked (both 16-byte templates are static
+  data, pseudo.c 1350-1351);
+- start `j` (0..9): x = **`getvalue(600 + 2j)`**, y = **`getvalue(601 +
+  2j)`** (VALUELST ids 600..619), wrapped into the board with repeated
+  `+= / -= width/height` loops; team flag = **`j & 1`** (alternating);
+- all 13 powerup-rule fields zeroed.
+
+### §5b. Powerup sub-editor — `sub_402595` + `sub_4023A2` (PINNED)
+
+Layout: header `getstring(754)` at (300, 30) in the `byte_497F8F` cyan ink
+(§1's ink pin); 13 rows at y = 24·i + 60, each a mouse button (id 5000+i,
+`sub_432298`) labelled `getstring(755)`; the powerup NAME column
+(`getstring(756)` with `getstring(850+i)`) at x≈90 in the `byte_49D37A`
+yellow ink; the born-with column (`getstring(757)` with `dword_4647A4[i]`)
+at x≈210 and the override column (`getstring(759)` with `dword_4646C4[i]`
+when `dword_464764[i]` is set, else `getstring(758)`) at x≈450, both in
+the general white ink; exit hint `getstring(737)` at the bottom. Exit
+keys: Enter(13)/Esc(27)/Space(32)/'Q'/'q'; F1 (315) = help browser. Rows
+are activated by MOUSE ONLY (hit ids 5000..5012 → `sub_4023A2(row)`).
+
+**`sub_4023A2` @ 0x4023A2** is the rules/override entry widget — a CHAIN
+of four modal prompts in fixed order, each independently cancellable (a
+cancel keeps that ONE field and the chain still continues):
+
+1. **born-with count** — `getstring(762)`, generic text-entry dialog
+   `sub_42E938` (maxlen 20, seeded `"%u"` with the current value, Done/
+   Cancel buttons, Enter commits / Esc returns -1), committed via atoi
+   (`sub_4516C1`). **NO clamp** (only the `.SCH` reader clamps `< 0 → 0`
+   at load);
+2. **forbidden** — `getstring(764)`, yes/no dialog `sub_42EDE0` →
+   `dword_4647E0[i]`;
+3. **has-override** — `getstring(766)`, yes/no dialog → `dword_464764[i]`;
+4. **override value** — `getstring(768)`, text entry seeded `"%d"`, atoi,
+   **NO clamp** — asked only when has-override is set; when it is NOT set
+   the value is unconditionally forced to **0** (the else branch), even if
+   prompt 3 was cancelled with it already clear.
+
+Field→`-P` mapping (cross-confirmed reader `sub_403EEE` ↔ writer format):
+`-P,<id>,<bornwith = dword_4647A4>,<hasoverride = dword_464764>,
+<overridevalue = dword_4646C4>,<forbidden = dword_4647E0>,<name comment>`.
+The reader clamps bornwith `< 0 → 0` and normalises both booleans `!= 0`.
+
+### §5c. The *.SCH file picker — `sub_407582` @ 0x407582 (PINNED)
+
+Globs `"*.SCH"` via `sub_41404B` (the help browser's findfirst/qsort
+helper, §4), pre-reads each file's embedded `-N` name (`sub_404BE9`), and
+lists **"`%s %s`" (filename + scheme name)** rows through the generic list
+dialog **`sub_41485A` → `sub_42DBCC`** at **(100, 100)** with header
+**`getstring(721)`** and the general white ink (`byte_49D38F | 0x10000`).
+`sub_42DBCC` sizes its window for **13 visible rows** first, falling back
+12→9 only when the window allocation fails; longer lists scroll. Selecting
+a row truncates at the first space (recovering the bare filename) and
+copies it into the live `schemefilename` global (`byte_4648C4`, then
+`sub_412A3B`). An empty glob shows the `getstring(720)`/`getstring(95)`
+error dialog instead.
+
+### §5d. Editor canvas art (PINNED) — and the port's wiring
+
+- **Tiles:** `sub_4022A1` (grid draw, pseudo.c 5148-5180) draws EVERY cell
+  with the `"tile %d blank"` frame first, then overdraws a non-blank
+  cell's `"tile %d solid"`/`"tile %d brick"` frame — sequence names
+  formatted with `dword_45B7B8` (`sub_402206`, pseudo.c 5120-5145), which
+  is **always 0** in practice (the '0' key's -1 state is dead). I.e. the
+  editor draws **TILES0.ANI**'s own `tile 0 blank/solid/brick` sequences —
+  the same art the match field uses. The brush preview draws the brush's
+  tile frame AT the mouse cursor each frame (`sub_402206(v53)` +
+  `sub_415920(mouse_x, mouse_y, frame)`).
+- **Cell geometry:** the cell→pixel mappers are the match field's own
+  `sub_426524`/`sub_42655F` (`cellW·x + cellW/2 + originX`, `cellH·y +
+  cellH − 1 + originY` — bottom-centre anchors over the standard field
+  origin/cell tunables), so the canvas IS the in-game field layout (our
+  port: origin (20, 68), cell 40×36, renderer.hpp's constants).
+- **Start markers:** slot number `"%u"` (i+1) at (cell_centre_x − 20,
+  cell_bottom − 36) in `sub_41672F(i)`'s ink — the editor wrapper
+  `sub_40330E` zeroes team play around the whole editor, so this is
+  always the slot-colour branch (the `.RMP` tail through the RGB555 LUT,
+  `docs/re/player-colour.md`) — then the **`teamring%u`** sequence (%u =
+  the start's team flag 0/1) at (cell_centre_x − 20, cell_bottom) via the
+  named-sequence draw `sub_41735A`.
+- **`teamring%u`'s ANI home: `DATA/ANI/MISC.ANI`** — its sequence table is
+  `cursor1`, `goldman`, `ring`, `safe`, `scan`, `teamring0`, `teamring1`
+  (checked against the install's file, 2026-07-08). This also resolves the
+  Goldman wheel's previously-unattributed `ring` pointer sequence
+  (`docs/re/goldman-roulette.md` §3/§7) to MISC.ANI.
+
+**Port status:** the above is wired in `libs/game/{editor_grid,
+editor_screen}.{hpp,cpp}` + `AssetStore::misc()`: single-cell painting,
+§5a's new-scheme board (VALUELST 600..619 starts passed through
+`GameApp`), the -V,2 writer version, §5b's 4-prompt chain (keyboard
+'E'/Right substitutes for the original's mouse-only row buttons — a
+documented deviation), §5c's 13-row picker at (100,100) with `-N` name
+suffixes, the Ctrl+F fill confirm, and the real TILES0/MISC.ANI canvas
+art (stage 0 loaded at editor entry; flat swatches remain only as the
+missing-asset fallback). Still NOT reproduced (all presentation minutiae,
+none gameplay-affecting): the Ctrl+B board reset, the '0' dead tileset
+toggle, the brush-preview-at-cursor, and `sub_42E938`'s exact dialog
+chrome (Done/Cancel button frame).
+
+MESSAGES ids: 720-721 (picker error/header), 728-729 (name prompt /
+default new-scheme name), 730-733 (editor menu), 735-740 (save-confirm,
+filename prompt, exit hint, "start %u" status, density prompt, reset
+confirm), 742-743 (scheme-file/density status labels), 754-759 + 762-768
+(powerup sub-editor), 97/95 (yes/no dialog chrome), 800-812 (powerup
+comments) + 850-862 (powerup names). VALUELST: 600-619 (default starts),
+810/815 (editor menu layout).
 
 (Provenance: trigger pseudo.c 30876-30883; `sub_40330E` 5847-5861;
-`sub_403184` 5745-5844; `sub_4028D2` 5429-5716; `sub_402595` 5275-5413;
-`sub_403C16` 6182-6250; `sub_407582` ~8421-8448; `sub_403EEE` 6252+;
-string constants pseudo.c 1320-1349; VALUELST 810/815; MESSAGES 730-739.)
+`sub_403184` 5745-5844; `sub_4028D2` 5429-5716; `sub_402206` 5120-5145;
+`sub_4022A1` 5148-5180; `sub_402595` 5275-5413; `sub_4023A2` in the same
+range; `sub_4048EB` 6629-6660; `sub_4049C0` 6681-6737; `sub_403C16`
+6182-6250; `sub_403EEE` 6252+; `sub_407582` 8422-8480; `sub_42E938`
+32751-32840; `sub_42DBCC` 32204-32340; row templates + writer format
+strings pseudo.c 1335-1351; `sub_426524`/`sub_42655F`/`sub_42665C`/
+`sub_4266A3` 27031-27095; MISC.ANI/TILES*.ANI sequence tables + shipped
+`-V,2` versions from the install, 2026-07-08.)
 
 ## Determinism / golden — no impact
 

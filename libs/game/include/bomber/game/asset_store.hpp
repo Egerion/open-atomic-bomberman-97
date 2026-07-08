@@ -107,13 +107,19 @@ public:
     const AniTextures& headwipe() const { return headwipe_; }
 
     // The Goldman wheel's "ring" pointer sequence (docs/re/goldman-roulette.md
-    // §3/§7, aRing) — the doc pins the SEQUENCE NAME only, not its containing
-    // ANI file (no `sub_41D957` file-table entry was recovered), so load()
-    // probes a small set of plausible frontend ANI files the same way
-    // cornerhead/bwalk probe multiple files for a named sequence. Empty when
-    // none of them own "ring" — GoldmanScreen then draws no pointer sprite
-    // (the wheel itself still works; see that class's fallback note).
+    // §3/§7, aRing) — RESOLVED: MISC.ANI owns it (its sequence table is
+    // cursor1/goldman/ring/safe/scan/teamring0/teamring1, checked against the
+    // install's file 2026-07-08), so the probe tries MISC.ANI first; the old
+    // candidates stay as fallbacks for partial installs. Empty when nothing
+    // owns "ring" — GoldmanScreen then draws no pointer sprite (the wheel
+    // itself still works; see that class's fallback note).
     const AniTextures& ring() const { return ring_; }
+
+    // MISC.ANI wholesale — the scheme editor's start markers draw its
+    // "teamring%u" sequences (sub_4028D2's aTeamringU draw, docs/re/
+    // results-and-options.md §5). Empty when the file is missing (the editor
+    // falls back to outline-box markers).
+    const AniTextures& misc() const { return misc_; }
 
     // The install ROOT (parent of DATA) — where the `.BM` help/credits screens
     // and the `FONT<n>.FON` fonts live (not under DATA/RES). Used by the BM
@@ -198,6 +204,7 @@ private:
 
     AniTextures headwipe_;  // screen-transition wipe (HEADWIPE.ANI), shared
     AniTextures ring_;      // Goldman wheel pointer ("ring" seq), shared — see ring() doc comment
+    AniTextures misc_;      // MISC.ANI (teamring0/1, cursor1, safe, scan) — editor markers
     assets::bmfont::Font frontend_font_;  // FONT6.FON, the .BM screen font
     assets::res::Messages messages_;      // MESSAGES.TXT string table (install root)
 

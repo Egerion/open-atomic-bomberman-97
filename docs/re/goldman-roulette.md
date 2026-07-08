@@ -143,7 +143,10 @@ Then palette `"roulette.plt"` is applied (`aRoulettePlt`, the standard
   in-game powerup ANI icons, no roulette-specific art;
 - draw the **pointer**: ANI sequence `"ring"` (`aRing`) resolved with the
   standard `sub_41D957`/`sub_41DAA7` pair (same as the menu cursor) at the
-  ring position;
+  ring position. RESOLVED (2026-07-08): `"ring"` lives in
+  **`DATA/ANI/MISC.ANI`** (sequence table `cursor1`/`goldman`/`ring`/
+  `safe`/`scan`/`teamring0`/`teamring1`, checked against the install) —
+  AssetStore's ring probe now tries MISC.ANI first;
 - phase 2 only: three result lines centred on the wheel (getvalue 1000/1001)
   — `getstring(790)`, `getstring(800 + prize)`, `getstring(791)`;
 - input poll (`sub_4102B7`), see §5.

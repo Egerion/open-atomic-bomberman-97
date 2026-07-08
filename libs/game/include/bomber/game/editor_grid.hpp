@@ -4,7 +4,7 @@
 // results-and-options.md #5, CONFIRMED): the 15x11 tile grid, the current
 // brush, flood fill, and the 10 movable player-start markers with their team
 // flags. Deliberately SDL-free (no <SDL3/...> include anywhere in this file
-// or editor_grid.cpp) so brush stamping and flood fill are unit-testable
+// or editor_grid.cpp) so painting and flood fill are unit-testable
 // without a renderer, per the task's "pure logic in an SDL-free helper with
 // doctests" requirement. editor_screen.{hpp,cpp} wraps this with mouse/
 // keyboard input and drawing.
@@ -67,11 +67,18 @@ class EditorGrid {
 public:
     EditorGrid() { reset(kEditorGridWidth, kEditorGridHeight); }
 
-    // Resets to an all-blank grid of the given size with starts spread along
-    // row 0 (an arbitrary, documented placeholder layout — §5 does not pin a
-    // "new scheme" default board, only that sub_4028D2(1) opens a NEW scheme;
-    // TODO(RE): the original's actual blank-scheme defaults are unpinned).
-    void reset(int width, int height);
+    // Resets to the original's "new scheme" board — sub_4049C0 @0x4049C0
+    // (docs/re/results-and-options.md §5, PINNED): density 90; even rows all
+    // brick (":::::::::::::::"), odd rows brick/solid alternating
+    // (":#:#:#:#:#:#:#:") — i.e. the classic pillar field, fully bricked;
+    // start slot j's team flag = j & 1 (alternating); all 13 powerup rows
+    // zeroed. Start POSITIONS come from VALUELST ids 600..619 (x =
+    // getvalue(600+2j), y = getvalue(601+2j), wrapped into the board with
+    // repeated += / -= width/height) — the caller passes them via
+    // `start_xy` since this model is VALUELST-free; nullptr keeps the same
+    // wrap rule applied to a zeroed table (all starts at (0,0)).
+    void reset(int width, int height,
+               const std::array<std::array<int, 2>, kEditorMaxStarts>* start_xy = nullptr);
 
     // Loads from a parsed Scheme (sub_4028D2(0) — "edit an existing scheme",
     // §5), clamping to the editor's fixed 15x11 board if the source scheme
@@ -88,18 +95,14 @@ public:
 
     EditorBrush cell(int x, int y) const;
     // Paints ONE cell with `brush` (§5 left mouse: "paint the hovered cell
-    // with the current brush"). Out-of-bounds is a silent no-op — mirrors
-    // the original's pixel->cell mappers only ever producing in-range
-    // coordinates; the model stays defensive for callers driven by raw mouse
-    // pixels.
+    // with the current brush"). PINNED: sub_4028D2's paint path is exactly
+    // `sub_4048EB(cell_x, cell_y, brush)` — one cell per click, cell chars
+    // '#' (35) solid / ':' (58) brick / '.' (46) blank; there is NO
+    // multi-cell brush in the original (the brush has only a TYPE), so the
+    // earlier "brush sizes 1/2/3, anchor rule TODO(RE)" is resolved by
+    // removal. Out-of-bounds is a silent no-op (sub_4048EB's own bounds
+    // check).
     void paint(int x, int y, EditorBrush brush);
-    // Stamps an `size`x`size` square brush centered at (x,y) — brush sizes
-    // 1/2/3 per the task brief; §5's body read did not pin the exact
-    // multi-cell anchor (top-left vs. centered), so this is a documented
-    // TODO(RE): kept centered (clamped to size//2 so a 2-wide brush leans
-    // top-left, matching the common "hover = top-left corner of the stamp"
-    // convention) rather than an invented anchor rule.
-    void stamp(int cx, int cy, int size, EditorBrush brush);
     // Ctrl+F (§5): flood-fills the WHOLE grid with `brush` — confirmed as a
     // whole-grid fill, not a connected-region fill (§5: "flood-fill the
     // whole grid with the brush").
@@ -129,7 +132,7 @@ private:
     int width_ = kEditorGridWidth;
     int height_ = kEditorGridHeight;
     std::vector<std::string> rows_;  // rows_[y][x], same char alphabet as sch::Cell
-    int density_ = 90;               // BASIC.SCH ships -B,90 (match_factory.hpp's citation)
+    int density_ = 90;               // sub_4049C0's new-scheme default (BASIC.SCH also ships -B,90)
     std::string name_;
     std::array<EditorStart, kEditorMaxStarts> starts_{};
     std::vector<assets::sch::PowerupRule> powerups_;

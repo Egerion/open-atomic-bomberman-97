@@ -718,8 +718,25 @@ void GameApp::present_editor() {
 
         if (!opened) continue;  // back to the chooser menu
 
+        // Canvas art: the editor draws the "tile 0 blank/solid/brick"
+        // sequences (sub_402206's dword_45B7B8 is only ever 0 — §5), so make
+        // sure tileset 0 is the one loaded in AssetStore; a later
+        // start_match reloads whatever stage the match picks.
+        assets_.load_stage(0);
+
+        // sub_4049C0's default start positions for a NEW scheme: VALUELST
+        // x = getvalue(600+2j), y = getvalue(601+2j) (wrapped into the board
+        // by EditorGrid::reset). Fallback 0s if VALUELST is absent.
+        std::array<std::array<int, 2>, kEditorMaxStarts> default_starts{};
+        for (int j = 0; j < kEditorMaxStarts; ++j) {
+            default_starts[static_cast<std::size_t>(j)][0] =
+                static_cast<int>(values_.column_or(600 + 2 * j, 0, 0));
+            default_starts[static_cast<std::size_t>(j)][1] =
+                static_cast<int>(values_.column_or(601 + 2 * j, 0, 0));
+        }
+
         EditorScreen editor(assets_, front_font_);
-        editor.enter(initial, pick_glue());
+        editor.enter(initial, pick_glue(), &default_starts);
         // The 'N'/'n' scheme-name prompt (§5) needs real text input (letters
         // beyond the raw keycode switch below); start it for the whole
         // editor session — harmless while the prompt is closed since
@@ -732,6 +749,11 @@ void GameApp::present_editor() {
                 if (editor.editing_powerups()) {
                     if (eev.type != SDL_EVENT_KEY_DOWN) continue;
                     editor.powerups_screen().on_key(eev.key.key, audio_);
+                    // sub_402595 returns into sub_4028D2's loop on its exit
+                    // keys — mirror that by closing the sub-editor here (the
+                    // screen sets done() but cannot clear the parent's
+                    // routing flag itself).
+                    if (editor.powerups_screen().done()) editor.close_powerups();
                     continue;
                 }
                 if (eev.type == SDL_EVENT_TEXT_INPUT) {
@@ -747,8 +769,8 @@ void GameApp::present_editor() {
                     float lx = 0, ly = 0;
                     SDL_RenderCoordinatesFromWindow(sdl_renderer_.get(), eev.button.x, eev.button.y,
                                                     &lx, &ly);
-                    int gx = (static_cast<int>(lx) - EditorScreen::kOriginX) / EditorScreen::kCellSize;
-                    int gy = (static_cast<int>(ly) - EditorScreen::kOriginY) / EditorScreen::kCellSize;
+                    int gx = (static_cast<int>(lx) - EditorScreen::kOriginX) / EditorScreen::kCellW;
+                    int gy = (static_cast<int>(ly) - EditorScreen::kOriginY) / EditorScreen::kCellH;
                     editor.on_mouse_down(eev.button.button, gx, gy);
                     continue;
                 }
@@ -1098,10 +1120,12 @@ AppInput GameApp::present_scoreboard() {
     // Header — getstring(30) "Game Winner was %s !", getvalue(780/781/783).
     const float hx = static_cast<float>(values_.column_or(780, 0, 150));
     const float hy = static_cast<float>(values_.column_or(780, 1, 140));
-    // getvalue(783) is a colour index in the original (palette LUT); we have
-    // no general colour-index -> RGB table outside the per-slot .RMP path, so
-    // the header (not tied to any one player) draws in a fixed light ink —
-    // documented simplification, the POSITION is exact.
+    // getvalue(783) is a colour index in the original — resolved:
+    // docs/re/results-and-options.md's "screen-ink byte globals" pin.
+    // byte_49D38F (general draw ink) is an offset into the shared RGB555 ->
+    // palette-index LUT (byte_495390), decoding to RGB555 (31,31,31) = white;
+    // verified against the install's FIELD0/5/10/MAINMENU.PCX palettes
+    // (nearest entry (255,255,255), dist2=0 on all four).
     constexpr Uint8 kHeaderR = 255, kHeaderG = 255, kHeaderB = 255;
 
     // Per-player row — getstring(31) non-team "Player %u score: %u (kills: %d)"
@@ -1162,11 +1186,14 @@ AppInput GameApp::present_scoreboard() {
         // per-round call already satisfies).
         front_font_.draw(sdl_renderer_.get(), header, hx, hy, kHeaderR, kHeaderG, kHeaderB);
 
-        // Per-player / per-team tally rows, each in that player's/team's ink
-        // (AssetStore::slot_color, docs/re/player-colour.md). Team ink uses
-        // the lowest-indexed active player on that team as a stand-in for the
-        // original's fixed 2-colour sub_4141F8 helper (byte_49D0DA/byte_49D38F),
-        // which we have not ported as an independent constant.
+        // Per-player / per-team tally rows. Non-team rows keep the slot's own
+        // ink (sub_41672F -> AssetStore::slot_color, docs/re/player-colour.md).
+        // Team rows use the original's fixed two-ink helper sub_4141F8
+        // (@0x4141F8, `team ? byte_49D0DA : byte_49D38F`) — both inks are
+        // RGB555 offsets into the byte_495390 LUT (results-and-options.md §1
+        // "screen-ink byte globals"): team 0 = the general white ink
+        // (31,31,31), team != 0 = red (31,10,10) -> (252,80,80) against the
+        // install's shared UI palette entries.
         if (team_mode) {
             std::array<bool, sim::kMaxPlayers> team_drawn{};
             int row = 0;
@@ -1180,8 +1207,10 @@ AppInput GameApp::present_scoreboard() {
                 // getstring(38) carries one %u (team number); splice the score
                 // in after it manually since fmt_u only substitutes the first.
                 line += " " + std::to_string(win_count_[i]);
-                std::uint8_t c[3];
-                assets_.slot_color(i, c);
+                const bool team1 = t != 0;  // sub_4141F8's `a1 ?` branch
+                const std::uint8_t c[3] = {static_cast<std::uint8_t>(team1 ? 252 : 255),
+                                           static_cast<std::uint8_t>(team1 ? 80 : 255),
+                                           static_cast<std::uint8_t>(team1 ? 80 : 255)};
                 front_font_.draw(sdl_renderer_.get(), line, rx,
                                  ry0 + rystep * static_cast<float>(row), c[0], c[1], c[2]);
                 ++row;
@@ -1216,12 +1245,12 @@ AppInput GameApp::present_scoreboard() {
             }
         }
 
-        // Outcome line: "still need N" (not yet clinched, ink byte_49A624 —
-        // approximated with a distinct amber "still playing" tone) vs "wins
-        // the match" (clinched, ink byte_497F8F — approximated with a
-        // distinct bright "match over" tone). Both approximations keep the
-        // POSITION and STRING selection exact; only the literal RGB triples
-        // are our own since the palette-index bytes are not yet ported.
+        // Outcome line inks — pinned (results-and-options.md §1 "screen-ink
+        // byte globals"): byte_49A624 ("still playing") and byte_497F8F
+        // ("match over") are RGB555 offsets into the byte_495390 LUT,
+        // decoding to (20,20,20) mid-grey and (10,31,31) cyan; resolved to
+        // (168,168,164) and (96,252,252) against the install's shared UI
+        // palette entries (identical across FIELD0/5/10 + MAINMENU.PCX).
         {
             std::string outcome;
             std::uint8_t oc[3];
@@ -1237,7 +1266,7 @@ AppInput GameApp::present_scoreboard() {
                 std::string fmt = team_mode ? assets_.getstring(121, "Team still needs %u to win")
                                             : assets_.getstring(120, "Still need %u to win");
                 outcome = fmt_u(fmt, needed);
-                oc[0] = 255; oc[1] = 200; oc[2] = 60;  // "still playing" amber
+                oc[0] = 168; oc[1] = 168; oc[2] = 164;  // byte_49A624: RGB555 (20,20,20) grey
             } else {
                 if (team_mode) {
                     std::string fmt = assets_.getstring(36, "TEAM %u WINS THE MATCH!");
@@ -1246,7 +1275,7 @@ AppInput GameApp::present_scoreboard() {
                     std::string fmt = assets_.getstring(35, "%s WINS THE MATCH!");
                     outcome = fmt_s(fmt, "P" + std::to_string(clinched_player + 1));
                 }
-                oc[0] = 255; oc[1] = 255; oc[2] = 255;  // "match over" bright white
+                oc[0] = 96; oc[1] = 252; oc[2] = 252;  // byte_497F8F: RGB555 (10,31,31) cyan
             }
             front_font_.draw(sdl_renderer_.get(), outcome, ox, oy, oc[0], oc[1], oc[2]);
         }
