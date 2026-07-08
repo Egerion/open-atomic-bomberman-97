@@ -153,6 +153,16 @@ private:
     // dismissal into that event; there is no side-channel state override.
     std::array<int, sim::kMaxPlayers> win_count_{};
     int win_target_ = 2;
+    // Per-ROUND kill tally (docs/re/results-and-options.md §1, sub_421B0F's
+    // field): the RESULTS row format shows this alongside the match win count.
+    // The sim's PlayerDied event (libs/sim/include/bomber/sim/event.hpp) does
+    // NOT carry flame-owner attribution (Event::data is unused for that type),
+    // so we cannot faithfully tally "who killed whom" from the presentation
+    // side without a libs/sim change — out of scope here (PRESENTATION ONLY).
+    // TODO(§1): once a sim-side PlayerDied owner field exists, tally it here
+    // per round and reset in reset_match_scores(); until then this stays 0 for
+    // every player and present_scoreboard's kills column reads "(kills: 0)".
+    std::array<int, sim::kMaxPlayers> kill_count_{};
 
     // Per-slot input type chosen in the PLAYER INPUT screen (sub_410F81):
     // 0 = OFF, 1 = COMPUTER, 2 = KEYBOARD, 3 = JOYSTICK (human) — the original's
