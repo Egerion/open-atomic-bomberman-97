@@ -399,7 +399,13 @@ presentation-side. (Provenance: `sub_42B9CE` idle path pseudo.c
 ## The results / DRAW / VICTORY flow — inside `sub_42A3F6` (CONFIRMED)
 
 The end-of-round path lives at the tail of the **Play** handler (`sub_42A3F6`,
-~29820-30130), not a standalone screen. It is a **three-tier** outcome:
+~29820-30130), not a standalone screen. **The in-round portion of the same
+handler — the auxiliary key loop (Ctrl+Q forfeit, F1 help, debug keys, the
+Esc-is-inert and no-pause negative findings), the per-tick callback
+`sub_42A191`, the countdown-clock HUD (`sub_4105D2`) + "hurry" flash, and the
+round-end shell constants (hardcoded 6000/3000/1500 ms, no getvalue ids) — is
+RE'd separately in `docs/re/in-match-shell.md`.** It is a **three-tier**
+outcome:
 
 1. **DRAW — no survivor.** `if (sub_4219B0(v69) != -1) goto RESULTS;` — the
    survivor query returns the lone survivor's index, or **-1 for none**. With no
@@ -438,16 +444,26 @@ dwell (the `sub_42A3F6` attract auto-advance) then a return to the menu. The
 winner voice group (2000) is played by `run_match` on match-over, matching
 `sub_427BFB(2000)`. TEAM%u is a documented future hook (needs sim team state).
 
-**Results MUSIC — 1020 (win) / 1130 (draw) (FIXED).** `sub_42A3F6` starts the
-looping **"win" track `sub_42741E(0x3FC)` = 1020** at handler entry (played under
-the VICTORY screen), and the DRAW branch switches to the **"draw" track
-`sub_42741E(0x46A)` = 1130** right before `sub_42A088(aDraw, 0)`. Both are looping
-`start_music` tracks that *replace* whatever was playing (stage music). The port's
-Results branch previously started no results music — the DRAW/VICTORY screens
-played under the leftover stage/menu track. It now calls `start_music(1130)` for
-DRAW and `start_music(1020)` for VICTORY (WIN.RSS + DRAW.RSS both ship), closing
-that silent-vs-original gap. (0x3FC=1020, 0x46A=1130 — hex confirmed; SOUNDLST
-labels `win`/`draw`.)
+**Results MUSIC — CORRECTED (2026-07-08, second pass): 1130 under ALL outcome
+screens; 1020 is the SETUP music, not victory music.** An earlier pass read
+`sub_42741E(0x3FC)` = 1020 at handler entry as "played under the VICTORY
+screen" — wrong. The round-end `sub_42741E(0x46A)` = **1130** fires
+**unconditionally, BEFORE the survivor test** (pseudo.c 29820 precedes the
+`sub_4219B0` check at 29823), so DRAW, the RESULTS tally, **and**
+VICTORY/TEAM all play under **1130**; nothing ever re-starts 1020 in the
+outcome tier. 1020 (started at Play entry, 29696) is in fact the
+**setup-screens track** (player select / LEVEL & ROUNDS) — it is replaced at
+every round init by the **per-level stage track** (`sub_4293E5` @ 0x4293E5:
+SOUNDLST id `1100+level`, fallback 1120/0x460; suppressed entirely by the
+Options "Disable music during gameplay" toggle `dword_4648C0`, which frees
+the music instead — `sub_410B6E` pseudo.c 14847-14850). Full call-site-
+exhaustive model in `docs/re/in-match-shell.md` "round-end shell" step 2.
+The port currently calls `start_music(1130)` for DRAW (correct) and
+`start_music(1020)` for VICTORY (**not faithful** — should also be 1130,
+with 1020 moved to the setup screens and `1100+level` under the round) —
+a tracked follow-up, not yet fixed. (0x3FC=1020, 0x46A=1130 — hex
+confirmed; the SOUNDLST labels `win`/`draw` describe the clips, not where
+the code plays them.)
 
 **SFX 40 (enrt1, "you can't do that here") — NETWORK-ONLY, N/A to our build.**
 The results/draw wait loops fire `sub_427961(40)` when a key is pressed but
@@ -604,8 +620,9 @@ randomness (SFX group pick) uses `AudioEngine`'s own LCG, never `State::rng`.
 | `getvalue(700/701/702)` | main-menu cursor x / y-base / y-step | **332 / 140 / 38** (VALUELST `700,332,140,38,0`) | CONFIRMED anchor + values (`sub_42B9CE`): x=getvalue(700), y=getvalue(701)+getvalue(702)·row |
 | SOUNDLST 1000 | boot/title music (`title`), looping, started ONCE in `sub_42B060`, continuous across logos+title | TITLE.RSS | CONFIRMED (`sub_42741E(0x3E8)` @ boot, loop 0xFFFF) |
 | SOUNDLST 1010 | main-menu music (`menu`), looping, started on menu entry (`sub_42741E(0x3F2)`, v14-gated) — replaces the boot track | MENU.RSS | CONFIRMED (`sub_42B9CE`); NOT 0x3FC/1020 (that is `sub_42A3F6`'s round "win" track) |
-| SOUNDLST 1020 | results "win" music (`win`), looping, started at `sub_42A3F6` entry (`sub_42741E(0x3FC)`) — under the VICTORY screen | WIN.RSS | CONFIRMED; port starts it for VICTORY |
-| SOUNDLST 1130 | draw-screen music (`draw`), looping, DRAW branch (`sub_42741E(0x46A)`) — under DRAW.PCX | DRAW.RSS | CONFIRMED; port starts it for DRAW |
+| SOUNDLST 1020 | **setup-screens music** (label `win`), looping, started at `sub_42A3F6` entry (`sub_42741E(0x3FC)`) — CORRECTED: plays under player/level setup, replaced at round init by the stage track; it does NOT underlie VICTORY | WIN.RSS | CONFIRMED (corrected 2026-07-08); port still starts it for VICTORY — tracked follow-up (see "Results MUSIC") |
+| SOUNDLST 1130 | **outcome-tier music** (label `draw`), looping, started unconditionally at round end (`sub_42741E(0x46A)` BEFORE the survivor test) — under DRAW **and** RESULTS **and** VICTORY | DRAW.RSS | CONFIRMED (corrected 2026-07-08); port starts it for DRAW only — VICTORY half is the same follow-up |
+| SOUNDLST 1100+level, 1120 | per-level in-round stage music (`sub_4293E5` @ 0x4293E5, called from `sub_410B6E` round init unless the "Disable music during gameplay" option frees the music instead); 1120 (0x460) is the fallback when the level has no entry | per-level RSS | CONFIRMED (`docs/re/in-match-shell.md` step 2); port plays no in-round music — gap |
 | SOUNDLST 10 | menu-exit / accept sting (`menuexit`), one-shot | MENUEXIT.RSS | CONFIRMED (`sub_427961(10)` accept path in `sub_42A088` + every menu select in `sub_42B9CE`) |
 | SOUNDLST 20 | nav blip (`letter1`), one-shot, on ANY key | LETTER1.RSS | CONFIRMED (`sub_427961(20)` in `sub_42A088`/`sub_42B9CE`/`sub_42A3F6`) |
 | SOUNDLST 40 | "you can't do that here" buzz (`enrt1`), one-shot | ENRT1.RSS | CONFIRMED **NETWORK-ONLY** (`sub_427961(40)` gated on `sub_40C06A()==1` in the results/setup wait loops); never fires in local play — correctly absent in the port |
