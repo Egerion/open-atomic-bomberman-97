@@ -34,7 +34,8 @@ Powerup kind order (matches scheme `-P` rows and the id blocks above): extra bom
 
 | id(s) | area |
 |---|---|
-| 91 | clogs (speed-down roulette effect) |
+| 91 | clogs speed penalty — the file's legend calls it the "special roulette power-down"; inventory slot 13, the Goldman wheel's booby prize (`docs/re/goldman-roulette.md` §3) |
+| 92 | menu attract-mode delay, seconds (30; legend: < 5 disables attract) — after it, `sub_42B9CE` runs a live all-CPU demo match (frontend-flow.md "Attract mode") |
 | 101, 102 | "hurry" timing and late-game powerup gating |
 | 120–138 | disease behavior flags and durations (300 frames each) |
 | 320–324 | dud-bomb timing and chance |
@@ -52,7 +53,8 @@ Powerup kind order (matches scheme `-P` rows and the id blocks above): extra bom
 | 745–748 | Options/Settings screen layout: x, y0, ystep, colour for the 19-item list (`docs/re/results-and-options.md` §3) |
 | 780–788 | RESULTS scoreboard layout: header (780–783) and per-player row (785–788) (`docs/re/results-and-options.md` §1) |
 | 790, 795, 800–803 | RESULTS screen "press F1", "continue with same net game?", and outcome-line (won/not-yet-clinched) coordinates |
-| 805, 1000–1010 | Goldman Roulette Wheel geometry — centre, radii, circle resolution, Lissajous params, twinkle duration (`sub_4034BC`, `docs/re/results-and-options.md` §4) |
+| 805, 1000–1010 | Goldman Roulette Wheel — 1000/1002/1004/1006 (+ second columns) = centre, radii, circle resolution, Lissajous params (`sub_4034BC`); 1010 = gold-twinkle seconds, consumed in-round by `sub_420D4E`, not the wheel; 805 ("title at top") has NO getvalue call in the binary — unreferenced (`docs/re/goldman-roulette.md` §7) |
+| 810, 815 | map editor menu layout: header pos and item x/y0/ystep (`sub_403184`, `docs/re/results-and-options.md` §5) |
 | 1100–1140 | key-remap UI (`sub_407B9D`) labels: screen header, per-slot "press key for", action names, bound-key display |
 
 ## Not in VALUELST (hardcoded in BM95.EXE — our own tunables)

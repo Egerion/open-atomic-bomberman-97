@@ -18,7 +18,7 @@ formats the asset pipeline already decodes:
 | Title | `DATA/RES/TITLE.PCX` | PCX | loads today |
 | Main menu | `DATA/RES/MAINMENU.PCX` | PCX | loads today |
 | Draw / no-winner | `DATA/RES/DRAW.PCX` | PCX | loads today |
-| Bonus / round win | `DATA/RES/BONUS.PCX` | PCX | loads today |
+| (dead asset — see BONUS.PCX note) | `DATA/RES/BONUS.PCX` | PCX | loads today, but UNREFERENCED by the binary |
 | Credits image bar | `DATA/RES/CREDBAR.PCX` | PCX | loads today |
 | Head-to-head wipe | `DATA/ANI/HEADWIPE.ANI` | ANI | loads today |
 | Boot/title music | `DATA/SOUND/TITLE.RSS` | RSS (id 1000, loop) | plays today, continuous across logos+title |
@@ -242,10 +242,15 @@ play / random start / conveyor speed / key-remap / …), fully RE'd in
 drawing code either; it globs `*.BM` and opens whichever the player picks
 in the existing `.BM` viewer — ROULETTE.BM is just one of ~10 listed help
 topics. The **real** Goldman Roulette Wheel mini-game is a separate,
-menu-unreachable routine (`sub_4034BC`) invoked automatically during round
-setup when the `goldman=1` option is on — see the same doc. The map editor
-entry point (and the "Ctrl+E ×6" easter egg's real target) remains
-unlocated; treat both as open, not confirmed, until found.
+menu-unreachable routine (`sub_4034BC`) that runs at the head of the Play
+flow (top of `sub_410F81`) when `goldman=1` and a gold player is pending —
+fully RE'd in `docs/re/goldman-roulette.md`. **The map editor is now
+LOCATED (2026-07-08, second pass):** it hangs off the hidden Ctrl+E ×6
+trigger in this very menu loop (raw code 5, six consecutive presses →
+`sub_40330E` → `sub_403184` → the full scheme editor `sub_4028D2` with a
+real `.SCH` writer `sub_403C16`) — chain and controls in
+`docs/re/results-and-options.md` §5. `EDITOR.BM` remains a help text only
+(the string appears nowhere in the binary).
 
 **Menu key → sound → action table (raw `sub_4102B7` codes, EXHAUSTIVE, CONFIRMED
 `sub_42B9CE`).** The nav blip fires *first* for every real key, then the dispatch:
@@ -258,23 +263,27 @@ unlocated; treat both as open, not confirmed, until found.
 | `17` / `27` Escape | `sub_427961(10)` accept | set v10=6 (**Quit**) and select |
 | `328` Up | (blip only) | `--v10`, wraps 0→6 |
 | `336` Down | (blip only) | `++v10`, wraps 6→0 |
-| `280` | `sub_427961(10)` accept | jump v10=3 (**Editor**) and select |
-| `315` | `sub_427961(10)` accept | jump v10=5 (**Roulette**) and select |
+| `280` | `sub_427961(10)` accept | jump v10=3 (**Options**, corrected) and select |
+| `315` | `sub_427961(10)` accept | jump v10=5 (**Help browser**, corrected) and select |
 | `286` | (blip only) | break the loop → run the current selection |
 | `288` | (blip only) | `sub_413D45()` — a toggle, no accept |
-| `5` (×5 in a row) | `sub_427961(10)` accept | `sub_40330E()` — the **campaign** easter egg |
-| idle > `getvalue(92)` s | (none) | timeout: break → run the current selection **silently** |
+| `5` = **Ctrl+E** (×6 in a row) | `sub_427961(10)` accept | `sub_40330E()` — **the MAP EDITOR** (corrected: code 5 is the Ctrl+E ASCII control code, the counter is `++v15 > 5` = six consecutive presses, and the target is the scheme editor, NOT a campaign — full chain in `docs/re/results-and-options.md` §5) |
+| idle > `getvalue(92)` s | (none) | **ATTRACT MODE** (corrected — it does NOT simply run the current row): sets the attract flag `dword_464938`, saves the roster/level/team config, forces v10=0 and dispatches Play as an AI-only demo match — see "Attract mode" below |
 
 `getvalue(92)` = **30** (VALUELST `92,30`) — the menu idle timeout, gated by
-`getvalue(92) > 5`, distinct from the waited-screen `getvalue(12)` = 7. Only Up
-(328) and Down (336) plus 286/288 stop at the blip; **every SELECT (Enter/Space/
-Escape/280/315) plays the accept sting 10**. On the Quit row (6, whether reached
+`getvalue(92) > 5` (the file's own legend documents it as the attract-mode
+delay, with < 5 disabling attract entirely), distinct from the waited-screen
+`getvalue(12)` = 7. Only Up (328) and Down (336) plus 286/288 stop at the
+blip; **every SELECT (Enter/Space/Escape/280/315) plays the accept sting
+10**. On the Quit row (6, whether reached
 by Escape/17/27 or Enter on the row), the dispatch calls `sub_412987`, which pops
 a confirm dialog and — on confirm — plays the exit sting `sub_427BFB(2600)` (the
 2600..2699 "go outside and play now!" group) before sleeping 4 s and exiting.
 
-So the confirmed public item set + order is **Play, Options/setup, another setup,
-Editor, Credits, Roulette, Quit** with an animated bomb-trigger cursor.
+So the confirmed public item set + order is **Play, net-setup A, net-setup B,
+Options, Credits, Help browser, Quit** with an animated bomb-trigger cursor
+(the map editor and the roulette wheel exist but have no menu row — hidden
+trigger / automatic respectively).
 
 **Port fidelity of the menu sounds (FIXED).** `present_menu` now matches the
 table: Up/Down play the blip 20 (correct already); **Enter/Space play the accept
@@ -321,6 +330,72 @@ hangs off the interactive controller-setup screen), so its `OpenControllers`
 edge exists in the flow graph but is not bound to a menu row here — a documented
 gap belonging to the deferred controller-setup UI.
 
+## Attract mode — the menu idle timeout runs a LIVE AI demo match (CONFIRMED)
+
+The question "does the original run a recorded DEMO match after the title
+timeout, like other 1997 games?" is now settled — in two halves:
+
+**1. There is NO recorded-input demo subsystem.** Negative, with evidence:
+`sub_42B060` (boot) is a single straight line — music, logos, sting, title,
+teardown, return — with no demo branch; the whole-decompile greps for
+`demo`, `.dem`, `.rec`, `record`, `playback`, `attract` return zero relevant
+hits (the only match is an unrelated ANI-loader diagnostic about a STAT
+record); none of the ~93 `fread`/`fwrite` sites has a per-tick input-log
+shape (they are stats/config/resource I/O); and the install contains no
+`.DEM`/`.REC`/`.INP` or other unexplained files. The port's straight
+IPLOGO → HSLOGO → TITLE → menu chain is faithful for the boot portion.
+
+**2. But the MENU idle timeout is a real attract mode — a live, AI-only
+match, not a plain "select the current row".** The idle path in
+`sub_42B9CE` (pseudo.c 30887-30894) does five things before dispatching:
+increments an attract counter (`dword_4642D8`), sets the **attract flag
+`dword_464938` = 1**, snapshots the 10 slots' input-type/sub bytes and the
+team flag via `sub_4224E2` @ 0x4224E2 (pseudo.c 24605-24620) plus the level
+into `dword_4646B8`, forces team play off, and forces **v10 = 0** — so it
+ALWAYS dispatches Play (`sub_42A3F6`), regardless of the highlighted row.
+The flag then reroutes the whole Play flow:
+
+- **`sub_410F81` (player setup) short-circuits** (pseudo.c 15125-15143):
+  goldman wheel skipped (`!dword_464938` gate at 15048), all 10 slots set
+  OFF, then `rand()%10 + 1` (clamped to a minimum of 3) slots are set to
+  **COMPUTER**, the level is set to `rand() % getvalue(35)` **directly**
+  (a specific random stage — bypassing the VALUELST 1150-1160 random-level
+  enable flags, so attract can pick hockey rink / coal mine), and the
+  function returns immediately — neither the player screen nor the LEVEL &
+  ROUNDS screen (`sub_406DDE`, called at `sub_410F81`'s tail, 15516) is
+  shown.
+- **The round runs live** — the normal sim with AI players; nothing is
+  scripted or replayed.
+- **Any dispatched-through keypress aborts**: the round loop's key handler
+  tail has `if (dword_464938) goto LABEL_34` (pseudo.c 29788 → 29737),
+  which clears the pending gold player and sets `dword_464A68 = 2` — back
+  to the menu.
+- **Round end skips ALL outcome screens**: before the DRAW/RESULTS tiers,
+  `if (dword_464938)` tears down and returns (pseudo.c 29812-29819,
+  `LABEL_204`) — an attract match never shows DRAW/RESULTS/VICTORY. (The
+  related 6 s auto-advance on those screens is gated by `sub_42247A` — an
+  **all-AI-roster test**, pseudo.c 24586-24602 — which covers the
+  human-configured all-CPU case, not the attract flag.)
+- **Menu re-entry restores everything** (pseudo.c 30747-30754): the flag is
+  cleared and `sub_422552` (24627-24642) writes the saved roster bytes,
+  team flag, and level back.
+
+`getvalue(92)` (VALUELST `92,30`) is the attract delay in seconds; the
+file's own legend documents that values < 5 never enter attract mode —
+matching the code's `getvalue(92) > 5` gate.
+
+**Port status:** our boot chain is faithful; the **menu-idle attract match
+is a documented gap** — reproducing it faithfully means: after 30 s of menu
+idle, save the configured roster/level/team, run a live match with
+`rand()%10+1` (min 3) CPU players on `rand()%11` (any stage, ignoring the
+enable flags), abort to the menu on any keypress, skip all outcome screens,
+and restore the configuration. All of it presentation/config-level (the sim
+just receives an all-AI `MatchConfig`); the two rand draws are
+presentation-side. (Provenance: `sub_42B9CE` idle path pseudo.c
+30747-30754/30887-30894; `sub_410F81` attract branch 15125-15143;
+`sub_42A3F6` gates 29788/29812; `sub_4224E2`/`sub_422552` 24605-24642;
+`sub_42247A` 24586-24602; VALUELST 92.)
+
 ## The results / DRAW / VICTORY flow — inside `sub_42A3F6` (CONFIRMED)
 
 The end-of-round path lives at the tail of the **Play** handler (`sub_42A3F6`,
@@ -343,11 +418,18 @@ The end-of-round path lives at the tail of the **Play** handler (`sub_42A3F6`,
    a winner" voice group `sub_427BFB(2000)`. (Provenance: `aDraw`/`aResultsPlt`/
    `aTeamU`/`aVictoryU` string table @ 1612-1615; blit sites @ 29825/29888/30130.)
 
-**Note on BONUS.PCX.** The install ships `BONUS.PCX`, but it is **not**
-referenced by this flow — the per-round outcome is DRAW (no survivor) or the
-RESULTS tally (a survivor), and the match winner is VICTORY%u. The earlier spine
-guess "round-win = BONUS" was wrong; the faithful round/match-win screen is
-`VICTORY<player>`. BONUS.PCX belongs to some other (unlocated) path.
+**Note on BONUS.PCX — CONFIRMED DEAD ASSET (2026-07-08).** The install ships
+`BONUS.PCX`, but it is **not** referenced by this flow — the per-round outcome
+is DRAW (no survivor) or the RESULTS tally (a survivor), and the match winner
+is VICTORY%u. The earlier spine guess "round-win = BONUS" was wrong; the
+faithful round/match-win screen is `VICTORY<player>`. A binary-wide search now
+closes the question: a case-insensitive grep for `bonus` over the whole
+decompile returns **zero hits** (no `aBonus*` string constant exists at all),
+DATA/RES ships no `bonus.plt` companion palette, VALUELST/MESSAGES contain no
+bonus-screen legend or string, and no `.RES` list names it (the only install
+file containing the word is ROULETTE.BM's help prose). BONUS.PCX is leftover
+art from a cut feature — nothing in the shipped binary can display it, so the
+port owes it nothing.
 
 **Spine mapping.** The sim does not yet model teams, so Results shows **DRAW**
 (no survivor / time-up, `round_winner()` returns -1) or **`VICTORY<player>`**
@@ -370,7 +452,11 @@ labels `win`/`draw`.)
 **SFX 40 (enrt1, "you can't do that here") — NETWORK-ONLY, N/A to our build.**
 The results/draw wait loops fire `sub_427961(40)` when a key is pressed but
 `sub_40C06A() == 1`. `sub_40C06A` is a bare `return dword_460058;` — the game-mode
-global (0 = local, 1 = network, 2 = demo). So enrt1 is the "can't dismiss this
+global (0 = local, 1/2 = the two network roles; CORRECTED: mode 2 is NOT a
+"demo" mode — its only writer is the setter `sub_40C035` @ 0x40C035, whose only
+non-zero call is `sub_40C839(2)` at the top of the net-game screen `sub_42B0CE`;
+no code path ever sets it for an unattended/demo run — see "Attract mode" below
+for what the real demo path uses instead). So enrt1 is the "can't dismiss this
 yet" buzz a **networked non-host** hears instead of the accept sting; every other
 SFX-40 site in the front end (`sub_42B0CE`/`sub_42B47D` network-setup screens,
 lines ~6102/8230/15390) is likewise gated on `sub_40C06A() == 1`. Our front end is
@@ -514,7 +600,7 @@ randomness (SFX group pick) uses `AudioEngine`'s own LCG, never `State::rng`.
 | id | meaning | value | status |
 |---|---|---|---|
 | `getvalue(12)` | attract / auto-advance delay for a waited screen | **7 s** (VALUELST `12,7`) | CONFIRMED value + source: `sub_42A088` waits `time_()` (seconds) to `start + getvalue(12)`; port uses 7000 ms for logos + title. Timeout synthesizes Enter → plays SFX 20 + 10 (audible advance) |
-| `getvalue(92)` | main-menu idle / attract timeout | **30 s** (VALUELST `92,30`) | CONFIRMED: `sub_42B9CE` breaks the menu loop (silently selects the current row) after `getvalue(92)` s idle, gated `getvalue(92) > 5`; distinct from `getvalue(12)` |
+| `getvalue(92)` | main-menu attract-mode delay | **30 s** (VALUELST `92,30`) | CONFIRMED: after `getvalue(92)` s idle (gated `> 5`; legend: < 5 disables attract) `sub_42B9CE` enters ATTRACT MODE — saves config, forces Play, runs a live all-CPU demo match (see "Attract mode"); distinct from `getvalue(12)` |
 | `getvalue(700/701/702)` | main-menu cursor x / y-base / y-step | **332 / 140 / 38** (VALUELST `700,332,140,38,0`) | CONFIRMED anchor + values (`sub_42B9CE`): x=getvalue(700), y=getvalue(701)+getvalue(702)·row |
 | SOUNDLST 1000 | boot/title music (`title`), looping, started ONCE in `sub_42B060`, continuous across logos+title | TITLE.RSS | CONFIRMED (`sub_42741E(0x3E8)` @ boot, loop 0xFFFF) |
 | SOUNDLST 1010 | main-menu music (`menu`), looping, started on menu entry (`sub_42741E(0x3F2)`, v14-gated) — replaces the boot track | MENU.RSS | CONFIRMED (`sub_42B9CE`); NOT 0x3FC/1020 (that is `sub_42A3F6`'s round "win" track) |

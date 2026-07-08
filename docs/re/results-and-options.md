@@ -1,4 +1,4 @@
-# RESULTS tally, key-remap, Options screen, and the Roulette row — RE
+# RESULTS tally, key-remap, Options screen, Roulette row, and the map editor — RE
 
 Reverse-engineered from `BM95.EXE` (pseudo.c) and the shipped
 `DATA/RES/VALUELST.RES` / `MESSAGES.TXT` (structure and ids only — text and
@@ -68,10 +68,13 @@ piece on our side. Confirmed layout:
 - **Input / advance:** a `getkey` loop identical in shape to the DRAW wait
   (frontend-flow.md): any real key → SFX 20; **Enter (13) or Space (32)**
   advance (SFX 10); **Esc/anything ≤ 27** advances too
-  (`dword_464A68 = 2`, i.e. "abort to menu"); and an **attract/idle
-  auto-advance** at `t0 + 6000 ms` when `sub_42247A()` (idle-timeout gate,
-  same helper as the menu's `getvalue(92)` idle check) or the
-  `dword_4646B4` flag is set. Network-only: `sub_40C06A()==1` non-host
+  (`dword_464A68 = 2`, i.e. "abort to menu"); and an **auto-advance** at
+  `t0 + 6000 ms` when `sub_42247A()` — CORRECTED: an **all-AI-roster
+  test** (@ 0x42247A, pseudo.c 24586-24602: returns 1 iff no slot's
+  input-type byte +16 is a human category 2/3/4), NOT an idle-timer
+  helper — or the `dword_4646B4` flag is set. I.e. the results screens
+  dismiss themselves after 6 s only when nobody human is playing (an
+  all-CPU roster; see frontend-flow.md "Attract mode"). Network-only: `sub_40C06A()==1` non-host
   players get the SFX-40 "can't dismiss" buzz instead (see
   frontend-flow.md's SFX-40 note — identical gating, N/A to local play).
 - **After RESULTS:** if the match is not yet clinched and fewer than 2
@@ -176,13 +179,14 @@ interactive settings/options list** — team play, random start, node name,
 conveyor speed, etc. — with no editor canvas, no `aEditorBm`/`EDITOR.BM`
 string reference anywhere in the function, and no drawing/tile-placement
 code. `EDITOR.BM` (which does ship in the install) is not referenced by
-`sub_4080DC` at all; it is presumably one of the files the help browser (§4)
-lists, and the map editor itself (if implemented) lives at a different,
-not-yet-located address — **the "Ctrl+E ×6" easter-egg-to-editor claim in
-frontend-flow.md is unverified and should be treated as a documented gap,
-not a confirmed fact**, pending a separate search for the real editor entry
-point. `sub_4080DC` **is** the OPTIONS screen; frontend-flow.md's row-3
-label should read "Options" not "map editor".
+`sub_4080DC` at all — nor anywhere else: the string never appears in the
+binary (grep `EDITOR` over the whole decompile: 0 hits); it is reachable
+only as a directory-listing entry of the help browser's `*.BM` glob (§4).
+The map editor itself HAS now been located (§5 below): a real, reachable
+screen behind the main menu's hidden **Ctrl+E ×6** trigger — the
+frontend-flow.md claim is now VERIFIED; the editor simply never had a menu
+row. `sub_4080DC` **is** the OPTIONS screen; frontend-flow.md's row-3 label
+should read "Options" not "map editor".
 
 Confirmed layout — a **19-row toggle/cycle list**, `getvalue(745)=x=55`,
 `getvalue(746)=y0=40`, `getvalue(747)=ystep=22`, `getvalue(748)=colour=500`
@@ -319,16 +323,19 @@ elsewhere calls the Roulette row "an inert stub in our port". Reading
 
 **The actual Goldman Roulette Wheel mini-game is a SEPARATE, unrelated
 routine — `sub_4034BC` @ 0x4034BC — and it is NOT reachable from the main
-menu at all.** It is invoked automatically during match/round setup
-(`sub_410B6E`'s init path, pseudo.c ~15050-15057) whenever **`goldman=1`**
-(`dword_4648BC`, the Options-screen "Gold Bomberman" toggle, §3) and a
-pending round winner exists (`dword_46492C != -1`) and the game is local
-(`!sub_40C06A()`); it draws a genuine animated Lissajous-curve spinning
-wheel (VALUELST `; Goldman Roulette Wheel` block: `1000,320,240` = wheel
-centre, `1002,200,150` = perimeter radii, `1004,70` = circle resolution,
-`1006,1,1` = Lissajous X/Y params, `1010,5` = how many seconds the
-"twinkling" finish lasts) that lands on and highlights the round's winner
-before the RESULTS tier (§1) is shown.
+menu at all.** It is invoked automatically at the head of the Play flow —
+CORRECTED (2026-07-08): the call at pseudo.c 15043-15057 sits at the top of
+**`sub_410F81`** (the player-setup screen, def 14924), not in `sub_410B6E`
+as first attributed — whenever **`goldman=1`** (`dword_4648BC`, the
+Options-screen "Gold Bomberman" toggle, §3), the game is local
+(`!sub_40C06A()`), it is not an attract/demo run (`!dword_464938`), and a
+pending gold player exists (`dword_46492C != -1`, checked inside
+`sub_4034BC`). It draws a genuine animated Lissajous-curve spinning wheel
+and awards the previous winner one bonus powerup — the full mechanics
+(5-draw rand sequence, deceleration model, the 6-slot prize table
+`{0,1,3,8,4,13}`, the +86-inventory award at round init, the gold twinkle,
+assets/sounds/message ids) are now pinned in **`docs/re/goldman-roulette.md`**,
+which supersedes this paragraph's summary.
 
 **Corrected mapping:**
 - Main menu row 5 = the **Help/Manual browser** (`sub_41431C`→
@@ -336,10 +343,10 @@ before the RESULTS tier (§1) is shown.
   file-picker over the same `.BM` viewer the port already has, not an
   inert stub.
 - **There is no main-menu row for the Goldman Roulette Wheel** — it is
-  conditional, automatic, mid-round-transition presentation, gated purely
-  by the `goldman=` option. It is a genuinely separate future feature
-  (an animated wheel widget) from the menu row, and belongs wired into the
-  round-transition flow (between round-teardown and RESULTS), not the menu.
+  conditional, automatic presentation at Play-flow entry, gated purely by
+  the `goldman=` option and a pending gold player. It belongs wired in
+  front of the player-setup screen (the top of our `present_setup`
+  equivalent), not the menu — see `docs/re/goldman-roulette.md`.
 
 (Provenance: `sub_41431C` @ 0x41431C pseudo.c 16996-17001; `sub_414235`
 @ 0x414235 pseudo.c 16933-16995; `sub_41404B` @ 0x41404B pseudo.c
@@ -348,6 +355,82 @@ math helpers `sub_403382`/others at 5876-5919); its caller pseudo.c
 15043-15057; VALUELST `15,1`, `; Goldman Roulette Wheel` block 805/
 1000-1010; MESSAGES.TXT ids 4/5/95/600/610; `ROULETTE.BM` header line
 confirms the help-topic framing.)
+
+## 5. The map/scheme editor — FOUND: `sub_4028D2`, behind Ctrl+E ×6 (CONFIRMED)
+
+The editor §3 left "not-yet-located" is real, complete, and reachable. It
+has **no menu row**; its sole entry point is a hidden trigger inside
+`sub_42B9CE`'s input loop (pseudo.c 30876-30883): raw key code **5** — the
+ASCII control code for **Ctrl+E** (the same stream encodes Ctrl+Q as 17,
+used by the menu's Escape/quit alias) — tracked by a same-key repeat
+counter that any other key resets; `++counter > 5` fires on the **6th
+consecutive press**, plays accept SFX 10 and calls `sub_40330E` (its only
+call site in the binary). So the old "Ctrl+E ×6" folklore is exactly right,
+and frontend-flow.md's "key 5 ×5 campaign easter egg" label for this
+trigger was wrong on both counts (it is 6 presses, and it opens the editor,
+not a campaign).
+
+Call chain, all confirmed by body reads:
+
+- **`sub_40330E` @ 0x40330E** (pseudo.c 5847-5861) — wrapper: saves and
+  zeroes the team-play flag `dword_464964` around the editor (bracketed by
+  the no-op stubs `sub_4021DC`/`sub_4021F1`), calls `sub_403184`.
+- **`sub_403184` @ 0x403184** (pseudo.c 5745-5844) — the editor's own
+  3-item menu on a random `GLUE<n>` backdrop (`sub_4148E5`, the same helper
+  as the pre-match screens): title `getstring(730)` at getvalue(810/811/813)
+  (VALUELST `; Editor - mainmenu header` → `810,50,100,0,400`), rows
+  `getstring(731..733)` at getvalue(815-818) (`; Editor - mainmenu items` →
+  `815,80,140,20,400`). Keys: **'1' (49)** → `sub_4028D2(0)` (edit an
+  existing scheme — first runs the `*.SCH` file picker `sub_407582`
+  @ 0x407582, a `findfirst` glob like the help browser's, then the `.SCH`
+  parser `sub_403EEE` @ 0x403EEE); **'2' (50)** → `sub_4028D2(1)` (new
+  scheme); **Esc/'Q'(81)/'q'(113)** exit; **315 (F1)** → help browser
+  `sub_41431C`. SFX 20 blip on any key.
+- **`sub_4028D2` @ 0x4028D2** (pseudo.c 5429-5716) — **the editor
+  screen**. Draws the tile grid with the current level's `tile %u solid` /
+  `tile %u brick` sequences and the 10 player-start markers (slot number in
+  the slot's colour `sub_41672F`/`sub_416867`, plus a `teamring%u` ANI
+  sprite showing each start's team flag — `aTeamringU`, pseudo.c 1325).
+  Interactions (verified against the body, incl. the key `switch`):
+  - **left mouse** — paint the hovered cell with the current brush
+    (`sub_4048EB(gx, gy, brush)` via the pixel→cell mappers
+    `sub_42665C`/`sub_4266A3`);
+  - **right mouse** — MOVE the currently-selected player-start marker to
+    the hovered cell (writes `dword_46481C[12*slot]`/`+4`);
+  - **'1'/'2'/'3'** select the brush (blank/solid/brick — the status line
+    uses the `tile %d blank/solid/brick` strings); **Tab/Enter/Space**
+    cycle it;
+  - **Ctrl+F (6)** — flood-fill the whole grid with the brush;
+  - **'+'/'='/'-'/'_'** cycle the selected start slot; **'T'/'t'** toggle
+    that start's team flag;
+  - **'D'/'d'** — brick-density prompt (text entry, clamped 0-100 into
+    `dword_4647A0` — the scheme `-B` field);
+  - **'N'/'n'** — scheme-name prompt (the `-N` field);
+  - **'P'/'p'** — `sub_402595` @ 0x402595 (pseudo.c 5275-5413), the
+    13-row powerup-rules sub-editor (bornwith / override / forbidden per
+    powerup — the `-P` rows);
+  - **Esc/'Q'/'q'** — exit with a save-changes confirm (`getstring(735)`),
+    writing through **`sub_403C16` @ 0x403C16** (pseudo.c 6182-6250) — a
+    real `.SCH` serializer emitting the exact shipped format: header
+    comment lines, `-V` version, `-N` name, `-B` density, the `-R` row
+    array, 10 `-S` player starts, and 13 `-P` powerup rows whose trailing
+    comment text is `getstring(800+i)` — the same 800-block strings the
+    roulette result screen uses (`docs/re/goldman-roulette.md` §7).
+  - **315 (F1)** — help browser.
+
+So the binary contains a full in-game scheme editor (mouse tile painting,
+start-marker placement with teams, density/name metadata, powerup rules,
+and `.SCH` load/save round-tripping the same format `docs/formats/sch.md`
+covers). MESSAGES ids: 730-733 (editor menu), 735-739 (save-confirm,
+filename prompt, F1 hint, "Player %u" marker label, density prompt).
+VALUELST: 810/815 (editor menu layout). For the port this is a documented,
+low-priority feature: our toolchain edits schemes as plain text, so
+reproducing the in-game editor is optional fidelity, not a gameplay gap.
+
+(Provenance: trigger pseudo.c 30876-30883; `sub_40330E` 5847-5861;
+`sub_403184` 5745-5844; `sub_4028D2` 5429-5716; `sub_402595` 5275-5413;
+`sub_403C16` 6182-6250; `sub_407582` ~8421-8448; `sub_403EEE` 6252+;
+string constants pseudo.c 1320-1349; VALUELST 810/815; MESSAGES 730-739.)
 
 ## Determinism / golden — no impact
 
