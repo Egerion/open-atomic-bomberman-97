@@ -87,6 +87,26 @@ private:
     // exits on Enter/Escape (sub_41302D). Returns Back on Escape else Advance
     // (both route the leaf back to the menu), or Quit on window close.
     AppInput present_bm_screen(const std::string& bm_name);
+    // The generic help-file browser (sub_41431C -> sub_414235, docs/re/
+    // results-and-options.md §4): globs every `*.BM` in the install root and
+    // lists them via HelpBrowser (bmscreen.hpp), opening the selection
+    // through the same BmScreen viewer present_bm_screen uses. Called from
+    // TWO sites, both bracketed per the RE facts: the main menu's row 5
+    // (present_menu's Enter case, no wipe — mirrors sub_42B9CE's `case 5:
+    // sub_41431C(); break;`) and the in-round F1 key (run_match, with the
+    // sim tick loop suspended for the duration — docs/re/in-match-shell.md
+    // §1's sub_42A16F(1)/(0) bracket). Owns its own nested SDL event loop,
+    // same shape as present_bm_screen/present_editor. Returns Quit on window
+    // close, else Advance (the browser was cancelled/closed normally).
+    AppInput present_help_browser();
+    // The same browser, opened mid-round by run_match's F1 key (docs/re/
+    // in-match-shell.md §1): identical widget/loop, but the backdrop is the
+    // LAST rendered match frame (renderer_->draw_frame) instead of MAINMENU,
+    // since the original composites the list dialog over whatever screen was
+    // already up rather than cutting to the menu — and the sim is never
+    // ticked while this runs (the caller does not call sim_.tick from
+    // inside), matching the sub_42A16F(1)/(0) freeze.
+    AppInput present_help_browser_modal();
     // The interactive Options screen (Team Play / Conveyor Speed): random
     // GLUE<n> backdrop, FONT6 text, Up/Down select a row, Left/Right change
     // its value, Enter/Esc leave (docs/re/frontend-flow.md "Interactive

@@ -316,12 +316,17 @@ timeout is `getvalue(92)`, not the waited-screen `getvalue(12)`.)
 order so the cursor anchor lands on the baked labels: Play→`Match`,
 setup A→Options `.BM` help, setup B→Network `.BM` help, row 3 (Options,
 corrected above)→inert stub, Credits→Credits `.BM`, row 5 (Help browser,
-corrected above)→inert stub, Quit→app exit. **Play, Credits, Quit are live**;
-rows 3 and 5 are documented inert stubs — row 3's real screen is the RE'd
-Options screen (`docs/re/results-and-options.md` §3, a separate
-implementation effort) and row 5's real screen is the RE'd `.BM` help
-browser (same doc §4), not a map editor / roulette wheel respectively as an
-earlier pass assumed. The cursor is now the actual animated `"bomb trigger
+corrected above)→**live**: the generic `*.BM` help browser
+(`GameApp::present_help_browser`, `HelpBrowser` in bmscreen.hpp — the
+`sub_41431C`→`sub_414235` glob+list+viewer loop of
+`docs/re/results-and-options.md` §4, dispatched inline with no wipe exactly
+as `sub_42B9CE`'s `case 5` does), Quit→app exit. **Play, Credits, Help
+browser, Quit are live**; row 3 remains a documented inert stub — its real
+screen is the RE'd Options screen (`docs/re/results-and-options.md` §3, a
+separate implementation effort), not a map editor as an earlier pass
+assumed. The same browser also opens mid-round on F1
+(`docs/re/in-match-shell.md` §1's `sub_42A16F(1)/(0)` bracket,
+`GameApp::present_help_browser_modal`). The cursor is now the actual animated `"bomb trigger
 green"` sprite (TRIGBOMB.ANI) at the pinned anchor, read live from VALUELST
 row 700's columns (`ValueList::column_or`), with `{332,140,38}` as the
 fallback; it falls back to a highlight bar only if TRIGBOMB.ANI is absent. The

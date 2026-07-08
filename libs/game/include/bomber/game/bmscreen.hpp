@@ -3,12 +3,14 @@
 #include <SDL3/SDL.h>
 
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <vector>
 
 #include "bomber/assets/bmfont.hpp"
 #include "bomber/assets/bmtext.hpp"
 #include "bomber/game/asset_store.hpp"
+#include "bomber/game/audio_engine.hpp"
 #include "bomber/game/sdl.hpp"
 
 // The front-end `.BM` text-screen viewer — the SDL realisation of the original's
@@ -91,6 +93,71 @@ private:
     const FontTextures* font_ = nullptr;
     assets::bmtext::BmDocument doc_;
     int top_ = 0;      // index of the first visible line (sub_41302D v54)
+    bool done_ = false;
+};
+
+// The generic help-file browser — sub_41431C -> sub_414235 (docs/re/
+// results-and-options.md §4, PINNED from the body): globs every `*.BM` in
+// the install ROOT (sub_41404B, the same findfirst/findnext/qsort helper
+// SchemeFilePicker uses for `*.SCH`, editor_screen.hpp), lists the matched
+// filenames through the generic list dialog at (100, 100) with header
+// getstring(600) ("Available help files:"), and opens the selected topic
+// through the SAME `.BM` viewer (BmScreen) main-menu row 4/present_bm_screen
+// already use. Selecting a topic and dismissing its viewer re-shows the SAME
+// list (sub_414235's `do { list } while (v14 != -1)` loop indexes the one
+// glob result array rather than re-scanning the directory) until the list
+// itself is cancelled with Esc. This is the SAME routine both the main
+// menu's row 5 (§4) and the in-round F1 key (docs/re/in-match-shell.md §1)
+// invoke; the caller (GameApp) owns the loop and, for the in-round case,
+// brackets it with the sim-tick suspension sub_42A16F(1)/(0) documents.
+//
+// Like BmScreen, this widget paints NO backdrop of its own — sub_41485A's
+// list dialog (sub_42DB80) is a floating panel composited over whatever the
+// caller already has on screen (the menu at row 5, the live match field at
+// the in-round F1 site), never a full-screen cut. The caller draws the
+// current screen first, then this on top (present_bm_screen's own
+// convention, extended here).
+class HelpBrowser {
+public:
+    HelpBrowser(const AssetStore& assets, const FontTextures& font)
+        : assets_(&assets), font_(&font), bm_(assets, font) {}
+
+    // Globs `*.BM` in the install root and resets the list cursor.
+    void enter();
+
+    // Feed one SDL keycode. While the list is showing: Up/Down move,
+    // Enter opens the highlighted topic (switches into the nested BmScreen
+    // loop), Esc cancels the whole browser (done()==true). While a topic is
+    // open, keys route to the BmScreen viewer instead (viewing()==true) —
+    // the caller should check viewing() and dispatch there, mirroring
+    // present_options_screen's own F1 sub-loop pattern.
+    void on_key(SDL_Keycode key, AudioEngine& audio);
+    void draw(SDL_Renderer* ren) const;
+
+    // True once a `.BM` viewer is open on top of the list (route on_key/
+    // draw's per-frame SDL_Delay pacing exactly like present_bm_screen).
+    bool viewing() const { return viewing_; }
+    BmScreen& viewer() { return bm_; }
+    // Called by the caller once viewer().done() returns true: closes the
+    // topic and re-shows the list (the loop-back sub_414235 performs).
+    void close_viewer() { viewing_ = false; }
+
+    bool done() const { return done_; }
+    // sub_41404B found zero `*.BM` files, or the install root is missing —
+    // the caller should show the getstring(4)/getstring(95) error case
+    // instead of an empty list (§4's "no .BM files found" branch).
+    bool empty() const { return entries_.empty(); }
+
+    static constexpr int kVisibleRows = 13;  // sub_42DBCC's 13-row dialog
+
+private:
+    const AssetStore* assets_ = nullptr;
+    const FontTextures* font_ = nullptr;
+    BmScreen bm_;
+    std::vector<std::filesystem::path> entries_;
+    int row_ = 0;
+    int top_ = 0;
+    bool viewing_ = false;
     bool done_ = false;
 };
 

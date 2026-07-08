@@ -263,9 +263,12 @@ ScreenDef victory_screen(int player) {
 // The original menu highlights one of seven rows (its selection variable v10
 // runs 0..6) over MAINMENU.PCX and dispatches on Enter: 0=Play (sub_42A3F6 runs
 // a match + results), 1/2=setup screens (sub_42B0CE/sub_42B47D), 3=editor,
-// 4=credits (.BM), 5=roulette, 6=quit (sub_412987, exit sting 2600). We keep
-// the row set and order but map the not-yet-built leaves to their stub
-// AppInputs; Start and Quit are wired live. (docs/re/frontend-flow.md.)
+// 4=credits (.BM), 5=the generic *.BM help browser (sub_41431C — CORRECTED,
+// docs/re/results-and-options.md §4: the row's old "Roulette" label was wrong;
+// it lists every *.BM in the install root, ROULETTE.BM among them), 6=quit
+// (sub_412987, exit sting 2600). We keep the row set and order but map the
+// not-yet-built leaves to their stub AppInputs; Start/Quit/Credits/Help are
+// wired live. (docs/re/frontend-flow.md.)
 struct MenuItem {
     AppInput action;   // resolved when Enter selects this row
     bool live;         // false = a documented stub row (no handler yet, inert)
@@ -280,7 +283,11 @@ struct MenuItem {
 //   2 setup B        -> OpenNetwork  (help overlay live; interactive UI = TODO)
 //   3 Editor         -> stub         (map editor not built — inert, documented)
 //   4 Credits        -> OpenCredits  (live: CREDITS.BM viewer)
-//   5 Roulette       -> stub         (roulette/help not built — inert, documented)
+//   5 Help browser   -> live, handled INLINE (see the SDLK_RETURN case below):
+//                       sub_41431C dispatches with no wipe in the original, so
+//                       row 5 is special-cased ahead of this table rather than
+//                       routed through AppInput/next() like rows 0-2/4/6 are —
+//                       its kMenuItems entry below is unused/dead for row 5.
 //   6 Quit           -> Quit         (live)
 // The Controllers help (INPUT.BM) is reachable from the interactive controller
 // setup screen in the original; here it has no dedicated main-menu row, so the
@@ -292,7 +299,7 @@ constexpr MenuItem kMenuItems[] = {
     {AppInput::OpenNetwork, true},      // 2 setup B -> network help
     {AppInput::Advance, false},         // 3 Editor (stub, inert)
     {AppInput::OpenCredits, true},      // 4 Credits
-    {AppInput::Advance, false},         // 5 Roulette (stub, inert)
+    {AppInput::Advance, false},         // 5 Help browser (handled inline, entry unused)
     {AppInput::Quit, true},             // 6 Quit
 };
 constexpr int kMenuCount = static_cast<int>(std::size(kMenuItems));
@@ -541,6 +548,69 @@ AppInput GameApp::present_bm_screen(const std::string& bm_name) {
     // cut, like every sub_42A088-style screen — the menu is redrawn from scratch
     // on the next frame. No screen-to-screen transition here.
     return result;
+}
+
+AppInput GameApp::present_help_browser() {
+    // sub_41431C -> sub_414235 (docs/re/results-and-options.md §4): glob every
+    // *.BM in the install root, show the list, open the pick through the same
+    // .BM viewer, and re-show the list on return (HelpBrowser owns that
+    // loop-back internally) until Esc cancels the list itself. MAINMENU stays
+    // the persistent backdrop behind both the list and the viewer, matching
+    // present_bm_screen's own convention (the original composites over
+    // whatever screen was already up — the menu here, the live match field at
+    // the in-round F1 call site, where the caller paints its own frame first).
+    HelpBrowser browser(assets_, front_font_);
+    browser.enter();
+    while (!browser.done()) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
+            if (ev.type != SDL_EVENT_KEY_DOWN) continue;
+            browser.on_key(ev.key.key, audio_);
+        }
+        if (browser.viewing() && browser.viewer().done()) browser.close_viewer();
+        audio_.update_music();
+        SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
+        SDL_RenderClear(sdl_renderer_.get());
+        const Sprite& bg = assets_.frontend_pcx("MAINMENU");
+        if (bg.tex) {
+            SDL_FRect d{0, 0, static_cast<float>(bg.w), static_cast<float>(bg.h)};
+            SDL_RenderTexture(sdl_renderer_.get(), bg.tex, nullptr, &d);
+        }
+        browser.draw(sdl_renderer_.get());
+        SDL_RenderPresent(sdl_renderer_.get());
+        SDL_Delay(2);
+    }
+    // No wipe out — same cut-back-to-caller convention as present_bm_screen.
+    return AppInput::Advance;
+}
+
+AppInput GameApp::present_help_browser_modal() {
+    // The in-round F1 opening of the SAME browser (docs/re/in-match-shell.md
+    // §1's sub_42A16F(1)/(0) bracket): this loop never calls sim_.tick — the
+    // match is genuinely frozen for its duration, exactly like the menu-row
+    // browser never advances anything either. The backdrop is the live
+    // (frozen) match render rather than MAINMENU, since the original
+    // overlays the list dialog on whatever screen was already current.
+    HelpBrowser browser(assets_, front_font_);
+    browser.enter();
+    while (!browser.done()) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
+            if (ev.type != SDL_EVENT_KEY_DOWN) continue;
+            browser.on_key(ev.key.key, audio_);
+        }
+        if (browser.viewing() && browser.viewer().done()) browser.close_viewer();
+        audio_.update_music();
+        SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
+        SDL_RenderClear(sdl_renderer_.get());
+        renderer_->draw_frame(sim_.state());  // last sim frame, frozen — no tick here
+        browser.draw(sdl_renderer_.get());
+        SDL_RenderPresent(sdl_renderer_.get());
+        SDL_Delay(2);
+    }
+    return AppInput::Advance;
 }
 
 AppInput GameApp::present_options_screen() {
@@ -1002,7 +1072,20 @@ AppInput GameApp::present_menu() {
                     // no "inert row" concept in the original; each row 0..6 is a
                     // live dispatch. So the accept sound fires first, always.
                     audio_.play(10);  // accept sting (SOUNDLST 10, menuexit)
-                    // A row we have not built yet (Editor/Roulette) still plays the
+                    // Row 5 = the generic help-file browser (sub_41431C, §4 —
+                    // CORRECTED from the old "Roulette" label, see kMenuItems'
+                    // comment above). sub_42B9CE's row switch calls it DIRECTLY
+                    // (case 5: sub_41431C(); break;) with NO sub_4121FF() wipe
+                    // first, unlike rows 0-2 — so unlike Credits/Options (which
+                    // this port already routes through the AppState wipe), this
+                    // row is handled here inline, staying on the menu loop, and
+                    // never touches AppInput/next() (task brief: prefer not to
+                    // add new AppInputs for this leaf).
+                    if (menu_index_ == 5) {
+                        if (present_help_browser() == AppInput::Quit) return AppInput::Quit;
+                        break;
+                    }
+                    // A row we have not built yet (Editor) still plays the
                     // accept sting to stay faithful, but has no leaf to jump to, so
                     // it simply stays put instead of dead-ending on an unbuilt
                     // screen. (Documented inert stub — the accept is real, the
@@ -1651,18 +1734,31 @@ AppInput GameApp::run_match() {
             // paragraph for the full rationale.
             if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_ESCAPE)
                 return AppInput::MatchOver;
-            // TODO(docs/re/in-match-shell.md §1, "auxiliary key table" row
-            // 0x13B=315=F1): the original opens a tick-suspending modal *.BM
-            // help browser mid-round (sub_41431C -> sub_414235, a real
-            // findfirst/findnext glob over every *.BM in the install root
-            // with a selectable-list dialog, per docs/re/
-            // results-and-options.md §4) without leaving the match. NOT
-            // wired here: our port has no multi-file browsable .BM list UI
-            // at all yet (the main menu's own row 5 is still a documented
-            // stub for the same reason, frontend-flow.md) — present_bm_screen
-            // only opens one FIXED file by name, so this would not "drop in
-            // cleanly" the way Ctrl+Q did. Building the browser is out of
-            // scope for this presentation-only pass.
+            // docs/re/in-match-shell.md §1, auxiliary key table row
+            // 0x13B=315=F1 (local only, matching `!sub_40C06A()` — no
+            // network gate needed here since this port has no network play):
+            // opens the SAME generic *.BM help browser row 5 opens
+            // (sub_41431C -> sub_414235, §4) without leaving the round,
+            // bracketed by the tick-suspend guard sub_42A16F(1)/(0)
+            // (pseudo.c 29769-29771) — "the whole game freezes under the
+            // help overlay: sim, rendering, HUD, everything" while it is up.
+            if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_F1) {
+                // sub_42A16F(1): suspend the tick callback. present_help_
+                // browser_modal draws the LAST rendered match frame as its
+                // backdrop (never advancing the sim) and returns once the
+                // browser is dismissed.
+                AppInput help = present_help_browser_modal();
+                if (help == AppInput::Quit) return AppInput::Quit;
+                // sub_42A16F(0): resume. Reset the accumulator/clock instead
+                // of reproducing the original's documented bug (the round
+                // clock silently absorbs the whole modal duration in one
+                // lump, §1's "Pause negative finding" point 2) — a
+                // DELIBERATE deviation, per this task's brief, so closing
+                // the browser does not fire a tick burst or eat round time.
+                last = SDL_GetTicks();
+                acc = 0;
+                continue;
+            }
             // A pad unplugged/plugged mid-match: rescan so a disconnect drops
             // that slot to neutral input (via collect_inputs' range check)
             // rather than leaving it wedged, and a reconnect resumes control at

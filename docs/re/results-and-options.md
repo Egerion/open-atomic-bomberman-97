@@ -422,6 +422,25 @@ which supersedes this paragraph's summary.
   front of the player-setup screen (the top of our `present_setup`
   equivalent), not the menu — see `docs/re/goldman-roulette.md`.
 
+**Loop-back detail, from `sub_414235`'s body (pseudo.c 16933-16983,
+transcribed in full):** the `sub_41404B("*.BM", &count)` glob runs exactly
+ONCE per browser open — the `do { ... sub_41485A(...) ... } while (v14 != -1)`
+loop re-shows the SAME list dialog (header `getstring(600)`, ink
+`byte_49D38F`, at `(100, 100)`) on every return from the `.BM` viewer,
+indexing the SAME `v12` filename array (`v12[v14]`) rather than re-globbing;
+the directory is only re-read on the browser's NEXT top-level open. The list
+finally frees via `sub_414173` when the dialog itself returns -1 (its own
+Esc/cancel). The two gated error paths (`getvalue(15)==0` "manual disabled"
+and an empty glob) both draw through `sub_414340` in ink `byte_49D0DA`
+(a distinct global from the list's own white `byte_49D38F` — not yet
+decoded, presumably a warning/red tint) with `getstring(5)`/`getstring(4)`
+(disabled) or `getstring(4)`/`getstring(95)` (empty) — CORRECTION: reading
+the exact call order, the "disabled" branch is `getstring(5)` then
+`getstring(95)`, and the "empty glob" branch (inside the `v12==0` arm) is
+`getstring(4)` then `getstring(95)` — i.e. only the FIRST string differs
+between the two error cases (5 vs 4), both share the `95` second line and
+the `414340` two-line dialog shape.
+
 (Provenance: `sub_41431C` @ 0x41431C pseudo.c 16996-17001; `sub_414235`
 @ 0x414235 pseudo.c 16933-16995; `sub_41404B` @ 0x41404B pseudo.c
 16867-16894; `sub_4034BC` @ 0x4034BC pseudo.c 5921-6132 (roulette-wheel
