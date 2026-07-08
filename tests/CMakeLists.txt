@@ -54,6 +54,13 @@ target_link_libraries(bomber_frontend_tests PRIVATE bomber::sim doctest::doctest
 target_include_directories(bomber_frontend_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
 add_test(NAME frontend COMMAND bomber_frontend_tests)
 
+# Goldman wheel PURE math (goldman_wheel.hpp) is SDL-free like app_flow.hpp:
+# own target linking only the game include dir + sim (for PowerupType).
+add_executable(bomber_goldman_wheel_tests test_goldman_wheel.cpp)
+target_link_libraries(bomber_goldman_wheel_tests PRIVATE bomber::sim doctest::doctest bomber::warnings)
+target_include_directories(bomber_goldman_wheel_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+add_test(NAME goldman_wheel COMMAND bomber_goldman_wheel_tests)
+
 # .BM text-screen parser lives in bomber::assets (SDL-free). Own target so it
 # links the assets lib rather than sim, like the anim/frontend suites.
 add_executable(bomber_bmtext_tests test_bmtext.cpp)
@@ -66,6 +73,7 @@ target_link_libraries(bomber_rmp_tests PRIVATE bomber::assets doctest::doctest b
 add_test(NAME rmp COMMAND bomber_rmp_tests)
 
 bomber_add_test(bomber_diarrhea_tests diarrhea_throw test_diarrhea_throw.cpp)
+bomber_add_test(bomber_goldman_award_tests goldman_award test_goldman_award.cpp)
 
 # Per-match brick fill lives in bomber::match (header-only); link the match lib.
 add_executable(bomber_match_tests test_match.cpp)

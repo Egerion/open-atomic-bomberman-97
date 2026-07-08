@@ -77,6 +77,32 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
             std::fprintf(stderr, "HEADWIPE.ANI load failed: %s\n", e.what());
         }
 
+        // Goldman wheel pointer ("ring" seq, docs/re/goldman-roulette.md §3/§7):
+        // the doc has no confirmed containing ANI file, so probe a small set of
+        // plausible frontend files (co-located with ROULETTE.PCX first) until
+        // one owns "ring" — same probing shape as cornerhead/bwalk. Cosmetic
+        // and optional: GoldmanScreen just draws no pointer if every candidate
+        // is missing/lacks the sequence.
+        {
+            static constexpr const char* kRingCandidates[] = {"ROULETTE.ANI", "EXTRAS.ANI",
+                                                               "CURSOR.ANI"};
+            for (const char* name : kRingCandidates) {
+                auto p = ani_dir / name;
+                try {
+                    if (fs::exists(p)) {
+                        AniTextures probe;
+                        probe.load(ren, p);
+                        if (!resolve_sequence(probe, "ring").steps.empty()) {
+                            ring_ = std::move(probe);
+                            break;
+                        }
+                    }
+                } catch (const std::exception& e) {
+                    std::fprintf(stderr, "%s load failed (ring probe): %s\n", name, e.what());
+                }
+            }
+        }
+
         // Front-end bitmap font for the .BM help/credits screens. The engine
         // draws every text string through the active font, which graphics-init
         // pins to FONT6 (sub_431E9C(6), BM95.EXE @ 0x417600). The FONT<n>.FON

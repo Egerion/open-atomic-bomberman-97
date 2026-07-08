@@ -14,6 +14,7 @@
 #include "bomber/game/audio_engine.hpp"
 #include "bomber/game/bmscreen.hpp"
 #include "bomber/game/gamepad.hpp"
+#include "bomber/game/goldman_screen.hpp"
 #include "bomber/game/input.hpp"
 #include "bomber/game/keyremap_screen.hpp"
 #include "bomber/game/options_screen.hpp"
@@ -152,6 +153,17 @@ private:
     // Advance to go on to the level screen, Back to cancel to the menu, Quit on
     // window close. (docs/re/setup-screens.md.)
     AppInput present_setup();
+    // The Goldman Roulette wheel (docs/re/goldman-roulette.md), sub_4034BC:
+    // run at the head of the Play flow, before present_setup(), whenever
+    // goldman is on, we're not in attract, it's a local game, AND a gold
+    // player is pending (gold_player_ >= 0, doc §2's re-entry gate — the
+    // wheel is a silent no-op with no pending winner). Awards +1 born-with
+    // inventory (MatchConfig::born_with_extra, doc §4) to the gold player
+    // (whole team in team mode) at every subsequent round init for the
+    // following match. Returns Advance to continue into present_setup, Back
+    // if Esc aborted the wheel (the caller must then skip the whole Play
+    // flow and forfeit the gold player, doc §2/§5), Quit on window close.
+    AppInput present_goldman_wheel();
     // Screen 2 — LEVEL & ROUNDS (sub_406DDE, the VALUELST "OPTIONS SCREEN"): the
     // RANDOM + 11 named levels and the win target, at getvalue 735-738. Left/Right
     // cycle the highlighted row, Up/Down switch rows, Enter commits the level
@@ -226,6 +238,25 @@ private:
     // specific built-in level whose stage index start_match uses directly.
     int selected_level_ = -1;
     std::uint32_t setup_lcg_ = 0x5E7C0DE5u;  // presentation RNG for the glue pick
+
+    // The Goldman wheel's pending gold player (dword_46492C, docs/re/goldman-
+    // roulette.md §2): -1 = none pending, else a player index (solo) or a
+    // team id encoded 0/2 (team mode, doc §2's sub_4223E7 note) whose match-
+    // win, under the goldman option, arms the next Play entry's wheel spin.
+    // Default -1 (boot init, doc's "Cleared to -1 by ... boot init 14661").
+    // ASSIGNMENT (who becomes gold player after a round) is the RESULTS
+    // tier's concern (present_scoreboard/run_match, doc §2 pseudo.c
+    // 30004-30022) — not written here; this class only CONSUMES the pending
+    // value at the Play-entry trigger site and clears it on the documented
+    // events this file owns (Esc on the wheel, Esc on present_setup, the
+    // Options-screen Gold Bomberman toggle).
+    int gold_player_ = -1;
+    // The prize awarded by the last successful (non-aborted) wheel spin, or
+    // -1 (doc §4: "dword_45E02C is never reset on consumption"). Consumed by
+    // start_match() into MatchConfig::born_with_extra every round while
+    // gold_player_ stays the same match's winner.
+    int gold_prize_ = -1;
+    std::uint32_t goldman_lcg_ = 0x60D1BEEFu;  // presentation RNG seed for the wheel's 5 draws
 
     Options opts_;
 
