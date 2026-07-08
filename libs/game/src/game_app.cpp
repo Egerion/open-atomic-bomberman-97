@@ -560,7 +560,9 @@ AppInput GameApp::present_help_browser() {
     // whatever screen was already up — the menu here, the live match field at
     // the in-round F1 call site, where the caller paints its own frame first).
     HelpBrowser browser(assets_, front_font_);
-    browser.enter();
+    // getvalue(15) ("is the online manual enabled?", default 1, §4): gate
+    // BEFORE the glob, matching sub_414235's own order.
+    browser.enter(values_.at_or(15, 1) != 0);
     while (!browser.done()) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -593,7 +595,10 @@ AppInput GameApp::present_help_browser_modal() {
     // (frozen) match render rather than MAINMENU, since the original
     // overlays the list dialog on whatever screen was already current.
     HelpBrowser browser(assets_, front_font_);
-    browser.enter();
+    // getvalue(15) ("is the online manual enabled?", default 1, §4): gate
+    // BEFORE the glob, matching sub_414235's own order — the SAME gate the
+    // menu-row browser above applies, since sub_41431C is one routine.
+    browser.enter(values_.at_or(15, 1) != 0);
     while (!browser.done()) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -617,8 +622,13 @@ AppInput GameApp::present_options_screen() {
     // The interactive Options screen (options_screen.hpp/.cpp): the full
     // §3 19-item list's LIVE subset, over a random GLUE<n> backdrop like
     // present_setup's documented convention (docs/re/setup-screens.md). F1
-    // layers the original's OPTIONS.BM help text on top, same content the row
-    // used to open exclusively. Music left untouched here — unlike
+    // opens the generic *.BM help browser — CORRECTED 2026-07-08: reading
+    // sub_4080DC's own F1 dispatch (pseudo.c, `if (v165 <= 0x13B) sub_41431C();`)
+    // shows it calls the SAME sub_41431C generic browser row 5 and the
+    // in-round F1 key open (§4), not a fixed OPTIONS.BM cut. OPTIONS.BM is
+    // just one entry in that browser's *.BM glob, same as EDITOR.BM (§3's
+    // own correction: "reachable only as a directory-listing entry of the
+    // help browser's *.BM glob"). Music left untouched here — unlike
     // present_setup this screen is reached straight from the main menu (not
     // the Play handler sub_42A3F6), so there is no confirmed "inherits 1020"
     // citation; it plays on under whatever the menu already started (1010,
@@ -633,9 +643,10 @@ AppInput GameApp::present_options_screen() {
             if (ev.type != SDL_EVENT_KEY_DOWN) continue;
             if (ev.key.key == SDLK_F1) {
                 // Keep the .BM help reachable without leaving the interactive
-                // screen: present it modally, then resume with the same
-                // in-progress edits (present_bm_screen owns its own loop).
-                AppInput help = present_bm_screen("OPTIONS");
+                // screen: present the generic browser modally (same routine
+                // row 5 and in-round F1 open, §4), then resume with the same
+                // in-progress edits (present_help_browser owns its own loop).
+                AppInput help = present_help_browser();
                 if (help == AppInput::Quit) return AppInput::Quit;
                 continue;
             }
@@ -746,11 +757,15 @@ void GameApp::present_editor() {
         if (action == EditorChooserResult::Exit) return;
         if (action == EditorChooserResult::Help) {
             // §5: F1 opens the same generic help browser (sub_41431C, §4)
-            // every other screen reaches on F1 — reuse the .BM viewer on
-            // the editor's own help topic (EDITOR.BM ships in the install,
-            // §3's correction: "reachable only as a directory-listing entry
-            // of the help browser's *.BM glob").
-            if (present_bm_screen("EDITOR") == AppInput::Quit) return;
+            // every other screen reaches on F1 — CORRECTED 2026-07-08: this
+            // was calling present_bm_screen("EDITOR") directly (a fixed-topic
+            // cut), contradicting this very comment. Confirmed against
+            // sub_403184's own F1 branch (pseudo.c, `if (v18 == 315)
+            // sub_41431C();`): it is the generic browser, listing EDITOR.BM
+            // as one glob entry among the rest (§3's correction: "reachable
+            // only as a directory-listing entry of the help browser's *.BM
+            // glob") — not a direct open of it.
+            if (present_help_browser() == AppInput::Quit) return;
             continue;
         }
 

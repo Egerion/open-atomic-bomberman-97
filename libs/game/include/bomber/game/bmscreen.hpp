@@ -117,13 +117,24 @@ private:
 // the in-round F1 site), never a full-screen cut. The caller draws the
 // current screen first, then this on top (present_bm_screen's own
 // convention, extended here).
+//
+// getvalue(15) gate: sub_414235 checks "is the online manual enabled?"
+// BEFORE the glob; enter(false) reproduces that (§4), and both gated error
+// paths (disabled here, or an empty glob) draw the SAME getstring(95)-suffixed
+// two-line dialog in the SAME ink (byte_49D0DA, RGB (252,80,80) — PINNED in
+// results-and-options.md §1, confirmed identical to sub_4141F8's team-1 ink).
 class HelpBrowser {
 public:
     HelpBrowser(const AssetStore& assets, const FontTextures& font)
         : assets_(&assets), font_(&font), bm_(assets, font) {}
 
     // Globs `*.BM` in the install root and resets the list cursor.
-    void enter();
+    // `manual_enabled` is the caller's getvalue(15) reading ("is the online
+    // manual enabled?", default 1, docs/re/results-and-options.md §4):
+    // sub_414235 checks this BEFORE globbing at all, so when false the
+    // browser skips the scan entirely and shows the pinned getstring(5)/
+    // getstring(95) "disabled" error pair instead of a topic list.
+    void enter(bool manual_enabled = true);
 
     // Feed one SDL keycode. While the list is showing: Up/Down move,
     // Enter opens the highlighted topic (switches into the nested BmScreen
@@ -147,6 +158,9 @@ public:
     // the caller should show the getstring(4)/getstring(95) error case
     // instead of an empty list (§4's "no .BM files found" branch).
     bool empty() const { return entries_.empty(); }
+    // getvalue(15)==0 at enter() time — the "manual disabled" error case
+    // (getstring(5)/getstring(95)), checked ahead of the glob (§4).
+    bool disabled() const { return disabled_; }
 
     static constexpr int kVisibleRows = 13;  // sub_42DBCC's 13-row dialog
 
@@ -159,6 +173,7 @@ private:
     int top_ = 0;
     bool viewing_ = false;
     bool done_ = false;
+    bool disabled_ = false;
 };
 
 }  // namespace bomber::game

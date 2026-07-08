@@ -360,10 +360,19 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       LUT offsets (0x495390 table); decoded to exact RGBs (white/grey/cyan/
       team-red) and applied in present_scoreboard incl. the real two-ink team
       split (results-and-options.md §1).
-- [ ] Remaining front-end: the generic .BM help BROWSER (menu row 5 + the
-      in-round F1 modal — one widget), attract-mode demo match (partial work
-      parked in a worktree; task was user-stopped), Network screen (netplay
-      deferred per ADR-0003), win_by_kills Options row already live.
+- [x] The generic .BM help BROWSER — DONE 2026-07-08: menu row 5 and the
+      in-round F1 modal both open the real sub_41431C/sub_414235 browser
+      (HelpBrowser, bmscreen.hpp), gated on getvalue(15) ("manual enabled")
+      ahead of the *.BM glob with the pinned getstring(5)/(4)+(95) error
+      pair in the real error ink (byte_49D0DA, RGB (252,80,80) — the SAME
+      LUT element as sub_4141F8's team-1 ink, results-and-options.md §1/§4).
+      The Options screen's F1 and the editor chooser's F1 were corrected to
+      open this SAME generic browser too (sub_4080DC/sub_403184 both call
+      sub_41431C directly, not a fixed OPTIONS.BM/EDITOR.BM cut — confirmed
+      against pseudo.c's F1/315 dispatch in both functions).
+- [ ] Remaining front-end: attract-mode demo match (partial work parked in a
+      worktree; task was user-stopped), Network screen (netplay deferred per
+      ADR-0003), win_by_kills Options row already live.
 - [ ] Known parked fidelity gaps (need their own golden recaptures, flagged as
       task chips): flame-arm stops, flying-bomb landing on powerups, scatter
       occupancy test.
