@@ -116,7 +116,7 @@ bool GameApp::init() {
     assets_.build_player_sets(base_tuning_.color_rgb);
     seqs_.resolve(assets_);  // re-resolve: player sprite sets exist now
 
-    renderer_.emplace(ren, assets_, seqs_);
+    renderer_.emplace(ren, assets_, seqs_, values_);
     screen_.emplace(assets_, audio_);
     transition_.emplace(assets_);
     // Upload FONT6.FON glyph textures for the .BM help/credits screens. Empty
@@ -148,13 +148,24 @@ namespace {
 // start_music() = the looping music channel, play() = a one-shot SFX voice.
 constexpr int kBootMusicId = 1000;   // 0x3E8 — TITLE.RSS, the continuous boot track
 constexpr int kMenuMusicId = 1010;   // 0x3F2 — MENU.RSS, started on menu entry
-// The results/round handler music (sub_42A3F6). Entry starts the "win" track
-// sub_42741E(0x3FC) = 1020, played under the VICTORY screen; the DRAW branch
-// switches to sub_42741E(0x46A) = 1130 ("draw") before showing DRAW.PCX. Both
-// are looping tracks (start_music), replacing the menu/stage music while the
-// results screen is up. (0x3FC=1020 win, 0x46A=1130 draw — confirmed hex.)
-constexpr int kWinMusicId = 1020;    // 0x3FC — WIN.RSS, VICTORY screen backdrop
-constexpr int kDrawMusicId = 1130;   // 0x46A — DRAW.RSS, DRAW screen backdrop
+// The Play-handler music (sub_42A3F6), CORRECTED by docs/re/in-match-shell.md
+// §2 (supersedes this file's earlier "1020 under VICTORY" reading):
+//   - Play entry (pseudo.c 29696): sub_42741E(0x3FC) = 1020 ("win") — this is
+//     actually the SETUP-SCREENS track (player select / LEVEL & ROUNDS), not
+//     victory music. Kept as kWinMusicId for the name's sake (matches
+//     SOUNDLST's own "win" label) but used only where the setup screens run.
+//   - Round end (pseudo.c 29820): sub_42741E(0x46A) = 1130 ("draw") replaces
+//     the stage track UNCONDITIONALLY, before the survivor test — so DRAW,
+//     the RESULTS tally, AND VICTORY/TEAM all play under 1130; nothing
+//     restarts 1020 anywhere in the outcome tier.
+// Both are looping tracks (start_music), replacing the menu/stage music.
+constexpr int kWinMusicId = 1020;    // 0x3FC — WIN.RSS, setup-screens backdrop (NOT victory)
+constexpr int kDrawMusicId = 1130;   // 0x46A — DRAW.RSS, DRAW *and* RESULTS *and* VICTORY backdrop
+// Per-level in-round stage track fallback (sub_4293E5, docs/re/
+// in-match-shell.md §2): SOUNDLST 1100+level, or this id when the level has
+// no entry (a stripped/minimal-install SOUNDLST — every built-in stage here
+// has a real 1100..1110 entry).
+constexpr int kStageMusicFallback = 1120;  // 0x460 — GENERIC.RSS
 // The title intro sting is a contiguous SOUNDLST GROUP (sub_427BFB(2800) picks a
 // random member): 2800..2810 = "ATOMIC BOMBERMAN!" takes (GEN8A/…); the file's
 // "2899 is the last intro" comment is the group's nominal end. We span 2800..2899
@@ -386,9 +397,23 @@ void GameApp::start_match(std::uint32_t seed) {
         // Options row 13, §3): a REAL consumer — simply don't start the
         // in-match track. Menu/results music is untouched (the option is
         // specifically "during gameplay").
-        if (!options_.disable_game_music) audio_.start_music(1100 + stage);  // SOUNDLST 1100+n
+        //
+        // Per-level stage track (docs/re/in-match-shell.md §2, sub_4293E5):
+        // SOUNDLST 1100+level, falling back to 1120 ("generic") when the level
+        // has no entry — our 11 built-in stages all have one (SOUNDLST.RES
+        // 1100..1110), so this only matters for a stripped/modified install.
+        if (!options_.disable_game_music) {
+            int stage_music = 1100 + stage;
+            if (!audio_.has_track(stage_music)) stage_music = kStageMusicFallback;  // 1120
+            audio_.start_music(stage_music);
+        }
     }
-    renderer_->reset_match();
+    // Untimed round HUD (docs/re/in-match-shell.md §3): the 1001 sentinel is a
+    // presentation-only concept (see cfg.tuning.game_seconds's own comment
+    // just above — the sim gets a very long but finite clock instead), so
+    // tell the renderer directly rather than trying to infer "untimed" back
+    // out of ticks_left.
+    renderer_->reset_match(options_.playtime_seconds == 1001);
     sounds_.reset();
 }
 
@@ -1552,8 +1577,37 @@ AppInput GameApp::run_match() {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
+            // Ctrl+Q = CONFIRMED instant, unconfirmed-dialog forfeit
+            // (docs/re/in-match-shell.md "Esc negative finding": raw key 0x11
+            // = 17 = Ctrl+Q is the ONLY key that aborts a round mid-match in
+            // the original — dword_46492C=-1/dword_464A68=2, no confirm
+            // prompt, straight to the standard teardown). Wired here as the
+            // faithful key.
+            if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_Q &&
+                (ev.key.mod & SDL_KMOD_CTRL) != 0)
+                return AppInput::MatchOver;
+            // Esc also bails to the menu — a PORT CONVENIENCE, not a binary
+            // fact: the same doc's finding is that literal Esc (27) is INERT
+            // mid-round in the original (falls through the round loop's key
+            // chain untouched; only Ctrl+Q aborts). We keep this binding
+            // anyway because it gives players a familiar "quit to menu" key,
+            // functionally standing in for the original's Ctrl+Q rather than
+            // matching its own (inert) Esc — see the doc's "Port status"
+            // paragraph for the full rationale.
             if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_ESCAPE)
-                return AppInput::MatchOver;  // Esc bails out of the match to the menu
+                return AppInput::MatchOver;
+            // TODO(docs/re/in-match-shell.md §1, "auxiliary key table" row
+            // 0x13B=315=F1): the original opens a tick-suspending modal *.BM
+            // help browser mid-round (sub_41431C -> sub_414235, a real
+            // findfirst/findnext glob over every *.BM in the install root
+            // with a selectable-list dialog, per docs/re/
+            // results-and-options.md §4) without leaving the match. NOT
+            // wired here: our port has no multi-file browsable .BM list UI
+            // at all yet (the main menu's own row 5 is still a documented
+            // stub for the same reason, frontend-flow.md) — present_bm_screen
+            // only opens one FIXED file by name, so this would not "drop in
+            // cleanly" the way Ctrl+Q did. Building the browser is out of
+            // scope for this presentation-only pass.
             // A pad unplugged/plugged mid-match: rescan so a disconnect drops
             // that slot to neutral input (via collect_inputs' range check)
             // rather than leaving it wedged, and a reconnect resumes control at
@@ -1698,13 +1752,20 @@ int GameApp::run_app() {
                 // tie-game sting instead (sub_427BFB(1700)) — a one-shot group
                 // pick, not looped music.
                 //
-                // Results MUSIC (sub_42A3F6): the handler starts the looping "win"
-                // track sub_42741E(0x3FC)=1020 at entry (under the VICTORY screen),
-                // and the DRAW branch switches to sub_42741E(0x46A)=1130 ("draw")
-                // before DRAW.PCX. start_music replaces the leftover stage/menu
-                // track, so the results screen carries its own backdrop music —
-                // previously our DRAW/VICTORY screens played under whatever music
-                // was left running, a silent-vs-original gap now closed.
+                // Results MUSIC (sub_42A3F6) — CORRECTED per docs/re/
+                // in-match-shell.md §2: sub_42741E(0x46A)=1130 ("draw") starts
+                // UNCONDITIONALLY on round-loop exit, BEFORE the survivor
+                // test — so DRAW, the RESULTS tally, AND VICTORY/TEAM all
+                // play under 1130; 1020 ("win") is the SETUP-SCREENS track
+                // (present_setup/present_goldman_wheel), never restarted
+                // anywhere in this outcome tier. This file previously read
+                // 1020 as VICTORY's own track (frontend-flow.md's original,
+                // now-corrected "Results MUSIC" paragraph) — fixed here to
+                // kDrawMusicId in every branch below. start_music replaces
+                // the leftover stage/menu track, so the results screen
+                // carries its own backdrop music — previously our DRAW/
+                // RESULTS/VICTORY screens played under whatever music was
+                // left running, a silent-vs-original gap now closed.
                 int w = round_winner();
                 if (w >= 0) ++win_count_[w];  // tally the round win
                 // The match-over check (§1 v73): the default win-count target,
@@ -1741,7 +1802,7 @@ int GameApp::run_app() {
                 if (match_over) {
                     // MATCH win: the target was reached -> VICTORY, then
                     // back to the menu (next(Results, Advance) = Menu).
-                    audio_.start_music(kWinMusicId);  // 1020 win track under VICTORY
+                    audio_.start_music(kDrawMusicId);  // 1130 under VICTORY (doc §2 correction)
                     audio_.play_random_in_range(2000, 2299);  // "we have a winner", under VICTORY
                     ev = present_screen(victory_screen(clinched));
                 } else if (w >= 0) {
@@ -1749,7 +1810,7 @@ int GameApp::run_app() {
                     // winner sting plays under THIS screen too (§1) — the
                     // original fires it as soon as the round decision is known,
                     // regardless of whether that decision also clinches the match.
-                    audio_.start_music(kWinMusicId);
+                    audio_.start_music(kDrawMusicId);  // 1130 under RESULTS too (doc §2 correction)
                     audio_.play_random_in_range(2000, 2299);  // "we have a winner", under RESULTS
                     ev = present_scoreboard();
                 } else {

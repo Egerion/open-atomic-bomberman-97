@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "bomber/game/app_flow.hpp"
+#include "bomber/game/hud_format.hpp"
 #include "bomber/game/input.hpp"
 #include "bomber/game/results.hpp"
 #include "bomber/sim/constants.hpp"
@@ -20,9 +21,12 @@
 using bomber::game::AppInput;
 using bomber::game::AppState;
 using bomber::game::assign_gold_player;
+using bomber::game::clock_warning;
 using bomber::game::cycle_slot_input_type;
+using bomber::game::format_clock;
 using bomber::game::is_terminal;
 using bomber::game::KeyAction;
+using bomber::game::kClockWarningSeconds;
 using bomber::game::kKeyActionCount;
 using bomber::game::kKeyboardSets;
 using bomber::game::KeySet;
@@ -333,4 +337,30 @@ TEST_CASE("assign_gold_player mirrors dword_46492C's RESULTS-tier write") {
     CHECK(assign_gold_player(true, true, 0, team_of) == 0);  // player 0 -> team 0
     // No clinch yet: -1 passes straight through, never indexed into team_of.
     CHECK(assign_gold_player(true, true, -1, team_of) == -1);
+}
+
+// docs/re/in-match-shell.md §3 (sub_4105D2): MM:SS via MESSAGES.TXT id 281 =
+// "%u:%02u" (v13/60, v13%60 on whole seconds remaining).
+TEST_CASE("format_clock splits whole seconds into MM:SS via the 281 format") {
+    CHECK(format_clock("%u:%02u", 0) == "0:00");
+    CHECK(format_clock("%u:%02u", 5) == "0:05");
+    CHECK(format_clock("%u:%02u", 59) == "0:59");
+    CHECK(format_clock("%u:%02u", 60) == "1:00");
+    CHECK(format_clock("%u:%02u", 150) == "2:30");
+    // A getstring(281) fallback still substitutes correctly through leading/
+    // trailing text a modified MESSAGES.TXT entry might carry.
+    CHECK(format_clock("Time: %u:%02u left", 65) == "Time: 1:05 left");
+    // Negative input (should never happen — ticks_left floors at 0) clamps
+    // rather than producing a negative/garbage string.
+    CHECK(format_clock("%u:%02u", -5) == "0:00");
+}
+
+// docs/re/in-match-shell.md §3 point 4: the ink colour changes at <=30s
+// remaining — a separate, permanent swap from the ~60s "hurry" flash.
+TEST_CASE("clock_warning fires at the confirmed <=30s threshold") {
+    CHECK(kClockWarningSeconds == 30);
+    CHECK_FALSE(clock_warning(31));
+    CHECK(clock_warning(30));
+    CHECK(clock_warning(1));
+    CHECK(clock_warning(0));
 }
