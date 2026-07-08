@@ -8,6 +8,21 @@ flow so the screens can be reproduced 1:1. It records structure only — the
 actual `MESSAGES.TXT` text and the `GLUE*.PCX` art load at runtime from the
 install and are never committed (clean-room, same as every other asset).
 
+## Follow-up (2026-07-08): the key-remap UI is `sub_407B9D`, off the Options screen
+
+The key-remap UI this doc's CORRECTION left as "elsewhere" is now located:
+**`sub_407B9D` @ 0x407B9D**, reached from the Options screen's (`sub_4080DC`)
+"Define keyboard layouts" row — a 2×6 clickable button grid, one keyboard set
+× six actions, each rebindable via a raw-scancode capture
+(`sub_407AD9`/`byte_4A2BA0[256]`). Bindings live in the same
+`dword_4645BC[10*set+action]` array `options.ini`'s `keydef=` reads/writes,
+and are flushed to disk on normal app exit (an atexit-style hook,
+`sub_405DE3`), not on screen close. Full RE: `docs/re/results-and-options.md`
+§2 (remap UI) and §3 (the Options screen + the complete 22-key options.ini
+table). This resolves the open item and confirms `sub_42B0CE`/`sub_42B47D`
+genuinely have nothing to do with key rebinding — they stay the START/JOIN
+NET GAME screens per the CORRECTION below.
+
 ## CORRECTION (2026-07-05): the real player-setup screen is in `sub_410F81`
 
 The VALUELST coordinate legend (below) shows that `sub_42B0CE` / `sub_42B47D`
