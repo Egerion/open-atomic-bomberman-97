@@ -1,6 +1,7 @@
 #include "bomber/game/game_app.hpp"
 
 #include <algorithm>  // std::max_element
+#include <cctype>     // std::isalnum (present_editor's filename sanitizer)
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
@@ -594,6 +595,166 @@ void GameApp::present_keyremap_screen() {
     options_dirty_ = true;
 }
 
+void GameApp::present_editor() {
+    // The hidden scheme editor (docs/re/results-and-options.md §5): the
+    // chooser (sub_403184) -> optionally the *.SCH file picker (sub_407582)
+    // -> the editor proper (sub_4028D2) -> optionally the powerup rules
+    // sub-editor (sub_402595). Runs its own nested loop exactly like
+    // present_keyremap_screen() — this screen has no AppState/AppInput slot
+    // (there is no menu row for it), so it simply returns to present_menu's
+    // own loop when the chooser is dismissed.
+    EditorChooserScreen chooser(assets_, front_font_);
+    chooser.enter(pick_glue());
+
+    while (true) {
+        EditorChooserResult action = EditorChooserResult::None;
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_EVENT_QUIT) return;
+            if (ev.type != SDL_EVENT_KEY_DOWN) continue;
+            EditorChooserResult r = chooser.on_key(ev.key.key, audio_);
+            if (r != EditorChooserResult::None) action = r;
+        }
+        audio_.update_music();
+        SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
+        SDL_RenderClear(sdl_renderer_.get());
+        chooser.draw(sdl_renderer_.get());
+        SDL_RenderPresent(sdl_renderer_.get());
+        SDL_Delay(2);
+
+        if (action == EditorChooserResult::Exit) return;
+        if (action == EditorChooserResult::Help) {
+            // §5: F1 opens the same generic help browser (sub_41431C, §4)
+            // every other screen reaches on F1 — reuse the .BM viewer on
+            // the editor's own help topic (EDITOR.BM ships in the install,
+            // §3's correction: "reachable only as a directory-listing entry
+            // of the help browser's *.BM glob").
+            if (present_bm_screen("EDITOR") == AppInput::Quit) return;
+            continue;
+        }
+
+        std::optional<assets::sch::Scheme> initial;
+        bool opened = false;
+        if (action == EditorChooserResult::New) {
+            opened = true;  // sub_4028D2(1): blank board, EditorScreen::enter(nullopt, ...)
+        } else if (action == EditorChooserResult::EditExisting) {
+            // sub_407582: the *.SCH file picker over DATA/SCHEMES.
+            SchemeFilePicker picker(assets_, front_font_);
+            picker.enter(opts_.game_dir / "DATA" / "SCHEMES", pick_glue());
+            while (!picker.done()) {
+                SDL_Event pev;
+                while (SDL_PollEvent(&pev)) {
+                    if (pev.type == SDL_EVENT_QUIT) return;
+                    if (pev.type != SDL_EVENT_KEY_DOWN) continue;
+                    picker.on_key(pev.key.key, audio_);
+                }
+                audio_.update_music();
+                SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
+                SDL_RenderClear(sdl_renderer_.get());
+                picker.draw(sdl_renderer_.get());
+                SDL_RenderPresent(sdl_renderer_.get());
+                SDL_Delay(2);
+            }
+            if (!picker.cancelled() && !picker.empty()) {
+                try {
+                    initial = assets::sch::load(picker.selected());
+                    opened = true;
+                } catch (const std::exception&) {
+                    opened = false;  // corrupt/unreadable file: fall back to the chooser
+                }
+            }
+        }
+
+        if (!opened) continue;  // back to the chooser menu
+
+        EditorScreen editor(assets_, front_font_);
+        editor.enter(initial, pick_glue());
+        // The 'N'/'n' scheme-name prompt (§5) needs real text input (letters
+        // beyond the raw keycode switch below); start it for the whole
+        // editor session — harmless while the prompt is closed since
+        // on_text_input() only accepts characters when prompt_kind_==Name.
+        SDL_StartTextInput(window_.get());
+        while (!editor.done()) {
+            SDL_Event eev;
+            while (SDL_PollEvent(&eev)) {
+                if (eev.type == SDL_EVENT_QUIT) return;
+                if (editor.editing_powerups()) {
+                    if (eev.type != SDL_EVENT_KEY_DOWN) continue;
+                    editor.powerups_screen().on_key(eev.key.key, audio_);
+                    continue;
+                }
+                if (eev.type == SDL_EVENT_TEXT_INPUT) {
+                    editor.on_text_input(eev.text.text);
+                    continue;
+                }
+                if (eev.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+                    // Window/backbuffer pixel -> logical (640x480) coordinate,
+                    // per the SDL_LOGICAL_PRESENTATION_LETTERBOX mode set in
+                    // init() — mirrors sub_42665C/sub_4266A3's pixel->cell
+                    // mappers (§5), then the logical pixel -> grid cell via
+                    // EditorScreen's own fixed cell geometry.
+                    float lx = 0, ly = 0;
+                    SDL_RenderCoordinatesFromWindow(sdl_renderer_.get(), eev.button.x, eev.button.y,
+                                                    &lx, &ly);
+                    int gx = (static_cast<int>(lx) - EditorScreen::kOriginX) / EditorScreen::kCellSize;
+                    int gy = (static_cast<int>(ly) - EditorScreen::kOriginY) / EditorScreen::kCellSize;
+                    editor.on_mouse_down(eev.button.button, gx, gy);
+                    continue;
+                }
+                if (eev.type != SDL_EVENT_KEY_DOWN) continue;
+                // Ctrl+F (§5's flood fill) needs the modifier; every other
+                // editor key is unmodified, so only gate 'F' on Ctrl here
+                // and let plain 'F' pass straight through untouched (the
+                // powerup sub-editor's own 'F' — forbidden toggle — is a
+                // SEPARATE screen/handler and never sees this event).
+                bool ctrl_f = (eev.key.key == SDLK_F) && (eev.key.mod & SDL_KMOD_CTRL) != 0;
+                if (ctrl_f || eev.key.key != SDLK_F) editor.on_key(eev.key.key, audio_);
+            }
+            audio_.update_music();
+            SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
+            SDL_RenderClear(sdl_renderer_.get());
+            editor.draw(sdl_renderer_.get());
+            SDL_RenderPresent(sdl_renderer_.get());
+            SDL_Delay(2);
+        }
+        SDL_StopTextInput(window_.get());
+
+        // §5: exit writes through sub_403C16 — our assets::sch::write() — on
+        // a confirmed save. Written schemes go to the install's DATA/
+        // SCHEMES dir (the SAME place the game loads them, §3's "Scheme
+        // File" row / init()'s scheme_path), NEVER the repo. The file name
+        // is derived from the in-editor -N name (§5 'N'/'n'); an empty name
+        // falls back to a generic "EDITED.SCH" rather than inventing a
+        // prompt-less silent overwrite of BASIC.SCH.
+        if (editor.save_requested()) {
+            assets::sch::Scheme out = editor.grid().to_scheme();
+            std::string file_stem = out.name.empty() ? std::string("EDITED") : out.name;
+            for (auto& c : file_stem)
+                if (!std::isalnum(static_cast<unsigned char>(c))) c = '_';
+            std::filesystem::path schemes_dir = opts_.game_dir / "DATA" / "SCHEMES";
+            std::error_code ec;
+            std::filesystem::create_directories(schemes_dir, ec);
+            std::filesystem::path out_path = schemes_dir / (file_stem + ".SCH");
+            try {
+                assets::sch::write(out, out_path);
+                // Make the freshly-saved scheme immediately selectable
+                // through the existing scheme rotation/pick path (task
+                // requirement 3): point this session's live scheme at it,
+                // exactly like passing --scheme would.
+                scheme_ = out;
+                opts_.scheme = out_path;
+            } catch (const std::exception& e) {
+                std::fprintf(stderr, "scheme editor: save failed: %s\n", e.what());
+            }
+        }
+        // Either way (saved or discarded), fall back to the chooser so
+        // Ctrl+E's single trigger can serve multiple edits without
+        // re-pressing the 6-key sequence — §5 does not document the
+        // chooser as single-shot, and sub_403184's own loop (its Esc/'Q'
+        // exit case) implies it re-shows after each sub_4028D2 return.
+    }
+}
+
 int GameApp::round_winner() const {
     // A round win is exactly one SIDE of survivors with the clock still
     // running; a mutual wipe-out or a time-out is a draw. Mirrors sub_42A3F6,
@@ -714,6 +875,27 @@ AppInput GameApp::present_menu() {
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
             if (ev.type != SDL_EVENT_KEY_DOWN) continue;
+
+            // Hidden scheme-editor trigger (docs/re/results-and-options.md
+            // §5, CONFIRMED): sub_42B9CE's input loop tracks a same-key
+            // repeat counter on raw key code 5 (ASCII Ctrl+E); any OTHER key
+            // resets it; `++counter > 5` fires on the 6th CONSECUTIVE press
+            // (plays accept SFX 10, then calls sub_40330E -> sub_403184).
+            // SDL reports Ctrl+E as SDLK_E with KMOD_CTRL set — there is no
+            // menu row for this, so it is checked directly in the raw event
+            // loop, ahead of (and independent of) the row-navigation switch
+            // below, and does not fall through to it on a match.
+            bool is_ctrl_e = (ev.key.key == SDLK_E) && (ev.key.mod & SDL_KMOD_CTRL) != 0;
+            if (is_ctrl_e) {
+                if (++editor_trigger_count_ > 5) {
+                    editor_trigger_count_ = 0;
+                    audio_.play(10);  // accept sting (SFX 10), §5
+                    present_editor();
+                }
+                continue;  // Ctrl+E itself never falls into the row switch
+            }
+            editor_trigger_count_ = 0;  // any other key resets the counter
+
             switch (ev.key.key) {
                 case SDLK_UP:
                 case SDLK_W:

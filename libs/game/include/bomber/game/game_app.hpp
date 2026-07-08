@@ -13,6 +13,7 @@
 #include "bomber/game/asset_store.hpp"
 #include "bomber/game/audio_engine.hpp"
 #include "bomber/game/bmscreen.hpp"
+#include "bomber/game/editor_screen.hpp"
 #include "bomber/game/gamepad.hpp"
 #include "bomber/game/goldman_screen.hpp"
 #include "bomber/game/input.hpp"
@@ -105,6 +106,15 @@ private:
     // KeyboardMapper AND marks options_dirty_ (write-on-exit, requirement 3)
     // — never writes options.ini directly here.
     void present_keyremap_screen();
+    // The hidden scheme editor (docs/re/results-and-options.md §5,
+    // sub_403184/sub_4028D2/sub_402595): reached ONLY via present_menu()'s
+    // raw Ctrl+E x6 trigger (sub_42B9CE's `++counter > 5` on key code 5) —
+    // there is no menu row. Runs the chooser -> (file picker ->) editor ->
+    // (powerup sub-editor) nested loop to completion and, on a confirmed
+    // save, writes the edited scheme via assets::sch::write() into the
+    // install's DATA/SCHEMES dir (never the repo) and reloads scheme_ so the
+    // edit is immediately selectable through the existing scheme path.
+    void present_editor();
     // The IPLOGO -> HSLOGO -> TITLE boot presentation (sub_42B060). LINEAR — no
     // attract re-run: each screen advances on a key OR the getvalue(12) = 7 s
     // timeout, and the title's Advance (key or timeout) returns so run_app drops
@@ -189,6 +199,12 @@ private:
     static const char* level_fallback(int idx);
 
     int menu_index_ = 0;  // highlighted main-menu row (persists across visits)
+    // The hidden scheme-editor trigger's same-key repeat counter (§5,
+    // sub_42B9CE pseudo.c 30876-30883): raw key code 5 (Ctrl+E) increments
+    // it; ANY OTHER key resets it to 0; `++counter > 5` (the 6th consecutive
+    // press) opens the editor. Lives here (not a local in present_menu)
+    // because it must persist across that function's per-frame event pump.
+    int editor_trigger_count_ = 0;
 
     // Multi-round match state (sub_42A3F6): best-of-N. win_count_ tallies round
     // wins per player; reaching win_target_ ends the MATCH (VICTORY). A draw

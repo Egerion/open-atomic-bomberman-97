@@ -1,6 +1,7 @@
 #include "bomber/assets/sch.hpp"
 
 #include <fstream>
+#include <sstream>
 #include <stdexcept>
 
 namespace bomber::assets::sch {
@@ -89,6 +90,53 @@ Scheme load(const std::filesystem::path& path) {
         if (row.size() != sch.rows[0].size())
             throw std::runtime_error("scheme rows differ in width: " + path.string());
     return sch;
+}
+
+// Serializer for the format load() parses (sub_403C16 @0x403C16,
+// docs/re/results-and-options.md §5). The exe's own field grammar (verified
+// against load()'s reader above, which is the port's only ground truth for
+// the shipped byte layout since we do not commit .SCH samples):
+//   -V,<version>
+//   -N,<name>
+//   -B,<density>
+//   -R,<row-number>,<row text>       (one per row, row-number = its index)
+//   -S,<player>,<x>,<y>,<extra>      (one per spawn)
+//   -P,<id>,<born_with>,<has_override>,<override_value>,<forbidden>,<comment>
+// (13 rows, one per powerup kind; comment = getstring(800+id), §5's "trailing
+// comment text is getstring(800+i)" — the SAME 800-block strings the
+// roulette result screen uses, docs/re/goldman-roulette.md §7). We do not
+// have MESSAGES.TXT text committed, so the comment is written verbatim from
+// whatever PowerupRule::comment already holds (round-tripped, never
+// invented) — an empty comment writes a bare "-P,..." line with no trailing
+// text, which load()'s parts.size()>5 check tolerates on read-back.
+// A couple of leading "; comment" lines are emitted for human-readability —
+// load() skips any line starting with ';', so their exact wording is not
+// part of the round-trip contract.
+std::string to_text(const Scheme& scheme) {
+    std::ostringstream out;
+    out << "; Atomic Bomberman scheme file\n";
+    out << "; written by Open Bomberman's scheme editor (docs/re/results-and-options.md #5)\n";
+    out << "-V," << scheme.version << "\n";
+    out << "-N," << scheme.name << "\n";
+    out << "-B," << scheme.brick_density << "\n";
+    for (int y = 0; y < scheme.height(); ++y) out << "-R," << y << "," << scheme.rows[y] << "\n";
+    for (const auto& sp : scheme.spawns)
+        out << "-S," << sp.player << "," << sp.x << "," << sp.y << "," << sp.extra << "\n";
+    for (const auto& pr : scheme.powerups) {
+        out << "-P," << pr.id << "," << pr.born_with << "," << pr.has_override << ","
+            << pr.override_value << "," << pr.forbidden;
+        if (!pr.comment.empty()) out << "," << pr.comment;
+        out << "\n";
+    }
+    return out.str();
+}
+
+void write(const Scheme& scheme, const std::filesystem::path& path) {
+    std::ofstream f(path, std::ios::binary);
+    if (!f) throw std::runtime_error("cannot write scheme: " + path.string());
+    std::string text = to_text(scheme);
+    f.write(text.data(), static_cast<std::streamsize>(text.size()));
+    if (!f) throw std::runtime_error("failed writing scheme: " + path.string());
 }
 
 }  // namespace bomber::assets::sch

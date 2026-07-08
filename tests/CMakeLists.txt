@@ -98,3 +98,18 @@ add_test(NAME valuelst COMMAND bomber_valuelst_tests)
 add_executable(bomber_messages_tests test_messages.cpp)
 target_link_libraries(bomber_messages_tests PRIVATE bomber::assets doctest::doctest bomber::warnings)
 add_test(NAME messages COMMAND bomber_messages_tests)
+
+# .SCH writer round-trip (bomber::assets, SDL-free), like bmtext/rmp.
+add_executable(bomber_sch_write_tests test_sch_write.cpp)
+target_link_libraries(bomber_sch_write_tests PRIVATE bomber::assets doctest::doctest bomber::warnings)
+add_test(NAME sch_write COMMAND bomber_sch_write_tests)
+
+# Scheme editor's pure grid model (editor_grid.hpp/.cpp) is SDL-free despite
+# living under libs/game/src — compiled directly into its own test binary
+# (like bomber_frontend_tests/bomber_anim_tests) rather than linking the
+# whole bomber_game_core (which pulls in SDL3).
+add_executable(bomber_editor_grid_tests test_editor_grid.cpp
+  ${CMAKE_SOURCE_DIR}/libs/game/src/editor_grid.cpp)
+target_link_libraries(bomber_editor_grid_tests PRIVATE bomber::assets bomber::sim doctest::doctest bomber::warnings)
+target_include_directories(bomber_editor_grid_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+add_test(NAME editor_grid COMMAND bomber_editor_grid_tests)
