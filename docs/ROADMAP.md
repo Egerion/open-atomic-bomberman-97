@@ -283,13 +283,55 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       `state_hash()`; full team MODE — a hashed `Player::team` + sim win/
       friendly-fire/AI-target logic — remains the documented follow-up in
       docs/re/ai.md).
-- [ ] Interactive front-end remainder (DEFERRED, hooks in place): controller
-      key-remap UI (`sub_42B0CE`/`sub_42B47D`) — the `.BM` help overlay still
-      renders for Network/Controllers. Also the RESULTS.PCX cumulative tally
-      tier (needs a multi-round match loop + scoreboard, now partly covered by
-      `present_scoreboard`/`win_count_`) and the map editor/roulette screens
-      (menu rows are inert documented stubs).
-- [ ] Match settings; campaign later.
+- [x] SDL3 gamepad support — DONE 2026-07-08. `GamepadMapper` (enumeration,
+      hotplug, d-pad/left-stick + south/east buttons), the setup screen's
+      JOYSTICK type-3 slots + joystick pane (getvalue 715/720, msgs 40/41/42),
+      the pure `cycle_slot_input_type` helper (sub_421E80's confirmed wrap
+      order, unit-tested), and per-slot `collect_inputs()` (keyboard sub 0/1 +
+      pad slots) feeding `sim_.tick`. Mid-match disconnect degrades to neutral
+      input. libs/sim untouched.
+- [x] Multi-round best-of-N loop + RESULTS tally 1:1 — DONE 2026-07-08.
+      `AppInput::RoundContinue` keeps the flow graph pure (no side-channel
+      state); round 2+ reuses the same roster/level/win-target; and
+      `present_scoreboard` now matches docs/re/results-and-options.md §1
+      exactly: header getstring(30) @ getvalue(780/781/783), rows getstring(31)/
+      (38) @ getvalue(785-788) in per-slot ink, outcome line strings 120/121 vs
+      35/36 @ getvalue(800/801/803), voice 2000 under the scoreboard, 6 s idle
+      auto-advance. Kills column + win_by_kills clinch = in-flight follow-up
+      (needs PlayerDied killer attribution — events are unhashed, golden-safe).
+- [x] RE: RESULTS/options/key-remap/roulette truth — DONE 2026-07-08
+      (docs/re/results-and-options.md, from pseudo.c): RESULTS layout ids
+      780-803 + the two packed counters (sub_421AC8 wins / sub_421B0F kills);
+      the real Options screen `sub_4080DC` (19 rows incl. Team Play/Random
+      Start; NOT the map editor as previously mislabelled) + ALL 22 options.ini
+      keys and the write-on-EXIT semantics (sub_405DE3 via sub_410EBF); the
+      key-remap UI `sub_407B9D` (2×6 scancode grid, keydef=); menu row 5 is a
+      generic .BM help browser, and the Goldman Roulette wheel (sub_4034BC)
+      runs at round setup under goldman=1, not from the menu. BONUS.PCX
+      confirmed DEAD (zero references in the whole decompile).
+- [x] Options screen + key-remap aligned to the RE — DONE 2026-07-08.
+      options_screen.cpp now carries the sub_4080DC rows our port can back
+      (Team Play, Random Start, Conveyor Speed, Stomped-Bombs/Win-By-Kills/
+      Goldman/Diseases-Destroyable toggles persisted, Enclosement Depth +
+      Play Time + Disable-Music with real Tuning/audio consumers, "Define
+      keyboard layouts" → the new KeyRemapScreen; net/modem/memory rows
+      omitted, documented per row). All 22 options.ini keys typed in
+      assets::Options (KeyDef 2×10 grid for keydef=); the write moved to app
+      EXIT (`flush_options`) matching sub_405DE3/sub_410EBF; KeyboardMapper is
+      data-driven from the bindings. num_to_win_match seeds win_target_.
+- [x] TEAM MODE, sim side — DONE 2026-07-08 (the docs/re/ai.md follow-up).
+      Hashed `Player::team` (+84 byte; one-time golden hash-layout recapture,
+      RNG streams proven identical), AI enemy scans (sub_422718/sub_40ABED/
+      sub_40B8C2) honour the documented team filter, round-end generalised to
+      "one SIDE left" (`sides_remaining`/`winning_side`, our semantics — team 0
+      = solo). Frontend maps the setup 0/1 byte to sim teams 1/2 under Team
+      Play (both +84 values are real teams, sub_4141F8). tests/test_team.cpp
+      (9 cases); suite 28/28.
+- [ ] Remaining front-end: kills column + win_by_kills clinch (in-flight),
+      Goldman Roulette wheel port (sub_4034BC — RE in-flight), Network screen
+      (netplay itself deferred per ADR-0003), menu row 3 truth (RE in-flight;
+      "editor" label was wrong).
+- [ ] Campaign later.
 
 ## Done (highlights)
 
