@@ -18,6 +18,7 @@
 #include "bomber/game/keyremap_screen.hpp"
 #include "bomber/game/options_screen.hpp"
 #include "bomber/game/renderer.hpp"
+#include "bomber/game/results.hpp"
 #include "bomber/game/screen.hpp"
 #include "bomber/game/sdl.hpp"
 #include "bomber/game/sequences.hpp"
@@ -123,6 +124,20 @@ private:
     // screen's DRAW-vs-VICTORY choice and the "player N wins" naming.
     int round_winner() const;
 
+    // True when at least two ACTIVE players share a MatchConfig team
+    // (docs/re/setup-screens.md dword_464964). Factored out so run_app's
+    // Results handler (the VICTORY-vs-scoreboard decision) and
+    // present_scoreboard (the scoreboard's own clinch/outcome-line render)
+    // agree on the SAME team_mode/win_by_kills gate — a divergence here would
+    // let the two disagree about whether the match is over.
+    bool is_team_mode() const;
+    // The §1 v73 match-clinch check, factored so run_app's Results handler
+    // and present_scoreboard call the identical predicate: the default
+    // win-count clinch, or (team mode + options_.win_by_kills) the
+    // kill_count_ clinch via results.hpp's win_by_kills_clinch(). Returns the
+    // clinching player's index, or -1 if the match is not yet decided.
+    int match_clinch() const;
+
     // Reset the per-match win tally + read the win target getvalue(310) at the
     // start of a fresh match (Menu -> StartMatch). Best-of-N, N = 2 by default.
     void reset_match_scores();
@@ -177,15 +192,17 @@ private:
     // dismissal into that event; there is no side-channel state override.
     std::array<int, sim::kMaxPlayers> win_count_{};
     int win_target_ = 2;
-    // Per-ROUND kill tally (docs/re/results-and-options.md §1, sub_421B0F's
-    // field): the RESULTS row format shows this alongside the match win count.
-    // The sim's PlayerDied event (libs/sim/include/bomber/sim/event.hpp) does
-    // NOT carry flame-owner attribution (Event::data is unused for that type),
-    // so we cannot faithfully tally "who killed whom" from the presentation
-    // side without a libs/sim change — out of scope here (PRESENTATION ONLY).
-    // TODO(§1): once a sim-side PlayerDied owner field exists, tally it here
-    // per round and reset in reset_match_scores(); until then this stays 0 for
-    // every player and present_scoreboard's kills column reads "(kills: 0)".
+    // Kill tally (docs/re/results-and-options.md §1, sub_421B0F's field):
+    // the RESULTS row shows this alongside the match win count. §1's
+    // "Reproduction status" paragraph is explicit that this counter, like the
+    // win count, is "carried across rounds within one match" — i.e. despite
+    // being called the "round-kill count", it is CUMULATIVE for the whole
+    // match (packed in the same per-player 152-byte record as the win count),
+    // NOT reset every round. So this resets only in reset_match_scores() (a
+    // fresh match), exactly like win_count_. Tallied from the sim's
+    // PlayerDied events (Event::data = killer index, event.hpp) once per tick
+    // in run_match via results.hpp's tally_kills() — self-kills are excluded
+    // (our semantics; §1 does not pin this — see results.hpp's doc comment).
     std::array<int, sim::kMaxPlayers> kill_count_{};
     // options.ini "num_to_win_match=" (§3/§5), read once in init(). Seeds
     // reset_match_scores()'s win_target_ default when getvalue(310) is
