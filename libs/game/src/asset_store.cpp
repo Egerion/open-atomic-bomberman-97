@@ -77,15 +77,26 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
             std::fprintf(stderr, "HEADWIPE.ANI load failed: %s\n", e.what());
         }
 
+        // MISC.ANI: teamring0/teamring1 (the scheme editor's start markers,
+        // sub_4028D2 aTeamringU), plus cursor1/goldman/ring/safe/scan —
+        // sequence table checked against the install's file (docs/re/
+        // results-and-options.md §5). Cosmetic and optional: the editor
+        // falls back to outline-box markers when this is missing.
+        try {
+            auto p = ani_dir / "MISC.ANI";
+            if (fs::exists(p)) misc_.load(ren, p);
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "MISC.ANI load failed: %s\n", e.what());
+        }
+
         // Goldman wheel pointer ("ring" seq, docs/re/goldman-roulette.md §3/§7):
-        // the doc has no confirmed containing ANI file, so probe a small set of
-        // plausible frontend files (co-located with ROULETTE.PCX first) until
-        // one owns "ring" — same probing shape as cornerhead/bwalk. Cosmetic
-        // and optional: GoldmanScreen just draws no pointer if every candidate
-        // is missing/lacks the sequence.
+        // RESOLVED — MISC.ANI owns "ring" (see the misc_ load above), so it
+        // heads the probe list; the older guesses stay as fallbacks for
+        // partial installs. Cosmetic and optional: GoldmanScreen just draws
+        // no pointer if every candidate is missing/lacks the sequence.
         {
-            static constexpr const char* kRingCandidates[] = {"ROULETTE.ANI", "EXTRAS.ANI",
-                                                               "CURSOR.ANI"};
+            static constexpr const char* kRingCandidates[] = {"MISC.ANI", "ROULETTE.ANI",
+                                                               "EXTRAS.ANI", "CURSOR.ANI"};
             for (const char* name : kRingCandidates) {
                 auto p = ani_dir / name;
                 try {

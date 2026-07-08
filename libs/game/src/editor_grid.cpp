@@ -4,22 +4,40 @@
 
 namespace bomber::game {
 
-void EditorGrid::reset(int width, int height) {
+void EditorGrid::reset(int width, int height,
+                       const std::array<std::array<int, 2>, kEditorMaxStarts>* start_xy) {
     width_ = width;
     height_ = height;
-    rows_.assign(static_cast<std::size_t>(height_), std::string(static_cast<std::size_t>(width_),
-                                                                  brush_to_cell_char(EditorBrush::Blank)));
-    density_ = 90;
+    // sub_4049C0 (PINNED): even rows are memcpy'd from ":::::::::::::::"
+    // (all brick), odd rows from ":#:#:#:#:#:#:#:" (brick/solid alternating)
+    // — the classic pillar field, fully bricked. Generalised per-cell for a
+    // non-15-wide board (ours is always 15): solid iff both x and y are odd.
+    rows_.assign(static_cast<std::size_t>(height_),
+                 std::string(static_cast<std::size_t>(width_), ' '));
+    for (int y = 0; y < height_; ++y)
+        for (int x = 0; x < width_; ++x)
+            rows_[static_cast<std::size_t>(y)][static_cast<std::size_t>(x)] =
+                ((y & 1) != 0 && (x & 1) != 0) ? brush_to_cell_char(EditorBrush::Solid)
+                                               : brush_to_cell_char(EditorBrush::Brick);
+    density_ = 90;  // sub_4049C0: dword_4647A0 = 90
     name_.clear();
-    for (int i = 0; i < kEditorMaxStarts; ++i) {
-        // Spread starts along row 0, one per column, clamped to the board —
-        // see the header's TODO(RE) on the unpinned "new scheme" default.
-        starts_[static_cast<std::size_t>(i)] = EditorStart{std::min(i, width_ - 1), 0, false};
+    for (int j = 0; j < kEditorMaxStarts; ++j) {
+        // Start positions: VALUELST getvalue(600+2j)/getvalue(601+2j) via the
+        // caller (start_xy), wrapped into the board with the original's
+        // repeated +=/-= loops; team flag = j & 1 (sub_4049C0's
+        // `dword_46481C[12j+8] = j & 1`).
+        int x = start_xy ? (*start_xy)[static_cast<std::size_t>(j)][0] : 0;
+        int y = start_xy ? (*start_xy)[static_cast<std::size_t>(j)][1] : 0;
+        while (x < 0) x += width_;
+        while (x >= width_) x -= width_;
+        while (y < 0) y += height_;
+        while (y >= height_) y -= height_;
+        starts_[static_cast<std::size_t>(j)] = EditorStart{x, y, (j & 1) != 0};
     }
     powerups_.clear();
     for (int i = 0; i < kEditorPowerupKinds; ++i) {
         assets::sch::PowerupRule pr;
-        pr.id = i;
+        pr.id = i;  // all four rule fields zeroed — sub_4049C0's final loop
         powerups_.push_back(pr);
     }
 }
@@ -50,7 +68,7 @@ void EditorGrid::load_from_scheme(const assets::sch::Scheme& scheme) {
 
 assets::sch::Scheme EditorGrid::to_scheme() const {
     assets::sch::Scheme s;
-    s.version = 1;  // TODO(RE): §5 pins a -V field exists but not the shipped version number
+    s.version = 2;  // every shipped scheme is "-V,2" (install DATA/SCHEMES, checked 2026-07-08)
     s.name = name_;
     s.brick_density = density_;
     s.rows = rows_;
@@ -75,18 +93,6 @@ EditorBrush EditorGrid::cell(int x, int y) const {
 void EditorGrid::paint(int x, int y, EditorBrush brush) {
     if (!in_bounds(x, y)) return;
     rows_[static_cast<std::size_t>(y)][static_cast<std::size_t>(x)] = brush_to_cell_char(brush);
-}
-
-void EditorGrid::stamp(int cx, int cy, int size, EditorBrush brush) {
-    if (size < 1) size = 1;
-    // Centered, leaning top-left for even sizes (header's documented TODO(RE)
-    // on the unpinned anchor rule) — offset runs [-(size/2), (size-1)/2], so
-    // a 2-wide brush covers {cursor-1, cursor} on each axis (the EXTRA cell
-    // lands above/left of the hovered cell, not below/right).
-    int lo = -(size / 2);
-    int hi = (size - 1) / 2;
-    for (int dy = lo; dy <= hi; ++dy)
-        for (int dx = lo; dx <= hi; ++dx) paint(cx + dx, cy + dy, brush);
 }
 
 void EditorGrid::flood_fill(EditorBrush brush) {

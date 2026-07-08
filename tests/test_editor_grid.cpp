@@ -1,7 +1,8 @@
 // Checks for the scheme editor's pure grid model (editor_grid.hpp,
-// docs/re/results-and-options.md #5, sub_4028D2): brush stamping, the
-// Ctrl+F whole-grid flood fill, player-start movement/team toggle, and
-// Scheme<->EditorGrid round-tripping. SDL-free — no renderer needed.
+// docs/re/results-and-options.md #5, sub_4028D2): single-cell painting
+// (PINNED — the original has no multi-cell brush), the Ctrl+F whole-grid
+// flood fill, sub_4049C0's new-scheme defaults, player-start movement/team
+// toggle, and Scheme<->EditorGrid round-tripping. SDL-free.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
@@ -11,16 +12,50 @@
 
 using namespace bomber::game;
 
-TEST_CASE("reset gives an all-blank board of the confirmed 15x11 size") {
+TEST_CASE("reset gives sub_4049C0's classic new-scheme board, 15x11") {
     EditorGrid g;
     CHECK(g.width() == 15);
     CHECK(g.height() == 11);
+    // sub_4049C0 (PINNED): even rows all brick ":::::::::::::::", odd rows
+    // ":#:#:#:#:#:#:#:" — solid exactly where both x and y are odd.
     for (int y = 0; y < g.height(); ++y)
-        for (int x = 0; x < g.width(); ++x) CHECK(g.cell(x, y) == EditorBrush::Blank);
+        for (int x = 0; x < g.width(); ++x) {
+            EditorBrush want = ((y & 1) != 0 && (x & 1) != 0) ? EditorBrush::Solid
+                                                              : EditorBrush::Brick;
+            CHECK(g.cell(x, y) == want);
+        }
+    CHECK(g.density() == 90);  // dword_4647A0 = 90
 }
 
-TEST_CASE("paint sets exactly the hovered cell") {
+TEST_CASE("reset alternates the start team flags (j & 1) and wraps positions") {
+    // sub_4049C0: team = j & 1; positions wrap into the board with repeated
+    // +=/-= width/height (the VALUELST 600..619 values arrive via start_xy).
+    std::array<std::array<int, 2>, kEditorMaxStarts> pos{};
+    pos[0] = {-1, -1};   // wraps to (14, 10)
+    pos[1] = {15, 11};   // wraps to (0, 0)
+    pos[2] = {31, 23};   // wraps twice to (1, 1)
+    pos[3] = {7, 5};     // in range, unchanged
     EditorGrid g;
+    g.reset(kEditorGridWidth, kEditorGridHeight, &pos);
+    CHECK(g.start(0).x == 14);
+    CHECK(g.start(0).y == 10);
+    CHECK(g.start(1).x == 0);
+    CHECK(g.start(1).y == 0);
+    CHECK(g.start(2).x == 1);
+    CHECK(g.start(2).y == 1);
+    CHECK(g.start(3).x == 7);
+    CHECK(g.start(3).y == 5);
+    for (int j = 0; j < kEditorMaxStarts; ++j) CHECK(g.start(j).team == ((j & 1) != 0));
+}
+
+TEST_CASE("to_scheme emits the shipped -V,2 version") {
+    EditorGrid g;
+    CHECK(g.to_scheme().version == 2);  // every install scheme is "-V,2"
+}
+
+TEST_CASE("paint sets exactly the hovered cell (single-cell brush, PINNED)") {
+    EditorGrid g;
+    g.flood_fill(EditorBrush::Blank);  // clear sub_4049C0's bricked default board
     g.paint(3, 4, EditorBrush::Solid);
     CHECK(g.cell(3, 4) == EditorBrush::Solid);
     CHECK(g.cell(2, 4) == EditorBrush::Blank);
@@ -36,43 +71,6 @@ TEST_CASE("paint out of bounds is a no-op, not a crash") {
     g.paint(1000, 0, EditorBrush::Solid);
     g.paint(0, 1000, EditorBrush::Solid);
     CHECK(g.cell(-1, 0) == EditorBrush::Blank);  // out-of-bounds reads default to Blank too
-}
-
-TEST_CASE("stamp size 1 behaves exactly like paint") {
-    EditorGrid g;
-    g.stamp(5, 5, 1, EditorBrush::Brick);
-    CHECK(g.cell(5, 5) == EditorBrush::Brick);
-    CHECK(g.cell(4, 5) == EditorBrush::Blank);
-    CHECK(g.cell(6, 5) == EditorBrush::Blank);
-}
-
-TEST_CASE("stamp size 2 covers a 2x2 block leaning top-left") {
-    EditorGrid g;
-    g.stamp(5, 5, 2, EditorBrush::Solid);
-    CHECK(g.cell(5, 5) == EditorBrush::Solid);
-    CHECK(g.cell(4, 5) == EditorBrush::Solid);
-    CHECK(g.cell(5, 4) == EditorBrush::Solid);
-    CHECK(g.cell(4, 4) == EditorBrush::Solid);
-    // Not painted outside the 2x2 block.
-    CHECK(g.cell(6, 5) == EditorBrush::Blank);
-    CHECK(g.cell(5, 6) == EditorBrush::Blank);
-}
-
-TEST_CASE("stamp size 3 covers a full 3x3 block centered on the cursor") {
-    EditorGrid g;
-    g.stamp(5, 5, 3, EditorBrush::Solid);
-    for (int dy = -1; dy <= 1; ++dy)
-        for (int dx = -1; dx <= 1; ++dx) CHECK(g.cell(5 + dx, 5 + dy) == EditorBrush::Solid);
-    CHECK(g.cell(3, 5) == EditorBrush::Blank);
-    CHECK(g.cell(7, 5) == EditorBrush::Blank);
-}
-
-TEST_CASE("stamp clamps to the board edge without crashing") {
-    EditorGrid g;
-    g.stamp(0, 0, 3, EditorBrush::Solid);  // top-left corner
-    CHECK(g.cell(0, 0) == EditorBrush::Solid);
-    g.stamp(g.width() - 1, g.height() - 1, 3, EditorBrush::Brick);  // bottom-right corner
-    CHECK(g.cell(g.width() - 1, g.height() - 1) == EditorBrush::Brick);
 }
 
 TEST_CASE("flood fill paints the WHOLE grid, not a connected region") {

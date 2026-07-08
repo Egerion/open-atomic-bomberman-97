@@ -9,7 +9,15 @@ namespace bomber::game {
 
 namespace {
 
-constexpr Uint8 kInkR = 230, kInkG = 230, kInkB = 210;
+// Screen inks, pinned via the byte_495390 RGB555-LUT decode (docs/re/
+// results-and-options.md §1 "screen-ink byte globals"): byte_49D38F =
+// white (the general draw ink every editor label uses), byte_49D37A =
+// yellow (the powerup-name column), byte_497F8F = cyan (the powerup
+// sub-editor's header). kSel/kHint are our own cursor/hint tints (the
+// original has no keyboard cursor — rows are mouse buttons).
+constexpr Uint8 kInkR = 255, kInkG = 255, kInkB = 255;    // byte_49D38F
+constexpr Uint8 kNameR = 252, kNameG = 248, kNameB = 88;  // byte_49D37A
+constexpr Uint8 kHeadR = 96, kHeadG = 252, kHeadB = 252;  // byte_497F8F
 constexpr Uint8 kSelR = 255, kSelG = 220, kSelB = 80;
 constexpr Uint8 kHintR = 160, kHintG = 160, kHintB = 160;
 
@@ -30,7 +38,9 @@ constexpr int kChooserItemX = 80, kChooserItemY0 = 140, kChooserItemYStep = 20; 
 void SchemeFilePicker::enter(const std::filesystem::path& schemes_dir, std::string backdrop) {
     backdrop_ = std::move(backdrop);
     entries_.clear();
+    names_.clear();
     row_ = 0;
+    top_ = 0;
     done_ = false;
     cancelled_ = false;
     std::error_code ec;
@@ -41,7 +51,19 @@ void SchemeFilePicker::enter(const std::filesystem::path& schemes_dir, std::stri
         for (auto& c : ext) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
         if (ext == ".SCH") entries_.push_back(entry.path());
     }
-    std::sort(entries_.begin(), entries_.end());  // qsort'd results, §4's help-browser precedent
+    std::sort(entries_.begin(), entries_.end());  // sub_41404B qsorts its glob results
+    // sub_407582 pre-reads each file's embedded -N name (sub_404BE9) and
+    // lists "<filename> <scheme name>" rows. An unreadable/corrupt file
+    // keeps its filename with no name suffix.
+    names_.reserve(entries_.size());
+    for (const auto& p : entries_) {
+        std::string n;
+        try {
+            n = assets::sch::load(p).name;
+        } catch (const std::exception&) {
+        }
+        names_.push_back(std::move(n));
+    }
 }
 
 void SchemeFilePicker::on_key(SDL_Keycode key, AudioEngine& audio) {
@@ -76,6 +98,10 @@ void SchemeFilePicker::on_key(SDL_Keycode key, AudioEngine& audio) {
         default:
             break;
     }
+    // Keep the cursor inside the kVisibleRows scroll window (sub_42DBCC's
+    // list scrolls; our window follows the cursor).
+    if (row_ < top_) top_ = row_;
+    if (row_ >= top_ + kVisibleRows) top_ = row_ - kVisibleRows + 1;
 }
 
 void SchemeFilePicker::draw(SDL_Renderer* ren) const {
@@ -91,18 +117,36 @@ void SchemeFilePicker::draw(SDL_Renderer* ren) const {
         }
     }
     if (!font_ || !font_->loaded()) return;
-    font_->draw(ren, "SELECT A SCHEME", 60.0f, 60.0f, kInkR, kInkG, kInkB);
+    // The generic list dialog (sub_42DBCC) is invoked at (100, 100) with
+    // header getstring(721) in the general white ink (byte_49D38F|0x10000).
+    const std::string header =
+        assets_ ? assets_->getstring(721, "Available schemes:") : std::string("Available schemes:");
+    font_->draw(ren, header, 100.0f, 100.0f, kInkR, kInkG, kInkB);
     if (entries_.empty()) {
-        font_->draw(ren, "(no .SCH files found)", 80.0f, 100.0f, kHintR, kHintG, kHintB);
+        // sub_407582's empty-glob path: the getstring(720)/getstring(95)
+        // error dialog (id cited; minimal inline rendering here).
+        const std::string err =
+            assets_ ? assets_->getstring(720, "No scheme files found!") : std::string();
+        font_->draw(ren, err.empty() ? "No scheme files found!" : err, 100.0f, 124.0f, kHintR,
+                    kHintG, kHintB);
         return;
     }
-    for (std::size_t i = 0; i < entries_.size(); ++i) {
-        bool sel = (static_cast<int>(i) == row_);
+    // Up to kVisibleRows (13) "<filename> <scheme name>" rows in the scroll
+    // window — sub_407582 formats each row "%s %s" from the glob name and
+    // the file's own -N line.
+    int count = static_cast<int>(entries_.size());
+    int last = std::min(count, top_ + kVisibleRows);
+    for (int i = top_; i < last; ++i) {
+        bool sel = (i == row_);
         Uint8 r = sel ? kSelR : kInkR, g = sel ? kSelG : kInkG, b = sel ? kSelB : kInkB;
-        std::string line = (sel ? "> " : "  ") + entries_[i].filename().string();
-        font_->draw(ren, line, 80.0f, 100.0f + static_cast<float>(i) * 20.0f, r, g, b);
+        std::string line =
+            (sel ? "> " : "  ") + entries_[static_cast<std::size_t>(i)].filename().string();
+        const std::string& nm = names_[static_cast<std::size_t>(i)];
+        if (!nm.empty()) line += " " + nm;
+        font_->draw(ren, line, 100.0f, 124.0f + static_cast<float>(i - top_) * 20.0f, r, g, b);
     }
-    font_->draw(ren, "UP/DOWN SELECT   ENTER OPEN   ESC CANCEL", 60.0f, 440.0f, kHintR, kHintG, kHintB);
+    font_->draw(ren, "UP/DOWN SELECT   ENTER OPEN   ESC CANCEL", 100.0f,
+                124.0f + static_cast<float>(kVisibleRows) * 20.0f + 8.0f, kHintR, kHintG, kHintB);
 }
 
 // ---------------------------------------------------------------------------
@@ -167,7 +211,46 @@ void EditorChooserScreen::draw(SDL_Renderer* ren) const {
 void PowerupRulesScreen::enter(std::vector<assets::sch::PowerupRule>* rows) {
     rows_ = rows;
     row_ = 0;
+    step_ = ChainStep::None;
+    entry_.clear();
     done_ = false;
+}
+
+void PowerupRulesScreen::begin_chain() {
+    // sub_4023A2's chain, started by activating a row (the original's mouse
+    // click on button 5000+row): prompt 1 is the born-with count text
+    // entry, seeded with the current value ("%u").
+    step_ = ChainStep::BornWith;
+    entry_ = std::to_string((*rows_)[static_cast<std::size_t>(row_)].born_with);
+}
+
+void PowerupRulesScreen::advance_chain(AudioEngine& audio) {
+    // Move to the next prompt of sub_4023A2's fixed order; prompt 4 is asked
+    // only when has-override is set, else the value is FORCED to 0 (the
+    // original's unconditional else-branch `dword_4646C4[i] = 0`).
+    auto& pr = (*rows_)[static_cast<std::size_t>(row_)];
+    switch (step_) {
+        case ChainStep::BornWith:
+            step_ = ChainStep::Forbidden;
+            break;
+        case ChainStep::Forbidden:
+            step_ = ChainStep::HasOverride;
+            break;
+        case ChainStep::HasOverride:
+            if (pr.has_override) {
+                step_ = ChainStep::OverrideValue;
+                entry_ = std::to_string(pr.override_value);
+            } else {
+                pr.override_value = 0;
+                step_ = ChainStep::None;
+            }
+            break;
+        case ChainStep::OverrideValue:
+        default:
+            step_ = ChainStep::None;
+            break;
+    }
+    audio.play(20);
 }
 
 void PowerupRulesScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
@@ -175,6 +258,49 @@ void PowerupRulesScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
         if (key == SDLK_ESCAPE || key == SDLK_RETURN) done_ = true;
         return;
     }
+    auto& pr = (*rows_)[static_cast<std::size_t>(row_)];
+
+    // A prompt of the sub_4023A2 chain is open — it owns all input. Each
+    // prompt cancels INDEPENDENTLY (sub_42E938/sub_42EDE0 returning -1 keeps
+    // that one field and the chain still continues to the next prompt).
+    if (step_ == ChainStep::BornWith || step_ == ChainStep::OverrideValue) {
+        // Text entry (sub_42E938): a generic line edit committed with Enter
+        // and atoi'd — NO clamp for either numeric field (only the .SCH
+        // reader clamps born-with < 0 at load). Digits only here since both
+        // fields are numeric.
+        if (key >= SDLK_0 && key <= SDLK_9) {
+            if (entry_ == "0") entry_.clear();
+            entry_ += static_cast<char>('0' + (key - SDLK_0));
+        } else if (key == SDLK_BACKSPACE && !entry_.empty()) {
+            entry_.pop_back();
+        } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+            int v = entry_.empty() ? 0 : std::atoi(entry_.c_str());
+            if (step_ == ChainStep::BornWith)
+                pr.born_with = v;
+            else
+                pr.override_value = v;
+            advance_chain(audio);
+        } else if (key == SDLK_ESCAPE) {
+            advance_chain(audio);  // cancel: keep the old value, continue the chain
+        }
+        return;
+    }
+    if (step_ == ChainStep::Forbidden || step_ == ChainStep::HasOverride) {
+        // Yes/no dialog (sub_42EDE0): Y/N commit, Esc cancels (keeps the old
+        // value) — either way the chain continues.
+        if (key == SDLK_Y || key == SDLK_N) {
+            int v = (key == SDLK_Y) ? 1 : 0;
+            if (step_ == ChainStep::Forbidden)
+                pr.forbidden = v;
+            else
+                pr.has_override = v;
+            advance_chain(audio);
+        } else if (key == SDLK_ESCAPE) {
+            advance_chain(audio);
+        }
+        return;
+    }
+
     int count = static_cast<int>(rows_->size());
     switch (key) {
         case SDLK_UP:
@@ -187,47 +313,21 @@ void PowerupRulesScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
             row_ = (row_ + 1) % count;
             audio.play(20);
             break;
-        case SDLK_B: {
-            // Toggle "born with" (bornwith field, §5).
-            auto& pr = (*rows_)[static_cast<std::size_t>(row_)];
-            pr.born_with = pr.born_with ? 0 : 1;
+        case SDLK_E:
+        case SDLK_RIGHT:
+            // Our keyboard substitute for the original's mouse click on the
+            // row button (id 5000+row) — starts sub_4023A2's prompt chain.
             audio.play(20);
+            begin_chain();
             break;
-        }
-        case SDLK_F: {
-            // Toggle "forbidden" (§5).
-            auto& pr = (*rows_)[static_cast<std::size_t>(row_)];
-            pr.forbidden = pr.forbidden ? 0 : 1;
-            audio.play(20);
-            break;
-        }
-        case SDLK_O: {
-            // Toggle "has override" — a widget detail (the override VALUE's
-            // own entry method) is not pinned by §5's body-read summary
-            // (only that override rows exist); TODO(RE): keep it minimal —
-            // Left/Right nudge the value while override is on.
-            auto& pr = (*rows_)[static_cast<std::size_t>(row_)];
-            pr.has_override = pr.has_override ? 0 : 1;
-            audio.play(20);
-            break;
-        }
-        case SDLK_LEFT:
-        case SDLK_RIGHT: {
-            auto& pr = (*rows_)[static_cast<std::size_t>(row_)];
-            if (pr.has_override) {
-                pr.override_value += (key == SDLK_RIGHT) ? 1 : -1;
-                if (pr.override_value < 0) pr.override_value = 0;
-                audio.play(20);
-            }
-            break;
-        }
         case SDLK_ESCAPE:
         case SDLK_RETURN:
         case SDLK_KP_ENTER:
+        case SDLK_SPACE:
+        case SDLK_Q:
         case SDLK_P:
-            // 'P' re-toggles the sub-editor closed too (§5's 'P'/'p' opens
-            // it from the grid screen; symmetric close is our own minimal
-            // completion of that gesture, not itself an RE fact).
+            // sub_402595's exit keys: Enter(13)/Esc(27)/Space(32)/'Q'/'q'
+            // ('P' kept as our symmetric close of the §5 open gesture).
             audio.play(10);
             done_ = true;
             break;
@@ -242,40 +342,89 @@ void PowerupRulesScreen::draw(SDL_Renderer* ren) const {
     SDL_RenderClear(ren);
     if (!font_ || !font_->loaded()) return;
 
-    font_->draw(ren, "POWERUP RULES", 40.0f, 20.0f, kInkR, kInkG, kInkB);
+    // Header getstring(754) at (300, 30) in the byte_497F8F cyan ink.
+    const std::string header =
+        assets_ ? assets_->getstring(754, "POWERUP RULES") : std::string("POWERUP RULES");
+    font_->draw(ren, header, 300.0f, 30.0f, kHeadR, kHeadG, kHeadB);
     if (!rows_) return;
     for (std::size_t i = 0; i < rows_->size(); ++i) {
         const auto& pr = (*rows_)[i];
-        char line[128];
-        std::snprintf(line, sizeof line, "POWERUP %2d   BORN-WITH:%s  FORBIDDEN:%s  OVERRIDE:%s%d",
-                      pr.id, pr.born_with ? "Y" : "N", pr.forbidden ? "Y" : "N",
-                      pr.has_override ? "Y=" : "N ", pr.override_value);
+        // Row layout (sub_402595): y = 24*i + 60; the powerup NAME column
+        // (getstring(756) with getstring(850+i)) at x=90 in the byte_49D37A
+        // yellow; born-with (getstring(757)) at x=210 and the override
+        // column (getstring(759)/getstring(758)) at x=450, both white.
+        float y = 60.0f + 24.0f * static_cast<float>(i);
         bool sel = (static_cast<int>(i) == row_);
-        Uint8 r = sel ? kSelR : kInkR, g = sel ? kSelG : kInkG, b = sel ? kSelB : kInkB;
-        std::string prefix = sel ? "> " : "  ";
-        font_->draw(ren, prefix + line, 40.0f, 50.0f + static_cast<float>(i) * 20.0f, r, g, b);
+        std::string name = assets_ ? assets_->getstring(850 + pr.id, "") : std::string();
+        if (name.empty()) name = "POWERUP " + std::to_string(pr.id);
+        font_->draw(ren, (sel ? "> " : "  ") + name, 10.0f, y, sel ? kSelR : kNameR,
+                    sel ? kSelG : kNameG, sel ? kSelB : kNameB);
+        char mid[64];
+        std::snprintf(mid, sizeof mid, "BORN-WITH:%d%s", pr.born_with,
+                      pr.forbidden ? "  FORBIDDEN" : "");
+        font_->draw(ren, mid, 210.0f, y, kInkR, kInkG, kInkB);
+        std::string ov = pr.has_override ? ("OVERRIDE " + std::to_string(pr.override_value))
+                                          : std::string("(default)");
+        font_->draw(ren, ov, 450.0f, y, kInkR, kInkG, kInkB);
     }
-    font_->draw(ren, "UP/DOWN ROW   B BORN-WITH   F FORBIDDEN   O OVERRIDE   LEFT/RIGHT VALUE   ENTER/ESC/P DONE",
-                40.0f, 460.0f, kHintR, kHintG, kHintB);
+    // The open chain prompt (sub_42E938 / sub_42EDE0 modal), minimal chrome.
+    if (step_ != ChainStep::None) {
+        SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(ren, 0, 0, 0, 220);
+        SDL_FRect box{120, 200, 400, 60};
+        SDL_RenderFillRect(ren, &box);
+        std::string label;
+        switch (step_) {
+            case ChainStep::BornWith: label = "BORN-WITH COUNT: " + entry_; break;
+            case ChainStep::Forbidden: label = "FORBIDDEN?  Y/N"; break;
+            case ChainStep::HasOverride: label = "OVERRIDE AMOUNT IN BRICKS?  Y/N"; break;
+            case ChainStep::OverrideValue: label = "OVERRIDE VALUE: " + entry_; break;
+            default: break;
+        }
+        font_->draw(ren, label, 136.0f, 222.0f, kSelR, kSelG, kSelB);
+    }
+    font_->draw(ren, "UP/DOWN ROW   E/RIGHT EDIT ROW   ENTER/ESC/SPACE/Q DONE", 40.0f, 460.0f,
+                kHintR, kHintG, kHintB);
 }
 
 // ---------------------------------------------------------------------------
 // EditorScreen — sub_4028D2 (§5)
 
-void EditorScreen::enter(std::optional<assets::sch::Scheme> initial, std::string backdrop) {
+void EditorScreen::enter(std::optional<assets::sch::Scheme> initial, std::string backdrop,
+                         const std::array<std::array<int, 2>, kEditorMaxStarts>* default_starts) {
     backdrop_ = std::move(backdrop);
-    if (initial)
+    if (initial) {
         grid_.load_from_scheme(*initial);
-    else
-        grid_.reset(kEditorGridWidth, kEditorGridHeight);  // sub_4028D2(1), "new scheme"
+    } else {
+        // sub_4028D2(1), "new scheme": sub_4049C0's board (editor_grid.cpp)
+        // + the default name getstring(729) applied by the caller right
+        // after it in sub_4028D2's own prologue.
+        grid_.reset(kEditorGridWidth, kEditorGridHeight, default_starts);
+        if (assets_) grid_.set_name(assets_->getstring(729, "UNNAMED"));
+    }
     brush_ = EditorBrush::Blank;
-    brush_size_ = 1;
     selected_start_ = 0;
     prompt_kind_ = PromptKind::None;
     prompt_text_.clear();
     editing_powerups_ = false;
     done_ = false;
     save_requested_ = false;
+
+    // Canvas art (§5, PINNED): the tile brush/grid draws the "tile %d
+    // blank/solid/brick" sequences with %d = dword_45B7B8 — which is only
+    // ever 0 (its '0'-key toggle flips to -1, a dead state: no TILES ANI
+    // owns a "tile -1" sequence) — and each start's team flag draws
+    // MISC.ANI's "teamring%u". Missing art leaves the Anim empty and
+    // draw() falls back to flat swatches.
+    tile_blank_ = tile_solid_ = tile_brick_ = Anim{};
+    teamring_[0] = teamring_[1] = Anim{};
+    if (assets_) {
+        tile_blank_ = resolve_sequence(assets_->tiles(), "tile 0 blank");
+        tile_solid_ = resolve_sequence(assets_->tiles(), "tile 0 solid");
+        tile_brick_ = resolve_sequence(assets_->tiles(), "tile 0 brick");
+        teamring_[0] = resolve_sequence(assets_->misc(), "teamring0");
+        teamring_[1] = resolve_sequence(assets_->misc(), "teamring1");
+    }
 }
 
 void EditorScreen::cycle_brush() {
@@ -302,9 +451,9 @@ void EditorScreen::start_save_confirm() { prompt_kind_ = PromptKind::SaveConfirm
 void EditorScreen::on_mouse_down(int button, int gx, int gy) {
     if (prompting() || editing_powerups_) return;  // modal sub-screens own input
     if (button == SDL_BUTTON_LEFT) {
-        // §5: "paint the hovered cell with the current brush" — stamp()
-        // subsumes plain paint() at brush_size_==1.
-        grid_.stamp(gx, gy, brush_size_, brush_);
+        // §5, PINNED: exactly one cell per click — sub_4028D2's paint path
+        // is sub_4048EB(cell_x, cell_y, brush); no multi-cell brush exists.
+        grid_.paint(gx, gy, brush_);
     } else if (button == SDL_BUTTON_RIGHT) {
         // §5: "MOVE the currently-selected player-start marker to the
         // hovered cell".
@@ -366,6 +515,19 @@ void EditorScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
         }
         return;
     }
+    if (prompt_kind_ == PromptKind::FillConfirm) {
+        // sub_4028D2 case 6 (Ctrl+F): the getstring(760)/97 yes/no confirm
+        // gates the fill; only "yes" runs the sub_4048EB loop.
+        if (key == SDLK_Y || key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+            grid_.flood_fill(brush_);
+            prompt_kind_ = PromptKind::None;
+            audio.play(10);
+        } else if (key == SDLK_N || key == SDLK_ESCAPE) {
+            prompt_kind_ = PromptKind::None;
+            audio.play(10);
+        }
+        return;
+    }
 
     // Normal grid-editing input (§5's documented key switch).
     switch (key) {
@@ -382,13 +544,12 @@ void EditorScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
         case SDLK_F:
             // Ctrl+F (raw code 6, §5) — SDL reports Ctrl+letter as the plain
             // letter keycode with KMOD_CTRL set; the caller (game_app.cpp)
-            // is expected to gate this case on the Ctrl modifier before
-            // calling on_key for 'F', mirroring how Ctrl+E is gated in
-            // present_menu. Kept unconditional here since EditorScreen has
-            // no access to the modifier state in this signature — see the
-            // caller's own Ctrl check.
-            grid_.flood_fill(brush_);
-            audio.play(10);
+            // gates this case on the Ctrl modifier. PINNED: the original
+            // asks the getstring(760)/97 confirm first (sub_4028D2 case 6),
+            // so this opens the FillConfirm prompt rather than filling
+            // immediately.
+            prompt_kind_ = PromptKind::FillConfirm;
+            audio.play(20);
             break;
         case SDLK_EQUALS:
         case SDLK_KP_PLUS:
@@ -446,15 +607,35 @@ void EditorScreen::draw(SDL_Renderer* ren) const {
         }
     }
 
-    // The tile grid: §5 draws "tile %u solid"/"tile %u brick" sequences; we
-    // do not have those ANI sequences wired into AssetStore for this screen
-    // yet (TODO(RE): editor-canvas art), so cells are flat-colour swatches —
-    // faithful to the CELL DATA (paint state) if not the original bitmap art.
+    // The tile grid — PINNED (sub_4022A1): every cell first draws the
+    // "tile 0 blank" frame, then a non-blank cell overdraws its solid/brick
+    // frame on top, all anchored like the match renderer (hotspot draw at
+    // the cell's bottom-centre, the sub_426524/sub_42655F convention).
+    // Missing art (empty Anims) falls back to the flat swatches.
+    auto draw_step = [&](const Anim& a, float cx, float cy) {
+        if (a.steps.empty()) return false;
+        const Sprite& sp = a.steps[0];
+        if (!sp.tex) return false;
+        SDL_FRect dst{cx - sp.hx, cy - sp.hy, static_cast<float>(sp.w),
+                      static_cast<float>(sp.h)};
+        SDL_RenderTexture(ren, sp.tex, nullptr, &dst);
+        return true;
+    };
+    const bool have_tiles =
+        !tile_blank_.steps.empty() && !tile_solid_.steps.empty() && !tile_brick_.steps.empty();
     for (int y = 0; y < grid_.height(); ++y) {
         for (int x = 0; x < grid_.width(); ++x) {
-            SDL_FRect cell{static_cast<float>(kOriginX + x * kCellSize),
-                           static_cast<float>(kOriginY + y * kCellSize),
-                           static_cast<float>(kCellSize - 1), static_cast<float>(kCellSize - 1)};
+            const float cx = static_cast<float>(kOriginX + x * kCellW) + kCellW / 2.0f;
+            const float cy = static_cast<float>(kOriginY + y * kCellH) + kCellH - 1.0f;
+            if (have_tiles) {
+                draw_step(tile_blank_, cx, cy);
+                if (grid_.cell(x, y) == EditorBrush::Solid) draw_step(tile_solid_, cx, cy);
+                if (grid_.cell(x, y) == EditorBrush::Brick) draw_step(tile_brick_, cx, cy);
+                continue;
+            }
+            SDL_FRect cell{static_cast<float>(kOriginX + x * kCellW),
+                           static_cast<float>(kOriginY + y * kCellH),
+                           static_cast<float>(kCellW - 1), static_cast<float>(kCellH - 1)};
             switch (grid_.cell(x, y)) {
                 case EditorBrush::Solid: SDL_SetRenderDrawColor(ren, 120, 120, 130, 255); break;
                 case EditorBrush::Brick: SDL_SetRenderDrawColor(ren, 150, 90, 40, 255); break;
@@ -464,24 +645,41 @@ void EditorScreen::draw(SDL_Renderer* ren) const {
         }
     }
 
-    // Player-start markers (§5: slot number in the slot colour, plus a
-    // teamring ANI for the team flag — we don't have per-slot colour/ANI
-    // wired here yet, TODO(RE): use sub_41672F's colour + the teamring%u
-    // sprite once AssetStore exposes them for this screen). A numbered
-    // marker with a distinct outline for team members stands in for now.
+    // Player-start markers — PINNED (sub_4028D2's draw loop): each slot
+    // draws its number ("%u", i+1) at (cell_centre_x - 20, cell_bottom - 36)
+    // in the slot's own ink (sub_41672F -> AssetStore::slot_color; the
+    // editor runs with team play zeroed, so it is always the slot-colour
+    // branch), then the "teamring%u" MISC.ANI sprite (%u = the start's team
+    // flag) at (cell_centre_x - 20, cell_bottom). The selected-slot inner
+    // box is our own cursor (the original tracks the selection only in the
+    // status line).
     for (int i = 0; i < kEditorMaxStarts; ++i) {
         const EditorStart& st = grid_.start(i);
-        SDL_FRect marker{static_cast<float>(kOriginX + st.x * kCellSize + 4),
-                         static_cast<float>(kOriginY + st.y * kCellSize + 4),
-                         static_cast<float>(kCellSize - 8), static_cast<float>(kCellSize - 8)};
-        bool sel = (i == selected_start_);
-        if (st.team)
-            SDL_SetRenderDrawColor(ren, 255, 255, 0, 255);  // team flag outline stand-in
-        else
-            SDL_SetRenderDrawColor(ren, 255, 255, 255, 255);
-        SDL_RenderRect(ren, &marker);
-        if (sel) {
-            SDL_FRect inner{marker.x + 2, marker.y + 2, marker.w - 4, marker.h - 4};
+        const float ccx = static_cast<float>(kOriginX + st.x * kCellW) + kCellW / 2.0f;
+        const float cby = static_cast<float>(kOriginY + st.y * kCellH) + kCellH - 1.0f;
+        const Anim& ring = teamring_[st.team ? 1 : 0];
+        bool drew_ring = draw_step(ring, ccx, cby);
+        if (font_ && font_->loaded()) {
+            std::uint8_t c[3] = {255, 255, 255};
+            if (assets_) assets_->slot_color(i, c);
+            font_->draw(ren, std::to_string(i + 1), ccx - 20.0f, cby - kCellH, c[0], c[1], c[2]);
+        }
+        if (!drew_ring) {
+            // Fallback marker when MISC.ANI is missing: outline box, team
+            // flag as the outline colour (yellow = flagged).
+            SDL_FRect marker{static_cast<float>(kOriginX + st.x * kCellW + 4),
+                             static_cast<float>(kOriginY + st.y * kCellH + 4),
+                             static_cast<float>(kCellW - 8), static_cast<float>(kCellH - 8)};
+            if (st.team)
+                SDL_SetRenderDrawColor(ren, 255, 255, 0, 255);
+            else
+                SDL_SetRenderDrawColor(ren, 255, 255, 255, 255);
+            SDL_RenderRect(ren, &marker);
+        }
+        if (i == selected_start_) {
+            SDL_FRect inner{static_cast<float>(kOriginX + st.x * kCellW + 6),
+                            static_cast<float>(kOriginY + st.y * kCellH + 6),
+                            static_cast<float>(kCellW - 12), static_cast<float>(kCellH - 12)};
             SDL_SetRenderDrawColor(ren, 255, 220, 80, 255);
             SDL_RenderRect(ren, &inner);
         }
@@ -489,20 +687,23 @@ void EditorScreen::draw(SDL_Renderer* ren) const {
 
     if (!font_ || !font_->loaded()) return;
 
+    // Status labels (sub_4028D2, all in the general white ink over the
+    // background ink): getstring(742) scheme file at (20,5), getstring(743)
+    // density at (20,23), getstring(738) selected start at (20,41), and the
+    // getstring(737) exit hint at the bottom (y = 476 - text height). Our
+    // single-line summary keeps those ids' CONTENT in one strip.
     const char* brush_name = brush_ == EditorBrush::Solid ? "SOLID"
                              : brush_ == EditorBrush::Brick ? "BRICK"
                                                              : "BLANK";
     char status[160];
     std::snprintf(status, sizeof status,
-                  "BRUSH:%s(%d)  START:%d%s  DENSITY:%d  NAME:%s", brush_name, brush_size_,
-                  selected_start_, grid_.start(selected_start_).team ? "[T]" : "",
+                  "BRUSH:%s  START:%d%s  DENSITY:%d  NAME:%s", brush_name,
+                  selected_start_ + 1, grid_.start(selected_start_).team ? "[T]" : "",
                   grid_.density(), grid_.name().empty() ? "(none)" : grid_.name().c_str());
-    font_->draw(ren, status, 20.0f, static_cast<float>(kOriginY + grid_.height() * kCellSize + 8),
-                kInkR, kInkG, kInkB);
+    font_->draw(ren, status, 20.0f, 5.0f, kInkR, kInkG, kInkB);
     font_->draw(ren,
                 "1/2/3 BRUSH  TAB CYCLE  CTRL+F FILL  +/- START  T TEAM  D DENSITY  N NAME  P POWERUPS  ESC SAVE/EXIT",
-                20.0f, static_cast<float>(kOriginY + grid_.height() * kCellSize + 28), kHintR, kHintG,
-                kHintB);
+                20.0f, 460.0f, kHintR, kHintG, kHintB);
 
     if (prompt_kind_ == PromptKind::Density || prompt_kind_ == PromptKind::Name) {
         SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
@@ -520,6 +721,14 @@ void EditorScreen::draw(SDL_Renderer* ren) const {
         SDL_RenderFillRect(ren, &box);
         font_->draw(ren, "SAVE CHANGES TO THIS SCHEME?  Y/ENTER = YES   N/ESC = NO", 156.0f, 222.0f,
                     kSelR, kSelG, kSelB);
+    } else if (prompt_kind_ == PromptKind::FillConfirm) {
+        // getstring(760)/getstring(97) — the Ctrl+F fill confirm (id cited).
+        SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(ren, 0, 0, 0, 200);
+        SDL_FRect box{140, 200, 360, 60};
+        SDL_RenderFillRect(ren, &box);
+        font_->draw(ren, "FILL THE WHOLE BOARD WITH THE BRUSH?  Y/N", 156.0f, 222.0f, kSelR, kSelG,
+                    kSelB);
     }
 }
 
