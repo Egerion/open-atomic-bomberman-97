@@ -65,12 +65,14 @@ public:
     // Player-facing sets: the recolored copy when built, else the green base.
     const AniTextures& bombs(int player) const { return pick(bombs_, bombs_c_, player); }
     const AniTextures& duds(int player) const { return pick(duds_, duds_c_, player); }
+    // Backed by TRIGANIM.ANI (NOT TRIGBOMB.ANI — see trigbomb_'s doc comment
+    // below), still exposed as trigbomb() since that names the GAME CONCEPT
+    // (the armed-trigger-bomb visual), not the backing file.
     const AniTextures& trigbomb(int player) const { return pick(trigbomb_, trigbomb_c_, player); }
     const AniTextures& flame(int player) const { return pick(flame_, flame_c_, player); }
     const AniTextures& stand(int player) const { return pick(stand_, stand_c_, player); }
     const AniTextures& walk(int player) const { return pick(walk_, walk_c_, player); }
     const AniTextures& kick(int player) const { return pick(kick_, kick_c_, player); }
-    const AniTextures& punch(int player) const { return pick(punch_, punch_c_, player); }
 
     // One of the eight CORNER*.ANI masters (idle "cornerhead" fidget frames),
     // recolored when built. Callers resolve "cornerhead N" against each file.
@@ -89,6 +91,29 @@ public:
     }
     static constexpr int bwalk_files() { return kBwalkFiles; }
 
+    // One of the four PUNBOMB*.ANI masters (the punch action pose), recolored
+    // when built. CORRECTED 2026-07-09 (docs/re/facts.md "ANI sequence-name
+    // audit"): MASTER.ALI loads punbomb1..4.ani, not punch.ani (which is
+    // never listed there and so never enters the original's sequence pool);
+    // each file owns one direction ("punch <dir>", no "green" suffix — unlike
+    // PUNCH.ANI's dead art), so callers probe every file like bwalk() above.
+    const AniTextures& punch(int file, int player) const {
+        if (file < 0 || file >= kPunchFiles) return punch_[0];
+        return pick(punch_[file], punch_c_[file], player);
+    }
+    static constexpr int punch_files() { return kPunchFiles; }
+
+    // One of the four PUP*.ANI masters (the "picking up a bomb" transitional
+    // pose, sub_41F29B action-state 4 — pseudo.c aPickupS, "pickup <dir>", no
+    // "green" suffix), recolored when built. MASTER.ALI loads pup1..4.ani
+    // (BPICKUP.ANI is never listed there, so never in the original's pool).
+    // Each file owns one direction; callers probe every file like bwalk().
+    const AniTextures& pickup(int file, int player) const {
+        if (file < 0 || file >= kPupFiles) return pickup_[0];
+        return pick(pickup_[file], pickup_c_[file], player);
+    }
+    static constexpr int pickup_files() { return kPupFiles; }
+
     // Death-animation pool (recolored when available).
     const std::vector<Anim>& deaths_for(int player) const;
 
@@ -102,6 +127,13 @@ public:
     // these; a missing file leaves the sequence empty (nothing drawn).
     const AniTextures& conveyor() const { return conveyor_; }
     const AniTextures& extras() const { return extras_; }
+    // Campaign rover/ghost hazard actors (docs/re/campaign.md "Per-tick
+    // mover"): ALIENS1.ANI, shared/uncoloured — "ghost <dir>"/"rover <dir>"
+    // (sub_4518D0(buf, aGhostS/aRoverS, dir)). Was previously believed cut
+    // content (no file literally named GHOST.ANI/ROVER.ANI exists), but the
+    // sequences ship under this file's name instead (CONFIRMED against the
+    // install 2026-07-09, docs/re/facts.md "ANI sequence-name audit").
+    const AniTextures& aliens1() const { return aliens1_; }
     SDL_Texture* field() const { return field_.get(); }
 
     // One built-in level's SAMPLE-BLOCK preview art (docs/re/setup-screens.md
@@ -144,6 +176,15 @@ public:
     // results-and-options.md §5). Empty when the file is missing (the editor
     // falls back to outline-box markers).
     const AniTextures& misc() const { return misc_; }
+
+    // EDIT.ANI — the scheme editor's schematic tile set, sequences "tile -1
+    // blank/brick/solid" (CONFIRMED against the install 2026-07-09, docs/re/
+    // facts.md "ANI sequence-name audit"). The editor's '0'-key tileset
+    // toggle (sub_402206's dword_45B7B8 = -1 state) resolves those names
+    // from the original's GLOBAL sequence pool (every MASTER.ALI file merged,
+    // sub_41D957), landing on this file — it was never a dead state. Empty
+    // when the file is missing (the editor falls back to flat swatches).
+    const AniTextures& edit() const { return edit_; }
 
     // The install ROOT (parent of DATA) — where the `.BM` help/credits screens
     // and the `FONT<n>.FON` fonts live (not under DATA/RES). Used by the BM
@@ -205,23 +246,44 @@ private:
     // direction per file (1=south, 2=north, 3=west, 4=east).
     static constexpr int kBwalkFiles = 4;
 
+    // PUNBOMB1..4.ANI hold the punch action pose, one direction per file (the
+    // file-number -> direction mapping isn't a fixed convention, so callers
+    // probe every file by resolved sequence name, like bwalk() above).
+    static constexpr int kPunchFiles = 4;
+
+    // PUP1..4.ANI hold the "picking up a bomb" transitional pose, one
+    // direction per file, probed the same way.
+    static constexpr int kPupFiles = 4;
+
     SDL_Renderer* ren_ = nullptr;
     std::filesystem::path game_dir_;
 
     AniTextures tiles_, xbrick_, bombs_, duds_, flame_, stand_, walk_, shadow_, kfont_, hurry_;
-    AniTextures kick_, punch_;  // action-pose masters (KICK.ANI / PUNCH.ANI)
-    AniTextures powers_;        // animated floor-powerup art (POWERS.ANI), shared (uncoloured)
-    AniTextures conveyor_;      // conveyor belt floor art (CONVEYOR.ANI), shared (uncoloured)
-    AniTextures extras_;        // trampoline/arrow/warp floor art (EXTRAS.ANI), shared
-    AniTextures trigbomb_;      // trigger-bomb master (TRIGBOMB.ANI), green -> per-player recolor
+    AniTextures kick_;      // action-pose master (KICK.ANI)
+    AniTextures powers_;    // animated floor-powerup art (POWERS.ANI), shared (uncoloured)
+    AniTextures conveyor_;  // conveyor belt floor art (CONVEYOR.ANI), shared (uncoloured)
+    AniTextures extras_;    // trampoline/arrow/warp floor art (EXTRAS.ANI), shared
+    AniTextures aliens1_;   // campaign rover/ghost hazard art (ALIENS1.ANI), shared (uncoloured)
+    // Trigger-bomb master. CORRECTED 2026-07-09 (docs/re/facts.md "ANI
+    // sequence-name audit"): MASTER.ALI comments out `;-trigbomb.ani` and
+    // loads `-triganim.ani` instead, so TRIGBOMB.ANI's "bomb trigger green"
+    // (7 steps) never enters the original's sequence pool — TRIGANIM.ANI's
+    // same-named sequence (19 steps, a rise-then-fall cycle) is the one
+    // actually shown. Loaded from TRIGANIM.ANI despite the member name (the
+    // name tracks the game concept — see trigbomb()'s doc comment above).
+    AniTextures trigbomb_;
     AniTextures corner_[kCornerFiles];  // idle-fidget masters (CORNER0..7.ANI)
     AniTextures bwalk_[kBwalkFiles];    // carry-bomb masters (BWALK1..4.ANI)
+    AniTextures punch_[kPunchFiles];    // punch-pose masters (PUNBOMB1..4.ANI)
+    AniTextures pickup_[kPupFiles];     // pickup-pose masters (PUP1..4.ANI)
     AniTextures walk_c_[kLocalPlayers], stand_c_[kLocalPlayers];
     AniTextures bombs_c_[kLocalPlayers], duds_c_[kLocalPlayers], flame_c_[kLocalPlayers];
-    AniTextures trigbomb_c_[kLocalPlayers];  // per-player recolor of TRIGBOMB.ANI
-    AniTextures kick_c_[kLocalPlayers], punch_c_[kLocalPlayers];
+    AniTextures trigbomb_c_[kLocalPlayers];  // per-player recolor of trigbomb_ (TRIGANIM.ANI)
+    AniTextures kick_c_[kLocalPlayers];
     AniTextures corner_c_[kCornerFiles][kLocalPlayers];
     AniTextures bwalk_c_[kBwalkFiles][kLocalPlayers];
+    AniTextures punch_c_[kPunchFiles][kLocalPlayers];
+    AniTextures pickup_c_[kPupFiles][kLocalPlayers];
 
     std::vector<AniTextures> xplode_;                   // XPLODE1..17 source files
     std::vector<Anim> deaths_;                          // green base pool
@@ -242,6 +304,7 @@ private:
     AniTextures headwipe_;  // screen-transition wipe (HEADWIPE.ANI), shared
     AniTextures ring_;      // Goldman wheel pointer ("ring" seq), shared — see ring() doc comment
     AniTextures misc_;      // MISC.ANI (teamring0/1, cursor1, safe, scan) — editor markers
+    AniTextures edit_;      // EDIT.ANI ("tile -1 blank/brick/solid") — editor schematic tiles
     assets::bmfont::Font frontend_font_;  // FONT6.FON, the .BM screen font
     assets::res::Messages messages_;      // MESSAGES.TXT string table (install root)
 

@@ -37,11 +37,16 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
         hurry_.load(ren, ani_dir / "HURRY.ANI");
         bombs_.load(ren, ani_dir / "BOMBS.ANI");
         duds_.load(ren, ani_dir / "DUDS.ANI");
-        flame_.load(ren, ani_dir / "FLAME.ANI");
+        // MFLAME.ANI, not FLAME.ANI — CORRECTED 2026-07-09 (docs/re/facts.md
+        // "ANI sequence-name audit"): MASTER.ALI comments out `;-flame.ani`
+        // and loads `-mflame.ani` instead, so FLAME.ANI's "flame <piece>
+        // green" sequences (7-step cycles) never enter the original's pool;
+        // MFLAME.ANI's same-named sequences (5-step cycles) are the ones
+        // actually shown.
+        flame_.load(ren, ani_dir / "MFLAME.ANI");
         stand_.load(ren, ani_dir / "STAND.ANI");
         walk_.load(ren, ani_dir / "WALK.ANI");
         kick_.load(ren, ani_dir / "KICK.ANI");
-        punch_.load(ren, ani_dir / "PUNCH.ANI");
         shadow_.load(ren, ani_dir / "SHADOW.ANI");
 
         // Animated floor-powerup art (POWERS.ANI, seq "power <name>"). Shared and
@@ -71,14 +76,27 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
             std::fprintf(stderr, "EXTRAS.ANI load failed: %s\n", e.what());
         }
 
-        // Trigger-bomb art (TRIGBOMB.ANI, seq "bomb trigger green"), recoloured
-        // per owner like the regular bomb. Cosmetic: a missing/broken file must
-        // NOT abort the load — the bomb draw falls back to the normal pulse.
+        // Campaign rover/ghost hazard art (ALIENS1.ANI, seq "ghost <dir>"/
+        // "rover <dir>"). Shared/uncoloured — the sequence names carry no
+        // "green" suffix, so the original never recolours them per player.
+        // Cosmetic and optional: a missing file leaves the renderer's plain
+        // marker fallback in place (docs/re/facts.md "ANI sequence-name audit").
         try {
-            auto p = ani_dir / "TRIGBOMB.ANI";
+            auto p = ani_dir / "ALIENS1.ANI";
+            if (fs::exists(p)) aliens1_.load(ren, p);
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "ALIENS1.ANI load failed: %s\n", e.what());
+        }
+
+        // Trigger-bomb art, recoloured per owner like the regular bomb.
+        // TRIGANIM.ANI, not TRIGBOMB.ANI — see trigbomb_'s doc comment
+        // (asset_store.hpp) for why. Cosmetic: a missing/broken file must NOT
+        // abort the load — the bomb draw falls back to the normal pulse.
+        try {
+            auto p = ani_dir / "TRIGANIM.ANI";
             if (fs::exists(p)) trigbomb_.load(ren, p);
         } catch (const std::exception& e) {
-            std::fprintf(stderr, "TRIGBOMB.ANI load failed: %s\n", e.what());
+            std::fprintf(stderr, "TRIGANIM.ANI load failed: %s\n", e.what());
         }
 
         // Front-end screen-transition wipe (HEADWIPE.ANI, single "HEAD"
@@ -102,6 +120,17 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
             if (fs::exists(p)) misc_.load(ren, p);
         } catch (const std::exception& e) {
             std::fprintf(stderr, "MISC.ANI load failed: %s\n", e.what());
+        }
+
+        // EDIT.ANI: the scheme editor's schematic "tile -1 blank/brick/solid"
+        // tiles (the '0'-key tileset toggle's -1 state — see edit()'s doc
+        // comment). Cosmetic and optional: the editor falls back to flat
+        // swatches when this is missing.
+        try {
+            auto p = ani_dir / "EDIT.ANI";
+            if (fs::exists(p)) edit_.load(ren, p);
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "EDIT.ANI load failed: %s\n", e.what());
         }
 
         // Goldman wheel pointer ("ring" seq, docs/re/goldman-roulette.md §3/§7):
@@ -198,6 +227,35 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
             }
         }
 
+        // Punch action pose (PUNBOMB1..4.ANI, seq "punch <dir>"). CORRECTED
+        // 2026-07-09: MASTER.ALI never lists punch.ani, only punbomb1..4.ani,
+        // so these — not PUNCH.ANI — are the files the original actually
+        // loads. One direction per file, probed like BWALK above. Cosmetic:
+        // a missing/broken file must NOT abort the load.
+        for (int i = 0; i < kPunchFiles; ++i) {
+            auto p = ani_dir / ("PUNBOMB" + std::to_string(i + 1) + ".ANI");
+            try {
+                if (fs::exists(p)) punch_[i].load(ren, p);
+            } catch (const std::exception& e) {
+                std::fprintf(stderr, "punch-pose load failed (%s): %s\n", p.string().c_str(),
+                             e.what());
+            }
+        }
+
+        // "Picking up a bomb" transitional pose (PUP1..4.ANI, seq "pickup
+        // <dir>"). CORRECTED 2026-07-09: MASTER.ALI never lists bpickup.ani,
+        // only pup1..4.ani. One direction per file, probed like BWALK above.
+        // Cosmetic: a missing/broken file must NOT abort the load.
+        for (int i = 0; i < kPupFiles; ++i) {
+            auto p = ani_dir / ("PUP" + std::to_string(i + 1) + ".ANI");
+            try {
+                if (fs::exists(p)) pickup_[i].load(ren, p);
+            } catch (const std::exception& e) {
+                std::fprintf(stderr, "pickup-pose load failed (%s): %s\n", p.string().c_str(),
+                             e.what());
+            }
+        }
+
         static constexpr const char* kPowFiles[] = {
             "POWBOMB",  "POWFLAME", "POWDISEA", "POWKICK",  "POWSKATE", "POWPUNCH", "POWGRAB",
             "POWSPOOG", "POWGOLD",  "POWTRIG",  "POWJELLY", "POWEBOLA", "POWRAND"};
@@ -243,11 +301,14 @@ void AssetStore::build_player_sets(const std::int32_t colors[][3]) {
         walk_c_[p] = recolor(walk_);
         stand_c_[p] = recolor(stand_);
         kick_c_[p] = recolor(kick_);
-        punch_c_[p] = recolor(punch_);
         for (int f = 0; f < kCornerFiles; ++f)
             if (corner_[f].loaded()) corner_c_[f][p] = recolor(corner_[f]);
         for (int f = 0; f < kBwalkFiles; ++f)
             if (bwalk_[f].loaded()) bwalk_c_[f][p] = recolor(bwalk_[f]);
+        for (int f = 0; f < kPunchFiles; ++f)
+            if (punch_[f].loaded()) punch_c_[f][p] = recolor(punch_[f]);
+        for (int f = 0; f < kPupFiles; ++f)
+            if (pickup_[f].loaded()) pickup_c_[f][p] = recolor(pickup_[f]);
         bombs_c_[p] = recolor(bombs_);
         duds_c_[p] = recolor(duds_);
         if (trigbomb_.loaded()) trigbomb_c_[p] = recolor(trigbomb_);
