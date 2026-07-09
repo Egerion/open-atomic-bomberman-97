@@ -16,7 +16,7 @@ below). Each entry cites its provenance so it can be re-checked.
 | Code section | `BEGTEXT` RVA 0x1000, ~348 KB | section table |
 | Data | `DGROUP` RVA 0x58000; `.bss` 0x5e000 | section table |
 | Compiler | **Watcom C/C++** | `BEGTEXT`/`DGROUP` section names; register calling convention seen throughout |
-| Calling convention | Watcom register: args in **EAX, EDX, EBX, ECX**; callee saves ebx/ecx/edx/esi/edi/ebp | prologue of getvalue @ 0x4124a4 reads arg from EAX |
+| Calling convention | Watcom register: args in **EAX, EDX, EBX, ECX**; callee saves ebx/ecx/edx/esi/edi/ebp | prologue of getstring @ 0x4124a4 reads arg from EAX |
 | Graphics | **DirectDraw** (`DDRAW.dll`) | import table |
 | Input | **DirectInput** (`DINPUT.dll`) | import table |
 | Audio | **DirectSound** (`DSOUND.dll`) + `WINMM.dll` | import table |
@@ -27,8 +27,17 @@ surface, matching the PCX/ANI asset formats we already decode.
 
 ## VALUELST lookup mechanism — CONFIRMED
 
-`getvalue(id)` lives at **0x4124a4**. Decompiled behavior (paraphrased, not
-copied):
+CORRECTION 2026-07-09 (docs/formats/valuelst.md consistency pass): the
+routine examined below at **0x4124a4** is `getstring(id)` (the MESSAGES.TXT
+string lookup), NOT `getvalue`. `getvalue(id)` — the numeric VALUELST lookup
+every other doc cites — is **`sub_412135` @ 0x412135**. Evidence:
+`sub_412135(1007)`'s return is used directly in arithmetic (pseudo.c
+~5907-5912), while `sub_4124A4(730)`/`(i+731)`'s return is passed as a
+string pointer to the text drawer `sub_41696C` (pseudo.c ~5780/5791). Both
+are id-indexed table lookups of the same shape, which is how the early cold
+scan mislabelled this one. The mechanism below was observed on 0x4124a4 and
+so describes the string table; `sub_412135`'s call shape matches the same
+id-indexed model for the value table:
 
 - Reads `id` from EAX.
 - If `id < 0` or `id >= count` (count at global `[0x46024c]`) → not-found path.
@@ -45,12 +54,14 @@ directly by resource id and looks them up by id, exactly as our
 `Tuning::apply(id, value)` model does. Our id-indexed approach is faithful to
 the binary. (Provenance: disassembly window at 0x4124a4–0x4124f6.)
 
-Observed literal-id `getvalue` call sites (28 of them) request only
-**non-gameplay** ids: 95, 97, 700–768 (menu layout coords), 900/905 (AI),
-1200–1250 (campaign). The core gameplay values in VALUELST are all marked
-`; PGT` in the file and are **not** fetched through `getvalue` — strong
-evidence they are loaded as a batch into a settings struct through a separate
-path. (Provenance: exhaustive scan of `call 0x4124a4` sites.)
+Observed literal-id call sites of **0x4124a4 = getstring** (28 of them)
+request ids 95, 97, 700–768, 900/905, 1200–1250 — MESSAGES.TXT string ids.
+(The old inference here — "gameplay VALUELST values are batch-loaded, not
+fetched through getvalue" — rested on mislabelling this scan as `getvalue`;
+the real `getvalue` = `sub_412135` IS called with gameplay ids throughout
+the decompile, e.g. `sub_412135(915)`/`(680)` in mechanics already ported.
+Provenance: exhaustive scan of `call 0x4124a4` sites + the correction note
+above.)
 
 ## ANI per-step timing (STAT HEAD u16) — CONFIRMED INERT (`sub_41CD03` loader, `sub_41DAA7` player)
 
@@ -124,7 +135,7 @@ runtime, and cross-references. String xrefs pin the gameplay functions exactly:
 | `0x42331c` | "bomb %s green" | bomb animation |
 | `0x405de3` | "diseases_destroyable=%u" | disease logic |
 | `0x40a1c6` | "player %u offscreen at %d,%d" | position/offscreen check |
-| `0x4124a4` | (found cold earlier) | getvalue(id) |
+| `0x4124a4` | (found cold earlier) | getstring(id) — mislabelled getvalue until 2026-07-09, see the VALUELST-lookup correction |
 
 Confirmed from disassembly of `0x41f29b`:
 - Grid X index is bounds-checked against **14** (`cmp …, 0xe`) → the playfield
@@ -1368,11 +1379,10 @@ pinned via targeted Capstone disassembly of `BM95.EXE` directly (per
    `"bmstats.txt"`) in mode `"wt"`. Writes msg-id 900 and msg-id 905 each via
    format `"%s\n\n"` (reproducing the title line, blank line, column-header
    line, blank line seen in the file). Then loops `i = 0..18`: fetches msg-id
-   `910+i` via `sub_4124A4` (the **same** id→value lookup routine already
-   documented above as VALUELST.RES's `getvalue`, called here with an id in
-   the 900s — MESSAGES.TXT-sourced string ids and VALUELST.RES's numeric
-   tuning ids apparently share one flat id-indexed table; the loading paths
-   themselves weren't traced further, out of scope here), `sprintf`s
+   `910+i` via `sub_4124A4` (= `getstring`, the MESSAGES.TXT string lookup —
+   see the 2026-07-09 correction under "VALUELST lookup mechanism"; the ids
+   in the 900s here are MESSAGES.TXT string ids, consistent with the labels
+   being install-editable text), `sprintf`s
    `"<label>:"`, then `fprintf`s `"%-30s %13u %13u\n"` with the label,
    `Total[i]`, and `Current[i]` — i.e. **"Last Run" is literally
    `Current[i]`, un-accumulated**, not a before/after diff. Closes.
