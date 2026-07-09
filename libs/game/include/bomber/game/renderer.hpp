@@ -95,7 +95,10 @@ private:
     static std::size_t timed_step(const Anim& a, int remaining, int total);
 
     // Cosmetic render-side RNG for the disease colour strobe (never the sim's).
-    Uint8 disease_flash_channel();
+    // Returns 0..kLocalPlayers-1 — the original's `rand() % 10` frame pick
+    // (sub_41F29B ~23252), i.e. which of the ten real player-colour sprite
+    // sets to redraw the body in this flash tick.
+    int disease_flash_colour();
 
     // The colour-set index (0-9) to draw player `slot` with — i.e. which of
     // AssetStore's per-slot recoloured sprite sets (built 1:1 off the ten

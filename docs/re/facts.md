@@ -370,13 +370,33 @@ frame delta each tick; when it exceeds the duration `+124` the disease is cured
 (`sub_41DF4C`). Our sim uses an equivalent per-tick countdown. Freshness `+128`
 counts down by 1/tick and gates re-spreading.
 
-**Visual — CONFIRMED (`sub_41F29B` ~23252):** a diseased player's sprite is
-drawn with a **random colour each frame** while a disease bit is set:
-`if (diseaseWord & 8) draw(x, y, rand() % 10, sprite)` — i.e. the body strobes
-through the ten player palettes. (This is why, with no such indicator, only the
-speed diseases were noticeable in-game.) Ported to game/main.cpp as an
-`SDL_SetTextureColorMod` colour strobe on diseased players; the disease roll
-itself is uniform across all nine (verified empirically).
+**Visual — CONFIRMED, re-traced exactly 2026-07-09 (`sub_41F29B` ~23252):**
+after the shadow blit, the body sprite's FRAME argument (normally the
+player's own draw-colour byte, `+0x3C`/+60 — one frame per player colour,
+0-9, within whatever pose sequence the animation state machine already
+picked) is replaced by `rand() % 10` whenever `v111[60] & 8` is set —
+`v111[60]` is a **WORD** at struct byte offset **+120** (`v111` is typed
+`__int16*` in this function; NOT the same access width as the `+0x3C` byte
+field), the SAME offset this section's "Timer" paragraph already names as
+the disease-age counter that "counts up by the frame delta each tick" — so
+this is bit 3 of the elapsed-disease-duration counter, not an independent
+flag: `if (diseaseAge & 8) draw(x, y, rand() % 10, sprite)`. Net effect: the
+body is redrawn each tick in a **random one of the ten real player-colour
+sprite sets** (not an arbitrary tint), and — because it keys off a counter
+bit rather than a plain boolean — it flashes in blocks as the counter's bit
+3 toggles, rather than being constantly randomized for the whole disease
+duration. (This is why, with no such indicator, only the speed diseases were
+noticeable in-game.) **Ported (tightened 2026-07-09, `libs/game/src/
+renderer.cpp` `draw_world`):** previously an `SDL_SetTextureColorMod`
+arbitrary-RGB tint; now `Renderer::disease_flash_colour()` (a presentation
+LCG, never `State::rng`) picks a real `0..9` colour index that substitutes
+for the player's own draw-colour in every pose branch (walk/stand/
+cornerhead/kick/punch/carry/spin all key off the same `body_colour`), so the
+flash genuinely shows the player briefly wearing one of the ten shipped
+player recolors, matching the original's actual mechanism instead of
+approximating it with a tint. Still an alternating-tick simplification
+(`s.tick & 1`) rather than reproducing the counter-bit cadence exactly — a
+presentation-only deviation, not a behaviour gap.
 
 **Pickup dispatch** (`sub_41E21E`, powerup type at `+4`): every pickup first rolls
 a cure — if curable, `rand() % cure_chance == 0` clears all diseases (`sub_41DF4C`)
@@ -1920,6 +1940,73 @@ propagated through the buffer.
 input unchanged) on every existing scenario. `Player::ice_history` was a
 NEW hashed field (added in the same commit as `State::regen_timer` above);
 see `tests/test_golden.cpp`'s recapture note. New suite: `tests/test_ice.cpp`.
+
+## `CFG.INI` / `soundonoff` — a THIRD config layer, boot-time only, N/A to port (2026-07-09)
+
+A string-literal sweep flagged `aSoundonoff` = `"soundonoff"` (pseudo.c 1587)
+read via `sub_41739C("soundonoff", buf)` inside `sub_42896E` (pseudo.c
+28498-28556, already pinned by `docs/re/frontend-flow.md` "The boot LOADING
+dialog" as the second boot loading-dialog phase, "Loading sound..."), then
+fed to `sub_4272DD` at pseudo.c 28544-28546. Tracing what these actually
+touch shows this is unrelated to `options.ini`'s 22-key table
+(`docs/re/results-and-options.md` "The full options.ini key list"):
+
+- **`sub_41739C`** (pseudo.c 18719-18788) is a distinct, primitive
+  `key=value` line-scanner over **`CFG.INI`** — confirmed by its own debug
+  format string, `"cfg_get_info: no cfg.ini file (CHCFG=='%s')"`
+  (`exit_()`s if the file is missing), and an environment-variable override
+  (`getenv("CHCFG")`) that can redirect the path. This is a DIFFERENT reader
+  from `options.ini`'s `sub_406238`/`sub_405DE3` pair (which never call
+  `sub_41739C` and vice versa) — two independent config files, not one file
+  read two ways. `sub_41739C` has exactly four call sites, all inside
+  `sub_41095A`'s boot-init chain (`docs/re/facts.md`'s "Presentation LCGs
+  must reseed" section already cites this same function for its RNG-seed
+  read): `aNetonoff` ("netonoff"), `aHdhome` ("hdhome"), `aCdhome`
+  ("cdhome"), `aDebug` ("debug"), and `aSoundonoff` ("soundonoff") — i.e.
+  CFG.INI carries install-path/hardware-detection state (`hdhome`/`cdhome` —
+  the local/CD install roots) and boot-time feature gates (`debug`,
+  `netonoff`, `soundonoff`), not gameplay options.
+- **The shipped install's own `CFG.INI`** (read-only reference, never
+  committed) confirms the exact key set and a header comment naming its
+  generator: `; created by E:\MAKECFG.exe` / `hdhome=...` / `cdhome=...` /
+  `; debug=3debug.log` (commented out) / `soundonoff=1` / `netonoff=1` — a
+  separate installer tool (`MAKECFG.EXE`, already listed as a non-gameplay
+  tool in `docs/re/coverage-audit.md`'s Executable/DLL row) writes it once at
+  install time; the game only ever reads it.
+- **`soundonoff` gates whether the audio HAL initializes AT ALL, not a
+  per-session mute.** `sub_4272DD(parsed_value)` (pseudo.c 27604-27616): if
+  truthy, it wires the mixer callbacks (`sub_4187ED`), reads a THIRD config
+  file (`aSoundIni` = `"sound.ini"`, a low-level DOS audio-driver settings
+  file — port/IRQ/DMA-era, distinct from both CFG.INI and options.ini), and
+  calls `sub_418FF7(handle, 16, 0x8000, 0x8000, 22050)` — a 16-bit/22050 Hz
+  driver bring-up call. If falsy, none of that runs — the whole sound
+  subsystem never comes up, unlike the Options screen's "Disable music
+  during gameplay" (`disable_game_music`, `docs/re/results-and-options.md`
+  §3 row 13), which only skips the gameplay MUSIC track and leaves SFX/the
+  driver itself running.
+
+**Resolves `docs/re/coverage-audit.md` row #134's open question** ("verify
+CFG.INI/nodename.ini are netplay-only before ignoring outright") —
+**CFG.INI is NOT netplay-only.** `netonoff` is, but `hdhome`/`cdhome`/
+`debug`/`soundonoff` are read unconditionally at every boot, local or
+networked.
+
+**N/A to port.** This is DOS-era install/hardware bring-up: an env-var
+overridable path, an installer-generated ini, and a driver-init gate with no
+analogue in a modern SDL3 backend (`AudioEngine::init` brings up SDL's audio
+device unconditionally; there is no DOS driver layer to conditionally skip).
+`assets::Options` correctly models only `options.ini`'s 22 keys — adding
+`soundonoff` there would misplace it in the wrong config layer. No code
+change; this section exists to pin the fact and close the coverage-audit
+question with evidence instead of leaving it open.
+
+(Provenance: `sub_41739C` @ 0x41739C pseudo.c 18719-18788 [4 call sites:
+11505, 14615-14617, 28544]; `sub_4272DD` @ 0x4272DD pseudo.c 27604-27616;
+`aSoundonoff`/`aSoundIni` pseudo.c 1587/1572; `sub_42896E` @ 0x42896E
+pseudo.c 28498-28556 [already cited by `docs/re/frontend-flow.md`]; shipped
+`CFG.INI` content, install root, 2026-07-09; `docs/re/coverage-audit.md` row
+134 [`.INI` files]; `docs/re/results-and-options.md` "The full options.ini
+key list" [confirms `soundonoff` is absent from that table, correctly].)
 
 ## Still guessed — not yet extracted from the binary
 
