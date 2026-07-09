@@ -39,6 +39,13 @@ public:
     // Cosmetic 1-in-n chance (presentation-layer RNG, never the sim's).
     bool chance(int n);
 
+    // Cosmetic uniform draw in [0, n) (presentation-layer RNG, never the
+    // sim's). For callers that need to LATCH a random choice across several
+    // calls instead of re-picking every time — e.g. the wall-slam SFX, which
+    // the original draws once per enclosure arm (`dword_462244 = rand() % 3`,
+    // docs/re/facts.md "Wall-slam SFX") and replays for every dropped tile.
+    int roll(int n);
+
     // Plays one of the given SOUNDLST ids (round-robin variety).
     void play_one_of(std::initializer_list<int> ids);
 

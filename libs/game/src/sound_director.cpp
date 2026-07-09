@@ -5,6 +5,7 @@ namespace bomber::game {
 void SoundDirector::reset() {
     pending_.clear();
     pickups_.fill(0);
+    wall_slam_id_ = -1;
 }
 
 void SoundDirector::on_tick(const sim::State& s) {
@@ -38,7 +39,17 @@ void SoundDirector::on_tick(const sim::State& s) {
                 // the contiguously loaded slots — hence the range, not play(2700).
                 audio_.play_random_in_range(2700, 2799);
                 break;
-            case sim::Event::Type::WallClosed: audio_.play_one_of({140, 141, 142}); break;
+            case sim::Event::Type::WallClosed:
+                // sub_426818 (docs/re/facts.md "Wall-slam SFX", `sub_4278F2`
+                // call site) draws `dword_462244 = rand() % 3` ONCE when the
+                // enclosure arms and replays SOUNDLST 140+dword_462244 for
+                // every tile that drops in the sequence — not a fresh pick
+                // per drop. Latch the roll on the first WallClosed since the
+                // last reset() (one per round, matching the original's
+                // per-arm draw) and reuse it thereafter.
+                if (wall_slam_id_ < 0) wall_slam_id_ = 140 + audio_.roll(3);
+                audio_.play(wall_slam_id_);
+                break;
             case sim::Event::Type::BombPunched:
                 // The glove swings on every press (the event fires regardless so
                 // the punch pose plays), but the original only plays the "kbomb"
