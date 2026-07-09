@@ -200,6 +200,19 @@ bool GameApp::init() {
         options_.diseases_destroyable =
             loaded_opts.diseases_destroyable.value_or(values_.at_or(120, 1) != 0);
         options_.disable_game_music = loaded_opts.disable_game_music.value_or(false);
+        // Options-screen rows 10/12/17 — trivial booleans with real
+        // options.ini keys but no gameplay consumer (docs/re/results-and-
+        // options.md §3); round-tripped like every other toggle now that the
+        // full-audit pass (2026-07-09) added their rows back to the screen.
+        options_.assign_keyboards = loaded_opts.assign_keyboards.value_or(false);
+        options_.lost_net_revert_ai = loaded_opts.lost_net_revert_ai.value_or(false);
+        options_.small_memory = loaded_opts.smallmemory.value_or(false);
+        // Row 8 (display-only, options_screen.hpp's file doc): show whatever
+        // scheme actually got loaded above, falling back to the on-disk key
+        // if load() somehow ran against a different path than options.ini
+        // recorded (it never does today, but this keeps the two in sync).
+        options_.scheme_filename =
+            loaded_opts.schemefilename.value_or(scheme_path.filename().string());
         // "keydef=" -> KeyboardMapper's two live key-sets (docs/re/results-and-
         // options.md §2). A KeyDef triple with scancode == -1 (never written)
         // keeps that action's compiled-in default (input.hpp's
@@ -897,6 +910,11 @@ AppInput GameApp::present_options_screen() {
             if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
             if (ev.type != SDL_EVENT_KEY_DOWN) continue;
             if (ev.key.key == SDLK_F1) {
+                // CONFIRMED (pseudo.c 9298-9299, 9384-9388): the nav-blip SFX
+                // 20 fires unconditionally for ANY real key, F1 included,
+                // before sub_4080DC dispatches to sub_41431C — the earlier
+                // port silently skipped this for F1 specifically.
+                audio_.play(20);
                 // Keep the .BM help reachable without leaving the interactive
                 // screen: present the generic browser modally (same routine
                 // row 5 and in-round F1 open, §4), then resume with the same
@@ -915,6 +933,7 @@ AppInput GameApp::present_options_screen() {
             if (opt.open_keyremap()) present_keyremap_screen();
         }
         audio_.update_music();
+        opt.tick();  // advances the cursor1 selection sprite's own frame timer
         SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
         SDL_RenderClear(sdl_renderer_.get());
         opt.draw(sdl_renderer_.get());
@@ -930,8 +949,13 @@ AppInput GameApp::present_options_screen() {
         // doc §2: "Cleared to -1 by: ... the Options-screen Gold Bomberman
         // toggle" — ANY edit of that row (on or off) forfeits a pending gold
         // player, checked before options_ is overwritten with the new
-        // snapshot so this compares old vs new.
-        if (opt.snapshot().goldman != options_.goldman) gold_player_ = -1;
+        // snapshot so this compares old vs new. CONFIRMED (pseudo.c 9310-9314):
+        // row 0 (Team Play) ALSO clears the pending gold player
+        // (dword_46492C=-1), not just row 6 (Gold Bomberman) — the earlier
+        // port only checked the goldman field.
+        if (opt.snapshot().goldman != options_.goldman ||
+            opt.snapshot().team_play != options_.team_play)
+            gold_player_ = -1;
         options_ = opt.snapshot();
         team_play_ = options_.team_play;
         conveyor_speed_index_ = options_.conveyor_speed_index;
@@ -3147,7 +3171,14 @@ void GameApp::flush_options() {
     to_write.goldman = options_.goldman;
     to_write.enclosement_depth = options_.enclosement_depth;
     to_write.playtime = options_.playtime_seconds;
-    to_write.assign_keyboards = std::nullopt;  // row omitted — never edited by this port
+    // Rows 10/12/17 (docs/re/results-and-options.md §3) — LIVE toggles as of
+    // the 2026-07-09 full-audit pass; round-tripped like every other row now.
+    to_write.assign_keyboards = options_.assign_keyboards;
+    to_write.lost_net_revert_ai = options_.lost_net_revert_ai;
+    to_write.smallmemory = options_.small_memory;
+    // Row 8 (display-only) — round-trip whatever is currently shown so a
+    // hand-edited options.ini value isn't silently dropped on the next save.
+    if (!options_.scheme_filename.empty()) to_write.schemefilename = options_.scheme_filename;
     to_write.diseases_destroyable = options_.diseases_destroyable;
     to_write.disable_game_music = options_.disable_game_music;
     // "fullscreen=" — PORT-ONLY key (see init()'s and toggle_fullscreen()'s
