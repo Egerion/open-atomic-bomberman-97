@@ -224,7 +224,10 @@ void AssetStore::build_player_sets(const std::int32_t colors[][3]) {
         // that colour's .RMP was missing/short (rmp_ok_[p] == false).
         const bool use_rmp = (p < kColors) && rmp_ok_[p];
         auto recolor = [&](const AniTextures& src) {
-            return use_rmp ? src.recolored(ren_, rmp_[p]) : src.recolored(ren_, colors[p]);
+            // rmp_rgb_[p] = the .RMP tail — the fallback target for the 16bpp
+            // type-4 frames the index remap cannot touch (sprites.cpp).
+            return use_rmp ? src.recolored(ren_, rmp_[p], rmp_rgb_[p])
+                           : src.recolored(ren_, colors[p]);
         };
 
         walk_c_[p] = recolor(walk_);

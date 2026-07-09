@@ -102,15 +102,25 @@ AniTextures AniTextures::recolored(SDL_Renderer* ren, const std::int32_t rgb[3])
     return out;
 }
 
-AniTextures AniTextures::recolored(SDL_Renderer* ren,
-                                   const std::array<std::uint8_t, 256>& rmp) const {
+AniTextures AniTextures::recolored(SDL_Renderer* ren, const std::array<std::uint8_t, 256>& rmp,
+                                   const std::array<std::uint8_t, 3>& tail_rgb) const {
+    // Per-frame dispatch: the index remap only exists for PALETTED (type 11)
+    // frames; this install stores most player art as 16bpp type 4 (survey:
+    // 2299 of 2327 frames), where recolor_image_rmp is a structural no-op —
+    // which left every player green. For those frames apply the truecolour
+    // green-excess recolour (the sub_414A65 BUILDER formula) with the .RMP
+    // TAIL percents — the same authoritative per-colour value the builder
+    // itself targets (docs/re/player-colour.md "the tail is the authoritative
+    // per-colour value"), so both frame types resolve to the same colour.
+    const std::int32_t tail[3] = {tail_rgb[0], tail_rgb[1], tail_rgb[2]};
     AniTextures out;
     out.data_ = data_;
     out.textures_.assign(out.data_.frames.size(), nullptr);
     for (std::size_t i = 0; i < out.data_.frames.size(); ++i) {
         auto& f = out.data_.frames[i];
         if (f.image.empty()) continue;
-        f.image = recolor_image_rmp(std::move(f.image), rmp);
+        f.image = f.image.paletted() ? recolor_image_rmp(std::move(f.image), rmp)
+                                     : recolor_image(std::move(f.image), tail);
         out.textures_[i] = make_texture(ren, f.image);
     }
     return out;

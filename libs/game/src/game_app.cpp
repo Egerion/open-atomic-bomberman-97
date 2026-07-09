@@ -284,18 +284,21 @@ struct MenuItem {
 };
 
 // Seven rows in the ORIGINAL's v10 order (sub_42B9CE), so the cursor anchor
-// (getvalue 700-702) lands on the labels baked into MAINMENU.PCX:
+// (getvalue 700-702) lands on the labels baked into MAINMENU.PCX. Row targets
+// per the CORRECTED dispatch (docs/re/results-and-options.md: v10==3 goes to
+// sub_4080DC = the OPTIONS screen, NOT an editor; v10==1/2 are the START/JOIN
+// NET GAME screens sub_42B0CE/sub_42B47D, netplay-deferred per ADR-0003):
 //   0 Play           -> StartMatch   (live)
-//   1 setup A        -> OpenOptions  (interactive Team Play / Conveyor Speed
-//                                     screen; F1 on it reaches the OPTIONS.BM
-//                                     help text)
-//   2 setup B        -> OpenNetwork  (help overlay live; interactive UI = TODO)
-//   3 Editor         -> stub         (map editor not built — inert, documented)
+//   1 net game A     -> OpenNetwork  (NETWORK.BM help overlay; the real
+//                                     START NET GAME screen = netplay, deferred)
+//   2 net game B     -> OpenNetwork  (ditto for JOIN NET GAME)
+//   3 Options        -> OpenOptions  (the interactive sub_4080DC screen;
+//                                     F1 on it reaches the help browser)
 //   4 Credits        -> OpenCredits  (live: CREDITS.BM viewer)
 //   5 Help browser   -> live, handled INLINE (see the SDLK_RETURN case below):
 //                       sub_41431C dispatches with no wipe in the original, so
 //                       row 5 is special-cased ahead of this table rather than
-//                       routed through AppInput/next() like rows 0-2/4/6 are —
+//                       routed through AppInput/next() like rows 0-4/6 are —
 //                       its kMenuItems entry below is unused/dead for row 5.
 //   6 Quit           -> Quit         (live)
 // The Controllers help (INPUT.BM) is reachable from the interactive controller
@@ -304,9 +307,9 @@ struct MenuItem {
 // (a documented gap — the row belongs to the deferred controller-setup UI).
 constexpr MenuItem kMenuItems[] = {
     {AppInput::StartMatch, true},       // 0 Play
-    {AppInput::OpenOptions, true},      // 1 setup A -> options help
-    {AppInput::OpenNetwork, true},      // 2 setup B -> network help
-    {AppInput::Advance, false},         // 3 Editor (stub, inert)
+    {AppInput::OpenNetwork, true},      // 1 START NET GAME -> network help
+    {AppInput::OpenNetwork, true},      // 2 JOIN NET GAME -> network help
+    {AppInput::OpenOptions, true},      // 3 Options (sub_4080DC) — was misbound to row 1
     {AppInput::OpenCredits, true},      // 4 Credits
     {AppInput::Advance, false},         // 5 Help browser (handled inline, entry unused)
     {AppInput::Quit, true},             // 6 Quit

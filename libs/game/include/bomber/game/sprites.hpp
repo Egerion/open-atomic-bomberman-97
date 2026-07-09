@@ -83,11 +83,14 @@ public:
     // `.RMP` file.
     AniTextures recolored(SDL_Renderer* ren, const std::int32_t rgb[3]) const;
 
-    // A copy with the AUTHENTIC `.RMP` index-remap applied to every frame (the
-    // original blit's per-colour table, docs/re/player-colour.md). Preferred
-    // whenever the colour's `.RMP` loaded; falls through to the base frame for
-    // any non-paletted frame (recolor_image_rmp returns it unchanged).
-    AniTextures recolored(SDL_Renderer* ren, const std::array<std::uint8_t, 256>& rmp) const;
+    // A copy with the AUTHENTIC `.RMP` index-remap applied to every PALETTED
+    // frame (the original blit's per-colour table, docs/re/player-colour.md).
+    // tail_rgb = the `.RMP` tail percents (0..100): non-paletted 16bpp type-4
+    // frames (most of this install — 2299 of 2327) instead get the truecolour
+    // green-excess recolour targeting the same tail colour, so the whole set
+    // resolves to one colour rather than silently staying green.
+    AniTextures recolored(SDL_Renderer* ren, const std::array<std::uint8_t, 256>& rmp,
+                          const std::array<std::uint8_t, 3>& tail_rgb) const;
 
     void reset();
 
