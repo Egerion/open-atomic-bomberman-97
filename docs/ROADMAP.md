@@ -334,9 +334,14 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       shared between run_app and present_scoreboard via results.hpp.
 - [x] Goldman Roulette wheel — DONE 2026-07-08 (docs/re/goldman-roulette.md,
       port 1:1: 5-draw setup, 420/6×70 Lissajous, boundary-decel landing,
-      prize table incl. the clogs booby slot as a documented no-op gap;
-      per-player born_with_extra config overlay, golden untouched). Gold-player
-      assignment = the RESULTS tier's v73 clinch write (§2, pinned + ported).
+      prize table incl. the clogs booby slot; per-player born_with_extra
+      config overlay, golden untouched). Gold-player assignment = the RESULTS
+      tier's v73 clinch write (§2, pinned + ported). Clogs (prize id 13) was
+      then RESOLVED same day (`f374e22`/`228a33f`, goldman-roulette.md §9):
+      hashed `Player::clogs` + `MatchConfig::born_with_clogs`, permanently
+      NOT a 14th `PowerupType` (design decision, not a stub). Residual: the
+      wheel's own prize-icon render for slot 13 is still unported (cosmetic
+      only — coverage-audit.md row #30).
 - [x] Hidden scheme editor — DONE 2026-07-08 (results-and-options.md §5):
       Ctrl+E ×6 menu trigger, chooser + 15×11 mouse editor + powerup-rules
       sub-editor, .SCH writer with parse(write(s))==s round-trip; detail pass
@@ -348,7 +353,8 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       "numeric font", ∞ when untimed, ≤30 s warning ink), hurry flash/2700
       reconciled, stage music 1100+level (fallback 1120), results tier all
       under track 1130 (1020 = setup screens only). F1 mid-round help browser
-      = TODO (needs the generic .BM glob browser, same as menu row 5).
+      — DONE 2026-07-08 ("Merge help-browser sweep" `e265541`): unified onto
+      the same generic `.BM` browser (`sub_41431C`) menu row 5 opens.
 - [x] Options toggles into the sim — DONE 2026-07-08 (facts.md "Options
       toggles"): stomped_bombs_detonate = the CLOSING WALL detonates (default
       getvalue(46)=1; airborne exempt) — wall-vs-bomb behaviour aligned;
@@ -370,12 +376,20 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       open this SAME generic browser too (sub_4080DC/sub_403184 both call
       sub_41431C directly, not a fixed OPTIONS.BM/EDITOR.BM cut — confirmed
       against pseudo.c's F1/315 dispatch in both functions).
-- [ ] Remaining front-end: attract-mode demo match (partial work parked in a
-      worktree; task was user-stopped), Network screen (netplay deferred per
-      ADR-0003), win_by_kills Options row already live.
-- [ ] Known parked fidelity gaps (need their own golden recaptures, flagged as
-      task chips): flame-arm stops, flying-bomb landing on powerups, scatter
-      occupancy test.
+- [x] Attract-mode demo match — DONE 2026-07-09 ("Port attract-mode demo
+      match" `d83cd9a`, merged `96be2e4`; docs/re/frontend-flow.md "Attract
+      mode" port status). Menu-idle (30 s, getvalue(92)) live AI-only demo
+      match: saved/restored roster+level+team, random 3-10 CPU roster on a
+      random stage, any input aborts, DRAW/RESULTS/VICTORY suppressed. Only
+      remaining front-end exclusion is the Network screen (netplay, deferred
+      per ADR-0003 — a deliberate exclusion, not open work); win_by_kills
+      Options row already live.
+- [x] Known fidelity gaps (flame-arm stops, flying-bomb landing on powerups,
+      scatter occupancy test) — DONE, landed together in "Merge fidelity
+      gaps" (`5370bbf`) with their golden recaptures; see facts.md's
+      per-mechanic CONFIRMED sections and coverage-audit.md rows #3/#4/#5.
+      (This bullet was left unchecked after that merge landed — corrected
+      2026-07-09, coverage-audit.md §6 item 8.)
 - [x] Campaign mode — DONE-with-scope 2026-07-09, consumers RE'd + banner/
       AI-seeding corrected same day (`docs/re/campaign.md`,
       `sub_401085`/`sub_4015C6`/`sub_410F81`/`sub_40151B`/`sub_4016DA`/
@@ -450,8 +464,43 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       from a real draw/time-up and so does not itself clear campaign state
       — it replays the same stage like any other draw, avoiding a widened
       `run_match` return contract for this port.
+      **SUPERSEDED same day by the rover/ghost port below**: the "deliberately
+      NOT ported here" call on rovers/ghosts, and round-pacing clauses 1/3
+      needing them, no longer apply — see the next item.
+- [x] Campaign rover/ghost hazard actors — DONE 2026-07-09 ("Port campaign
+      rover/ghost hazard actors" `6e38222`, merged `fd811d5`;
+      `docs/re/campaign.md`). Closes the follow-up the campaign-consumer pass
+      above flagged: a new `libs/sim` actor system (`RoverSystem`,
+      `libs/sim/src/systems/rovers.{hpp,cpp}`) ports `sub_401AAE`/
+      `sub_401B05` (spawn) and `sub_401B5C` (per-tick mover: wander +
+      human-avoidance bias, flame-death with kill-score award, landing-tile
+      player knockback/kill) as hashed `State::rovers`. `rover_speed`/
+      `ghost_speed` (campaign fields 4/6) now have a real consumer via
+      `MatchConfig::campaign_rovers`/etc, read off `campaign_stages_` in
+      `start_match`. Round-pacing clause 1 (mover driver) is `RoverSystem::
+      tick` itself; clause 3 (2 s hazard-clear grace once every rover/ghost
+      is dead) is `State::hazard_clear_timer`, edge-checked in `run_match`
+      against `kHazardClearTicks`. Clause 5 (mutual-wipeout stage-replay
+      fallback) remains a documented follow-up (edge case, no test pressure).
+      Renderer draws the actors (`renderer.cpp`); `tests/test_rovers.cpp`
+      (spawn/wander/flame-death/knockback); golden hashes recaptured (rover-
+      free scenarios byte-identical, per test_golden.cpp's updated cases).
 
 ## Done (highlights)
+
+**State of the port, 2026-07-09.** 35 doctest suites registered in
+`tests/CMakeLists.txt`, all green. RE + port coverage is complete for every
+in-scope subsystem in `docs/re/coverage-audit.md` except a handful of
+low-priority residuals (wall-slam SFX call site, `LEVELS.DAT` purpose,
+editor chrome polish, in-round debug keys, the Goldman-wheel clogs icon
+render) — see that file's "Top open items" list. The sole **deliberate**
+exclusion is netplay (ADR-0003: the sim stays pure so lockstep netplay is
+possible later, but no netcode is written now) — everything else the
+original binary does has either shipped or has a tracked, pinned follow-up.
+**The pre-push `lefthook` gate is currently NOT installed in this worktree**
+(no `.git/hooks/pre-push`) — re-enable it (`lefthook install`, see README
+"Git hooks") before resuming normal development so the headless build/ctest
++ clang-tidy gate runs again on push.
 
 Asset pipeline · deterministic sim core · exact movement port (sub_41EC84) ·
 bombs/kick/punch/grab/throw/spooger · 9 diseases (contagion/cure/visual) ·

@@ -392,17 +392,24 @@ The flag then reroutes the whole Play flow:
 file's own legend documents that values < 5 never enter attract mode —
 matching the code's `getvalue(92) > 5` gate.
 
-**Port status:** our boot chain is faithful; the **menu-idle attract match
-is a documented gap** — reproducing it faithfully means: after 30 s of menu
-idle, save the configured roster/level/team, run a live match with
-`rand()%10+1` (min 3) CPU players on `rand()%11` (any stage, ignoring the
-enable flags), abort to the menu on any keypress, skip all outcome screens,
-and restore the configuration. All of it presentation/config-level (the sim
-just receives an all-AI `MatchConfig`); the two rand draws are
-presentation-side. (Provenance: `sub_42B9CE` idle path pseudo.c
-30747-30754/30887-30894; `sub_410F81` attract branch 15125-15143;
-`sub_42A3F6` gates 29788/29812; `sub_4224E2`/`sub_422552` 24605-24642;
-`sub_42247A` 24586-24602; VALUELST 92.)
+**Port status: DONE** (2026-07-09, "Port attract-mode demo match" `d83cd9a`,
+merged `96be2e4`; coverage-audit.md table row #18). The menu-idle attract
+match is fully reproduced: after 30 s of menu idle (`getvalue(92)`, gated
+> 5), `present_menu` saves the configured roster/level/team
+(`GameApp::AttractSaved`), rolls a random 3..10-slot COMPUTER-only roster and
+a random stage bypassing the VALUELST 1150-1160 enable flags
+(`attract_computer_count`/`fill_attract_roster`/`attract_stage_pick` in
+`input.hpp`, pure/SDL-free and unit-tested), and dispatches the same
+Menu->StartMatch edge a real Play selection uses (no new `AppState`/
+`AppInput`). Any key/mouse/gamepad-button input during the demo aborts
+`run_match` immediately; either exit (natural end or abort) skips DRAW/
+RESULTS/VICTORY entirely and restores the saved selections before returning
+to the menu. All of it presentation/config-level (the sim just receives an
+all-AI `MatchConfig`); the two rand draws are on a dedicated presentation
+LCG, never `State::rng` — ADR-0003 untouched. (Provenance: `sub_42B9CE` idle
+path pseudo.c 30747-30754/30887-30894; `sub_410F81` attract branch
+15125-15143; `sub_42A3F6` gates 29788/29812; `sub_4224E2`/`sub_422552`
+24605-24642; `sub_42247A` 24586-24602; VALUELST 92.)
 
 ## The results / DRAW / VICTORY flow — inside `sub_42A3F6` (CONFIRMED)
 

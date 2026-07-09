@@ -1608,8 +1608,11 @@ AppInput GameApp::present_scoreboard() {
                 if (!s.players[i].present) continue;
                 // getstring(31) "Player %u score: %u (kills: %d)" — two
                 // independent counters (§1): win_count_ (match score) and
-                // kill_count_ (round kills; TODO(§1) — see kill_count_'s
-                // declaration in game_app.hpp for why this is 0 for now).
+                // kill_count_ (cumulative match kills, NOT round kills
+                // despite the string's "kills" label — see kill_count_'s
+                // declaration comment in game_app.hpp for the §1 citation;
+                // tallied every tick from PlayerDied events, self-kills
+                // excluded per our documented semantics).
                 std::string line = assets_.getstring(31, "Player %u score: %u (kills: %d)");
                 line = fmt_u(line, i + 1);
                 // fmt_u only substitutes the FIRST specifier; splice the
@@ -2363,15 +2366,17 @@ int GameApp::run_app() {
                     // loads its scheme/roster instead of returning to the
                     // menu. sub_4016DA's per-tick round pacing (RE'd
                     // 2026-07-09, docs/re/campaign.md "Round pacing —
-                    // PINNED") only ADDS an early-out once every rover/ghost
-                    // is dead (a 2-second wall-clock grace before ending the
-                    // stage); rovers/ghosts don't exist in libs/sim yet (see
-                    // load_campaign_stage's TODO), so there is nothing for
-                    // that clause to gate on — our port re-uses the existing
-                    // best-of-N win_target_/win_by_kills clinch as "this
-                    // stage is done" for the SAME survivor-count check the
-                    // original ALSO applies (sub_410578()<=1), which is
-                    // exactly what match_over/clinched above already is.
+                    // PINNED") ADDS an early-out once every rover/ghost is
+                    // dead (a 2-second wall-clock grace before ending the
+                    // stage) — clause 3, now wired via RoverSystem's hashed
+                    // State::hazard_clear_timer and the run_match edge-check
+                    // that sets over_ticks when it reaches kHazardClearTicks
+                    // (see that check's own comment, same file). The clause
+                    // this VICTORY-tail block still re-uses unmodified is
+                    // clause 2, the SAME survivor-count check the normal
+                    // best-of-N win_target_/win_by_kills clinch already is
+                    // (sub_410578()<=1), which is exactly what
+                    // match_over/clinched above already checks.
                     // Exhausting the stage list falls through to the menu
                     // and clears campaign state (port convenience; the
                     // original's own post-last-stage behaviour is unpinned
