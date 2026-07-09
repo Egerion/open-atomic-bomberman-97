@@ -39,4 +39,19 @@ fi
 
 mapfile -t FILES < <(find libs apps -name "*.cpp" | grep -v "/build/")
 echo "lint: checking ${#FILES[@]} files with $(basename "$CT")..."
-printf '%s\n' "${FILES[@]}" | xargs -P 8 -I{} "$CT" {} -- -std=c++20 "${INCLUDES[@]}"
+# Every file must be CHECKED even after one fails: a bare `xargs "$CT"` stops
+# feeding new batches once an invocation fails (observed: a failing batch left
+# dozens of files unchecked, so re-runs "passed" on a random subset). Each
+# invocation is wrapped to always exit 0 and record failures; the gate then
+# fails once, at the end, with the full failing-file list.
+FAILLOG="$(mktemp)"
+trap 'rm -f "$FAILLOG"' EXIT
+printf '%s\n' "${FILES[@]}" |
+  xargs -P 8 -I{} bash -c '"$1" "$2" -- -std=c++20 "${@:3}" || echo "$2" >> "$0"' \
+    "$FAILLOG" "$CT" {} "${INCLUDES[@]}"
+if [ -s "$FAILLOG" ]; then
+  echo "lint: FAILED files:" >&2
+  sort "$FAILLOG" >&2
+  exit 1
+fi
+echo "lint: all ${#FILES[@]} files clean."
