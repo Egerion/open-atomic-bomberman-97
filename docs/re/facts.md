@@ -1467,7 +1467,6 @@ Capstone/PE-parsing script per `docs/re/method.md`; `sub_40200C`
 increment; `sub_4124A4` shared id lookup, already documented above as
 `getvalue`; `messages.txt` ids 900/905/910-928 in this install's own copy.)
 
-<<<<<<< HEAD
 ## Third `.DAT` file identified — `WINEREG/EReg058.dat` (2026-07-09)
 
 Read for coverage-audit.md §3's `.DAT` row: `LEVELS.DAT` and `bmstats.dat`
@@ -1523,7 +1522,7 @@ as the `LEVELS.DAT`/`bmstats.dat` entries above).
 **Conclusion: non-gameplay tooling data, same class as `WINEREG/INTER.BMP`.**
 Closes the `.DAT` row's outstanding "3rd file unchecked" item; no parser
 warranted (it belongs to a separate bundled EXE, not the game).
-=======
+
 ## Presentation LCGs must reseed from real entropy at boot — CONFIRMED (`sub_41095A`, pseudo.c 14602-14663)
 
 Read/fixed 2026-07-09, reported as "RANDOM level selection always gives the
@@ -1578,7 +1577,6 @@ LCGs. Presentation-only, as with every LCG in this file: `setup_lcg_`,
 14602-14663; `sub_410B6E` pseudo.c 14688-14857; `sub_42A3F6` pseudo.c
 29609-30185 and its recursive call site at pseudo.c 30650; `sub_4260F5`
 already cited above.)
->>>>>>> worktree-agent-af602900e8abca68b
 
 ## id-audit.md presentation-side follow-ups — PORTED (2026-07-09)
 

@@ -509,7 +509,11 @@ matched up:
    half — 1130 under DRAW.PCX — is right but incomplete): the port's
    `start_music(1020)` on VICTORY does not match the binary; faithful is
    1130 under all three outcome screens, with 1020 as the setup-screens
-   track. Flagged as a port follow-up, not fixed here (DOCS-ONLY task).
+   track. Flagged as a port follow-up when this section was written
+   (DOCS-ONLY task) — **fixed since**: `game_app.cpp`'s `kDrawMusicId`
+   (1130) now starts for DRAW, RESULTS, and VICTORY/TEAM alike, `kWinMusicId`
+   (1020) is scoped to the Play/setup path only (coverage-audit table row
+   #21, "RESOLVED").
 3. **DRAW branch (`sub_4219B0(...) == -1`, no survivor):** draws DRAW.PCX
    (cut, no wipe — `docs/re/frontend-flow.md`'s `sub_42A088` cut semantics),
    plays sting group **1700** once, then runs a **bespoke wait loop**
@@ -539,7 +543,9 @@ matched up:
      `sub_410B6E()` again — **starts the next round of the same match**,
      looping the whole `while(1)` structure from step... this is the
      multi-round match structure `docs/re/frontend-flow.md`'s "RESULTS
-     tally tier" section flags as still needing a port. If `v76 < 2`
+     tally tier" section flagged as still needing a port when this section
+     was written — **shipped since**, ROADMAP "Multi-round best-of-N loop +
+     RESULTS tally 1:1 — DONE 2026-07-08". If `v76 < 2`
      (fewer than 2 players ever scored — a degenerate/aborted setup), shows
      message 47 ("Too many players have left the game!", header 95 "NOTE!")
      and sets `dword_464A68 = 2` (quit to menu) — **no forfeit-vs-quit
@@ -579,9 +585,15 @@ point 1 above — and instead sleeps 3 s later, after RESULTS, right before
 VICTORY). The numeric value (3000 ms / 3 s) our port already uses happens to
 match the original's `sub_413CB0(3000)` exactly, which is a correct constant
 even though it is wired into a different point in the sequence — a
-structural gap (multi-round loop-back, RESULTS tally, and the two 6 s
-bespoke wait loops are the still-missing pieces per `docs/re/frontend-flow.md`
-"RESULTS tally tier — RE'd, port still DEFERRED"), not a constant-value bug.
+structural gap noted when this section was written (multi-round loop-back,
+RESULTS tally, and the two 6 s bespoke wait loops were then the
+still-missing pieces per `docs/re/frontend-flow.md`'s "RESULTS tally tier"
+section) rather than a constant-value bug. All three have since shipped:
+the multi-round loop-back and RESULTS tally via ROADMAP "Multi-round
+best-of-N loop + RESULTS tally 1:1 — DONE 2026-07-08" (`docs/re/frontend-
+flow.md` now reads "RESULTS tally tier — RE'd, port DONE"), and the 6 s
+auto-advance wait loop as `kResultsDwellMs` in `game_app.cpp`'s
+DRAW/RESULTS screen handlers.
 
 **End-of-round jingle/sting ids** (stings were pinned in
 `docs/re/frontend-flow.md`; the music placement is corrected by step 2

@@ -65,9 +65,13 @@ the human input decoder; `+16 == 0` is absent.
 
 **Roster → `MatchConfig`:** `player_count` = count of slots with `+16 != 0`;
 `ai[i] = (+16 == 1)`; a human slot (`+16 ∈ {2,3,4}`) binds a keyboard/controller.
-We support OFF / COMPUTER / KEYBOARD now; joystick (3) is a later controller-
-detect pass. The two net-game screens below are kept for reference but are NOT
-the screen we reproduce.
+We support OFF / COMPUTER / KEYBOARD / JOYSTICK (type-3 slots) — SDL3 gamepad
+support shipped 2026-07-08 (`GamepadMapper`: enumeration, hotplug, d-pad/
+left-stick + south/east buttons, `sub_421E80`'s confirmed slot-type wrap
+order; ROADMAP "SDL3 gamepad support — DONE 2026-07-08"; `docs/re/
+coverage-audit.md` table row #39). Type-4 "other controller" has no SDL3
+analogue and is not ported. The two net-game screens below are kept for
+reference but are NOT the screen we reproduce.
 
 ## Backdrop — a RANDOM glue picture (CONFIRMED: `sub_4148E5` @0x4148E5)
 
@@ -441,7 +445,8 @@ cosmetic simplification, not a gameplay fact).
    to 5 bits/channel, `min(v/3,31)`, then expand5 in place of the palette LUT).
    The `.RMP` tail is the authoritative per-colour value (docs/re/player-colour.md);
    `Tuning::color_rgb` is only the fallback when a `.RMP` is absent. Input-type per
-   slot (OFF/COMPUTER/KEYBOARD0/KEYBOARD1 — joystick detect deferred), a per-slot
+   slot (OFF/COMPUTER/KEYBOARD0/KEYBOARD1/JOYSTICK — SDL3 `GamepadMapper`,
+   ROADMAP "SDL3 gamepad support — DONE 2026-07-08"), a per-slot
    TEAM flag toggled by 'T'. Keys: Up/Down slot, Right cycle type, Left/'0' off,
    'T' team, Enter start, Esc cancel — mirroring the table above. **Team Play
    marker**: whenever `team_play_` is on, every slot line gets a trailing
