@@ -91,7 +91,7 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 | BM help-screen | `.BM` | 10 | pinned | ported | `docs/formats/bm.md`, `bmscreen`/HelpBrowser | — | done |
 | Resource list | `.RES` | 8 (incl. VALUELST.RES, SOUNDLST.RES, EXTRA*.RES) | pinned | ported | `reslist.hpp`, `extra.hpp`, facts.md, stage-actors.md (EXTRA*.RES actor registry) | — | done |
 | Font | `.FON` | 3 | pinned | ported | `docs/formats/fon.md`, `bmfont.hpp`, `test_bmfont.cpp` | — | done |
-| Misc data | `.DAT` | 3 (LEVELS.DAT, bmstats.dat, + 1 more) | **unRE'd** | **absent** | RE-NOTES.md: "🟡 Minor/low priority (fonts, key remaps)" — stale since FON/RMP are now done, but `LEVELS.DAT` itself was never RE'd | grep pseudo.c for `LEVELS.DAT` read site, determine purpose (level unlock state? campaign progress?), RE + parse only if it gates any reachable feature | low-medium — unknown purpose, verify it isn't load-bearing for something already "done" |
+| Misc data | `.DAT` | 3 (LEVELS.DAT, bmstats.dat, + 1 more) | `LEVELS.DAT` RE'd | **absent** | `docs/re/facts.md` "`LEVELS.DAT` — NOT READ by the shipped game" — exhaustive grep of `pseudo.c` and `strings` on every shipped `.EXE` (incl. `FREDIT.EXE`) finds zero "level" references anywhere; file is 4 bytes, installer-copied, never opened at runtime | none — confirmed dead/tooling data, not load-bearing for any reachable feature; no parser warranted | done (LEVELS.DAT); bmstats.dat / 3rd `.DAT` still unchecked, low priority |
 | Campaign | `.CAM` | 3 (CROUTON.CAM, GHOSTS.CAM, SIMPLE.CAM) | pinned | ported | `docs/re/campaign.md` — reachability CONFIRMED: hidden 'C'×5 trigger on the local player-setup screen (`sub_410F81` → picker → `sub_401085` loader → `dword_46489C` flag read at ~12 sites). `.CAM` parser (`libs/assets/campaign.hpp/.cpp`, `test_campaign.cpp`); `CampaignFilePicker` (`libs/game/campaign_screen.hpp/.cpp`); stage sequencing (`AppInput::CampaignContinue`, `GameApp::load_campaign_stage`), AI-count roster seeding (`sub_40151B` CORRECTED, `seed_campaign_ai_slots`), stage banner (`present_campaign_banner`), round pacing (`sub_4016DA` PINNED, `hazard_clear_timer`), and the rover/ghost hazard actors themselves (RoverSystem, table row #13) are all ported. field-8 (`ai_difficulty`) CONFIRMED dead code — grepped every read site, none exists beyond the loader's own write | none required for the confirmed-reachable scope; remaining edge case: mutual-wipeout stage-replay fallback (campaign.md "Round pacing" clause 5) is independently portable but left as a documented follow-up, no test pressure yet | done |
 | Palette | `.PAL` | 1 (COLOR.PAL) | pinned | ported (via PCX palette loading) | RE-NOTES.md | — | done |
 | Bitmap | `.BMP` | 1 | **unchecked** | **unchecked** | not mentioned in any doc; likely a tool/icon asset, not gameplay data | identify the single `.BMP` file's role (icon export?), likely no action needed | low |
@@ -243,8 +243,10 @@ asset-format rows in §3 (excluding pure-tooling extensions marked N/A:
   rows — #15 wall-slam SFX (unconfirmed call site, permanently uncertain),
   #23 INPUT.BM menu-row binding, #30's residual (clogs wheel *icon* render
   only — the clogs *effect* is done), #32 editor chrome polish, #35 in-round
-  debug/cheat keys — plus 2 asset formats (`LEVELS.DAT` unRE'd, `.BMP`
-  unchecked).
+  debug/cheat keys — plus 2 asset formats (the `.DAT` row's `LEVELS.DAT`
+  component was RE'd this pass and confirmed dead/non-gameplay data with no
+  port needed, but `bmstats.dat`/the 3rd `.DAT` file are still unchecked so
+  the row stays open; `.BMP` unchecked).
 - **N/A / excluded (netplay per ADR-0003, or non-gameplay tooling):** 1
   subsystem row (#25 net-game setup screens) + the §4 netplay function
   cluster + several tooling file extensions (.ICO/.EXE/.DLL/.IDB).
@@ -257,29 +259,27 @@ asset-format rows in §3 (excluding pure-tooling extensions marked N/A:
 Everything that was "open" at the 2026-07-08 snapshot's top of this list
 (attract mode, the three fidelity gaps, the VICTORY music row, the clogs
 prize decision) is now **done** — see §6 items 7-9 and table rows #13/#18/
-#30. What remains open, in priority order:
+#30. `LEVELS.DAT` (formerly item 1) is now also **done** — RE'd 2026-07-09
+and confirmed dead/tooling data, not load-bearing; see §3 and
+`docs/re/facts.md`. What remains open, in priority order:
 
-1. **`LEVELS.DAT` purpose unknown** (§3 asset table) — never RE'd; could gate
-   a reachable feature (level-unlock state? campaign progress persistence?
-   plausible given campaign mode is now live). Grep pseudo.c for the read
-   site and RE it if it turns out to be load-bearing.
-2. **Goldman wheel clogs prize-icon render** (§2 #30 residual) — the clogs
+1. **Goldman wheel clogs prize-icon render** (§2 #30 residual) — the clogs
    *effect* (speed penalty) is fully ported; only the wheel's own "power
    clogs" ANI icon draw for slot 13 is still missing, per
    goldman-roulette.md §9.5. Small, cosmetic, well-scoped.
-3. **Campaign round-pacing clause 5** (mutual-wipeout stage-replay fallback,
+2. **Campaign round-pacing clause 5** (mutual-wipeout stage-replay fallback,
    campaign.md "Round pacing") — pinned but not ported; independently
    portable, no test pressure yet (edge case: every side wiped out
    simultaneously mid-stage).
-4. **Wall-slam SFX ids 140-146 call site** (§1 #15) — the RE itself may be
+3. **Wall-slam SFX ids 140-146 call site** (§1 #15) — the RE itself may be
    permanently unconfirmable (no call site found in the decompile); either
    find it via a targeted disasm search or formally close this as
    "accepted unconfirmed" in facts.md.
-5. **INPUT.BM menu-row binding** (§2 #23) — help overlay is live but there is
+4. **INPUT.BM menu-row binding** (§2 #23) — help overlay is live but there is
    no real interactive controller-remap UI or confirmed menu-row wiring.
-6. Low-priority polish: editor chrome (#32: Ctrl+B reset, '0' toggle,
+5. Low-priority polish: editor chrome (#32: Ctrl+B reset, '0' toggle,
    brush-preview, exact dialog chrome), in-round debug/cheat keys (#35,
-   developer/QA-only), `.BMP`/`.TXT` asset spot-checks (§3).
+   developer/QA-only), `.BMP`/`.TXT`/`bmstats.dat` asset spot-checks (§3).
 
 See the "TODO(RE) / TODO(§) crumbs still in the tree" list below for the
 exact file:line inline markers a future session can pick off directly.

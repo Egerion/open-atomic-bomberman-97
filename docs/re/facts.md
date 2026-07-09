@@ -1230,6 +1230,51 @@ untouched.
 24196-24212; `sub_42708D` 27511-27519 (separate array, never called from
 `sub_4255B2`).)
 
+## `LEVELS.DAT` — NOT READ by the shipped game (2026-07-09)
+
+Read for coverage-audit.md §3 / "Top open items" #1: is `LEVELS.DAT` a
+level-unlock table or campaign-progress file the port is missing?
+
+**Finding: `BM95.EXE` never opens this file.** Exhaustive checks against the
+full `pseudo.c` decompile:
+
+- `grep -in "levels" pseudo.c` and `grep -in "\.dat" pseudo.c` — zero matches.
+  No string literal `"LEVELS.DAT"` (or any casing/substring of "level")
+  exists anywhere in the decompiled text.
+- Every wildcard file-scan literal in the binary is enumerated at
+  `aCam = "*.cam"` (pseudo.c:1311), `aSch_0 = "*.SCH"` (pseudo.c:1404), and
+  `aSnd_1 = "*.snd"` (pseudo.c:1576) — no `"*.dat"` or `"*.*"` scan exists
+  that could pick the file up incidentally.
+- `strings -a BM95.EXE` (raw PE, not just the decompile) also has zero
+  occurrences of "level" in any case, narrow or wide-char — ruling out a
+  string built at runtime that Hex-Rays failed to surface as a literal.
+- The same check against every other shipped executable in the install tree
+  (`MAKECFG.EXE`, `TOOLS/EXTPSS.EXE`, `TOOLS/FREDIT.EXE`,
+  `TOOLS/FREDSPIT.EXE`, `TOOLS/NUMBER.EXE`, `TOOLS/PLAYSH.EXE`,
+  `TOOLS/PSS.EXE`) — including `FREDIT.EXE`, the stage/scheme editor, the
+  most plausible consumer of a "levels" file — also finds zero "level"
+  strings. No shipped binary reads or writes it.
+
+**What the file actually is:** 4 bytes, contents `81 FB BF 33`. Too small to
+be a level table (no per-level struct, no count prefix that resolves to a
+sane array). `uninst.log` lists it only as `Copied
+C:\INTRPLAY\BOMBRMAN\LEVELS.DAT` — i.e. it was part of the original install
+payload, not something the game wrote at runtime (its file timestamp matches
+the other installed binaries, not `bmstats.dat`'s later, clearly
+runtime-rewritten timestamp). Best explanation: a leftover installer/build
+artifact (version stamp, checksum, or an internal Interplay tool's marker
+not present in this retail tree) that ships with the product but has no
+consumer in it.
+
+**Conclusion: not load-bearing for any feature.** It does not gate level
+unlocks, campaign progress, or anything else — `.CAM` campaign progression
+(`docs/re/campaign.md`) and stage rotation (`.SCH` via `MatchConfig`) are
+fully accounted for by other, confirmed-read files. No parser was added;
+writing one would invent structure for 4 bytes nothing in the shipped game
+interprets, which is exactly the kind of unfounded content CLAUDE.md's
+faithful-port rule forbids. Closing this as **dead/tooling data**, not a
+gap in the port.
+
 ## Still guessed — not yet extracted from the binary
 
 | Constant | Current value | Status |
