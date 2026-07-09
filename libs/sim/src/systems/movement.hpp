@@ -44,6 +44,20 @@ public:
     void move(Player& p, Direction d, std::int32_t extra_budget, StepOnFn on_center, void* ctx,
               bool use_player_speed = true);
 
+    // Ice / input-lag (VALUELST ids 450-460, Hockey Rink; docs/re/facts.md
+    // "Ice / input-lag", sub_41F29B ~23058-23078). Pushes this tick's desired
+    // direction (`want_godir`: -1 = none, 0..3 = Up/Right/Down/Left) into
+    // `p.ice_history` and returns the EFFECTIVE direction to actually move
+    // with this tick: the sample that is exactly `delay_ticks` ticks old
+    // (clamped to the buffer's capacity), where delay_ticks is derived from
+    // the current level's ice_delay_ms. Safe to call unconditionally every
+    // tick for every player: AI players are exempt in the original (gated on
+    // the player-type byte +16 != 1) and are returned unchanged with the
+    // buffer untouched; on every level but Hockey Rink ice_delay_ms is 0, so
+    // this returns want_godir unchanged WITHOUT writing the buffer — keeping
+    // `p.ice_history` a fixed all-zero hashed field there (see player.hpp).
+    int ice_delay(Player& p, int want_godir) const;
+
 private:
     State& s_;
 };

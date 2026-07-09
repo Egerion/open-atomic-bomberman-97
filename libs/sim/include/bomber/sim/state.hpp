@@ -26,6 +26,14 @@ struct State {
     std::int32_t enclose_index = 0;
     std::int32_t enclose_timer = 0;
     std::int32_t enclose_interval = 0;
+    // Per-level tile regeneration countdown, ticks (docs/re/facts.md "Per-
+    // level tile regeneration", sub_426704's dword_464978). Counts down to 0,
+    // then TileRegenSystem makes ONE regen attempt and resets it to the
+    // current level's regen_seconds*kTicksPerSecond. Only non-zero cadence on
+    // level index 7 ("haunted house"); TileRegenSystem is a no-op (this field
+    // never moves, draws no RNG) whenever tuning.regen_seconds[level] <= 0 —
+    // every other level/scenario, so this is a fixed mix(0) there.
+    std::int32_t regen_timer = 0;
     // Next tick a dud roll may fire (global rate limiter, dword_464AF4 in
     // the original — armed at setup, re-armed on every open-gate placement).
     std::uint64_t dud_gate = 0;

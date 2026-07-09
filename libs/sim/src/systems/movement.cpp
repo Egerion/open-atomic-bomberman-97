@@ -1,5 +1,7 @@
 #include "systems/movement.hpp"
 
+#include <algorithm>
+
 #include "grid.hpp"
 
 namespace bomber::sim {
@@ -127,6 +129,37 @@ void MovementSystem::move(Player& p, Direction d, std::int32_t extra_budget, Ste
                 on_center(ctx, p, nx / kTileW, ny / kTileH);
         }
     }
+}
+
+int MovementSystem::ice_delay(Player& p, int want_godir) const {
+    // AI is exempt: sub_41F29B gates the whole buffer push+resolve block on
+    // the player-type byte (+16 != 1, i.e. NOT a computer player) — an AI's
+    // desired direction reaches the mover unlagged even on Hockey Rink.
+    if (p.ai) return want_godir;
+
+    const int level = std::clamp(s_.tuning.level_index, 0, 10);
+    const int delay_ms = s_.tuning.ice_delay_ms[level];
+    if (delay_ms <= 0) return want_godir;  // inert off Hockey Rink; buffer left untouched
+
+    // Age + shift + insert (sub_41F29B ~23060-23077): the original ages every
+    // slot by the frame delta (dword_464958), shifts the buffer down one, and
+    // inserts the fresh sample at slot 0. At our fixed 20 Hz tick rate "age by
+    // one tick" and "shift" collapse to a plain FIFO push — slot k's age
+    // after this push is exactly k ticks (k * kMsPerTick ms).
+    for (int k = Player::kIceHistoryLen - 1; k > 0; --k)
+        p.ice_history[k] = p.ice_history[k - 1];
+    p.ice_history[0] = static_cast<std::int8_t>(want_godir);
+
+    // Resolve (sub_41F29B ~23071-23077): walk from the freshest sample toward
+    // the oldest, using the first whose age has reached delay_ms — i.e. the
+    // smallest k with k*kMsPerTick >= delay_ms (ceil(delay_ms/kMsPerTick)),
+    // clamped to the buffer's own capacity (the original's behaviour when a
+    // delay exceeds its 30-slot history: the loop runs out and the LAST
+    // (oldest) sample it read stays in effect).
+    constexpr int kMsPerTick = 1000 / kTicksPerSecond;
+    int k = (delay_ms + kMsPerTick - 1) / kMsPerTick;
+    if (k >= Player::kIceHistoryLen) k = Player::kIceHistoryLen - 1;
+    return p.ice_history[k];
 }
 
 }  // namespace bomber::sim

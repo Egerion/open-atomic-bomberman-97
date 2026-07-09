@@ -11,6 +11,7 @@ add_library(bomber_sim STATIC
   src/systems/powerups.cpp
   src/systems/diseases.cpp
   src/systems/enclosure.cpp
+  src/systems/tile_regen.cpp
   src/systems/stage_actors.cpp
   src/systems/ai.cpp
   src/systems/rovers.cpp

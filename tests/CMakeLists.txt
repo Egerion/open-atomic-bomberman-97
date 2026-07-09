@@ -41,6 +41,8 @@ bomber_add_test(bomber_team_tests     team         test_team.cpp)
 # pinned without a libs/game/SDL dependency.
 target_link_libraries(bomber_team_tests PRIVATE bomber::match)
 bomber_add_test(bomber_rover_tests    rovers       test_rovers.cpp)
+bomber_add_test(bomber_regen_tests    tile_regen   test_regen.cpp)
+bomber_add_test(bomber_ice_tests      ice_delay    test_ice.cpp)
 
 # ANI pacing helper lives in the game lib (header-only, SDL-free): frame =
 # counter % statecnt, mirroring sub_41DAA7. Own target so it needn't link sim.

@@ -55,6 +55,40 @@ struct Tuning {
     // 1150..1160; the original disables hockey rink and coal mine by default).
     std::int32_t level_enabled[11] = {1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1};
 
+    // Which of the 11 built-in stages this match is playing (0..10, same
+    // index space as level_enabled/kNames in game_app.cpp's level_fallback).
+    // NOT itself a VALUELST id — it is the "current level" selector
+    // (dword_46499C in the original) that the per-level blocks below
+    // (regen_seconds, ice_delay_ms) are indexed by. bomber::match/game_app
+    // set this from the resolved stage index (docs/re/facts.md "Per-level
+    // tile regeneration", "Ice / input-lag"). Defaults to 0 ("new
+    // traditionalist"), which has zero regen and zero ice delay, so every
+    // hand-built MatchConfig (tests, golden) that never sets this keeps its
+    // old inert behaviour.
+    std::int32_t level_index = 0;
+
+    // Per-level tile regeneration (ids 340..350, one per stage): seconds
+    // between regen ATTEMPTS on that stage; 0 = the mechanic never runs
+    // there. Only level index 7 ("haunted house", the file's own comment
+    // calls it "cemetary/mortuary") is non-zero in the shipped VALUELST.
+    // Consumed by TileRegenSystem. See docs/re/facts.md "Per-level tile
+    // regeneration".
+    std::int32_t regen_seconds[11] = {0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0};
+    // id 695: the Manhattan-distance "clear radius" (in tiles) that must be
+    // free of any live player around a candidate regen tile. Companion to
+    // regen_seconds; consumed by the SAME system.
+    std::int32_t regen_clear_radius = 4;
+
+    // Per-level "ice delay" (ids 450..460, one per stage), milliseconds of
+    // input-response lag applied to HUMAN players' desired movement
+    // direction. Only level index 2 ("hockey rink") is non-zero in the
+    // shipped VALUELST. id 449 itself is a documented sentinel ("just to
+    // prevent invalid access") the original never reads — the real
+    // per-level block starts at 450, so this array is NOT id-450-based in
+    // the id-minus-base sense used elsewhere; see apply() below. Consumed
+    // by MovementSystem::ice_delay. See docs/re/facts.md "Ice / input-lag".
+    std::int32_t ice_delay_ms[11] = {0, 0, 250, 0, 0, 0, 0, 0, 0, 0, 0};
+
     std::int32_t pickup_pause = 2;         // id 665: movement pause when grabbing, ticks
     std::int32_t powers_lost_min = 1;      // id 670: min powers dropped on a head hit
     std::int32_t powers_lost_rand = 3;     // id 671: modulus of the extra random drops
@@ -206,6 +240,7 @@ struct Tuning {
             case 1300: campaign_ai_kill_score = v; return true;
             case 1310: rover_kill_score = v; return true;
             case 1320: ghost_kill_score = v; return true;
+            case 695: regen_clear_radius = v; return true;
             default: break;
         }
         if (id >= 130 && id < 139) { disease_frames[id - 130] = v; return true; }
@@ -213,6 +248,11 @@ struct Tuning {
         if (id >= 550 && id < 550 + kPowerupKinds) { limits[id - 550] = v; return true; }
         if (id >= 400 && id < 400 + kPowerupKinds) { spawn_counts[id - 400] = v; return true; }
         if (id >= 1150 && id < 1161) { level_enabled[id - 1150] = v; return true; }
+        if (id >= 340 && id <= 350) { regen_seconds[id - 340] = v; return true; }
+        // id 449 (the "prevent invalid access" sentinel) is deliberately NOT
+        // consumed here — no getvalue(449) call site exists in the original;
+        // the real per-level ice block is 450..460.
+        if (id >= 450 && id <= 460) { ice_delay_ms[id - 450] = v; return true; }
         if (id >= 200 && id < 250) {
             int k = id - 200;
             if (k % 5 < 3) color_rgb[k / 5][k % 5] = v;

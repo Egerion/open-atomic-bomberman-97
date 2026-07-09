@@ -52,6 +52,9 @@ mirrors instead; both fixed below).
 | 1200 | campaign rover/ghost 1-in-N chance to turn at an open intersection | 3 |
 | 1300, 1310, 1320 | campaign-only kill scores: AI / rover / ghost | 250 / 15 / 25 |
 | 650, 651 | "Fire In The Hole"/"Clear" taunt (id-audit.md item 1, `sound_director.cpp`'s `BombPlaced` handler): 651 gates the carrying player's bomb-count powerup level ("many" bombs), 650 = 1-in-N roll once they place the LAST bomb of that allotment. `sub_41F29B` pseudo.c ~23362-23368, plays SOUNDLST 1200-1299 (corrected range — see that id below). Presentation-side roll (`AudioEngine`), never `State::rng`; see the handler's own comment for the register-provenance caveat on the 651 comparison | 4 / 4 |
+| 340–350 | per-level tile-regen ATTEMPT interval, seconds (0 = never); one value per stage, indexed by `Tuning::level_index`. Only level 7 (Haunted House, "cemetary/mortuary") is non-zero. `TileRegenSystem`, `docs/re/facts.md` "Per-level tile regeneration" | 0×10, 4 (idx 7) |
+| 695 | tile-regen clear radius, tiles (Manhattan) — no live player may be within this of a candidate regrow tile. `TileRegenSystem` | 4 |
+| 450–460 | per-level ice/input-lag, ms (0 = none); one value per stage, indexed by `Tuning::level_index`. Only level 2 (Hockey Rink) is non-zero. `MovementSystem::ice_delay`, `docs/re/facts.md` "Ice / input-lag" | 0×9, 250 (idx 2) |
 
 Powerup kind order (matches scheme `-P` rows and the id blocks above): extra bomb, flame, disease, kick, skate, punch, grab, spooger, goldflame, trigger, jelly, super-disease, random.
 
@@ -117,8 +120,6 @@ id-audit pass:
 | 120–138 | disease behavior flags and durations mostly consumed (see table above); 122 = diseases_will_recycle (0) — genuinely not yet consumed |
 | 324 | dud-bomb fizzle duration's random-additional-frames component (320-323 are consumed; 324 is a leftover 5th value in the same VALUELST block, unconfirmed whether the original even reads it — no `getvalue(324)` call site found) |
 | 681 | trampoline hop arc height (px/frame) — presentation-only; id 680 (bounce frames) is now consumed above |
-| 340–350, 695 | per-level tile regeneration + clear radius — only level index 7 (id 347 = 4s, "cemetary/mortuary") is non-zero; 695 = the companion proximity-clear-radius gate |
-| 449–460 | per-level ice (input lag) in ms — only level 2 (id 452 = 250ms, Hockey Rink) is non-zero |
 | 905 | reserved/unused AI slot — no `getvalue(905)` call exists in the binary and VALUELST has no `905,<n>` line; only the editor's label writer touches it (`docs/re/ai.md` §9.5) |
 | 1100–1110 | net protocol retransmit timing / count — netplay, out of scope (ADR-0003) |
 | 790, 795 | RESULTS screen "press F1" / "continue with same net game?" coordinates |

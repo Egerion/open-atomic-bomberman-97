@@ -111,6 +111,24 @@ MatchConfig pillars_config() {
 // golden E's final rng/bounces are UNCHANGED (verified byte-for-byte before
 // recapturing the hashes below) — confirming rovers/ghosts add no new RNG
 // draws and no gameplay change on every existing (zero-hazard) scenario.
+//
+// UPDATE 2026-07-09 (per-level tile regeneration + ice/input-lag, docs/re/
+// facts.md "Per-level tile regeneration" / "Ice / input-lag"): hash.cpp now
+// mixes State::regen_timer (one word, right after dud_gate) and, per present
+// player, Player::ice_history (a 30-entry ring buffer, 4 packed words, right
+// after the disease word) — TWO new hash TERMS. Every golden MatchConfig
+// leaves Tuning::level_index at its default 0 ("new traditionalist"), whose
+// regen_seconds/ice_delay_ms are both 0 — TileRegenSystem::update() and
+// MovementSystem::ice_delay() both take their very first early-return branch
+// every tick for every scenario, so regen_timer never moves off 0 and
+// ice_history is never written. One-time HASH-LAYOUT recapture only (CLAUDE.md
+// determinism contract rule 5), same shape as the updates above. Verified by
+// running the full suite before/after this change: every non-hash assertion
+// in this file — golden A's final rng, golden D's kExpectedRng at all four
+// checkpoints, golden E's bounce count (7) and final rng — is BYTE-IDENTICAL
+// (17 of 24 assertions in this file are the hash checks that moved; the
+// other 7 all passed unchanged), proving zero extra RNG draws and zero
+// gameplay change on every existing scenario.
 
 TEST_CASE("golden A: empty state, 10000 ticks") {
     Simulation a;
@@ -124,7 +142,7 @@ TEST_CASE("golden A: empty state, 10000 ticks") {
     // matching that documented intent.
     a.state().ticks_left = 9999 * kTicksPerSecond;
     for (std::uint64_t t = 0; t < 10000; ++t) a.tick(pattern(t));
-    CHECK(a.hash() == 0xa8b91cd5a6f31e64ull);
+    CHECK(a.hash() == 0x5189198a15a7c8e4ull);
     CHECK(a.state().rng == 0x0000002au);
 }
 
@@ -142,15 +160,15 @@ TEST_CASE("golden B: 4-player brick match with all abilities") {
     cfg.born_with[static_cast<int>(PowerupType::Spooger)] = true;
     cfg.born_with[static_cast<int>(PowerupType::Jelly)] = true;
     Simulation s(cfg);
-    CHECK(s.hash() == 0x69cccb89e173fa5dull);  // setup itself is pinned
+    CHECK(s.hash() == 0x74063ae1c65ff3e5ull);  // setup itself is pinned
 
     static constexpr std::uint64_t kExpected[6] = {
-        0xd4b28797759f321cull,  // tick 500
-        0x565dd22c0acd85b0ull,  // tick 1000
-        0x3c4b891b1eb02e34ull,  // tick 1500
-        0xc6704386d445263bull,  // tick 2000
-        0x4ce3ef49ad1a688cull,  // tick 2500
-        0xb90ab2e62869d8a9ull,  // tick 3000
+        0xc98a79b86f285084ull,  // tick 500
+        0x8ceacfcff0456ff8ull,  // tick 1000
+        0xc5769471afbdbadcull,  // tick 1500
+        0x86ffedc4f771c04bull,  // tick 2000
+        0x5c6c133383e66534ull,  // tick 2500
+        0x366532977d9a0171ull,  // tick 3000
     };
     for (std::uint64_t t = 0; t < 3000; ++t) {
         s.tick(pattern(t));
@@ -168,7 +186,7 @@ TEST_CASE("golden C: trigger bombs and a fast hurry phase") {
     cfg.born_with[static_cast<int>(PowerupType::Trigger)] = true;
     Simulation s(cfg);
     for (std::uint64_t t = 0; t < 1500; ++t) s.tick(pattern(t * 7 + 3));
-    CHECK(s.hash() == 0x1a7a4d391bf16b0cull);
+    CHECK(s.hash() == 0xe26d9311354b51f8ull);
 }
 
 TEST_CASE("golden D: the disease gauntlet") {
@@ -198,10 +216,10 @@ TEST_CASE("golden D: the disease gauntlet") {
     // checkpoint: the fix adds no RNG draws, it only changes which tile the
     // arm's blank-tile ignite loop reaches next.
     static constexpr std::uint64_t kExpectedHash[4] = {
-        0xcc7e94c767b6e15aull,  // tick 200
-        0x8a5faa88f4e379c0ull,  // tick 400
-        0xff026aeb5147bf87ull,  // tick 600
-        0x6f5e9a1bd08d53deull,  // tick 800
+        0xd074efb8aa8e4800ull,  // tick 200
+        0x2b8a89162c1e4716ull,  // tick 400
+        0x33d7e95d52a86e2dull,  // tick 600
+        0x923965955e194f9cull,  // tick 800
     };
     static constexpr std::uint32_t kExpectedRng[4] = {0xca47489cu, 0x49cffff6u, 0x2abb3268u,
                                                       0xd72904d8u};
@@ -254,10 +272,10 @@ TEST_CASE("golden E: jelly ping-pong and a veering punched flight") {
     };
 
     static constexpr std::uint64_t kExpected[4] = {
-        0x7bdded5a07b838eaull,  // tick 75
-        0x8a8bb62a189f5f3full,  // tick 150
-        0x890518a31d5ca601ull,  // tick 225
-        0x1d1eb5076b76b4e8ull,  // tick 300
+        0xf5a2a7dad0bb032aull,  // tick 75
+        0xbe36319fb96de287ull,  // tick 150
+        0xba506a5104a7a409ull,  // tick 225
+        0xc6d75606e29769e8ull,  // tick 300
     };
     int bounces = 0;
     for (std::uint64_t t = 0; t < 300; ++t) {

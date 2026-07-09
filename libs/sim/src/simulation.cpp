@@ -20,6 +20,7 @@
 #include "systems/powerups.hpp"
 #include "systems/rovers.hpp"
 #include "systems/stage_actors.hpp"
+#include "systems/tile_regen.hpp"
 
 namespace bomber::sim {
 
@@ -33,7 +34,7 @@ namespace {
 // disease), bomb dropping (edge-gated, spooger, auto-drop diseases), and the
 // action2 priority chain: throw > grab > trigger-detonate > punch.
 void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs,
-                 StageActorSystem& stage) {
+                 StageActorSystem& stage, MovementSystem& movement) {
     Player& p = s.players[i];
 
     if (p.stun > 0) {
@@ -111,8 +112,16 @@ void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs,
 
     static constexpr Direction kGodir[4] = {Direction::Up, Direction::Right,
                                             Direction::Down, Direction::Left};
-    Direction want = want_godir >= 0 ? kGodir[want_godir] : p.facing;
-    bool moving = want_godir >= 0;
+
+    // Ice / input-lag (Hockey Rink, VALUELST ids 450-460; docs/re/facts.md
+    // "Ice / input-lag", sub_41F29B ~23058-23078): replaces this tick's
+    // resolved direction with a delayed sample from the player's own
+    // history for HUMAN players on that level. A faithful no-op everywhere
+    // else (returns want_godir unchanged, touches no state) — see
+    // MovementSystem::ice_delay's doc comment.
+    const int eff_godir = movement.ice_delay(p, want_godir);
+    Direction want = eff_godir >= 0 ? kGodir[eff_godir] : p.facing;
+    bool moving = eff_godir >= 0;
 
     // Movement, with any conveyor under the player folded in: a belt speeds/
     // slows a walking player and pushes a standing one along its direction
@@ -120,7 +129,7 @@ void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs,
     // The belt-only push (no input) is handled inside move_on_actor.
     {
         Fixed bx = p.x, by = p.y;
-        stage.move_on_actor(p, want_godir, moving);
+        stage.move_on_actor(p, eff_godir, moving);
         // A player pushed head-on into a restable bomb kicks it, same as a
         // walked-into bomb: only when the (belt-forced or input) move stalled.
         if (moving && p.x == bx && p.y == by) bombs.try_kick(p, want, i);
@@ -260,6 +269,7 @@ void run_tick(State& s, const TickInputs& inputs) {
     MovementSystem movement{s};
     StageActorSystem stage{s, movement};
     EnclosureSystem enclosure{s, flames};
+    TileRegenSystem tile_regen{s};
     AISystem ai{s};
     RoverSystem rovers{s};
 
@@ -283,7 +293,7 @@ void run_tick(State& s, const TickInputs& inputs) {
         // step-order dependency shifts (steps 2..7 below are untouched).
         PlayerInput in = inputs.players[i];
         if (p.ai) ai.decide(i, in);
-        player_turn(s, i, in, bombs, stage);
+        player_turn(s, i, in, bombs, stage, movement);
     }
 
     // 2. Kicked bombs slide; airborne bombs fly.
@@ -315,9 +325,15 @@ void run_tick(State& s, const TickInputs& inputs) {
     // 5c. Diseases: spread on contact, age the freshness gate, and expire.
     diseases.spread_and_age();
 
-    // 6. Match clock, and walls closing in during the hurry phase.
+    // 6. Match clock, and walls closing in during the hurry phase. Tile
+    // regeneration runs immediately before the enclosure stepper, mirroring
+    // the original: sub_426704 (regen) is called from WITHIN sub_426818 (the
+    // enclosure stepper), right before its own arm/disarm/drop logic
+    // (docs/re/facts.md "Per-level tile regeneration"). A no-op on every
+    // level but Haunted House.
     if (s.ticks_left > 0 && --s.ticks_left == 0)
         s.events.push_back({Event::Type::TimeUp, -1, -1, -1, 0});
+    tile_regen.update();
     enclosure.update();
 
     // 7. Compact dead bombs (stable order — deterministic).

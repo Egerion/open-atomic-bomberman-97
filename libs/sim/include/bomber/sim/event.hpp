@@ -41,6 +41,15 @@ struct Event {
                            // `player` is the VICTIM's player slot (not a rover index)
                            // so the presentation can reuse the normal death path;
                            // data = the rover's index into State::rovers
+        // Per-level tile regeneration (docs/re/facts.md "Per-level tile
+        // regeneration", Haunted House/Cemetery). x,y = the tile. NOTE: the
+        // original has NO dedicated sound or animation for this — sub_426704
+        // writes the cell straight to Brick and the normal per-tile redraw
+        // path blits the level's standard TILE<n>_BRICK art, same as any
+        // other brick. This event exists only so the presentation can redraw/
+        // react to the change without diffing the grid every frame; it does
+        // not imply a distinct visual.
+        TileRegrew,
     };
     Type type{};
     std::int8_t player = -1;  // acting/affected player, -1 if n/a

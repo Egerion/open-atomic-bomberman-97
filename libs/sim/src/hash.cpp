@@ -22,6 +22,14 @@ std::uint64_t state_hash(const State& s) {
         (static_cast<std::uint64_t>(static_cast<std::uint32_t>(s.enclose_index)) << 8) |
         (static_cast<std::uint64_t>(static_cast<std::uint32_t>(s.enclose_timer)) << 40));
     mix(s.dud_gate);
+    // Per-level tile regeneration countdown (docs/re/facts.md "Per-level tile
+    // regeneration"). A ONE-TIME hash-layout growth (CLAUDE.md determinism
+    // contract rule 5; tests/test_golden.cpp recaptured in the same commit).
+    // Always 0 on every existing scenario (TileRegenSystem never moves it
+    // when tuning.regen_seconds[level] <= 0, true on every level but Haunted
+    // House) -> mix(0) for every golden/test scenario, byte-identical
+    // gameplay, only the digest layout shifted.
+    mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(s.regen_timer)));
     for (int y = 0; y < kGridHeight; ++y) {
         for (int x = 0; x < kGridWidth; ++x) {
             mix(static_cast<std::uint64_t>(s.cells[y][x]) |
@@ -122,6 +130,22 @@ std::uint64_t state_hash(const State& s) {
         mix(static_cast<std::uint64_t>(dbits) |
             (static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.disease_timer)) << 16) |
             (static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.disease_fresh)) << 40));
+        // Ice / input-lag ring buffer (docs/re/facts.md "Ice / input-lag"):
+        // live gameplay state (determines a future tick's effective movement
+        // direction on Hockey Rink), so hashed — packed 8 bytes/word. A
+        // ONE-TIME hash-layout growth (CLAUDE.md determinism contract rule
+        // 5; tests/test_golden.cpp recaptured in the same commit). Always
+        // all-zero on every existing scenario (MovementSystem::ice_delay
+        // never writes it when tuning.ice_delay_ms[level] <= 0, true on
+        // every level but Hockey Rink) -> mix(0) x4 for every golden/test
+        // player, byte-identical gameplay, only the digest layout shifted.
+        for (int base = 0; base < Player::kIceHistoryLen; base += 8) {
+            std::uint64_t w = 0;
+            for (int k = 0; k < 8 && base + k < Player::kIceHistoryLen; ++k)
+                w |= (static_cast<std::uint64_t>(static_cast<std::uint8_t>(p.ice_history[base + k]))
+                      << (8 * k));
+            mix(w);
+        }
     }
     // Computer-AI brains (ADR-0005 §3 / docs/re/ai.md §1.1). Hashed in one
     // clean block, parallel to `players`: every gameplay field of every Brain is
