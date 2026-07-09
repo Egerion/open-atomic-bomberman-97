@@ -114,6 +114,14 @@ struct Options {
     // clamps set in [0,1] / action in [0,9], dropping the whole line
     // otherwise; the writer always emits all 20 triples. See KeyDef's doc.
     std::optional<KeyDef> keydef;
+    // "fullscreen=" — PORT-ONLY key, NOT one of the original's confirmed 22
+    // options.ini keys above (the 1997 binary is a fixed 640x480 window with
+    // no fullscreen/resize concept). A deliberate port enhancement
+    // (GameApp's Alt+Enter/F11 toggle, game_app.cpp/game_app.hpp), persisted
+    // through this SAME read-modify-write file so it round-trips like every
+    // RE'd toggle above. Normalized 0/1; absent key -> windowed (matching the
+    // original's only mode).
+    std::optional<bool> fullscreen;
 };
 
 // Reads and parses `<path>` (the install-root options.ini). A missing or

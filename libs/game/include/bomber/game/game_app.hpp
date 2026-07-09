@@ -70,6 +70,18 @@ public:
 
 private:
     bool init();
+    // PORT ENHANCEMENT (not RE'd — the original has no fullscreen concept):
+    // the Alt+Enter/F11 fullscreen toggle, wired as a global SDL_EventFilter
+    // (installed once in init()) so it works from every one of this file's
+    // per-screen SDL_PollEvent loops without touching each of them. Returns
+    // false (swallow) for the toggle keys, true (keep) for everything else —
+    // matches SDL_EventFilter's contract, called via the static thunk below
+    // since SDL needs a plain function pointer + void* userdata.
+    bool handle_global_event(const SDL_Event& ev);
+    static bool SDLCALL sdl_event_filter(void* userdata, SDL_Event* event);
+    // Flips fullscreen_, applies it to the live window, and marks the choice
+    // for persistence (options_dirty_ — flush_options() is the sole writer).
+    void toggle_fullscreen();
     // Write-on-exit (task requirement 3 / §2): serializes every in-memory
     // option this session has touched back to options.ini, ONLY if something
     // actually changed since load (options_dirty_) and a game_dir is known.
@@ -528,6 +540,12 @@ private:
     // flush_options() (the write-on-exit hook, §2). Empty when no game_dir
     // was resolvable (init() already failed in that case).
     std::filesystem::path options_path_;
+    // PORT ENHANCEMENT — "fullscreen=" (see init()'s window-creation comment
+    // and toggle_fullscreen()): not one of the original's confirmed 22
+    // options.ini keys, since the 1997 binary has no fullscreen mode at all.
+    // Loaded once in init(), applied to the window there, flipped by
+    // Alt+Enter/F11 (handle_global_event), persisted by flush_options().
+    bool fullscreen_ = false;
 
     std::optional<sdl::VideoSubsystem> video_;
     sdl::WindowPtr window_;
