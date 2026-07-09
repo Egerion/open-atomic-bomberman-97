@@ -655,6 +655,29 @@ fills by splitting each `id,a,b,c` line into consecutive slots, so
 0}`. Confirmed cursor: **x = 332, y = 140 + 38·row**. (The menu's own idle
 timeout is `getvalue(92)`, not the waited-screen `getvalue(12)`.)
 
+**Cursor pacing — CORRECTED (2026-07-09).** The cursor's animation-frame
+counter is `v13`, declared once at `sub_42B9CE`'s top (`v13 = 0`) and
+incremented exactly once per pass of the menu's own poll loop
+(`v3 = v13++;`, pseudo.c 30776, immediately followed by the SAME loop's
+input poll `sub_4102B7` and its own blit/flip). There is no separate
+throttle anywhere in this loop and no `getvalue()` id backs a frame-rate
+constant — "one animation step per displayed frame" IS the original's
+pacing, and the displayed frame rate is whatever the DirectDraw flip's
+vertical-blank wait gave it (typically 60-75 Hz on 1997 VGA/SVGA). Our
+port's `present_menu` matched the FORMULA (`frame % statecnt`, `anim_pace.hpp`)
+but not the RATE: `++frame` incremented once per iteration of a loop capped
+only by `SDL_Delay(2)` (~500 Hz, no vsync) — about 8x faster than the
+original's vsync-limited rate, a visibly-too-fast flicker on the
+bomb-trigger cursor. **Fixed**: `GameApp::init()` now calls
+`SDL_SetRenderVSync(ren, 1)` right after creating the renderer, so
+`SDL_RenderPresent` blocks to the display's refresh — the same mechanism
+(flip synced to vertical blank) the original almost certainly used, without
+guessing a magic millisecond constant. This is a global fix (one call site),
+so it also corrects the same free-running-frame-counter pattern in every
+other front-end loop that shares it (Goldman wheel spin, boot logo timing,
+attract idle) — not just the main menu, though the main menu's cursor is
+the specific case that surfaced it.
+
 **Spine mapping.** The polished menu keeps the seven rows in the original v10
 order so the cursor anchor lands on the baked labels: Play→`Match`,
 setup A→Options `.BM` help, setup B→Network `.BM` help, row 3 (Options,

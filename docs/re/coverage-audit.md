@@ -82,7 +82,7 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 | 16 | Boot flow (IPLOGO→HSLOGO→TITLE→menu), `sub_42B060`/`sub_42B9CE` | pinned | ported | frontend-flow.md, ADR-0004, `app_flow.hpp`, `test_frontend.cpp` | — | done |
 | 17 | Attract mode boot-loop restart (no attract on boot) | pinned | ported | frontend-flow.md "boot flow is STRAIGHT-LINE" | — | done |
 | 18 | Attract mode: menu-idle LIVE AI-only demo match | pinned | ported | frontend-flow.md table (this row, "Merge attract-mode demo match" 96be2e4): `attract_` flag (`dword_464938` equivalent), `input.hpp`'s `attract_computer_count`/`fill_attract_roster`/`attract_stage_pick` helpers, roster/level/team save-restore (`GameApp::AttractSaved`), AI-only dispatch bypassing the goldman wheel/setup/map-select screens, any key/mouse/pad input aborts immediately, DRAW/RESULTS/VICTORY suppressed | — | done |
-| 19 | Main menu (7 rows, cursor, navigation) | pinned | ported | frontend-flow.md "main-menu items", `present_menu` | — | done |
+| 19 | Main menu (7 rows, cursor, navigation) | pinned | ported | frontend-flow.md "main-menu items", `present_menu`; audited against `sub_42B9CE` again 2026-07-09 (row labels baked into MAINMENU.PCX confirmed — none drawn, matching; cursor anchor/sounds/dispatch already matched) — see row #42 below for the one real gap this pass found | — | done |
 | 20 | Results tail: DRAW/RESULTS/VICTORY tiers | pinned | ported | frontend-flow.md, ROADMAP "Multi-round best-of-N loop + RESULTS tally 1:1 — DONE 2026-07-08" | — | done — frontend-flow.md's older "port still DEFERRED" note fixed to match (§RESULTS tally tier) | done |
 | 21 | VICTORY music using track 1020 instead of 1130 | pinned | **RESOLVED** | `game_app.cpp`: `kDrawMusicId` (1130) is started for DRAW, RESULTS, **and** VICTORY/TEAM (`audio_.start_music(kDrawMusicId)` in every outcome branch); `kWinMusicId` (1020) is scoped to the Play/setup path only. frontend-flow.md's "Results MUSIC" section and the 1020/1130 tunables rows updated to match — this audit's snapshot was stale on this row | — | done |
 | 22 | `.BM` generic help browser (menu row 5 + in-round F1) | pinned | ported | ROADMAP "The generic .BM help BROWSER — DONE 2026-07-08" | — | done |
@@ -104,6 +104,9 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 | 38 | Faithful screen inks (RGB555 LUT) | pinned | ported | ROADMAP "Faithful screen inks — DONE 2026-07-08" | — | done |
 | 39 | SDL3 gamepad support | pinned (`sub_421E80` cycle order) | ported | ROADMAP "SDL3 gamepad support — DONE 2026-07-08" | — | done |
 | 40 | Team Play colour split (the red/white sprite override) | pinned | ported | player-colour.md "Team Play colour override" (`sub_4214BC` round-init +60 override, CONFIRMED 2026-07-09), `bomber::match::team_render_colour` (`libs/match/include/bomber/match/team_colour.hpp`), `Renderer::render_colour` (`renderer.cpp`, every player/bomb/flame/carried-bomb/death-anim colour site), `present_setup`'s trailing team-marker glyph (`game_app.cpp`), `test_team.cpp` | — | done |
+| 41 | In-round "player row" HUD (S:/K: score+kill grid, "xxx" dead-slot marker) | pinned | ported | in-match-shell.md "The player row — CONFIRMED (`sub_420F07`, corrects the point above)" (2026-07-09) — corrects row #34's/this doc's own earlier "no score/kill HUD" claim; `GameApp::draw_player_row`, `SequenceSet::eliminated_marker` | — | done |
+| 42 | In-round "cornerhead" face bubble (`KFACE.ANI`, follows one designated player slot `dword_45BE3C`) | pinned (call site + asset located) | **absent** | in-match-shell.md "The player row" section, "A separate, NOT ported, lower-confidence finding" | `dword_45BE3C`'s exact "which slot is this" semantics need more tracing before porting — a same-screen multiplayer port has no obvious single "local" slot the way a netplay client would, so guessing an index risks an invented visual | low |
+| 43 | Main-menu (and other front-end loops') animated-cursor pacing vs. an uncapped render loop | pinned | **RESOLVED** | frontend-flow.md "Cursor pacing — CORRECTED (2026-07-09)": `sub_42B9CE`'s cursor-frame counter advances once per menu-loop iteration with no separate throttle (the DirectDraw flip's own vsync IS the pacing); our port's equivalent `++frame` was uncapped (`SDL_Delay(2)` only, ~500 Hz, ~8x too fast) — fixed with one `SDL_SetRenderVSync(ren, 1)` call in `GameApp::init()`, which also corrects the same pattern in the Goldman wheel spin / boot logos / attract idle | — | done |
 
 ## 3. Asset-format coverage (libs/assets vs install tree)
 
@@ -304,23 +307,28 @@ still correctly empty).
 
 ## Summary counts
 
-Counting the 40 numbered subsystem rows (§1+§2) + the 14 distinct
+Counting the 43 numbered subsystem rows (§1+§2) + the 14 distinct
 asset-format rows in §3 (excluding pure-tooling extensions marked N/A:
 .ICO/.EXE/.DLL/.IDB):
 
-- **Covered (RE pinned + ported, "done"):** 39 of 40 subsystem rows (up from
+- **Covered (RE pinned + ported, "done"):** 41 of 43 subsystem rows (up from
   31 at the 2026-07-08 snapshot — #13 rover/ghost mover, #18 attract mode,
   and #30 clogs prize (effect + wheel icon render) closed earlier in this
   2026-07-09 pass; #15 wall-slam SFX and #23 INPUT.BM menu-row binding
   closed in the same day's SFX/audit sweep; #32's editor Ctrl+B reset/'0'
   tileset toggle/brush-preview/dialog-chrome polish closed in the same
   day's editor pass; #40 Team Play colour split closed in the comprehensive
-  team-mode RE pass the same day) + **14 of 14** asset formats (up from 11
-  — .CAM/campaign, then `.BMP`, then the `.DAT` row's 3rd file
-  (`WINEREG/EReg058.dat`) closed this pass) — the large majority of 1:1
-  gameplay and front-end fidelity, and every asset-format row now closed.
-- **Partial/open (RE pinned, port absent or a small residual):** 1 subsystem
-  row — #35 in-round debug/cheat keys. No asset format rows remain open:
+  team-mode RE pass; #41 the in-round "player row" S:/K: HUD and #43 the
+  vsync cursor-pacing fix closed in the user-findings pass the same day) +
+  **14 of 14** asset formats (up from 11 — .CAM/campaign, then `.BMP`, then
+  the `.DAT` row's 3rd file (`WINEREG/EReg058.dat`) closed this pass) — the
+  large majority of 1:1 gameplay and front-end fidelity, and every
+  asset-format row now closed.
+- **Partial/open (RE pinned, port absent or a small residual):** 2 subsystem
+  rows — #35 in-round debug/cheat keys, #42 the in-round "cornerhead"
+  KFACE.ANI face bubble (pinned but deliberately unported until
+  `dword_45BE3C`'s slot semantics are traced). No asset format rows remain
+  open:
   the `.DAT` row closed 2026-07-09 (`LEVELS.DAT` confirmed dead/tooling
   data, `bmstats.dat`/`.txt` confirmed live-but-write-only debug telemetry
   with no reader/reachable UI, and the 3rd file — `WINEREG/EReg058.dat`, a

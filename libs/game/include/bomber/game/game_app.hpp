@@ -284,6 +284,19 @@ private:
     // reaches Results).
     AppInput run_match();
 
+    // The in-round "player row" HUD strip (docs/re/in-match-shell.md "The
+    // player row" — corrects that document's earlier "no score/kill HUD
+    // element exists" claim, which missed this block inside sub_420F07):
+    // for every slot that has ever been in this match, draws "S:<wins>
+    // K:<kills>" in that player's own colour at a 5-column x 2-row grid
+    // across the top of the screen (VALUELST 113-119), overlaying the
+    // MISC.ANI "xxx" marker on a slot that is dead THIS round. Called once
+    // per rendered frame from run_match, after Renderer::draw_frame — needs
+    // GameApp's own win_count_/kill_count_/front_font_/seqs_, none of which
+    // Renderer owns (CLAUDE.md's libs/game boundary: Renderer reads sim
+    // State + events only).
+    void draw_player_row(const sim::State& s);
+
     // The winner of the round just ended: the sole surviving player's index, or
     // -1 for a draw (no survivor, or the clock ran out). Drives the Results
     // screen's DRAW-vs-VICTORY choice and the "player N wins" naming.
@@ -429,7 +442,19 @@ private:
     // -1 = RANDOM (keep pick_stage over the enabled rotation), else 0..10 = a
     // specific built-in level whose stage index start_match uses directly.
     int selected_level_ = -1;
-    std::uint32_t setup_lcg_ = 0x5E7C0DE5u;  // presentation RNG for the glue pick
+    // Presentation RNG for the glue pick (and the LEVEL & ROUNDS preview
+    // swatch's per-cell tile re-roll). The literal below is only a
+    // construction-time placeholder: GameApp::init() overwrites it (and the
+    // three sibling LCGs in this file) with a real per-process seed from
+    // random_boot_seed() (game_app.cpp), matching the original's boot-time
+    // `time_(); srand_();` (sub_41095A, pseudo.c 14610-14611/14639-14640 —
+    // the same wall-clock reseed docs/re/facts.md "Per-match brick fill"
+    // already cites). A hardcoded literal here would replay the exact same
+    // "random" sequence on every launch; `next_seed_` below has the same
+    // shape and feeds `match::pick_stage`, so leaving it constant was the
+    // root cause of the reported "RANDOM level always picks the same map"
+    // bug. Presentation-only: never bomber::sim::State::rng.
+    std::uint32_t setup_lcg_ = 0x5E7C0DE5u;
 
     // ATTRACT MODE (docs/re/frontend-flow.md "Attract mode", sub_42B9CE's idle
     // path + sub_410F81's attract branch, dword_464938). Presentation/config-
@@ -464,7 +489,9 @@ private:
     };
     AttractSaved attract_saved_{};
     // Dedicated presentation LCG (never State::rng) for the two attract rolls
-    // (roster-count, stage) — same shape as setup_lcg_/goldman_lcg_.
+    // (roster-count, stage) — same shape as setup_lcg_/goldman_lcg_. Reseeded
+    // per-process by GameApp::init() (random_boot_seed(), see setup_lcg_'s
+    // comment above); the literal is only the construction-time placeholder.
     std::uint32_t attract_lcg_ = 0x0A77AC70u;
 
     // Campaign mode (docs/re/campaign.md, dword_46489C): armed only by the
@@ -510,7 +537,9 @@ private:
     // start_match() into MatchConfig::born_with_extra every round while
     // gold_player_ stays the same match's winner.
     int gold_prize_ = -1;
-    std::uint32_t goldman_lcg_ = 0x60D1BEEFu;  // presentation RNG seed for the wheel's 5 draws
+    // Presentation RNG seed for the wheel's 5 draws; reseeded per-process by
+    // GameApp::init() (random_boot_seed(), see setup_lcg_'s comment above).
+    std::uint32_t goldman_lcg_ = 0x60D1BEEFu;
 
     Options opts_;
 
@@ -566,7 +595,14 @@ private:
     std::optional<Screen> screen_;
     std::optional<Transition> transition_;
     FontTextures front_font_;  // FONT6.FON glyph textures for the .BM screens
-    std::uint32_t next_seed_ = 0xB0BB1E5;  // per-match seed, advanced each round
+    // Per-match seed, advanced each round (`start_match(next_seed_++)`) and
+    // fed to `match::build_match_config`'s per-candidate brick fill/spawn
+    // shuffle AND `match::pick_stage`'s RANDOM level pick. GameApp::init()
+    // reseeds this from random_boot_seed() (see setup_lcg_'s comment above);
+    // the literal below is only the construction-time placeholder — leaving
+    // it fixed was the bug that made a fresh process's first RANDOM level
+    // pick (and first match's brick layout) identical on every launch.
+    std::uint32_t next_seed_ = 0xB0BB1E5;
 
     sim::Simulation sim_;
 };

@@ -226,14 +226,12 @@ NOT a player-triggered pause; it is the game freezing its own clock once a
 side has already won, presumably so the linger-and-death-animation window
 doesn't visibly burn round time. No key toggles this.
 
-**No score/kill/lives HUD element exists in `sub_4105D2` or anywhere else in
-the tick callback chain** — the per-tick chain (`sub_4105D2`,
-`sub_415CA4`, `sub_42641F`, `sub_4056CA`, `sub_4245B9`, `sub_424F89`,
-`sub_41B961`, `sub_426D06`, `sub_426818`, `sub_420F07`, `sub_42459A`,
-`sub_410578`) was read function-by-function for this task; only
-`sub_4105D2` (clock) and the "hurry" block (below) draw any text/HUD
-element. Per-player win tallies only appear later, on the separate RESULTS
-screen (`docs/re/frontend-flow.md` "RESULTS tally tier").
+**CORRECTED 2026-07-09 — a per-player score/kill HUD element DOES exist.**
+This document's earlier claim ("no score/kill/lives HUD element exists in
+`sub_4105D2` or anywhere else in the tick callback chain... only `sub_4105D2`
+[clock] and the 'hurry' block draw any text/HUD element") was wrong: it
+listed `sub_420F07` among the functions "read function-by-function" but
+missed a real draw block inside it. See "The player row" below.
 
 ### The "hurry" late-round flash — CONFIRMED, separate from the clock colour change
 
@@ -263,6 +261,121 @@ they are now implemented, not just recorded.
 pseudo.c 29531-29549; VALUELST `101,60` / `110,525` / `111,36` / `112,4`
 [file's own comment: "extra pixels of space between the timer font
 digits"]; MESSAGES.TXT `281,"%u:%02u"`.)
+
+### The player row — CONFIRMED (`sub_420F07`, corrects the point above)
+
+`sub_420F07` (@ 0x420F07, the "per-player render-and-cornerhead pass" this
+document's round-driver section already names) has its own per-player draw
+block, separate from the clock/hurry HUD, gated `if (byte_461BD4[152*i])`
+(the "Player struct" facts.md entry's `+0x10` field — CONFIRMED here to mean
+"this slot has ever had a player in this MATCH", not "alive this round",
+since a round-eliminated slot still draws — see the marker overlay below):
+
+```
+v10 = sub_412135(i/2 + 115);           // x = getvalue(115 + i/2)
+v9  = sub_412135((i&1) + 113);         // y = getvalue(113 + i&1)
+v4  = dword_461C2C[38*i] >> 16;        // sub_421AC8(i) — win count
+v1  = sub_4124A4(37);                  // getstring(37) = "S:%d K:%d"
+sub_4518D0(v8, v1, v4);                // sprintf (2nd %d arg lost to
+                                        // Hex-Rays' variadic-call undercount,
+                                        // resolved below via sub_421AC8's
+                                        // OWN call sites elsewhere)
+v5 = sub_416867(i); v2 = sub_41672F(i);        // ink/shadow, per-player colour
+sub_41696C(dword_464AE4, v8, v10, 90, v9, v2, v5);
+if (!dword_461BC4[38*i]) {             // +0x00 "active/moving" == dead THIS round
+    v6 = sub_41D957(aXxx);             // aXxx = "xxx" (literal, lowercase)
+    v7 = sub_41DAA7(v6, 0);
+    sub_415920(v10, v9, v7);           // overlay the "xxx" sprite
+}
+```
+
+**Layout — pixel-exact from the VALUELST file's OWN comments** (not
+inferred): `; two vertical (Y) coordinates of each player row across the
+top` → `113,6` / `114,26`; `; left (X) coordinates of each player column
+across the top` → `115,10` `116,110` `117,210` `118,310` `119,410`. So this
+is a **5-column x 2-row grid of up to 10 player slots** spanning the top of
+the screen (y=6 or y=26; x=10/110/210/310/410), column = `i/2`, row = `i&1`
+(pairs (0,1),(2,3),(4,5),(6,7),(8,9) stacked in each column). The box width
+passed to `sub_41696C` (90 px) is a literal, not a `getvalue()` id.
+
+**The two numbers ARE win-count and kill-count, not a decompiler artifact.**
+`sub_421AC8(a1)` (`return dword_461C2C[38*a1]>>16`) is the SAME accessor
+`sub_420F07` inlines as `v4` above — and it is independently used at the
+RESULTS tier's match-clinch check (`sub_421AC8(k) >= dword_464A7C`, pseudo.c
+29943, "wins needed to clinch") and its own per-player score print (pseudo.c
+29959-29960, `sub_421B0F(j)` / `sub_421AC8(j)`, immediately followed by
+`sub_4124A4(31)` = MESSAGES.TXT `31,"Player %u score: %u (kills: %d)"`) —
+`docs/re/results-and-options.md` §1 already pins this exact pair as **"Score
+= `sub_421AC8(i)` (cumulative match win count)... 'kills' figure...
+`sub_421B0F(i)`"**. Our port already tracks both of these under
+`GameApp::win_count_`/`kill_count_` (results.hpp's `tally_kills`, wired for
+the RESULTS screen) — `sub_420F07`'s row is the SAME two counters, drawn
+LIVE during the round instead of only at RESULTS.
+
+**The "xxx" overlay is a real sprite, not synthesized text.** `aXxx` is the
+literal C string `"xxx"` (`char aXxx[4] = "xxx"`, pseudo.c 1556), passed to
+`sub_41D957` — the same named-sequence lookup the tile/flame/powerup art all
+go through (a binary search over a loaded ANI's sequence table, confirmed by
+reading `sub_41D957`'s body: `stricmp` binary search, "Unable to find
+sequence" error on a miss). The shipped `MISC.ANI` (also home to `goldman`,
+`cursor1`, `teamring0/1`) carries a `'xxx'` sequence verbatim: 1 step, frame
+`XXXX.TGA`, 77x20 px (confirmed via `abtool ani MISC.ANI` against this
+install). `sub_415920` is the same generic single-frame blit `sub_41696C`'s
+clock digits use elsewhere in this document — so this is a genuine icon
+overlay, not a text glyph.
+
+**No panel/background art backs this row.** The only call immediately before
+the per-player loop, `sub_429790`, is joystick-input polling (unrelated,
+confirmed by reading its body) — there is no fill/border/backdrop draw call
+site anywhere in `sub_420F07`. The row is a bare text+icon overlay directly
+on the live game field, matching the clock HUD's own styling.
+
+**A separate, NOT ported, lower-confidence finding: the "cornerhead" face
+bubble.** Still inside `sub_41F29B` (the per-player animation-advance this
+document's round-driver section already cites for the idle-fidget "cornerhead"
+poses — CONFIRMED unrelated to this section, already ported as
+`Renderer`'s `panic_ticks_`/`panic_variant_`), a SEPARATE block (pseudo.c
+23269-23276) draws a `KFACE.ANI` face (`sub_4518D0(v76, aKfaceS, dir)`,
+`aKfaceS = "kface %s"`; `KFACE.ANI` ships `kface north/east/south/west`, 4
+single-frame ~40x40 images, confirmed via `abtool ani KFACE.ANI`) 4px left
+and 34px above ONE specific player's sprite — gated
+`if (((char*)v111-(char*)dword_461BC4)/152 == dword_45BE3C)`, i.e. only for
+the player slot equal to global `dword_45BE3C`. This reads as a
+netplay-era "which one is me" indicator (one face bubble floating over a
+single designated slot, direction-facing via `sub_413AED`), not a per-player
+roster display — `dword_45BE3C`'s exact semantics (a fixed "local player"
+slot index, presumably always 0 or the first human slot in a hotseat/local
+game) were not traced further; this task's brief is a genuinely different
+concept from the "player row" above (an icon that follows ONE player's
+sprite around the field, vs. a fixed top-of-screen grid of everyone), has
+only one call site with more ambiguity in what it should mean for a
+same-screen multiplayer port (every "local" player is equally local here),
+and porting a wrong index would be an invented visual — **left unported,
+flagged here as a confirmed-but-deferred gap** rather than guessed.
+
+**Port status: DONE for the player row, deferred for the cornerhead face
+bubble.** `GameApp::draw_player_row` (`game_app.cpp`, called from
+`run_match` after `Renderer::draw_frame`) now draws the S:/K: grid in each
+slot's `AssetStore::slot_color` (the same helper `present_scoreboard`'s
+non-team row already uses for the identical `sub_41672F` ink), with the
+`MISC.ANI` "xxx" sequence (`SequenceSet::eliminated_marker`) overlaid on a
+round-dead slot. `sim::Player::present`/`sim::Player::alive` stand in for
+`byte_461BD4`(+0x10)/`dword_461BC4`(+0x00) respectively — both fields
+facts.md's "Player struct" entry already names, now correctly mapped to
+their actual meanings (match-membership vs. round-alive) via this block's
+own two independent gates.
+
+(Provenance: `sub_420F07` @ 0x420F07 pseudo.c 23628-23701 [already partially
+cited by this document's round-driver section]; `sub_421AC8`/`sub_421B0F`
+@ 0x421AC8/0x421B0F pseudo.c 24112-24130; `sub_41D957` @ 0x41D957 pseudo.c
+21760-21806; `aXxx` pseudo.c 1556; VALUELST `113,6` `114,26` `115,10`
+`116,110` `117,210` `118,310` `119,410` with the file's own two comment
+lines quoted above; MESSAGES.TXT `37,"S:%d K:%d"` [only call site in the
+whole decompile]; `docs/re/results-and-options.md` §1 [`sub_421AC8`/
+`sub_421B0F` cross-reference, RESULTS screen's own use of the identical
+pair]; `sub_41F29B` cornerhead-face block pseudo.c 23269-23276, `aKfaceS`
+pseudo.c 1554; `MISC.ANI`/`KFACE.ANI` sequence tables confirmed via `abtool
+ani` against this install's `DATA/ANI/`.)
 
 ## The round-end shell — from "one side left" to the results tier
 
@@ -442,6 +555,8 @@ shippable-binary developer cheats, not decompiler artifacts.
   pass (clock HUD); id `101` was already loosely noted as "hurry timing", now
   pinned to an exact value and formula.
 - `libs/game/src/game_app.cpp` — `run_match` (`~line 1545`) is the port's
-  in-round loop; this document's Esc finding, HUD, and hurry-flash facts are
-  all implemented there (ROADMAP "In-round shell — RE'd + ported
-  2026-07-08").
+  in-round loop; this document's Esc finding, clock HUD, and hurry-flash
+  facts are all implemented there (ROADMAP "In-round shell — RE'd + ported
+  2026-07-08"). `draw_player_row` (called from `run_match`, 2026-07-09) adds
+  "The player row" section's S:/K: grid + "xxx" dead-slot marker; the
+  cornerhead face bubble in that same section remains unported.

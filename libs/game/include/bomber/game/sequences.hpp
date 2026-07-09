@@ -48,6 +48,9 @@ struct SequenceSet {
     Anim infinity;  // KFONT 'infinity' — drawn instead of digits on an untimed round
                     // (docs/re/in-match-shell.md §3: dword_4601A8 == 1001, aInfinity)
     Anim hurry;
+    // MISC.ANI 'xxx' (docs/re/in-match-shell.md "The player row") — overlaid
+    // on a round-eliminated player's top-of-screen score entry.
+    Anim eliminated_marker;
     // Stage-actor floor art (docs/re/stage-actors.md). conveyor/dirarrow indexed
     // by godir (0=Up/north,1=Right/east,2=Down/south,3=Left/west); trampoline
     // and warphole are direction-independent. Empty entries simply draw nothing.

@@ -2,10 +2,12 @@
 
 #include <algorithm>  // std::max_element
 #include <cctype>     // std::isalnum (present_editor's filename sanitizer)
+#include <chrono>     // random_boot_seed
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <iterator>  // std::size
+#include <random>    // random_boot_seed
 #include <string>
 
 #include "bomber/assets/install.hpp"
@@ -38,6 +40,117 @@ namespace {
 // results-and-options.md #5, "exact dialog chrome") can reuse the SAME
 // pinned facts instead of re-deriving them — see that header for the full
 // sub_43C734/sub_432298 provenance comments.
+// A fresh per-process seed for the front end's presentation-only LCGs
+// (setup_lcg_, attract_lcg_, goldman_lcg_, next_seed_ — GameApp::init() below
+// assigns one call's result to each). The original seeds its single C
+// rand() from the wall clock exactly once at boot — `time_(); srand_();`
+// twice in a row inside the init routine sub_41095A (pseudo.c 14610-14611
+// and, after loading the boot dialogs/config, again at 14639-14640) — so
+// EVERY "random" pick downstream of it (the glue-screen backdrop, the
+// LEVEL & ROUNDS RANDOM level, the per-match brick fill, the attract-mode
+// roster/stage, the Goldman wheel draws) varies from one launch to the next
+// (docs/re/facts.md "Per-match brick fill" already cites this same
+// `time_()`/`srand_()` pair). Our port previously left every one of these
+// LCGs at a fixed literal seed, so each replayed the exact same sequence on
+// every process start — most visibly, picking RANDOM on the LEVEL & ROUNDS
+// screen always resolved to the same map on a fresh launch (`next_seed_`
+// feeds `match::pick_stage`). This mixes `std::random_device` (real OS
+// entropy on every platform we ship) with the high-resolution clock so the
+// result still varies even on a `random_device` implementation that is
+// itself deterministic (a known quirk of some older toolchains) — matching
+// the original's per-boot reseed while staying entirely presentation-side:
+// this seeds LCGs that only ever touch cosmetic/setup-time picks, never
+// `bomber::sim::State::rng` (ADR-0003 untouched).
+std::uint32_t random_boot_seed() {
+    static std::random_device rd;
+    auto clock_bits = static_cast<std::uint32_t>(
+        std::chrono::high_resolution_clock::now().time_since_epoch().count());
+    std::uint32_t seed = static_cast<std::uint32_t>(rd()) ^ clock_bits;
+    return seed != 0 ? seed : 1u;  // an LCG's own step never produces 0 from a 0 seed here,
+                                    // but avoid a literal 0 seed on principle
+}
+
+// The shared sub_43C734 dialog-chrome primitive — PINNED 2026-07-09
+// (docs/re/frontend-flow.md "The sub_43C734 dialog-chrome primitive"). Both
+// the boot LOADING dialog (sub_412E33's percent-bar window) and the Yes/No
+// confirm (sub_41456C) open through this ONE window constructor, and its
+// "chrome" is exactly two things: a single flat filled rectangle (colormode
+// 256 -> the theme default fill, byte_495390[dword_45C46C], decoded RGB555
+// offset 10570 -> (82,82,82) grey) and NOTHING else — no border, no shadow,
+// no bevel anywhere in the window body (sub_43D398/sub_4428E4, the placement
+// + blit steps, never draw a decorative outline). The earlier port's guessed
+// light-frame outline had no basis in the decompile and is removed here.
+//
+// sub_43C734's real signature is `(y, height, width, colormode, flags)`, NOT
+// `(x, y, width, ...)` as an earlier pass assumed — confirmed against the
+// master 640x480 root window's own construction
+// (`sub_43C734(0, 480, 640, black, 1)`, only sensible as y=0/height=480/
+// width=640). Neither dialog caller ever computes an explicit X; the
+// confirm dialog computes only a vertical center. The X-placement source
+// register is one IDA's decompiler lost (`sub_43D398`'s internal x value,
+// "possibly undefined" — TODO(RE): needs a disassembler pass, unavailable
+// here) — every visual call site's evident intent is a horizontally
+// centered dialog, so the port centers against the 640-px screen width.
+struct DialogRect {
+    float x, y, w, h;
+};
+
+constexpr Uint8 kChromeFillR = 82, kChromeFillG = 82, kChromeFillB = 82;  // dword_45C46C=10570
+
+// X is never an explicit sub_43C734 parameter anywhere in this family (see
+// the block comment above) — the port horizontally centers every dialog
+// against the 640-px screen width, the one behaviour consistent with every
+// call site's visible intent.
+DialogRect dialog_rect(float y_px, float height_px, float width_px) {
+    return DialogRect{(static_cast<float>(kScreenW) - width_px) / 2, y_px, width_px, height_px};
+}
+
+// The confirm dialog's Y IS an explicit, CONFIRMED expression
+// (`(dword_464A6C - height) / 2` = vertical screen-center, sub_41456C
+// pseudo.c 17197) — unlike the loading dialog, which hardcodes y=200.
+DialogRect dialog_rect_vcentered(float height_px, float width_px) {
+    return dialog_rect((static_cast<float>(kScreenH) - height_px) / 2, height_px, width_px);
+}
+
+// The one flat fill sub_43C734/sub_43D1C0 draw — see the block comment above.
+void draw_dialog_chrome(SDL_Renderer* ren, const DialogRect& r) {
+    SDL_FRect box{r.x, r.y, r.w, r.h};
+    SDL_SetRenderDrawColor(ren, kChromeFillR, kChromeFillG, kChromeFillB, 255);
+    SDL_RenderFillRect(ren, &box);
+}
+
+// sub_432298 — the button widget (PINNED, docs/re/frontend-flow.md
+// "sub_432298 — the button widget"). Size is text-derived (width =
+// measure(label)+16, height = fontheight+6, pseudo.c ~35197-35199), with a
+// real 2px-inset bevel (unlike the plain window body above): light tone
+// (123,123,123, dword_45C470) on the top/left ring, dark tone (66,66,66,
+// dword_45C474) on the bottom/right ring — a raised "up" look, the only
+// state this port draws (no press animation needed for a Yes/No choice) —
+// closed with a 1px black outline, then the label in the text-shadow ink
+// (165,165,165, dword_45C478). `x, y` are the button's top-left in
+// WINDOW-relative pixels (matching sub_41456C's own button call sites).
+void draw_dialog_button(SDL_Renderer* ren, const FontTextures& font, float x, float y,
+                        const std::string& label) {
+    const float label_w = font.loaded() ? static_cast<float>(font.measure(label)) : 0.0f;
+    const float h = static_cast<float>(font.loaded() ? font.line_height() : 12);
+    const float w = label_w + 16.0f;
+    const float bh = h + 6.0f;
+
+    SDL_FRect outline{x, y, w, bh};
+    SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);  // byte_495390[0]
+    SDL_RenderFillRect(ren, &outline);
+    SDL_FRect ring1{x + 1, y + 1, w - 2, bh - 2};
+    SDL_SetRenderDrawColor(ren, 66, 66, 66, 255);  // dword_45C474, bottom/right (drawn full then...)
+    SDL_RenderFillRect(ren, &ring1);
+    SDL_FRect ring1_lit{x + 1, y + 1, w - 3, bh - 3};  // ...top/left overpainted light
+    SDL_SetRenderDrawColor(ren, 123, 123, 123, 255);  // dword_45C470
+    SDL_RenderFillRect(ren, &ring1_lit);
+    SDL_FRect face{x + 2, y + 2, w - 4, bh - 4};
+    SDL_SetRenderDrawColor(ren, kChromeFillR, kChromeFillG, kChromeFillB, 255);
+    SDL_RenderFillRect(ren, &face);
+
+    font.draw(ren, label, x + (w - label_w) / 2.0f, y + 3.0f, 165, 165, 165);  // dword_45C478
+}
 
 // The boot LOADING dialog — PINNED 2026-07-09 (docs/re/frontend-flow.md "The
 // boot LOADING dialog" + "The percent-bar dialog, sub_412E33"). This is NOT
@@ -109,6 +222,18 @@ void draw_boot_loading_dialog(SDL_Renderer* ren, const FontTextures& font, const
 }  // namespace
 
 bool GameApp::init() {
+    // Reseed the front end's presentation-only LCGs from real per-process
+    // entropy, mirroring sub_41095A's boot-time `time_(); srand_();` (see
+    // random_boot_seed()'s comment above) — done first, before anything that
+    // could read one of them, exactly like the original reseeds before its
+    // own config/subsystem init runs. Fixes RANDOM level selection (and the
+    // per-match brick fill/attract roster/Goldman wheel) always replaying the
+    // same pick on a fresh launch.
+    setup_lcg_ = random_boot_seed();
+    attract_lcg_ = random_boot_seed();
+    goldman_lcg_ = random_boot_seed();
+    next_seed_ = random_boot_seed();
+
     fs::path game = !opts_.game_dir.empty() ? opts_.game_dir : assets::default_game_dir();
     if (game.empty() || !fs::is_directory(game / "DATA")) {
         std::fprintf(stderr,
@@ -223,6 +348,26 @@ bool GameApp::init() {
     // advance-on-any-key, the editor's text input, etc). Installed once here,
     // for the window's whole lifetime.
     SDL_SetEventFilter(&GameApp::sdl_event_filter, this);
+    // Vsync the present loop (best-effort; a no-op on a driver that can't,
+    // e.g. the dummy/offscreen video driver some CI runs use). The original
+    // is a DirectDraw flip loop with no getvalue()-backed frame-rate id
+    // anywhere in VALUELST, so its own pacing is whatever the display's
+    // vertical blank gave it (front-end loops like sub_42B9CE's menu poll
+    // once per iteration with no separate throttle — the flip IS the
+    // throttle). Every front-end screen that free-runs its own cosmetic
+    // frame counter once per render iteration (docs/re/frontend-flow.md
+    // "Cursor anchor" — present_menu's `++frame` driving the animated
+    // bomb-trigger cursor is the specific case that surfaced this, but the
+    // same pattern recurs in the Goldman wheel spin, boot logo timing, and
+    // attract idle) was, pre-fix, advancing at this loop's uncapped
+    // `SDL_Delay(2)` rate (~500 Hz) instead of the original's
+    // vsync-limited rate (~60-75 Hz) — a visibly-too-fast flicker with no
+    // faithful fixed millisecond constant to substitute, since the
+    // original's own pacing IS "one step per displayed frame". Syncing our
+    // present to the display's refresh is the faithful fix: it makes "one
+    // step per displayed frame" true here too, the same relationship the
+    // original had, without guessing a magic delay.
+    SDL_SetRenderVSync(ren, 1);
 
     // FONT6, loaded standalone BEFORE the boot LOADING dialogs — matching the
     // real init order (docs/re/frontend-flow.md "FONT6 timing", CONFIRMED):
@@ -2520,6 +2665,58 @@ sim::TickInputs GameApp::collect_inputs() const {
     return in;
 }
 
+// docs/re/in-match-shell.md "The player row" — CONFIRMED, pixel-exact
+// against the VALUELST file's own comments (ids 113/114 = "two vertical (Y)
+// coordinates of each player row across the top", 115-119 = "left (X)
+// coordinates of each player column across the top"). Message 37 = "S:%d
+// K:%d" (MESSAGES.TXT); the two values are sub_421AC8(i) (win_count_, the
+// SAME field the RESULTS screen's "score" already uses) and sub_421B0F(i)
+// (kill_count_, ditto "kills") — sub_420F07's own two accessors, already
+// wired to these exact members for the RESULTS screen (present_scoreboard,
+// docs/re/results-and-options.md §1). No panel/background art backs this
+// row (no draw call site found behind it in sub_420F07) — a bare overlay
+// directly on the live field, ported the same way.
+void GameApp::draw_player_row(const sim::State& s) {
+    auto splice_next = [](std::string& f, int v) {
+        auto p = f.find('%');
+        if (p == std::string::npos) return;
+        std::size_t q = p + 1;
+        while (q < f.size() && f[q] != 'u' && f[q] != 'd' && f[q] != 'i') ++q;
+        if (q < f.size()) f = f.substr(0, p) + std::to_string(v) + f.substr(q + 1);
+    };
+    for (int i = 0; i < sim::kMaxPlayers; ++i) {
+        // byte_461BD4 (+0x10, "alive/on-screen" per facts.md's "Player struct"
+        // entry) gates the whole row entry -> sim::Player::present, which is
+        // set once at match setup and stays true for the rest of the match
+        // regardless of round elimination (unlike `alive`, checked below).
+        if (!s.players[i].present) continue;
+        int col = i / 2;   // getvalue(115 + i/2): 5 columns, VALUELST 10/110/210/310/410
+        int row = i & 1;   // getvalue(113 + i&1): 2 rows, VALUELST 6/26
+        float x = static_cast<float>(values_.column_or(115 + col, 0, 10 + 100 * col));
+        float y = static_cast<float>(values_.column_or(113 + row, 0, 6 + 20 * row));
+
+        std::string line = assets_.getstring(37, "S:%d K:%d");
+        splice_next(line, win_count_[i]);
+        splice_next(line, kill_count_[i]);
+        std::uint8_t c[3];
+        assets_.slot_color(i, c);
+        front_font_.draw(sdl_renderer_.get(), line, x, y, c[0], c[1], c[2]);
+
+        // dword_461BC4 (+0x00, "active/moving state") gates the "xxx" overlay
+        // -> sim::Player::alive, the per-ROUND flag (reset every round,
+        // unlike `present` above) — a player dead THIS round still keeps
+        // their score visible underneath the marker.
+        if (!s.players[i].alive && !seqs_.eliminated_marker.steps.empty()) {
+            const Sprite& sp = seqs_.eliminated_marker.steps[0];
+            if (sp.tex) {
+                SDL_FRect dst{x - static_cast<float>(sp.hx), y - static_cast<float>(sp.hy),
+                              static_cast<float>(sp.w), static_cast<float>(sp.h)};
+                SDL_RenderTexture(sdl_renderer_.get(), sp.tex, nullptr, &dst);
+            }
+        }
+    }
+}
+
 AppInput GameApp::run_match() {
     start_match(next_seed_++);
     const std::uint64_t tick_ms = 1000 / sim::kTicksPerSecond;
@@ -2652,6 +2849,13 @@ AppInput GameApp::run_match() {
 
         audio_.update_music();
         renderer_->draw_frame(sim_.state());  // NOLINT(bugprone-unchecked-optional-access)
+        // The player-row HUD strip (docs/re/in-match-shell.md "The player
+        // row") needs GameApp's own win_count_/kill_count_/front_font_, none
+        // of which Renderer owns — drawn as a GameApp-side overlay on top of
+        // Renderer's frame, same layering the original has (sub_420F07 draws
+        // it every tick, after the field/world but the clock/hurry HUD is
+        // logically part of the same pass).
+        draw_player_row(sim_.state());
         SDL_RenderPresent(sdl_renderer_.get());
         SDL_Delay(2);
     }
