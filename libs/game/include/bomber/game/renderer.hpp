@@ -79,6 +79,15 @@ private:
     // Cosmetic render-side RNG for the disease colour strobe (never the sim's).
     Uint8 disease_flash_channel();
 
+    // The colour-set index (0-9) to draw player `slot` with — i.e. which of
+    // AssetStore's per-slot recoloured sprite sets (built 1:1 off the ten
+    // .RMP files) to index into. Bounds-checks `slot` then delegates to the
+    // SDL-free `bomber::match::team_render_colour` (libs/match/include/bomber/
+    // match/team_colour.hpp — see its doc comment for the full sub_4214BC RE
+    // citation and doctest coverage) for the actual team-vs-slot-index rule.
+    // docs/re/player-colour.md "Team Play colour override".
+    static int render_colour(const sim::State& s, int slot);
+
     // True when all four orthogonal neighbours of (tx,ty) are impassable
     // (wall/brick/burning brick or a resting bomb); out-of-grid counts blocked.
     static bool boxed_in(const sim::State& s, int tx, int ty);

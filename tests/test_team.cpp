@@ -12,6 +12,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
+#include "bomber/match/team_colour.hpp"
 #include "bomber/sim/rng.hpp"
 #include "bomber/sim/simulation.hpp"
 
@@ -260,4 +261,45 @@ TEST_CASE("an all-zero-team roster hashes identically before/after the team "
     cfg2.team.fill(0);
     Simulation a(cfg1), b(cfg2);
     CHECK(a.hash() == b.hash());
+}
+
+// ---------------------------------------------------------------------------
+// team_render_colour (bomber::match, libs/match/include/bomber/match/
+// team_colour.hpp): the Team Play red/white sprite-colour rule, CONFIRMED
+// from sub_4214BC (round init, pseudo.c ~23916-23927) — see that header's
+// doc comment for the full RE citation. Player::team == 0 keeps the slot's
+// own colour index; team == 1 -> colour 0 (white, 0.RMP); team == 2 -> colour
+// 2 (red, 2.RMP); any other nonzero team value also collapses to red (the
+// original's `? 2 : 0` has no third branch).
+// ---------------------------------------------------------------------------
+
+TEST_CASE("team_render_colour: no team (0) keeps the player's own slot index") {
+    for (int slot = 0; slot < kMaxPlayers; ++slot)
+        CHECK(bomber::match::team_render_colour(0, slot) == slot);
+}
+
+TEST_CASE("team_render_colour: team 1 forces colour 0 (white/0.RMP) regardless of slot") {
+    for (int slot = 0; slot < kMaxPlayers; ++slot)
+        CHECK(bomber::match::team_render_colour(1, slot) == 0);
+}
+
+TEST_CASE("team_render_colour: team 2 forces colour 2 (red/2.RMP) regardless of slot") {
+    for (int slot = 0; slot < kMaxPlayers; ++slot)
+        CHECK(bomber::match::team_render_colour(2, slot) == 2);
+}
+
+TEST_CASE("team_render_colour: an out-of-contract nonzero, non-2 team value is treated as "
+          "white (only team==2 is red)") {
+    // Our setup only ever produces team in {0,1,2} (setup byte+1), so this is
+    // a defensive/degenerate input, not a real scenario. The rule mirrors
+    // sub_4214BC's `*(byte*)(v6+84) ? 2 : 0` literally: only an exact match on
+    // the "team B" value is red; anything else nonzero falls to the `: 0`
+    // (white) arm, same as team == 1 does.
+    CHECK(bomber::match::team_render_colour(9, 3) == 0);
+    CHECK(bomber::match::team_render_colour(255, 7) == 0);
+}
+
+TEST_CASE("team_render_colour: an out-of-range slot with no team clamps to 0") {
+    CHECK(bomber::match::team_render_colour(0, -1) == 0);
+    CHECK(bomber::match::team_render_colour(0, kMaxPlayers) == 0);
 }

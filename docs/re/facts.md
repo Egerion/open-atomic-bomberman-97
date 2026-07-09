@@ -179,7 +179,8 @@ struct base is `0x461BC4`, **stride 152 bytes (38 dwords)**. Fields seen:
 |---|---|---|
 | +0x00 | dword | active/moving state (truthy while acting) |
 | +0x10 | byte | alive / on-screen |
-| +0x54 | byte | a flag (team?) |
+| +0x3C (+60) | byte | **CONFIRMED draw-colour index** (0-9, selects the `.RMP`/`dword_460564[10]` set): non-team play = the player's own slot index; Team Play = `sub_4214BC`'s round-init override, `0` (white) or `2` (red) per the team byte below — every colour-keyed draw (body blit, bomb spawn, and by inheritance flame/carried-bomb/death-anim) reads THIS byte, `docs/re/player-colour.md` "Team Play colour override" |
+| +0x54 | byte | **CONFIRMED team byte** (== decimal +84, same field `docs/re/setup-screens.md` cites as "+84", `sub_4223E7`/`sub_422437` accessors; read by `sub_4214BC`'s round-init colour override, `docs/re/player-colour.md` "Team Play colour override") |
 | +0x68 | dword | position, **16.16 fixed point** (`>>16` = pixel) |
 
 Timing: global timers are decremented by the frame-delta `dword_464958` and
