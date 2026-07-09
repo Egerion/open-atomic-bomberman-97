@@ -23,6 +23,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -84,7 +85,7 @@ private:
 
 // sub_403184's 3-item chooser (§5): '1' edit an existing scheme (after a
 // file picker), '2' new scheme, Esc/'Q' exit, F1 help.
-enum class EditorChooserResult {
+enum class EditorChooserResult : std::uint8_t {
     None,       // still open
     EditExisting,
     New,
@@ -151,7 +152,7 @@ public:
 
 private:
     // sub_4023A2's four-prompt chain, in its exact order.
-    enum class ChainStep { None, BornWith, Forbidden, HasOverride, OverrideValue };
+    enum class ChainStep : std::uint8_t { None, BornWith, Forbidden, HasOverride, OverrideValue };
 
     void begin_chain();
     void advance_chain(AudioEngine& audio);
@@ -237,7 +238,7 @@ private:
     // FillConfirm: sub_4028D2's Ctrl+F case asks the getstring(760)/97
     // yes/no confirm BEFORE flood-filling (the fill itself is the k/j loop
     // over sub_4048EB).
-    enum class PromptKind { None, Density, Name, SaveConfirm, FillConfirm };
+    enum class PromptKind : std::uint8_t { None, Density, Name, SaveConfirm, FillConfirm };
 
     const AssetStore* assets_ = nullptr;
     const FontTextures* font_ = nullptr;

@@ -18,6 +18,16 @@ namespace bomber::game {
 
 namespace fs = std::filesystem;
 
+// NOTE on the `renderer_->`/`screen_->` NOLINTs below (bugprone-unchecked-
+// optional-access): both are std::optional<T> members populated exactly once,
+// unconditionally, at the end of a successful init() (this file, below) —
+// every method that dereferences them runs only from GameApp::run(), which
+// the app mains call strictly after a successful init(). clang-tidy's flow
+// analysis is per-function and can't see that cross-method invariant; an
+// `if (renderer_)` guard at each of the ~12 call sites (scattered across the
+// per-frame render/event loops) would be pure churn around a precondition
+// that's already true by construction, so these are deliberate one-offs
+// rather than fixed.
 bool GameApp::init() {
     fs::path game = !opts_.game_dir.empty() ? opts_.game_dir : assets::default_game_dir();
     if (game.empty() || !fs::is_directory(game / "DATA")) {
@@ -487,7 +497,7 @@ void GameApp::start_match(std::uint32_t seed) {
     // just above — the sim gets a very long but finite clock instead), so
     // tell the renderer directly rather than trying to infer "untimed" back
     // out of ticks_left.
-    renderer_->reset_match(options_.playtime_seconds == 1001);
+    renderer_->reset_match(options_.playtime_seconds == 1001);  // NOLINT(bugprone-unchecked-optional-access)
     sounds_.reset();
 }
 
@@ -495,8 +505,8 @@ int GameApp::run_demo() {
     for (int t = 0; t < opts_.demo_ticks; ++t) {
         sim_.tick(demo_inputs(t));
         sounds_.on_tick(sim_.state());
-        renderer_->on_events(sim_.state());
-        renderer_->draw_frame(sim_.state());  // keeps walk-anim sampling in sync
+        renderer_->on_events(sim_.state());  // NOLINT(bugprone-unchecked-optional-access)
+        renderer_->draw_frame(sim_.state());  // NOLINT(bugprone-unchecked-optional-access) — keeps walk-anim sampling in sync
     }
     SDL_Surface* shot = SDL_RenderReadPixels(sdl_renderer_.get(), nullptr);
     int rc = 1;
@@ -512,7 +522,7 @@ int GameApp::run_demo() {
 AppInput GameApp::present_screen(const ScreenDef& def) {
     // Enter the screen (resets its clock/counter; music is NOT touched here —
     // the caller owns the continuous track, sub_42A088 only presents an image).
-    screen_->enter(def, SDL_GetTicks());
+    screen_->enter(def, SDL_GetTicks());  // NOLINT(bugprone-unchecked-optional-access)
     AppInput result = AppInput::Advance;
     bool waiting = true;
     while (waiting) {
@@ -525,7 +535,7 @@ AppInput GameApp::present_screen(const ScreenDef& def) {
                 // accept sting (SFX 10) and finishes. Escape additionally routes
                 // us "back"; Enter/Space "advance". The blip/sting come from the
                 // Screen, so the music track is untouched — only the screen ends.
-                screen_->on_key(ev.key.key);
+                screen_->on_key(ev.key.key);  // NOLINT(bugprone-unchecked-optional-access)
                 if (ev.key.key == SDLK_ESCAPE) {
                     result = AppInput::Back;
                     waiting = false;
@@ -533,13 +543,13 @@ AppInput GameApp::present_screen(const ScreenDef& def) {
             }
         }
         std::uint64_t now = SDL_GetTicks();
-        screen_->update(now);
-        if (screen_->done()) waiting = false;
+        screen_->update(now);  // NOLINT(bugprone-unchecked-optional-access)
+        if (screen_->done()) waiting = false;  // NOLINT(bugprone-unchecked-optional-access)
 
         audio_.update_music();
         SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
         SDL_RenderClear(sdl_renderer_.get());
-        screen_->draw(sdl_renderer_.get());
+        screen_->draw(sdl_renderer_.get());  // NOLINT(bugprone-unchecked-optional-access)
         SDL_RenderPresent(sdl_renderer_.get());
         SDL_Delay(2);
     }
@@ -651,7 +661,7 @@ AppInput GameApp::present_help_browser_modal() {
         audio_.update_music();
         SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
         SDL_RenderClear(sdl_renderer_.get());
-        renderer_->draw_frame(sim_.state());  // last sim frame, frozen — no tick here
+        renderer_->draw_frame(sim_.state());  // NOLINT(bugprone-unchecked-optional-access) — last sim frame, frozen, no tick here
         browser.draw(sdl_renderer_.get());
         SDL_RenderPresent(sdl_renderer_.get());
         SDL_Delay(2);
@@ -1003,7 +1013,7 @@ void GameApp::present_campaign_picker() {
             campaign_stages_.clear();
             return;
         }
-    } catch (const std::exception&) {
+    } catch (const std::exception&) {  // NOLINT(bugprone-empty-catch)
         // aCouldnTOpenCam path (§1/§3): unreadable/corrupt file. Leave
         // campaign mode untouched, same as a cancelled picker.
     }
@@ -1117,7 +1127,7 @@ AppInput GameApp::present_campaign_banner() {
         audio_.update_music();
         SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
         SDL_RenderClear(sdl_renderer_.get());
-        renderer_->draw_frame(sim_.state());  // last frame as backdrop, like the help modal
+        renderer_->draw_frame(sim_.state());  // NOLINT(bugprone-unchecked-optional-access) — last frame as backdrop, like the help modal
         front_font_.draw(sdl_renderer_.get(), campaign_banner_, 220.0f, 200.0f, 255, 255, 255);
         front_font_.draw(sdl_renderer_.get(), prepare, 220.0f, 224.0f, 255, 220, 80);
         SDL_RenderPresent(sdl_renderer_.get());
@@ -1995,8 +2005,7 @@ AppInput GameApp::present_map_select() {
                 break;
             }
             audio_.play(20);
-            if (k == SDLK_UP) row = (row + 1) % 2;
-            else if (k == SDLK_DOWN) row = (row + 1) % 2;
+            if (k == SDLK_UP || k == SDLK_DOWN) row = (row + 1) % 2;  // 2 rows: either arrow toggles
             else if (row == 0 && k == SDLK_LEFT) {         // --level, wrap below -1
                 if (--selected_level_ < -1) selected_level_ = level_count - 1;
             } else if (row == 0 && k == SDLK_RIGHT) {      // ++level, wrap above count-1 to -1
@@ -2006,9 +2015,11 @@ AppInput GameApp::present_map_select() {
             } else if (row == 1 && (k == SDLK_RIGHT)) {    // wins +1
                 if (++win_target_ > 100) win_target_ = 100;
             } else if (row == 1 && k == SDLK_PAGEUP) {     // wins +5 (sub_406DDE 0x174)
-                if ((win_target_ += 5) > 100) win_target_ = 100;
+                win_target_ += 5;
+                if (win_target_ > 100) win_target_ = 100;
             } else if (row == 1 && k == SDLK_PAGEDOWN) {   // wins -5 (371)
-                if ((win_target_ -= 5) < 1) win_target_ = 1;
+                win_target_ -= 5;
+                if (win_target_ < 1) win_target_ = 1;
             }
         }
         // Re-roll the sample-block pattern on entry and whenever the LEVEL row
@@ -2218,7 +2229,7 @@ AppInput GameApp::run_match() {
             acc -= tick_ms;
             sim_.tick(collect_inputs());
             sounds_.on_tick(sim_.state());
-            renderer_->on_events(sim_.state());
+            renderer_->on_events(sim_.state());  // NOLINT(bugprone-unchecked-optional-access)
             // §1's kill tally (sub_421B0F): a GameApp-side pass over this
             // tick's events, separate from the renderer's own on_events walk
             // (renderer_ never mutates GameApp state — CLAUDE.md's libs/game
@@ -2265,7 +2276,7 @@ AppInput GameApp::run_match() {
         }
 
         audio_.update_music();
-        renderer_->draw_frame(sim_.state());
+        renderer_->draw_frame(sim_.state());  // NOLINT(bugprone-unchecked-optional-access)
         SDL_RenderPresent(sdl_renderer_.get());
         SDL_Delay(2);
     }

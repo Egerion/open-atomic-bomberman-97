@@ -12,7 +12,10 @@ namespace bomber::assets::res {
 //   DATA/RES/VALUELST.RES  — gameplay tuning values (id -> integer)
 //   DATA/RES/SOUNDLST.RES  — sound events (id -> RSS base name)
 
-struct ValueList {
+// bugprone-exception-escape (NOLINT below) — same std::map-default-ctor false
+// positive documented on bomber::assets::res::Messages (messages.hpp); this
+// struct's std::map members can't avoid it without a container-type change.
+struct ValueList {  // NOLINT(bugprone-exception-escape)
     // Single-value view: id -> FIRST column. This is what the sim/tuning path
     // reads (match_factory feeds every entry to Tuning::apply); its contents are
     // deliberately unchanged by the multi-column support below.
@@ -41,7 +44,9 @@ struct ValueList {
     }
 };
 
-struct SoundList {
+// bugprone-exception-escape (NOLINT below) — same std::map-default-ctor false
+// positive documented on bomber::assets::res::Messages (messages.hpp).
+struct SoundList {  // NOLINT(bugprone-exception-escape)
     std::map<int, std::string> names;  // id -> base name (as written, e.g. "bmdrop2")
     std::vector<std::string> warnings;
 };

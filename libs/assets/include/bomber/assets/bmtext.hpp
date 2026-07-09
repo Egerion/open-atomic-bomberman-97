@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -14,7 +15,7 @@ namespace bomber::assets::bmtext {
 
 // One run within a line: either literal text or an inline image reference.
 struct BmSegment {
-    enum class Kind { Text, Image };
+    enum class Kind : std::uint8_t { Text, Image };
     Kind kind = Kind::Text;
     // Text: the run's characters, with tabs already expanded to 4-column stops.
     // Image: the base name between `<IMG` and `>` (no extension), used verbatim

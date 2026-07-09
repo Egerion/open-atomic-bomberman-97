@@ -18,8 +18,12 @@ int main(int argc, char** argv) {
     using namespace bomber::tools;
     namespace fs = std::filesystem;
 
-    std::vector<std::string> args(argv + 1, argv + argc);
+    // Whole body in the try (not just the dispatch): `args`'s construction can
+    // throw bad_alloc too, and a bare `main` must not let any exception escape
+    // (bugprone-exception-escape) — catch (...) as a last resort below the
+    // std::exception handler covers non-standard-derived throws as well.
     try {
+        std::vector<std::string> args(argv + 1, argv + argc);
         if (args.size() >= 2 && args[0] == "survey") return cmd_survey(args[1]);
         if (args.size() >= 2 && args[0] == "ani") {
             fs::path out;
@@ -45,6 +49,9 @@ int main(int argc, char** argv) {
         }
     } catch (const std::exception& e) {
         std::fprintf(stderr, "error: %s\n", e.what());
+        return 1;
+    } catch (...) {
+        std::fprintf(stderr, "error: unknown exception\n");
         return 1;
     }
     std::fprintf(stderr,

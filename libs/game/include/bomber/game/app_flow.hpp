@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 // The front-end screen/state machine — the SDL-free, doctestable core of the
 // application flow (docs/adr/0004-frontend-screen-flow.md). It mirrors the
 // original's top-level boot path (`sub_42B060` logos+title, then the
@@ -32,7 +34,7 @@ namespace bomber::game {
 // now render the real `.BM` help/credits text (BmScreen, sub_41302D); the
 // fully-INTERACTIVE settings/controller-remap widgets remain deferred behind the
 // same states (docs/re/frontend-flow.md "The .BM text-screen viewer").
-enum class AppState {
+enum class AppState : std::uint8_t {
     Boot,         // pre-first-frame; immediately advances into the flow
     Logo,         // IPLOGO then HSLOGO (skippable / timed)
     Title,        // TITLE.PCX + title sting (wait-for-key or 7 s timeout -> menu)
@@ -75,7 +77,7 @@ enum class AppState {
 //   OpenOptions/OpenControllers/OpenNetwork/OpenCredits — the menu opened a
 //                deep leaf; each routes Menu -> the matching leaf state.
 //   Quit       — hard quit request (window close or the menu's Quit item).
-enum class AppInput {
+enum class AppInput : std::uint8_t {
     Advance,
     Back,
     MatchOver,

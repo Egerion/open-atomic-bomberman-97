@@ -61,9 +61,9 @@ void SequenceSet::resolve(const AssetStore& a) {
             Anim& sout = standbomb[p][d];
             wout = {};
             sout = {};
-            for (int f = 0; f < a.bwalk_files() && wout.steps.empty(); ++f)
+            for (int f = 0; f < AssetStore::bwalk_files() && wout.steps.empty(); ++f)
                 wout = resolve_sequence(a.bwalk(f, p), wname);
-            for (int f = 0; f < a.bwalk_files() && sout.steps.empty(); ++f)
+            for (int f = 0; f < AssetStore::bwalk_files() && sout.steps.empty(); ++f)
                 sout = resolve_sequence(a.bwalk(f, p), sname);
         }
         // The 13 "cornerhead N" fidgets are unevenly distributed across the 8
@@ -72,7 +72,7 @@ void SequenceSet::resolve(const AssetStore& a) {
             std::string name = "cornerhead " + std::to_string(i);
             Anim& out = cornerhead[p][i];
             out = {};
-            for (int f = 0; f < a.corner_files() && out.steps.empty(); ++f)
+            for (int f = 0; f < AssetStore::corner_files() && out.steps.empty(); ++f)
                 out = resolve_sequence(a.corner(f, p), name);
         }
     }

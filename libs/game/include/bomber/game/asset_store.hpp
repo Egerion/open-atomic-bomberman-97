@@ -174,11 +174,14 @@ public:
     }
 
 private:
+    // bugprone-return-const-ref-from-parameter (NOLINT below) — private helper,
+    // every call site (above) passes a member AniTextures_ with `this`'s
+    // lifetime, never a temporary, so `base` never dangles in practice.
     const AniTextures& pick(const AniTextures& base,
                             const AniTextures (&colored)[kLocalPlayers], int player) const {
         if (player >= 0 && player < kLocalPlayers && colored[player].loaded())
             return colored[player];
-        return base;
+        return base;  // NOLINT(bugprone-return-const-ref-from-parameter)
     }
 
     // CORNER0.ANI..CORNER7.ANI hold the 13 direction-independent "cornerhead"

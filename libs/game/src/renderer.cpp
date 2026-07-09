@@ -126,11 +126,17 @@ void Renderer::on_events(const sim::State& s) {
                     punch_pose_[ev.player] = kActionPoseTicks;
                 break;
             case sim::Event::Type::PlayerDied: {
+                // Every real emitter (simulation.cpp/enclosure.cpp/rovers.cpp)
+                // sets `player` from a valid loop index, but guard it the same
+                // way BombKicked/BombPunched do above rather than trust that.
+                if (ev.player < 0 || ev.player >= sim::kMaxPlayers) break;
                 const auto& pool = assets_->deaths_for(ev.player);
                 if (pool.empty()) break;
                 DeathFx fx;
-                fx.player = ev.player;
-                fx.anim = static_cast<std::size_t>(s.tick + ev.player * 7u) % pool.size();
+                fx.player = ev.player;  // NOLINT(bugprone-signed-char-misuse) — range-checked above
+                fx.anim = static_cast<std::size_t>(
+                              s.tick + static_cast<std::uint64_t>(ev.player) * 7u) %
+                          pool.size();
                 fx.x = kFieldOriginX +
                        s.players[ev.player].x / static_cast<float>(sim::kScale);
                 fx.y = kFieldOriginY +

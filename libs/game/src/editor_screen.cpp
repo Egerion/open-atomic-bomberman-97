@@ -60,7 +60,9 @@ void SchemeFilePicker::enter(const std::filesystem::path& schemes_dir, std::stri
         std::string n;
         try {
             n = assets::sch::load(p).name;
-        } catch (const std::exception&) {
+        } catch (const std::exception&) {  // NOLINT(bugprone-empty-catch)
+            // Deliberate: an unreadable/corrupt file keeps its filename with
+            // no name suffix (sub_407582's behavior — see the function doc).
         }
         names_.push_back(std::move(n));
     }

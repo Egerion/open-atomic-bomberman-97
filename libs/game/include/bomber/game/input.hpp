@@ -32,7 +32,7 @@ namespace bomber::game {
 
 // The 6 bindable actions per keyboard set, in §2's action-name id order
 // (1120 Move Up .. 1125 Action 2).
-enum class KeyAction { Up, Right, Down, Left, Action1, Action2, kCount };
+enum class KeyAction : std::uint8_t { Up, Right, Down, Left, Action1, Action2, kCount };
 inline constexpr int kKeyActionCount = static_cast<int>(KeyAction::kCount);
 inline constexpr int kKeyboardSets = 2;
 
@@ -72,7 +72,7 @@ sim::TickInputs demo_inputs(int t);
 // The PLAYER INPUT TYPE SELECTION slot categories (docs/re/setup-screens.md,
 // sub_421DD2's player byte +16). Mirrors the original's type numbering so the
 // setup-screen switch statements (present_setup) read directly against it.
-enum class SlotInputType { Off = 0, Computer = 1, Keyboard = 2, Joystick = 3, Other = 4 };
+enum class SlotInputType : std::uint8_t { Off = 0, Computer = 1, Keyboard = 2, Joystick = 3, Other = 4 };
 
 // ATTRACT-MODE roster/stage rolls (docs/re/frontend-flow.md "Attract mode",
 // sub_410F81's attract branch, pseudo.c 15125-15143). The menu idle timeout

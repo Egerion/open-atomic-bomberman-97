@@ -36,7 +36,13 @@
 
 namespace bomber::game {
 
-class GameApp {
+// clang-analyzer-optin.performance.Padding (NOLINT below) — a singleton root
+// object (one instance for the app's lifetime, apps/game/main.cpp), not a
+// hashed sim/hot-path type; clang-tidy's suggested reorder touches ~48
+// members by hand in a class this large, which risks a transcription bug
+// (member-initializer-list order must track it) for a one-time 34-byte
+// saving that has no measurable effect on a singleton.
+class GameApp {  // NOLINT(clang-analyzer-optin.performance.Padding)
 public:
     struct Options {
         std::filesystem::path game_dir;  // empty: auto-detect (bomber::assets)

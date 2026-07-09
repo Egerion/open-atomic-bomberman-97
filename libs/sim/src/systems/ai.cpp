@@ -962,7 +962,10 @@ bool AISystem::behave_seek_enemy(int i, PlayerInput& out) {
     // Liveness: the original reloads the actor pointer and drops the target if it
     // is null / not the alive value / stunned (`!v4 || *v4 != 1 || v4[2]`). Our
     // slot image: give up if the slot is no longer a live, unstunned player.
-    const int ts = br.enemy_seek.target_slot;
+    // bugprone-signed-char-misuse (NOLINT below) — target_slot (std::int8_t)
+    // is a genuine signed small int; the negative-slot check right below
+    // relies on its sign, so casting through unsigned char first would break it.
+    const int ts = br.enemy_seek.target_slot;  // NOLINT(bugprone-signed-char-misuse)
     if (ts < 0 || ts >= kMaxPlayers) {
         br.enemy_seek.active = false;
         return false;

@@ -31,7 +31,11 @@ inline void tally_kills(const std::vector<sim::Event>& events,
                         std::array<int, sim::kMaxPlayers>& kill_count) {
     for (const sim::Event& e : events) {
         if (e.type != sim::Event::Type::PlayerDied) continue;
-        int killer = e.data;
+        // bugprone-signed-char-misuse (NOLINT below) — e.data (std::int8_t)
+        // is a genuine signed small int here (-1 == "no killer" sentinel,
+        // checked right below); casting through unsigned char first would
+        // turn -1 into 255 and break that sentinel check.
+        int killer = e.data;  // NOLINT(bugprone-signed-char-misuse)
         if (killer < 0 || killer >= sim::kMaxPlayers) continue;  // no killer
         if (killer == e.player) continue;                        // self-kill: excluded
         ++kill_count[static_cast<std::size_t>(killer)];

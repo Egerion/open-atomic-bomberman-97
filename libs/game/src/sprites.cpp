@@ -67,7 +67,7 @@ assets::Image recolor_image_rmp(assets::Image img, const std::array<std::uint8_t
     // Defensive: the ANI loader sizes indices == px and palette == 1024 for every
     // type-11 frame, but 1997 files are untrusted — bail rather than run past a
     // short buffer (leaves the frame as its base colour).
-    if (img.indices.size() < px || img.palette.size() < 256 * 4 || img.rgba.size() < px * 4)
+    if (img.indices.size() < px || img.palette.size() < std::size_t{256} * 4 || img.rgba.size() < px * 4)
         return img;
     for (std::size_t i = 0; i < px; ++i) {
         if (img.rgba[i * 4 + 3] == 0) continue;  // transparent: leave as-is
