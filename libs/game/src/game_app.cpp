@@ -1603,7 +1603,25 @@ AppInput GameApp::present_menu() {
     // switches the looping music from the boot track to the menu track and keeps
     // it playing while in the menu. Returns the AppInput the highlighted row
     // resolves to, or Quit on window close.
-    audio_.start_music(kMenuMusicId);
+    //
+    // menu_music_started_ IS the v14 gate (game_app.hpp's doc on the member):
+    // sub_42B9CE is __noreturn and only ever loops back into ITS OWN wait loop
+    // between sub-screens, so the original calls sub_42741E(0x3F2) exactly
+    // once, ever. present_menu() is a discrete function re-invoked on every
+    // Menu re-entry (Options/Credits/Network/Controllers/Results -> Menu, the
+    // app's hub), so an earlier unconditional start_music() call here replayed
+    // that ~2.7 MB MENU.RSS decode-and-restart on EVERY hop back to the menu —
+    // measured ~6 ms of redundant disk read + PCM decode per hop (dwarfed by
+    // the frame budget on its own) PLUS an audible restart glitch each time,
+    // since start_music always resets the stream to sample 0 — the original
+    // never has either: the track just keeps looping. That glitch, on every
+    // single trip back to the hub, is what reads as "switching screens feels
+    // laggy". Gating this to the first call reproduces the original's
+    // "once ever" shape and removes both the waste and the glitch.
+    if (!menu_music_started_) {
+        audio_.start_music(kMenuMusicId);
+        menu_music_started_ = true;
+    }
     std::uint64_t frame = 0;
     // ATTRACT idle timer (docs/re/frontend-flow.md "Attract mode"): seeded to
     // "now" on every fresh visit to the menu (including a re-entry after an

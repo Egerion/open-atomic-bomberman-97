@@ -481,6 +481,20 @@ private:
     // disables attract"). 0 is a sentinel meaning "not yet initialised for
     // this menu visit" — present_menu seeds it to the current tick on entry.
     std::uint64_t menu_idle_since_ms_ = 0;
+    // The menu music's own v14 run-once gate (docs/re/frontend-flow.md
+    // "sub_42B9CE": `if (v14) { sub_42741E(0x3F2); v14 = 0; }`) — sub_42B9CE is
+    // __noreturn and only ever dispatches sub-screens from within its OWN loop,
+    // so v14 is cleared exactly once, ever, for the app's whole lifetime; every
+    // later "return to the menu" is really just looping back inside that same
+    // call frame, never a fresh v14=1. present_menu() is a discrete function
+    // called fresh on every Menu re-entry, so this flag reproduces the same
+    // "once ever" shape: false until the first present_menu() call starts the
+    // track, true thereafter (never reset) so a later Options/Credits/.../
+    // Results -> Menu hop leaves the still-looping 1010 track alone instead of
+    // re-decoding+restarting MENU.RSS from disk — a faithfulness fix (the
+    // original never restarts this track after the first play) that also
+    // removes the redundant per-hop decode cost.
+    bool menu_music_started_ = false;
     // dword_464938: true for the duration of an attract demo match. Set by
     // roll_attract_match() (present_menu's idle-timeout branch), read by
     // run_app's StartMatch handler (skip the goldman wheel / present_setup /
