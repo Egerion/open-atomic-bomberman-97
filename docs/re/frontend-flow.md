@@ -81,21 +81,250 @@ touches the boot music (`sub_42741E(0x3E8)`, started later inside
 `sub_42B060` — see "Top-level flow" below), so the two LOADING dialogs run
 in silence.
 
-**Port status: DONE, coarsely.** `GameApp::init` (`game_app.cpp`) now flashes
-a small dialog (`draw_boot_loading_dialog`, a dark panel + a filled
-percent-bar rect + `SDL_RenderDebugText` caption — SDL's built-in debug font,
-since FONT6.FON itself is one of the things `AssetStore::load()` loads, so
-it isn't available yet at the FIRST flash) at the same two points in the same
-order: once captioned "Loading data..." immediately before `assets_.load()`,
-and once captioned `getstring(200)` ("Loading sound...", read from the
-now-loaded MESSAGES.TXT) immediately before `audio_.init()`. **Documented
-simplification:** our loaders have no per-file/per-byte progress callback
-(`AssetStore::load` is one monolithic try-block) and complete in well under a
-second on modern hardware, so each flash presents the bar already full (100%)
-for one rendered frame rather than animating a real or synthetic percent —
-inventing progress data we don't have would be less faithful than a same-order
-same-caption flash. Skipped in `--demo` mode (matching that `audio_.init` is
-also skipped there). No PCX/font asset dependency, no `libs/sim` involvement.
+**Port status: DONE, chrome now pixel-pinned (2026-07-09 chrome pass).**
+`GameApp::init` (`game_app.cpp`) flashes a small dialog
+(`draw_boot_loading_dialog`) at the same two points in the same order: once
+captioned "Loading data..." immediately before `assets_.load()`, and once
+captioned `getstring(200)` ("Loading sound...", read from the now-loaded
+MESSAGES.TXT) immediately before `audio_.init()`. Both flashes now render
+through the pinned `sub_43C734` chrome (below) with the real FONT6 glyph
+textures — FONT6 is loaded standalone before the first flash, matching the
+CONFIRMED init order (`sub_41095A` pins FONT6 via `sub_414DF4` before it
+calls either loading dialog; see "FONT6 timing" below), correcting the
+earlier port's assumption of a font-readiness gap at the first flash.
+**Documented simplification (unchanged):** our loaders have no per-file/
+per-byte progress callback (`AssetStore::load` is one monolithic try-block)
+and complete in well under a second on modern hardware, so each flash
+presents the bar already full (100%) for one rendered frame rather than
+animating a real or synthetic percent — inventing progress data we don't
+have would be less faithful than a same-order same-caption flash. Skipped in
+`--demo` mode (matching that `audio_.init` is also skipped there). No PCX
+asset dependency, no `libs/sim` involvement.
+
+### The `sub_43C734` dialog-chrome primitive — PINNED (2026-07-09)
+
+`sub_43C734` is the shared window-object constructor both the boot LOADING
+dialog (`sub_412E33`'s percent-bar window) and the Yes/No confirm
+(`sub_41456C`) open through. Reading its body plus every accessor that
+touches the same struct offsets (`sub_43DE0C`/`sub_43DE28` — width/height
+getters; `sub_43D398` — the bounds-clamp/placement step; `sub_43D4D0`/
+`sub_4428E4` — the generic dirty-rect blit, not a border draw) resolves the
+full geometry/colour contract, and CORRECTS the parameter order an earlier
+investigation pass guessed:
+
+**Signature (CORRECTED): `sub_43C734(a1=y, a2=height, a3=width, a4=colormode,
+a5=flags)`** — NOT `(x, y, width, ...)`. Proof: the master 640×480 root
+window is created at `sub_414DF4` (@0x417523, the graphics-init routine) as
+`sub_43C734(0, 480, 640, byte_495390[0], 1)` — only readable as
+`(y=0, height=480, width=640, black, flags)`; as `(x, y, width, ...)` it would
+place a 640-wide window at `y=480` on a 480-tall screen, entirely off-screen.
+Every other call site is consistent with this reading once re-parsed:
+`a3` always lands on the literal pixel width (200/360/450/300/600/…), matches
+`sub_43DE0C`'s offset-24 "width" accessor at every use, and the two dialogs
+this task cares about both compute `a2` as an explicit height expression
+(`8·fontheight` for the loading dialog, `4·fontheight+64+promptheight` for the
+confirm) rather than a Y screen-position. **`a1` (the "y" slot) is X in the
+percent-bar's own reading only insofar as that call hardcodes it (`200`); the
+confirm dialog instead computes `a1 = (screenH − windowHeight) / 2` —
+i.e. `a1` genuinely is used as the window's Y origin, vertically centering the
+box.** (Provenance: `sub_414DF4` @ 0x414DF4/0x417523 window-create line;
+`sub_43DE0C`/`sub_43DE28` @ 0x43DE0C/0x43DE28 struct-offset accessors,
+confirmed against `sub_4327DC`'s own-bounds check `x+w <= sub_43DE0C(win)`,
+`y+h <= sub_43DE28(win)`.)
+
+**X placement is NOT an explicit parameter anywhere in this family.**
+Neither `sub_43C734` itself nor either dialog caller (`sub_412E33`,
+`sub_41456C`) ever computes/passes a horizontal position — `sub_41456C`
+computes ONLY the vertical center `(dword_464A6C − height)/2` (`dword_464A6C`
+= 480, confirmed screen height, corrected from an earlier pass's "screen
+width" misreading — `dword_464A70` = 640 is the width, set one line above it
+in `sub_414DF4`). `sub_43D398` (the placement/clamp step, called from the
+constructor right after the background fill) DOES clamp an X value (its
+internal `v3`) against the screen-width bound `dword_4A3BE8`, so a
+horizontal position genuinely exists and is genuinely clamped — but its
+SOURCE register is one IDA's decompiler explicitly marks lost
+(`// 43D3C7: variable 'v3' is possibly undefined`, i.e. a stack-spilled value
+across the constructor's slot-search loop that the decompiler failed to
+recover). `TODO(RE): sub_43D398`'s exact X-default formula needs a
+disassembler pass (not available in this environment) to pin bit-for-bit; the
+port instead centers each dialog horizontally against the 640-px screen
+width, which is faithful to every visual call site's evident intent (nothing
+in the binary ever repositions these dialogs off-center) even though the
+literal source expression for that default isn't independently confirmed.**
+
+**There is NO border/frame draw anywhere in this primitive.** The
+"chrome" is exactly two steps, both already in the constructor:
+1. `sub_43D1C0(id, 0, width, 0, height, fillColour)` — ONE flat filled
+   rectangle spanning the whole window, in `fillColour`.
+2. `sub_43D398(id, y)` — clamps/stores the final on-screen rect and blits the
+   (still just flat-filled) buffer via `sub_43D4D0`/`sub_4428E4`, a generic
+   dirty-rect pixel copy, not a decorative draw.
+
+No outline, no drop shadow, no bevel anywhere in the WINDOW body — the
+earlier port's guessed light-frame `SDL_RenderRect` outline around the
+loading-dialog panel has no basis in the decompile and is removed. (The
+BUTTON widget, `sub_432298` below, *does* have a real bevel — that is a
+property of buttons, not of `sub_43C734` windows in general.)
+
+**Fill colour resolution (a4=colormode).** `sub_43C734`/`sub_43D1C0` share
+one decode: `a4==256` → the THEME DEFAULT fill, `(unsigned
+__int8)byte_495390[dword_45C46C]`; `BYTE1(a4)!=0` (high byte set) → an
+indexed palette lookup via `dword_45C068[a4 & 0xFFFF]`; otherwise `a4` is
+used as a raw palette index directly. Both boot-chrome dialogs here pass
+literal `256` — the theme default. `dword_45C46C` is a **fixed literal LUT
+offset set once at window-system init** (`sub_414DF4`'s constructor block,
+same as the button bevel colours below) — **`10570`**, which decodes via the
+established RGB555-offset formula (`docs/re/results-and-options.md` "screen-
+ink byte globals") to `r5,g5,b5 = 10,10,10` → **RGB (82, 82, 82)**, a
+mid-dark grey. This is the ONE fill colour both boot dialogs use.
+
+**Flags (a5) do not affect visible appearance.** Loading dialog passes `4`;
+the confirm dialog passes `20` (0x14 = bits 2|4). Every flags-bit tested
+anywhere in the constructor or its siblings (`sub_43D2A4`, `sub_43D4D0`)
+governs internal z-order/redraw-callback bookkeeping (e.g. `a5&1` merges in
+a default-flags global before storage; `a5&4==0` triggers a stacking-reorder
+insertion pass) — none gates a border, shadow, or fill-colour branch. So the
+flags difference between the two dialogs (4 vs 20) is a genuine but
+INVISIBLE difference (window-manager stacking behaviour only); the port does
+not need to (and cannot meaningfully) reproduce it.
+
+**Window default fill and the button bevel colours are siblings from the
+SAME init block** (`sub_414DF4`, pseudo.c ~43614-43626 — all four are
+literal LUT offsets assigned once, never reassigned elsewhere):
+
+| global | LUT offset | r5,g5,b5 | decoded RGB | role |
+|---|---|---|---|---|
+| `dword_45C46C` | 10570 | 10,10,10 | **(82, 82, 82)** | window default fill (`a4==256`) |
+| `dword_45C470` | 15855 | 15,15,15 | **(123, 123, 123)** | button bevel "light" tone |
+| `dword_45C474` | 8456 | 8,8,8 | **(66, 66, 66)** | button bevel "dark" tone |
+| `dword_45C478` | 21140 | 20,20,20 | **(165, 165, 165)** | button label text-shadow ink |
+
+(Provenance: literal assignments @ pseudo.c ~43614-43626, inside the same
+window-subsystem init block that also sets `dword_45C468=1`
+(`dword_45C468` gates every accessor in this family — "is the window system
+initialized"); decode formula per `docs/re/results-and-options.md` "screen-
+ink byte globals".)
+
+### `sub_432298` — the button widget (PINNED)
+
+Buttons ARE where a real 3D bevel exists. `sub_432298(win, x, ?, y, ?, ?,
+hotkeyChar, labelPtr, ?)` (9 params; the `?` slots are `-1` sentinels at both
+confirm-dialog call sites and not needed to reproduce the visible geometry):
+
+- **Size is text-derived, not caller-specified:** width = `measure(label) +
+  16`, height = `fontheight + 6` (pseudo.c ~35197-35199, `v13`/`v15`).
+- **Two 8-bit-alpha bitmaps are built per button — "up" and "down"** — each
+  gets the SAME two-ring inset bevel (`sub_44240C` called twice, insets 1px
+  and 2px from the edge) using the two grey tones above, **colour order
+  swapped between the two bitmaps**: light-then-dark for "up" (top/left lit,
+  bottom/right shadowed — a raised look), dark-then-light for "down"
+  (a pressed/sunken look). A 1px flat outline in black (`byte_495390[0]`)
+  closes each bevel (`sub_442384`, the rect-fill primitive, drawn at the
+  bitmap's own edge). The port draws only the "up" state (there is no
+  press-animation requirement here) as a 2px inset bevel: `(123,123,123)`
+  top/left ring, `(66,66,66)` bottom/right ring, 1px black outline.
+- **Label ink uses the text-shadow colour** `dword_45C478` = **(165, 165,
+  165)** (`dword_45C378(...)|0x10000` call immediately before each bevel
+  pass) — a lighter grey than pure white, distinct from the window-fill grey.
+- **Confirm-dialog button positions (from `sub_41456C`, both CONFIRMED
+  literal expressions):** Yes at `x = width/2 − 80`, No at `x = width/2 +
+  22` (both window-relative, `width` = the dialog's own computed width
+  `v30`), same `y = height − 32 − fontheight − 6` for both (window-relative,
+  bottom-anchored). Hotkey chars are ASCII `'Y'`=89, `'N'`=78 — cosmetic
+  labels only; the REAL accept/cancel logic lives in `sub_41456C`'s own key
+  loop (already pinned below), not in the button widget.
+
+(Provenance: `sub_432298` @ 0x432298 pseudo.c 35167-35276; `sub_44240C` @
+0x44240C two-colour inset-rect primitive; `sub_442384` @ 0x442384 filled-rect
+primitive; button geometry read directly from `sub_41456C` @ 0x41456C
+pseudo.c 17211-17216.)
+
+### The percent-bar dialog, `sub_412E33` — geometry CONFIRMED, one residual gap
+
+Re-verifying against the corrected `sub_43C734` signature: the window is
+`sub_43C734(200, 8·h, 360, 256, 4)` = **y=200, height=8·fontheight, width=360**
+(`h` = the active font's char-height getter, `dword_45C37C`), themed grey
+fill `(82,82,82)`, x auto-centered (see the X-placement gap above). Contents,
+window-relative (all CONFIRMED by direct read, pseudo.c 16181-16204):
+
+- **Caption "Completion"** (`aCompletion`): `sub_41696C(win, text, (360−tw)/2,
+  tw, 1.5·h, ink=white(255,255,255), bg=black)` — horizontally centered, y =
+  `h/2 + h` = 1.5·fontheight.
+- **"%d" percent readout:** drawn via a SECOND `sub_41696C` call at **y =
+  3.5·fontheight** (`v12+3·v13`, `v12=h/2`) — **CORRECTION to an earlier
+  investigation pass:** its ink is `byte_49D37A` (**yellow**, RGB ≈
+  (255,255,90) — a fifth screen-ink global, same LUT-offset decode, offset
+  `32747` → r5,g5,b5=31,31,11), NOT the caption's white. The two text draws
+  use two different inks.
+- **Two-tone bar** (`sub_43D1C0` × 2, already pinned): filled segment `x=31,
+  width=3·pct, y=5·h+1+h/2, height=h−1`, colour `byte_49A624` mid-grey
+  (168,168,164); unfilled remainder `x=3·pct+31, width=3·(100−pct)`, same
+  rect, colour black.
+- **`TODO(RE): sub_43D080`'s exact role** — a call between the caption and
+  the readout (`sub_43D080(win, 5·h, 6·h, white)`) that this pass could not
+  fully resolve: its signature takes only (win, a2, a3, colormode) yet reads
+  a THIRD geometry value from the window's own stored fields internally
+  (offsets 6/11, "possibly undefined" in the decompile — the same
+  register-spill loss as `sub_43D398`'s X value above), consistent with
+  either a full-width horizontal rule/divider or a redundant background
+  strip in the 5.5h–6.5h band, immediately overpainted by the bar draw one
+  line below it. Visually inconsequential either way (the bar redraws that
+  same band), so the port omits it rather than guess a specific 1px line;
+  flagged here rather than silently dropped.
+
+**Port status: chrome now pinned and reimplemented** (`draw_boot_loading_dialog`,
+`libs/game/src/game_app.cpp`) — grey fill window, "Completion" caption in
+white, "%d" readout in yellow, two-tone bar in the decoded greys, all via
+FONT6 (see the timing trace below), keeping the already-documented
+"presented already-complete" percent simplification (no per-byte load
+callback) and the boot-order/caption content unchanged.
+
+### FONT6 timing — CONFIRMED ready before BOTH loading-dialog flashes
+
+`sub_41095A` (pseudo.c 14602-14663, the config/subsystem-init routine) calls,
+in exact order: … `sub_413B1C()` (14618) → `sub_4127FF()` (14619) →
+**`sub_414DF4()` (14620)** → `sub_406086()` (14621) → `sub_42971F()` (14622)
+→ **`sub_41D695()` (14623, "Loading data...")** → **`sub_42896E()` (14624,
+"Loading sound...")** → … `sub_414DF4` (@0x414DF4, pseudo.c 17523-17602) is
+the graphics/window-system init: it creates the master 640×480 root window
+(`sub_43C734(0,480,640,black,1)`, confirming the corrected signature above)
+AND, as its very last statement, pins the active font via **`sub_431E9C(6)`**
+(pseudo.c 17600) — i.e. FONT6 is loaded/pinned and the window system is live
+**before `sub_414DF4` even returns**, which is itself two calls before either
+loading dialog runs.
+
+**Conclusion (CORRECTS the earlier port comment):** FONT6 is ready for the
+**FIRST** loading-dialog flash too, not just the second. The earlier
+`draw_boot_loading_dialog` comment ("no PCX/font asset is loaded yet at this
+point … uses SDL's built-in debug font") was wrong about FONT6 specifically —
+it was right that MESSAGES.TXT isn't loaded yet (so the first flash's caption
+falls back to literal text, unchanged by this pass), but the FONT ASSET
+ITSELF has no such gap. **Port fix:** `GameApp::init()` now calls
+`AssetStore::load_frontend_font()` (a small standalone FONT6.FON loader,
+`asset_store.cpp`) and builds `front_font_` from it immediately after
+creating the SDL renderer, before the first `draw_boot_loading_dialog` call —
+matching `sub_41095A`'s real order. Both loading-dialog flashes now render
+with the real FONT6 glyph textures; `SDL_RenderDebugText` is no longer used
+by either dialog. (Provenance: call order pseudo.c 14602-14663 read in full;
+`sub_414DF4` body pseudo.c 17523-17602, `sub_431E9C(6)` @ 17600.)
+
+### Escape/Quit-row confirm dialog — chrome now exact
+
+The quit-confirm modal (`sub_412987` → `sub_41456C`, already pinned above for
+its behaviour/sound path) now uses the SAME `sub_43C734` chrome as the
+loading dialog (grey `(82,82,82)` fill, no border) sized from the ACTUAL
+button label extents (`FontTextures::measure` on getstring(26)/(25) = " Yes
+"/" No ", matching `v29 = max(text-width, 80)` and `v30 = v29+64`, `v32 =
+4·fontheight+64+fontheight` for a one-line prompt), vertically centered
+(`y=(480−v32)/2`) and horizontally centered against the 640-px screen width
+(the X-placement gap above), with the two buttons drawn via the pinned
+`sub_432298` bevel geometry and colours instead of a single inline text
+line. The prompt text itself (getstring(10)) is drawn window-relative at
+`y = fontheight+32`, horizontally centered, in the general white ink
+(`byte_49D38F`, already pinned) — replacing the previous ad hoc
+`" Y/ENTER =… N/ESC =…"` single-line hint with the real prompt-plus-two-
+buttons layout. Behaviour (Y/Enter/Space confirm, N/Escape cancel, the sound
+path, the 4 s exit delay) is UNCHANGED — this pass is chrome-only.
 
 ## Top-level flow — `sub_42B060` then `sub_42B9CE`
 
@@ -390,10 +619,12 @@ play the blip 20; **Enter/Space play the accept 10 on EVERY row** including the
 "inert" Editor/net-setup stubs (the original has no inert-row concept — every
 row 0..6 is a live dispatch); **Escape plays blip 20 + accept 10, sets the
 highlighted row to 6, and opens the SAME Yes/No confirm modal Enter-on-row-6
-opens** (`quit_confirm_`, `game_app.cpp`) — a floating box over the menu
-backdrop with `getstring(10)`/`getstring(26)`/`getstring(25)` (fallback text
-if MESSAGES.TXT lacks those ids), drawn with the front-end FontTextures the
-same way `EditorScreen`'s SaveConfirm/FillConfirm prompts already do. Inside
+opens** (`quit_confirm`, `game_app.cpp`) — since 2026-07-09 drawn with the
+pinned `sub_43C734` chrome ("Escape/Quit-row confirm dialog" below): a
+centered grey window sized from the actual `getstring(26)`/`getstring(25)`
+(" Yes "/" No ", fallback text if MESSAGES.TXT lacks those ids) button label
+extents, `getstring(10)` as the prompt, and two real `sub_432298`-bevel
+buttons — not the earlier flat single-line hint. Inside
 that modal: **Y/Enter/Space confirm** — blip 20 (already fired on keydown) +
 accept 10 + the exit-sting group `play_random_in_range(2600, 2699)` + a 4 s
 `SDL_Delay` (mirroring `sub_452012(0xFA0)`, so the sting is audible instead of
