@@ -9,7 +9,7 @@
 
 namespace bomber::sim {
 
-void BombSystem::place(Player& p, std::uint8_t owner, int tx, int ty) {
+void BombSystem::place(Player& p, std::uint8_t owner, int tx, int ty, int fuse_stagger) {
     State& s = s_;
     Bomb b;
     b.active = true;
@@ -23,13 +23,15 @@ void BombSystem::place(Player& p, std::uint8_t owner, int tx, int ty) {
     // (#9 Trigger allowance — the original never blocks placement, it downgrades
     // the bomb). The +85 counter is refilled only by the next Trigger pickup.
     const bool make_trigger = p.trigger && p.trigger_placed < p.max_bombs;
-    if (make_trigger) {
-        ++p.trigger_placed;
-        b.fuse = -1;
-    } else {
-        b.fuse = s.tuning.fuse_frames;
-        if (p.sick(Disease::ShortFuse)) b.fuse = std::max(1, b.fuse / 3);
-    }
+    if (make_trigger) ++p.trigger_placed;
+    // The fuse DURATION is computed and stored for EVERY kind (sub_41EB13's
+    // v10 -> sub_422EDE word +74), trigger included — a trigger bomb only
+    // gates the fuse TICKING; the duration survives for a later downgrade
+    // (sub_424C47) or throw restart. The spooge run index staggers the
+    // countdown (+k ticks), not the duration (elapsed +68 = -50*k ms).
+    b.fuse_init = s.tuning.fuse_frames;
+    if (p.sick(Disease::ShortFuse)) b.fuse_init = std::max(1, b.fuse_init / 3);
+    b.fuse = make_trigger ? -1 : b.fuse_init + fuse_stagger;
     // Flame reach (sub_41EB13 ordering): short-flame forces 1, then goldflame
     // (+94) OVERRIDES to max(gridW,gridH) — so goldflame beats short-flame. The
     // literal max(cols,rows) replaces our old flame=99 sentinel (#10 Goldflame).
@@ -38,12 +40,19 @@ void BombSystem::place(Player& p, std::uint8_t owner, int tx, int ty) {
     b.jelly = p.jelly && !make_trigger;
     b.trigger = make_trigger;
     // Duds (sub_422EDE): only regular bombs can fizzle, and only while the
-    // global gate is open; the gate re-arms base + rand(spread) ticks ahead
+    // global gate is open; the gate re-arms base + rand(spread) SECONDS ahead
     // BEFORE the 1-in-N roll (sub_422C13 runs first) — RNG order contract.
+    // Units per VALUELST 320/321's own legend ("minimum/additional random
+    // number of SECONDS between potential dud bombs"): 180+rand%180 s = 3-6
+    // minutes per opportunity, converted to ticks here. The re-arm ADDS to the
+    // previous deadline (sub_422C13 `dword_464AF4 += ...`), it does not anchor
+    // on "now" — a long-idle gate can bank consecutive openings, exactly like
+    // the original. facts.md "Dud bombs" (units corrected 2026-07-09).
     if (!b.trigger && !b.jelly && s.tick >= s.dud_gate) {
-        s.dud_gate = s.tick + static_cast<std::uint64_t>(s.tuning.dud_gate_base) +
-                     random_below(s, static_cast<std::uint32_t>(
-                                         std::max<std::int32_t>(1, s.tuning.dud_gate_rand)));
+        s.dud_gate += (static_cast<std::uint64_t>(s.tuning.dud_gate_base) +
+                       random_below(s, static_cast<std::uint32_t>(
+                                           std::max<std::int32_t>(1, s.tuning.dud_gate_rand)))) *
+                      kTicksPerSecond;
         if (random_below(s, static_cast<std::uint32_t>(
                                 std::max<std::int32_t>(1, s.tuning.dud_chance))) == 0)
             b.dud_left = s.tuning.dud_frames;
@@ -63,19 +72,34 @@ void BombSystem::drop(Player& p, std::uint8_t owner) {
     int tx = p.tile_x(), ty = p.tile_y();
     if (!grid::tile_open(s_, tx, ty) || grid::bomb_at(s_, tx, ty)) return;
     if (p.bombs_placed >= p.max_bombs) return;
+    // No bombs on a WARPHOLE (sub_41F29B drop block ~23354: an actor of type 1
+    // under the player short-circuits the placement; sound 40 plays unless the
+    // drop was disease-forced). facts.md "Core-feel audit" §3.
+    if (grid::in_grid(tx, ty) && s_.actor_type[ty][tx] == ActorType::Warphole) {
+        if (!p.sick(Disease::Diarrhea) && !p.sick(Disease::Super))
+            s_.events.push_back({Event::Type::DropRefused, static_cast<std::int8_t>(owner),
+                                 static_cast<std::int8_t>(tx), static_cast<std::int8_t>(ty), 0});
+        return;
+    }
     place(p, owner, tx, ty);
 }
 
 void BombSystem::spooge_ahead(Player& p, std::uint8_t owner) {
     int cx = p.tile_x(), cy = p.tile_y();
     const int dx = grid::dir_dx(p.facing), dy = grid::dir_dy(p.facing);
+    // sub_41F29B spooge loop: stop at a live player (sub_421CB5), a powerup
+    // record (sub_42542D), a blocked tile (!sub_41E5C3), or when the supply
+    // runs out. The run counter k feeds sub_41EB13 -> a +k-tick fuse stagger,
+    // so the laid line detonates as a one-tile-per-tick cascade.
+    int k = 0;
     while (p.bombs_placed < p.max_bombs) {
         cx += dx;
         cy += dy;
+        if (grid::player_at(s_, cx, cy)) break;
+        if (grid::in_grid(cx, cy) && s_.floor[cy][cx] != PowerupType::None) break;
         if (!grid::tile_open(s_, cx, cy)) break;
         if (grid::bomb_at(s_, cx, cy)) break;
-        if (s_.floor[cy][cx] != PowerupType::None) break;
-        place(p, owner, cx, cy);
+        place(p, owner, cx, cy, ++k);
     }
 }
 
@@ -111,11 +135,18 @@ void BombSystem::try_punch(Player& p, std::uint8_t who) {
 }
 
 bool BombSystem::try_grab(Player& p, int who) {
+    // The underfoot probe is sub_422E48: motion states 0 (resting) AND 1
+    // (sliding) both qualify — a player can pluck their own bomb mid-slide.
+    // Only flying (2) and carried (3) are exempt; bomb_at already excludes
+    // those (flying filter / carried bombs are deactivated slots).
     Bomb* b = grid::bomb_at(s_, p.tile_x(), p.tile_y());
-    if (!b || b->moving) return false;
+    if (!b) return false;
     p.carrying = true;
     p.carried_owner = b->owner;
-    p.carried_fuse = b->fuse;
+    // Store the creation-time DURATION, not the frozen remnant: the throw
+    // restarts the fuse from scratch (sub_41F29B LABEL_246 zeroes elapsed +68
+    // before sub_424987), so the remnant is never consumed by anything.
+    p.carried_fuse = b->fuse_init;
     p.carried_flame = b->flame;
     p.carried_jelly = b->jelly;
     p.carried_trigger = b->trigger;
@@ -133,7 +164,12 @@ void BombSystem::throw_carried(Player& p, int who) {
     nb.owner = p.carried_owner;
     nb.x = grid::tile_center_x(p.tile_x());
     nb.y = grid::tile_center_y(p.tile_y());
-    nb.fuse = p.carried_fuse;
+    // Fresh full fuse on release (sub_41F29B LABEL_246: `+68 = 0` right before
+    // the launch): a thrown bomb always lands with its complete creation-time
+    // duration ahead of it, not the remnant frozen at grab time. Trigger bombs
+    // stay fuse-less. facts.md "Core-feel audit" §5.
+    nb.fuse_init = p.carried_fuse;  // carried_fuse holds fuse_init since grab
+    nb.fuse = p.carried_trigger ? -1 : p.carried_fuse;
     nb.flame = p.carried_flame;
     nb.jelly = p.carried_jelly;
     nb.trigger = p.carried_trigger;
@@ -146,9 +182,13 @@ void BombSystem::throw_carried(Player& p, int who) {
 }
 
 bool BombSystem::detonate_triggered(int owner) {
+    // sub_424B41 excludes only motion 3 (carried) and 2 (flying) — a SLIDING
+    // trigger bomb is a legal remote-detonation target. Our vector is in
+    // creation order, so the first match is the oldest (== the original's
+    // min-creation-stamp scan).
     for (std::size_t bi = 0; bi < s_.bombs.size(); ++bi) {
         Bomb& b = s_.bombs[bi];
-        if (b.active && b.trigger && b.owner == owner && !b.moving && !b.flying) {
+        if (b.active && b.trigger && b.owner == owner && !b.flying) {
             flames_.explode(bi);
             return true;
         }
@@ -160,13 +200,35 @@ void BombSystem::try_kick(Player& p, Direction d, int who) {
     if (!p.kick) return;
     int tx = p.tile_x() + grid::dir_dx(d), ty = p.tile_y() + grid::dir_dy(d);
     Bomb* b = grid::bomb_at(s_, tx, ty);
-    if (!b || b->moving) return;
+    if (!b) return;
+    // The mover requires the tile beyond the bomb passable (sub_41E5C3) before
+    // dispatching the kick, for resting and sliding targets alike.
     int nx = tx + grid::dir_dx(d), ny = ty + grid::dir_dy(d);
     if (!grid::tile_open(s_, nx, ny) || grid::bomb_at(s_, nx, ny)) return;
-    b->moving = true;
-    b->dir = d;
+    if (b->moving) {
+        // sub_42464B on an already-sliding bomb: same direction is a silent
+        // no-op (only the speed is re-set — a constant for us); a DIFFERENT
+        // direction snaps it to its tile centre and redirects it, with the
+        // kick sound (played when `dir != new || !moving`).
+        if (b->dir == d) return;
+        b->x = grid::tile_center_x(b->tile_x());
+        b->y = grid::tile_center_y(b->tile_y());
+        b->dir = d;
+    } else {
+        b->moving = true;
+        b->dir = d;
+    }
     s_.events.push_back({Event::Type::BombKicked, static_cast<std::int8_t>(who),
                          static_cast<std::int8_t>(tx), static_cast<std::int8_t>(ty), 0});
+}
+
+void BombSystem::stop_own_sliding(int owner) {
+    // sub_4247C5: every active bomb of this owner that is SLIDING (motion 1)
+    // and not jelly (kind 2) gets the stop flag; slide() halts it on the next
+    // tile centre. No sound here — the stop itself plays 130 when it lands.
+    for (auto& b : s_.bombs)
+        if (b.active && b.owner == owner && b.moving && !b.flying && !b.jelly)
+            b.stop_pending = true;
 }
 
 void BombSystem::fly(Bomb& b) {
@@ -283,6 +345,9 @@ void BombSystem::slide(std::size_t index, std::int32_t budget) {
                 if (at == ActorType::DirArrow) {
                     b.dir = grid::from_godir(s.actor_dir[ty][tx]);
                     b.warp_latch = false;
+                    // A dirarrow overrides a pending kick-stop (sub_42331C
+                    // ~25535 clears +57 in the same branch that re-steers).
+                    b.stop_pending = false;
                     // recompute the axis/centre/sign for the new direction
                     axis = (grid::dir_dx(b.dir) != 0) ? b.x : b.y;
                     center = (grid::dir_dx(b.dir) != 0) ? cx : cy;
@@ -305,6 +370,21 @@ void BombSystem::slide(std::size_t index, std::int32_t budget) {
                        s.actor_type[ty][tx] != ActorType::Warphole) {
                 // moved off a non-warp tile mid-slide: allow future warps
                 b.warp_latch = false;
+            }
+            // Kick+action2 stop (sub_42331C `if (+57 && v81 >= 0)`): a pending
+            // stop is consumed the moment the bomb is at/past a tile centre —
+            // snap onto it and halt. Checked AFTER the actor block (a dirarrow
+            // just cleared it) and before probing the next tile. Never set on
+            // jelly, so no reverse branch here. facts.md "Core-feel audit" §4.
+            if (b.stop_pending) {
+                b.x = cx;
+                b.y = cy;
+                b.moving = false;
+                b.stop_pending = false;
+                s.events.push_back({Event::Type::BombStopped, -1,
+                                    static_cast<std::int8_t>(tx),
+                                    static_cast<std::int8_t>(ty), 0});
+                return;
             }
             int nx = tx + grid::dir_dx(b.dir), ny = ty + grid::dir_dy(b.dir);
             // The cell-entry probe mirrors sub_4230A5's order: a bomb or a
@@ -333,6 +413,7 @@ void BombSystem::slide(std::size_t index, std::int32_t budget) {
             if (blocked) {
                 b.x = cx;
                 b.y = cy;
+                b.stop_pending = false;  // LABEL_36 clears +57 on any stop
                 if (b.jelly) {
                     // Jelly (sub_42331C slide block): reverse and KEEP the
                     // moving state — it ping-pongs off obstacles instead of

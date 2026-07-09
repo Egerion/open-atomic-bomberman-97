@@ -71,13 +71,7 @@ void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs, Stag
         return;
     }
 
-    // Reversed-controls disease flips the pressed direction (humans only in
-    // the original; our sim drives every player through inputs).
-    bool up = in.up, down = in.down, left = in.left, right = in.right;
-    if (p.sick(Disease::Reversed)) {
-        std::swap(up, down);
-        std::swap(left, right);
-    }
+    const bool up = in.up, down = in.down, left = in.left, right = in.right;
 
     // Opposite-key resolution, faithful to the original input decoder
     // (sub_41E61E, LABEL_58): collect the four direction flags in GODIR order
@@ -110,6 +104,16 @@ void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs, Stag
     for (int g = 0; g < 4; ++g)
         if (dir[g]) want_godir = g;
 
+    // Reversed-controls disease (sub_41F29B ~23049): applied to the RESOLVED
+    // godir — `(g + 2) & 3` — AFTER the opposite-key filter ran on the RAW
+    // pressed dirs, and BEFORE the ice buffer (the delayed samples store the
+    // reversed value). Humans only: the `+16 != 1` gate exempts computer
+    // players, whose chosen direction reaches the mover unflipped. The old
+    // port swapped the input flags pre-resolution, which fed the passability
+    // filter the flipped dirs — divergent under multi-key input.
+    if (want_godir >= 0 && p.sick(Disease::Reversed) && !p.ai)
+        want_godir = (want_godir + 2) & 3;
+
     static constexpr Direction kGodir[4] = {Direction::Up, Direction::Right, Direction::Down,
                                             Direction::Left};
 
@@ -120,7 +124,6 @@ void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs, Stag
     // else (returns want_godir unchanged, touches no state) — see
     // MovementSystem::ice_delay's doc comment.
     const int eff_godir = movement.ice_delay(p, want_godir);
-    Direction want = eff_godir >= 0 ? kGodir[eff_godir] : p.facing;
     bool moving = eff_godir >= 0;
 
     // Movement, with any conveyor under the player folded in: a belt speeds/
@@ -128,11 +131,32 @@ void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs, Stag
     // (StageActorSystem::move_on_actor, port of sub_41F29B's actor branches).
     // The belt-only push (no input) is handled inside move_on_actor.
     {
-        Fixed bx = p.x, by = p.y;
         stage.move_on_actor(p, eff_godir, moving);
-        // A player pushed head-on into a restable bomb kicks it, same as a
-        // walked-into bomb: only when the (belt-forced or input) move stalled.
-        if (moving && p.x == bx && p.y == by) bombs.try_kick(p, want, i);
+        // Kick probe (sub_41EC84 `!v35` branch): the kick fires whenever the
+        // player sits EXACTLY on the tile centre along the travel axis with a
+        // bomb directly ahead — evaluated inside the pixel loop, so a player
+        // WALKING into a bomb kicks it on the ARRIVAL tick (the mover pins
+        // them at the centre; the same-tick loop iteration with v35 == 0
+        // dispatches sub_424708), not one tick later as the old stall gate
+        // did. Post-move "centred along the axis" is the same predicate: a
+        // blocked player cannot end the tick anywhere else, and a re-probe
+        // while parked matches the original's every-iteration re-kick (a
+        // same-direction re-kick is a silent no-op in try_kick). The belt-
+        // forced case (no input) probes along the belt — the original's mover
+        // runs identically there with +46 = the belt dir. facts.md
+        // "Core-feel audit" §1.
+        int probe = moving ? eff_godir : -1;
+        if (!moving) {
+            const int ptx = p.tile_x(), pty = p.tile_y();
+            if (grid::in_grid(ptx, pty) && s.actor_type[pty][ptx] == ActorType::Conveyor)
+                probe = s.actor_dir[pty][ptx];
+        }
+        if (probe >= 0) {
+            const int px = static_cast<int>(p.x / kScale), py = static_cast<int>(p.y / kScale);
+            const int sx = ((px % kTileW) + kTileW) % kTileW - kTileW / 2;
+            const int sy = ((py % kTileH) + kTileH) % kTileH - kTileH / 2;
+            if (sx * DX[probe] + sy * DY[probe] == 0) bombs.try_kick(p, kGodir[probe], i);
+        }
     }
     // A settle on a trampoline centre launches an in-place hop; a settle on a
     // warphole centre teleports to the linked exit (no RNG). Both use a one-shot
@@ -164,28 +188,33 @@ void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs, Stag
     if (p.carrying) {
         if (auto_drop || !a1_now) bombs.throw_carried(p, i);
     }
-    // (3) Action key (action2): punch the bomb ahead (+91) and/or detonate a
-    //     trigger bomb (+95). Edge-gated (`+57 && !+55`). In the original PUNCH
-    //     additionally requires `!+56` (the bomb key not down) so it never swings
-    //     mid-drop / mid-auto-drop; TRIGGER has no such gate and fires regardless.
-    //     Grab/throw live on action1. This block runs BEFORE the drop block (4),
-    //     matching LABEL_246's order (the old port had drop before this — a
-    //     trigger detonation now precedes a same-tick drop, as in the binary).
+    // (3) Action key (action2): stop own sliding bombs (+89 kick), punch the
+    //     bomb ahead (+91), and/or detonate a trigger bomb (+95) — three
+    //     independent ifs in sub_41F29B's exact order, all edge-gated
+    //     (`+57 && !+55`). The KICK-flag handler (sub_4247C5) flags every one
+    //     of the player's sliding non-jelly bombs to halt at the next tile
+    //     centre. PUNCH additionally requires `!+56` (the bomb key not down)
+    //     so it never swings mid-drop / mid-auto-drop; TRIGGER has no such
+    //     gate. Grab/throw live on action1. This block runs BEFORE the drop
+    //     block (4), matching LABEL_246's order.
     if (in.action2 && !p.prev_action2) {
+        if (p.kick) bombs.stop_own_sliding(i);
         if (p.punch && !a1_now) bombs.try_punch(p, static_cast<std::uint8_t>(i));
         if (p.trigger) bombs.detonate_triggered(i);
     }
     // (4) Drop block (`+56 && !+54 && !+134`): constipation (+134) blocks it. On
-    //     the edge, GRAB your own resting bomb underfoot (+92), else spray a
-    //     SPOOGER line (+93, suppressed while auto-dropping — `!v112`), else DROP.
-    //     Grab/spooger are the "double-tap": press 1 drops a bomb underfoot,
-    //     press 2 (now standing on it) grabs or sprays.
+    //     the edge, GRAB the OWN bomb underfoot (+92), else spray a SPOOGER
+    //     line (+93, suppressed while auto-dropping — `!v112`; also own-bomb
+    //     gated), else DROP. Both gates are sub_422E48 + `owner == self`
+    //     (motion 0 AND 1 qualify — a player can grab their own bomb mid-
+    //     slide; flying/carried are exempt via bomb_at). Grab/spooger are the
+    //     "double-tap": press 1 drops a bomb underfoot, press 2 grabs/sprays.
     if (drop_edge && !p.sick(Disease::Constipation)) {
         const Bomb* under = grid::bomb_at(s, p.tile_x(), p.tile_y());
-        const bool own = under && !under->moving && under->owner == static_cast<std::uint8_t>(i);
+        const bool own = under && under->owner == static_cast<std::uint8_t>(i);
         if (p.grab && own)
             bombs.try_grab(p, i);
-        else if (p.spooge && !auto_drop && under)
+        else if (p.spooge && !auto_drop && own)
             bombs.spooge_ahead(p, static_cast<std::uint8_t>(i));
         else
             bombs.drop(p, static_cast<std::uint8_t>(i));

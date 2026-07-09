@@ -132,3 +132,99 @@ TEST_CASE("kick nuances stay deterministic across replays") {
     }
     CHECK(a.hash() == b.hash());
 }
+
+// ---- Core-feel audit 2026-07-10 (facts.md "Core-feel audit" §1/§4) --------
+
+TEST_CASE("the kick fires on the walk-up's ARRIVAL tick (sub_41EC84 !v35 in-loop probe)") {
+    Simulation s(open_config());
+    s.state().players[1].alive = false;
+    Player& p = s.state().players[0];
+    p.kick = true;
+    // Stand 15 px west of the (1,0) centre; a resting bomb waits at (2,0).
+    p.x = 1 * kTileWF + kTileWF / 2 - 15 * kScale;
+    p.y = kTileHF / 2;
+    push_sliding_bomb(s, 2, 0, Direction::Right);
+    s.state().bombs[0].moving = false;  // resting target
+
+    TickInputs right;
+    right.players[0].right = true;
+    // Tick 1: 10 px (budget 923 spends 10 iterations) -> 5 px short; no kick.
+    s.tick(right);
+    CHECK(!s.state().bombs[0].moving);
+    // Tick 2: reaches the centre and is pinned there; the SAME tick's probe
+    // (the original's in-loop v35 == 0 check) kicks the bomb — not tick 3, as
+    // the old post-stall gate had it.
+    s.tick(right);
+    CHECK(s.state().bombs[0].moving);
+    CHECK(s.state().bombs[0].dir == Direction::Right);
+}
+
+TEST_CASE("a bomb sliding across the player's face is snapped and REDIRECTED (sub_42464B)") {
+    Simulation s(open_config());
+    s.state().players[1].alive = false;
+    Player& p = s.state().players[0];
+    p.kick = true;
+    p.x = 2 * kTileWF + kTileWF / 2;  // centred at (2,0), will face east
+    p.y = kTileHF / 2;
+    // A bomb sliding WEST, currently on the tile directly ahead (3,0); the
+    // tile beyond it (4,0) is open, so the kick handler accepts it.
+    push_sliding_bomb(s, 3, 0, Direction::Left);
+
+    TickInputs right;
+    right.players[0].right = true;
+    s.tick(right);
+    REQUIRE(s.state().bombs.size() == 1);
+    const Bomb& b = s.state().bombs[0];
+    CHECK(b.moving);                     // still sliding — never stopped
+    CHECK(b.dir == Direction::Right);    // ... but now AWAY from the player
+    CHECK(b.tile_x() == 3);              // snapped onto the ahead tile's centre
+}
+
+TEST_CASE("re-kicking a bomb already sliding the same way is a silent no-op") {
+    Simulation s(open_config());
+    s.state().players[1].alive = false;
+    Player& p = s.state().players[0];
+    p.kick = true;
+    p.x = 2 * kTileWF + kTileWF / 2;
+    p.y = kTileHF / 2;
+    push_sliding_bomb(s, 3, 0, Direction::Right);  // already fleeing east
+
+    TickInputs right;
+    right.players[0].right = true;
+    s.tick(right);
+    // No BombKicked event: sub_42464B only plays the kick sound when the
+    // direction changes or the bomb was resting.
+    for (const auto& e : s.state().events) CHECK(e.type != Event::Type::BombKicked);
+    CHECK(s.state().bombs[0].dir == Direction::Right);
+    CHECK(s.state().bombs[0].moving);
+}
+
+TEST_CASE("kick + action2 stops own sliding bombs at the next tile centre (sub_4247C5)") {
+    Simulation s(open_config());
+    s.state().players[0].kick = true;
+    s.state().players[1].alive = false;
+    // An own bomb mid-slide, 15 px short of the (2,0) centre, heading east.
+    push_sliding_bomb(s, 2, 0, Direction::Right, /*owner=*/0);
+    s.state().bombs[0].x -= 15 * kScale;
+
+    s.tick(press2(0));  // flag it (slide covers 10 px this tick: 5 px short)
+    CHECK(s.state().bombs[0].stop_pending);
+    run(s, 2);
+    const Bomb& b = s.state().bombs[0];
+    CHECK(!b.moving);  // halted ON the centre, not where the key was pressed
+    CHECK(b.x == 2 * kTileWF + kTileWF / 2);
+    CHECK(!b.stop_pending);
+}
+
+TEST_CASE("kick + action2 does NOT stop jelly bombs (sub_4247C5 skips kind 2)") {
+    Simulation s(open_config());
+    s.state().players[0].kick = true;
+    s.state().players[1].alive = false;
+    push_sliding_bomb(s, 2, 0, Direction::Right, /*owner=*/0);
+    s.state().bombs[0].jelly = true;
+
+    s.tick(press2(0));
+    CHECK(!s.state().bombs[0].stop_pending);
+    run(s, 4);
+    CHECK(s.state().bombs[0].moving);  // still ping-ponging along
+}

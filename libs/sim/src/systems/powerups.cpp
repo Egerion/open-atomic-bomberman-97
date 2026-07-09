@@ -23,38 +23,45 @@ void PowerupSystem::apply(Player& p, PowerupType t) {
         case PowerupType::Goldflame: p.goldflame = true; break;
         case PowerupType::Skate:
             p.skates = limited(p.skates + 1, t);
-            p.speed = tn.start_speed + p.skates * tn.skate_speed_bonus;
+            p.speed = tn.start_speed + p.skates * tn.skate_speed_bonus -
+                      p.clogs * tn.clogs_speed_penalty;
             break;
         case PowerupType::Kick: p.kick = true; break;
         // Mutually exclusive glove/bomb kinds (sub_41E21E via sub_41E16A):
         // punch↔trigger, grab↔spooger, trigger↔jelly all evict each other, and
-        // trigger additionally drops punch. Picking one strips the conflicting
-        // kind(s) — remove() only flips flags (no RNG), so the draw order is
-        // unaffected; the hashed flags change, so golden must be recaptured.
+        // trigger additionally drops punch. Eviction is NOT a silent flag
+        // clear: sub_41E16A SCATTERS the evicted token back onto a random
+        // floor tile (sub_425BED -> sub_4255B2) whenever the count exceeds the
+        // VALUELST start-with baseline, and evicting Trigger additionally
+        // DOWNGRADES the player's live trigger bombs to normal timed bombs
+        // with a fresh fuse (sub_424C47). The scatter draws RNG (order/count
+        // contract) and the flags are hashed — golden recaptured.
+        // facts.md "Core-feel audit" §2.
         case PowerupType::Punch:
             p.punch = true;
-            remove(p, PowerupType::Trigger);
+            evict(p, PowerupType::Trigger);
             break;
         case PowerupType::Grab:
             p.grab = true;
-            remove(p, PowerupType::Spooger);
+            evict(p, PowerupType::Spooger);
             break;
         case PowerupType::Spooger:
             p.spooge = true;
-            remove(p, PowerupType::Grab);
+            evict(p, PowerupType::Grab);
             break;
         case PowerupType::Trigger:
             // Trigger pickup (sub_41E21E case 9) resets the live-trigger
             // counter (+85 = 0), refilling the placement allowance to a fresh
-            // max_bombs, then sets the flag and evicts punch + jelly.
+            // max_bombs, then sets the flag and evicts punch + jelly (in that
+            // order — the scatter draws must follow it).
             p.trigger_placed = 0;
             p.trigger = true;
-            remove(p, PowerupType::Punch);
-            remove(p, PowerupType::Jelly);
+            evict(p, PowerupType::Punch);
+            evict(p, PowerupType::Jelly);
             break;
         case PowerupType::Jelly:
             p.jelly = true;
-            remove(p, PowerupType::Trigger);
+            evict(p, PowerupType::Trigger);
             break;
         default: break;
     }
@@ -66,7 +73,10 @@ void PowerupSystem::remove(Player& p, PowerupType t) {
         case PowerupType::Flame: if (p.flame > 1) --p.flame; break;
         case PowerupType::Skate:
             if (p.skates > 0) --p.skates;
-            p.speed = s_.tuning.start_speed + p.skates * s_.tuning.skate_speed_bonus;
+            // Recompute keeps the clogs penalty term (sub_41F29B's per-tick
+            // `base + skates*getvalue(90) - clogs*getvalue(91)`; we bake it).
+            p.speed = s_.tuning.start_speed + p.skates * s_.tuning.skate_speed_bonus -
+                      p.clogs * s_.tuning.clogs_speed_penalty;
             break;
         case PowerupType::Kick: p.kick = false; break;
         case PowerupType::Goldflame: p.goldflame = false; break;
@@ -76,6 +86,47 @@ void PowerupSystem::remove(Player& p, PowerupType t) {
         case PowerupType::Trigger: p.trigger = false; break;
         case PowerupType::Jelly: p.jelly = false; break;
         default: break;
+    }
+}
+
+// Mutual-exclusion eviction (sub_41E16A, flag-kind branch — sub_425C10 is
+// true for exactly the five kinds the dispatcher ever evicts): when the
+// player holds the kind above its VALUELST start-with baseline, the surplus
+// token is SCATTERED back onto a random floor tile and the count drops to
+// the baseline. Evicting Trigger with the flag ending cleared additionally
+// converts the player's live trigger bombs to normal timed bombs with a
+// fresh full fuse (sub_424C47: kind = 0, fuse-elapsed = 0) — they can no
+// longer be detonated and will now explode on their own.
+void PowerupSystem::evict(Player& p, PowerupType t) {
+    const int kind = static_cast<int>(t);
+    const bool baseline = kind < kPowerupKinds && s_.tuning.start_with[kind] > 0;
+    const bool held = [&] {
+        switch (t) {
+            case PowerupType::Punch: return p.punch;
+            case PowerupType::Grab: return p.grab;
+            case PowerupType::Spooger: return p.spooge;
+            case PowerupType::Trigger: return p.trigger;
+            case PowerupType::Jelly: return p.jelly;
+            default: return false;  // only flag kinds are ever evicted
+        }
+    }();
+    if (held && !baseline) {
+        scatter(t);  // sub_425BED before the count write, same draw order
+        remove(p, t);
+    }
+    if (t == PowerupType::Trigger && !p.trigger) {
+        const int owner = static_cast<int>(&p - s_.players.data());
+        for (auto& b : s_.bombs)
+            if (b.active && b.trigger && b.owner == owner) {
+                b.trigger = false;
+                b.fuse = b.fuse_init;  // relit from scratch (elapsed = 0)
+            }
+        // sub_424C47 matches on the bomb KIND alone — a trigger bomb of this
+        // owner riding in someone's hands (motion 3 in the original; our
+        // carried_* fields) converts too, and lands as a normal timed bomb.
+        for (auto& q : s_.players)
+            if (q.present && q.carrying && q.carried_trigger && q.carried_owner == owner)
+                q.carried_trigger = false;
     }
 }
 

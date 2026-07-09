@@ -107,9 +107,14 @@ struct Tuning {
     std::int32_t taunt_many_chance = 4;  // id 650
     std::int32_t jelly_turn_chance = 3;  // id 667: flying jelly veers ±90°, 1-in-N per boundary
     // Duds (sub_422EDE / sub_422C13): only regular bombs fizzle, gated by a
-    // global timer that re-arms base + rand(spread) ticks ahead.
-    std::int32_t dud_gate_base = 180;     // id 320
-    std::int32_t dud_gate_rand = 180;     // id 321
+    // global timer that re-arms base + rand(spread) SECONDS ahead — the ids'
+    // own VALUELST legend ("minimum/additional random number of SECONDS
+    // between potential dud bombs"); consumers multiply by kTicksPerSecond.
+    // 180+rand%180 s = one dud opportunity per 3-6 MINUTES (facts.md "Dud
+    // bombs", units corrected 2026-07-09 — the old port read these as ticks,
+    // making duds ~20x too frequent).
+    std::int32_t dud_gate_base = 180;     // id 320, seconds
+    std::int32_t dud_gate_rand = 180;     // id 321, seconds
     std::int32_t dud_chance = 3;          // id 322: 1-in-N when the gate is open
     std::int32_t dud_frames = 120;        // id 323: fizzle duration
     std::int32_t flame_frames = 10;       // id 10 (flame anim cycle); confirmed as the

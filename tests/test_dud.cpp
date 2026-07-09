@@ -1,9 +1,10 @@
 // Dud bombs — reverse-engineered from bomb creation (sub_422EDE) and the
 // bomb updater (sub_42331C): only REGULAR bombs can fizzle; a global gate
-// (armed at match init, re-armed base + rand(spread) ticks ahead by
-// sub_422C13, VALUELST 320/321) rate-limits the 1-in-getvalue(322) roll; a
-// dud freezes its fuse for getvalue(323) ticks, then relights and resumes.
-// See docs/re/facts.md "Dud bombs".
+// (armed at match init, re-armed base + rand(spread) SECONDS ahead by
+// sub_422C13 — VALUELST 320/321's own legend; ~3-6 minutes per opportunity)
+// rate-limits the 1-in-getvalue(322) roll; a dud freezes its fuse for
+// getvalue(323) ticks, then relights and resumes. See docs/re/facts.md
+// "Dud bombs" (units corrected 2026-07-10).
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
@@ -102,6 +103,27 @@ TEST_CASE("a chain explosion sets off a fizzling dud") {
     // Let the live bomb explode; its flame must chain the dud instantly.
     run(s, s.state().tuning.fuse_frames + 2);
     CHECK(s.state().bombs.empty());
+}
+
+// ---- Core-feel audit 2026-07-10 (facts.md "Dud bombs" units correction) ----
+
+TEST_CASE("the dud gate is armed in SECONDS, 3-6 minutes out (VALUELST 320/321 legend)") {
+    // Default tuning: base 180 s + rand % 180 s, converted to ticks at arm
+    // time. The old port misread these as ticks (9-18 s), making duds ~20x
+    // too frequent.
+    Simulation s(open_config());
+    CHECK(s.state().dud_gate >= 180ull * kTicksPerSecond);
+    CHECK(s.state().dud_gate < 360ull * kTicksPerSecond);
+}
+
+TEST_CASE("the re-arm ACCUMULATES on the previous deadline (sub_422C13 `+=`)") {
+    // Gate armed at 0 (base 0, spread 1): the first placement's re-arm adds
+    // (base + rand % 1) * 20 ticks to the OLD gate value, not to "now".
+    Simulation s(always_dud_config());
+    s.state().tuning.dud_gate_base = 100;             // re-arm adds exactly 100 s
+    const std::uint64_t before = s.state().dud_gate;  // 0 (armed with base 0)
+    s.tick(press1(0));                                // placement -> re-arm
+    CHECK(s.state().dud_gate == before + 100ull * kTicksPerSecond);
 }
 
 TEST_CASE("dud rolls are deterministic") {

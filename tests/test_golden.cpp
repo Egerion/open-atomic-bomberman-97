@@ -129,6 +129,33 @@ MatchConfig pillars_config() {
 // (17 of 24 assertions in this file are the hash checks that moved; the
 // other 7 all passed unchanged), proving zero extra RNG draws and zero
 // gameplay change on every existing scenario.
+//
+// UPDATE 2026-07-10 (core-feel fidelity audit, docs/re/facts.md "Core-feel
+// audit 2026-07-10" + "Dud bombs" units correction): a DELIBERATE behaviour
+// recapture, not a layout-only one. The changes and their per-scenario reach:
+//   1. Dud gate units seconds->ticks x20 (VALUELST 320/321's own legend) and
+//      literal `+=` re-arm: every build_state() digest shifts because the
+//      hashed dud_gate VALUE grew x20 (same single setup RNG draw). Within
+//      3000/1500-tick runs the gate (>= 3600 ticks) never opens, so B's and
+//      C's in-run dud re-arm+roll draws VANISH.
+//   2. Kick fidelity (sub_41EC84 `!v35` in-loop probe): the kick now fires on
+//      the ARRIVAL tick (was one tick later), and a bomb sliding in another
+//      direction is snapped + REDIRECTED (sub_42464B). Kick+action2 stops own
+//      sliding bombs (sub_4247C5). Reaches B (kick players) and E (the
+//      choreography kicks earlier and redirects the returning jelly bomb:
+//      bounce count 7 -> 10, veer-roll RNG stream shifts).
+//   3. Eviction scatter (sub_41E16A) + trigger downgrade (sub_424C47), spooge
+//      owner-gate/player-stop/fuse-stagger, throw fuse restart, grab-while-
+//      sliding: reach B (all gloves born_with) and C (born_with trigger).
+//   4. Reversed disease applied to the RESOLVED dir, humans only (sub_41F29B
+//      ~23049): reaches D (disease gauntlet) — movement-only, RNG-neutral.
+// Hash-layout growth rides along: per-bomb fuse_init + stop_pending words
+// (zero-bomb scenarios unaffected). PROOFS run before recapture: golden A
+// passes BYTE-IDENTICAL (old constant kept — no players, no bombs, bare-ctor
+// state has dud_gate 0). Golden D's kExpectedRng is byte-identical at all
+// four checkpoints, and with the x20 temporarily reverted D's ticks 200-600
+// hashes reproduce the OLD constants exactly — isolating D's delta to the
+// dud_gate value plus one RNG-neutral reversal divergence in ticks 600-800.
 
 TEST_CASE("golden A: empty state, 10000 ticks") {
     Simulation a;
@@ -160,15 +187,15 @@ TEST_CASE("golden B: 4-player brick match with all abilities") {
     cfg.born_with[static_cast<int>(PowerupType::Spooger)] = true;
     cfg.born_with[static_cast<int>(PowerupType::Jelly)] = true;
     Simulation s(cfg);
-    CHECK(s.hash() == 0x74063ae1c65ff3e5ull);  // setup itself is pinned
+    CHECK(s.hash() == 0x57a58cd7591a0885ull);  // setup itself is pinned
 
     static constexpr std::uint64_t kExpected[6] = {
-        0xc98a79b86f285084ull,  // tick 500
-        0x8ceacfcff0456ff8ull,  // tick 1000
-        0xc5769471afbdbadcull,  // tick 1500
-        0x86ffedc4f771c04bull,  // tick 2000
-        0x5c6c133383e66534ull,  // tick 2500
-        0x366532977d9a0171ull,  // tick 3000
+        0x57c354d638c66743ull,  // tick 500
+        0xf78a6117e3a966c7ull,  // tick 1000
+        0xac762307668aeff3ull,  // tick 1500
+        0x8b7d40da72ac06b5ull,  // tick 2000
+        0x678b77f30499a1ebull,  // tick 2500
+        0xd26e903bfb21b042ull,  // tick 3000
     };
     for (std::uint64_t t = 0; t < 3000; ++t) {
         s.tick(pattern(t));
@@ -186,7 +213,7 @@ TEST_CASE("golden C: trigger bombs and a fast hurry phase") {
     cfg.born_with[static_cast<int>(PowerupType::Trigger)] = true;
     Simulation s(cfg);
     for (std::uint64_t t = 0; t < 1500; ++t) s.tick(pattern(t * 7 + 3));
-    CHECK(s.hash() == 0xe26d9311354b51f8ull);
+    CHECK(s.hash() == 0x183f800195a7b93dull);
 }
 
 TEST_CASE("golden D: the disease gauntlet") {
@@ -220,10 +247,10 @@ TEST_CASE("golden D: the disease gauntlet") {
     // checkpoint: the fix adds no RNG draws, it only changes which tile the
     // arm's blank-tile ignite loop reaches next.
     static constexpr std::uint64_t kExpectedHash[4] = {
-        0xd074efb8aa8e4800ull,  // tick 200
-        0x2b8a89162c1e4716ull,  // tick 400
-        0x33d7e95d52a86e2dull,  // tick 600
-        0x923965955e194f9cull,  // tick 800
+        0x725cfee1548c97c7ull,  // tick 200
+        0xdf043d8f1c91bfd1ull,  // tick 400
+        0x517dedf684531a90ull,  // tick 600
+        0x1c886f30d32bd6bdull,  // tick 800
     };
     static constexpr std::uint32_t kExpectedRng[4] = {0xca47489cu, 0x49cffff6u, 0x2abb3268u,
                                                       0xd72904d8u};
@@ -284,10 +311,10 @@ TEST_CASE("golden E: jelly ping-pong and a veering punched flight") {
     };
 
     static constexpr std::uint64_t kExpected[4] = {
-        0xf5a2a7dad0bb032aull,  // tick 75
-        0xbe36319fb96de287ull,  // tick 150
-        0xba506a5104a7a409ull,  // tick 225
-        0xc6d75606e29769e8ull,  // tick 300
+        0x2127eecc535b0d1dull,  // tick 75
+        0x2b023abf13ff90baull,  // tick 150
+        0x47ed56eafc466f39ull,  // tick 225
+        0xd897750a91e2131bull,  // tick 300
     };
     int bounces = 0;
     for (std::uint64_t t = 0; t < 300; ++t) {
@@ -296,6 +323,10 @@ TEST_CASE("golden E: jelly ping-pong and a veering punched flight") {
             if (e.type == Event::Type::JellyBounced) ++bounces;
         if ((t + 1) % 75 == 0) CHECK(s.hash() == kExpected[(t + 1) / 75 - 1]);
     }
-    CHECK(bounces == 7);                  // the ping-pong really happened
-    CHECK(s.state().rng == 0xcce3bbf8u);  // the veer roll really consumed RNG
+    // 10 with the audit's kick fidelity (was 7): the kick lands on the walk-up's
+    // ARRIVAL tick and the returning jelly bomb is REDIRECTED east by the still-
+    // facing player (sub_42464B) instead of waiting for the body-block reverse,
+    // so the ping-pong starts sooner and completes more legs in 300 ticks.
+    CHECK(bounces == 10);                 // the ping-pong really happened
+    CHECK(s.state().rng == 0x405862fbu);  // the veer roll really consumed RNG
 }

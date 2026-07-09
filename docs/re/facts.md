@@ -478,26 +478,39 @@ Read 2026-07-03. Bomb state (+0): 0 dead, 1 live, **2 = dud (fizzling)**.
 - **Roll site = bomb creation** (`sub_422EDE`): only when the kind is REGULAR
   (`!a4` — trigger and jelly never fizzle) and not a network game. Gated by a
   global timer (`dword_464AF4`): when open, the gate re-arms FIRST
-  (`sub_422C13`: gate += getvalue(320) + rand() % getvalue(321), VALUELST
-  320 = 180, 321 = 180 — one dud opportunity per ~9–18 s) and then the bomb
-  duds on `rand() % max(1, getvalue(322)) == 0` (322 = 3). The gate is also
-  armed once at match init (`sub_422C7A`).
+  (`sub_422C13`: gate += getvalue(320) + rand() % getvalue(321)) and then the
+  bomb duds on `rand() % max(1, getvalue(322)) == 0` (322 = 3). The gate is
+  also armed once at match init (`sub_422C7A`).
+- **UNITS CORRECTED 2026-07-10 (core-feel audit):** VALUELST 320/321 are
+  **SECONDS**, per the file's own legend — *"minimum number of seconds
+  between potential dud bombs"* (320 = 180) / *"additional random number of
+  seconds"* (321 = 180). One dud opportunity per **3–6 MINUTES**, not the
+  ~9–18 s this entry previously claimed by reading the raw values as ticks —
+  that misreading made our duds ~20× too frequent (a major feel deviation:
+  roughly every third bomb after each 9–18 s window fizzled). The gate
+  compares against the program's ms clock (`time_()`); the exact
+  seconds→clock scaling inside `sub_422C13` is register-garbled in the
+  decompile, but the legend's intent is unambiguous. Note the re-arm is
+  literally `+=` on the PREVIOUS deadline (not anchored on "now"), so a
+  long-idle gate can bank consecutive openings — ported literally.
 - **Fizzle window** (`sub_42331C` tail): the "bomb regular green dud"
   sequence (DUDS.ANI) renders while the always-running anim counter stays
   within getvalue(323) = 120 ticks (6 s); past it the bomb returns to state 1
   with its anim reset. The fuse gate skips state 2 entirely, so the fuse
   RESUMES where it froze — total lifetime = fuse + fizzle.
 - The original's gate compares wall-clock-ish time (why network games skip
-  duds); our deterministic port measures the same 180-frame values in ticks
-  (`State::dud_gate`, hashed) — semantics identical at 20 Hz, and
-  determinism holds where the original had to disable the feature.
+  duds); our deterministic port measures the same values in ticks
+  (`State::dud_gate`, hashed, seconds × `kTicksPerSecond`) — semantics
+  identical at 20 Hz, and determinism holds where the original had to
+  disable the feature.
 - Chain explosions still set off a fizzling dud (the explosion path ignores
   the dud state).
 
 Ported: `Bomb::dud_left` (hashed) + `State::dud_gate` (hashed), roll in
 `BombSystem::place`, freeze in `tick_fuses`, DUDS.ANI wired through
 AssetStore/SequenceSet/Renderer. Tests: `tests/test_dud.cpp`. Golden fully
-recaptured (hash layout gained two fields; setup consumes one arm draw).
+recaptured (hash layout gained two fields; setup consumes one arm draw), and
+again 2026-07-10 for the seconds correction.
 
 ## Head hit — CONFIRMED (`sub_421F7E`, stun countdown in the player updater)
 
@@ -552,9 +565,26 @@ are the per-kind counts (86 bombs, 87 flame, 89 kick, 90 skate, 91 punch,
   legal outcome). Ported into the pickup path in `simulation.cpp`
   (`State::forbidden` now carries the scheme flags; one RNG draw per
   attempt). Tests: `tests/test_random.cpp`.
-- **Mutual exclusions** via the remove helper `sub_41E16A`: punch removes
+- **Mutual exclusions** via the evict helper `sub_41E16A`: punch removes
   trigger; grab removes spooger; spooger removes grab; trigger removes punch
-  AND jelly; jelly removes trigger. NOT yet in our sim (roadmap item 11).
+  AND jelly; jelly removes trigger. **DEEPENED 2026-07-10 (core-feel audit
+  §2):** eviction is not a silent flag clear. `sub_41E16A` splits on
+  `sub_425C10(kind)` (true for exactly kinds 5/6/7/9/10 — the flag kinds):
+  when the count exceeds the getvalue(50+kind) start-with baseline it
+  **SCATTERS the evicted token back onto a random floor tile**
+  (`sub_425BED` → `sub_4255B2`, the head-hit scatter — same RNG draw
+  pattern) and writes the count back to the baseline (the non-flag branch
+  loops, scattering ALL surplus — never reached from the dispatcher). And
+  when the evicted kind is TRIGGER (a2 == 9) and the flag ends cleared, it
+  calls **`sub_424C47`**, which walks the bomb array and DOWNGRADES every
+  live kind-1 bomb of that player to kind 0 with fuse-elapsed reset to 0 —
+  the orphaned trigger bombs relight with a fresh full fuse (they'd
+  otherwise sit inert forever, since the flag gates the detonate key).
+  Ported: `PowerupSystem::evict` (scatter + downgrade, incl. a carried
+  trigger bomb — `sub_424C47` matches on kind alone); `remove()` stays the
+  head-hit primitive (the head hit `sub_421F7E` decrements + scatters
+  itself and does NOT call `sub_424C47`). Tests:
+  `tests/test_trigger_allowance.cpp`. GOLDEN (new scatter RNG draws).
 - **Trigger pickup** also zeroes the live-trigger-bomb counter (+85); bomb
   creation lays trigger kind only while `+85 < +86 (max bombs)`.
 - **AWESOME cadence**: pickup counter +101 (not incremented by skulls):
@@ -727,11 +757,15 @@ Read 2026-07-04 ("devam" #8). Three gaps audited against the kicked-slide loop.
    tile's** direction. We do not model dirarrows/conveyors yet, so there is
    nothing faithful to add; this belongs to ROADMAP #7 (conveyors/trampolines).
    (This corrects the task's "resting player re-reads godir" premise.)
-   Sidenote: `sub_4230A5` (the slide passability check) tests walls, bombs,
-   bricks, powerups and the warphole actor (type 1) — it does **not** test for
-   players, so in the original a sliding bomb passes THROUGH players. Our slide
-   currently treats a live player on the next tile as a blocker; left as-is
-   (pre-existing, out of this audit's scope) and noted for a future pass.
+   Sidenote — **CORRECTED 2026-07-10 (core-feel audit):** the earlier claim
+   here that `sub_4230A5` "does not test for players" was wrong. Re-read of
+   the function (0x4230A5): its second check is literally
+   `if (sub_421CB5(a1, a2)) return 0;` — `sub_421CB5` IS the player-at-tile
+   scan (the head-hit helper). A sliding bomb is **blocked by a live
+   player**, exactly as our slide already behaved; the "future pass" this
+   note requested is unnecessary. (It also probes `sub_405654` type 1 —
+   sliding bombs cannot ENTER a warphole tile via normal passability; the
+   warp handling happens elsewhere in the mover.)
 3. **Kicked-bomb speed = fixed VALUELST id 300 — CONFIRMED faithful.** The kick
    handler `sub_42464B` sets bomb `+112 = getvalue(300)` (id 300 = 1000; punch
    `sub_...25943` sets `+112 = getvalue(301)` = 1300). The `getvalue(base+190)`
@@ -743,6 +777,106 @@ Ported: flame-into-explode in `BombSystem::slide` (now index-based). Tests:
 `tests/test_kick_nuances.cpp`. Golden: the flame-explode path only triggers when
 a kicked bomb meets flame; golden scenarios that never do stay byte-identical,
 but recapture after the trigger/goldflame hash-layout change regardless.
+
+## Core-feel audit 2026-07-10 — line-by-line arithmetic pass (movement / drop / powerups / timing)
+
+A full side-by-side re-read of `sub_41F29B` (player updater), `sub_41EC84`
+(pixel mover), `sub_41EB13`/`sub_422EDE` (bomb creation), `sub_41E21E`
+(pickup dispatcher, incl. `sub_41E16A`/`sub_424C47`/`sub_41DFB6`),
+`sub_421F7E` (head hit), `sub_42464B`/`sub_4247C5`/`sub_424B41` (kick/stop/
+detonate handlers) and `sub_422C13` (dud gate) against the sim, triggered by
+a "core feel deviates" report. Verified-identical areas (no change): the
+per-pixel mover's corner/glide/settle resolution and its (dir±1)&3 rotations;
+the walk-speed budget `base(42=923) + skates*90 − clogs*91`, molasses ÷3 then
+hyper ×3/2, frame-scaled, conveyor ±getvalue(190+idx) after disease scaling;
+base speed set once at spawn from getvalue(42); the opposite-key resolution
+(blocked-pressed-dirs filter, last-index wins); ice buffering order; bomb
+kind exclusivity + trigger allowance + goldflame/short-flame ordering; fuse
+40 (id 41, stored as duration for every kind); drop tile-snap via the
+floor-division tile of the player centre; head-hit stun 16 / drop-count /
+kind-roll / scatter; the 550-block caps in the pickup tail; cure roll before
+dispatch; Random reroll `%12` ×200; skull rolls (1 vs 3, first announces);
+disease durations 50ms×getvalue(130+i); flame lifetime 10. Six deviations
+were found and fixed (each cites its sub above; GOLDEN recaptured in the
+same commit, `tests/test_golden.cpp` 2026-07-10 note has the per-scenario
+proofs):
+
+1. **Kick timing + redirect (`sub_41EC84` `!v35` branch, `sub_42464B`).**
+   The kick check lives INSIDE the per-pixel loop, firing whenever the
+   player sits on the tile centre along the travel axis with a bomb ahead
+   and the tile beyond it passable — so a walk-up kicks on the ARRIVAL tick
+   (our old post-stall gate was one tick late on every approach), a parked
+   player holding the direction re-fires every tick, and `sub_424708 →
+   sub_42464B` accepts a bomb ALREADY SLIDING (`sub_422E48` matches motion
+   0 and 1): same direction = silent speed refresh (no sound: `sub_42464B`
+   plays 120 only when `dir != new || !moving`), different direction =
+   **snap to tile centre + redirect, still sliding**. Ported as a post-move
+   centred-along-axis probe in `player_turn` (same-tick equivalent of the
+   in-loop check; the belt-forced no-input mover probes along the belt dir)
+   plus the redirect branch in `try_kick`. Tests: `test_kick_nuances.cpp`.
+2. **Powerup eviction scatters + trigger downgrade (`sub_41E16A`,
+   `sub_424C47`).** See the deepened "Mutual exclusions" bullet in the
+   pickup-dispatcher section: evicted tokens return to the board via the
+   scatter, and an evicted Trigger converts the player's live trigger bombs
+   to fresh-fused normal bombs. `PowerupSystem::evict`.
+3. **Drop/spooge block details (`sub_41F29B` LABEL_246).** (a) A drop on a
+   WARPHOLE tile is refused (`sub_405654` type 1 short-circuits placement;
+   sound 40/41 "enrt" unless disease-auto-drop — `Event::DropRefused`).
+   (b) The spooge branch requires the underfoot bomb to be OWN (owner word
+   +62 == self), not just any bomb. (c) The spooge run ALSO stops at a live
+   player (`sub_421CB5` is the loop's first break). (d) The run index n is
+   passed to `sub_41EB13` → `sub_422EDE` inits fuse-elapsed to −50·n ms:
+   each successive spooge bomb burns **one tick longer** — the line pops as
+   a near-to-far cascade, one tile per tick (our old port detonated the
+   whole line simultaneously). Tests: `test_spooge.cpp`,
+   `test_stage_actors.cpp`.
+4. **Kick + action2 stops own sliding bombs (`sub_4247C5`).** The action
+   edge-gate's FIRST branch (before punch and trigger): a kick player's
+   action key sets byte +57 on every own SLIDING, non-jelly (kind != 2)
+   bomb; the slide loop consumes it at the next at-or-past-centre step
+   (`+57 && v81 >= 0` → snap + stop), and a DIRARROW clears it (~25535).
+   Previously missing entirely. `Bomb::stop_pending` (hashed),
+   `BombSystem::stop_own_sliding`. Also from `sub_424B41`: the trigger
+   detonate scan exempts ONLY carried (3) and flying (2) — a SLIDING
+   trigger bomb detonates fine (ours wrongly excluded it), and it picks the
+   OLDEST by creation stamp (+64), which our creation-ordered vector's
+   first match reproduces. Tests: `test_kick_nuances.cpp`,
+   `test_trigger_allowance.cpp`.
+5. **Throw restarts the fuse (`sub_41F29B` LABEL_246 `+37` release:
+   `*(_WORD*)(v73+68) = 0`).** The carried bomb's fuse-elapsed is zeroed
+   right before the launch — a thrown bomb lands with its complete
+   creation-time duration (incl. a short-fuse ÷3 baked at creation), not
+   the remnant frozen at grab. Also `sub_422E48` (the grab's underfoot
+   probe) matches motion 0 AND 1: a player can grab their own bomb
+   mid-slide. Ported via `Bomb::fuse_init` (hashed; the duration word +74
+   the original stores for every kind). Tests: `test_punch_throw.cpp`.
+6. **Reversed-controls application point (`sub_41F29B` ~23049).** The flip
+   is `(godir + 2) & 3` on the RESOLVED direction — after the opposite-key
+   passability filter ran on the RAW pressed dirs, before the ice buffer
+   push (delayed samples store the flipped value) — and it is gated
+   `+16 != 1`, i.e. **humans only**; an AI's direction is never flipped.
+   Our old port swapped the four input flags pre-resolution (divergent
+   under multi-key input) and flipped AIs too. Also from `sub_41DFB6`: the
+   skull's 200-try reroll of Swap is NET-game-only; locally a Swap with no
+   valid target is simply LOST (nothing assigned), not rerolled into a
+   different disease — `assign_random` now matches. Tests: existing
+   disease/ice suites still pin the composition order.
+
+Plus the **dud-gate units correction** (see "Dud bombs": VALUELST 320/321
+are SECONDS — one opportunity per 3–6 minutes, not 9–18 s; re-arm is `+=`
+on the previous deadline) and the **skate-recompute clogs term** (a skate
+pickup/loss recomputes `speed = 923 + skates·150 − clogs·150`; the old
+recompute dropped the clogs penalty — `sub_41F29B` recomputes the whole
+term per tick, so the penalty never vanishes in the original). Deviations
+found but deliberately NOT changed, documented for honesty: the original
+writes the GLIDE's diagonal direction into the facing word (+44) mid-loop
+(a punch thrown mid-glide can aim the lateral way — sub-tick, cosmetic-
+adjacent; ours keeps the input facing); the cure roll draws `rand()` even
+for healthy players (outcome-identical — our internal RNG draws only when
+diseased); and the swap-disease target pick is one draw over the valid set
+instead of the original's up-to-200 rejection sampling (outcome-equivalent
+distribution). These are internal-RNG/bookkeeping differences with no
+player-visible effect; our own draw-order contract stays self-consistent.
 
 ## Punch glove feedback — CONFIRMED (`sub_424A50` handler, `sub_41F29B` dispatch)
 
