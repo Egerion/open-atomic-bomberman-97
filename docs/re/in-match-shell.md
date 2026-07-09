@@ -330,36 +330,99 @@ confirmed by reading its body) — there is no fill/border/backdrop draw call
 site anywhere in `sub_420F07`. The row is a bare text+icon overlay directly
 on the live game field, matching the clock HUD's own styling.
 
-**A separate, NOT ported, lower-confidence finding: the "cornerhead" face
-bubble.** Still inside `sub_41F29B` (the per-player animation-advance this
-document's round-driver section already cites for the idle-fidget "cornerhead"
-poses — CONFIRMED unrelated to this section, already ported as
-`Renderer`'s `panic_ticks_`/`panic_variant_`), a SEPARATE block (pseudo.c
-23269-23276) draws a `KFACE.ANI` face (`sub_4518D0(v76, aKfaceS, dir)`,
-`aKfaceS = "kface %s"`; `KFACE.ANI` ships `kface north/east/south/west`, 4
-single-frame ~40x40 images, confirmed via `abtool ani KFACE.ANI`) 4px left
-and 34px above ONE specific player's sprite — gated
-`if (((char*)v111-(char*)dword_461BC4)/152 == dword_45BE3C)`, i.e. only for
-the player slot equal to global `dword_45BE3C`. This reads as a
-netplay-era "which one is me" indicator (one face bubble floating over a
-single designated slot, direction-facing via `sub_413AED`), not a per-player
-roster display — `dword_45BE3C`'s exact semantics (a fixed "local player"
-slot index, presumably always 0 or the first human slot in a hotseat/local
-game) were not traced further; this task's brief is a genuinely different
-concept from the "player row" above (an icon that follows ONE player's
-sprite around the field, vs. a fixed top-of-screen grid of everyone), has
-only one call site with more ambiguity in what it should mean for a
-same-screen multiplayer port (every "local" player is equally local here),
-and porting a wrong index would be an invented visual — **left unported,
-flagged here as a confirmed-but-deferred gap** rather than guessed.
+**A separate, NOT ported finding, now FULLY TRACED: the "cornerhead" face
+bubble — CONFIRMED N/A for a same-screen port (2026-07-09).** Still inside
+`sub_41F29B` (the per-player animation-advance this document's round-driver
+section already cites for the idle-fidget "cornerhead" poses — CONFIRMED
+unrelated to this section, already ported as `Renderer`'s
+`panic_ticks_`/`panic_variant_`), a SEPARATE block (pseudo.c 23269-23276)
+draws a `KFACE.ANI` face (`sub_4518D0(v76, aKfaceS, dir)`, `aKfaceS = "kface
+%s"`; `KFACE.ANI` ships `kface north/east/south/west`, 4 single-frame
+~40x40 images, confirmed via `abtool ani KFACE.ANI`) at `(player_x - 4,
+player_y - 34)` (`sub_415A9F(*(v111+7) - 4, *(v111+8) - 34, 0, v74)`, frame 0
+of the direction sequence, drawn every tick the gate holds — no health/
+disease/event condition, no cadence beyond "gate is true this frame") —
+gated `if (((char*)v111-(char*)dword_461BC4)/152 == dword_45BE3C)`, i.e.
+only for the player slot equal to global `dword_45BE3C`. The direction is
+picked by `sub_413AED(BYTE2(*(v111+21)))` — `off_45BCC4[facing_byte & 3]`, a
+4-entry direction-name table indexed by the player's own facing.
 
-**Port status: DONE for the player row, deferred for the cornerhead face
-bubble.** `GameApp::draw_player_row` (`game_app.cpp`, called from
-`run_match` after `Renderer::draw_frame`) now draws the S:/K: grid in each
-slot's `AssetStore::slot_color` (the same helper `present_scoreboard`'s
-non-team row already uses for the identical `sub_41672F` ink), with the
-`MISC.ANI` "xxx" sequence (`SequenceSet::eliminated_marker`) overlaid on a
-round-dead slot. `sim::Player::present`/`sim::Player::alive` stand in for
+`dword_45BE3C`'s semantics are now **exhaustively traced** — every read and
+write in the whole decompile (5 sites total, confirmed by a full-file grep,
+no others exist):
+
+- **Declaration/init** (pseudo.c 2235): `int dword_45BE3C = -1;` — global,
+  starts "nobody designated."
+- **Round-start reset** (pseudo.c 23986, `sub_421793`, the per-round init
+  function that also resets the +53/+54 fields on all 10 slots and shuffles
+  the spawn-point tables): `dword_45BE3C = -1;` — cleared at the top of
+  every round, so it never silently survives from a previous round.
+- **The only local WRITE that isn't a reset** (pseudo.c 22358-22372, inside
+  `sub_41E61E` — the per-player *human input decoder*, `switch` on the same
+  input-type-category byte `docs/re/setup-screens.md`'s "State model" section
+  pins at player-struct `+16` (0=OFF, 1=COMPUTER, 2=keyboard, **3=joystick**,
+  4=other controller)): **only `case 3` (joystick) touches it.**
+  `sub_429520(stick_index, &v29, &v31, &v30)` reads the live joystick sample
+  cached by the polling loop `sub_429790` (confirmed: `v4[8]`/`v4[9]` are the
+  X/Y axes rescaled to 0-100, `v4[10] = pji.dwButtons`, the raw
+  `joyGetPosEx` button bitmask — so `v31` here is that raw button bitmask,
+  not a percentage). If `v31 == 74` exactly, `dword_45BE3C` is set to *this
+  player's own slot index* (`(v28 - dword_461BC4)/152`) and
+  `sub_4101F1(index)` fires; if `v31 == 138` exactly, it is cleared to `-1`
+  and `sub_4101F1(-1)` fires. Both 74 (`0b01001010`) and 138 (`0b10001010`)
+  are multi-bit chords, not single-button presses — an unlikely-to-hit-by-
+  accident gesture, and one that requires a **joystick specifically**
+  (neither keyboard `case 2` nor the "other controller" `case 4` ever touch
+  `dword_45BE3C`).
+- **`sub_4101F1`** (pseudo.c 14249) is a **network-send** wrapper:
+  `sub_40C326(57)` + `sub_40CE27((int16*)0x39, &value, ..., 2)` — it puts the
+  new value on the wire as message id **57 (0x39)**, a 2-byte payload.
+- **The matching receive-side handler, `sub_40E2D8`** (pseudo.c 12786-12795,
+  one of the `sub_40C497(a1)`-gated message dispatch wrappers alongside
+  every other `sub_40Exxx` handler in that block): on a valid inbound
+  message it calls **`sub_4226F6(*(int16*)(a1+12))`**.
+- **`sub_4226F6`** (pseudo.c 24697-24702) is a trivial setter:
+  `dword_45BE3C = result; return result;` — the mirror-side write, applying
+  whatever slot index a network peer broadcast.
+- **The only READ anywhere** is the KFACE gate above (pseudo.c 23269).
+
+**Conclusion: this is a netplay-only, joystick-gated "designate one slot to
+show a face-bubble over" broadcast, with no local-multiplayer analogue.**
+Three independent facts rule out a same-screen port rather than merely
+leaving it "lower confidence":
+1. It is **joystick-exclusive** — the write path lives solely in `case 3` of
+   the input decoder; keyboard input (the only human input type our port
+   currently drives — `setup-screens.md`: "We support OFF / COMPUTER /
+   KEYBOARD now; joystick (3) is a later controller-detect pass") has no
+   code path that could ever reach it, faithfully or otherwise.
+2. It is **network-replicated, not locally computed** — the write is
+   immediately mirrored to every peer over message 57, and the receive
+   handler (`sub_4226F6`) applies a peer's value with no local identity
+   check at all. In a same-screen game there is no "peer" to broadcast to
+   or receive from; the entire round-trip this global exists to serve
+   (telling OTHER machines which slot to draw a marker over) is meaningless
+   on one machine.
+3. It has **no stable "which slot" identity to reuse** — it is not "the
+   first human," "keyboard-set-0's slot," or any other fixed role; it is
+   whichever joystick user happens to hold an obscure button chord at that
+   instant, reset to "nobody" every round. There is no keyboard-set-0-style
+   analogue in the trace to translate; inventing one (e.g. "always show it
+   over local slot 0") would be exactly the invented-visual risk row #42
+   already flagged, now confirmed rather than merely suspected.
+
+Per this document's own decision rule (trace fully, then port only if the
+semantics translate cleanly to same-screen local multiplayer): **not
+ported.** Closed as a documented N/A, not a residual gap — see
+`docs/re/coverage-audit.md` row #42.
+
+**Port status: DONE for the player row; N/A (confirmed, not a port gap) for
+the cornerhead face bubble.** `GameApp::draw_player_row` (`game_app.cpp`,
+called from `run_match` after `Renderer::draw_frame`) now draws the S:/K:
+grid in each slot's `AssetStore::slot_color` (the same helper
+`present_scoreboard`'s non-team row already uses for the identical
+`sub_41672F` ink), with the `MISC.ANI` "xxx" sequence
+(`SequenceSet::eliminated_marker`) overlaid on a round-dead slot.
+`sim::Player::present`/`sim::Player::alive` stand in for
 `byte_461BD4`(+0x10)/`dword_461BC4`(+0x00) respectively — both fields
 facts.md's "Player struct" entry already names, now correctly mapped to
 their actual meanings (match-membership vs. round-alive) via this block's
@@ -375,7 +438,16 @@ whole decompile]; `docs/re/results-and-options.md` §1 [`sub_421AC8`/
 `sub_421B0F` cross-reference, RESULTS screen's own use of the identical
 pair]; `sub_41F29B` cornerhead-face block pseudo.c 23269-23276, `aKfaceS`
 pseudo.c 1554; `MISC.ANI`/`KFACE.ANI` sequence tables confirmed via `abtool
-ani` against this install's `DATA/ANI/`.)
+ani` against this install's `DATA/ANI/`; `dword_45BE3C` full trace —
+declaration pseudo.c 2235, `sub_421793` round-reset pseudo.c 23977-23986,
+`sub_41E61E` joystick-case write pseudo.c 22279-22391 [`case 3` block
+22358-22391], `sub_429520` joystick-sample accessor pseudo.c 28957-28980,
+`sub_429790` joystick-poll loop confirming `v4[8]/v4[9]/v4[10]` = X%/Y%/
+`dwButtons` pseudo.c 29090-29152, `sub_4101F1` network-send wrapper pseudo.c
+14249-14257 [message id 0x39=57], `sub_40E2D8` receive-side dispatch
+pseudo.c 12786-12795, `sub_4226F6` mirror-side setter pseudo.c 24697-24702;
+input-type category table `docs/re/setup-screens.md` "State model —
+CONFIRMED (`sub_421DD2`)".)
 
 ## The round-end shell — from "one side left" to the results tier
 
@@ -559,4 +631,6 @@ shippable-binary developer cheats, not decompiler artifacts.
   facts are all implemented there (ROADMAP "In-round shell — RE'd + ported
   2026-07-08"). `draw_player_row` (called from `run_match`, 2026-07-09) adds
   "The player row" section's S:/K: grid + "xxx" dead-slot marker; the
-  cornerhead face bubble in that same section remains unported.
+  cornerhead face bubble in that same section is CONFIRMED N/A (2026-07-09
+  `dword_45BE3C` trace) — a netplay-only, joystick-gated broadcast with no
+  same-screen-multiplayer analogue, not a port gap.
