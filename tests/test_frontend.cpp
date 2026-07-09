@@ -31,11 +31,11 @@ using bomber::game::default_setup_team;
 using bomber::game::fill_attract_roster;
 using bomber::game::format_clock;
 using bomber::game::is_terminal;
-using bomber::game::KeyAction;
 using bomber::game::kClockWarningSeconds;
+using bomber::game::KeyAction;
+using bomber::game::KeySet;
 using bomber::game::kKeyActionCount;
 using bomber::game::kKeyboardSets;
-using bomber::game::KeySet;
 using bomber::game::next;
 using bomber::game::reset_setup_teams;
 using bomber::game::seed_campaign_ai_slots;
@@ -123,9 +123,9 @@ TEST_CASE("Back skips and backs out along the flow") {
 
 TEST_CASE("Quit short-circuits from every state and is terminal") {
     const AppState all[] = {
-        AppState::Boot,    AppState::Logo,        AppState::Title,   AppState::Menu,
-        AppState::Match,   AppState::Results,     AppState::Options, AppState::Controllers,
-        AppState::Network, AppState::Credits,     AppState::Quit,
+        AppState::Boot,    AppState::Logo,    AppState::Title,   AppState::Menu,
+        AppState::Match,   AppState::Results, AppState::Options, AppState::Controllers,
+        AppState::Network, AppState::Credits, AppState::Quit,
     };
     for (AppState s : all) {
         CHECK(next(s, AppInput::Quit) == AppState::Quit);
@@ -163,7 +163,8 @@ TEST_CASE("best-of-N: a not-yet-decided round loops Results -> Match again") {
     CHECK(s == AppState::Match);
 }
 
-TEST_CASE("campaign: CampaignContinue loops Results -> Match like RoundContinue, for a clinched match") {
+TEST_CASE(
+    "campaign: CampaignContinue loops Results -> Match like RoundContinue, for a clinched match") {
     // docs/re/campaign.md "Advances through campaign stages automatically":
     // a clinched match (VICTORY) with campaign stages remaining routes back
     // to Match for the NEXT stage instead of the menu -- the SDL shell has
@@ -274,8 +275,9 @@ TEST_CASE("default_setup_team alternates 0/1 by slot parity") {
     CHECK(default_setup_team(9) == 1);
 }
 
-TEST_CASE("reset_setup_teams fills every slot with the alternating default, "
-          "clobbering any earlier value") {
+TEST_CASE(
+    "reset_setup_teams fills every slot with the alternating default, "
+    "clobbering any earlier value") {
     std::array<int, kMaxPlayers> team{};
     team.fill(1);  // simulate a stale all-1 roster from a previous visit
     reset_setup_teams(team);
@@ -285,9 +287,10 @@ TEST_CASE("reset_setup_teams fills every slot with the alternating default, "
     CHECK(team[0] != team[1]);
 }
 
-TEST_CASE("the setup-byte -> sim-team mapping (setup_team_[i] + 1, "
-          "game_app.cpp start_match) turns the alternating default into two "
-          "real, distinct sim sides") {
+TEST_CASE(
+    "the setup-byte -> sim-team mapping (setup_team_[i] + 1, "
+    "game_app.cpp start_match) turns the alternating default into two "
+    "real, distinct sim sides") {
     // Mirrors GameApp::start_match's `cfg.team[i] =
     // static_cast<uint8_t>(setup_team_[i] + 1)` shift documented at that call
     // site: the sim reserves team 0 for "no team", so team play shifts the
@@ -297,16 +300,16 @@ TEST_CASE("the setup-byte -> sim-team mapping (setup_team_[i] + 1, "
     std::array<int, kMaxPlayers> team{};
     reset_setup_teams(team);
     std::array<std::uint8_t, kMaxPlayers> sim_team{};
-    for (int i = 0; i < kMaxPlayers; ++i)
-        sim_team[i] = static_cast<std::uint8_t>(team[i] + 1);
+    for (int i = 0; i < kMaxPlayers; ++i) sim_team[i] = static_cast<std::uint8_t>(team[i] + 1);
     CHECK(sim_team[0] == 1);
     CHECK(sim_team[1] == 2);
-    CHECK(sim_team[0] != sim_team[1]);  // two players, two different sides
+    CHECK(sim_team[0] != sim_team[1]);      // two players, two different sides
     for (auto t : sim_team) CHECK(t != 0);  // never collapses to "no team"
 }
 
-TEST_CASE("the 'T' toggle (present_setup's SDLK_T handler: team ? 0 : 1) "
-          "still flips a slot away from its alternating default") {
+TEST_CASE(
+    "the 'T' toggle (present_setup's SDLK_T handler: team ? 0 : 1) "
+    "still flips a slot away from its alternating default") {
     std::array<int, kMaxPlayers> team{};
     reset_setup_teams(team);
     CHECK(team[0] == 0);
@@ -470,11 +473,12 @@ TEST_CASE("seed_campaign_ai_slots clamps an out-of-range count to [0, kMaxPlayer
     CHECK(seed_campaign_ai_slots(lcg, 999).size() == static_cast<std::size_t>(kMaxPlayers));
 }
 
-TEST_CASE("seed_campaign_ai_slots is deterministic for a fixed lcg seed/count (presentation RNG, not State::rng)") {
+TEST_CASE(
+    "seed_campaign_ai_slots is deterministic for a fixed lcg seed/count (presentation RNG, not "
+    "State::rng)") {
     std::uint32_t lcg_a = 42;
     std::uint32_t lcg_b = 42;
-    CHECK(seed_campaign_ai_slots(lcg_a, 5) ==
-          seed_campaign_ai_slots(lcg_b, 5));
+    CHECK(seed_campaign_ai_slots(lcg_a, 5) == seed_campaign_ai_slots(lcg_b, 5));
 }
 
 // docs/re/campaign.md "Round pacing" clauses 4-5 (sub_4016DA, pseudo.c
@@ -560,7 +564,7 @@ TEST_CASE("clock_warning fires at the confirmed <=30s threshold") {
 TEST_CASE("attract_computer_count rolls 1..10 clamped to a floor of 3") {
     // roll % 10 == 0 -> n = 0 + 1 = 1, clamped up to 3.
     CHECK(attract_computer_count(0) == 3);
-    CHECK(attract_computer_count(10) == 3);   // 10 % 10 == 0 -> same as roll 0
+    CHECK(attract_computer_count(10) == 3);  // 10 % 10 == 0 -> same as roll 0
     // roll % 10 == 1 -> n = 2, still clamped to 3.
     CHECK(attract_computer_count(1) == 3);
     // roll % 10 == 2 -> n = 3, right at the floor already (no clamp needed).
@@ -622,8 +626,8 @@ TEST_CASE("fill_attract_roster handles the documented extremes: 3 and 10") {
 TEST_CASE("attract_stage_pick wraps into [0, level_count) regardless of enable flags") {
     CHECK(attract_stage_pick(0, 11) == 0);
     CHECK(attract_stage_pick(10, 11) == 10);
-    CHECK(attract_stage_pick(11, 11) == 0);   // wraps
-    CHECK(attract_stage_pick(24, 11) == 2);   // 24 % 11 == 2
+    CHECK(attract_stage_pick(11, 11) == 0);  // wraps
+    CHECK(attract_stage_pick(24, 11) == 2);  // 24 % 11 == 2
 
     // Every roll stays in range for a variety of level counts, including the
     // degenerate "stripped VALUELST" case of a count < 1 (clamped to 1).

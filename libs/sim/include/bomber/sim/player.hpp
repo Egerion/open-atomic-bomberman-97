@@ -32,12 +32,12 @@ struct Player {
     std::uint8_t team = 0;
     Fixed x = 0, y = 0;  // center position in field pixels * 100
     Direction facing = Direction::Down;
-    std::int32_t speed = 0;       // movement budget added per tick (VALUELST id 42 + skates)
-    std::int32_t move_budget = 0; // carried sub-pixel budget; spent 100 per 1px step (sub_41EC84)
+    std::int32_t speed = 0;        // movement budget added per tick (VALUELST id 42 + skates)
+    std::int32_t move_budget = 0;  // carried sub-pixel budget; spent 100 per 1px step (sub_41EC84)
     std::int32_t max_bombs = 1;
     std::int32_t bombs_placed = 0;
-    std::int32_t flame = 2;       // cells beyond the epicenter
-    bool goldflame = false;       // Goldflame flag (+94): reach = max(gridW,gridH) at drop time
+    std::int32_t flame = 2;  // cells beyond the epicenter
+    bool goldflame = false;  // Goldflame flag (+94): reach = max(gridW,gridH) at drop time
     std::int32_t skates = 0;
     // Clogs (Goldman wheel booby prize, inventory slot 13, docs/re/
     // goldman-roulette.md §9): a speed-penalty count, the mirror image of
@@ -49,7 +49,7 @@ struct Player {
     bool kick = false;
     bool punch = false;
     bool grab = false;
-    bool spooge = false;          // lays a line of bombs ahead (Spooger powerup)
+    bool spooge = false;  // lays a line of bombs ahead (Spooger powerup)
     bool trigger = false;
     // Live trigger-bomb allowance (player byte +85, sub_41EB13/sub_41E21E): a
     // Trigger pickup resets this to 0; each placed trigger bomb increments it
@@ -57,7 +57,7 @@ struct Player {
     // once exhausted further placements fall back to normal timed bombs until
     // the next Trigger pickup refills the budget.
     std::int32_t trigger_placed = 0;
-    std::int32_t stun = 0;        // ticks of enforced pause (bomb pickup, head hits)
+    std::int32_t stun = 0;  // ticks of enforced pause (bomb pickup, head hits)
     // Trampoline hop (player state +78==5, sub_41F29B state 5 / sub_41DE63): a
     // step onto a trampoline launches a FLIGHT lasting tuning
     // .trampoline_bounce_frames ticks (VALUELST id 680 = 30). During the flight
@@ -105,7 +105,7 @@ struct Player {
     bool carried_jelly = false, carried_trigger = false;
     std::uint8_t carried_owner = 0;
     bool jelly = false;
-    bool prev_action1 = false;    // for edge detection (part of state!)
+    bool prev_action1 = false;  // for edge detection (part of state!)
     bool prev_action2 = false;
     // Diseases: per-kind active flags sharing one countdown; a healthy player
     // has disease_timer == 0. disease_fresh gates re-spreading (VALUELST id 129).

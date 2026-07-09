@@ -20,9 +20,9 @@ namespace bomber::assets::res {
 // tree (verified: an equivalent std::vector-only struct is NOT flagged, only
 // std::map is). Marking noexcept would be a lie (std::terminate on OOM
 // instead of propagating); there's no fix that isn't a container-type change.
-struct Messages {  // NOLINT(bugprone-exception-escape)
-    std::map<int, std::string> strings;   // id -> format string
-    std::vector<std::string> warnings;    // lines that looked like data but didn't parse
+struct Messages {                        // NOLINT(bugprone-exception-escape)
+    std::map<int, std::string> strings;  // id -> format string
+    std::vector<std::string> warnings;   // lines that looked like data but didn't parse
 
     // getstring(id): the format string for id, or `fallback` if absent.
     std::string get_or(int id, const std::string& fallback = std::string()) const {

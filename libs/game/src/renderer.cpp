@@ -102,8 +102,7 @@ void Renderer::update_gold_sparkles(const sim::State& s) {
     // (GameApp::start_match), so s.tick already IS the round-elapsed clock —
     // no separate "round start" bookkeeping needed.
     const std::int64_t duration = values_ ? values_->at_or(1010, 5) : 5;
-    if (duration != 0 &&
-        static_cast<std::int64_t>(s.tick) / sim::kTicksPerSecond >= duration)
+    if (duration != 0 && static_cast<std::int64_t>(s.tick) / sim::kTicksPerSecond >= duration)
         return;
     for (int i = 0; i < sim::kMaxPlayers; ++i) {
         const sim::Player& p = s.players[i];
@@ -148,8 +147,8 @@ bool Renderer::boxed_in(const sim::State& s, int tx, int ty) {
     for (int k = 0; k < 4; ++k) {
         int nx = tx + dx[k], ny = ty + dy[k];
         if (nx < 0 || nx >= sim::kGridWidth || ny < 0 || ny >= sim::kGridHeight) continue;
-        bool blocked = s.cells[ny][nx] == sim::Cell::Solid ||
-                       s.cells[ny][nx] == sim::Cell::Brick || s.burning[ny][nx] > 0;
+        bool blocked = s.cells[ny][nx] == sim::Cell::Solid || s.cells[ny][nx] == sim::Cell::Brick ||
+                       s.burning[ny][nx] > 0;
         if (!blocked) {
             for (const auto& b : s.bombs) {
                 if (b.active && !b.flying && b.tile_x() == nx && b.tile_y() == ny) {
@@ -206,13 +205,11 @@ void Renderer::on_events(const sim::State& s) {
                 if (pool.empty()) break;
                 DeathFx fx;
                 fx.player = colour;  // NOLINT(bugprone-signed-char-misuse) — range-checked above
-                fx.anim = static_cast<std::size_t>(
-                              s.tick + static_cast<std::uint64_t>(ev.player) * 7u) %
-                          pool.size();
-                fx.x = kFieldOriginX +
-                       s.players[ev.player].x / static_cast<float>(sim::kScale);
-                fx.y = kFieldOriginY +
-                       s.players[ev.player].y / static_cast<float>(sim::kScale) +
+                fx.anim =
+                    static_cast<std::size_t>(s.tick + static_cast<std::uint64_t>(ev.player) * 7u) %
+                    pool.size();
+                fx.x = kFieldOriginX + s.players[ev.player].x / static_cast<float>(sim::kScale);
+                fx.y = kFieldOriginY + s.players[ev.player].y / static_cast<float>(sim::kScale) +
                        sim::kTileH / 2.0f - 1.0f;
                 fx.start = s.tick;
                 deaths_.push_back(fx);
@@ -227,8 +224,8 @@ void Renderer::sample_movement(const sim::State& s) {
     if (s.tick == last_tick_) return;
     for (int i = 0; i < sim::kMaxPlayers; ++i) {
         const sim::Player& p = s.players[i];
-        bool m = last_tick_ != ~0ull && p.present && p.alive &&
-                 (p.x != last_x_[i] || p.y != last_y_[i]);
+        bool m =
+            last_tick_ != ~0ull && p.present && p.alive && (p.x != last_x_[i] || p.y != last_y_[i]);
         moving_[i] = m;
         // Advance the leg cycle by DISTANCE travelled, not once per tick: the
         // original holds a 16.16 walk phase that increments with the character's
@@ -239,10 +236,8 @@ void Renderer::sample_movement(const sim::State& s) {
         // tick (sim pos is pixels*kScale) and add it to walk_phase_; draw_anim's
         // `% statecnt` then picks the frame. Purely render-side.
         if (m) {
-            std::uint32_t dpx =
-                static_cast<std::uint32_t>((std::abs(p.x - last_x_[i]) +
-                                            std::abs(p.y - last_y_[i])) /
-                                           sim::kScale);
+            std::uint32_t dpx = static_cast<std::uint32_t>(
+                (std::abs(p.x - last_x_[i]) + std::abs(p.y - last_y_[i])) / sim::kScale);
             if (dpx == 0) dpx = 1;  // a sub-pixel step still nudges the cycle
             walk_phase_[i] += dpx;
         }
@@ -346,8 +341,7 @@ void Renderer::draw_powerups(const sim::State& s) {
             // advancing frame = counter % statecnt (sub_4250DE / sub_41DAA7).
             // See docs/re/facts.md "Screen geometry". A shared per-tick pulse is
             // used for the counter (matches "advanced by a per-item counter").
-            if (kind >= 0 && kind < sim::kPowerupKinds &&
-                !q.powerup_anim[kind].steps.empty()) {
+            if (kind >= 0 && kind < sim::kPowerupKinds && !q.powerup_anim[kind].steps.empty()) {
                 float sx = tile_screen_x(x) + sim::kTileW / 2.0f;
                 float sy = tile_screen_y(y) + sim::kTileH - 1.0f;
                 draw_anim(q.powerup_anim[kind], static_cast<std::size_t>(s.tick), sx, sy);
@@ -373,8 +367,10 @@ void Renderer::draw_world(const sim::State& s) {
         for (int x = 0; x < sim::kGridWidth; ++x) {
             float sx = tile_screen_x(x) + sim::kTileW / 2.0f;
             float sy = tile_screen_y(y) + sim::kTileH - 1.0f;
-            if (s.cells[y][x] == sim::Cell::Solid) draw_anim(q.solid, 0, sx, sy);
-            else if (s.cells[y][x] == sim::Cell::Brick) draw_anim(q.brick, 0, sx, sy);
+            if (s.cells[y][x] == sim::Cell::Solid)
+                draw_anim(q.solid, 0, sx, sy);
+            else if (s.cells[y][x] == sim::Cell::Brick)
+                draw_anim(q.brick, 0, sx, sy);
             else if (s.burning[y][x] > 0)
                 draw_anim(q.burn, timed_step(q.burn, s.burning[y][x], s.tuning.brick_burn_frames),
                           sx, sy);
@@ -394,13 +390,19 @@ void Renderer::draw_world(const sim::State& s) {
             const FlameSet& fset = q.flames[render_colour(s, owner)];
             const Anim* a = &fset.center;
             if ((l || r) && !u && !d) {
-                if (l && r) a = &fset.mid_h[(x + y) & 1];
-                else if (l) a = &fset.tip_e;
-                else a = &fset.tip_w;
+                if (l && r)
+                    a = &fset.mid_h[(x + y) & 1];
+                else if (l)
+                    a = &fset.tip_e;
+                else
+                    a = &fset.tip_w;
             } else if ((u || d) && !l && !r) {
-                if (u && d) a = &fset.mid_v[(x + y) & 1];
-                else if (u) a = &fset.tip_s;
-                else a = &fset.tip_n;
+                if (u && d)
+                    a = &fset.mid_v[(x + y) & 1];
+                else if (u)
+                    a = &fset.tip_s;
+                else
+                    a = &fset.tip_n;
             }
             float sx = tile_screen_x(x) + sim::kTileW / 2.0f;
             float sy = tile_screen_y(y) + sim::kTileH - 1.0f;
@@ -469,7 +471,7 @@ void Renderer::draw_world(const sim::State& s) {
         float lift = 0.0f;
         if (p.bounce > 0) {
             const int len = s.tuning.trampoline_bounce_frames;
-            const int c = len - p.bounce;  // elapsed frames: 0 at launch .. len-1
+            const int c = len - p.bounce;                // elapsed frames: 0 at launch .. len-1
             const int tent = c < len - c ? c : len - c;  // min(c, len-c)
             lift = static_cast<float>(kHopPixelsPerFrame * tent);
         }
@@ -571,16 +573,14 @@ void Renderer::draw_world(const sim::State& s) {
             static constexpr float kCarryDirDx[4] = {0, 0, -1, 1};  // Up,Down,Left,Right
             static constexpr float kCarryDirDy[4] = {-1, 1, 0, 0};
             const int t = carry_ticks_[i];
-            const float cx = values_ ? static_cast<float>(
-                                            values_->column_or(kCarryArcIds[t], 0,
-                                                               static_cast<std::int64_t>(
-                                                                   kCarryArcXDefault[t])))
-                                     : kCarryArcXDefault[t];
-            const float cy = values_ ? static_cast<float>(
-                                            values_->column_or(kCarryArcIds[t], 1,
-                                                               static_cast<std::int64_t>(
-                                                                   kCarryArcYDefault[t])))
-                                     : kCarryArcYDefault[t];
+            const float cx =
+                values_ ? static_cast<float>(values_->column_or(
+                              kCarryArcIds[t], 0, static_cast<std::int64_t>(kCarryArcXDefault[t])))
+                        : kCarryArcXDefault[t];
+            const float cy =
+                values_ ? static_cast<float>(values_->column_or(
+                              kCarryArcIds[t], 1, static_cast<std::int64_t>(kCarryArcYDefault[t])))
+                        : kCarryArcYDefault[t];
             const float bx = sx + kCarryDirDx[dir] * (cx + 10.0f);
             const float by = sy + kCarryDirDy[dir] * 10.0f - cy;
             draw_anim(q.bomb[bo], pulse, bx, by);
@@ -596,12 +596,12 @@ void Renderer::draw_world(const sim::State& s) {
     for (const auto& r : s.rovers) {
         if (!r.alive) continue;
         float sx = kFieldOriginX + r.x / static_cast<float>(sim::kScale);
-        float sy = kFieldOriginY + r.y / static_cast<float>(sim::kScale) +
-                  sim::kTileH / 2.0f - 1.0f;
+        float sy =
+            kFieldOriginY + r.y / static_cast<float>(sim::kScale) + sim::kTileH / 2.0f - 1.0f;
         constexpr float kMarkerW = 24.0f, kMarkerH = 24.0f;
         SDL_FRect dst{sx - kMarkerW / 2.0f, sy - kMarkerH - 4.0f, kMarkerW, kMarkerH};
         if (r.kind == sim::RoverKind::Rover)
-            SDL_SetRenderDrawColor(ren_, 170, 90, 30, 255);   // rover: brown/orange
+            SDL_SetRenderDrawColor(ren_, 170, 90, 30, 255);  // rover: brown/orange
         else
             SDL_SetRenderDrawColor(ren_, 210, 225, 255, 220);  // ghost: pale blue-white
         SDL_RenderFillRect(ren_, &dst);

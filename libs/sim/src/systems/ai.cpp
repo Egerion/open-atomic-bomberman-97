@@ -174,8 +174,8 @@ bool AISystem::safe_tile(int tx, int ty) const {
 // campaign-entity here (sub_405654, the rover/ghost list dword_45E0A8); that
 // list is empty in the versus AI, so it drops out. Used by behaviour 3.
 bool AISystem::drop_tile_clear(int tx, int ty) const {
-    if (!grid::in_grid(tx, ty)) return false;                       // out of bounds: sub_425FB9 -> 1
-    if (grid::bomb_at(s_, tx, ty) != nullptr) return false;         // sub_422E48
+    if (!grid::in_grid(tx, ty)) return false;                // out of bounds: sub_425FB9 -> 1
+    if (grid::bomb_at(s_, tx, ty) != nullptr) return false;  // sub_422E48
     return s_.cells[ty][tx] == Cell::Blank && s_.burning[ty][tx] == 0;  // sub_425FB9 == 0
 }
 
@@ -495,7 +495,7 @@ bool AISystem::behave_grab_drop(int i, PlayerInput& out) {
     const bool own =
         under != nullptr && !under->moving && under->owner == static_cast<std::uint8_t>(i);
     if (own && random_below(s_, 2) == 0) {  // rand()%2 == 0 -> grab it (the 1/2 whim)
-        press_bomb(out);                     // fresh bomb-key edge -> try_grab in player_turn
+        press_bomb(out);                    // fresh bomb-key edge -> try_grab in player_turn
         return true;
     }
     return false;  // pass down to behaviour 1/2/...
@@ -531,8 +531,7 @@ bool AISystem::behave_walk_path(int i, PlayerInput& out) {
             // (a) Directed: walk one step toward the held goal (docs/re/ai.md
             // §3.2 directed branch). maxdist = 20 (the original's literal).
             int iters = 0;
-            const int first =
-                directed_bfs(px, py, br.path_target_x, br.path_target_y, 20, iters);
+            const int first = directed_bfs(px, py, br.path_target_x, br.path_target_y, 20, iters);
             if (first < 0) {
                 // No path within depth -> drop the target and pass down (the
                 // original clears +2 and returns 0).
@@ -761,7 +760,7 @@ bool AISystem::behave_seek_powerup(int i, PlayerInput& out) {
 // ---------------------------------------------------------------------------
 bool AISystem::behave_punch(int i, PlayerInput& out) {
     Player& p = s_.players[i];
-    if (!p.punch) return false;         // sub_40BE02: !+91 -> not our behaviour
+    if (!p.punch) return false;                  // sub_40BE02: !+91 -> not our behaviour
     if (random_below(s_, 4) != 0) return false;  // rand()%4 != 0 -> consider it only 1-in-4
 
     const int px = p.tile_x(), py = p.tile_y();
@@ -890,24 +889,24 @@ int AISystem::pick_live_enemy(int self) {
     const int start1 = static_cast<int>(random_below(s_, 10));
     for (int n = 0; n < kMaxPlayers; ++n) {
         const int j = (start1 + n) % kMaxPlayers;
-        if (j == self) continue;                 // a1 == v7 (self)
+        if (j == self) continue;  // a1 == v7 (self)
         const Player& q = s_.players[j];
-        if (!q.present) continue;                // !+16 (absent)
-        if (q.ai) continue;                      // +16 == 1 (another computer player)
-        if (!q.alive || q.stun != 0) continue;   // !+0 (inactive) || +8 (stunned)
-        if (same_team(self, j)) continue;        // team mode: skip a teammate
+        if (!q.present) continue;               // !+16 (absent)
+        if (q.ai) continue;                     // +16 == 1 (another computer player)
+        if (!q.alive || q.stun != 0) continue;  // !+0 (inactive) || +8 (stunned)
+        if (same_team(self, j)) continue;       // team mode: skip a teammate
         return j;  // the first live, non-teammate human opponent (slot != self)
     }
     // Pass 2: fall back to ANY live opponent (incl. other AI) — the relaxed scan.
     const int start2 = static_cast<int>(random_below(s_, 10));
     for (int n = 0; n < kMaxPlayers; ++n) {
         const int j = (start2 + n) % kMaxPlayers;
-        if (j == self) continue;                 // a1 == v8 (self)
+        if (j == self) continue;  // a1 == v8 (self)
         const Player& q = s_.players[j];
-        if (!q.present) continue;                // !+16 (absent)
-        if (!q.alive || q.stun != 0) continue;   // !+0 (inactive) || +8 (stunned)
-        if (same_team(self, j)) continue;        // team mode: skip a teammate
-        return j;  // any live, non-teammate opponent
+        if (!q.present) continue;               // !+16 (absent)
+        if (!q.alive || q.stun != 0) continue;  // !+0 (inactive) || +8 (stunned)
+        if (same_team(self, j)) continue;       // team mode: skip a teammate
+        return j;                               // any live, non-teammate opponent
     }
     return -1;  // no live opponent
 }
@@ -1043,13 +1042,17 @@ void AISystem::write_move(PlayerInput& out, int godir) {
 // The bomb-key edge (+56=1; +54=0 in the original) -> action1. player_turn's drop
 // block is edge-gated on action1 && !prev_action1; the AI never sets prev_action1
 // itself, so a single-tick action1=true is a fresh press (docs/re/ai.md §7).
-void AISystem::press_bomb(PlayerInput& out) { out.action1 = true; }
+void AISystem::press_bomb(PlayerInput& out) {
+    out.action1 = true;
+}
 
 // The action-key edge (+57=1; +55=0 in the original) -> action2. player_turn's
 // action block is edge-gated on action2 && !prev_action2, so a single-tick
 // action2=true is a fresh press routed to punch (+91) / trigger (+95). The AI
 // never sets prev_action2 itself (docs/re/ai.md §7).
-void AISystem::press_action(PlayerInput& out) { out.action2 = true; }
+void AISystem::press_action(PlayerInput& out) {
+    out.action2 = true;
+}
 
 // ---------------------------------------------------------------------------
 // Dispatcher — sub_40A1C6 (docs/re/ai.md §2). Draw A (leading scratch), the

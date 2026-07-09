@@ -111,7 +111,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
         // no pointer if every candidate is missing/lacks the sequence.
         {
             static constexpr const char* kRingCandidates[] = {"MISC.ANI", "ROULETTE.ANI",
-                                                               "EXTRAS.ANI", "CURSOR.ANI"};
+                                                              "EXTRAS.ANI", "CURSOR.ANI"};
             for (const char* name : kRingCandidates) {
                 auto p = ani_dir / name;
                 try {
@@ -179,8 +179,8 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
             try {
                 if (fs::exists(p)) corner_[i].load(ren, p);
             } catch (const std::exception& e) {
-                std::fprintf(stderr, "cornerhead load failed (%s): %s\n",
-                             p.string().c_str(), e.what());
+                std::fprintf(stderr, "cornerhead load failed (%s): %s\n", p.string().c_str(),
+                             e.what());
             }
         }
 
@@ -193,14 +193,14 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
             try {
                 if (fs::exists(p)) bwalk_[i].load(ren, p);
             } catch (const std::exception& e) {
-                std::fprintf(stderr, "carry-bomb load failed (%s): %s\n",
-                             p.string().c_str(), e.what());
+                std::fprintf(stderr, "carry-bomb load failed (%s): %s\n", p.string().c_str(),
+                             e.what());
             }
         }
 
         static constexpr const char* kPowFiles[] = {
-            "POWBOMB", "POWFLAME", "POWDISEA", "POWKICK", "POWSKATE", "POWPUNCH", "POWGRAB",
-            "POWSPOOG", "POWGOLD", "POWTRIG", "POWJELLY", "POWEBOLA", "POWRAND"};
+            "POWBOMB",  "POWFLAME", "POWDISEA", "POWKICK",  "POWSKATE", "POWPUNCH", "POWGRAB",
+            "POWSPOOG", "POWGOLD",  "POWTRIG",  "POWJELLY", "POWEBOLA", "POWRAND"};
         for (int i = 0; i < sim::kPowerupKinds; ++i) {
             auto img = assets::pcx::load(res_dir / (std::string(kPowFiles[i]) + ".PCX"));
             sdl::TexturePtr tex{make_texture(ren, img)};
@@ -276,9 +276,9 @@ void AssetStore::set_color_fallbacks(const std::int32_t colors[][3], int n) {
 
 bool AssetStore::load_stage(int stage) {
     try {
-        field_.reset(make_texture(
-            ren_, assets::pcx::load(game_dir_ / "DATA" / "RES" /
-                                    ("FIELD" + std::to_string(stage) + ".PCX"))));
+        field_.reset(
+            make_texture(ren_, assets::pcx::load(game_dir_ / "DATA" / "RES" /
+                                                 ("FIELD" + std::to_string(stage) + ".PCX"))));
         tiles_.load(ren_, game_dir_ / "DATA" / "ANI" / ("TILES" + std::to_string(stage) + ".ANI"));
         xbrick_.load(ren_,
                      game_dir_ / "DATA" / "ANI" / ("XBRICK" + std::to_string(stage) + ".ANI"));

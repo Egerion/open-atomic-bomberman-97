@@ -41,8 +41,9 @@ struct SequenceSet {
     // walk dirs). Direction-independent, per-player recolored like walk/stand.
     Anim spin[kLocalPlayers];
     Anim kick[kLocalPlayers][4], punch[kLocalPlayers][4];  // action poses, [player][direction]
-    Anim walkbomb[kLocalPlayers][4], standbomb[kLocalPlayers][4];  // carrying a bomb, [player][direction]
-    Anim cornerhead[kLocalPlayers][kCornerheadVariants];   // idle fidgets, direction-independent
+    Anim walkbomb[kLocalPlayers][4],
+        standbomb[kLocalPlayers][4];                      // carrying a bomb, [player][direction]
+    Anim cornerhead[kLocalPlayers][kCornerheadVariants];  // idle fidgets, direction-independent
     Anim shadow;
     Anim digits;    // KFONT 'numeric font': glyphs 0-9 + colon
     Anim infinity;  // KFONT 'infinity' — drawn instead of digits on an untimed round

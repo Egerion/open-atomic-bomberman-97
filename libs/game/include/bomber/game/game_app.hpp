@@ -69,7 +69,8 @@ public:
     ~GameApp() {
         try {
             flush_options();
-        } catch (...) {}
+        } catch (...) {
+        }
     }
 
     // Runs to completion; returns the process exit code.
@@ -529,9 +530,9 @@ private:
     // roster-pick screens"), and run_app's Menu/Results handlers skip
     // present_map_select() and auto-advance dword_4648B0 between stages
     // instead of returning to the menu.
-    bool campaign_active_ = false;                              // dword_46489C
-    std::vector<assets::res::CampaignStage> campaign_stages_;    // parsed .CAM (dword_45E010)
-    int campaign_stage_index_ = 0;                               // dword_4648B0
+    bool campaign_active_ = false;                             // dword_46489C
+    std::vector<assets::res::CampaignStage> campaign_stages_;  // parsed .CAM (dword_45E010)
+    int campaign_stage_index_ = 0;                             // dword_4648B0
     // Stage display banner text, "(<stage name>)" (sub_40133F, getstring
     // 1235="(%s)" — docs/re/campaign.md "Stage banner"), set by
     // load_campaign_stage each time a campaign stage is (re)loaded. Drawn by

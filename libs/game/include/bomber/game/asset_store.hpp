@@ -174,10 +174,13 @@ public:
     void slot_color(int i, std::uint8_t out[3]) const {
         auto q = [](std::uint8_t v) -> std::uint8_t {
             int f = v / 3;
-            if (f > 31) f = 31;  // sub_41672F clamp to 5 bits
+            if (f > 31) f = 31;                                     // sub_41672F clamp to 5 bits
             return static_cast<std::uint8_t>((f << 3) | (f >> 2));  // expand5
         };
-        if (i < 0 || i >= kColors) { out[0] = out[1] = out[2] = 128; return; }
+        if (i < 0 || i >= kColors) {
+            out[0] = out[1] = out[2] = 128;
+            return;
+        }
         out[0] = q(rmp_rgb_[i][0]);
         out[1] = q(rmp_rgb_[i][1]);
         out[2] = q(rmp_rgb_[i][2]);
@@ -187,8 +190,8 @@ private:
     // bugprone-return-const-ref-from-parameter (NOLINT below) — private helper,
     // every call site (above) passes a member AniTextures_ with `this`'s
     // lifetime, never a temporary, so `base` never dangles in practice.
-    const AniTextures& pick(const AniTextures& base,
-                            const AniTextures (&colored)[kLocalPlayers], int player) const {
+    const AniTextures& pick(const AniTextures& base, const AniTextures (&colored)[kLocalPlayers],
+                            int player) const {
         if (player >= 0 && player < kLocalPlayers && colored[player].loaded())
             return colored[player];
         return base;  // NOLINT(bugprone-return-const-ref-from-parameter)
@@ -207,10 +210,10 @@ private:
 
     AniTextures tiles_, xbrick_, bombs_, duds_, flame_, stand_, walk_, shadow_, kfont_, hurry_;
     AniTextures kick_, punch_;  // action-pose masters (KICK.ANI / PUNCH.ANI)
-    AniTextures powers_;  // animated floor-powerup art (POWERS.ANI), shared (uncoloured)
-    AniTextures conveyor_; // conveyor belt floor art (CONVEYOR.ANI), shared (uncoloured)
-    AniTextures extras_;   // trampoline/arrow/warp floor art (EXTRAS.ANI), shared
-    AniTextures trigbomb_;  // trigger-bomb master (TRIGBOMB.ANI), green -> per-player recolor
+    AniTextures powers_;        // animated floor-powerup art (POWERS.ANI), shared (uncoloured)
+    AniTextures conveyor_;      // conveyor belt floor art (CONVEYOR.ANI), shared (uncoloured)
+    AniTextures extras_;        // trampoline/arrow/warp floor art (EXTRAS.ANI), shared
+    AniTextures trigbomb_;      // trigger-bomb master (TRIGBOMB.ANI), green -> per-player recolor
     AniTextures corner_[kCornerFiles];  // idle-fidget masters (CORNER0..7.ANI)
     AniTextures bwalk_[kBwalkFiles];    // carry-bomb masters (BWALK1..4.ANI)
     AniTextures walk_c_[kLocalPlayers], stand_c_[kLocalPlayers];
@@ -220,13 +223,13 @@ private:
     AniTextures corner_c_[kCornerFiles][kLocalPlayers];
     AniTextures bwalk_c_[kBwalkFiles][kLocalPlayers];
 
-    std::vector<AniTextures> xplode_;                  // XPLODE1..17 source files
-    std::vector<Anim> deaths_;                         // green base pool
-    std::vector<Anim> deaths_c_[kLocalPlayers];        // recolored pools
-    std::vector<AniTextures> xplode_c_[kLocalPlayers]; // keep textures alive
+    std::vector<AniTextures> xplode_;                   // XPLODE1..17 source files
+    std::vector<Anim> deaths_;                          // green base pool
+    std::vector<Anim> deaths_c_[kLocalPlayers];         // recolored pools
+    std::vector<AniTextures> xplode_c_[kLocalPlayers];  // keep textures alive
 
     Sprite powerups_[sim::kPowerupKinds]{};
-    std::vector<sdl::TexturePtr> powerup_textures_;    // owners for powerups_
+    std::vector<sdl::TexturePtr> powerup_textures_;  // owners for powerups_
     sdl::TexturePtr field_;
 
     // stage_preview() cache: keyed by stage index, populated lazily. Separate

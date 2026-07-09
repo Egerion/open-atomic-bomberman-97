@@ -72,7 +72,13 @@ sim::TickInputs demo_inputs(int t);
 // The PLAYER INPUT TYPE SELECTION slot categories (docs/re/setup-screens.md,
 // sub_421DD2's player byte +16). Mirrors the original's type numbering so the
 // setup-screen switch statements (present_setup) read directly against it.
-enum class SlotInputType : std::uint8_t { Off = 0, Computer = 1, Keyboard = 2, Joystick = 3, Other = 4 };
+enum class SlotInputType : std::uint8_t {
+    Off = 0,
+    Computer = 1,
+    Keyboard = 2,
+    Joystick = 3,
+    Other = 4
+};
 
 // ATTRACT-MODE roster/stage rolls (docs/re/frontend-flow.md "Attract mode",
 // sub_410F81's attract branch, pseudo.c 15125-15143). The menu idle timeout
@@ -87,7 +93,7 @@ enum class SlotInputType : std::uint8_t { Off = 0, Computer = 1, Keyboard = 2, J
 // the bounds/composition are unit-testable without a window.
 constexpr int attract_computer_count(unsigned roll) {
     int n = static_cast<int>(roll % 10) + 1;  // rand()%10 + 1 -> 1..10
-    return n < 3 ? 3 : n;                      // "clamped to a minimum of 3"
+    return n < 3 ? 3 : n;                     // "clamped to a minimum of 3"
 }
 
 // Fills 10 roster slots for an attract demo: the first `computer_count`
@@ -127,7 +133,9 @@ constexpr int attract_stage_pick(unsigned roll, int level_count) {
 // Getting this wrong (this port's original behaviour) meant Team Play ON
 // without anyone pressing 'T' put every player on the SAME sim side.
 // Pure/SDL-free so it is unit-testable without a window.
-constexpr int default_setup_team(int slot) { return slot & 1; }
+constexpr int default_setup_team(int slot) {
+    return slot & 1;
+}
 
 template <std::size_t N>
 constexpr void reset_setup_teams(std::array<int, N>& team) {

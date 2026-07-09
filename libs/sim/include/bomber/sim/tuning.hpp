@@ -21,12 +21,12 @@ struct Tuning {
     // goldman-roulette.md §9.1: "v20 - v22*v21"). Wheel-only — never a
     // normal-play pickup (§9.2).
     std::int32_t clogs_speed_penalty = 150;  // id 91
-    std::int32_t kicked_bomb_speed = 1000; // id 300
-    std::int32_t punched_bomb_speed = 1300;// id 301
-    std::int32_t game_seconds = 150;       // id 100
-    std::int32_t taunt_chance = 5;         // id 95, 1-in-N post-death taunt
-    std::int32_t hurry_seconds = 60;       // id 101, walls start closing in
-    std::int32_t enclosement_depth = 1;    // id 27: 0 none, 1 = 2 rings, 2 = 4, 3 = all
+    std::int32_t kicked_bomb_speed = 1000;   // id 300
+    std::int32_t punched_bomb_speed = 1300;  // id 301
+    std::int32_t game_seconds = 150;         // id 100
+    std::int32_t taunt_chance = 5;           // id 95, 1-in-N post-death taunt
+    std::int32_t hurry_seconds = 60;         // id 101, walls start closing in
+    std::int32_t enclosement_depth = 1;      // id 27: 0 none, 1 = 2 rings, 2 = 4, 3 = all
     // id 46 ("when a wall segment closes in on a bomb, does it set the bomb
     // off? 0 - destroy, 1 - detonate ... this is a default; otherwise the
     // settings override it") = the OPTIONS-screen "Stomped Bombs Detonate"
@@ -34,7 +34,7 @@ struct Tuning {
     // then options.ini "stomped_bombs_detonate=" / the Options row overrides.
     // Consumed by EnclosureSystem::drop_wall. See docs/re/facts.md
     // "Options toggles: stomped_bombs_detonate / diseases_destroyable".
-    std::int32_t wall_detonates = 1;       // id 46: closing wall detonates (1) or eats (0) bombs
+    std::int32_t wall_detonates = 1;  // id 46: closing wall detonates (1) or eats (0) bombs
 
     // Starting inventory (ids 50..62), indexed by PowerupType.
     std::int32_t start_with[kPowerupKinds] = {1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
@@ -89,13 +89,13 @@ struct Tuning {
     // by MovementSystem::ice_delay. See docs/re/facts.md "Ice / input-lag".
     std::int32_t ice_delay_ms[11] = {0, 0, 250, 0, 0, 0, 0, 0, 0, 0, 0};
 
-    std::int32_t pickup_pause = 2;         // id 665: movement pause when grabbing, ticks
-    std::int32_t powers_lost_min = 1;      // id 670: min powers dropped on a head hit
-    std::int32_t powers_lost_rand = 3;     // id 671: modulus of the extra random drops
-    std::int32_t head_stun_frames = 16;    // CONFIRMED hardcoded 16 (sub_421F7E sets the
-                                           // +58 countdown; not a VALUELST id)
-    std::int32_t punch_arc_first = 65;     // id 660: three-tile punch arc height, px
-    std::int32_t punch_arc_hop = 20;       // id 661: subsequent one-tile hops
+    std::int32_t pickup_pause = 2;       // id 665: movement pause when grabbing, ticks
+    std::int32_t powers_lost_min = 1;    // id 670: min powers dropped on a head hit
+    std::int32_t powers_lost_rand = 3;   // id 671: modulus of the extra random drops
+    std::int32_t head_stun_frames = 16;  // CONFIRMED hardcoded 16 (sub_421F7E sets the
+                                         // +58 countdown; not a VALUELST id)
+    std::int32_t punch_arc_first = 65;   // id 660: three-tile punch arc height, px
+    std::int32_t punch_arc_hop = 20;     // id 661: subsequent one-tile hops
     // "Fire In The Hole" taunt (docs/re/id-audit.md item 1, sub_41F29B pseudo.c
     // ~23362-23368, the plain single-bomb-drop path): id 651 ("what constitutes
     // 'many' dropped bombs") gates a player's CURRENT bomb-count powerup level
@@ -103,18 +103,18 @@ struct Tuning {
     // audio playing") is the roll denominator. Consumed presentation-side only
     // (SoundDirector) — see that file's BombPlaced case for the full citation,
     // including the register-provenance caveat on the 651 comparison.
-    std::int32_t taunt_many_bombs = 4;     // id 651
-    std::int32_t taunt_many_chance = 4;    // id 650
-    std::int32_t jelly_turn_chance = 3;    // id 667: flying jelly veers ±90°, 1-in-N per boundary
+    std::int32_t taunt_many_bombs = 4;   // id 651
+    std::int32_t taunt_many_chance = 4;  // id 650
+    std::int32_t jelly_turn_chance = 3;  // id 667: flying jelly veers ±90°, 1-in-N per boundary
     // Duds (sub_422EDE / sub_422C13): only regular bombs fizzle, gated by a
     // global timer that re-arms base + rand(spread) ticks ahead.
-    std::int32_t dud_gate_base = 180;      // id 320
-    std::int32_t dud_gate_rand = 180;      // id 321
-    std::int32_t dud_chance = 3;           // id 322: 1-in-N when the gate is open
-    std::int32_t dud_frames = 120;         // id 323: fizzle duration
-    std::int32_t flame_frames = 10;        // id 10 (flame anim cycle); confirmed as the
-                                           // flame lifetime by disasm of 0x426d06
-    std::int32_t brick_burn_frames = 10;   // id 20 (disintegration anim length)
+    std::int32_t dud_gate_base = 180;     // id 320
+    std::int32_t dud_gate_rand = 180;     // id 321
+    std::int32_t dud_chance = 3;          // id 322: 1-in-N when the gate is open
+    std::int32_t dud_frames = 120;        // id 323: fizzle duration
+    std::int32_t flame_frames = 10;       // id 10 (flame anim cycle); confirmed as the
+                                          // flame lifetime by disasm of 0x426d06
+    std::int32_t brick_burn_frames = 10;  // id 20 (disintegration anim length)
 
     // Conveyor speeds (VALUELST ids 189..192, sub_41F29B via getvalue(190+idx);
     // see docs/re/stage-actors.md §3). The belt adds this many 1/100-px units
@@ -123,8 +123,8 @@ struct Tuning {
     // and the belt by the identical dword_464958/dword_46494C frame ratio which
     // is ~1 at the locked 20 Hz. id 189 = how many speeds exist:
     //   190 = 250 (low), 191 = 350 (medium), 192 = 450 (high).
-    std::int32_t conveyor_speed_count = 3; // id 189
-    std::int32_t conveyor_speeds[3] = {250, 350, 450}; // ids 190,191,192
+    std::int32_t conveyor_speed_count = 3;              // id 189
+    std::int32_t conveyor_speeds[3] = {250, 350, 450};  // ids 190,191,192
     // The "Conveyor Speed" GAME OPTION selector (dword_464930, 0/1/2), NOT a
     // per-board field. CONFIRMED: the binary's hardcoded default is 1 (medium)
     // (pseudo.c 14652); it is otherwise loaded from the options struct
@@ -138,7 +138,7 @@ struct Tuning {
     // so the index is in [0,2] and always addresses the 3-element speed table.
     std::int32_t conveyor_speed() const {
         int hi = conveyor_speed_count - 1;
-        if (hi > 2) hi = 2;   // never index past the 3-slot 190/191/192 table
+        if (hi > 2) hi = 2;  // never index past the 3-slot 190/191/192 table
         if (hi < 0) hi = 0;
         int i = conveyor_speed_index;
         if (i < 0) i = 0;
@@ -168,11 +168,11 @@ struct Tuning {
     // Diseases (VALUELST 120..138; see docs/re/facts.md "Disease system").
     // Nine diseases, one duration each at ids 130..138.
     std::int32_t disease_frames[kDiseaseKinds] = {300, 300, 300, 300, 300, 300, 300, 300, 300};
-    std::int32_t disease_freshness = 10;   // id 129: ticks before a disease can pass again
-    std::int32_t disease_cure_chance = 10; // id 125: 1-in-N cure per fresh powerup
-    bool diseases_time_limited = true;     // id 121: wears off after its duration
-    bool diseases_multiply = true;         // id 123: on contact both keep it
-    bool diseases_curable = true;          // id 124: a fresh powerup can cure
+    std::int32_t disease_freshness = 10;    // id 129: ticks before a disease can pass again
+    std::int32_t disease_cure_chance = 10;  // id 125: 1-in-N cure per fresh powerup
+    bool diseases_time_limited = true;      // id 121: wears off after its duration
+    bool diseases_multiply = true;          // id 123: on contact both keep it
+    bool diseases_curable = true;           // id 124: a fresh powerup can cure
     // id 120 ("can diseases be blown up like all other powerups?",
     // gbl_diseases_can_be_destroyed) = the OPTIONS-screen "Diseases Can Be
     // Destroyed" toggle's seed value: dword_464990 = getvalue(120) at init
@@ -181,16 +181,16 @@ struct Tuning {
     // relocates to a random free tile (sub_4255B2(2)); the destruction itself
     // is unconditional. Consumed by FlameSystem::spread_to and
     // BombSystem::slide. See docs/re/facts.md "Options toggles".
-    bool diseases_destroyable = true;      // id 120
+    bool diseases_destroyable = true;  // id 120
 
     // Campaign rover/ghost tunables (docs/re/campaign.md "Per-tick mover" /
     // "Round pacing"). id 1205 ("human-avoidance bias") is confirmed NOT
     // read anywhere in the mover (sub_401B5C) — correctly left unconsumed;
     // see campaign.md's clause 2 for the full negative-result citation.
-    std::int32_t rover_turn_chance = 3;    // id 1200: 1-in-N chance to turn at an open intersection
+    std::int32_t rover_turn_chance = 3;  // id 1200: 1-in-N chance to turn at an open intersection
     std::int32_t campaign_ai_kill_score = 250;  // id 1300: points for killing an AI (campaign only)
-    std::int32_t rover_kill_score = 15;    // id 1310: points for killing a rover (campaign only)
-    std::int32_t ghost_kill_score = 25;    // id 1320: points for killing a ghost (campaign only)
+    std::int32_t rover_kill_score = 15;  // id 1310: points for killing a rover (campaign only)
+    std::int32_t ghost_kill_score = 25;  // id 1320: points for killing a ghost (campaign only)
 
     // Feeds one parsed VALUELST pair. Returns true if the id was consumed.
     bool apply(int id, std::int64_t value) {
@@ -226,7 +226,7 @@ struct Tuning {
             case 191: conveyor_speeds[1] = v; return true;
             case 192: conveyor_speeds[2] = v; return true;
             case 680: trampoline_bounce_frames = v; return true;  // trampoline bounce frames
-            case 900: ai_personalities = v; return true;   // AI tunables (docs/re/ai.md §6)
+            case 900: ai_personalities = v; return true;          // AI tunables (docs/re/ai.md §6)
             case 910: fire_god_lookahead = v; return true;
             case 915: ai_blast_chance = v; return true;
             case 920: ai_powerup_range = v; return true;
@@ -243,16 +243,37 @@ struct Tuning {
             case 695: regen_clear_radius = v; return true;
             default: break;
         }
-        if (id >= 130 && id < 139) { disease_frames[id - 130] = v; return true; }
-        if (id >= 50 && id < 50 + kPowerupKinds) { start_with[id - 50] = v; return true; }
-        if (id >= 550 && id < 550 + kPowerupKinds) { limits[id - 550] = v; return true; }
-        if (id >= 400 && id < 400 + kPowerupKinds) { spawn_counts[id - 400] = v; return true; }
-        if (id >= 1150 && id < 1161) { level_enabled[id - 1150] = v; return true; }
-        if (id >= 340 && id <= 350) { regen_seconds[id - 340] = v; return true; }
+        if (id >= 130 && id < 139) {
+            disease_frames[id - 130] = v;
+            return true;
+        }
+        if (id >= 50 && id < 50 + kPowerupKinds) {
+            start_with[id - 50] = v;
+            return true;
+        }
+        if (id >= 550 && id < 550 + kPowerupKinds) {
+            limits[id - 550] = v;
+            return true;
+        }
+        if (id >= 400 && id < 400 + kPowerupKinds) {
+            spawn_counts[id - 400] = v;
+            return true;
+        }
+        if (id >= 1150 && id < 1161) {
+            level_enabled[id - 1150] = v;
+            return true;
+        }
+        if (id >= 340 && id <= 350) {
+            regen_seconds[id - 340] = v;
+            return true;
+        }
         // id 449 (the "prevent invalid access" sentinel) is deliberately NOT
         // consumed here — no getvalue(449) call site exists in the original;
         // the real per-level ice block is 450..460.
-        if (id >= 450 && id <= 460) { ice_delay_ms[id - 450] = v; return true; }
+        if (id >= 450 && id <= 460) {
+            ice_delay_ms[id - 450] = v;
+            return true;
+        }
         if (id >= 200 && id < 250) {
             int k = id - 200;
             if (k % 5 < 3) color_rgb[k / 5][k % 5] = v;

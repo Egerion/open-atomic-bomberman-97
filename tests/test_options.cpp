@@ -28,8 +28,8 @@
 namespace fs = std::filesystem;
 using bomber::assets::KeyDef;
 using bomber::assets::load_options;
-using bomber::assets::save_options;
 using bomber::assets::Options;
+using bomber::assets::save_options;
 
 namespace {
 
@@ -251,7 +251,8 @@ TEST_CASE("options.ini: the boolean rows normalize to 0/1") {
     fs::remove(p);
 }
 
-TEST_CASE("options.ini: string/int passthrough rows (schemefilename, playtime-adjacent modem/net)") {
+TEST_CASE(
+    "options.ini: string/int passthrough rows (schemefilename, playtime-adjacent modem/net)") {
     auto p = write_temp(
         "schemefilename=BASIC.SCH\n"
         "modemdial=555-1234\n"
@@ -325,13 +326,14 @@ TEST_CASE("save_options: fullscreen= is appended/rewritten in place, preserving 
     fs::remove(p);
 }
 
-TEST_CASE("options.ini: keydef= triples parse into KeyDef, out-of-range set/action drops the line") {
+TEST_CASE(
+    "options.ini: keydef= triples parse into KeyDef, out-of-range set/action drops the line") {
     auto p = write_temp(
         "keydef=0,0,200\n"
         "keydef=0,4,57\n"
         "keydef=1,5,3\n"
-        "keydef=2,0,99\n"   // set out of [0,1] -> dropped
-        "keydef=0,10,1\n"); // action out of [0,9] -> dropped
+        "keydef=2,0,99\n"    // set out of [0,1] -> dropped
+        "keydef=0,10,1\n");  // action out of [0,9] -> dropped
     auto opts = load_options(p);
     REQUIRE(opts.keydef.has_value());
     CHECK(opts.keydef->scancode[0][0] == 200);
@@ -349,9 +351,9 @@ TEST_CASE("save_options: keydef= round-trips all set (set,action) triples and sk
 
     Options opts;
     KeyDef kd;
-    kd.scancode[0][0] = 200;   // Up, set 0
-    kd.scancode[0][4] = 57;    // Action1, set 0
-    kd.scancode[1][3] = 30;    // Left, set 1
+    kd.scancode[0][0] = 200;  // Up, set 0
+    kd.scancode[0][4] = 57;   // Action1, set 0
+    kd.scancode[1][3] = 30;   // Left, set 1
     // Every other slot stays -1 (absent) and must NOT be written.
     opts.keydef = kd;
     save_options(p, opts);
@@ -365,7 +367,8 @@ TEST_CASE("save_options: keydef= round-trips all set (set,action) triples and sk
     fs::remove(p);
 }
 
-TEST_CASE("save_options: re-saving keydef= rewrites a (set,action) triple in place, not duplicated") {
+TEST_CASE(
+    "save_options: re-saving keydef= rewrites a (set,action) triple in place, not duplicated") {
     auto p = write_temp("keydef=0,0,200\nlevelno=1\n");
 
     Options opts;

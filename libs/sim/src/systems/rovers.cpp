@@ -137,22 +137,20 @@ bool RoverSystem::step(Rover& r, int rover_index) {
                     s.tuning.rover_turn_chance >= 1 ? s.tuning.rover_turn_chance : 1;
                 if (random_below(s, static_cast<std::uint32_t>(n)) == 0) {
                     // SECOND draw: the turn direction.
-                    r.dir = static_cast<std::uint8_t>(
-                        (random_below(s, 2) ? r.dir + 1 : r.dir + 3) & 3);
+                    r.dir =
+                        static_cast<std::uint8_t>((random_below(s, 2) ? r.dir + 1 : r.dir + 3) & 3);
                 }
             } else {
                 // Blocked ahead: ALWAYS turn (no roll for the fact of
                 // turning, only its +-90 direction -- matches sub_401B5C,
                 // which reaches the rand()%2 turn unconditionally once the
                 // "ahead passable" branch's own roll is skipped). ONE draw.
-                r.dir = static_cast<std::uint8_t>(
-                    (random_below(s, 2) ? r.dir + 1 : r.dir + 3) & 3);
+                r.dir = static_cast<std::uint8_t>((random_below(s, 2) ? r.dir + 1 : r.dir + 3) & 3);
             }
             // Re-test the (possibly new) ahead-of-candidate tile; if STILL
             // blocked, stop moving for the rest of THIS tick's budget (no
             // overshoot into a wall) -- no further draw.
-            if (!passable(r.kind, cand_tx + kDx[r.dir], cand_ty + kDy[r.dir]))
-                r.move_budget = 0;
+            if (!passable(r.kind, cand_tx + kDx[r.dir], cand_ty + kDy[r.dir])) r.move_budget = 0;
         }
 
         // Commit: the original always writes v29/v30 (the ORIGINAL
@@ -228,7 +226,7 @@ void RoverSystem::tick() {
         }
         s.rovers.erase(std::remove_if(s.rovers.begin(), s.rovers.end(),
                                       [](const Rover& r) { return !r.alive; }),
-                      s.rovers.end());
+                       s.rovers.end());
     }
 
     // Round pacing clause 3 (docs/re/campaign.md): grace timer counts ticks

@@ -88,8 +88,8 @@ private:
 
     void draw_sprite(const Sprite& sp, float x, float y, Uint8 r = 255, Uint8 g = 255,
                      Uint8 b = 255);
-    void draw_anim(const Anim& a, std::size_t step, float x, float y, Uint8 r = 255,
-                   Uint8 g = 255, Uint8 b = 255);
+    void draw_anim(const Anim& a, std::size_t step, float x, float y, Uint8 r = 255, Uint8 g = 255,
+                   Uint8 b = 255);
 
     // Maps a countdown timer onto a play-once sequence.
     static std::size_t timed_step(const Anim& a, int remaining, int total);
@@ -154,7 +154,7 @@ private:
 
     std::vector<DeathFx> deaths_;
     std::uint64_t hurry_until_ = 0;  // HURRY! banner flashes until this tick
-    bool untimed_ = false;  // draw the KFONT 'infinity' glyph instead of MM:SS
+    bool untimed_ = false;           // draw the KFONT 'infinity' glyph instead of MM:SS
     std::uint32_t flash_lcg_ = 0x2545F491u;
     std::uint32_t panic_lcg_ = 0x9E3779B9u;
 
@@ -170,8 +170,8 @@ private:
     };
     static constexpr int kGoldSparkleSlots = 100;
     std::array<GoldSparkle, kGoldSparkleSlots> gold_sparkles_{};
-    Anim goldman_anim_;            // MISC.ANI "goldman" sequence
-    int gold_player_ = -1;         // -1 = no pending gold player (see set_gold_player)
+    Anim goldman_anim_;     // MISC.ANI "goldman" sequence
+    int gold_player_ = -1;  // -1 = no pending gold player (see set_gold_player)
     bool gold_team_mode_ = false;
     std::uint32_t gold_lcg_ = 0xB16B00B5u;
 };

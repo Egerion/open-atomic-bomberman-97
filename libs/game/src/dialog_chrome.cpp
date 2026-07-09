@@ -98,8 +98,8 @@ void draw_compact_confirm_dialog(SDL_Renderer* ren, const FontTextures& font,
     DialogRect win = dialog_rect_vcentered(win_h, win_w);
     draw_dialog_chrome(ren, win);
 
-    font.draw(ren, line, win.x + (win.w - text_w(font, line)) / 2.0f, win.y + h / 2.0f + 4.0f,
-              255, 255, 255);  // byte_49D38F (sub_4023A2's own ink arg)
+    font.draw(ren, line, win.x + (win.w - text_w(font, line)) / 2.0f, win.y + h / 2.0f + 4.0f, 255,
+              255, 255);  // byte_49D38F (sub_4023A2's own ink arg)
 
     const float btn_y = win.y + win.h - h - 12.0f;
     draw_dialog_button(ren, font, win.x + win.w / 2.0f - 64.0f, btn_y, yes_label);
@@ -121,8 +121,8 @@ void draw_text_entry_dialog(SDL_Renderer* ren, const FontTextures& font, float y
     // The live editable buffer, with a plain text-cursor caret (our own
     // reproduction; sub_42FF1C's real caret draw wasn't pinned by this pass).
     std::string shown = entry_text + "_";
-    font.draw(ren, shown, win.x + (win.w - text_w(font, shown)) / 2.0f, win.y + h * 2.0f, 255,
-              220, 80);  // our own selection-tint ink, not an RE'd colour
+    font.draw(ren, shown, win.x + (win.w - text_w(font, shown)) / 2.0f, win.y + h * 2.0f, 255, 220,
+              80);  // our own selection-tint ink, not an RE'd colour
 
     const float btn_y = win.y + win.h - h - 10.0f;
     draw_dialog_button(ren, font, win.x + win.w / 2.0f - 72.0f, btn_y, done_label);

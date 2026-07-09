@@ -173,7 +173,8 @@ std::uint64_t state_hash(const State& s) {
              << 48));
         // Enemy-seek sub-struct (+10/+12/+16/+20).
         mix(static_cast<std::uint64_t>(br.enemy_seek.active) |
-            (static_cast<std::uint64_t>(static_cast<std::uint8_t>(br.enemy_seek.target_slot)) << 8) |
+            (static_cast<std::uint64_t>(static_cast<std::uint8_t>(br.enemy_seek.target_slot))
+             << 8) |
             (static_cast<std::uint64_t>(static_cast<std::uint8_t>(br.enemy_seek.step_dir)) << 16) |
             (static_cast<std::uint64_t>(static_cast<std::uint32_t>(br.enemy_seek.timer)) << 32));
     }

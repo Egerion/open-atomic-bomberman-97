@@ -16,10 +16,10 @@ namespace bomber::sim {
 enum class RoverKind : std::uint8_t { Rover = 1, Ghost = 2 };
 
 struct Rover {
-    bool alive = false;   // live/reaped flag (original's +0)
+    bool alive = false;  // live/reaped flag (original's +0)
     RoverKind kind = RoverKind::Rover;
-    Fixed x = 0, y = 0;    // current pixel position (original's +28/+32)
-    std::uint8_t dir = 0;  // godir 0..3 (original's +42 high word / +44)
+    Fixed x = 0, y = 0;            // current pixel position (original's +28/+32)
+    std::uint8_t dir = 0;          // godir 0..3 (original's +42 high word / +44)
     std::int32_t speed = 0;        // per-tick budget increment (.CAM field 4/6)
     std::int32_t move_budget = 0;  // carried sub-pixel budget (original's +116)
     // Per-tick step counter (original's +48), advanced once per pixel step.

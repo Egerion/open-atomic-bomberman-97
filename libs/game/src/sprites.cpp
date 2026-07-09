@@ -7,9 +7,9 @@
 namespace bomber::game {
 
 SDL_Texture* make_texture(SDL_Renderer* ren, const assets::Image& img) {
-    SDL_Surface* surf = SDL_CreateSurfaceFrom(img.width, img.height, SDL_PIXELFORMAT_RGBA32,
-                                              const_cast<std::uint8_t*>(img.rgba.data()),
-                                              img.width * 4);
+    SDL_Surface* surf =
+        SDL_CreateSurfaceFrom(img.width, img.height, SDL_PIXELFORMAT_RGBA32,
+                              const_cast<std::uint8_t*>(img.rgba.data()), img.width * 4);
     if (!surf) return nullptr;
     SDL_Texture* tex = SDL_CreateTextureFromSurface(ren, surf);
     SDL_DestroySurface(surf);
@@ -37,8 +37,8 @@ assets::Image recolor_image(assets::Image img, const std::int32_t rgb[3]) {
         if (img.rgba[i + 3] == 0) continue;
         const int r = img.rgba[i], g = img.rgba[i + 1], b = img.rgba[i + 2];
         if (g > r && g > b) {
-            const int baseline = (r + b) / 2;   // sub_414A65 v33
-            const int excess = g - baseline;    // (v32 - v33)
+            const int baseline = (r + b) / 2;  // sub_414A65 v33
+            const int excess = g - baseline;   // (v32 - v33)
             img.rgba[i + 0] =
                 static_cast<std::uint8_t>(std::clamp(rgb[0] * excess / 100 + baseline, 0, 255));
             img.rgba[i + 1] =
@@ -63,11 +63,13 @@ assets::Image recolor_image_rmp(assets::Image img, const std::array<std::uint8_t
     // key-colour transparency is already baked into rgba's alpha by the ANI
     // loader, so we preserve alpha and only rewrite the RGB.
     if (!img.paletted()) return img;  // 16bpp CIMG (type 4): no indices to remap
-    const std::size_t px = static_cast<std::size_t>(img.width) * static_cast<std::size_t>(img.height);
+    const std::size_t px =
+        static_cast<std::size_t>(img.width) * static_cast<std::size_t>(img.height);
     // Defensive: the ANI loader sizes indices == px and palette == 1024 for every
     // type-11 frame, but 1997 files are untrusted — bail rather than run past a
     // short buffer (leaves the frame as its base colour).
-    if (img.indices.size() < px || img.palette.size() < std::size_t{256} * 4 || img.rgba.size() < px * 4)
+    if (img.indices.size() < px || img.palette.size() < std::size_t{256} * 4 ||
+        img.rgba.size() < px * 4)
         return img;
     for (std::size_t i = 0; i < px; ++i) {
         if (img.rgba[i * 4 + 3] == 0) continue;  // transparent: leave as-is
@@ -85,8 +87,7 @@ void AniTextures::load(SDL_Renderer* ren, const std::filesystem::path& path) {
     data_ = assets::ani::load(path);
     textures_.assign(data_.frames.size(), nullptr);
     for (std::size_t i = 0; i < data_.frames.size(); ++i)
-        if (!data_.frames[i].image.empty())
-            textures_[i] = make_texture(ren, data_.frames[i].image);
+        if (!data_.frames[i].image.empty()) textures_[i] = make_texture(ren, data_.frames[i].image);
 }
 
 AniTextures AniTextures::recolored(SDL_Renderer* ren, const std::int32_t rgb[3]) const {

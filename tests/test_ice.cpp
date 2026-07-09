@@ -17,13 +17,14 @@ namespace {
 MatchConfig hockey_config() {
     MatchConfig cfg = open_config();
     for (auto& row : cfg.cells) row.fill(Cell::Blank);  // open runway, no pillars
-    cfg.tuning.level_index = 2;                          // Hockey Rink
+    cfg.tuning.level_index = 2;                         // Hockey Rink
     return cfg;
 }
 
 }  // namespace
 
-TEST_CASE("VALUELST defaults: only Hockey Rink (2) has ice delay, only Haunted House (7) has regen") {
+TEST_CASE(
+    "VALUELST defaults: only Hockey Rink (2) has ice delay, only Haunted House (7) has regen") {
     Tuning t;
     for (int i = 0; i < 11; ++i) {
         CHECK(t.ice_delay_ms[i] == (i == 2 ? 250 : 0));
@@ -44,9 +45,12 @@ TEST_CASE("ice delay is inert off Hockey Rink: movement matches the plain speed-
     long budget = 0, expected = 0;
     for (int t = 0; t < 10; ++t) {
         budget += s.state().tuning.start_speed;
-        while (budget > 0) { budget -= 100; ++expected; }
+        while (budget > 0) {
+            budget -= 100;
+            ++expected;
+        }
     }
-    CHECK(moved == static_cast<int>(expected));  // identical to test_move.cpp's baseline
+    CHECK(moved == static_cast<int>(expected));   // identical to test_move.cpp's baseline
     for (auto v : p.ice_history) CHECK(v == -1);  // buffer never written off-level
 }
 

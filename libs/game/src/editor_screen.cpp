@@ -29,8 +29,9 @@ constexpr Uint8 kHintR = 160, kHintG = 160, kHintB = 160;
 // (never committed, per CLAUDE.md), so the LABEL TEXT below is our own
 // paraphrase — the message ids are cited so a real install's strings can be
 // substituted later; only the ids/positions are RE facts.
-constexpr int kChooserHeaderX = 50, kChooserHeaderY = 100;   // getvalue(810/811)
-constexpr int kChooserItemX = 80, kChooserItemY0 = 140, kChooserItemYStep = 20;  // getvalue(815-818)
+constexpr int kChooserHeaderX = 50, kChooserHeaderY = 100;  // getvalue(810/811)
+constexpr int kChooserItemX = 80, kChooserItemY0 = 140,
+              kChooserItemYStep = 20;  // getvalue(815-818)
 
 }  // namespace
 
@@ -72,7 +73,10 @@ void SchemeFilePicker::enter(const std::filesystem::path& schemes_dir, std::stri
 
 void SchemeFilePicker::on_key(SDL_Keycode key, AudioEngine& audio) {
     if (entries_.empty()) {
-        if (key == SDLK_ESCAPE || key == SDLK_RETURN) { done_ = true; cancelled_ = true; }
+        if (key == SDLK_ESCAPE || key == SDLK_RETURN) {
+            done_ = true;
+            cancelled_ = true;
+        }
         return;
     }
     int count = static_cast<int>(entries_.size());
@@ -99,8 +103,7 @@ void SchemeFilePicker::on_key(SDL_Keycode key, AudioEngine& audio) {
             done_ = true;
             cancelled_ = true;
             break;
-        default:
-            break;
+        default: break;
     }
     // Keep the cursor inside the kVisibleRows scroll window (sub_42DBCC's
     // list scrolls; our window follows the cursor).
@@ -156,28 +159,21 @@ void SchemeFilePicker::draw(SDL_Renderer* ren) const {
 // ---------------------------------------------------------------------------
 // EditorChooserScreen — sub_403184 (§5)
 
-void EditorChooserScreen::enter(std::string backdrop) { backdrop_ = std::move(backdrop); }
+void EditorChooserScreen::enter(std::string backdrop) {
+    backdrop_ = std::move(backdrop);
+}
 
 EditorChooserResult EditorChooserScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
     // §5: '1' -> edit existing (sub_4028D2(0), via the *.SCH file picker
     // sub_407582 first); '2' -> new (sub_4028D2(1)); Esc/'Q'/'q' exit; F1
     // (315) help. SFX 20 blip on any key (§5: "SFX 20 blip on any key").
     switch (key) {
-        case SDLK_1:
-            audio.play(20);
-            return EditorChooserResult::EditExisting;
-        case SDLK_2:
-            audio.play(20);
-            return EditorChooserResult::New;
+        case SDLK_1: audio.play(20); return EditorChooserResult::EditExisting;
+        case SDLK_2: audio.play(20); return EditorChooserResult::New;
         case SDLK_ESCAPE:
-        case SDLK_Q:
-            audio.play(20);
-            return EditorChooserResult::Exit;
-        case SDLK_F1:
-            audio.play(20);
-            return EditorChooserResult::Help;
-        default:
-            return EditorChooserResult::None;
+        case SDLK_Q: audio.play(20); return EditorChooserResult::Exit;
+        case SDLK_F1: audio.play(20); return EditorChooserResult::Help;
+        default: return EditorChooserResult::None;
     }
 }
 
@@ -234,12 +230,8 @@ void PowerupRulesScreen::advance_chain(AudioEngine& audio) {
     // original's unconditional else-branch `dword_4646C4[i] = 0`).
     auto& pr = (*rows_)[static_cast<std::size_t>(row_)];
     switch (step_) {
-        case ChainStep::BornWith:
-            step_ = ChainStep::Forbidden;
-            break;
-        case ChainStep::Forbidden:
-            step_ = ChainStep::HasOverride;
-            break;
+        case ChainStep::BornWith: step_ = ChainStep::Forbidden; break;
+        case ChainStep::Forbidden: step_ = ChainStep::HasOverride; break;
         case ChainStep::HasOverride:
             if (pr.has_override) {
                 step_ = ChainStep::OverrideValue;
@@ -250,9 +242,7 @@ void PowerupRulesScreen::advance_chain(AudioEngine& audio) {
             }
             break;
         case ChainStep::OverrideValue:
-        default:
-            step_ = ChainStep::None;
-            break;
+        default: step_ = ChainStep::None; break;
     }
     audio.play(20);
 }
@@ -335,8 +325,7 @@ void PowerupRulesScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
             audio.play(10);
             done_ = true;
             break;
-        default:
-            break;
+        default: break;
     }
 }
 
@@ -368,7 +357,7 @@ void PowerupRulesScreen::draw(SDL_Renderer* ren) const {
                       pr.forbidden ? "  FORBIDDEN" : "");
         font_->draw(ren, mid, 210.0f, y, kInkR, kInkG, kInkB);
         std::string ov = pr.has_override ? ("OVERRIDE " + std::to_string(pr.override_value))
-                                          : std::string("(default)");
+                                         : std::string("(default)");
         font_->draw(ren, ov, 450.0f, y, kInkR, kInkG, kInkB);
     }
     // The open chain prompt — sub_4023A2's own sub_42E938/sub_42EDE0 calls,
@@ -401,15 +390,15 @@ void PowerupRulesScreen::draw(SDL_Renderer* ren) const {
             }
             case ChainStep::HasOverride: {
                 std::string label = (assets_ ? assets_->getstring(766, "Override amount?")
-                                              : std::string("Override amount?")) +
-                                     " " + name;
+                                             : std::string("Override amount?")) +
+                                    " " + name;
                 draw_compact_confirm_dialog(ren, *font_, label, "Yes", "No");
                 break;
             }
             case ChainStep::OverrideValue: {
                 std::string label = (assets_ ? assets_->getstring(768, "Override value:")
-                                              : std::string("Override value:")) +
-                                     " " + name;
+                                             : std::string("Override value:")) +
+                                    " " + name;
                 draw_text_entry_dialog(ren, *font_, 400.0f, label, entry_, "Done", "Cancel");
                 break;
             }
@@ -438,8 +427,8 @@ void EditorScreen::enter(std::optional<assets::sch::Scheme> initial, std::string
     }
     brush_ = EditorBrush::Blank;
     selected_start_ = 0;
-    tileset_ = 0;      // dword_45B7B8 starts at 0 every session, §5 case 48
-    dirty_ = false;    // sub_4028D2's own v49, pseudo.c 5514
+    tileset_ = 0;    // dword_45B7B8 starts at 0 every session, §5 case 48
+    dirty_ = false;  // sub_4028D2's own v49, pseudo.c 5514
     prompt_kind_ = PromptKind::None;
     prompt_text_.clear();
     editing_powerups_ = false;
@@ -494,9 +483,13 @@ void EditorScreen::start_name_prompt() {
     prompt_text_ = grid_.name();
 }
 
-void EditorScreen::start_save_confirm() { prompt_kind_ = PromptKind::SaveConfirm; }
+void EditorScreen::start_save_confirm() {
+    prompt_kind_ = PromptKind::SaveConfirm;
+}
 
-void EditorScreen::start_reset_confirm() { prompt_kind_ = PromptKind::ResetConfirm; }
+void EditorScreen::start_reset_confirm() {
+    prompt_kind_ = PromptKind::ResetConfirm;
+}
 
 void EditorScreen::on_mouse_down(int button, int gx, int gy) {
     if (prompting() || editing_powerups_) return;  // modal sub-screens own input
@@ -604,9 +597,18 @@ void EditorScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
 
     // Normal grid-editing input (§5's documented key switch).
     switch (key) {
-        case SDLK_1: brush_ = EditorBrush::Blank; audio.play(20); break;
-        case SDLK_2: brush_ = EditorBrush::Solid; audio.play(20); break;
-        case SDLK_3: brush_ = EditorBrush::Brick; audio.play(20); break;
+        case SDLK_1:
+            brush_ = EditorBrush::Blank;
+            audio.play(20);
+            break;
+        case SDLK_2:
+            brush_ = EditorBrush::Solid;
+            audio.play(20);
+            break;
+        case SDLK_3:
+            brush_ = EditorBrush::Brick;
+            audio.play(20);
+            break;
         case SDLK_TAB:
         case SDLK_RETURN:
         case SDLK_KP_ENTER:
@@ -694,8 +696,7 @@ void EditorScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
             }
             audio.play(20);
             break;
-        default:
-            break;
+        default: break;
     }
 }
 
@@ -727,8 +728,7 @@ void EditorScreen::draw(SDL_Renderer* ren) const {
         if (a.steps.empty()) return false;
         const Sprite& sp = a.steps[0];
         if (!sp.tex) return false;
-        SDL_FRect dst{cx - sp.hx, cy - sp.hy, static_cast<float>(sp.w),
-                      static_cast<float>(sp.h)};
+        SDL_FRect dst{cx - sp.hx, cy - sp.hy, static_cast<float>(sp.w), static_cast<float>(sp.h)};
         SDL_RenderTexture(ren, sp.tex, nullptr, &dst);
         return true;
     };
@@ -766,7 +766,7 @@ void EditorScreen::draw(SDL_Renderer* ren) const {
     if (have_tiles) {
         const Anim& preview = brush_ == EditorBrush::Solid   ? tile_solid_
                               : brush_ == EditorBrush::Brick ? tile_brick_
-                                                              : tile_blank_;
+                                                             : tile_blank_;
         draw_step(preview, mouse_px_, mouse_py_);
     }
 
@@ -817,19 +817,18 @@ void EditorScreen::draw(SDL_Renderer* ren) const {
     // density at (20,23), getstring(738) selected start at (20,41), and the
     // getstring(737) exit hint at the bottom (y = 476 - text height). Our
     // single-line summary keeps those ids' CONTENT in one strip.
-    const char* brush_name = brush_ == EditorBrush::Solid ? "SOLID"
+    const char* brush_name = brush_ == EditorBrush::Solid   ? "SOLID"
                              : brush_ == EditorBrush::Brick ? "BRICK"
-                                                             : "BLANK";
+                                                            : "BLANK";
     char status[160];
-    std::snprintf(status, sizeof status,
-                  "BRUSH:%s  START:%d%s  DENSITY:%d  NAME:%s", brush_name,
+    std::snprintf(status, sizeof status, "BRUSH:%s  START:%d%s  DENSITY:%d  NAME:%s", brush_name,
                   selected_start_ + 1, grid_.start(selected_start_).team ? "[T]" : "",
                   grid_.density(), grid_.name().empty() ? "(none)" : grid_.name().c_str());
     font_->draw(ren, status, 20.0f, 5.0f, kInkR, kInkG, kInkB);
-    font_->draw(
-        ren,
-        "1/2/3 BRUSH  TAB CYCLE  CTRL+F FILL  CTRL+B RESET  0 TILESET  +/- START  T TEAM  D DENSITY  N NAME  P POWERUPS  ESC SAVE/EXIT",
-        20.0f, 460.0f, kHintR, kHintG, kHintB);
+    font_->draw(ren,
+                "1/2/3 BRUSH  TAB CYCLE  CTRL+F FILL  CTRL+B RESET  0 TILESET  +/- START  T TEAM  "
+                "D DENSITY  N NAME  P POWERUPS  ESC SAVE/EXIT",
+                20.0f, 460.0f, kHintR, kHintG, kHintB);
 
     // Every editor prompt now routes through the SAME pinned sub_41456C/
     // sub_42E938 chrome (dialog_chrome.hpp) the boot LOADING dialog and
@@ -842,7 +841,7 @@ void EditorScreen::draw(SDL_Renderer* ren) const {
         // HARDCODED literals (not message-table lookups, dialog_chrome.hpp).
         bool is_density = prompt_kind_ == PromptKind::Density;
         std::string label = assets_ ? assets_->getstring(is_density ? 739 : 728,
-                                                          is_density ? "DENSITY (0-100):" : "NAME:")
+                                                         is_density ? "DENSITY (0-100):" : "NAME:")
                                     : std::string(is_density ? "DENSITY (0-100):" : "NAME:");
         draw_text_entry_dialog(ren, *font_, 180.0f, label, prompt_text_, "Done", "Cancel");
     } else if (prompt_kind_ == PromptKind::SaveConfirm) {
@@ -857,8 +856,9 @@ void EditorScreen::draw(SDL_Renderer* ren) const {
     } else if (prompt_kind_ == PromptKind::FillConfirm) {
         // sub_41456C two-line chrome — getstring(760) + getstring(97) (§5
         // Ctrl+F, pseudo.c 5601-5604).
-        std::string line1 = assets_ ? assets_->getstring(760, "Fill the whole board with the brush?")
-                                    : std::string("Fill the whole board with the brush?");
+        std::string line1 = assets_
+                                ? assets_->getstring(760, "Fill the whole board with the brush?")
+                                : std::string("Fill the whole board with the brush?");
         std::string line2 = assets_ ? assets_->getstring(97, "") : std::string();
         std::string yes_label = assets_ ? assets_->getstring(26, " Yes ") : std::string(" Yes ");
         std::string no_label = assets_ ? assets_->getstring(25, " No ") : std::string(" No ");

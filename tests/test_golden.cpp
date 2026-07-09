@@ -201,10 +201,14 @@ TEST_CASE("golden D: the disease gauntlet") {
         for (int x = 0; x < kGridWidth; ++x) {
             if (s.state().cells[y][x] != Cell::Blank) continue;
             int m = k++ % 5;
-            if (m == 0) s.state().floor[y][x] = PowerupType::Disease;
-            else if (m == 1) s.state().floor[y][x] = PowerupType::SuperDisease;
-            else if (m == 2) s.state().floor[y][x] = PowerupType::Skate;
-            else if (m == 3) s.state().floor[y][x] = PowerupType::Flame;
+            if (m == 0)
+                s.state().floor[y][x] = PowerupType::Disease;
+            else if (m == 1)
+                s.state().floor[y][x] = PowerupType::SuperDisease;
+            else if (m == 2)
+                s.state().floor[y][x] = PowerupType::Skate;
+            else if (m == 3)
+                s.state().floor[y][x] = PowerupType::Flame;
         }
 
     // Ticks 600/800 recaptured (docs/re/facts.md "Flame-arm stops"): the
@@ -250,8 +254,8 @@ TEST_CASE("golden E: jelly ping-pong and a veering punched flight") {
     cfg.player_count = 2;
     cfg.seed = 4242;
     for (auto& c : cfg.tuning.spawn_counts) c = 0;
-    cfg.tuning.fuse_frames = 200;   // long fuse: room for the ping-pong
-    cfg.tuning.start_with[0] = 3;   // three bombs
+    cfg.tuning.fuse_frames = 200;  // long fuse: room for the ping-pong
+    cfg.tuning.start_with[0] = 3;  // three bombs
     cfg.born_with[static_cast<int>(PowerupType::Kick)] = true;
     cfg.born_with[static_cast<int>(PowerupType::Punch)] = true;
     cfg.born_with[static_cast<int>(PowerupType::Jelly)] = true;
@@ -260,14 +264,22 @@ TEST_CASE("golden E: jelly ping-pong and a veering punched flight") {
     auto script = [](std::uint64_t t) {
         TickInputs in{};
         auto& p = in.players[0];
-        if (t == 0) p.action1 = true;                 // drop jelly bomb at (2,0)
-        else if (t >= 1 && t <= 10) p.left = true;    // step off westward
-        else if (t >= 11 && t <= 18) p.right = true;  // walk back -> kick east
-        else if (t >= 19 && t <= 26) p.down = true;   // leave row 0 to the ping-pong
-        else if (t == 32) p.action1 = true;           // drop bomb #2 at (2,2)
-        else if (t >= 33 && t <= 36) p.left = true;   // one tile west of it
-        else if (t == 40) p.right = true;             // face east (no contact)
-        else if (t == 44) p.action2 = true;           // punch #2 -> flight + veer RNG
+        if (t == 0)
+            p.action1 = true;  // drop jelly bomb at (2,0)
+        else if (t >= 1 && t <= 10)
+            p.left = true;  // step off westward
+        else if (t >= 11 && t <= 18)
+            p.right = true;  // walk back -> kick east
+        else if (t >= 19 && t <= 26)
+            p.down = true;  // leave row 0 to the ping-pong
+        else if (t == 32)
+            p.action1 = true;  // drop bomb #2 at (2,2)
+        else if (t >= 33 && t <= 36)
+            p.left = true;  // one tile west of it
+        else if (t == 40)
+            p.right = true;  // face east (no contact)
+        else if (t == 44)
+            p.action2 = true;  // punch #2 -> flight + veer RNG
         return in;
     };
 
@@ -284,6 +296,6 @@ TEST_CASE("golden E: jelly ping-pong and a veering punched flight") {
             if (e.type == Event::Type::JellyBounced) ++bounces;
         if ((t + 1) % 75 == 0) CHECK(s.hash() == kExpected[(t + 1) / 75 - 1]);
     }
-    CHECK(bounces == 7);                    // the ping-pong really happened
-    CHECK(s.state().rng == 0xcce3bbf8u);    // the veer roll really consumed RNG
+    CHECK(bounces == 7);                  // the ping-pong really happened
+    CHECK(s.state().rng == 0xcce3bbf8u);  // the veer roll really consumed RNG
 }

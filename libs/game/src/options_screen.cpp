@@ -56,7 +56,9 @@ int playtime_index(int seconds) {
     return 0;
 }
 
-const char* yes_no(bool v) { return v ? "YES" : "NO"; }  // getstring(<global>+25): 25=" No ", 26=" Yes "
+const char* yes_no(bool v) {
+    return v ? "YES" : "NO";
+}  // getstring(<global>+25): 25=" No ", 26=" Yes "
 
 }  // namespace
 
@@ -198,8 +200,7 @@ void OptionsScreen::activate_row(int dir) {
             snap_.small_memory = !snap_.small_memory;
             changed_ = true;
             break;
-        default:
-            break;
+        default: break;
     }
 }
 
@@ -219,12 +220,8 @@ void OptionsScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
             row_ = (row_ + kCursorRowCount - 1) % kCursorRowCount;
             break;
         case SDLK_DOWN:
-        case SDLK_S:
-            row_ = (row_ + 1) % kCursorRowCount;
-            break;
-        case SDLK_LEFT:
-            activate_row(-1);
-            break;
+        case SDLK_S: row_ = (row_ + 1) % kCursorRowCount; break;
+        case SDLK_LEFT: activate_row(-1); break;
         case SDLK_RIGHT:
         case SDLK_RETURN:
         case SDLK_KP_ENTER:
@@ -243,8 +240,7 @@ void OptionsScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
             // Escape is the ONLY key that sets sub_4080DC's own exit flag.
             done_ = true;
             break;
-        default:
-            break;
+        default: break;
     }
 }
 

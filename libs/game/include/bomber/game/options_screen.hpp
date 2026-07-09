@@ -181,21 +181,21 @@ struct OptionsSnapshot {
     // GameApp::init re-seeds them from the live VALUELST + options.ini, so
     // these literals only matter for a snapshot never fed through init.
     bool random_start = true;            // getvalue(40) = 1
-    int conveyor_speed_index = 1;    // 0 low / 1 medium / 2 high
+    int conveyor_speed_index = 1;        // 0 low / 1 medium / 2 high
     bool stomped_bombs_detonate = true;  // getvalue(46) = 1
     bool win_by_kills = false;
     bool goldman = false;
-    int enclosement_depth = 1;       // 0..3
+    int enclosement_depth = 1;  // 0..3
     // Row 8, display-only (see file doc) — the currently-loaded scheme's
     // filename, round-tripped through options.ini's `schemefilename=` even
     // though this port has no in-screen `.SCH` browser to change it.
     std::string scheme_filename;
-    int playtime_seconds = 150;      // one of kPlayTimeChoices, or 1001 = unlimited
-    bool assign_keyboards = false;       // row 10, getvalue-less default per §3 (no seed cited)
-    bool diseases_destroyable = true;    // getvalue(120) = 1
-    bool lost_net_revert_ai = false;     // row 12
+    int playtime_seconds = 150;        // one of kPlayTimeChoices, or 1001 = unlimited
+    bool assign_keyboards = false;     // row 10, getvalue-less default per §3 (no seed cited)
+    bool diseases_destroyable = true;  // getvalue(120) = 1
+    bool lost_net_revert_ai = false;   // row 12
     bool disable_game_music = false;
-    bool small_memory = false;           // row 17 backing value; LABEL is inverted, see file doc
+    bool small_memory = false;  // row 17 backing value; LABEL is inverted, see file doc
 };
 
 // The Play Time cycle's choices (§3 row 9: `sub_4076FE`, no exact value list
@@ -269,7 +269,7 @@ private:
     const AssetStore* assets_ = nullptr;
     const FontTextures* font_ = nullptr;
 
-    std::string backdrop_;   // "GLUE<n>", supplied by the caller's pick_glue()
+    std::string backdrop_;  // "GLUE<n>", supplied by the caller's pick_glue()
 
     int row_ = 0;  // OptionRow, as an int for the wrap arithmetic — always in [0, kCursorRowCount)
     std::uint64_t cursor_frame_ = 0;
@@ -277,7 +277,7 @@ private:
     bool changed_ = false;
     bool done_ = false;
     bool open_keyremap_ = false;
-    bool goldman_touched_ = false;    // see gold_forfeiting_row_touched()
+    bool goldman_touched_ = false;  // see gold_forfeiting_row_touched()
     bool team_play_touched_ = false;
 };
 

@@ -68,8 +68,10 @@ void SoundDirector::on_tick(const sim::State& s) {
                 }
                 // Diarrhea/super drop = random "poops" splat (SOUNDLST 550-554,
                 // sub_41F29B v112 branch); a normal drop is 100/101.
-                if (ev.data) audio_.play_random_in_range(550, 554);
-                else audio_.play_one_of({100, 101});
+                if (ev.data)
+                    audio_.play_random_in_range(550, 554);
+                else
+                    audio_.play_one_of({100, 101});
                 break;
             }
             case sim::Event::Type::BombKicked: audio_.play_random_in_range(120, 123); break;
@@ -138,8 +140,10 @@ void SoundDirector::on_tick(const sim::State& s) {
                 // Skull voice: 1-in-3 the per-disease line (the 3000+50*idx
                 // block), else the generic "oh no" (2300) — as sub_41DFB6.
                 int base = 3000 + 50 * ev.data;
-                if (audio_.chance(3)) audio_.play_random_in_range(base, base + 49);
-                else audio_.play(2300);
+                if (audio_.chance(3))
+                    audio_.play_random_in_range(base, base + 49);
+                else
+                    audio_.play(2300);
                 break;
             }
             case sim::Event::Type::PowerupPicked: {

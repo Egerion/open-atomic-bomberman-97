@@ -82,8 +82,7 @@ void AudioEngine::play_one_of(std::initializer_list<int> ids) {
 void AudioEngine::play_random_in_range(int lo, int hi) {
     if (!ok_) return;
     std::vector<int> c;
-    for (auto it = names_.names.lower_bound(lo); it != names_.names.end() && it->first <= hi;
-         ++it)
+    for (auto it = names_.names.lower_bound(lo); it != names_.names.end() && it->first <= hi; ++it)
         c.push_back(it->first);
     if (!c.empty()) play(c[next_rand() % c.size()]);
 }

@@ -46,7 +46,7 @@ struct ValueList {  // NOLINT(bugprone-exception-escape)
 
 // bugprone-exception-escape (NOLINT below) — same std::map-default-ctor false
 // positive documented on bomber::assets::res::Messages (messages.hpp).
-struct SoundList {  // NOLINT(bugprone-exception-escape)
+struct SoundList {                     // NOLINT(bugprone-exception-escape)
     std::map<int, std::string> names;  // id -> base name (as written, e.g. "bmdrop2")
     std::vector<std::string> warnings;
 };

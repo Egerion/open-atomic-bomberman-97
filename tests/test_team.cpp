@@ -20,8 +20,12 @@ using namespace bomber::sim;
 
 namespace {
 
-Fixed cx(int tx) { return tx * kTileWF + kTileWF / 2; }
-Fixed cy(int ty) { return ty * kTileHF + kTileHF / 2; }
+Fixed cx(int tx) {
+    return tx * kTileWF + kTileWF / 2;
+}
+Fixed cy(int ty) {
+    return ty * kTileHF + kTileHF / 2;
+}
 
 // A bare, open-arena Simulation (mirrors tests/test_ai.cpp's open_arena, minus
 // the single implicit player) with a real, generous clock so the enclosure
@@ -51,10 +55,16 @@ Player& add_player(State& st, int slot, int tx, int ty, bool ai, std::uint8_t te
     return p;
 }
 
-TickInputs idle() { return TickInputs{}; }
+TickInputs idle() {
+    return TickInputs{};
+}
 
-int tile_x(const Player& p) { return static_cast<int>(p.x / kTileWF); }
-int tile_y(const Player& p) { return static_cast<int>(p.y / kTileHF); }
+int tile_x(const Player& p) {
+    return static_cast<int>(p.x / kTileWF);
+}
+int tile_y(const Player& p) {
+    return static_cast<int>(p.y / kTileHF);
+}
 
 }  // namespace
 
@@ -88,8 +98,9 @@ TEST_CASE("default MatchConfig leaves every player's team at 0") {
 // AI targeting: a same-team player is not an enemy.
 // ---------------------------------------------------------------------------
 
-TEST_CASE("behaviour 4 does not bomb a teammate on its cross, but does bomb a "
-          "stranger") {
+TEST_CASE(
+    "behaviour 4 does not bomb a teammate on its cross, but does bomb a "
+    "stranger") {
     // Same room/seed/geometry as the Stage-5 "AI beside enemy" test (test_ai.cpp)
     // that proves behaviour 4 fires against a stranger; here the adjacent player
     // shares the AI's team and must NEVER be bombed.
@@ -176,9 +187,9 @@ TEST_CASE("sides_remaining/winning_side treat teammates as one side") {
     // TWO alive players -> round continues (this is the crux of the TEAM rule:
     // alive_count() would still be 2, but sides_remaining() is 1).
     st.players[2].alive = false;
-    CHECK(alive_count(st) == 2);       // two players alive...
-    CHECK(sides_remaining(st) == 1);   // ...but ONE side -> round IS over
-    CHECK(winning_side(st) != -1);     // decided: side {0,1} won
+    CHECK(alive_count(st) == 2);      // two players alive...
+    CHECK(sides_remaining(st) == 1);  // ...but ONE side -> round IS over
+    CHECK(winning_side(st) != -1);    // decided: side {0,1} won
     CHECK((winning_side(st) == 0 || winning_side(st) == 1));
 
     // Killing one of the two teammates still leaves their side the winner.
@@ -249,8 +260,9 @@ TEST_CASE("state_hash differs when only Player::team differs") {
     CHECK(b.hash() == c.hash());
 }
 
-TEST_CASE("an all-zero-team roster hashes identically before/after the team "
-          "field existed (regression pin against golden-style byte identity)") {
+TEST_CASE(
+    "an all-zero-team roster hashes identically before/after the team "
+    "field existed (regression pin against golden-style byte identity)") {
     // Two configs that are identical except one explicitly zeroes team[] (a
     // no-op, since it already defaults to 0) must hash the same — the team word
     // mixes in a constant 0 for every player on the untamed path.
@@ -288,8 +300,9 @@ TEST_CASE("team_render_colour: team 2 forces colour 2 (red/2.RMP) regardless of 
         CHECK(bomber::match::team_render_colour(2, slot) == 2);
 }
 
-TEST_CASE("team_render_colour: an out-of-contract nonzero, non-2 team value is treated as "
-          "white (only team==2 is red)") {
+TEST_CASE(
+    "team_render_colour: an out-of-contract nonzero, non-2 team value is treated as "
+    "white (only team==2 is red)") {
     // Our setup only ever produces team in {0,1,2} (setup byte+1), so this is
     // a defensive/degenerate input, not a real scenario. The rule mirrors
     // sub_4214BC's `*(byte*)(v6+84) ? 2 : 0` literally: only an exact match on

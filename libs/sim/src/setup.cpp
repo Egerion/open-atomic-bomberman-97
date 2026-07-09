@@ -29,8 +29,7 @@ State build_state(const MatchConfig& config) {
     s.warp_dest_x = config.warp_dest_x;  // pre-resolved warphole exits (no sim RNG)
     s.warp_dest_y = config.warp_dest_y;
     for (int y = 0; y < kGridHeight; ++y)
-        for (int x = 0; x < kGridWidth; ++x)
-            s.actor_type[y][x] = config.actor_type[y][x];
+        for (int x = 0; x < kGridWidth; ++x) s.actor_type[y][x] = config.actor_type[y][x];
 
     PowerupSystem powerups{s};
 
@@ -131,9 +130,10 @@ State build_state(const MatchConfig& config) {
 
     // Arm the dud gate (the original arms it once at match init, sub_422C7A
     // -> sub_422C13): base + rand(spread) ticks from now.
-    s.dud_gate = static_cast<std::uint64_t>(s.tuning.dud_gate_base) +
-                 random_below(s, static_cast<std::uint32_t>(
-                                     std::max<std::int32_t>(1, s.tuning.dud_gate_rand)));
+    s.dud_gate =
+        static_cast<std::uint64_t>(s.tuning.dud_gate_base) +
+        random_below(s,
+                     static_cast<std::uint32_t>(std::max<std::int32_t>(1, s.tuning.dud_gate_rand)));
     return s;
 }
 

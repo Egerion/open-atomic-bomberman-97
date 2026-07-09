@@ -23,9 +23,9 @@
 
 namespace bomber::game {
 
-inline constexpr int kEditorGridWidth = sim::kGridWidth;    // 15
-inline constexpr int kEditorGridHeight = sim::kGridHeight;  // 11
-inline constexpr int kEditorMaxStarts = sim::kMaxPlayers;   // 10
+inline constexpr int kEditorGridWidth = sim::kGridWidth;        // 15
+inline constexpr int kEditorGridHeight = sim::kGridHeight;      // 11
+inline constexpr int kEditorMaxStarts = sim::kMaxPlayers;       // 10
 inline constexpr int kEditorPowerupKinds = sim::kPowerupKinds;  // 13
 
 // The three paintable cell kinds (§5: "the status line uses the `tile %d

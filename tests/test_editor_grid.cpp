@@ -20,8 +20,8 @@ TEST_CASE("reset gives sub_4049C0's classic new-scheme board, 15x11") {
     // ":#:#:#:#:#:#:#:" — solid exactly where both x and y are odd.
     for (int y = 0; y < g.height(); ++y)
         for (int x = 0; x < g.width(); ++x) {
-            EditorBrush want = ((y & 1) != 0 && (x & 1) != 0) ? EditorBrush::Solid
-                                                              : EditorBrush::Brick;
+            EditorBrush want =
+                ((y & 1) != 0 && (x & 1) != 0) ? EditorBrush::Solid : EditorBrush::Brick;
             CHECK(g.cell(x, y) == want);
         }
     CHECK(g.density() == 90);  // dword_4647A0 = 90
@@ -31,10 +31,10 @@ TEST_CASE("reset alternates the start team flags (j & 1) and wraps positions") {
     // sub_4049C0: team = j & 1; positions wrap into the board with repeated
     // +=/-= width/height (the VALUELST 600..619 values arrive via start_xy).
     std::array<std::array<int, 2>, kEditorMaxStarts> pos{};
-    pos[0] = {-1, -1};   // wraps to (14, 10)
-    pos[1] = {15, 11};   // wraps to (0, 0)
-    pos[2] = {31, 23};   // wraps twice to (1, 1)
-    pos[3] = {7, 5};     // in range, unchanged
+    pos[0] = {-1, -1};  // wraps to (14, 10)
+    pos[1] = {15, 11};  // wraps to (0, 0)
+    pos[2] = {31, 23};  // wraps twice to (1, 1)
+    pos[3] = {7, 5};    // in range, unchanged
     EditorGrid g;
     g.reset(kEditorGridWidth, kEditorGridHeight, &pos);
     CHECK(g.start(0).x == 14);
@@ -132,7 +132,8 @@ TEST_CASE("move_start / toggle_start_team ignore out-of-range slots") {
     CHECK(g.start(0).x != 1);
 }
 
-TEST_CASE("toggle_editor_tileset — '0' key's dword_45B7B8 increment-clamp, PINNED pseudo.c 5654-5657") {
+TEST_CASE(
+    "toggle_editor_tileset — '0' key's dword_45B7B8 increment-clamp, PINNED pseudo.c 5654-5657") {
     // `if (++v > 0) v = -1;` — NOT a plain flip: from 0 it increments to 1,
     // which is >0, so it clamps to -1; from -1 it increments to 0, which is
     // NOT >0, so it stays 0. Net effect over {0,-1} is a strict toggle, but
@@ -161,17 +162,9 @@ TEST_CASE("Scheme -> EditorGrid -> Scheme round-trips every field") {
     s.name = "ROUND TRIP";
     s.brick_density = 77;
     s.rows = {
-        "###############",
-        "#.............#",
-        "#.###.#.#.###.#",
-        "#.............#",
-        "#.#.#.#.#.#.#.#",
-        "#.............#",
-        "#.#.#.#.#.#.#.#",
-        "#.............#",
-        "#.###.#.#.###.#",
-        "#.............#",
-        "###############",
+        "###############", "#.............#", "#.###.#.#.###.#", "#.............#",
+        "#.#.#.#.#.#.#.#", "#.............#", "#.#.#.#.#.#.#.#", "#.............#",
+        "#.###.#.#.###.#", "#.............#", "###############",
     };
     for (int i = 0; i < kEditorMaxStarts; ++i) {
         bomber::assets::sch::Spawn sp;

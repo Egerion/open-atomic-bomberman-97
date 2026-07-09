@@ -64,7 +64,9 @@ public:
     bool done() const { return done_; }
     bool cancelled() const { return cancelled_; }
     // The selected file's full path — only valid when done() && !cancelled().
-    const std::filesystem::path& selected() const { return entries_[static_cast<std::size_t>(row_)]; }
+    const std::filesystem::path& selected() const {
+        return entries_[static_cast<std::size_t>(row_)];
+    }
     bool empty() const { return entries_.empty(); }
 
     // sub_42DBCC sizes the dialog for 13 rows first (falling back 12..9 only
@@ -86,7 +88,7 @@ private:
 // sub_403184's 3-item chooser (§5): '1' edit an existing scheme (after a
 // file picker), '2' new scheme, Esc/'Q' exit, F1 help.
 enum class EditorChooserResult : std::uint8_t {
-    None,       // still open
+    None,  // still open
     EditExisting,
     New,
     Exit,
@@ -238,10 +240,10 @@ public:
     // map is the plain divide — the original's extra -(cellH/2-1) y bias in
     // sub_4266A3 compensates its bottom-anchored blit, not a different
     // layout).
-    static constexpr int kCellW = 40;   // sim::kTileW
-    static constexpr int kCellH = 36;   // sim::kTileH
-    static constexpr int kOriginX = 20; // kFieldOriginX
-    static constexpr int kOriginY = 68; // kFieldOriginY
+    static constexpr int kCellW = 40;    // sim::kTileW
+    static constexpr int kCellH = 36;    // sim::kTileH
+    static constexpr int kOriginX = 20;  // kFieldOriginX
+    static constexpr int kOriginY = 68;  // kFieldOriginY
 
 private:
     // FillConfirm: sub_4028D2's Ctrl+F case asks the getstring(760)/97
@@ -249,7 +251,14 @@ private:
     // over sub_4048EB). ResetConfirm: Ctrl+B's getstring(740)/97 confirm
     // (§5, PINNED — pseudo.c 5584-5599), gated on `dirty_` exactly like the
     // original's `v49` "touched" flag (see the on_key doc below).
-    enum class PromptKind : std::uint8_t { None, Density, Name, SaveConfirm, FillConfirm, ResetConfirm };
+    enum class PromptKind : std::uint8_t {
+        None,
+        Density,
+        Name,
+        SaveConfirm,
+        FillConfirm,
+        ResetConfirm
+    };
 
     const AssetStore* assets_ = nullptr;
     const FontTextures* font_ = nullptr;
@@ -257,7 +266,7 @@ private:
     std::string backdrop_;
     EditorGrid grid_;
     EditorBrush brush_ = EditorBrush::Blank;
-    int selected_start_ = 0;     // '+'/'='/'-'/'_' cycles this, §5
+    int selected_start_ = 0;  // '+'/'='/'-'/'_' cycles this, §5
 
     // Ctrl+B's own reset target — sub_4049C0's VALUELST 600..619 start
     // positions, the SAME table `enter()`'s "new scheme" path uses. Stored
@@ -287,7 +296,7 @@ private:
     Anim teamring_[2];
 
     PromptKind prompt_kind_ = PromptKind::None;
-    std::string prompt_text_;    // in-progress text for the Name prompt
+    std::string prompt_text_;  // in-progress text for the Name prompt
 
     bool editing_powerups_ = false;
     PowerupRulesScreen powerups_screen_;
@@ -325,6 +334,8 @@ private:
 // driver must gate 'F'/'B' on the Ctrl modifier itself before forwarding to
 // EditorScreen::on_key (every other editor key is unmodified and passes
 // straight through).
-inline bool editor_key_needs_ctrl(SDL_Keycode key) { return key == SDLK_F || key == SDLK_B; }
+inline bool editor_key_needs_ctrl(SDL_Keycode key) {
+    return key == SDLK_F || key == SDLK_B;
+}
 
 }  // namespace bomber::game

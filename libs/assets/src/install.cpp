@@ -124,8 +124,8 @@ Options load_options(const fs::path& path) {
             // "keydef=<set>,<action>,<scancode>" — three comma-separated ints.
             // Out-of-range set/action drops the WHOLE line (§3's clamp note).
             int set = 0, action = 0, scancode = 0;
-            if (std::sscanf(val.c_str(), "%d,%d,%d", &set, &action, &scancode) == 3 &&
-                set >= 0 && set < KeyDef::kSets && action >= 0 && action < KeyDef::kActionsPerSet) {
+            if (std::sscanf(val.c_str(), "%d,%d,%d", &set, &action, &scancode) == 3 && set >= 0 &&
+                set < KeyDef::kSets && action >= 0 && action < KeyDef::kActionsPerSet) {
                 if (!opts.keydef) opts.keydef = KeyDef{};
                 opts.keydef->scancode[set][action] = scancode;
             }
@@ -171,11 +171,13 @@ void save_options(const fs::path& path, const Options& opts) {
 
     if (opts.levelno) set_key("levelno", std::to_string(*opts.levelno));
     if (opts.num_to_win_match) set_key("num_to_win_match", std::to_string(*opts.num_to_win_match));
-    if (opts.enclosement_depth) set_key("enclosement_depth", std::to_string(*opts.enclosement_depth));
+    if (opts.enclosement_depth)
+        set_key("enclosement_depth", std::to_string(*opts.enclosement_depth));
     if (opts.conveyor_speed) set_key("conveyor_speed", std::to_string(*opts.conveyor_speed));
     if (opts.team_play) set_bool("team_play", *opts.team_play);
     if (opts.random_start) set_bool("random_start", *opts.random_start);
-    if (opts.stomped_bombs_detonate) set_bool("stomped_bombs_detonate", *opts.stomped_bombs_detonate);
+    if (opts.stomped_bombs_detonate)
+        set_bool("stomped_bombs_detonate", *opts.stomped_bombs_detonate);
     if (opts.win_by_kills) set_bool("win_by_kills", *opts.win_by_kills);
     if (opts.goldman) set_bool("goldman", *opts.goldman);
     if (opts.schemefilename) set_key("schemefilename", *opts.schemefilename);
@@ -206,8 +208,8 @@ void save_options(const fs::path& path, const Options& opts) {
             for (int action = 0; action < KeyDef::kActionsPerSet; ++action) {
                 int sc = opts.keydef->scancode[set][action];
                 if (sc < 0) continue;
-                std::string value = std::to_string(set) + "," + std::to_string(action) + "," +
-                                     std::to_string(sc);
+                std::string value =
+                    std::to_string(set) + "," + std::to_string(action) + "," + std::to_string(sc);
                 std::string prefix = std::to_string(set) + "," + std::to_string(action) + ",";
                 bool replaced = false;
                 for (std::string& line : lines) {

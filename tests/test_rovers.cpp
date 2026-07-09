@@ -14,8 +14,12 @@ using namespace bomber::sim::test;
 
 namespace {
 
-Fixed centre_x(int tx) { return tx * kTileWF + kTileWF / 2; }
-Fixed centre_y(int ty) { return ty * kTileHF + kTileHF / 2; }
+Fixed centre_x(int tx) {
+    return tx * kTileWF + kTileWF / 2;
+}
+Fixed centre_y(int ty) {
+    return ty * kTileHF + kTileHF / 2;
+}
 
 bool any_event(const Simulation& s, Event::Type t) {
     for (const auto& e : s.state().events)
@@ -105,7 +109,7 @@ TEST_CASE("a ghost passes through bricks; a rover does not") {
     ghost.kind = RoverKind::Ghost;
     ghost.x = centre_x(6);
     ghost.y = centre_y(5);
-    ghost.dir = 1;  // East
+    ghost.dir = 1;       // East
     ghost.speed = 2000;  // fast: guarantees it reaches the brick tile this tick
     st.rovers.push_back(ghost);
 
@@ -232,7 +236,8 @@ TEST_CASE("a rover dying to a flame with no owner reports -1, not a garbage slot
     st.rovers.push_back(r);
 
     st.flame[5][7] = 5;
-    st.flame_owner[5][7] = 255;  // no attributable owner (matches Player slot sentinel usage elsewhere)
+    st.flame_owner[5][7] =
+        255;  // no attributable owner (matches Player slot sentinel usage elsewhere)
 
     for (int i = 0; i < 5 && !st.rovers.empty(); ++i) s.tick(TickInputs{});
     CHECK(st.rovers.empty());

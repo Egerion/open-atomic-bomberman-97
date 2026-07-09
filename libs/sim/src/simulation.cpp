@@ -33,8 +33,8 @@ namespace {
 // Step 1: one player's turn — stun, movement (with the reversed-controls
 // disease), bomb dropping (edge-gated, spooger, auto-drop diseases), and the
 // action2 priority chain: throw > grab > trigger-detonate > punch.
-void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs,
-                 StageActorSystem& stage, MovementSystem& movement) {
+void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs, StageActorSystem& stage,
+                 MovementSystem& movement) {
     Player& p = s.players[i];
 
     if (p.stun > 0) {
@@ -110,8 +110,8 @@ void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs,
     for (int g = 0; g < 4; ++g)
         if (dir[g]) want_godir = g;
 
-    static constexpr Direction kGodir[4] = {Direction::Up, Direction::Right,
-                                            Direction::Down, Direction::Left};
+    static constexpr Direction kGodir[4] = {Direction::Up, Direction::Right, Direction::Down,
+                                            Direction::Left};
 
     // Ice / input-lag (Hockey Rink, VALUELST ids 450-460; docs/re/facts.md
     // "Ice / input-lag", sub_41F29B ~23058-23078): replaces this tick's
@@ -152,9 +152,9 @@ void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs,
     //     key state under auto-drop. v112 also unconditionally releases a carried
     //     bomb (block 2) and suppresses the spooger (block 4).
     const bool auto_drop = p.sick(Disease::Diarrhea) || p.sick(Disease::Super);
-    const bool a1_now = auto_drop ? true : in.action1;    // +56
+    const bool a1_now = auto_drop ? true : in.action1;        // +56
     const bool a1_last = auto_drop ? false : p.prev_action1;  // +54
-    const bool drop_edge = a1_now && !a1_last;             // the +56 && !+54 gate
+    const bool drop_edge = a1_now && !a1_last;                // the +56 && !+54 gate
 
     // (2) Throw block (`+37`): a carried bomb is thrown when auto-drop forces it
     //     (v112) OR the key is released (`!+56`). NOT gated by constipation — a
@@ -182,8 +182,7 @@ void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs,
     //     press 2 (now standing on it) grabs or sprays.
     if (drop_edge && !p.sick(Disease::Constipation)) {
         const Bomb* under = grid::bomb_at(s, p.tile_x(), p.tile_y());
-        const bool own = under && !under->moving &&
-                         under->owner == static_cast<std::uint8_t>(i);
+        const bool own = under && !under->moving && under->owner == static_cast<std::uint8_t>(i);
         if (p.grab && own)
             bombs.try_grab(p, i);
         else if (p.spooge && !auto_drop && under)
@@ -337,9 +336,9 @@ void run_tick(State& s, const TickInputs& inputs) {
     enclosure.update();
 
     // 7. Compact dead bombs (stable order — deterministic).
-    s.bombs.erase(std::remove_if(s.bombs.begin(), s.bombs.end(),
-                                 [](const Bomb& b) { return !b.active; }),
-                  s.bombs.end());
+    s.bombs.erase(
+        std::remove_if(s.bombs.begin(), s.bombs.end(), [](const Bomb& b) { return !b.active; }),
+        s.bombs.end());
 
     ++s.tick;
 }
@@ -348,11 +347,17 @@ void run_tick(State& s, const TickInputs& inputs) {
 
 Simulation::Simulation(const MatchConfig& config) : state_(detail::build_state(config)) {}
 
-void Simulation::tick(const TickInputs& inputs) { run_tick(state_, inputs); }
+void Simulation::tick(const TickInputs& inputs) {
+    run_tick(state_, inputs);
+}
 
-std::uint64_t Simulation::hash() const { return state_hash(state_); }
+std::uint64_t Simulation::hash() const {
+    return state_hash(state_);
+}
 
-bool tile_blocked(const State& s, int tx, int ty) { return !grid::tile_open(s, tx, ty); }
+bool tile_blocked(const State& s, int tx, int ty) {
+    return !grid::tile_open(s, tx, ty);
+}
 
 bool tile_has_bomb(const State& s, int tx, int ty) {
     return grid::bomb_at(s, tx, ty) != nullptr;
@@ -406,7 +411,9 @@ int winning_side(const State& s) {
     return winner;  // -1 if nobody is alive (mutual wipe-out -> draw)
 }
 
-int enclose_total(int depth) { return EnclosureSystem::total(depth); }
+int enclose_total(int depth) {
+    return EnclosureSystem::total(depth);
+}
 
 bool enclose_pos(int index, int depth, int* x, int* y) {
     return EnclosureSystem::position(index, depth, x, y);

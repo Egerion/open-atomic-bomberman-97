@@ -51,12 +51,14 @@ void EditorGrid::reset(int width, int height,
 void EditorGrid::load_from_scheme(const assets::sch::Scheme& scheme) {
     width_ = scheme.width() > 0 ? scheme.width() : kEditorGridWidth;
     height_ = scheme.height() > 0 ? scheme.height() : kEditorGridHeight;
-    rows_.assign(static_cast<std::size_t>(height_), std::string(static_cast<std::size_t>(width_),
-                                                                  brush_to_cell_char(EditorBrush::Blank)));
+    rows_.assign(
+        static_cast<std::size_t>(height_),
+        std::string(static_cast<std::size_t>(width_), brush_to_cell_char(EditorBrush::Blank)));
     for (int y = 0; y < height_ && y < static_cast<int>(scheme.rows.size()); ++y) {
         const std::string& src = scheme.rows[static_cast<std::size_t>(y)];
         for (int x = 0; x < width_ && x < static_cast<int>(src.size()); ++x)
-            rows_[static_cast<std::size_t>(y)][static_cast<std::size_t>(x)] = src[static_cast<std::size_t>(x)];
+            rows_[static_cast<std::size_t>(y)][static_cast<std::size_t>(x)] =
+                src[static_cast<std::size_t>(x)];
     }
     density_ = std::clamp(scheme.brick_density, 0, 100);
     name_ = scheme.name;
@@ -64,9 +66,8 @@ void EditorGrid::load_from_scheme(const assets::sch::Scheme& scheme) {
     for (auto& st : starts_) st = EditorStart{};
     for (const auto& sp : scheme.spawns) {
         if (sp.player < 0 || sp.player >= kEditorMaxStarts) continue;
-        starts_[static_cast<std::size_t>(sp.player)] =
-            EditorStart{std::clamp(sp.x, 0, width_ - 1), std::clamp(sp.y, 0, height_ - 1),
-                        sp.extra != 0};
+        starts_[static_cast<std::size_t>(sp.player)] = EditorStart{
+            std::clamp(sp.x, 0, width_ - 1), std::clamp(sp.y, 0, height_ - 1), sp.extra != 0};
     }
 
     powerups_ = scheme.powerups;
@@ -108,7 +109,9 @@ void EditorGrid::flood_fill(EditorBrush brush) {
         for (int x = 0; x < width_; ++x) paint(x, y, brush);
 }
 
-void EditorGrid::set_density(int d) { density_ = std::clamp(d, 0, 100); }
+void EditorGrid::set_density(int d) {
+    density_ = std::clamp(d, 0, 100);
+}
 
 void EditorGrid::move_start(int slot, int x, int y) {
     if (slot < 0 || slot >= kEditorMaxStarts) return;

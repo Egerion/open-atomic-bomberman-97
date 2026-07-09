@@ -54,8 +54,7 @@ inline void tally_kills(const std::vector<sim::Event>& events,
 // entry, always 0, must not accidentally tie for the lead against a real
 // player who also has 0 kills).
 inline int win_by_kills_clinch(const std::array<int, sim::kMaxPlayers>& kill_count,
-                               const std::array<bool, sim::kMaxPlayers>& present,
-                               int target) {
+                               const std::array<bool, sim::kMaxPlayers>& present, int target) {
     int best = -1;
     int best_count = -1;
     int leaders = 0;
@@ -70,7 +69,7 @@ inline int win_by_kills_clinch(const std::array<int, sim::kMaxPlayers>& kill_cou
         }
     }
     if (best < 0 || best_count < target) return -1;  // nobody reached the target
-    if (leaders != 1) return -1;                      // v78 == 1: unique leader required
+    if (leaders != 1) return -1;                     // v78 == 1: unique leader required
     return best;
 }
 
@@ -88,9 +87,10 @@ inline int win_by_kills_clinch(const std::array<int, sim::kMaxPlayers>& kill_cou
 // the original, so a pending gold player must be left untouched on a draw
 // round (the caller simply skips calling this, not passing a sentinel).
 inline int assign_gold_player(bool goldman_on, bool team_mode, int clinched_player,
-                               const std::array<int, sim::kMaxPlayers>& team_of) {
+                              const std::array<int, sim::kMaxPlayers>& team_of) {
     if (!goldman_on) return -1;
-    if (team_mode && clinched_player >= 0) return team_of[static_cast<std::size_t>(clinched_player)];
+    if (team_mode && clinched_player >= 0)
+        return team_of[static_cast<std::size_t>(clinched_player)];
     return clinched_player;
 }
 
@@ -105,10 +105,9 @@ inline int assign_gold_player(bool goldman_on, bool team_mode, int clinched_play
 // resolved VICTORY<player> even under Team Play (a genuine end-to-end gap,
 // not a deliberate simplification — TEAM%u used to be a documented "future
 // hook" note from before Player::team landed).
-inline std::string victory_background_name(bool team_mode, int clinched_player,
-                                            int clinched_team) {
+inline std::string victory_background_name(bool team_mode, int clinched_player, int clinched_team) {
     return team_mode ? "TEAM" + std::to_string(clinched_team)
-                      : "VICTORY" + std::to_string(clinched_player);
+                     : "VICTORY" + std::to_string(clinched_player);
 }
 
 // Campaign AI-roster seeding (docs/re/campaign.md "Rover/ghost/AI roster —

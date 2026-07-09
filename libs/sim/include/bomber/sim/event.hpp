@@ -25,22 +25,22 @@ struct Event {
         BombGrabbed,
         BombThrown,
         HeadHit,
-        Infected,     // picked up / caught a disease (data = Disease kind)
-        BombStopped,  // kicked bomb hit an obstacle and stopped (SOUNDLST 130)
-        JellyBounced, // jelly bomb reversed off an obstacle while sliding (SOUNDLST 135)
+        Infected,      // picked up / caught a disease (data = Disease kind)
+        BombStopped,   // kicked bomb hit an obstacle and stopped (SOUNDLST 130)
+        JellyBounced,  // jelly bomb reversed off an obstacle while sliding (SOUNDLST 135)
         // Stage actors (docs/re/stage-actors.md). SoundDirector maps these:
         // TrampolineBounce -> SOUNDLST 350, WarpUsed -> SOUNDLST 1330.
-        TrampolineBounce, // player stepped onto a trampoline and launched a hop
-        WarpUsed,         // player entered a warphole (reserved; warphole deferred)
+        TrampolineBounce,  // player stepped onto a trampoline and launched a hop
+        WarpUsed,          // player entered a warphole (reserved; warphole deferred)
         // Campaign rover/ghost hazards (docs/re/campaign.md "Per-tick mover").
         // `player` is the rover's INDEX into State::rovers for all three (not
         // a player slot) unless noted otherwise.
-        RoverSpawned,   // a rover/ghost was placed on the board; data = RoverKind
-        RoverDied,      // stepped into an active flame; data = flame owner's player slot
-        RoverKilledPlayer, // killed a human/network player on its landing tile;
-                           // `player` is the VICTIM's player slot (not a rover index)
-                           // so the presentation can reuse the normal death path;
-                           // data = the rover's index into State::rovers
+        RoverSpawned,       // a rover/ghost was placed on the board; data = RoverKind
+        RoverDied,          // stepped into an active flame; data = flame owner's player slot
+        RoverKilledPlayer,  // killed a human/network player on its landing tile;
+                            // `player` is the VICTIM's player slot (not a rover index)
+                            // so the presentation can reuse the normal death path;
+                            // data = the rover's index into State::rovers
         // Per-level tile regeneration (docs/re/facts.md "Per-level tile
         // regeneration", Haunted House/Cemetery). x,y = the tile. NOTE: the
         // original has NO dedicated sound or animation for this — sub_426704

@@ -28,7 +28,9 @@ struct KeyDef {
     static constexpr int kActionsPerSet = 10;  // reader's array width (§2)
     std::array<std::array<int, kActionsPerSet>, kSets> scancode;
 
-    KeyDef() { for (auto& set : scancode) set.fill(-1); }
+    KeyDef() {
+        for (auto& set : scancode) set.fill(-1);
+    }
 };
 
 // The install-root `options.ini` (parsed by sub_406238): a plain "key=value"

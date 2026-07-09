@@ -43,8 +43,7 @@ void SequenceSet::resolve(const AssetStore& a) {
         f.tip_s = resolve_sequence(fa, "flame tipsouth green");
         f.tip_w = resolve_sequence(fa, "flame tipwest green");
         f.tip_e = resolve_sequence(fa, "flame tipeast green");
-        if (f.center.steps.empty())
-            f.center = resolve_sequence(a.flame(-1), "flame center green");
+        if (f.center.steps.empty()) f.center = resolve_sequence(a.flame(-1), "flame center green");
     }
 
     static constexpr const char* kDirs[4] = {"north", "south", "west", "east"};
@@ -91,19 +90,19 @@ void SequenceSet::resolve(const AssetStore& a) {
     // A missing sequence leaves the entry empty -> draw_powerups keeps the
     // static POW*.PCX fallback for that kind.
     static constexpr const char* kPowerNames[sim::kPowerupKinds] = {
-        "power bomb",    // ExtraBomb
-        "power flame",   // Flame
-        "power disease", // Disease
-        "power kicker",  // Kick
-        "power skate",   // Skate
-        "power punch",   // Punch
-        "power grab",    // Grab
-        "power spooge",  // Spooger
-        "power goldflame", // Goldflame
-        "power trigger", // Trigger
-        "power jelly",   // Jelly
-        "power disease3", // SuperDisease
-        "power random",  // Random
+        "power bomb",       // ExtraBomb
+        "power flame",      // Flame
+        "power disease",    // Disease
+        "power kicker",     // Kick
+        "power skate",      // Skate
+        "power punch",      // Punch
+        "power grab",       // Grab
+        "power spooge",     // Spooger
+        "power goldflame",  // Goldflame
+        "power trigger",    // Trigger
+        "power jelly",      // Jelly
+        "power disease3",   // SuperDisease
+        "power random",     // Random
     };
     for (int k = 0; k < sim::kPowerupKinds; ++k)
         powerup_anim[k] = resolve_sequence(a.powers(), kPowerNames[k]);
@@ -120,8 +119,8 @@ void SequenceSet::resolve(const AssetStore& a) {
     // "extra trampoline" (no direction suffix). Missing entries draw nothing.
     static constexpr const char* kGodirCompass[4] = {"north", "east", "south", "west"};
     for (int g = 0; g < 4; ++g) {
-        conveyor[g] = resolve_sequence(a.conveyor(),
-                                       std::string("extra conveyor ") + kGodirCompass[g]);
+        conveyor[g] =
+            resolve_sequence(a.conveyor(), std::string("extra conveyor ") + kGodirCompass[g]);
         dirarrow[g] = resolve_sequence(a.extras(), std::string("extra arrow ") + kGodirCompass[g]);
     }
     warphole = resolve_sequence(a.extras(), "extra warp 1");

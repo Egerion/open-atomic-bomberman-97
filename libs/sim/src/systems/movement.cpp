@@ -146,8 +146,7 @@ int MovementSystem::ice_delay(Player& p, int want_godir) const {
     // inserts the fresh sample at slot 0. At our fixed 20 Hz tick rate "age by
     // one tick" and "shift" collapse to a plain FIFO push — slot k's age
     // after this push is exactly k ticks (k * kMsPerTick ms).
-    for (int k = Player::kIceHistoryLen - 1; k > 0; --k)
-        p.ice_history[k] = p.ice_history[k - 1];
+    for (int k = Player::kIceHistoryLen - 1; k > 0; --k) p.ice_history[k] = p.ice_history[k - 1];
     p.ice_history[0] = static_cast<std::int8_t>(want_godir);
 
     // Resolve (sub_41F29B ~23071-23077): walk from the freshest sample toward

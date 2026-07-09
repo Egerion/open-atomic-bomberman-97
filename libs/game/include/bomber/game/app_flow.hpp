@@ -164,16 +164,16 @@ constexpr AppState next(AppState state, AppInput input) {
         case AppState::Options:
         case AppState::Controllers:
         case AppState::Network:
-        case AppState::Credits:
-            return AppState::Menu;
+        case AppState::Credits: return AppState::Menu;
 
-        case AppState::Quit:
-            return AppState::Quit;
+        case AppState::Quit: return AppState::Quit;
     }
     return state;  // unreachable; keeps -Wreturn-type / MSVC happy
 }
 
 // True once the flow has reached its terminal state.
-constexpr bool is_terminal(AppState state) { return state == AppState::Quit; }
+constexpr bool is_terminal(AppState state) {
+    return state == AppState::Quit;
+}
 
 }  // namespace bomber::game
