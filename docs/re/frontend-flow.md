@@ -841,12 +841,19 @@ file containing the word is ROULETTE.BM's help prose). BONUS.PCX is leftover
 art from a cut feature — nothing in the shipped binary can display it, so the
 port owes it nothing.
 
-**Spine mapping.** The sim does not yet model teams, so Results shows **DRAW**
-(no survivor / time-up, `round_winner()` returns -1) or **`VICTORY<player>`**
-(one survivor, naming that player), each as a normal `Screen` with a bounded 6 s
-dwell (the `sub_42A3F6` attract auto-advance) then a return to the menu. The
-winner voice group (2000) is played by `run_match` on match-over, matching
-`sub_427BFB(2000)`. TEAM%u is a documented future hook (needs sim team state).
+**Spine mapping.** Results shows **DRAW** (no survivor / time-up,
+`round_winner()` returns -1) or, once a match is clinched, either
+**`TEAM<0/1>`** (Team Play on — `is_team_mode()`, naming the clinching
+player's raw setup-screen team id) or **`VICTORY<player>`** (solo, naming the
+winner), each as a normal `Screen` with a bounded 6 s dwell (the `sub_42A3F6`
+attract auto-advance) then a return to the menu. The winner voice group (2000)
+is played by `run_match` on match-over, matching `sub_427BFB(2000)`. RESOLVED
+2026-07-09: `Player::team` landed (docs/re/setup-screens.md "team mode
+landed"), so `game_app.cpp`'s `team_victory_screen()` now picks TEAM0/TEAM1
+instead of always falling through to VICTORY<player> under Team Play — the
+prior always-VICTORY<player> behaviour was a genuine gap (TEAM%u was still a
+"future hook" note left over from before team state existed), not a deliberate
+simplification.
 
 **Results MUSIC — CORRECTED (2026-07-08, second pass): 1130 under ALL outcome
 screens; 1020 is the SETUP music, not victory music.** An earlier pass read

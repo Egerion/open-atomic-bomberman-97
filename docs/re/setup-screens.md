@@ -461,9 +461,11 @@ cosmetic simplification, not a gameplay fact).
    up one step at each screen.
 
 **Roster/level → match:** `setup_type_[i]` → `active[]`/`ai[]` (as before);
-`setup_team_[i]` → `MatchConfig::team[]` (config-only, non-hashed); the committed
-level index → `start_match` overrides the stage (specific level) or keeps
-`pick_stage` (RANDOM). The committed win target → `win_target_` (best-of).
+`setup_team_[i]` → `MatchConfig::team[]` → the hashed `Player::team` (see the
+"Determinism / golden" update right below — this was config-only/non-hashed
+when first written, no longer true); the committed level index → `start_match`
+overrides the stage (specific level) or keeps `pick_stage` (RANDOM). The
+committed win target → `win_target_` (best-of).
 
 ## Determinism / golden — UPDATE (2026-07-08): team mode landed, one-time recapture
 

@@ -469,13 +469,15 @@ ScreenDef draw_screen() {
 // take (GUMP1/GEN11*/ZAA*/…), matching the original's variety.
 constexpr int kDrawStingLo = 1700;
 constexpr int kDrawStingHi = 1999;
-ScreenDef victory_screen(int player) {
-    // VICTORY<player>.PCX — the original resolves "victory%u" against the winner
-    // index (sub_42A3F6 aVictoryU); the install ships VICTORY0..VICTORY9. The
-    // "we have a winner" voice group (2000) is played by run_app's Results
-    // handler, under this screen, per §1 (fires as soon as v73 is computed).
-    // (ScreenDef.background owns its own std::string copy, so this is safe.)
-    return ScreenDef{"VICTORY" + std::to_string(player), {}, kResultsDwellMs,
+// VICTORY<player>.PCX / TEAM<0/1>.PCX — the original resolves "victory%u"/
+// "team%u" against the winner index / clinching team (sub_42A3F6 aVictoryU/
+// aTeamU); see results.hpp's victory_background_name for the full RE
+// citation. The "we have a winner" voice group (2000) is played by run_app's
+// Results handler, under this screen, per §1 (fires as soon as v73 is
+// computed). (ScreenDef.background owns its own std::string copy, so this is
+// safe.)
+ScreenDef victory_screen(bool team_mode, int player, int team) {
+    return ScreenDef{victory_background_name(team_mode, player, team), {}, kResultsDwellMs,
                      /*skippable*/ true};
 }
 // --- Main-menu model (sub_42B9CE) -----------------------------------------
@@ -2996,7 +2998,10 @@ int GameApp::run_app() {
                     // back to the menu (next(Results, Advance) = Menu).
                     audio_.start_music(kDrawMusicId);  // 1130 under VICTORY (doc §2 correction)
                     audio_.play_random_in_range(2000, 2299);  // "we have a winner", under VICTORY
-                    ev = present_screen(victory_screen(clinched));
+                    // Team game -> TEAM<0/1>.PCX, else -> VICTORY<player>.PCX
+                    // (frontend-flow.md "VICTORY" §3, aTeamU vs aVictoryU).
+                    ev = present_screen(
+                        victory_screen(is_team_mode(), clinched, setup_team_[clinched]));
                     // Campaign stage advance (docs/re/campaign.md
                     // "Advances through campaign stages automatically",
                     // sub_401312/sub_40133F gated `if (dword_46489C)`): a
