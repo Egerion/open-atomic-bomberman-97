@@ -402,9 +402,64 @@ skates*90 - clogs*91`, exactly the port's formula, §9.4).
   original DOES draw a real clogs icon on the wheel, not a blank/missing
   slot; nothing in `sub_4034BC` special-cases slot 13's drawing (only its
   RESULT-line message id (800+13) and settle SFX (1320 vs 1310, §3) differ).
-  So the port's wheel rendering needs a "clogs" ANI icon resolved the same
-  `"power %s"` way as the other five, not a documented no-op — see
-  `goldman_wheel.hpp`/`goldman_screen.hpp` TODOs.
+  RESOLVED 2026-07-09, see §9.5 — the port now draws a real "power clog"
+  icon for slot 13 instead of skipping it.
+
+### 9.5 Wheel prize-icon render for slot 13 (clogs) — pinned (RESOLVED 2026-07-09)
+
+`sub_425C7F` @ 0x425C7F (pseudo.c 26718-26735) is the shared floor-powerup
+icon drawer the wheel calls for every one of its 6 slots (§3's per-frame
+icon-draw loop, pseudo.c 6022-6031: `sub_425C7F(v5, v6, v4)` where `v4 =
+dword_45B7BC[k]`, the slot's raw inventory kind id — `13` for the clogs
+slot, no special-casing):
+
+```c
+int __usercall sub_425C7F@<eax>(int a1@<eax>, int a2@<edx>, int a3@<ebx>)
+{
+  char v5[100];
+  sub_4518D0((int)v5, aPowerS, (char)off_45BE50[a3]);   // v5 = "power " + off_45BE50[a3]
+  v9 = sub_41D957((int)v5);                              // resolve ANI sequence by name
+  v3 = sub_41DAA7(v9, 0);
+  return sub_415920(v8, v6, v3);                         // draw it at (a1, a2)
+}
+```
+
+`aPowerS` (pseudo.c 1566) is the literal format string `"power %s"`.
+`off_45BE50[18]` (pseudo.c 2261-2280, "weak"-typed `char*[18]`) is:
+
+```
+{ "bomb", "flame", "disease", "kicker", "skate", "punch", "grab", "spooge",
+  "goldflame", "trigger", "jelly", "disease3", "random", "clog",
+  "?1", "?2", "?3", "?4" }
+```
+
+Index **13 = `"clog"`** — so for the clogs wheel slot `sub_425C7F` builds
+the sequence name `"power clog"` and resolves it the identical way as the
+other five slots (`sub_41D957`/`sub_41DAA7`, the same pair the pointer's
+`"ring"` sequence and the in-round floor powerups use). CONFIRMED against
+the shipped `DATA/ANI/POWERS.ANI`: a byte scan of the file shows a `SEQ`
+chunk named `power clog` immediately after `power random` (the 13th of 13
+named sequences: bomb/flame/kicker/disease/punch/skate/jelly/grab/spooge/
+goldflame/disease3/trigger/random/clog) — the icon is a real shipped asset,
+not a placeholder or reused sprite; no recolour is applied (the wheel's
+icon loop carries no palette/tint argument, same as the other 5 slots, §3).
+
+Port (landed in `f374e22`): `SequenceSet::clogs_anim` (`sequences.hpp`/
+`sequences.cpp`) resolves `a.powers()` sequence `"power clog"` outside the
+`kPowerupKinds`-indexed `powerup_anim[]` loop (clogs is not a
+`sim::PowerupType`, §8/§9.2, so it cannot share that table).
+`GoldmanScreen::draw()` (`goldman_screen.hpp`) special-cases
+`prize_id == kClogsPrizeId` in its 6-icon loop to draw `seqs_->clogs_anim`
+instead of routing through `wheel_prize_to_powerup` (which correctly stays
+`PowerupType::None` for id 13, §8) — mirroring `sub_4034BC`'s own
+uniform-loop-with-uniform-lookup shape (one drawer, one name table, no
+branch on slot index) even though the port's data model necessarily splits
+clogs out of `PowerupType` space.
+
+(Provenance: `sub_425C7F` @ 0x425C7F pseudo.c 26718-26735; `off_45BE50`
+pseudo.c 2261-2280; `aPowerS` pseudo.c 1566; call site `sub_4034BC`
+pseudo.c 6022-6031; asset confirmation `DATA/ANI/POWERS.ANI` byte scan,
+"power clog" SEQ chunk present.)
 
 (Provenance: `sub_4034BC` @ 0x4034BC pseudo.c 5921-6110; helpers
 `sub_403382`/`sub_40341F` pseudo.c 5876-5919; wheel slots `dword_45B7BC`

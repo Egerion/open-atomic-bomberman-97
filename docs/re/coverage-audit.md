@@ -66,8 +66,8 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 | 26 | Player colour `.RMP` remap pipeline | pinned | ported | player-colour.md (no open gaps), `rmp.cpp`, `test_rmp.cpp` | — | done |
 | 27 | Options screen (19-row `sub_4080DC`) | pinned | ported (most rows) | results-and-options.md, ROADMAP "Options screen + key-remap aligned to the RE — DONE 2026-07-08"; net/modem/memory rows explicitly omitted (netplay/dead HW, N/A) | — | done for in-scope rows |
 | 28 | Key-remap UI (`sub_407B9D`) | pinned | ported | results-and-options.md, `KeyRemapScreen` | — | done |
-| 29 | Goldman Roulette wheel | pinned | ported | goldman-roulette.md, ROADMAP "Goldman Roulette wheel — DONE 2026-07-08" | — | done, except prize id 13 (clogs) — see #30 | done |
-| 30 | Goldman wheel prize id 13 (clogs, speed-penalty booby prize) | pinned | ported | goldman-roulette.md §9 "RESOLVED 2026-07-08": hashed `Player::clogs` count + `MatchConfig::born_with_clogs` overlay (not a 14th `PowerupType` — permanent design decision, not a stub), speed-penalty folded into the walk-speed term per `tuning.hpp`'s `clogs_speed_penalty` (id 91); `f374e22`/`228a33f`. Residual cosmetic gap: the wheel's own prize-icon render for slot 13 (a "power clogs" ANI icon, `sub_4034BC`'s uniform k=0..5 icon draw) is still unported per goldman-roulette.md §9.5 — `goldman_wheel.hpp`/`goldman_screen.hpp` icon lookup only covers the 5 `PowerupType`-backed slots | wheel icon render for slot 13 (cosmetic only — the clogs effect itself is fully ported) | low — cosmetic residual, effect is done |
+| 29 | Goldman Roulette wheel | pinned | ported | goldman-roulette.md, ROADMAP "Goldman Roulette wheel — DONE 2026-07-08" | — | done |
+| 30 | Goldman wheel prize id 13 (clogs, speed-penalty booby prize) | pinned | ported | goldman-roulette.md §9 "RESOLVED 2026-07-08": hashed `Player::clogs` count + `MatchConfig::born_with_clogs` overlay (not a 14th `PowerupType` — permanent design decision, not a stub), speed-penalty folded into the walk-speed term per `tuning.hpp`'s `clogs_speed_penalty` (id 91); `f374e22`/`228a33f`. Wheel prize-icon render for slot 13 also done: goldman-roulette.md §9.5 "RESOLVED 2026-07-09" pins `sub_425C7F`/`off_45BE50[13]="clog"` and confirms `DATA/ANI/POWERS.ANI` ships a real `"power clog"` sequence; `SequenceSet::clogs_anim` + `GoldmanScreen::draw()`'s slot-13 branch (landed in `f374e22`) draw it | — | done |
 | 31 | Hidden scheme/map editor (`sub_4028D2`) | pinned | ported | results-and-options.md, ROADMAP "Hidden scheme editor — DONE 2026-07-08" | — | done |
 | 32 | Editor: Ctrl+B reset, '0' dead-tileset toggle, brush-preview-at-cursor, exact dialog chrome | pinned | **absent** | results-and-options.md: "Still NOT reproduced" | low-value polish pass on editor_screen.cpp/editor_grid.cpp | low |
 | 33 | Editor: powerup sub-editor mouse-only interaction | pinned | ported (keyboard substitute) | results-and-options.md: "documented deviation" | none required — accepted deviation, note if mouse support is later added | low |
@@ -234,15 +234,15 @@ Counting the 39 numbered subsystem rows (§1+§2) + the 14 distinct
 asset-format rows in §3 (excluding pure-tooling extensions marked N/A:
 .ICO/.EXE/.DLL/.IDB):
 
-- **Covered (RE pinned + ported, "done"):** 34 of 39 subsystem rows (up from
+- **Covered (RE pinned + ported, "done"):** 35 of 39 subsystem rows (up from
   31 at the 2026-07-08 snapshot — #13 rover/ghost mover, #18 attract mode,
-  and #30 clogs prize all closed this pass) + 12 of 14 asset formats (up from
-  11 — .CAM/campaign closed this pass) — the large majority of 1:1 gameplay
-  and front-end fidelity.
-- **Partial/open (RE pinned, port absent or a small residual):** 5 subsystem
+  and #30 clogs prize (effect + wheel icon render, both closed this pass)
+  all closed this pass) + 12 of 14 asset formats (up from 11 — .CAM/campaign
+  closed this pass) — the large majority of 1:1 gameplay and front-end
+  fidelity.
+- **Partial/open (RE pinned, port absent or a small residual):** 4 subsystem
   rows — #15 wall-slam SFX (unconfirmed call site, permanently uncertain),
-  #23 INPUT.BM menu-row binding, #30's residual (clogs wheel *icon* render
-  only — the clogs *effect* is done), #32 editor chrome polish, #35 in-round
+  #23 INPUT.BM menu-row binding, #32 editor chrome polish, #35 in-round
   debug/cheat keys — plus 2 asset formats (the `.DAT` row's `LEVELS.DAT`
   component was RE'd this pass and confirmed dead/non-gameplay data with no
   port needed, but `bmstats.dat`/the 3rd `.DAT` file are still unchecked so
@@ -261,23 +261,24 @@ Everything that was "open" at the 2026-07-08 snapshot's top of this list
 prize decision) is now **done** — see §6 items 7-9 and table rows #13/#18/
 #30. `LEVELS.DAT` (formerly item 1) is now also **done** — RE'd 2026-07-09
 and confirmed dead/tooling data, not load-bearing; see §3 and
-`docs/re/facts.md`. What remains open, in priority order:
+`docs/re/facts.md`. The Goldman wheel clogs prize-icon render (§2 #30's
+former residual) is likewise **done**: goldman-roulette.md §9.5 pins
+`sub_425C7F`'s `"power %s"` + `off_45BE50[13]="clog"` lookup and the shipped
+`DATA/ANI/POWERS.ANI` "power clog" sequence; `SequenceSet::clogs_anim` +
+`GoldmanScreen::draw()`'s slot-13 branch draw it, landed in `f374e22`.
+What remains open, in priority order:
 
-1. **Goldman wheel clogs prize-icon render** (§2 #30 residual) — the clogs
-   *effect* (speed penalty) is fully ported; only the wheel's own "power
-   clogs" ANI icon draw for slot 13 is still missing, per
-   goldman-roulette.md §9.5. Small, cosmetic, well-scoped.
-2. **Campaign round-pacing clause 5** (mutual-wipeout stage-replay fallback,
+1. **Campaign round-pacing clause 5** (mutual-wipeout stage-replay fallback,
    campaign.md "Round pacing") — pinned but not ported; independently
    portable, no test pressure yet (edge case: every side wiped out
    simultaneously mid-stage).
-3. **Wall-slam SFX ids 140-146 call site** (§1 #15) — the RE itself may be
+2. **Wall-slam SFX ids 140-146 call site** (§1 #15) — the RE itself may be
    permanently unconfirmable (no call site found in the decompile); either
    find it via a targeted disasm search or formally close this as
    "accepted unconfirmed" in facts.md.
-4. **INPUT.BM menu-row binding** (§2 #23) — help overlay is live but there is
+3. **INPUT.BM menu-row binding** (§2 #23) — help overlay is live but there is
    no real interactive controller-remap UI or confirmed menu-row wiring.
-5. Low-priority polish: editor chrome (#32: Ctrl+B reset, '0' toggle,
+4. Low-priority polish: editor chrome (#32: Ctrl+B reset, '0' toggle,
    brush-preview, exact dialog chrome), in-round debug/cheat keys (#35,
    developer/QA-only), `.BMP`/`.TXT`/`bmstats.dat` asset spot-checks (§3).
 

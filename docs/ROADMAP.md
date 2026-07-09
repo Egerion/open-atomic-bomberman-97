@@ -339,9 +339,10 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       tier's v73 clinch write (§2, pinned + ported). Clogs (prize id 13) was
       then RESOLVED same day (`f374e22`/`228a33f`, goldman-roulette.md §9):
       hashed `Player::clogs` + `MatchConfig::born_with_clogs`, permanently
-      NOT a 14th `PowerupType` (design decision, not a stub). Residual: the
-      wheel's own prize-icon render for slot 13 is still unported (cosmetic
-      only — coverage-audit.md row #30).
+      NOT a 14th `PowerupType` (design decision, not a stub). The wheel's
+      own prize-icon render for slot 13 is also DONE (`f374e22`,
+      goldman-roulette.md §9.5): `sub_425C7F`/`off_45BE50[13]="clog"` pinned,
+      `SequenceSet::clogs_anim` draws the real "power clog" POWERS.ANI icon.
 - [x] Hidden scheme editor — DONE 2026-07-08 (results-and-options.md §5):
       Ctrl+E ×6 menu trigger, chooser + 15×11 mouse editor + powerup-rules
       sub-editor, .SCH writer with parse(write(s))==s round-trip; detail pass
@@ -492,10 +493,12 @@ behaviour changes (cite the facts.md entry) → tick the box here.
 `tests/CMakeLists.txt`, all green. RE + port coverage is complete for every
 in-scope subsystem in `docs/re/coverage-audit.md` except a handful of
 low-priority residuals (wall-slam SFX call site, editor chrome polish,
-in-round debug keys, the Goldman-wheel clogs icon render) — see that file's
-"Top open items" list. (`LEVELS.DAT`'s purpose was resolved 2026-07-09:
-confirmed dead/tooling data never read by the shipped game, no port
-needed.) The sole **deliberate**
+in-round debug keys) — see that file's "Top open items" list.
+(`LEVELS.DAT`'s purpose was resolved 2026-07-09: confirmed dead/tooling
+data never read by the shipped game, no port needed. The Goldman-wheel
+clogs icon render was closed the same day: the port had already landed in
+`f374e22`; goldman-roulette.md §9.5 now pins the icon fact.) The sole
+**deliberate**
 exclusion is netplay (ADR-0003: the sim stays pure so lockstep netplay is
 possible later, but no netcode is written now) — everything else the
 original binary does has either shipped or has a tracked, pinned follow-up.
