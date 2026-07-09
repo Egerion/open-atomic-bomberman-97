@@ -491,9 +491,11 @@ behaviour changes (cite the facts.md entry) → tick the box here.
 **State of the port, 2026-07-09.** 35 doctest suites registered in
 `tests/CMakeLists.txt`, all green. RE + port coverage is complete for every
 in-scope subsystem in `docs/re/coverage-audit.md` except a handful of
-low-priority residuals (wall-slam SFX call site, `LEVELS.DAT` purpose,
-editor chrome polish, in-round debug keys, the Goldman-wheel clogs icon
-render) — see that file's "Top open items" list. The sole **deliberate**
+low-priority residuals (wall-slam SFX call site, editor chrome polish,
+in-round debug keys, the Goldman-wheel clogs icon render) — see that file's
+"Top open items" list. (`LEVELS.DAT`'s purpose was resolved 2026-07-09:
+confirmed dead/tooling data never read by the shipped game, no port
+needed.) The sole **deliberate**
 exclusion is netplay (ADR-0003: the sim stays pure so lockstep netplay is
 possible later, but no netcode is written now) — everything else the
 original binary does has either shipped or has a tracked, pinned follow-up.
