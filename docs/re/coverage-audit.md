@@ -1,8 +1,12 @@
 # Coverage audit — RE + port completeness vs BM95.EXE
 
-Snapshot at 2026-07-08 (worktree `worktree-agent-ae75baa4f26b0b60b`, after
-merge with `main` @ `e265541`). Netplay is out of scope per ADR-0003 — listed
-here only to mark the boundary, not as work to schedule.
+Snapshot at 2026-07-09 (worktree `worktree-agent-afc56c379215a828e`, after
+merge with `main` @ `fd811d5`, "Merge rover/ghost hazard actors"). Refreshes
+the 2026-07-08 snapshot: attract-mode demo match, the Goldman-wheel clogs
+booby prize, campaign mode (parser/trigger/flow/banner/AI-seeding), and the
+campaign rover/ghost hazard actors all shipped since then. Netplay is out of
+scope per ADR-0003 — listed here only to mark the boundary, not as work to
+schedule.
 
 Method: cross-referenced every `sub_XXXXXX` cited in `docs/re/*.md` (~230
 unique addresses, `facts.md`/`ai.md`/`frontend-flow.md`/`in-match-shell.md`/
@@ -41,7 +45,7 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 | 10 | Options toggles → sim (stomped-bombs-detonate, diseases-destroyable, random-start) | pinned | ported | facts.md "Options toggles", `test_options.cpp` | — | done |
 | 11 | Team mode (sim side: `Player::team`, round-end side logic) | pinned | ported | ROADMAP "TEAM MODE, sim side — DONE 2026-07-08", `test_team.cpp` | — | done |
 | 12 | AI — all 8 behaviours (`ai.c`/VALUELST 900-series) | pinned | ported | `docs/re/ai.md`, ADR-0005, `ai.cpp`, `test_ai.cpp` | — | done (Phase 2 complete) |
-| 13 | AI: campaign "rover" mover (`sub_401B5C`) | pinned (address+role identified) | **N/A (out of scope until campaign)** | ai.md: "matters only if/when we port campaign monsters" | leave parked; revisit under Campaign item (§5) | low |
+| 13 | AI: campaign "rover"/"ghost" mover (`sub_401AAE`/`sub_401B05` spawn, `sub_401B5C` per-tick mover) | pinned | ported | `docs/re/campaign.md` "Rover/ghost/AI roster — CORRECTED", `libs/sim/src/systems/rovers.cpp/.hpp` (wander AI, human-avoidance bias, flame-death + kill-score, landing-tile player kill), hashed `State::rovers`, `tests/test_rovers.cpp`; wired via `simulation.cpp`, rendered (`renderer.cpp`), campaign pacing clause 1/3 consumed in `game_app.cpp` | — | done |
 | 14 | AI: `sub_4245DA` "column-guard" comparand | pinned | ported | ai.md §9.3 RESOLVED (2026-07-09, raw-disasm re-pin): comparand = max-bombs byte +86, and `sub_4245DA` counts the actor's OWN live bombs (owner word at bomb +62), not bombs-in-column; port CORRECTED to the spare-capacity gate (`ai.cpp` behaviours 3/4, `test_ai.cpp` pins) | — | done |
 | 15 | Wall-slam SFX ids 140–146 | **unconfirmed call site** | ported (best guess) | facts.md: "UNCONFIRMABLE (no call site found)... port keeps existing mapping unconfirmed" | targeted disasm search for the call site, or accept as permanently unconfirmed and document as such explicitly (currently only in facts.md prose, not this table) | low |
 
@@ -51,7 +55,7 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 |---|---|---|---|---|---|---|
 | 16 | Boot flow (IPLOGO→HSLOGO→TITLE→menu), `sub_42B060`/`sub_42B9CE` | pinned | ported | frontend-flow.md, ADR-0004, `app_flow.hpp`, `test_frontend.cpp` | — | done |
 | 17 | Attract mode boot-loop restart (no attract on boot) | pinned | ported | frontend-flow.md "boot flow is STRAIGHT-LINE" | — | done |
-| 18 | Attract mode: menu-idle LIVE AI-only demo match | pinned | **absent** (parked) | frontend-flow.md "menu-idle attract match... documented gap"; ROADMAP "attract-mode demo match (partial work parked in a worktree; task was user-stopped)" | resume the parked worktree or restart: wire `dword_464938` attract flag equivalent, roster/level save-restore, AI-only dispatch, suppress DRAW/RESULTS/VICTORY screens | **high** — largest known fully-RE'd-but-unported feature |
+| 18 | Attract mode: menu-idle LIVE AI-only demo match | pinned | ported | frontend-flow.md table (this row, "Merge attract-mode demo match" 96be2e4): `attract_` flag (`dword_464938` equivalent), `input.hpp`'s `attract_computer_count`/`fill_attract_roster`/`attract_stage_pick` helpers, roster/level/team save-restore (`GameApp::AttractSaved`), AI-only dispatch bypassing the goldman wheel/setup/map-select screens, any key/mouse/pad input aborts immediately, DRAW/RESULTS/VICTORY suppressed | — | done |
 | 19 | Main menu (7 rows, cursor, navigation) | pinned | ported | frontend-flow.md "main-menu items", `present_menu` | — | done |
 | 20 | Results tail: DRAW/RESULTS/VICTORY tiers | pinned | ported | frontend-flow.md, ROADMAP "Multi-round best-of-N loop + RESULTS tally 1:1 — DONE 2026-07-08" | — | done — frontend-flow.md's older "port still DEFERRED" note fixed to match (§RESULTS tally tier) | done |
 | 21 | VICTORY music using track 1020 instead of 1130 | pinned | **RESOLVED** | `game_app.cpp`: `kDrawMusicId` (1130) is started for DRAW, RESULTS, **and** VICTORY/TEAM (`audio_.start_music(kDrawMusicId)` in every outcome branch); `kWinMusicId` (1020) is scoped to the Play/setup path only. frontend-flow.md's "Results MUSIC" section and the 1020/1130 tunables rows updated to match — this audit's snapshot was stale on this row | — | done |
@@ -63,11 +67,11 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 | 27 | Options screen (19-row `sub_4080DC`) | pinned | ported (most rows) | results-and-options.md, ROADMAP "Options screen + key-remap aligned to the RE — DONE 2026-07-08"; net/modem/memory rows explicitly omitted (netplay/dead HW, N/A) | — | done for in-scope rows |
 | 28 | Key-remap UI (`sub_407B9D`) | pinned | ported | results-and-options.md, `KeyRemapScreen` | — | done |
 | 29 | Goldman Roulette wheel | pinned | ported | goldman-roulette.md, ROADMAP "Goldman Roulette wheel — DONE 2026-07-08" | — | done, except prize id 13 (clogs) — see #30 | done |
-| 30 | Goldman wheel prize id 13 (clogs, speed-penalty booby prize) | pinned | **explicit no-op / deferred** | goldman-roulette.md §3: "outside our 13-kind scheme space... decision deferred until the wheel screen itself is built" (wheel screen now IS built, per #29 — **this decision point is now actionable and stale**) | decide and implement (or explicitly reject) the clogs inventory-kind representation now that the wheel is live; `goldman_wheel.hpp` §8 still says "decision deferred" | medium — small scope, decision was blocked on a prerequisite that has since shipped |
+| 30 | Goldman wheel prize id 13 (clogs, speed-penalty booby prize) | pinned | ported | goldman-roulette.md §9 "RESOLVED 2026-07-08": hashed `Player::clogs` count + `MatchConfig::born_with_clogs` overlay (not a 14th `PowerupType` — permanent design decision, not a stub), speed-penalty folded into the walk-speed term per `tuning.hpp`'s `clogs_speed_penalty` (id 91); `f374e22`/`228a33f`. Residual cosmetic gap: the wheel's own prize-icon render for slot 13 (a "power clogs" ANI icon, `sub_4034BC`'s uniform k=0..5 icon draw) is still unported per goldman-roulette.md §9.5 — `goldman_wheel.hpp`/`goldman_screen.hpp` icon lookup only covers the 5 `PowerupType`-backed slots | wheel icon render for slot 13 (cosmetic only — the clogs effect itself is fully ported) | low — cosmetic residual, effect is done |
 | 31 | Hidden scheme/map editor (`sub_4028D2`) | pinned | ported | results-and-options.md, ROADMAP "Hidden scheme editor — DONE 2026-07-08" | — | done |
 | 32 | Editor: Ctrl+B reset, '0' dead-tileset toggle, brush-preview-at-cursor, exact dialog chrome | pinned | **absent** | results-and-options.md: "Still NOT reproduced" | low-value polish pass on editor_screen.cpp/editor_grid.cpp | low |
 | 33 | Editor: powerup sub-editor mouse-only interaction | pinned | ported (keyboard substitute) | results-and-options.md: "documented deviation" | none required — accepted deviation, note if mouse support is later added | low |
-| 34 | In-round HUD (clock/warning ink/hurry flash/SFX 2700) | pinned | ported | in-match-shell.md ("a confirmed gap" note is now stale — HUD shipped per later ROADMAP "MM:SS clock HUD... reconciled") | **fix stale "confirmed gap" note in in-match-shell.md** | low (doc hygiene) |
+| 34 | In-round HUD (clock/warning ink/hurry flash/SFX 2700) | pinned | ported | in-match-shell.md "Port status: DONE — no longer a gap" (already fixed by the prior §6 pass), ROADMAP "MM:SS clock HUD... reconciled" | — | done |
 | 35 | In-round debug/cheat keys (1/4/18/274-305/288) | pinned | **absent** (F1 only) | in-match-shell.md: "remain unwired except F1" | low priority — these are developer/QA keys, not player-facing; port only if debug tooling is wanted | low |
 | 36 | Pause (Ctrl+Q forfeit, no real pause) | pinned | ported | in-match-shell.md negative finding ("NO pause exists") | — | done |
 | 37 | Multi-round best-of-N + win_by_kills clinch | pinned | ported | ROADMAP "Multi-round best-of-N loop", "Kill attribution + win_by_kills — DONE 2026-07-08" | — | done |
@@ -88,7 +92,7 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 | Resource list | `.RES` | 8 (incl. VALUELST.RES, SOUNDLST.RES, EXTRA*.RES) | pinned | ported | `reslist.hpp`, `extra.hpp`, facts.md, stage-actors.md (EXTRA*.RES actor registry) | — | done |
 | Font | `.FON` | 3 | pinned | ported | `docs/formats/fon.md`, `bmfont.hpp`, `test_bmfont.cpp` | — | done |
 | Misc data | `.DAT` | 3 (LEVELS.DAT, bmstats.dat, + 1 more) | **unRE'd** | **absent** | RE-NOTES.md: "🟡 Minor/low priority (fonts, key remaps)" — stale since FON/RMP are now done, but `LEVELS.DAT` itself was never RE'd | grep pseudo.c for `LEVELS.DAT` read site, determine purpose (level unlock state? campaign progress?), RE + parse only if it gates any reachable feature | low-medium — unknown purpose, verify it isn't load-bearing for something already "done" |
-| Campaign | `.CAM` | 3 (CROUTON.CAM, GHOSTS.CAM, SIMPLE.CAM) | **pinned** (RE'd 2026-07-09) | **absent** | `docs/re/campaign.md` — reachability CONFIRMED: hidden 'C'×5 trigger on the local player-setup screen (`sub_410F81` → `sub_4015C6` picker → `sub_401085` loader → `dword_46489C` flag read at ~12 sites: level-select skip, stage auto-advance, round pacing, roster auto-fill). The "may be vestigial" hedge is resolved — feature is fully wired, just undiscoverable (easter-egg trigger, 3 joke-named `.CAM` files). Format confirmed trivial text (9 comma fields, `-C` line marker) matching RE-NOTES.md | port when wanted: `.CAM` parser in `libs/assets` (MESSAGES.TXT-tier), 'C'×5 trigger + picker + stage-sequencer above `libs/match` (no sim impact) — see campaign.md "Port implication" | low — small hidden feature, but now a real port item, not a stub |
+| Campaign | `.CAM` | 3 (CROUTON.CAM, GHOSTS.CAM, SIMPLE.CAM) | pinned | ported | `docs/re/campaign.md` — reachability CONFIRMED: hidden 'C'×5 trigger on the local player-setup screen (`sub_410F81` → picker → `sub_401085` loader → `dword_46489C` flag read at ~12 sites). `.CAM` parser (`libs/assets/campaign.hpp/.cpp`, `test_campaign.cpp`); `CampaignFilePicker` (`libs/game/campaign_screen.hpp/.cpp`); stage sequencing (`AppInput::CampaignContinue`, `GameApp::load_campaign_stage`), AI-count roster seeding (`sub_40151B` CORRECTED, `seed_campaign_ai_slots`), stage banner (`present_campaign_banner`), round pacing (`sub_4016DA` PINNED, `hazard_clear_timer`), and the rover/ghost hazard actors themselves (RoverSystem, table row #13) are all ported. field-8 (`ai_difficulty`) CONFIRMED dead code — grepped every read site, none exists beyond the loader's own write | none required for the confirmed-reachable scope; remaining edge case: mutual-wipeout stage-replay fallback (campaign.md "Round pacing" clause 5) is independently portable but left as a documented follow-up, no test pressure yet | done |
 | Palette | `.PAL` | 1 (COLOR.PAL) | pinned | ported (via PCX palette loading) | RE-NOTES.md | — | done |
 | Bitmap | `.BMP` | 1 | **unchecked** | **unchecked** | not mentioned in any doc; likely a tool/icon asset, not gameplay data | identify the single `.BMP` file's role (icon export?), likely no action needed | low |
 | Icon | `.ICO` | 1 (BM95.ICO) | N/A | N/A | application icon, not game data | none | N/A |
@@ -125,20 +129,25 @@ below aren't misread as gaps.
 
 ## 5. Known non-gameplay parked items (ROADMAP, verbatim carry-forward)
 
-- Campaign mode — "Campaign later" (see asset-table `.CAM`/`.DAT` rows above).
-  UPDATE 2026-07-09: reachability confirmed, NOT vestigial — the loading code
-  is thin but fully wired behind a hidden 'C'×5 trigger; full chain in
-  `docs/re/campaign.md`. Stays parked as a small low-priority port item.
+- Campaign mode — CLOSED 2026-07-09. Fully ported: `.CAM` parser, 'C'×5
+  trigger, picker, stage sequencing, AI-count roster seeding, stage banner,
+  round pacing, and the rover/ghost hazard actors themselves (a new
+  `libs/sim` actor system with hashed state). See asset-table `.CAM` row
+  above and table row #13. No longer a parked item.
 - Random Start Options-row wording — intentionally left unguessed until RE'd
   (per ROADMAP note under Interactive Options screen); superseded — random
   start IS now RE'd and ported (facts.md "Options toggles", `random_start=`).
-  **Stale ROADMAP phrasing, not an open gap** — worth a ROADMAP cleanup pass.
+  **Stale ROADMAP phrasing, not an open gap** — fixed in this pass (see §6
+  item 9) alongside the other stale ROADMAP lines this snapshot found.
 
 ## 6. Documentation staleness found during this audit — FIXED
 
-All five spots below have been corrected in place (worktree
-`worktree-agent-a2dd02d9c78d8e344`); kept here as a record of what was stale
-and what superseded it.
+Items 1-5 below were corrected in an earlier pass (worktree
+`worktree-agent-a2dd02d9c78d8e344`); items 6-9 were found and fixed in this
+2026-07-09 pass (worktree `worktree-agent-afc56c379215a828e`), triggered by
+the attract-mode, clogs, and campaign/rover-ghost merges landing since the
+prior snapshot. Kept here as a record of what was stale and what superseded
+it.
 
 1. `CLAUDE.md` "Currently the only known guess: fuse pause while a bomb is
    airborne" — was **stale**. `facts.md`'s "Still guessed" table shows this
@@ -169,52 +178,139 @@ and what superseded it.
    precondition is met and the decision is open/actionable, not resolved
    (the clogs mapping itself is still `PowerupType::None` — this was a
    doc-only fix, not a feature implementation). `docs/re/goldman-roulette.md`
-   §8 updated to match.
+   §8 updated to match. **Superseded 2026-07-08 same day**: the clogs
+   decision itself was then made and shipped (`f374e22`/`228a33f`, table row
+   #30) — `goldman_wheel.hpp` now documents the permanent design (clogs is
+   never a `PowerupType`), not an open decision. Only the wheel's cosmetic
+   prize-icon render for slot 13 remains open (see row #30's residual note).
+6. `libs/game/src/game_app.cpp` (~line 2365, in the VICTORY-screen campaign
+   stage-advance path) — "rovers/ghosts don't exist in libs/sim yet (see
+   load_campaign_stage's TODO), so there is nothing for that clause to gate
+   on" — was **stale**, left behind by the rover/ghost merge (`fd811d5`)
+   which added `RoverSystem` and wired `hazard_clear_timer` into the exact
+   grace-timer check this comment claims is unimplemented (see the edge-check
+   ~30 lines above the stale comment, in the same function's tick loop).
+   **Fixed**: comment reworded to state clause 3 (the hazard-clear grace
+   timer) is wired via `State::hazard_clear_timer`, matching
+   `load_campaign_stage`'s own up-to-date comment on the same topic just
+   above it in the file.
+7. `docs/re/frontend-flow.md` "Attract mode" §"Port status": "our boot chain
+   is faithful; the **menu-idle attract match is a documented gap**" — was
+   **stale**, superseded by "Port attract-mode demo match" (`d83cd9a`,
+   merged `96be2e4`). **Fixed**: reworded to "port DONE" citing
+   `GameApp::run_boot_attract`/the `AttractSaved` save-restore contract and
+   `input.hpp`'s pure roster/stage-pick helpers, matching table row #18.
+8. `docs/ROADMAP.md` "Remaining front-end: attract-mode demo match (partial
+   work parked in a worktree; task was user-stopped)... Known parked
+   fidelity gaps... flame-arm stops, flying-bomb landing on powerups, scatter
+   occupancy test" — was **stale** on both counts: attract mode shipped (see
+   item 7 above), and all three fidelity gaps were already closed by "Merge
+   fidelity gaps" (`5370bbf`) well before this snapshot — the unchecked `[ ]`
+   boxes were simply never ticked/removed. **Fixed**: both bullets replaced —
+   attract mode moved to the Done section's dated summary paragraph, the
+   fidelity-gap bullet removed (superseded by the `[x]` Phase 1 items #3/#4
+   /#5 already recording the fix).
+9. `docs/ROADMAP.md` "F1 mid-round help browser = TODO (needs the generic
+   .BM glob browser, same as menu row 5)" (end of the "In-round shell" `[x]`
+   item) — was **stale**, superseded by "Merge help-browser sweep" (`e265541`)
+   which unified menu row 5 and in-round F1 onto the same `sub_41431C`
+   browser (table row #22, in-match-shell.md). **Fixed**: sentence reworded
+   to state F1 is DONE, citing the help-browser sweep. Also fixed the
+   adjacent Random Start Options-row wording flagged stale in §5 above.
 
 None of these were gameplay bugs — they were doc/comment lag behind later
-ROADMAP entries in the same repo.
+ROADMAP/merge commits in the same repo.
 
 Note: `docs/re/facts.md` was intentionally left untouched by this pass (a
-concurrent task was working near it) even though it is cited as the
-superseding source for items 1 and 2 above.
+concurrent task was working near it in the prior 2026-07-08 snapshot; this
+pass re-checked it and found no new staleness — its "Still guessed" table is
+still correctly empty).
 
 ---
 
 ## Summary counts
 
-Counting the 39 numbered subsystem rows (§1+§2) + the asset-format rows in
-§3 that represent a distinct format (14 formats, excluding pure-tooling
-extensions marked N/A):
+Counting the 39 numbered subsystem rows (§1+§2) + the 14 distinct
+asset-format rows in §3 (excluding pure-tooling extensions marked N/A:
+.ICO/.EXE/.DLL/.IDB):
 
-- **Covered (RE pinned + ported, "done"):** 35 subsystem rows (includes #21,
-  VICTORY music — RESOLVED, see §6/top-open-items update; #3/#4/#5 closed by
-  "Merge fidelity gaps" 5370bbf; #14 closed by the 2026-07-09 raw-disasm
-  re-pin — see ai.md §9.3), 11 asset formats — the large majority of 1:1
-  gameplay and front-end fidelity.
-- **Partial (RE pinned/partial, port absent or partial):** 3 subsystem rows
-  (attract-mode demo match, wall-slam SFX, editor chrome polish),
-  2 asset formats (LEVELS.DAT, .CAM/campaign).
-- **Explicit no-op / decision-deferred (now actionable):** 1 (Goldman wheel
-  clogs prize).
-- **N/A / excluded (netplay per ADR-0003, or non-gameplay tooling):** ~9
-  functions/screens + several tooling file extensions.
-- **Doc staleness (no code gap, just needs a note fixed):** 5 items (§6) —
-  all fixed by this pass.
+- **Covered (RE pinned + ported, "done"):** 34 of 39 subsystem rows (up from
+  31 at the 2026-07-08 snapshot — #13 rover/ghost mover, #18 attract mode,
+  and #30 clogs prize all closed this pass) + 12 of 14 asset formats (up from
+  11 — .CAM/campaign closed this pass) — the large majority of 1:1 gameplay
+  and front-end fidelity.
+- **Partial/open (RE pinned, port absent or a small residual):** 5 subsystem
+  rows — #15 wall-slam SFX (unconfirmed call site, permanently uncertain),
+  #23 INPUT.BM menu-row binding, #30's residual (clogs wheel *icon* render
+  only — the clogs *effect* is done), #32 editor chrome polish, #35 in-round
+  debug/cheat keys — plus 2 asset formats (`LEVELS.DAT` unRE'd, `.BMP`
+  unchecked).
+- **N/A / excluded (netplay per ADR-0003, or non-gameplay tooling):** 1
+  subsystem row (#25 net-game setup screens) + the §4 netplay function
+  cluster + several tooling file extensions (.ICO/.EXE/.DLL/.IDB).
+- **Doc staleness (no code gap, just needs a note fixed):** 9 items (§6),
+  items 1-5 fixed in the 2026-07-08 pass, items 6-9 found and fixed in this
+  2026-07-09 pass.
 
 ## Top open items, priority order
 
-1. **Attract-mode live AI demo match** (§2 #18) — fully RE'd, largest single
-   unported feature, work was already started once and parked.
-2. ~~**Flame-arm stop condition** (§1 #3)~~ — **DONE**: RE'd + ported in
-   "Merge fidelity gaps" (facts.md "Flame-arm stops — CONFIRMED").
-3. ~~**Flying-bomb landing on a powerup tile** (§1 #4)~~ — **DONE**: RE'd +
-   ported in "Merge fidelity gaps" (facts.md "Flying-bomb landing on
-   powerups — CONFIRMED").
-4. ~~**VICTORY music track bug** (§2 #21)~~ — **RESOLVED**: `kDrawMusicId`
-   (1130) already plays under DRAW/RESULTS/VICTORY in `game_app.cpp`; this
-   audit's snapshot was stale on that row (fixed above).
-5. **Goldman wheel clogs prize (id 13)** (§2 #30) — decision was blocked on
-   the wheel screen shipping; it has, so this is now unblocked and small.
+Everything that was "open" at the 2026-07-08 snapshot's top of this list
+(attract mode, the three fidelity gaps, the VICTORY music row, the clogs
+prize decision) is now **done** — see §6 items 7-9 and table rows #13/#18/
+#30. What remains open, in priority order:
 
-Everything else in §1/§2 is either done, explicitly out of scope (netplay),
-or low-priority polish (editor chrome, debug keys, doc staleness).
+1. **`LEVELS.DAT` purpose unknown** (§3 asset table) — never RE'd; could gate
+   a reachable feature (level-unlock state? campaign progress persistence?
+   plausible given campaign mode is now live). Grep pseudo.c for the read
+   site and RE it if it turns out to be load-bearing.
+2. **Goldman wheel clogs prize-icon render** (§2 #30 residual) — the clogs
+   *effect* (speed penalty) is fully ported; only the wheel's own "power
+   clogs" ANI icon draw for slot 13 is still missing, per
+   goldman-roulette.md §9.5. Small, cosmetic, well-scoped.
+3. **Campaign round-pacing clause 5** (mutual-wipeout stage-replay fallback,
+   campaign.md "Round pacing") — pinned but not ported; independently
+   portable, no test pressure yet (edge case: every side wiped out
+   simultaneously mid-stage).
+4. **Wall-slam SFX ids 140-146 call site** (§1 #15) — the RE itself may be
+   permanently unconfirmable (no call site found in the decompile); either
+   find it via a targeted disasm search or formally close this as
+   "accepted unconfirmed" in facts.md.
+5. **INPUT.BM menu-row binding** (§2 #23) — help overlay is live but there is
+   no real interactive controller-remap UI or confirmed menu-row wiring.
+6. Low-priority polish: editor chrome (#32: Ctrl+B reset, '0' toggle,
+   brush-preview, exact dialog chrome), in-round debug/cheat keys (#35,
+   developer/QA-only), `.BMP`/`.TXT` asset spot-checks (§3).
+
+See the "TODO(RE) / TODO(§) crumbs still in the tree" list below for the
+exact file:line inline markers a future session can pick off directly.
+
+## TODO(RE) / TODO(§) crumbs still in the tree
+
+Grepped `TODO(RE)` and `TODO(§` across `docs/`, `libs/`, `apps/`, `tests/`
+(2026-07-09). Four hits found; one (`game_app.cpp:1608`) turned out to be
+itself stale and was fixed in place during this pass rather than left as a
+crumb, since it directly contradicted the up-to-date declaration comment
+next to it (`kill_count_` is a live, tallied, cumulative-per-match counter,
+not a stub returning 0 — `game_app.hpp`'s own field comment already said so).
+Three genuine crumbs remain, all in `libs/game`:
+
+1. `libs/game/include/bomber/game/editor_grid.hpp:102` — `// earlier "brush
+   sizes 1/2/3, anchor rule TODO(RE)" is resolved by`. Not a live TODO: this
+   is a comment *referencing* a past TODO(RE) that was already resolved (the
+   original has no multi-cell brush, confirmed). Matched by the grep but not
+   actionable — safe to leave as historical context, or reword to drop the
+   literal "TODO(RE)" substring if a future pass wants the grep clean.
+2. `libs/game/src/game_app.cpp:993` — `// above) stands in for that minimal
+   fidelity gap (TODO(RE): no`. Live gap: the campaign 'C'×5 trigger's accept
+   sting stands in for `sub_4015C6`'s dedicated confirmation dialog
+   (getstring 1210+95), which is not built. Small, cosmetic, campaign-only.
+3. `libs/game/src/game_app.cpp:1832` — `// how the original itself leaves
+   campaign mode — TODO(RE)):`. Live gap: the original's own campaign-exit
+   key/behaviour is unpinned; the port's Esc-clears-campaign-flag is a
+   documented convenience, not a confirmed fact. Needs a targeted RE pass on
+   the campaign-exit path if exactness here ever matters.
+
+No other `TODO(RE)`/`TODO(§` markers exist in the tree. (Plain `TODO` without
+those tags also appears at `libs/game/include/bomber/game/options_screen.hpp`
+lines 49/53 — Network screen and Goldman-wheel-consumer follow-ups already
+tracked via table rows #23/#29 — and is not double-counted here.)

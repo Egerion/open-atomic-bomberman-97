@@ -23,11 +23,12 @@ Goal: clean-room rewrite in modern C++ using the original assets.
 | `SOUNDLST.RES` | Text | ✅ Sound ID → file mapping. Header documents RSS: **raw 22 kHz stereo 16-bit signed LE PCM** (headerless). |
 | `.RSS` audio | Binary | ✅ Raw PCM per above. Trivial loader. |
 | `.PCX` images | Binary | ✅ Standard PCX, 640×480 8-bit palettized. Palette: `TOOLS/BOMBPAL.PCX` / `COLOR.PAL`. |
-| `.ANI` animations | Binary | 🟡 Custom chunked format (`CHFILEANI` / HEAD / PAL / FRAM / SEQ). Already reverse-engineered by community — parsers exist (fpc_atomic in Pascal, ab_aniex extractor, HerbFargus wiki docs). Port, don't re-derive. |
-| `.CAM` | Text | ✅ Campaign/stage info, commented. |
+| `.ANI` animations | Binary | ✅ Custom chunked format (`CHFILEANI` / HEAD / PAL / FRAM / SEQ), fully parsed natively (`libs/assets/src/ani.cpp`, `docs/formats/ani.md`) — the community references below were consulted early on but the port doesn't depend on them. |
+| `.CAM` | Text | ✅ Campaign/stage info. Parsed (`libs/assets/src/campaign.hpp/.cpp`) and fully wired: hidden 'C'×5 trigger, stage sequencing, AI-count roster seeding, rover/ghost hazard actors — see `docs/re/campaign.md`. |
 | `MESSAGES.TXT` | Text | ✅ All UI strings. |
-| `.FON`, `.RMP`, `LEVELS.DAT` | Binary | 🟡 Minor/low priority (fonts, key remaps). |
-| `BM95.EXE` logic | Binary | 🔴 Only true black box: exact AI behavior, movement/collision feel, disease effects, timing. Mitigated by VALUELST comments + existing open reimplementations. |
+| `.FON`, `.RMP` | Binary | ✅ Both fully RE'd and ported — `.FON` bitmap fonts (`docs/formats/fon.md`, `bmfont.hpp`), `.RMP` player-colour palette remap (`docs/re/player-colour.md`, `rmp.hpp/.cpp`). Stale "minor/low priority" note from the initial survey removed 2026-07-09 (`docs/re/coverage-audit.md` flagged this row). |
+| `LEVELS.DAT` | Binary | 🟡 Still unRE'd — the one remaining loose end from the original survey. Never confirmed as load-bearing for anything currently shipped; see `docs/re/coverage-audit.md` §3's open item. |
+| `BM95.EXE` logic | Binary | 🔴 Only true black box: exact AI behavior, movement/collision feel, disease effects, timing. Mitigated by VALUELST comments + `docs/re/facts.md`'s from-the-binary findings (the "existing open reimplementations" angle was an early-survey guess; in practice the facts came from direct decompilation, not those projects). |
 
 ## Key external references
 
