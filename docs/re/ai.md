@@ -242,7 +242,7 @@ Key facts:
 ### 3.3 — `sub_40AD8D`: blast bricks (priority 3)
 Byte-exact (0x40AD8D, verified 2026-07-05):
 ```
-if sub_4245DA(actor.tileX) < v2:                       // v2 undefined edx (§9.3): "<1 bomb in my column"
+if sub_4245DA(actor.playerIndex) < actor.maxBombs(+86): // spare-capacity gate (CONFIRMED from disasm, §9.3)
     if player.constipation(+134): return 0             // can't drop
     count = #{ i in 0..3 : sub_425FB9(pos+godir[i]) == 2 }  // # of adjacent BRICK tiles (type 2)
     if count:
@@ -255,18 +255,18 @@ if sub_4245DA(actor.tileX) < v2:                       // v2 undefined edx (§9.
     else:                                              // no adjacent bricks
         if brain.state(+52)==9: brain.state=0
         return 0
-else:                                                  // column already has a bomb
+else:                                                  // all my bomb slots are already on the field
     if brain.state(+52)==9: brain.state=0
     return 0
 ```
-So an AI standing next to a destroyable brick, on a tile with no bomb of its own
-in the same column, drops a bomb ~1/5 of the eligible ticks. It does NOT flee
-inside this behaviour — it sets `state_flag(+52)=9` ("committed to a brick-blast
-drop") and returns; the very next tick(s) the danger grid lights up under the new
-bomb, and **behaviour 2 (walk/flee, §3.2) runs first in priority** and paths the
-AI out of the blast. State 9 is cleared back to 0 the moment there are no adjacent
-bricks (or the column fills) — i.e. once the AI has moved off / the situation
-resolves. (State 9 is otherwise inert in the versus AI: no behaviour keys off it
+So an AI standing next to a destroyable brick, with at least one spare bomb slot
+(live own bombs < max bombs +86, §9.3), drops a bomb ~1/5 of the eligible ticks.
+It does NOT flee inside this behaviour — it sets `state_flag(+52)=9` ("committed
+to a brick-blast drop") and returns; the very next tick(s) the danger grid lights
+up under the new bomb, and **behaviour 2 (walk/flee, §3.2) runs first in
+priority** and paths the AI out of the blast. State 9 is cleared back to 0 the
+moment there are no adjacent bricks (or capacity fills) — i.e. once the AI has
+moved off / the situation resolves. (State 9 is otherwise inert in the versus AI: no behaviour keys off it
 except this self-clear; it exists for the original's anim/telemetry.)
 
 **`sub_423188(x,y)` is NOT an escape-route search** (correcting the earlier "can
@@ -288,7 +288,7 @@ before dropping. Our port reproduces exactly the two conditions we model (the
 
 ### 3.4 — `sub_40ABED`: drop a bomb next to an enemy (priority 4) — RESOLVED (Stage 5)
 ```
-if sub_4245DA(pos.x) >= v2: return 0                   // column bomb-density guard (undefined edx, §9.3)
+if sub_4245DA(actor.playerIndex) >= actor.maxBombs(+86): return 0  // no spare bomb slot -> pass (CONFIRMED, §9.3)
 if abs(tileX(+20)) + abs(tileY(+24)) >= 3:             // Manhattan gate over the STALE +20/+24 snapshot
     for i in 0..4:                                      // scan the 5-tile cross (X=dword_45BAB0[i], Y=dword_45BA9C[i])
         who = player_at(pos + off[i])   (sub_421CB5)    // sub_421CB5 = live unstunned PLAYER at tile (self zeroed out)
@@ -688,19 +688,42 @@ offsets and control flow only).
    max = a standing threat). This scalar only ORDERS live-bomb tiles against
    each other (never vs flame's flat 1000), and the danger grid is unhashed
    scratch, so its exact magnitude never touches the golden.
-3. **[RESOLVED-as-far-as-pseudo.c] Column guard.** `sub_4245DA(x)` (0x4245DA):
-   scans the 100-slot bomb array (`dword_46220C`, stride 38) and returns the
-   count of live bombs whose **tile-X (`bomb[15]>>16`) == x** — confirmed "bombs
-   in column x". BUT the comparand is unpinnable from the pseudocode: both
-   `sub_40AD8D` (`if (v1 < v2)`) and `sub_40ABED` (`if (v1 >= v2) return 0`)
-   compare against **`v2`, an undefined edx** (IDA: *"variable 'v2' is possibly
-   undefined"* at 0x40AC16). This is a Watcom regcall artifact — the true
-   immediate is not recoverable without the raw disassembly bytes (not
-   committed). **Safest interpretation, documented for Stage 4/5:** treat the
-   guard as "at least one bomb already in my column ⇒ skip the drop"
-   (comparand 1), the common Bomberman anti-stacking rule; it only suppresses
-   drops in behaviors 3/4 (both STUBS in Stage 2), so it does not affect Stage 2
-   and can be re-pinned from a disassembler when those behaviors land.
+3. **[RESOLVED — byte-confirmed from BM95.EXE, 2026-07-09] The "column guard"
+   is neither a column count nor an undefined comparand: it is the standard
+   spare-bomb-capacity gate.** Decoded from the raw instruction bytes (PE
+   BEGTEXT, raw 0x400 = VA 0x401000; capstone x86-32 over the function
+   regions), because Hex-Rays lifted the comparand as an undefined `v2`/edx:
+   - **The comparand.** In both callers the edx setup the decompiler dropped
+     is right at function entry. `sub_40ABED` at 0x40AC01: `xor edx, edx` then
+     `mov dl, byte ptr [eax+0x56]` (eax = the actor), i.e. edx = zero-extended
+     **player byte +86 = max bombs (bomb capacity)**; then `mov eax,
+     [eax+0x3C]; sar eax, 0x10; call sub_4245DA; cmp eax, edx; jl <proceed>`.
+     `sub_40AD8D` is instruction-for-instruction identical at 0x40ADA1/0x40ADAF
+     (`mov dl, [eax+0x56]` … `cmp eax, edx; jl 0x40ADDB`). So the gates are
+     `sub_4245DA(...) < maxBombs(+86)` ⇒ proceed, else pass down.
+   - **What sub_4245DA counts.** The earlier "bombs in column x" reading was
+     wrong. The argument is the actor dword `+60 >> 16` (`[eax+0x3C]`,
+     `sar 0x10`), and +60 is a PACKED field, not a position: `sub_41EB13`
+     passes its **low byte** and its **high word** as separate bomb-create
+     arguments (line 22513-22517: `25 * (player+60 >> 16) + counter` is the
+     per-player slot allocator; `HIWORD(player+60)` is create-arg a5), and
+     `sub_422EDE` stores that high word into the **bomb word at +62** (word
+     index 31) — the owner player index — while the bomb's real position goes
+     to +28/+32. `sub_4245DA` (disasm: `mov eax, [bomb+0x3C]; sar eax, 0x10;
+     cmp eax, [ebp-0x14]`) reads the bomb dword at +60, whose high word IS
+     that owner word at +62. So `sub_4245DA(idx)` = **count of live bomb
+     slots owned by player idx** — exactly the count the mover compares
+     against +86 at the normal drop (line 23346 `+86 > sub_4245DA(...)`), the
+     spooge-loop stop (line 23336 `+86 <= sub_4245DA(...)`), and the
+     "last bomb" grunt (line 23363 `+86 - 1 == count`).
+   - **Consequence for behaviours 3/4:** the gate is simply "do I have a spare
+     bomb slot?" — a bomb elsewhere in the AI's tile column is irrelevant, and
+     an AI with capacity ≥ 2 may bomb again while its first bomb is still
+     live. Our port previously used the "safest interpretation" placeholder
+     ("no bomb already in my column", comparand 1); that was **corrected** to
+     `bombs_placed >= max_bombs ⇒ pass down` (`ai.cpp` behaviours 3/4), where
+     `Player::bombs_placed` is the sim's maintained equivalent of the
+     original's owner scan (same counter `BombSystem::drop` gates on).
 4. **[RESOLVED — byte-confirmed from BM95.EXE] `sub_40ABED` scan geometry
    (behavior 4, Stage 5 IMPLEMENTED).** i in 0..4: `v7 = posX +
    dword_45BAB0[i]`, `v8 = posY + dword_45BA9C[i]`, then `who = sub_421CB5(v7,v8)`

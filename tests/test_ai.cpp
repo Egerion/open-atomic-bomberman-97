@@ -355,40 +355,70 @@ TEST_CASE("Stage 4: no adjacent brick -> the AI never drops a blast-bricks bomb"
     CHECK(st.players[0].alive);
 }
 
-TEST_CASE("Stage 4: a bomb already in the AI's column suppresses the blast drop") {
-    // The column guard (sub_4245DA): if a live bomb already sits in the AI's
-    // column, behaviour 3 bails before the brick count / 1-in-5 roll. Confine the
-    // AI to a 1-wide vertical corridor in column 6 (solids on both sides) with a
-    // brick capping the corridor directly SOUTH of it, and a foreign bomb up the
-    // SAME column. The AI can only ever stand in column 6 (walled in), so the
-    // column guard ALWAYS fires and it never adds a bomb of its own — regardless
-    // of how it wanders up/down the corridor. This removes any way for the AI to
-    // reach a brick-adjacent tile in a different (empty) column, so the test is
-    // robust for any seed.
+TEST_CASE("Stage 4: a foreign bomb in the AI's column does NOT suppress the drop") {
+    // The behaviours-3/4 entry gate is the spare-bomb-capacity check, NOT a
+    // bombs-in-my-column rule (docs/re/ai.md §9.3 RESOLVED: sub_4245DA counts
+    // the actor's OWN live bombs — the owner word at bomb +62 — and the
+    // pseudocode's "undefined edx" comparand is the max-bombs byte +86 read at
+    // 0x40ADA1). So a bomb someone ELSE parked in the same tile column is
+    // irrelevant: confine the AI to a 1-wide corridor in column 6 with a brick
+    // capping it south and a long-fuse FOREIGN bomb up the same column — the AI
+    // (capacity 1, none placed) must still blast-drop. Under the superseded
+    // "column occupied ⇒ bail" reading this drop could never happen.
     Simulation s = open_arena(/*tx=*/6, /*ty=*/7, /*ai=*/true);
     State& st = s.state();
     st.rng = 0x13572468u;
-    // Solid walls flanking column 6 for rows 2..8 -> a vertical corridor.
-    for (int y = 2; y <= 8; ++y) {
+    // Solid walls flanking column 6 for rows 2..9 -> a vertical corridor. A solid
+    // cap at (9,6) BEHIND the brick keeps the corridor sealed even after the AI's
+    // bomb burns the brick away (the confinement REQUIRE below runs to the end).
+    for (int y = 2; y <= 9; ++y) {
         st.cells[y][5] = Cell::Solid;
         st.cells[y][7] = Cell::Solid;
     }
     st.cells[8][6] = Cell::Brick;   // brick capping the corridor just south of the AI
+    st.cells[9][6] = Cell::Solid;   // sealed behind the brick
     st.cells[1][6] = Cell::Solid;   // cap the top so the AI stays in rows 2..7
-    // A long-fuse foreign bomb up column 6 (row 2), flame 1 -> its danger (rows
-    // 1..3) is up-corridor; the AI starts at row 7, out of that blast. The AI may
-    // flee within the corridor but can never leave column 6.
+    // The long-fuse foreign bomb up column 6 (row 2), flame 1 -> its danger
+    // (rows 1..3) is up-corridor; the AI starts at row 7, outside it.
     put_bomb(st, /*tx=*/6, /*ty=*/2, /*flame=*/1, /*fuse=*/1000000, /*owner=*/3);
     REQUIRE(st.bombs.size() == 1);
 
-    for (int t = 0; t < 80; ++t) {
+    bool dropped = false;
+    for (int t = 0; t < 200; ++t) {
         s.tick(idle());
         REQUIRE(tile_x(st.players[0]) == 6);  // walled in: always column 6
+        if (st.bombs.size() > 1) dropped = true;
     }
-    // The AI never dropped: its column always held the foreign bomb, so behaviour
-    // 3 bailed on the column guard every eligible tick.
-    CHECK(st.bombs.size() == 1);
+    CHECK(dropped);                  // the capacity gate passed despite the column bomb
+    CHECK(st.players[0].alive);      // and behaviour 2 fled its own blast in time
+    CHECK(st.cells[8][6] != Cell::Brick);  // the drop actually broke the brick
+}
+
+TEST_CASE("Stage 4: an AI at bomb capacity never blast-drops (capacity guard)") {
+    // The flip side of §9.3: with every bomb slot spent (bombs_placed ==
+    // max_bombs) behaviour 3 bails BEFORE the brick count and the 1-in-5 roll,
+    // even though the AI's own column is empty. The AI stands beside a brick
+    // with its one live bomb parked far away in a DIFFERENT column; it must
+    // never drop and — because the capacity branch clears/never sets the
+    // commit marker — brains[0].state_flag must stay 0 throughout. Under the
+    // superseded column reading the guard would have passed (empty column) and
+    // an eventual successful roll would have pressed the key and set flag 9.
+    Simulation s = open_arena(/*tx=*/6, /*ty=*/5, /*ai=*/true);
+    State& st = s.state();
+    st.rng = 0x13572468u;
+    st.cells[5][5] = Cell::Brick;   // brick west of the AI, same as the drop test
+    st.players[0].max_bombs = 1;
+    st.players[0].bombs_placed = 1;  // the parked own bomb below spends the only slot
+    put_bomb(st, /*tx=*/10, /*ty=*/2, /*flame=*/1, /*fuse=*/1000000, /*owner=*/0);
+    REQUIRE(st.bombs.size() == 1);
+
+    for (int t = 0; t < 200; ++t) {
+        s.tick(idle());
+        REQUIRE(st.bombs.size() == 1);          // never dropped a second bomb
+        REQUIRE(st.brains[0].state_flag == 0);  // never committed to a blast drop
+    }
     CHECK(st.players[0].alive);
+    CHECK(st.cells[5][5] == Cell::Brick);       // the brick survived untouched
 }
 
 TEST_CASE("Stage 4: a grab-AI on its own bomb grabs it (behaviour 0)") {
@@ -509,8 +539,8 @@ TEST_CASE("Stage 5: a punch-glove AI punches a bomb sitting directly ahead") {
 }
 
 TEST_CASE("Stage 5: an AI next to an enemy drops a bomb at it, then flees") {
-    // Behaviour 4 (sub_40ABED): a live enemy sits on the AI's cross; with the
-    // column clear, the standing tile clear, and abs(tileX)+abs(tileY) >= 3, the
+    // Behaviour 4 (sub_40ABED): a live enemy sits on the AI's cross; with a
+    // spare bomb slot, the standing tile clear, and abs(tileX)+abs(tileY) >= 3, the
     // AI drops a bomb on the 1-in-5 whim. Then the new bomb lights the danger grid
     // and behaviour 2 (higher priority) flees the AI out of its own blast. Keep the
     // pair in a small 3x3 room so the wandering AI stays within cross range of the

@@ -31,9 +31,9 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 |---|---|---|---|---|---|---|
 | 1 | Movement/collision (`sub_41F29B`, `sub_41EC84`) | pinned | ported | facts.md "Player movement", `movement.cpp`, `test_move.cpp` | — | done |
 | 2 | Bomb machine: kind/fuse/kick/flight/jelly/dud/trigger/goldflame (`sub_42331C`, `sub_41EB13`) | pinned | ported | facts.md, `bombs.cpp`, `test_jelly/dud/trigger_allowance/goldflame/kick_nuances.cpp` | — | done |
-| 3 | Flame-arm stops at first target hit | **partial** | **absent** | ROADMAP "Known parked fidelity gaps ... flame-arm stops"; no facts.md entry beyond flame lifetime (10 frames, `sub_426d06`) | RE the per-tile flame propagation stop condition in `sub_42708D`/flame spread loop, then port + golden recapture | **high** — correctness gap in core flame mechanic |
-| 4 | Flying-bomb (thrown/punched) landing on a powerup tile | **partial** | **absent** | ROADMAP "flying-bomb landing on powerups"; facts.md only covers flying-bomb spawn (`sub_424987`→`sub_41013F`) and the enclosure exemption | RE landing-tile occupancy test for flying bombs vs powerup tiles, port into `bombs.cpp` | **high** — visible bug class (bombs vanishing/stacking on powerups) |
-| 5 | Scatter occupancy test (head-hit powerup scatter) | **partial** | **partial** | ROADMAP "scatter occupancy test"; facts.md "Head hit" covers the scatter RNG (`sub_4255B2`) but not a full occupancy/collision check against other scattered items | RE whether `sub_4255B2` checks prior scatter targets in the same call for collisions | medium |
+| 3 | Flame-arm stops at first target hit | pinned | ported | facts.md "Flame-arm stops — CONFIRMED (`sub_42331C` per-direction arm loop)"; landed in "Merge fidelity gaps" (5370bbf) | — | done |
+| 4 | Flying-bomb (thrown/punched) landing on a powerup tile | pinned | ported | facts.md "Flying-bomb landing on powerups — CONFIRMED (`sub_42331C` flight-landing check)"; landed in "Merge fidelity gaps" (5370bbf) | — | done |
+| 5 | Scatter occupancy test (head-hit powerup scatter) | pinned | ported | facts.md "Scatter occupancy test — CONFIRMED (`sub_4255B2` re-roll predicate)"; landed in "Merge fidelity gaps" (5370bbf) | — | done |
 | 6 | Powerup pickup dispatcher, mutual exclusions, random reroll | pinned | ported | facts.md, `powerups.cpp`, `test_random.cpp` | — | done |
 | 7 | Disease system (9 diseases, contagion/cure/visual) | pinned | ported | facts.md "Disease system", `diseases.cpp`, `test_disease.cpp`, `test_stomped_diseases.cpp` | — | done |
 | 8 | HURRY enclosement wall | pinned | ported | `docs/re/enclosure.md` (no open gaps stated), `enclosure.cpp` | — | done |
@@ -42,7 +42,7 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 | 11 | Team mode (sim side: `Player::team`, round-end side logic) | pinned | ported | ROADMAP "TEAM MODE, sim side — DONE 2026-07-08", `test_team.cpp` | — | done |
 | 12 | AI — all 8 behaviours (`ai.c`/VALUELST 900-series) | pinned | ported | `docs/re/ai.md`, ADR-0005, `ai.cpp`, `test_ai.cpp` | — | done (Phase 2 complete) |
 | 13 | AI: campaign "rover" mover (`sub_401B5C`) | pinned (address+role identified) | **N/A (out of scope until campaign)** | ai.md: "matters only if/when we port campaign monsters" | leave parked; revisit under Campaign item (§5) | low |
-| 14 | AI: `sub_4245DA` column-guard comparand | **partial** | ported (best-effort) | ai.md: "not fully pinnable from pseudocode... safest interpretation pending a disassembler re-pin" | re-derive with IDA/disassembler pass instead of pseudocode-only reading, confirm or correct current port choice | medium — silent behavioural risk in a shipped AI path |
+| 14 | AI: `sub_4245DA` "column-guard" comparand | pinned | ported | ai.md §9.3 RESOLVED (2026-07-09, raw-disasm re-pin): comparand = max-bombs byte +86, and `sub_4245DA` counts the actor's OWN live bombs (owner word at bomb +62), not bombs-in-column; port CORRECTED to the spare-capacity gate (`ai.cpp` behaviours 3/4, `test_ai.cpp` pins) | — | done |
 | 15 | Wall-slam SFX ids 140–146 | **unconfirmed call site** | ported (best guess) | facts.md: "UNCONFIRMABLE (no call site found)... port keeps existing mapping unconfirmed" | targeted disasm search for the call site, or accept as permanently unconfirmed and document as such explicitly (currently only in facts.md prose, not this table) | low |
 
 ## 2. Front-end / presentation subsystems (libs/game)
@@ -186,12 +186,13 @@ Counting the 39 numbered subsystem rows (§1+§2) + the asset-format rows in
 §3 that represent a distinct format (14 formats, excluding pure-tooling
 extensions marked N/A):
 
-- **Covered (RE pinned + ported, "done"):** 31 subsystem rows (includes #21,
-  VICTORY music — RESOLVED, see §6/top-open-items update), 11 asset
-  formats — the large majority of 1:1 gameplay and front-end fidelity.
-- **Partial (RE pinned/partial, port absent or partial):** 7 subsystem rows
-  (flame-arm stops, flying-bomb-on-powerup, scatter occupancy, attract-mode
-  demo match, `sub_4245DA` comparand, wall-slam SFX, editor chrome polish),
+- **Covered (RE pinned + ported, "done"):** 35 subsystem rows (includes #21,
+  VICTORY music — RESOLVED, see §6/top-open-items update; #3/#4/#5 closed by
+  "Merge fidelity gaps" 5370bbf; #14 closed by the 2026-07-09 raw-disasm
+  re-pin — see ai.md §9.3), 11 asset formats — the large majority of 1:1
+  gameplay and front-end fidelity.
+- **Partial (RE pinned/partial, port absent or partial):** 3 subsystem rows
+  (attract-mode demo match, wall-slam SFX, editor chrome polish),
   2 asset formats (LEVELS.DAT, .CAM/campaign).
 - **Explicit no-op / decision-deferred (now actionable):** 1 (Goldman wheel
   clogs prize).
@@ -204,10 +205,11 @@ extensions marked N/A):
 
 1. **Attract-mode live AI demo match** (§2 #18) — fully RE'd, largest single
    unported feature, work was already started once and parked.
-2. **Flame-arm stop condition** (§1 #3) — core mechanic correctness gap, no
-   RE yet.
-3. **Flying-bomb landing on a powerup tile** (§1 #4) — core mechanic
-   correctness gap, no RE yet.
+2. ~~**Flame-arm stop condition** (§1 #3)~~ — **DONE**: RE'd + ported in
+   "Merge fidelity gaps" (facts.md "Flame-arm stops — CONFIRMED").
+3. ~~**Flying-bomb landing on a powerup tile** (§1 #4)~~ — **DONE**: RE'd +
+   ported in "Merge fidelity gaps" (facts.md "Flying-bomb landing on
+   powerups — CONFIRMED").
 4. ~~**VICTORY music track bug** (§2 #21)~~ — **RESOLVED**: `kDrawMusicId`
    (1130) already plays under DRAW/RESULTS/VICTORY in `game_app.cpp`; this
    audit's snapshot was stale on that row (fixed above).
