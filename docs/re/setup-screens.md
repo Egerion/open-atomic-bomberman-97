@@ -245,6 +245,37 @@ VALUELST legend (confirmed by the file's own comments before the 700 block):
   screen slot ink" — this caller just neutralises that branch for this one
   call). Team mode is toggled on the OPTIONS game-type screen, OFF by default.
   The 'T'/'t' key on THIS screen toggles the +84 byte between 0 and 1.
+- **TEAM default — CORRECTED 2026-07-09** (reported symptom: Team Play forms
+  only a white team and the match "ends instantly"): `sub_410F81` calls
+  `sub_4046CC()` unconditionally as its second statement (pseudo.c line
+  15046). `sub_4046CC`, when a CD is present, calls `sub_403EEE(byte_4648C4)`
+  (pseudo.c line 6573), which ITSELF unconditionally calls `sub_4049C0()`
+  first (pseudo.c line 6321) before attempting to parse any saved profile.
+  `sub_4049C0` (pseudo.c lines 6702-6718) sets, for every slot `j` in
+  `[0,10)`: `dword_46481C[12*j] = <default colour x>`, `[12*j+4] = <default
+  colour y>`, and **`[12*j+8] = j & 1`** — the TEAM field, alternating
+  0,1,0,1,... by slot parity. `sub_403EEE`'s own save-file parse loop only
+  ever overwrites a slot's colour fields (`+0`/`+4`) from disk; TEAM (`+8`)
+  is left at the `j & 1` default UNLESS a "-S slot,x,y,team" 5-field profile
+  line is present (pseudo.c line 6427, `dword_46481C[12*v31+8] =
+  sub_4516C1(v39)!=0`) — a rare, hidden colour-profile file format this port
+  does not implement. `sub_403EEE` finishes by pushing all 10
+  `dword_46481C[...+8]` values into `dword_461BC4[38*i+21]` via
+  `sub_422437(k, ...)` (pseudo.c line 6491) — the exact array `sub_4223E7`/
+  the setup screen's own TEAM column reads. Net effect: **every time the
+  setup screen loads, TEAM resets to an alternating 0/1/0/1 pattern by slot
+  index**, not to a flat 0 and not persisted from a prior visit. The port's
+  `GameApp::present_setup()` (`libs/game/src/game_app.cpp`) now mirrors this
+  with `for (slot) setup_team_[slot] = slot & 1;` at entry. Before this fix,
+  `setup_team_` defaulted (and stayed) all-0, so Team Play ON without anyone
+  pressing 'T' put every player on the SAME sim side: `MatchConfig::team[]`
+  was uniformly 1, giving everyone the team-1/WHITE `0.RMP` colour override
+  (nobody red) and making `sim::sides_remaining()` read `<=1` from tick 0
+  (round-end "one side left" firing before any player could act). The
+  round-end rule itself was not the bug — `sides_remaining() <= 1` is the
+  correct, deliberate generalisation of the pre-existing `alive_count() <=
+  1` solo rule (docs/re/ai.md "our semantics"); it only misfired because the
+  roster it was fed was degenerate.
 - **Joystick pane:** heading `getstring(40)` at getvalue(715)=(300,140); per-stick
   list `getstring(41)`(+i) if `sub_429628(i)` (present) else `getstring(42)`
   ("none") at getvalue(720)=x **320**, y **170**+**24**·i, colour getvalue(723).
