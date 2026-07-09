@@ -6,13 +6,16 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
+#include "bomber/assets/campaign.hpp"
 #include "bomber/assets/reslist.hpp"
 #include "bomber/assets/sch.hpp"
 #include "bomber/game/app_flow.hpp"
 #include "bomber/game/asset_store.hpp"
 #include "bomber/game/audio_engine.hpp"
 #include "bomber/game/bmscreen.hpp"
+#include "bomber/game/campaign_screen.hpp"
 #include "bomber/game/editor_screen.hpp"
 #include "bomber/game/gamepad.hpp"
 #include "bomber/game/goldman_screen.hpp"
@@ -143,6 +146,31 @@ private:
     // install's DATA/SCHEMES dir (never the repo) and reloads scheme_ so the
     // edit is immediately selectable through the existing scheme path.
     void present_editor();
+    // The hidden campaign-mode picker (docs/re/campaign.md, sub_4015C6):
+    // reached ONLY via present_setup()'s raw 'C'x5 trigger (mirrors
+    // present_editor's Ctrl+E x6 pattern) — there is no menu row. Globs
+    // `*.cam` in the install root (CampaignFilePicker, campaign_screen.hpp),
+    // and on a confirmed selection parses it (assets::res::load_campaign)
+    // and, if it yields at least one stage, arms campaign mode: seeds the
+    // roster from stage 0's rover/ghost/AI counts (sub_42288C semantics,
+    // §"Roster/level auto-fill") and sets campaign_active_ so the Play flow
+    // skips present_map_select() and auto-advances stages (run_app's Menu/
+    // Results handlers). A cancelled picker, an unreadable file, or a file
+    // with zero stages leaves campaign mode untouched (port convenience —
+    // the original's own error-dialog path for the analogous cases, §3).
+    void present_campaign_picker();
+    // Loads campaign stage `campaign_stage_index_`'s scheme by name
+    // (resolves `<scheme>.SCH` case-insensitively under DATA/SCHEMES,
+    // mirroring the case-insensitive glob every other picker already uses)
+    // into scheme_, and seeds setup_type_/setup_sub_ from its rover/ghost/AI
+    // counts (docs/re/campaign.md "Roster/level auto-fill": fields 3-8 fill
+    // all 10 slots — rovers and ghosts are AI-driven "monster" slots in our
+    // port, same as a COMPUTER slot, since libs/sim has no separate
+    // rover/ghost archetype; see the doc-cited TODO(RE) on that gap in
+    // ROADMAP.md). Returns false (and leaves state untouched) if the
+    // scheme can't be resolved/loaded, so the caller can bail out of
+    // campaign mode cleanly instead of starting a match with a stale board.
+    bool load_campaign_stage(int index);
     // The IPLOGO -> HSLOGO -> TITLE boot presentation (sub_42B060). LINEAR — no
     // attract re-run: each screen advances on a key OR the getvalue(12) = 7 s
     // timeout, and the title's Advance (key or timeout) returns so run_app drops
@@ -233,6 +261,16 @@ private:
     // press) opens the editor. Lives here (not a local in present_menu)
     // because it must persist across that function's per-frame event pump.
     int editor_trigger_count_ = 0;
+    // The hidden campaign picker's same-key repeat counter (docs/re/
+    // campaign.md §4, sub_410F81 pseudo.c 15357-15365): raw key 'C' (0x43)
+    // increments it; ANY OTHER key resets it to 0; the 5th CONSECUTIVE press
+    // (`== 5`, not editor_trigger_count_'s `> 5` — the doc pins "5 consecutive
+    // 'C'", not a 6th) opens the campaign picker. Lives here for the same
+    // reason editor_trigger_count_ does: it must persist across
+    // present_setup's per-frame event pump. The original also gates this on
+    // "not net mode" (sub_40C06A()); this port has no netplay (ADR-0003
+    // defers it), so that guard is always-true here and simply omitted.
+    int campaign_trigger_count_ = 0;
 
     // Multi-round match state (sub_42A3F6): best-of-N. win_count_ tallies round
     // wins per player; reaching win_target_ ends the MATCH (VICTORY). A draw
@@ -282,6 +320,20 @@ private:
     // specific built-in level whose stage index start_match uses directly.
     int selected_level_ = -1;
     std::uint32_t setup_lcg_ = 0x5E7C0DE5u;  // presentation RNG for the glue pick
+
+    // Campaign mode (docs/re/campaign.md, dword_46489C): armed only by the
+    // 'C'x5 trigger + a successful *.cam pick on present_setup
+    // (present_campaign_picker). Presentation/config-only, like
+    // setup_type_/selected_level_ above — never sim::State, never hashed.
+    // While active, campaign_stages_[campaign_stage_index_]'s scheme/roster
+    // REPLACE the manual setup_type_/selected_level_ values for the
+    // duration (the doc's "replacing the normal manual level-pick and
+    // roster-pick screens"), and run_app's Menu/Results handlers skip
+    // present_map_select() and auto-advance dword_4648B0 between stages
+    // instead of returning to the menu.
+    bool campaign_active_ = false;                              // dword_46489C
+    std::vector<assets::res::CampaignStage> campaign_stages_;    // parsed .CAM (dword_45E010)
+    int campaign_stage_index_ = 0;                               // dword_4648B0
 
     // The Goldman wheel's pending gold player (dword_46492C, docs/re/goldman-
     // roulette.md §2): -1 = none pending, else a player index (solo) or a
