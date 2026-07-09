@@ -84,7 +84,7 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 | 16 | Boot flow (IPLOGO→HSLOGO→TITLE→menu), `sub_42B060`/`sub_42B9CE` | pinned | ported | frontend-flow.md, ADR-0004, `app_flow.hpp`, `test_frontend.cpp` | — | done |
 | 17 | Attract mode boot-loop restart (no attract on boot) | pinned | ported | frontend-flow.md "boot flow is STRAIGHT-LINE" | — | done |
 | 18 | Attract mode: menu-idle LIVE AI-only demo match | pinned | ported | frontend-flow.md table (this row, "Merge attract-mode demo match" 96be2e4): `attract_` flag (`dword_464938` equivalent), `input.hpp`'s `attract_computer_count`/`fill_attract_roster`/`attract_stage_pick` helpers, roster/level/team save-restore (`GameApp::AttractSaved`), AI-only dispatch bypassing the goldman wheel/setup/map-select screens, any key/mouse/pad input aborts immediately, DRAW/RESULTS/VICTORY suppressed | — | done |
-| 19 | Main menu (7 rows, cursor, navigation) | pinned | ported | frontend-flow.md "main-menu items", `present_menu`; audited against `sub_42B9CE` again 2026-07-09 (row labels baked into MAINMENU.PCX confirmed — none drawn, matching; cursor anchor/sounds/dispatch already matched) — see row #42 below for the one real gap this pass found | — | done |
+| 19 | Main menu (7 rows, cursor, navigation) | pinned | ported | frontend-flow.md "main-menu items", `present_menu`; audited against `sub_42B9CE` again 2026-07-09 (row labels baked into MAINMENU.PCX confirmed — none drawn, matching; cursor anchor/sounds/dispatch already matched) — row #42 below (found the same pass) later fully traced and closed N/A, not a port gap | — | done |
 | 20 | Results tail: DRAW/RESULTS/VICTORY tiers | pinned | ported | frontend-flow.md, ROADMAP "Multi-round best-of-N loop + RESULTS tally 1:1 — DONE 2026-07-08" | — | done — frontend-flow.md's older "port still DEFERRED" note fixed to match (§RESULTS tally tier) | done |
 | 21 | VICTORY music using track 1020 instead of 1130 | pinned | **RESOLVED** | `game_app.cpp`: `kDrawMusicId` (1130) is started for DRAW, RESULTS, **and** VICTORY/TEAM (`audio_.start_music(kDrawMusicId)` in every outcome branch); `kWinMusicId` (1020) is scoped to the Play/setup path only. frontend-flow.md's "Results MUSIC" section and the 1020/1130 tunables rows updated to match — this audit's snapshot was stale on this row | — | done |
 | 22 | `.BM` generic help browser (menu row 5 + in-round F1) | pinned | ported | ROADMAP "The generic .BM help BROWSER — DONE 2026-07-08" | — | done |
@@ -107,7 +107,7 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 | 39 | SDL3 gamepad support | pinned (`sub_421E80` cycle order) | ported | ROADMAP "SDL3 gamepad support — DONE 2026-07-08" | — | done |
 | 40 | Team Play colour split (the red/white sprite override) | pinned | ported | player-colour.md "Team Play colour override" (`sub_4214BC` round-init +60 override, CONFIRMED 2026-07-09), `bomber::match::team_render_colour` (`libs/match/include/bomber/match/team_colour.hpp`), `Renderer::render_colour` (`renderer.cpp`, every player/bomb/flame/carried-bomb/death-anim colour site), `present_setup`'s trailing team-marker glyph (`game_app.cpp`), `test_team.cpp` | — | done |
 | 41 | In-round "player row" HUD (S:/K: score+kill grid, "xxx" dead-slot marker) | pinned | ported | in-match-shell.md "The player row — CONFIRMED (`sub_420F07`, corrects the point above)" (2026-07-09) — corrects row #34's/this doc's own earlier "no score/kill HUD" claim; `GameApp::draw_player_row`, `SequenceSet::eliminated_marker` | — | done |
-| 42 | In-round "cornerhead" face bubble (`KFACE.ANI`, follows one designated player slot `dword_45BE3C`) | pinned (call site + asset located) | **absent** | in-match-shell.md "The player row" section, "A separate, NOT ported, lower-confidence finding" | `dword_45BE3C`'s exact "which slot is this" semantics need more tracing before porting — a same-screen multiplayer port has no obvious single "local" slot the way a netplay client would, so guessing an index risks an invented visual | low |
+| 42 | In-round "cornerhead" face bubble (`KFACE.ANI`, follows one designated player slot `dword_45BE3C`) | pinned (fully traced, 2026-07-09) | **N/A — confirmed negative** | in-match-shell.md "the cornerhead face bubble — CONFIRMED N/A for a same-screen port (2026-07-09)": exhaustive 5-site trace of `dword_45BE3C` (declaration, round-reset `sub_421793`, joystick-only write `sub_41E61E` case 3 gated on an obscure `dwButtons` chord [74/138], network-send `sub_4101F1` msg 57, receive-mirror `sub_40E2D8`→`sub_4226F6`) — netplay-replicated, joystick-exclusive, no stable "which slot" identity to translate | none — netplay-only broadcast with no local-multiplayer analogue (no joystick input in this port, no "peer" to broadcast to on one machine, no fixed slot identity to reuse without inventing one) | N/A |
 | 43 | Main-menu (and other front-end loops') animated-cursor pacing vs. an uncapped render loop | pinned | **RESOLVED** | frontend-flow.md "Cursor pacing — CORRECTED (2026-07-09)": `sub_42B9CE`'s cursor-frame counter advances once per menu-loop iteration with no separate throttle (the DirectDraw flip's own vsync IS the pacing); our port's equivalent `++frame` was uncapped (`SDL_Delay(2)` only, ~500 Hz, ~8x too fast) — fixed with one `SDL_SetRenderVSync(ren, 1)` call in `GameApp::init()`, which also corrects the same pattern in the Goldman wheel spin / boot logos / attract idle | — | done |
 | 44 | Team Play match-clinch outcome screen (TEAM0/1.PCX vs VICTORY\<player\>.PCX) | pinned | **fixed 2026-07-09** | frontend-flow.md "VICTORY" §3 (`aTeamU`/`aVictoryU`) — the port's `victory_screen()` always resolved `VICTORY<player>` even under Team Play, a real end-to-end gap left over from before `Player::team` landed (frontend-flow.md's "Spine mapping" note used to say "TEAM%u is a documented future hook"); fixed with `victory_background_name()` (`results.hpp`/`game_app.cpp`, TEAM0/TEAM1.PCX confirmed shipped in the install), gated on `is_team_mode()` at the match-clinch call site, naming the clinching player's raw setup-screen team id (same id `present_scoreboard`'s "TEAM %u WINS" line and the setup-screen marker already use) | — | done |
 
@@ -331,19 +331,20 @@ asset-format rows in §3 (excluding pure-tooling extensions marked N/A:
   .CAM/campaign, then `.BMP`, then the `.DAT` row's 3rd file
   (`WINEREG/EReg058.dat`) closed this pass) — the large majority of 1:1
   gameplay and front-end fidelity, and every asset-format row now closed.
-- **Partial/open (RE pinned, port absent or a small residual):** 2 subsystem
-  rows — #35 in-round debug/cheat keys, #42 the in-round "cornerhead"
-  KFACE.ANI face bubble (pinned but deliberately unported until
-  `dword_45BE3C`'s slot semantics are traced). No asset format rows remain
-  open:
+- **Partial/open (RE pinned, port absent or a small residual):** 1 subsystem
+  row — #35 in-round debug/cheat keys. No asset format rows remain open:
   the `.DAT` row closed 2026-07-09 (`LEVELS.DAT` confirmed dead/tooling
   data, `bmstats.dat`/`.txt` confirmed live-but-write-only debug telemetry
   with no reader/reachable UI, and the 3rd file — `WINEREG/EReg058.dat`, a
   blank registration-wizard user-data template — identified and confirmed
   non-gameplay tooling, same class as the `.BMP` row).
-- **N/A / excluded (netplay per ADR-0003, or non-gameplay tooling):** 1
-  subsystem row (#25 net-game setup screens) + the §4 netplay function
-  cluster + several tooling file extensions (.ICO/.EXE/.DLL/.IDB/.BMP).
+- **N/A / excluded (netplay per ADR-0003, or non-gameplay tooling):** 2
+  subsystem rows (#25 net-game setup screens; #42 the in-round "cornerhead"
+  KFACE.ANI face bubble, closed 2026-07-09 after a full trace of
+  `dword_45BE3C` showed it to be a netplay-replicated, joystick-exclusive
+  global with no local-multiplayer analogue — in-match-shell.md) + the §4
+  netplay function cluster + several tooling file extensions
+  (.ICO/.EXE/.DLL/.IDB/.BMP).
 - **Doc staleness (no code gap, just needs a note fixed):** 9 items (§6),
   items 1-5 fixed in the 2026-07-08 pass, items 6-9 found and fixed in the
   2026-07-09 pass.
@@ -392,7 +393,11 @@ What remains open, in priority order:
 2. Low-priority polish: in-round debug/cheat keys (#35, developer/QA-only).
    (Editor chrome #32 — Ctrl+B reset, '0' toggle, brush-preview, exact
    dialog chrome — closed in the same day's editor pass; campaign clause 5
-   closed per the paragraph above.)
+   closed per the paragraph above. The in-round "cornerhead" `KFACE.ANI`
+   face bubble, #42, is likewise off this list — 2026-07-09's full
+   `dword_45BE3C` trace closed it N/A, not a residual: it is a netplay-only,
+   joystick-gated broadcast with no same-screen-multiplayer analogue, see
+   table row #42 and in-match-shell.md.)
 
 `.BMP`/`.TXT`/`.DAT` asset spot-checks (§3) — **CLOSED 2026-07-09**: the
 single `.BMP` (`WINEREG/INTER.BMP`) belongs to the bundled
