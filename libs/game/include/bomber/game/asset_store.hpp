@@ -39,6 +39,17 @@ public:
     // so a caller that skips this early call still gets the font.
     void load_frontend_font(const std::filesystem::path& game_dir);
 
+    // Loads just WINZ.PCX (the sub_43C734 window-chrome 9-patch skin, docs/
+    // re/frontend-flow.md "The WINZ.PCX 9-patch window skin") standalone,
+    // ahead of the full load() pass — mirroring sub_414DF4, which loads
+    // "winz.plt" (the extension map resolves it to DATA/RES/WINZ.PCX) during
+    // graphics init, BEFORE the boot LOADING dialogs run. Populates the same
+    // frontend_pcx("WINZ") cache the rest of the front-end uses, so a later
+    // frontend_pcx("WINZ") is a pure cache hit. Returns the cached sprite
+    // (empty if the file is missing — callers fall back to the flat base
+    // coat, matching a hypothetical missing-winz install).
+    const Sprite& load_frontend_winz(SDL_Renderer* ren, const std::filesystem::path& game_dir);
+
     // Builds per-player recolored copies of the player-facing sprite sets
     // (walk/stand/bombs/flames/deaths). Prefers each slot's authentic .RMP index
     // remap; `colors` (VALUELST 200..247) is the truecolour fallback for a slot

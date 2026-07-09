@@ -70,27 +70,37 @@ std::uint32_t random_boot_seed() {
                                    // but avoid a literal 0 seed on principle
 }
 
-// The boot LOADING dialog — PINNED 2026-07-09 (docs/re/frontend-flow.md "The
-// boot LOADING dialog" + "The percent-bar dialog, sub_412E33"). This is NOT
-// the IPLOGO/HSLOGO/TITLE screen chain (sub_42B060, a separate later step):
-// it is a small modal progress window (sub_43C734, above) that the entry
-// point sub_42BE22 shows TWICE before sub_42B060 ever runs — once for
-// "Loading data..." (getstring(201), sub_41D695's MASTER.ALI read) and once
-// for "Loading sound..." (getstring(200), sub_4287B9's SOUNDLST group
-// preload) — both driven by the shared percent-bar primitive sub_412E33 (a
-// two-tone bar plus a "%d" readout, "Completion" caption). It is
-// programmatically drawn (box + bar + text), NOT a PCX asset — no
-// LOADING*.PCX exists anywhere in the install or the decompile.
+// The boot LOADING dialog — RE-PINNED 2026-07-10 (docs/re/frontend-flow.md
+// "The percent-bar dialog, sub_412E33 (RE-PINNED)"). This is NOT the
+// IPLOGO/HSLOGO/TITLE screen chain (sub_42B060, a separate later step): it
+// is a small modal progress window (sub_43C734, above) that the entry point
+// sub_42BE22 shows TWICE before sub_42B060 ever runs — once for "Loading
+// data..." (getstring(201), sub_41D695's MASTER.ALI read) and once for
+// "Loading sound..." (getstring(200), sub_4287B9's SOUNDLST group preload) —
+// both driven by the shared percent-bar primitive sub_412E33. It is
+// programmatically drawn (WINZ chrome + bar + text), NOT a full-screen PCX —
+// no LOADING*.PCX exists anywhere in the install or the decompile.
 //
-// Pinned geometry (sub_412E33, pseudo.c 16157-16211): window
-// y=200 (CONFIRMED literal, not centered — contrast the confirm dialog
-// below), height=8*fontheight, width=360 (x auto-centered, see the chrome
-// comment above); caption "Completion" centered at y=1.5*fontheight in
-// white (byte_49D38F); "%d" readout centered at y=3.5*fontheight in YELLOW
-// (byte_49D37A, RGB (255,255,90) — corrects an earlier pass's assumption
-// that it shared the caption's white); two-tone bar at x=31, y=5.5*
-// fontheight+1, height=fontheight-1, width 300 split at 3*pct, filled
-// portion byte_49A624 mid-grey (168,168,164), unfilled black.
+// Pinned geometry/colours (sub_412E33, pseudo.c 16157-16211 + the 2026-07-10
+// raw-byte passes): window y=200 (CONFIRMED literal, not centered — contrast
+// the confirm dialog below), height=8*fontheight, width=360 (x
+// auto-centered), painted with the WINZ.PCX 9-patch via sub_41726B @ 16181 —
+// the BLUE textured window the user remembers, correcting the earlier flat
+// (82,82,82) grey. Caption centered at y=1.5*fontheight in the general white
+// ink (byte_49D38F -> (240,248,252)): the caption STRING is the buffer at
+// 0x45BC5C, whose "Completion" initial value IS IDA's `aCompletion` symbol —
+// but sub_412E0C strcpy's the caller's getstring(201)/(200) text over it
+// before the dialog ever shows, so the visible caption is "Loading
+// data..."/"Loading sound..." (the raw-byte pass that resolved the buffer
+// address corrected the earlier "captioned Completion" reading). "%d"
+// readout centered at y=3.5*fontheight in YELLOW (byte_49D37A -> LUT idx 182
+// -> (252,248,88)); a 1-px WHITE FRAME around the bar band (sub_43D080 @
+// 16191, y from 5.5*fontheight to 6.5*fontheight — its x extent is a
+// decompiler-lost window field, reconstructed as one px around the track);
+// two-tone bar at x=31, y=5.5*fontheight+1, height=fontheight-1, width 300
+// split at 3*pct, filled portion byte_49A624 -> idx 178 -> (168,168,164),
+// unfilled black. All text via sub_41696C = ink over a 4-pass 1-px black
+// outline (draw_dialog_text).
 //
 // Our AssetStore::load() has no per-file progress callback (a monolithic
 // try-block of ANI/PCX loads), and on modern hardware the whole thing is
@@ -103,36 +113,44 @@ std::uint32_t random_boot_seed() {
 //
 // Font: FONT6 is CONFIRMED ready before BOTH flashes (docs/re/
 // frontend-flow.md "FONT6 timing" — sub_414DF4 pins it via sub_431E9C(6)
-// before sub_41095A ever calls the loading dialogs), correcting the earlier
-// port comment that assumed a readiness gap at the first flash. GameApp::init
-// now loads FONT6 standalone ahead of this call, so both flashes render with
-// the real glyph textures; SDL_RenderDebugText is no longer used here.
-void draw_boot_loading_dialog(SDL_Renderer* ren, const FontTextures& font, const char* caption) {
+// before sub_41095A ever calls the loading dialogs). WINZ.PCX is likewise
+// loaded by sub_414DF4 itself ("winz.plt"), so GameApp::init pre-warms both
+// before the first flash.
+void draw_boot_loading_dialog(SDL_Renderer* ren, const FontTextures& font, const Sprite* winz,
+                              const char* caption) {
     SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
     SDL_RenderClear(ren);
 
     const float h = static_cast<float>(font.loaded() ? font.line_height() : 12);
     const DialogRect win = dialog_rect(200.0f, 8.0f * h, 360.0f);
-    draw_dialog_chrome(ren, win);
+    draw_dialog_chrome(ren, win, winz);
 
-    // Caption "Completion" — white (byte_49D38F), horizontally centered,
-    // y = 1.5*fontheight (window-relative).
+    // Caption — the getstring(201)/(200) text (see the buffer note above),
+    // general white ink, centered, y = 1.5*fontheight (window-relative).
     std::string cap_str = caption;
     float cap_w = font.loaded() ? static_cast<float>(font.measure(cap_str)) : 0.0f;
-    font.draw(ren, cap_str, win.x + (win.w - cap_w) / 2, win.y + 1.5f * h, 255, 255, 255);
+    draw_dialog_text(ren, font, cap_str, win.x + (win.w - cap_w) / 2, win.y + 1.5f * h, kDialogInkR,
+                     kDialogInkG, kDialogInkB);
+
+    // The white bar frame (sub_43D080): 1-px outline in the general white
+    // ink spanning the 5.5h..6.5h band, one px around the 300-px track.
+    SDL_FRect frame{win.x + 30.0f, win.y + 5.5f * h, 302.0f, h + 1.0f};
+    SDL_SetRenderDrawColor(ren, kDialogInkR, kDialogInkG, kDialogInkB, 255);
+    SDL_RenderRect(ren, &frame);
 
     // The bar sits at a fixed "complete" 100% (the documented simplification
     // above) — the filled segment spans the full 300 px track, so the
     // never-drawn unfilled segment is omitted rather than drawn zero-width.
     SDL_FRect bar{win.x + 31.0f, win.y + 5.5f * h + 1.0f, 300.0f, h - 1.0f};
-    SDL_SetRenderDrawColor(ren, 168, 168, 164, 255);  // byte_49A624
+    SDL_SetRenderDrawColor(ren, 168, 168, 164, 255);  // byte_49A624 -> idx 178
     SDL_RenderFillRect(ren, &bar);
 
     // "%d" readout (100, matching the always-complete bar) — yellow
-    // (byte_49D37A), y = 3.5*fontheight, horizontally centered.
+    // (byte_49D37A -> idx 182), y = 3.5*fontheight, horizontally centered.
     std::string pct_str = "100";
     float pct_w = font.loaded() ? static_cast<float>(font.measure(pct_str)) : 0.0f;
-    font.draw(ren, pct_str, win.x + (win.w - pct_w) / 2, win.y + 3.5f * h, 255, 255, 90);
+    draw_dialog_text(ren, font, pct_str, win.x + (win.w - pct_w) / 2, win.y + 3.5f * h, 252, 248,
+                     88);
 
     SDL_RenderPresent(ren);
 }
@@ -319,7 +337,11 @@ bool GameApp::init() {
     // uses the literal fallback text; the second flash below reads the real
     // string once it's available. Both flashes now render with FONT6 (above),
     // matching the trace — there is no font-readiness gap at the FIRST flash.
-    draw_boot_loading_dialog(ren, front_font_, "Loading data...");
+    // WINZ.PCX (the blue 9-patch window skin, draw_boot_loading_dialog's
+    // comment) is likewise pre-warmed here: sub_414DF4 loads "winz.plt"
+    // during graphics init, before either dialog runs.
+    const Sprite& winz = assets_.load_frontend_winz(ren, game);
+    draw_boot_loading_dialog(ren, front_font_, &winz, "Loading data...");
 
     if (!assets_.load(ren, game)) return false;
     seqs_.resolve(assets_);
@@ -334,7 +356,7 @@ bool GameApp::init() {
     // audio_.init(). Skipped in --demo mode, matching that the demo path never
     // calls audio_.init either.
     if (!opts_.demo) {
-        draw_boot_loading_dialog(ren, front_font_,
+        draw_boot_loading_dialog(ren, front_font_, &assets_.frontend_pcx("WINZ"),
                                  assets_.getstring(200, "Loading sound...").c_str());
         if (!audio_.init(game)) std::fprintf(stderr, "audio unavailable, continuing silent\n");
     }
@@ -1435,11 +1457,15 @@ AppInput GameApp::present_campaign_confirm() {
         SDL_RenderClear(sdl_renderer_.get());
         renderer_->draw_frame(sim_.state());  // NOLINT(bugprone-unchecked-optional-access) — last
                                               // frame as backdrop, like the stage banner
-        draw_dialog_chrome(sdl_renderer_.get(), win);
-        front_font_.draw(sdl_renderer_.get(), top_line, win.x + (win.w - top_w) / 2.0f,
-                         win.y + h + 32.0f, 255, 255, 255);  // byte_49D38F
-        front_font_.draw(sdl_renderer_.get(), bottom_line, win.x + (win.w - bottom_w) / 2.0f,
-                         win.y + h + 32.0f + h + 2.0f, 255, 255, 255);
+        // sub_414340 paints the WINZ 9-patch too (its sub_41726B call @
+        // pseudo.c 17070) and draws its lines via sub_41696C (outlined).
+        draw_dialog_chrome(sdl_renderer_.get(), win, &assets_.frontend_pcx("WINZ"));
+        draw_dialog_text(sdl_renderer_.get(), front_font_, top_line,
+                         win.x + (win.w - top_w) / 2.0f, win.y + h + 32.0f, kDialogInkR,
+                         kDialogInkG, kDialogInkB);  // byte_49D38F
+        draw_dialog_text(sdl_renderer_.get(), front_font_, bottom_line,
+                         win.x + (win.w - bottom_w) / 2.0f, win.y + h + 32.0f + h + 2.0f,
+                         kDialogInkR, kDialogInkG, kDialogInkB);
         SDL_RenderPresent(sdl_renderer_.get());
         SDL_Delay(2);
     }
@@ -1866,22 +1892,28 @@ AppInput GameApp::present_menu() {
                 SDL_RenderFillRect(sdl_renderer_.get(), &bar);
             }
         }
-        // The Quit confirm modal (sub_412987 -> sub_41456C, PINNED — docs/re/
-        // frontend-flow.md "Escape/Quit-row confirm dialog"): the SAME
-        // sub_43C734 chrome as the loading dialog, sized from the actual
-        // button label extents (v29=max(textwidth,80), v30=v29+64=width,
-        // v32=4*fontheight+64+fontheight=height for this one-line prompt),
-        // centered on screen (both axes — see the chrome comment's X-
-        // placement TODO(RE)). Prompt at y=fontheight+32 (window-relative,
-        // centered), general white ink (byte_49D38F); two sub_432298 buttons
-        // at the pinned y=height-32-fontheight-6, x=width/2-80 (Yes) /
-        // width/2+22 (No). Behaviour (Y/Enter/Space confirm, N/Escape
-        // cancel, sound path, 4s exit delay) is UNCHANGED — chrome-only pass.
+        // The Quit confirm modal (sub_412987 -> sub_41456C, RE-PINNED
+        // 2026-07-10 — docs/re/frontend-flow.md "Escape/Quit-row confirm
+        // dialog"): the SAME sub_43C734 chrome as the loading dialog — the
+        // WINZ.PCX 9-patch (sub_41726B @ pseudo.c 17200), NOT a flat grey —
+        // sized from the prompt extent (v29=max(prompt-width,80),
+        // v30=v29+64=width, v32=4*fontheight+64+fontheight=height for this
+        // one-line prompt), centered on screen (both axes — see the chrome
+        // comment's X-placement TODO(RE)). Prompt at y=fontheight+32
+        // (window-relative, centered) in sub_412987's OWN ink byte_49A390 —
+        // LUT offset 0x5000 -> idx 248 -> (164,0,0), a dark red (pseudo.c
+        // 16027: `v0 = byte_49A390` is the a3/foreground argument;
+        // correcting this pass's earlier white) — outlined black via
+        // sub_41696C; two sub_432298 buttons at the pinned
+        // y=height-32-fontheight-6, x=width/2-80 (Yes) / width/2+22 (No).
+        // Behaviour (Y/Enter/Space confirm, N/Escape cancel, sound path, 4s
+        // exit delay) is UNCHANGED — chrome-only pass.
         if (quit_confirm) {
             std::string prompt = assets_.getstring(10, "Are you sure you want to exit?");
             std::string yes_label = assets_.getstring(26, " Yes ");
             std::string no_label = assets_.getstring(25, " No ");
-            draw_confirm_dialog(sdl_renderer_.get(), front_font_, prompt, "", yes_label, no_label);
+            draw_confirm_dialog(sdl_renderer_.get(), front_font_, &assets_.frontend_pcx("WINZ"),
+                                prompt, "", yes_label, no_label, 164, 0, 0);
         }
         SDL_RenderPresent(sdl_renderer_.get());
         SDL_Delay(2);

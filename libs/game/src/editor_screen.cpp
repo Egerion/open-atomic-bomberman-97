@@ -861,7 +861,8 @@ void EditorScreen::draw(SDL_Renderer* ren) const {
         std::string line2 = assets_ ? assets_->getstring(95, "") : std::string();
         std::string yes_label = assets_ ? assets_->getstring(26, " Yes ") : std::string(" Yes ");
         std::string no_label = assets_ ? assets_->getstring(25, " No ") : std::string(" No ");
-        draw_confirm_dialog(ren, *font_, line1, line2, yes_label, no_label);
+        draw_confirm_dialog(ren, *font_, assets_ ? &assets_->frontend_pcx("WINZ") : nullptr, line1,
+                            line2, yes_label, no_label, kDialogInkR, kDialogInkG, kDialogInkB);
     } else if (prompt_kind_ == PromptKind::FillConfirm) {
         // sub_41456C two-line chrome — getstring(760) + getstring(97) (§5
         // Ctrl+F, pseudo.c 5601-5604).
@@ -871,7 +872,8 @@ void EditorScreen::draw(SDL_Renderer* ren) const {
         std::string line2 = assets_ ? assets_->getstring(97, "") : std::string();
         std::string yes_label = assets_ ? assets_->getstring(26, " Yes ") : std::string(" Yes ");
         std::string no_label = assets_ ? assets_->getstring(25, " No ") : std::string(" No ");
-        draw_confirm_dialog(ren, *font_, line1, line2, yes_label, no_label);
+        draw_confirm_dialog(ren, *font_, assets_ ? &assets_->frontend_pcx("WINZ") : nullptr, line1,
+                            line2, yes_label, no_label, kDialogInkR, kDialogInkG, kDialogInkB);
     } else if (prompt_kind_ == PromptKind::ResetConfirm) {
         // sub_41456C two-line chrome — getstring(740) + getstring(97) (§5
         // Ctrl+B, pseudo.c 5587-5590).
@@ -880,7 +882,8 @@ void EditorScreen::draw(SDL_Renderer* ren) const {
         std::string line2 = assets_ ? assets_->getstring(97, "") : std::string();
         std::string yes_label = assets_ ? assets_->getstring(26, " Yes ") : std::string(" Yes ");
         std::string no_label = assets_ ? assets_->getstring(25, " No ") : std::string(" No ");
-        draw_confirm_dialog(ren, *font_, line1, line2, yes_label, no_label);
+        draw_confirm_dialog(ren, *font_, assets_ ? &assets_->frontend_pcx("WINZ") : nullptr, line1,
+                            line2, yes_label, no_label, kDialogInkR, kDialogInkG, kDialogInkB);
     }
 }
 
