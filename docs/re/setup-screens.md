@@ -229,10 +229,22 @@ VALUELST legend (confirmed by the file's own comments before the 700 block):
   is absent.
 - **TEAM** is the player byte **+84** (`dword_461BC4[38*i + 21]`, `LOBYTE`),
   read by `sub_4223E7(i)` and written by `sub_422437(i, v)`. Rendered ONLY in
-  team mode (`dword_464964 != 0`): the marker `getstring(230)` is appended,
-  inked via `sub_4141F8(team)` (returns `byte_49D0DA` for team 1 else
-  `byte_49D38F`). Team mode is toggled on the OPTIONS game-type screen, OFF by
-  default. The 'T'/'t' key on THIS screen toggles the +84 byte between 0 and 1.
+  team mode (`dword_464964 != 0`), for EVERY slot (not gated on that slot's own
+  team value): a trailing marker glyph, `getstring(230)`, appended after the
+  name+type line (pseudo.c ~15212-15224) — CONFIRMED **unformatted** (no `%u`:
+  the original never sprintf's it, just two back-to-back `sub_4124A4(230)`
+  reads with no intervening `sub_4518D0`), inked via `sub_4141F8(team)`
+  (returns `byte_49D0DA` red (252,80,80) for team 1 else `byte_49D38F` white
+  (255,255,255), `docs/re/player-colour.md` "Team Play colour override"). So
+  the COLOUR of the marker glyph — not its text — is what tells the two teams
+  apart. The name+type line itself is NOT recoloured: `sub_410F81` deliberately
+  saves+zeroes `dword_464964` around its own `sub_41672F(i)`/`sub_416867(i)`
+  ink lookup (pseudo.c ~15191-15204), forcing that text to keep the slot's own
+  individual `.RMP` colour even under Team Play (`sub_41672F` itself DOES
+  branch on team mode when called normally — see player-colour.md's "Setup-
+  screen slot ink" — this caller just neutralises that branch for this one
+  call). Team mode is toggled on the OPTIONS game-type screen, OFF by default.
+  The 'T'/'t' key on THIS screen toggles the +84 byte between 0 and 1.
 - **Joystick pane:** heading `getstring(40)` at getvalue(715)=(300,140); per-stick
   list `getstring(41)`(+i) if `sub_429628(i)` (present) else `getstring(42)`
   ("none") at getvalue(720)=x **320**, y **170**+**24**·i, colour getvalue(723).
@@ -423,7 +435,16 @@ cosmetic simplification, not a gameplay fact).
    `Tuning::color_rgb` is only the fallback when a `.RMP` is absent. Input-type per
    slot (OFF/COMPUTER/KEYBOARD0/KEYBOARD1 — joystick detect deferred), a per-slot
    TEAM flag toggled by 'T'. Keys: Up/Down slot, Right cycle type, Left/'0' off,
-   'T' team, Enter start, Esc cancel — mirroring the table above.
+   'T' team, Enter start, Esc cancel — mirroring the table above. **Team Play
+   marker**: whenever `team_play_` is on, every slot line gets a trailing
+   "TEAM"-style marker glyph inked red `(252,80,80)` (team byte 1) or white
+   `(255,255,255)` (team byte 0) — the port's equivalent of `sub_4141F8`
+   (docs/re/player-colour.md "Team Play colour override"); the slot's own
+   name+type text stays in its individual `.RMP` colour regardless of Team
+   Play, matching the original's `dword_464964`-neutralising call site. The
+   SAME red/white split also now recolours every in-match sprite that inherits
+   a player's colour (`Renderer::render_colour`, same doc section) — the fix
+   for the reported "Team Play doesn't visibly split the roster" gap.
 2. `present_map_select` (new) — the LEVEL & ROUNDS screen: random `GLUE<n>`
    backdrop, **music 1020**, the LEVEL row (RANDOM + the 11 named levels,
    `getstring(150+n)` / `getstring(149)`) and the WINS row (1..100), at

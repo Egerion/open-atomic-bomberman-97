@@ -132,6 +132,58 @@ background `sub_416867(i)` is the outline colour (`palette[0]` in normal play;
 the team colour in team mode). So the slot colour is the **`.RMP` tail**, not the
 raw VALUELST percent.
 
+**`sub_41672F` itself branches on Team Play** (CONFIRMED, pseudo.c 18463-18493):
+`if (dword_464964) return sub_4141F8(sub_4223E7(a1)); else { ...the .RMP-tail
+quantise above... }` — i.e. the FUNCTION's own team-mode branch replaces the
+slot's individual ink with the fixed two-colour team ink
+(`sub_4141F8`/`byte_49D0DA` red vs `byte_49D38F` white, `docs/re/results-and-
+options.md` §1 "screen-ink byte globals"). **BUT** the PLAYER INPUT screen's own
+call site neutralises this: `sub_410F81` (pseudo.c ~15191-15204) saves
+`dword_464964`, **zeroes it**, calls `sub_41672F(i)`/`sub_416867(i)` for the
+slot's name+type line, then restores it — deliberately forcing the non-team
+branch even under Team Play, so **that line always shows the slot's own `.RMP`
+colour**, team mode or not. Team Play's visible effect on THIS screen is a
+separate, later block (pseudo.c ~15212-15224) that — only when `dword_464964`
+is still set (i.e. unconditionally, once per slot) — draws an **unformatted**
+marker glyph (`getstring(230)`, no `%u`: confirmed by the back-to-back
+`sub_4124A4(230)` calls with no intervening `sub_4518D0`/sprintf) inked via
+`sub_4141F8(v96)` where `v96 = sub_4223E7(i)` (that slot's own team byte) — red
+for team B, white for team A. So on the setup screen the COLOUR split is
+carried entirely by this trailing marker glyph, not by recolouring the slot's
+own name/type text.
+
+## Team Play colour override (in-match sprites) — CONFIRMED (`sub_4214BC` @0x4214BC)
+
+This is the fact behind the user-visible report "Team Play splits the roster
+into red and white": round init (`sub_4214BC`, pseudo.c ~23916-23927, the loop
+that resets all 10 player structs at the start of every round) sets each
+player's **draw-colour byte, offset +60** — the SAME byte the body blit
+(`sub_4158CF`/`dword_460564[colour]` above), the bomb-spawn colour
+(`sub_422EDE` via `sub_426FCC`, colour forwarded from the placing player's own
++60 byte at pseudo.c 22517), and by inheritance every flame/carried-bomb/
+death-anim colour selection all read — from:
+
+```c
+if (dword_464964)                          // Team Play on
+    *(byte*)(v6 + 60) = *(byte*)(v6 + 84) ? 2 : 0;   // team byte -> 2 (red) or 0 (white)
+else
+    *(byte*)(v6 + 60) = v8;                 // v8 = this player's own slot index (0-9)
+```
+
+i.e. under Team Play **every player's sprite is forced to ONE OF TWO EXISTING
+colour slots — `0.RMP` (white) for team A, `2.RMP` (red) for team B** —
+overwriting the player's own individual slot colour entirely. This is not a
+bespoke "team palette": it reuses the same two `.RMP` files a solo-mode
+player 0 (white) or player 2 (red) would use. Non-team play (`dword_464964 ==
+0`) is unaffected — each player keeps their own slot-indexed colour, exactly
+as `## Our port` below already implemented before this fact was pinned.
+
+Our setup maps the 0/1 setup-screen team byte to sim teams 1/2 (both real
+teams under Team Play, `docs/re/setup-screens.md` "sub_4141F8"), so
+`sim::Player::team == 1` → colour 0 (white), `== 2` → colour 2 (red); `team ==
+0` (Team Play off) keeps the slot-indexed colour — the direct translation of
+the `? 2 : 0` rule above into our team-numbering space.
+
 ## Our port
 
 - **Parser** `libs/assets` `res::load_rmp` (`rmp.hpp`/`rmp.cpp`): reads the 256
@@ -151,21 +203,46 @@ raw VALUELST percent.
   loaded, else the truecolour `recolored(color_rgb[p])` fallback. A missing/short
   `.RMP` is logged, never fatal.
 - **Setup screen** tints slot `i` via `AssetStore::slot_color(i)`, the truecolour
-  equivalent of `sub_41672F` (`min(v/3, 31)` then `expand5` of the 5-bit channels
-  instead of the palette LUT), from the loaded tail — so each slot reads as its
-  real in-game colour (white 255/255/255, red 255/0/24, blue 0/24/231, green
-  0/255/0, yellow 255/255/0, cyan 0/247/255, magenta 255/0/247, orange
-  255/132/0, purple 132/0/255).
+  equivalent of `sub_41672F`'s non-team branch (`min(v/3, 31)` then `expand5` of
+  the 5-bit channels instead of the palette LUT), from the loaded tail — so
+  each slot's name+type line reads as its real in-game colour (white
+  255/255/255, red 255/0/24, blue 0/24/231, green 0/255/0, yellow 255/255/0,
+  cyan 0/247/255, magenta 255/0/247, orange 255/132/0, purple 132/0/255) EVEN
+  under Team Play, matching the original's `dword_464964=0` neutralising trick
+  at that call site. `GameApp::present_setup` (`game_app.cpp`) additionally
+  draws the trailing team-marker glyph (getstring 230, unformatted) in
+  `(252,80,80)` red / `(255,255,255)` white per that slot's own team byte
+  whenever Team Play is on — the `sub_4141F8`-equivalent second draw call,
+  mirroring the original's separate marker block.
+- **In-match sprites — Team Play colour override**: `Renderer::render_colour`
+  (`libs/game/src/renderer.cpp`) resolves the colour-set index to draw a given
+  player slot with, delegating to the SDL-free `bomber::match::
+  team_render_colour(Player::team, slot)` (`libs/match/include/bomber/match/
+  team_colour.hpp`) — the direct port of `sub_4214BC`'s `? 2 : 0` rule above.
+  Every draw call keyed off a player's colour (body walk/stand/kick/punch/
+  cornerhead/carry/warp poses, the floor bomb and its dud/trigger variants, the
+  flame pieces via `flame_owner`, the carried-bomb icon, and the death
+  animation picked at the `PlayerDied` event) now routes through this one
+  helper instead of the raw slot index, so Team Play visibly splits the whole
+  roster into white/red exactly like the original, not just the scoreboard
+  (`docs/re/results-and-options.md` §1, already ported) and the setup-screen
+  marker above.
 
 ## Determinism / golden — NO IMPACT
 
 Recolour and slot colour are entirely PRESENTATION-side. `libs/sim` `State`,
 `state_hash()`, and `tests/test_golden.cpp` are byte-identical — player colour is
 NOT a hashed field (it is `MatchConfig`/asset data, never mixed into the hash).
-Confirmed unchanged: no sim file was touched.
+Confirmed unchanged: no sim file was touched; `team_render_colour` only READS
+the already-hashed `Player::team`, never writes it.
 
 Sources: `sub_414A65` (0x414A65) builder + apply/backfill (decompile 17420-17500,
 17580-17600), `sub_415A1C` blit (0x415A1C, wrapper @18002), `dword_460564[10]`
-tables, base palette `sub_42C570` (0x42C570), setup ink `sub_41672F` (0x41672F) /
-`sub_416867` (0x416867), the `%u.rmp` layout confirmed against the install
-(band 100..174 + 3 tail percent bytes).
+tables, base palette `sub_42C570` (0x42C570), setup ink `sub_41672F` (0x41672F,
+pseudo.c 18463-18493, team branch @18471-18475) / `sub_416867` (0x416867), the
+`%u.rmp` layout confirmed against the install (band 100..174 + 3 tail percent
+bytes), the setup screen's team-mode-neutralising call site and separate
+marker block (`sub_410F81`, pseudo.c ~15191-15224), the in-match colour
+override `sub_4214BC` (0x4214BC, pseudo.c ~23916-23927), the bomb-spawn colour
+forward (`sub_426FCC`/`sub_422EDE` called from pseudo.c 22517, colour = the
+placing player's own +60 byte).

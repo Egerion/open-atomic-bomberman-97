@@ -327,6 +327,27 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       = solo). Frontend maps the setup 0/1 byte to sim teams 1/2 under Team
       Play (both +84 values are real teams, sub_4141F8). tests/test_team.cpp
       (9 cases); suite 28/28.
+- [x] TEAM MODE, the red/white colour split — DONE 2026-07-09. A user report
+      ("Team Play doesn't visibly split the roster into two colours") led to a
+      full pseudo.c sweep of every `dword_464964`/+84-byte read site. Root
+      cause CONFIRMED: `sub_4214BC` (round init) forces every player's
+      draw-colour byte (+60, decimal — the SAME byte the body blit/bomb-spawn/
+      flame-owner/death-anim colour selection all key off) to `0` (white,
+      0.RMP) or `2` (red, 2.RMP) per team, instead of that player's own slot
+      index — was never ported. Fixed: `bomber::match::team_render_colour`
+      (new SDL-free header, `libs/match/include/bomber/match/team_colour.hpp`,
+      doctest-covered in `test_team.cpp`) is the pure port of that rule;
+      `Renderer::render_colour` (`renderer.cpp`) routes every player/bomb/
+      flame/carried-bomb/death-anim colour lookup through it. Also fixed a
+      SEPARATE, smaller setup-screen gap found in the same sweep: the PLAYER
+      INPUT screen's per-slot line always kept its OWN `.RMP` colour (CONFIRMED
+      the original neutralises `sub_41672F`'s team branch there on purpose) but
+      was missing the original's trailing team-marker glyph (red/white per
+      slot, unformatted "TEAM" text) — added to `present_setup`
+      (`game_app.cpp`). No sim/hash impact (presentation-only, `Player::team`
+      is read-only here). Full RE: `docs/re/player-colour.md` "Team Play
+      colour override", `docs/re/setup-screens.md`'s TEAM bullet.
+      `docs/re/coverage-audit.md` row 40.
 - [x] Kill attribution + win_by_kills — DONE 2026-07-08. PlayerDied events
       carry the killer slot (unhashed Event::data, contract rule 4 — golden
       byte-identical, proven); frontend kill tally (self-kills excluded, "our

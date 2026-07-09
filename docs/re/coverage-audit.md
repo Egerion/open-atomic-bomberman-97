@@ -94,6 +94,7 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 | 37 | Multi-round best-of-N + win_by_kills clinch | pinned | ported | ROADMAP "Multi-round best-of-N loop", "Kill attribution + win_by_kills — DONE 2026-07-08" | — | done |
 | 38 | Faithful screen inks (RGB555 LUT) | pinned | ported | ROADMAP "Faithful screen inks — DONE 2026-07-08" | — | done |
 | 39 | SDL3 gamepad support | pinned (`sub_421E80` cycle order) | ported | ROADMAP "SDL3 gamepad support — DONE 2026-07-08" | — | done |
+| 40 | Team Play colour split (the red/white sprite override) | pinned | ported | player-colour.md "Team Play colour override" (`sub_4214BC` round-init +60 override, CONFIRMED 2026-07-09), `bomber::match::team_render_colour` (`libs/match/include/bomber/match/team_colour.hpp`), `Renderer::render_colour` (`renderer.cpp`, every player/bomb/flame/carried-bomb/death-anim colour site), `present_setup`'s trailing team-marker glyph (`game_app.cpp`), `test_team.cpp` | — | done |
 
 ## 3. Asset-format coverage (libs/assets vs install tree)
 
@@ -294,18 +295,20 @@ still correctly empty).
 
 ## Summary counts
 
-Counting the 39 numbered subsystem rows (§1+§2) + the 14 distinct
+Counting the 40 numbered subsystem rows (§1+§2) + the 14 distinct
 asset-format rows in §3 (excluding pure-tooling extensions marked N/A:
 .ICO/.EXE/.DLL/.IDB):
 
-- **Covered (RE pinned + ported, "done"):** 37 of 39 subsystem rows (up from
+- **Covered (RE pinned + ported, "done"):** 38 of 40 subsystem rows (up from
   31 at the 2026-07-08 snapshot — #13 rover/ghost mover, #18 attract mode,
   and #30 clogs prize (effect + wheel icon render) closed earlier in this
   2026-07-09 pass; #15 wall-slam SFX and #23 INPUT.BM menu-row binding
-  closed in the same day's SFX/audit sweep) + **14 of 14** asset formats (up
-  from 11 — .CAM/campaign, then `.BMP`, then the `.DAT` row's 3rd file
-  (`WINEREG/EReg058.dat`) closed this pass) — the large majority of 1:1
-  gameplay and front-end fidelity, and every asset-format row now closed.
+  closed in the same day's SFX/audit sweep; #40 Team Play colour split closed
+  in a follow-up comprehensive team-mode RE pass the same day) + **14 of 14**
+  asset formats (up from 11 — .CAM/campaign, then `.BMP`, then the `.DAT`
+  row's 3rd file (`WINEREG/EReg058.dat`) closed this pass) — the large
+  majority of 1:1 gameplay and front-end fidelity, and every asset-format
+  row now closed.
 - **Partial/open (RE pinned, port absent or a small residual):** 2 subsystem
   rows — #32 editor chrome polish, #35 in-round debug/cheat keys. No asset
   format rows remain open: the `.DAT` row closed 2026-07-09 (`LEVELS.DAT`

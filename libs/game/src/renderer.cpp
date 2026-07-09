@@ -8,6 +8,7 @@
 
 #include "bomber/game/anim_pace.hpp"
 #include "bomber/game/hud_format.hpp"
+#include "bomber/match/team_colour.hpp"
 
 namespace bomber::game {
 
@@ -71,6 +72,11 @@ std::uint32_t Renderer::panic_roll() {
     return panic_lcg_ >> 16;
 }
 
+int Renderer::render_colour(const sim::State& s, int slot) {
+    if (slot < 0 || slot >= sim::kMaxPlayers) return 0;
+    return match::team_render_colour(s.players[slot].team, slot);
+}
+
 bool Renderer::boxed_in(const sim::State& s, int tx, int ty) {
     // "Blocked" = not walkable: outside the grid, a solid/brick/burning tile,
     // or a resting (non-flying) bomb sitting on it. Mirrors the original's
@@ -130,10 +136,14 @@ void Renderer::on_events(const sim::State& s) {
                 // sets `player` from a valid loop index, but guard it the same
                 // way BombKicked/BombPunched do above rather than trust that.
                 if (ev.player < 0 || ev.player >= sim::kMaxPlayers) break;
-                const auto& pool = assets_->deaths_for(ev.player);
+                // render_colour resolves Team Play's white/red override (see its
+                // doc comment) so a diseased-strobe-free death still shows the
+                // player's on-screen team colour, not their raw slot colour.
+                const int colour = render_colour(s, ev.player);
+                const auto& pool = assets_->deaths_for(colour);
                 if (pool.empty()) break;
                 DeathFx fx;
-                fx.player = ev.player;  // NOLINT(bugprone-signed-char-misuse) — range-checked above
+                fx.player = colour;  // NOLINT(bugprone-signed-char-misuse) — range-checked above
                 fx.anim = static_cast<std::size_t>(
                               s.tick + static_cast<std::uint64_t>(ev.player) * 7u) %
                           pool.size();
@@ -309,7 +319,7 @@ void Renderer::draw_world(const sim::State& s) {
             };
             bool l = lit(x - 1, y), r = lit(x + 1, y), u = lit(x, y - 1), d = lit(x, y + 1);
             int owner = s.flame_owner[y][x];
-            const FlameSet& fset = q.flames[owner < kLocalPlayers ? owner : 0];
+            const FlameSet& fset = q.flames[render_colour(s, owner)];
             const Anim* a = &fset.center;
             if ((l || r) && !u && !d) {
                 if (l && r) a = &fset.mid_h[(x + y) & 1];
@@ -342,7 +352,7 @@ void Renderer::draw_world(const sim::State& s) {
         }
         float sx = kFieldOriginX + bx;
         float sy = kFieldOriginY + by + sim::kTileH / 2.0f - 1.0f - lift;
-        int bo = b.owner < kLocalPlayers ? b.owner : 0;
+        int bo = render_colour(s, b.owner);
         // Bomb sprite selection (mirrors the original's per-state pick):
         //   fizzling dud  -> DUDS.ANI "bomb regular green dud"
         //   armed trigger -> TRIGBOMB.ANI "bomb trigger green"
@@ -401,7 +411,7 @@ void Renderer::draw_world(const sim::State& s) {
         // blits "shadow" @0x45a242), so only a bounce suppresses it.
         if (p.bounce <= 0) draw_anim(q.shadow, 0, sx, sy);
         sy -= lift;  // raise the body (and anything anchored to it) by the hop arc
-        int pv = i < kLocalPlayers ? i : 0;
+        int pv = render_colour(s, i);
         const Anim* a = moving_[i] ? &q.walk[pv][dir] : &q.stand[pv][dir];
         std::size_t ph = moving_[i] ? walk_phase_[i] : 0;
         // Boxed-in idle: replace the stand pose with the current "cornerhead"
@@ -456,7 +466,7 @@ void Renderer::draw_world(const sim::State& s) {
             draw_anim(*a, ph, sx, sy);
         }
         if (p.carrying) {  // held bomb rides above the head
-            int bo = p.carried_owner < kLocalPlayers ? p.carried_owner : 0;
+            int bo = render_colour(s, p.carried_owner);
             draw_anim(q.bomb[bo], pulse, sx, sy - 78.0f);
         }
     }

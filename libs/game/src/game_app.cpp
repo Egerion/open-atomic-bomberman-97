@@ -2275,7 +2275,6 @@ AppInput GameApp::present_setup() {
                 default: type = assets_.getstring(220, "OFF"); break;
             }
             std::string line = label + type;
-            if (setup_team_[i]) line += "  " + fmt_u(assets_.getstring(230, "[T%u]"), setup_team_[i]);
             // Tint the label with the slot's authentic on-screen colour: the
             // original inks each slot line via sub_41672F(i), which quantises the
             // slot's stored RGB (the .RMP tail) to 5 bits/channel and looks it up
@@ -2284,6 +2283,17 @@ AppInput GameApp::present_setup() {
             // slot reads as its real in-game colour. The selected row is nudged
             // brighter so the cursor is legible over any colour (ours; the
             // original moves a separate cursor glyph, sub_413BD6).
+            //
+            // CONFIRMED this label ink is NEVER the team red/white override: the
+            // caller (sub_410F81, pseudo.c ~15191-15204) saves dword_464964,
+            // ZEROES it, calls sub_41672F(i)/sub_416867(i) for THIS text, then
+            // restores it — deliberately forcing sub_41672F's non-team branch
+            // (the slot's own .RMP tail) even in Team Play. Only the SEPARATE
+            // team-marker glyph appended after it (getstring(230), pseudo.c
+            // ~15212-15224) is inked via sub_4141F8(team) (red/white) — see
+            // below. (Team Play's red/white override IS real for the in-match
+            // sprites — Renderer::render_colour, docs/re/player-colour.md "Team
+            // Play colour override" — just not for this particular label ink.)
             std::uint8_t sc[3];
             assets_.slot_color(i, sc);
             const bool sel = i == cursor;
@@ -2291,8 +2301,36 @@ AppInput GameApp::present_setup() {
                 int x = v + (sel ? 70 : 0);
                 return static_cast<Uint8>(x > 255 ? 255 : x);
             };
-            front_font_.draw(sdl_renderer_.get(), line, lx, ly + lys * static_cast<float>(i),
-                             boost(sc[0]), boost(sc[1]), boost(sc[2]));
+            float lx_end = front_font_.draw(sdl_renderer_.get(), line, lx,
+                                            ly + lys * static_cast<float>(i), boost(sc[0]),
+                                            boost(sc[1]), boost(sc[2]));
+            if (team_play_) {
+                // Team marker: getstring(230), drawn for EVERY slot whenever Team
+                // Play is on (gated on the GLOBAL dword_464964, pseudo.c ~15212 —
+                // NOT on this slot's own team byte, unlike our old placeholder).
+                // CONFIRMED unformatted: the original never sprintf's it (no
+                // sub_4518D0 call before the two back-to-back sub_4124A4(230)
+                // reads at pseudo.c ~15221/15223 — the second is the raw string
+                // pointer passed straight to the draw), so it carries no "%u" —
+                // the COLOUR alone tells the two teams apart, via sub_4141F8(v96)
+                // (v96 = sub_4223E7(i), this slot's own team byte): team byte != 0
+                // -> byte_49D0DA red (252,80,80), else byte_49D38F white
+                // (255,255,255) — the same red/white split as the in-match sprite
+                // override (Renderer::render_colour, docs/re/player-colour.md
+                // "Team Play colour override"). Drawn as its own run continuing
+                // the same line (the original positions it via its own
+                // getvalue(710/711/712) x/y, not literally appended text, but the
+                // visual result — a coloured marker trailing the slot line — is
+                // the same).
+                std::string marker = "  " + assets_.getstring(230, "TEAM");
+                const bool team1 = setup_team_[i] != 0;  // sub_4141F8's `a1 ?` branch
+                const std::uint8_t mc[3] = {static_cast<std::uint8_t>(team1 ? 252 : 255),
+                                            static_cast<std::uint8_t>(team1 ? 80 : 255),
+                                            static_cast<std::uint8_t>(team1 ? 80 : 255)};
+                front_font_.draw(sdl_renderer_.get(), marker, lx_end,
+                                 ly + lys * static_cast<float>(i), boost(mc[0]), boost(mc[1]),
+                                 boost(mc[2]));
+            }
         }
         // Joystick pane (getvalue 715/720): heading msg 40, then one line per
         // detected stick (msg 41 + index, from GamepadMapper::name) or, if none

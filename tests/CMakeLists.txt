@@ -36,6 +36,10 @@ bomber_add_test(bomber_golden_tests   golden       test_golden.cpp)
 bomber_add_test(bomber_stompdisease_tests stomped_diseases test_stomped_diseases.cpp)
 bomber_add_test(bomber_ai_tests       ai           test_ai.cpp)
 bomber_add_test(bomber_team_tests     team         test_team.cpp)
+# team_render_colour (the Team Play red/white sprite-colour rule) lives in
+# bomber::match (header-only, SDL-free) so the renderer's mapping can be
+# pinned without a libs/game/SDL dependency.
+target_link_libraries(bomber_team_tests PRIVATE bomber::match)
 bomber_add_test(bomber_rover_tests    rovers       test_rovers.cpp)
 
 # ANI pacing helper lives in the game lib (header-only, SDL-free): frame =
