@@ -2,10 +2,12 @@
 
 #include <algorithm>  // std::max_element
 #include <cctype>     // std::isalnum (present_editor's filename sanitizer)
+#include <chrono>     // random_boot_seed
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <iterator>  // std::size
+#include <random>    // random_boot_seed
 #include <string>
 
 #include "bomber/assets/install.hpp"
@@ -30,6 +32,36 @@ namespace fs = std::filesystem;
 // rather than fixed.
 
 namespace {
+
+// A fresh per-process seed for the front end's presentation-only LCGs
+// (setup_lcg_, attract_lcg_, goldman_lcg_, next_seed_ — GameApp::init() below
+// assigns one call's result to each). The original seeds its single C
+// rand() from the wall clock exactly once at boot — `time_(); srand_();`
+// twice in a row inside the init routine sub_41095A (pseudo.c 14610-14611
+// and, after loading the boot dialogs/config, again at 14639-14640) — so
+// EVERY "random" pick downstream of it (the glue-screen backdrop, the
+// LEVEL & ROUNDS RANDOM level, the per-match brick fill, the attract-mode
+// roster/stage, the Goldman wheel draws) varies from one launch to the next
+// (docs/re/facts.md "Per-match brick fill" already cites this same
+// `time_()`/`srand_()` pair). Our port previously left every one of these
+// LCGs at a fixed literal seed, so each replayed the exact same sequence on
+// every process start — most visibly, picking RANDOM on the LEVEL & ROUNDS
+// screen always resolved to the same map on a fresh launch (`next_seed_`
+// feeds `match::pick_stage`). This mixes `std::random_device` (real OS
+// entropy on every platform we ship) with the high-resolution clock so the
+// result still varies even on a `random_device` implementation that is
+// itself deterministic (a known quirk of some older toolchains) — matching
+// the original's per-boot reseed while staying entirely presentation-side:
+// this seeds LCGs that only ever touch cosmetic/setup-time picks, never
+// `bomber::sim::State::rng` (ADR-0003 untouched).
+std::uint32_t random_boot_seed() {
+    static std::random_device rd;
+    auto clock_bits = static_cast<std::uint32_t>(
+        std::chrono::high_resolution_clock::now().time_since_epoch().count());
+    std::uint32_t seed = static_cast<std::uint32_t>(rd()) ^ clock_bits;
+    return seed != 0 ? seed : 1u;  // an LCG's own step never produces 0 from a 0 seed here,
+                                    // but avoid a literal 0 seed on principle
+}
 
 // The shared sub_43C734 dialog-chrome primitive — PINNED 2026-07-09
 // (docs/re/frontend-flow.md "The sub_43C734 dialog-chrome primitive"). Both
@@ -183,6 +215,18 @@ void draw_boot_loading_dialog(SDL_Renderer* ren, const FontTextures& font, const
 }  // namespace
 
 bool GameApp::init() {
+    // Reseed the front end's presentation-only LCGs from real per-process
+    // entropy, mirroring sub_41095A's boot-time `time_(); srand_();` (see
+    // random_boot_seed()'s comment above) — done first, before anything that
+    // could read one of them, exactly like the original reseeds before its
+    // own config/subsystem init runs. Fixes RANDOM level selection (and the
+    // per-match brick fill/attract roster/Goldman wheel) always replaying the
+    // same pick on a fresh launch.
+    setup_lcg_ = random_boot_seed();
+    attract_lcg_ = random_boot_seed();
+    goldman_lcg_ = random_boot_seed();
+    next_seed_ = random_boot_seed();
+
     fs::path game = !opts_.game_dir.empty() ? opts_.game_dir : assets::default_game_dir();
     if (game.empty() || !fs::is_directory(game / "DATA")) {
         std::fprintf(stderr,

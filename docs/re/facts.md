@@ -1456,6 +1456,61 @@ Capstone/PE-parsing script per `docs/re/method.md`; `sub_40200C`
 increment; `sub_4124A4` shared id lookup, already documented above as
 `getvalue`; `messages.txt` ids 900/905/910-928 in this install's own copy.)
 
+## Presentation LCGs must reseed from real entropy at boot — CONFIRMED (`sub_41095A`, pseudo.c 14602-14663)
+
+Read/fixed 2026-07-09, reported as "RANDOM level selection always gives the
+same map." Root cause: our four presentation-only LCGs (`setup_lcg_`,
+`attract_lcg_`, `goldman_lcg_`, `next_seed_` in `GameApp`) were left at fixed
+literal seeds set once at construction (member-initializer defaults), so
+every fresh process replayed the exact same "random" sequence — most visibly,
+`next_seed_` feeds both `match::pick_stage` (the LEVEL & ROUNDS RANDOM pick)
+and `match::build_match_config`'s per-round brick fill/spawn shuffle, so a
+freshly-launched game's first RANDOM level pick was always identical.
+
+- **The original seeds its C `rand()` from the wall clock exactly ONCE at
+  process boot**, not per round/per match: `sub_41095A` (the top-level init
+  routine, called once from `WinMain`'s equivalent at pseudo.c 30950) runs
+  `time_(); srand_();` twice in a row — once at entry (pseudo.c 14610-14611,
+  before any subsystem/config load) and again right after loading the boot
+  dialogs/VALUELST config (pseudo.c 14639-14640). Both calls are boot-time
+  only; nothing later in the binary calls `srand_()` again. Every downstream
+  `rand_()` draw (stage RANDOM pick in `sub_410B6E` pseudo.c 14746-14755,
+  brick fill in `sub_4260F5`, attract-mode roster/stage, the Goldman wheel's
+  5 draws) just continues pulling from that one continuous, wall-clock-seeded
+  stream for the rest of the process's life — this is the same `time_()`/
+  `srand_()` pair the "Per-match brick fill" entry above already cites for
+  the brick-fill RNG source.
+- **Per-round cadence confirmed separately**: the RANDOM stage pick inside
+  `sub_410B6E` (pseudo.c 14746-14755, `dword_46499C = rand_() % v29`, a
+  200-try retry against the enabled-level VALUELST flags 1150-1160) is NOT
+  gated to run once per match. `sub_410B6E` is invoked from the top of
+  `sub_42A3F6` (pseudo.c 29609, gated `if (!dword_464A68)`), and
+  `sub_42A3F6` itself is called AGAIN, recursively, from the results/
+  scoreboard screen handler for every subsequent round of the same match
+  (pseudo.c 30650, `++dword_4642C4; sub_42A3F6();`) — the per-round tick
+  loop `sub_427342`/`sub_4293E5` resets `dword_464A68 = 0` on entry (pseudo.c
+  15044), which is what re-arms `sub_410B6E`'s `if (!dword_464A68)` gate for
+  the next round. So a RANDOM level IS free to change round-to-round within
+  one match in the original — this matches our existing architecture
+  unchanged (`GameApp::run_match()` already calls `start_match(next_seed_++)`
+  once per round, at line ~2457 of `game_app.cpp`); no cadence change was
+  needed, only the boot seed.
+
+**Port.** `GameApp::init()` now reseeds all four presentation LCGs from a
+fresh per-process `random_boot_seed()` (`game_app.cpp`, mixing
+`std::random_device` with `std::chrono::high_resolution_clock` — real OS
+entropy rather than reproducing Watcom's exact `rand()`/`srand()` algorithm,
+which is unnecessary since none of these four LCGs ever touch
+`bomber::sim::State::rng` or the hashed sim state; ADR-0003 is untouched).
+This is done first thing in `init()`, before anything reads one of the four
+LCGs. Presentation-only, as with every LCG in this file: `setup_lcg_`,
+`attract_lcg_`, `goldman_lcg_`, and `next_seed_` never feed
+`bomber::sim::State::rng`. **No golden impact** — `libs/sim` untouched, only
+`libs/game`'s boot sequence changed. (Provenance: `sub_41095A` pseudo.c
+14602-14663; `sub_410B6E` pseudo.c 14688-14857; `sub_42A3F6` pseudo.c
+29609-30185 and its recursive call site at pseudo.c 30650; `sub_4260F5`
+already cited above.)
+
 ## Still guessed — not yet extracted from the binary
 
 | Constant | Current value | Status |
