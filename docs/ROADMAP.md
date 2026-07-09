@@ -376,49 +376,80 @@ behaviour changes (cite the facts.md entry) → tick the box here.
 - [ ] Known parked fidelity gaps (need their own golden recaptures, flagged as
       task chips): flame-arm stops, flying-bomb landing on powerups, scatter
       occupancy test.
-- [x] Campaign mode — DONE-with-scope 2026-07-09 (`docs/re/campaign.md`,
-      `sub_401085`/`sub_4015C6`/`sub_410F81`). `.CAM` parser
-      (`libs/assets/campaign.hpp/.cpp`, `bomber::assets::res`): `;` comments,
-      `-C`-marked 9-field stage lines (case-insensitive marker), lenient
-      per-line malformed-line warnings, mirrors `messages.hpp`'s
-      parse/load split (`tests/test_campaign.cpp`, registered). Trigger:
-      present_setup's 'C'×5 same-key counter (`campaign_trigger_count_`,
-      mirrors the menu's Ctrl+E×6 `editor_trigger_count_`) opens
-      `CampaignFilePicker` (`libs/game/campaign_screen.hpp/.cpp`, same glob+
-      list-dialog shape as `SchemeFilePicker`) globbing `*.cam` in the
-      install root; a confirmed pick loads the file, seeds all 10 roster
-      slots from stage 0's rover/ghost/AI counts (folded into COMPUTER
-      slots — see TODO below), and arms `campaign_active_`. Flow: campaign
-      SKIPS `present_map_select` (`sub_406DDE`'s `if (!dword_46489C)` gate)
-      going straight from `present_setup` to the match; a clinched match
-      (VICTORY) advances `campaign_stage_index_` and loads the next stage's
-      scheme/roster instead of returning to the menu, via a new
-      `AppInput::CampaignContinue` (`app_flow.hpp`, `Results -> Match`,
-      doctested in `test_frontend.cpp`) — kept distinct from
-      `RoundContinue` since campaign stage-advance changes the
-      roster/scheme, breaking that event's "same roster/settings" contract.
-      Esc on present_setup clears the campaign flag (port convenience — the
-      doc does not pin the original's own campaign-exit key). GOLDEN: no
-      impact — zero libs/sim changes; campaign only sequences which
-      `match::build_match_config` runs next, same anti-corruption boundary
-      `start_match` already crosses for a manual game.
-      **TODO(RE)** (unpinned by campaign.md, marked rather than guessed):
-      rover speed / ghost speed / AI difficulty (`.CAM` fields 4/6/8) are
-      parsed onto `CampaignStage` but not applied — no consumer site is
-      pinned, and field 8 is "(unused at present)" per the format's own
-      header; rovers/ghosts have no distinct AI archetype in `libs/sim`
-      (folded into COMPUTER, the closest existing slot kind) — a real
-      rover/ghost behaviour split is a `libs/sim` AI change, out of this
-      port's "zero sim impact" scope; `sub_4016DA`'s per-tick round-timeout
-      countdown (`dword_4646C0` vs `2*dword_46494C*getvalue(25)`) is not
-      reproduced — stage completion instead reuses the existing best-of-N
-      win_target_/win_by_kills clinch; the stage display name/level-name
-      banner (`sub_401312`/`sub_40133F`'s `sub_4124A4(1235)`/`sub_4518D0`
-      formatting) has no on-screen reproduction yet; mid-round abandon
-      (Esc/Ctrl+Q inside `run_match`) is indistinguishable from a real
-      draw/time-up and so does not itself clear campaign state — it replays
-      the same stage like any other draw, a scope call to avoid widening
-      `run_match`'s return contract for this port.
+- [x] Campaign mode — DONE-with-scope 2026-07-09, consumers RE'd + banner/
+      AI-seeding corrected same day (`docs/re/campaign.md`,
+      `sub_401085`/`sub_4015C6`/`sub_410F81`/`sub_40151B`/`sub_4016DA`/
+      `sub_40133F`). `.CAM` parser (`libs/assets/campaign.hpp/.cpp`,
+      `bomber::assets::res`): `;` comments, `-C`-marked 9-field stage lines
+      (case-insensitive marker), lenient per-line malformed-line warnings,
+      mirrors `messages.hpp`'s parse/load split (`tests/test_campaign.cpp`,
+      registered). Trigger: present_setup's 'C'×5 same-key counter
+      (`campaign_trigger_count_`, mirrors the menu's Ctrl+E×6
+      `editor_trigger_count_`) opens `CampaignFilePicker` (`libs/game/
+      campaign_screen.hpp/.cpp`, same glob+list-dialog shape as
+      `SchemeFilePicker`) globbing `*.cam` in the install root; a confirmed
+      pick loads the file, seeds the roster from stage 0's AI count, and
+      arms `campaign_active_`. Flow: campaign SKIPS `present_map_select`
+      (`sub_406DDE`'s `if (!dword_46489C)` gate) going straight from
+      `present_setup` to the match; a clinched match (VICTORY) advances
+      `campaign_stage_index_` and loads the next stage's scheme/roster
+      instead of returning to the menu, via a new `AppInput::
+      CampaignContinue` (`app_flow.hpp`, `Results -> Match`, doctested in
+      `test_frontend.cpp`) — kept distinct from `RoundContinue` since
+      campaign stage-advance changes the roster/scheme, breaking that
+      event's "same roster/settings" contract. Esc on present_setup clears
+      the campaign flag (port convenience — the doc does not pin the
+      original's own campaign-exit key). GOLDEN: no impact — zero libs/sim
+      changes; campaign only sequences which `match::build_match_config`
+      runs next, same anti-corruption boundary `start_match` already
+      crosses for a manual game.
+      **2026-07-09 consumer RE + correction** (`docs/re/campaign.md`'s
+      "sub_40151B", "Rover/ghost/AI roster", "Round pacing", "Stage banner"
+      sections): the prior TODO list guessed at consumer sites; all four are
+      now pinned. (1) **AI count seeding CORRECTED**: the real seeder is
+      `sub_40151B` (not `sub_4015C6`/`sub_42288C` — that only clears a
+      per-slot UI latch), which activates the AI count via `sub_422928`'s
+      RANDOM slot pick (`rand()%10` + retry-on-occupied), not a sequential
+      fill; ported as `bomber::game::seed_campaign_ai_slots` (`libs/game/
+      results.hpp`, doctested in `test_frontend.cpp`), driven by the
+      existing presentation-only `setup_lcg_`. (2) **Rovers/ghosts are NOT
+      player slots** — CORRECTED, the prior "folded into COMPUTER slots"
+      roster fill was a mislabelling and has been REMOVED (not replaced):
+      they are autonomous roaming map-hazard actors in a third, separate
+      particle-actor table (`sub_401AAE`/`sub_401B05` spawn, `sub_401B5C`
+      per-tick mover: wander + human-avoidance bias, flame-death with
+      kill-score award, player knockback). This is a genuine new `libs/sim`
+      actor kind (spawn/movement-AI/flame-interaction/hashed-state/art) —
+      confirmed real but deliberately NOT ported here (out of scope for a
+      doc-and-small-port pass; flagged as follow-up, not silently dropped).
+      `rover_speed`/`ghost_speed` (fields 4/6) are real original inputs (an
+      actor's move-budget) with no effect until that actor kind exists.
+      (3) **AI difficulty (field 8) CONFIRMED dead** — grepped the whole
+      decompile for every read of the campaign record's field-8 slot: none
+      exists beyond the loader's own write. Not a guess anymore; nothing
+      left to wire up, and no dormant AI-personality link either (VALUELST
+      900=1 in the shipped file ⇒ `rand()%900` always yields personality 0
+      regardless of any campaign input). (4) **`sub_4016DA` round pacing
+      PINNED** (5 clauses: rover/ghost mover driver, the SAME survivor-count
+      check the normal round-end already uses, a campaign-only 2s grace
+      timer once every rover/ghost is dead, a human/network-alive early-out
+      guard, and a mutual-wipeout stage-replay fallback) — clause 2 is
+      already exactly our port's existing best-of-N `sides_remaining<=1`
+      check, so no change there; clauses 1/3 need rovers/ghosts to exist
+      sim-side (deferred with them, now for a pinned reason instead of an
+      unpinned guess); clause 5 (mutual-wipeout replay) is independently
+      portable but left for a follow-up (edge case, no test pressure yet).
+      **Stage banner PORTED**: `GameApp::present_campaign_banner()` shows
+      `"(<stage name>)"` (getstring 1235) over `"Prepare to begin
+      Campaign!"` (getstring 1230) at every stage transition (first stage
+      via the picker, subsequent stages via the Results handler); the
+      stage-list-exhausted variant (getstring 1220/1225) is NOT ported,
+      consistent with the port's existing dialog-less exhaustion path.
+      **Remaining scope calls** (unchanged from before, still deliberate):
+      mid-round abandon (Esc/Ctrl+Q inside `run_match`) is indistinguishable
+      from a real draw/time-up and so does not itself clear campaign state
+      — it replays the same stage like any other draw, avoiding a widened
+      `run_match` return contract for this port.
 
 ## Done (highlights)
 
