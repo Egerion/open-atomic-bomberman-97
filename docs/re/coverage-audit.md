@@ -107,6 +107,7 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 | 41 | In-round "player row" HUD (S:/K: score+kill grid, "xxx" dead-slot marker) | pinned | ported | in-match-shell.md "The player row — CONFIRMED (`sub_420F07`, corrects the point above)" (2026-07-09) — corrects row #34's/this doc's own earlier "no score/kill HUD" claim; `GameApp::draw_player_row`, `SequenceSet::eliminated_marker` | — | done |
 | 42 | In-round "cornerhead" face bubble (`KFACE.ANI`, follows one designated player slot `dword_45BE3C`) | pinned (call site + asset located) | **absent** | in-match-shell.md "The player row" section, "A separate, NOT ported, lower-confidence finding" | `dword_45BE3C`'s exact "which slot is this" semantics need more tracing before porting — a same-screen multiplayer port has no obvious single "local" slot the way a netplay client would, so guessing an index risks an invented visual | low |
 | 43 | Main-menu (and other front-end loops') animated-cursor pacing vs. an uncapped render loop | pinned | **RESOLVED** | frontend-flow.md "Cursor pacing — CORRECTED (2026-07-09)": `sub_42B9CE`'s cursor-frame counter advances once per menu-loop iteration with no separate throttle (the DirectDraw flip's own vsync IS the pacing); our port's equivalent `++frame` was uncapped (`SDL_Delay(2)` only, ~500 Hz, ~8x too fast) — fixed with one `SDL_SetRenderVSync(ren, 1)` call in `GameApp::init()`, which also corrects the same pattern in the Goldman wheel spin / boot logos / attract idle | — | done |
+| 44 | Team Play match-clinch outcome screen (TEAM0/1.PCX vs VICTORY\<player\>.PCX) | pinned | **fixed 2026-07-09** | frontend-flow.md "VICTORY" §3 (`aTeamU`/`aVictoryU`) — the port's `victory_screen()` always resolved `VICTORY<player>` even under Team Play, a real end-to-end gap left over from before `Player::team` landed (frontend-flow.md's "Spine mapping" note used to say "TEAM%u is a documented future hook"); fixed with `victory_background_name()` (`results.hpp`/`game_app.cpp`, TEAM0/TEAM1.PCX confirmed shipped in the install), gated on `is_team_mode()` at the match-clinch call site, naming the clinching player's raw setup-screen team id (same id `present_scoreboard`'s "TEAM %u WINS" line and the setup-screen marker already use) | — | done |
 
 ## 3. Asset-format coverage (libs/assets vs install tree)
 
@@ -307,11 +308,11 @@ still correctly empty).
 
 ## Summary counts
 
-Counting the 43 numbered subsystem rows (§1+§2) + the 14 distinct
+Counting the 44 numbered subsystem rows (§1+§2) + the 14 distinct
 asset-format rows in §3 (excluding pure-tooling extensions marked N/A:
 .ICO/.EXE/.DLL/.IDB):
 
-- **Covered (RE pinned + ported, "done"):** 41 of 43 subsystem rows (up from
+- **Covered (RE pinned + ported, "done"):** 42 of 44 subsystem rows (up from
   31 at the 2026-07-08 snapshot — #13 rover/ghost mover, #18 attract mode,
   and #30 clogs prize (effect + wheel icon render) closed earlier in this
   2026-07-09 pass; #15 wall-slam SFX and #23 INPUT.BM menu-row binding
@@ -319,11 +320,13 @@ asset-format rows in §3 (excluding pure-tooling extensions marked N/A:
   tileset toggle/brush-preview/dialog-chrome polish closed in the same
   day's editor pass; #40 Team Play colour split closed in the comprehensive
   team-mode RE pass; #41 the in-round "player row" S:/K: HUD and #43 the
-  vsync cursor-pacing fix closed in the user-findings pass the same day) +
-  **14 of 14** asset formats (up from 11 — .CAM/campaign, then `.BMP`, then
-  the `.DAT` row's 3rd file (`WINEREG/EReg058.dat`) closed this pass) — the
-  large majority of 1:1 gameplay and front-end fidelity, and every
-  asset-format row now closed.
+  vsync cursor-pacing fix closed in the user-findings pass the same day;
+  #44 the Team Play TEAM0/1.PCX match-clinch outcome screen — a real
+  end-to-end gap the user-reported "Team Play is still broken" pass found
+  and fixed the same day) + **14 of 14** asset formats (up from 11 —
+  .CAM/campaign, then `.BMP`, then the `.DAT` row's 3rd file
+  (`WINEREG/EReg058.dat`) closed this pass) — the large majority of 1:1
+  gameplay and front-end fidelity, and every asset-format row now closed.
 - **Partial/open (RE pinned, port absent or a small residual):** 2 subsystem
   rows — #35 in-round debug/cheat keys, #42 the in-round "cornerhead"
   KFACE.ANI face bubble (pinned but deliberately unported until

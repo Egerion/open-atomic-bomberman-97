@@ -39,6 +39,7 @@ using bomber::game::next;
 using bomber::game::seed_campaign_ai_slots;
 using bomber::game::SlotInputType;
 using bomber::game::tally_kills;
+using bomber::game::victory_background_name;
 using bomber::game::win_by_kills_clinch;
 using bomber::sim::Event;
 using bomber::sim::kMaxPlayers;
@@ -359,6 +360,26 @@ TEST_CASE("assign_gold_player mirrors dword_46492C's RESULTS-tier write") {
     CHECK(assign_gold_player(true, true, 0, team_of) == 0);  // player 0 -> team 0
     // No clinch yet: -1 passes straight through, never indexed into team_of.
     CHECK(assign_gold_player(true, true, -1, team_of) == -1);
+}
+
+// docs/re/frontend-flow.md "VICTORY" §3 (aTeamU vs aVictoryU): the
+// match-clinch outcome screen is TEAM<0/1>.PCX under Team Play, else
+// VICTORY<player>.PCX — a real gap fixed 2026-07-09 (the port previously
+// always resolved VICTORY<player>, even under Team Play, because this branch
+// predates Player::team landing).
+TEST_CASE("victory_background_name: solo names the winning player") {
+    CHECK(victory_background_name(/*team_mode=*/false, /*player=*/0, /*team=*/0) == "VICTORY0");
+    CHECK(victory_background_name(false, 7, 1) == "VICTORY7");
+    // The team id is ignored entirely outside team mode.
+    CHECK(victory_background_name(false, 3, 99) == "VICTORY3");
+}
+
+TEST_CASE("victory_background_name: team mode names the clinching TEAM, not the player") {
+    CHECK(victory_background_name(/*team_mode=*/true, /*player=*/2, /*team=*/1) == "TEAM1");
+    CHECK(victory_background_name(true, 5, 0) == "TEAM0");
+    // The player index is ignored entirely once team mode picks the branch —
+    // only the clinching player's raw setup-screen team id matters.
+    CHECK(victory_background_name(true, 9, 0) == "TEAM0");
 }
 
 // docs/re/campaign.md "Rover/ghost/AI roster — CORRECTED": sub_40151B's

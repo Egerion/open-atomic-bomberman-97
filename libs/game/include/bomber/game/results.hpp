@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "bomber/sim/constants.hpp"
@@ -91,6 +92,23 @@ inline int assign_gold_player(bool goldman_on, bool team_mode, int clinched_play
     if (!goldman_on) return -1;
     if (team_mode && clinched_player >= 0) return team_of[static_cast<std::size_t>(clinched_player)];
     return clinched_player;
+}
+
+// The match-clinch outcome screen's background name (docs/re/frontend-flow.md
+// "VICTORY" §3, CONFIRMED): "Team game -> aTeamU (\"team%u\" -> TEAM0/
+// TEAM1.PCX); else -> aVictoryU (\"victory%u\" -> VICTORY0..VICTORY9.PCX)".
+// `clinched_team` is the clinching player's RAW 0/1 setup-screen team id
+// (team_of[clinched_player], same id present_scoreboard's "TEAM %u WINS THE
+// MATCH!" line and the setup-screen team-marker glyph already use) — NOT the
+// sim's shifted 1/2 Player::team. Both TEAM0.PCX/TEAM1.PCX are confirmed
+// shipped in the install. Before this helper existed the port always
+// resolved VICTORY<player> even under Team Play (a genuine end-to-end gap,
+// not a deliberate simplification — TEAM%u used to be a documented "future
+// hook" note from before Player::team landed).
+inline std::string victory_background_name(bool team_mode, int clinched_player,
+                                            int clinched_team) {
+    return team_mode ? "TEAM" + std::to_string(clinched_team)
+                      : "VICTORY" + std::to_string(clinched_player);
 }
 
 // Campaign AI-roster seeding (docs/re/campaign.md "Rover/ghost/AI roster —

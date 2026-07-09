@@ -561,9 +561,13 @@ private:
     // options.ini key, ever) still falls back to Tuning's own confirmed
     // default (1 = medium) rather than OptionsSnapshot's arbitrary default.
     std::optional<int> conveyor_speed_index_;
-    // Team Play toggle (dword_464964). Mirrors options_.team_play; threaded
-    // into MatchConfig::team_play at start_match() (config-only, not consumed
-    // by build_state() yet — see MatchConfig::team_play's doc comment).
+    // Team Play toggle (dword_464964). Mirrors options_.team_play; the
+    // game-type-level GATE, separate from each slot's own setup_team_[]
+    // (+84) byte. start_match() zeroes every slot's MatchConfig::team[] when
+    // this is false, regardless of what setup_team_[] holds (there is no
+    // separate MatchConfig::team_play field — team[]'s all-zero/non-zero
+    // state IS the hashed Player::team gate, docs/re/setup-screens.md
+    // "Roster/level -> match"). is_team_mode() also gates on this directly.
     bool team_play_ = false;
     // The install-root options.ini path resolved in init(), used only by
     // flush_options() (the write-on-exit hook, §2). Empty when no game_dir
