@@ -167,6 +167,27 @@ std::uint64_t state_hash(const State& s) {
             (static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.fly_ticks) & 0x3F) << 56));
         mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.dud_left)));
     }
+    // Campaign rover/ghost hazards (docs/re/campaign.md "Rover/ghost/AI
+    // roster", "Per-tick mover"). Empty on every non-campaign match, so this
+    // is a ONE-TIME hash-layout growth (mix(0) for the count word, no per-
+    // entry words at all) for every existing golden scenario — CLAUDE.md
+    // determinism contract rule 5.
+    mix(static_cast<std::uint64_t>(s.rovers.size()));
+    for (const auto& r : s.rovers) {
+        mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(r.x)) |
+            (static_cast<std::uint64_t>(static_cast<std::uint32_t>(r.y)) << 32));
+        mix(static_cast<std::uint64_t>(r.alive) |
+            (static_cast<std::uint64_t>(static_cast<std::uint8_t>(r.kind)) << 8) |
+            (static_cast<std::uint64_t>(r.dir) << 16) |
+            (static_cast<std::uint64_t>(static_cast<std::uint32_t>(r.speed)) << 24) |
+            (static_cast<std::uint64_t>(r.anim_step) << 48));
+        mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(r.move_budget)));
+    }
+    // Campaign hazard-active flag + grace timer (docs/re/campaign.md "Round
+    // pacing" clause 3): both always 0/false on a non-campaign match, so
+    // mix(0) for every existing golden scenario.
+    mix(static_cast<std::uint64_t>(s.campaign_hazards_active) |
+        (static_cast<std::uint64_t>(static_cast<std::uint32_t>(s.hazard_clear_timer)) << 8));
     return h;
 }
 

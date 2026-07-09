@@ -8,6 +8,7 @@
 #include "bomber/sim/simulation.hpp"
 #include "grid.hpp"
 #include "systems/powerups.hpp"
+#include "systems/rovers.hpp"
 
 namespace bomber::sim::detail {
 
@@ -77,6 +78,20 @@ State build_state(const MatchConfig& config) {
         p.clogs = config.born_with_clogs[i];
         p.speed -= p.clogs * s.tuning.clogs_speed_penalty;
     }
+
+    // Campaign rover/ghost hazards (docs/re/campaign.md "sub_40151B — the
+    // REAL per-stage starter"): the original seeds ghosts THEN rovers
+    // (sub_401B05 before sub_401AAE in sub_40151B's own call order), both
+    // AFTER players are placed (the spawn's distance-3-from-every-player
+    // gate needs live player positions) and BEFORE the hidden-powerup RNG
+    // loop below (sub_40151B runs at stage-start, well before the normal
+    // per-round powerup-hide pass). Zero count -> RoverSystem::spawn draws
+    // no RNG at all, so every non-campaign MatchConfig (both counts default
+    // 0) leaves the RNG stream byte-identical to before this code existed.
+    s.campaign_hazards_active = config.campaign_rovers > 0 || config.campaign_ghosts > 0;
+    RoverSystem rover_system{s};
+    rover_system.spawn(RoverKind::Ghost, config.campaign_ghosts, config.campaign_ghost_speed);
+    rover_system.spawn(RoverKind::Rover, config.campaign_rovers, config.campaign_rover_speed);
 
     // Hide powerups under randomly chosen bricks (seeded RNG — deterministic).
     std::vector<std::pair<int, int>> bricks;

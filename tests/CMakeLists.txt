@@ -36,6 +36,7 @@ bomber_add_test(bomber_golden_tests   golden       test_golden.cpp)
 bomber_add_test(bomber_stompdisease_tests stomped_diseases test_stomped_diseases.cpp)
 bomber_add_test(bomber_ai_tests       ai           test_ai.cpp)
 bomber_add_test(bomber_team_tests     team         test_team.cpp)
+bomber_add_test(bomber_rover_tests    rovers       test_rovers.cpp)
 
 # ANI pacing helper lives in the game lib (header-only, SDL-free): frame =
 # counter % statecnt, mirroring sub_41DAA7. Own target so it needn't link sim.

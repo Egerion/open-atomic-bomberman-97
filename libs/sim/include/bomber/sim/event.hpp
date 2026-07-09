@@ -32,6 +32,15 @@ struct Event {
         // TrampolineBounce -> SOUNDLST 350, WarpUsed -> SOUNDLST 1330.
         TrampolineBounce, // player stepped onto a trampoline and launched a hop
         WarpUsed,         // player entered a warphole (reserved; warphole deferred)
+        // Campaign rover/ghost hazards (docs/re/campaign.md "Per-tick mover").
+        // `player` is the rover's INDEX into State::rovers for all three (not
+        // a player slot) unless noted otherwise.
+        RoverSpawned,   // a rover/ghost was placed on the board; data = RoverKind
+        RoverDied,      // stepped into an active flame; data = flame owner's player slot
+        RoverKilledPlayer, // killed a human/network player on its landing tile;
+                           // `player` is the VICTIM's player slot (not a rover index)
+                           // so the presentation can reuse the normal death path;
+                           // data = the rover's index into State::rovers
     };
     Type type{};
     std::int8_t player = -1;  // acting/affected player, -1 if n/a

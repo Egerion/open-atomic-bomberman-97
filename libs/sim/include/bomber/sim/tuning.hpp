@@ -140,6 +140,15 @@ struct Tuning {
     // BombSystem::slide. See docs/re/facts.md "Options toggles".
     bool diseases_destroyable = true;      // id 120
 
+    // Campaign rover/ghost tunables (docs/re/campaign.md "Per-tick mover" /
+    // "Round pacing"). id 1205 ("human-avoidance bias") is confirmed NOT
+    // read anywhere in the mover (sub_401B5C) — correctly left unconsumed;
+    // see campaign.md's clause 2 for the full negative-result citation.
+    std::int32_t rover_turn_chance = 3;    // id 1200: 1-in-N chance to turn at an open intersection
+    std::int32_t campaign_ai_kill_score = 250;  // id 1300: points for killing an AI (campaign only)
+    std::int32_t rover_kill_score = 15;    // id 1310: points for killing a rover (campaign only)
+    std::int32_t ghost_kill_score = 25;    // id 1320: points for killing a ghost (campaign only)
+
     // Feeds one parsed VALUELST pair. Returns true if the id was consumed.
     bool apply(int id, std::int64_t value) {
         auto v = static_cast<std::int32_t>(value);
@@ -182,6 +191,10 @@ struct Tuning {
             case 124: diseases_curable = v != 0; return true;
             case 125: disease_cure_chance = v; return true;
             case 129: disease_freshness = v; return true;
+            case 1200: rover_turn_chance = v; return true;
+            case 1300: campaign_ai_kill_score = v; return true;
+            case 1310: rover_kill_score = v; return true;
+            case 1320: ghost_kill_score = v; return true;
             default: break;
         }
         if (id >= 130 && id < 139) { disease_frames[id - 130] = v; return true; }

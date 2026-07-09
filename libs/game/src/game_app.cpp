@@ -445,6 +445,22 @@ void GameApp::start_match(std::uint32_t seed) {
     auto actors = assets::extra::load_for_board(opts_.game_dir, stage, sim::kGridWidth,
                                                 sim::kGridHeight);
     match::apply_actors(cfg, actors, seed);
+    // Campaign rover/ghost hazards (docs/re/campaign.md "Rover/ghost/AI
+    // roster", "sub_40151B — the REAL per-stage starter"): fields 3-6 of the
+    // current stage's .CAM record. build_state (setup.cpp) spawns them (ghost
+    // first, then rover, matching sub_40151B's own call order) as part of
+    // Simulation's constructor. A non-campaign match leaves these at 0
+    // (MatchConfig's default), so RoverSystem::spawn/tick are true no-ops.
+    if (campaign_active_ &&
+        campaign_stage_index_ >= 0 &&
+        campaign_stage_index_ < static_cast<int>(campaign_stages_.size())) {
+        const assets::res::CampaignStage& stage_rec =
+            campaign_stages_[static_cast<std::size_t>(campaign_stage_index_)];
+        cfg.campaign_rovers = stage_rec.rovers;
+        cfg.campaign_rover_speed = stage_rec.rover_speed;
+        cfg.campaign_ghosts = stage_rec.ghosts;
+        cfg.campaign_ghost_speed = stage_rec.ghost_speed;
+    }
     sim_ = sim::Simulation(cfg);
     if (assets_.load_stage(stage)) {
         seqs_.resolve_stage(assets_, stage);
@@ -1040,22 +1056,23 @@ bool GameApp::load_campaign_stage(int index) {
         setup_team_[slot] = 0;
     }
     for (int slot : seed_campaign_ai_slots(setup_lcg_, stage.ai_count)) setup_type_[slot] = 1;
-    // TODO(RE, scoped out — docs/re/campaign.md "Rovers/ghosts are NOT
-    // player slots"): rovers/ghosts (fields 3-6) are autonomous roaming
-    // map-hazard actors spawned into a SEPARATE particle-actor table
-    // (sub_401AAE/sub_401B05, dword_45E020, distinct from both the player
-    // array and the EXTRA<N>.RES stage-actor registry stage-actors.md
-    // documents), with their own per-tick mover (sub_401B5C: random-turn
-    // wander biased away from humans at intersections, VALUELST 1200/1205;
-    // die on stepping into an active flame tile, sub_42708D, awarding the
-    // flame's owner VALUELST 1310/1320 points; punch players off their
-    // landing tile). This is a genuine new libs/sim actor kind (spawn,
-    // movement AI, flame interaction, hashed state, art) — out of scope for
-    // this doc-and-port pass; ai_difficulty (field 8) is CONFIRMED dead
+    // Rovers/ghosts (fields 3-6, docs/re/campaign.md "Rover/ghost/AI
+    // roster") are NOT player slots — they are autonomous roaming map-hazard
+    // actors, now a real libs/sim actor kind (RoverSystem: spawn, wander AI,
+    // flame death + kill-score, landing-tile player kill; hashed
+    // State::rovers). start_match reads stage.rovers/rover_speed/ghosts/
+    // ghost_speed straight off campaign_stages_[campaign_stage_index_] into
+    // MatchConfig::campaign_rovers/etc (this function only prepares the
+    // scheme/roster/banner, not the sim config, so the counts are read
+    // there, not stashed here). ai_difficulty (field 8) is CONFIRMED dead
     // code (grep of the whole binary: dword_45E010's field-8 slot,
     // v20[27]/v6[27], is written once by the loader and read NOWHERE else),
     // matching the .CAM format's own "(unused at present)" comment exactly
-    // — not a guess, a confirmed negative.
+    // — not a guess, a confirmed negative. Round pacing clauses 1/3/4/5
+    // (docs/re/campaign.md "Round pacing") are now wired too: clause 1 by
+    // RoverSystem::tick itself (simulation.cpp), clause 3 by run_match's
+    // hazard_clear_timer edge-check, clauses 4-5 by the Results DRAW branch
+    // (run_app) — see each site's own comment for the exact mechanism.
 
     // Stage display banner (docs/re/campaign.md "Stage banner — CONFIRMED"):
     // sub_40133F formats getstring(1235)="(%s)" with the stage's OWN name
@@ -2112,6 +2129,19 @@ AppInput GameApp::run_match() {
             tally_kills(sim_.state().events, kill_count_);
 
             const sim::State& s = sim_.state();
+            // Campaign hazard-clear grace timer (docs/re/campaign.md "Round
+            // pacing" clause 3, sub_4016DA's dword_4646C0): once every
+            // rover/ghost has been dead for kHazardClearTicks ticks, the
+            // ORIGINAL flags "stage clear, pending" — reached even if a
+            // human survivor is ALSO already about to end the round the
+            // normal way (clause 2 below), so this is an independent, not
+            // additional, early-out. Edge-detected on the STATE field itself
+            // (RoverSystem is a private stack object of simulation.cpp) —
+            // fires exactly once, the tick the timer reaches the threshold.
+            if (over_ticks < 0 && campaign_active_ &&
+                s.hazard_clear_timer == sim::kHazardClearTicks) {
+                over_ticks = 3 * sim::kTicksPerSecond;
+            }
             // Team-aware round-over: "one SIDE left", not "one player left"
             // (docs/re/ai.md TEAM follow-up). sides_remaining() degenerates to
             // alive_count() when every team byte is 0 (the default), so a solo
@@ -2373,6 +2403,16 @@ int GameApp::run_app() {
                     ev = present_scoreboard();
                 } else {
                     // DRAW (no survivor / time-up): nobody scores; replay a round.
+                    // This is ALSO clauses 4-5 of docs/re/campaign.md "Round
+                    // pacing" (sub_4016DA): "all humans/network players dead
+                    // -> undo the pending stage advance, replay the SAME
+                    // stage". Our port never needs an explicit undo because
+                    // campaign_stage_index_ is only ever incremented in the
+                    // match_over branch above, which requires w>=0 (a
+                    // survivor) — a draw (w==-1, this branch) never reaches
+                    // that increment in the first place, so "replay a round"
+                    // on a draw is already exactly "replay the same campaign
+                    // stage" for free, with no separate decrement needed.
                     audio_.start_music(kDrawMusicId);  // 1130 draw track under DRAW
                     audio_.play_random_in_range(kDrawStingLo, kDrawStingHi);
                     ev = present_screen(draw_screen());
