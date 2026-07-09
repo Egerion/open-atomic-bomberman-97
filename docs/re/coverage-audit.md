@@ -100,7 +100,7 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 | 32 | Editor: Ctrl+B reset, '0' dead-tileset toggle, brush-preview-at-cursor, exact dialog chrome | pinned | ported | results-and-options.md §5/§5d "2026-07-09: the four remaining items closed out" (Ctrl+B's `dirty_`/`v49` gate — including the Esc/Q silent-exit-when-untouched corollary — `editor_grid.hpp`'s `toggle_editor_tileset` + doctest, `EditorScreen::on_mouse_move`, `dialog_chrome.{hpp,cpp}` shared confirm/text-entry chrome wired into `EditorScreen::draw`/`PowerupRulesScreen::draw`) | — | done |
 | 33 | Editor: powerup sub-editor mouse-only interaction | pinned | ported (keyboard substitute) | results-and-options.md: "documented deviation" | none required — accepted deviation, note if mouse support is later added | low |
 | 34 | In-round HUD (clock/warning ink/hurry flash/SFX 2700) | pinned | ported | in-match-shell.md "Port status: DONE — no longer a gap" (already fixed by the prior §6 pass), ROADMAP "MM:SS clock HUD... reconciled" | — | done |
-| 35 | In-round debug/cheat keys (1/4/18/274-305/288) | pinned | **absent** (F1 only) | in-match-shell.md: "remain unwired except F1" | low priority — these are developer/QA keys, not player-facing; port only if debug tooling is wanted | low |
+| 35 | In-round debug/cheat keys (1/4/18/274-305/288) | pinned | **N/A — confirmed negative, per-key (2026-07-09)** | in-match-shell.md "Row #35 closure — CONFIRMED N/A for every key, individually justified (2026-07-09)": key `1`'s dump target/payload is decompiler-unresolvable ("possibly undefined" filename register); key `4` arms raw VGA text-page memory (`0xB0000`/`0xB8000`), a hardware primitive with no modern-OS equivalent; key `18` opens a live HSL colour-remap tuning dialog whose colour math (`sub_414A65`) is already ported (player-colour.md row #26) but whose tool needs two things the port has neither of (a debug-mode flag, live texture regeneration) for a zero-player-value feature; key `288`'s 5 stat fields are 3/5 netplay-only (ADR-0003) and 2/5 Watcom/DirectSound engine counters (mem, audio-cache-hit%) with no port equivalent — showing them would mean fabricating displayed numbers; keys `274-305` are the already-established netplay stats dump (ADR-0003) | none — every key individually traced and closed; not a residual gap | N/A |
 | 36 | Pause (Ctrl+Q forfeit, no real pause) | pinned | ported | in-match-shell.md negative finding ("NO pause exists") | — | done |
 | 37 | Multi-round best-of-N + win_by_kills clinch | pinned | ported | ROADMAP "Multi-round best-of-N loop", "Kill attribution + win_by_kills — DONE 2026-07-08" | — | done |
 | 38 | Faithful screen inks (RGB555 LUT) | pinned | ported | ROADMAP "Faithful screen inks — DONE 2026-07-08" | — | done |
@@ -331,15 +331,25 @@ asset-format rows in §3 (excluding pure-tooling extensions marked N/A:
   .CAM/campaign, then `.BMP`, then the `.DAT` row's 3rd file
   (`WINEREG/EReg058.dat`) closed this pass) — the large majority of 1:1
   gameplay and front-end fidelity, and every asset-format row now closed.
-- **Partial/open (RE pinned, port absent or a small residual):** 1 subsystem
-  row — #35 in-round debug/cheat keys. No asset format rows remain open:
-  the `.DAT` row closed 2026-07-09 (`LEVELS.DAT` confirmed dead/tooling
-  data, `bmstats.dat`/`.txt` confirmed live-but-write-only debug telemetry
-  with no reader/reachable UI, and the 3rd file — `WINEREG/EReg058.dat`, a
-  blank registration-wizard user-data template — identified and confirmed
-  non-gameplay tooling, same class as the `.BMP` row).
-- **N/A / excluded (netplay per ADR-0003, or non-gameplay tooling):** 2
-  subsystem rows (#25 net-game setup screens; #42 the in-round "cornerhead"
+- **Partial/open (RE pinned, port absent or a small residual):** none. The
+  last row in this bucket, #35 in-round debug/cheat keys, was closed
+  2026-07-09 (moved to N/A below — see that row's evidence). No asset format
+  rows remain open: the `.DAT` row closed 2026-07-09 (`LEVELS.DAT` confirmed
+  dead/tooling data, `bmstats.dat`/`.txt` confirmed live-but-write-only debug
+  telemetry with no reader/reachable UI, and the 3rd file —
+  `WINEREG/EReg058.dat`, a blank registration-wizard user-data template —
+  identified and confirmed non-gameplay tooling, same class as the `.BMP`
+  row).
+- **N/A / excluded (netplay per ADR-0003, or non-gameplay tooling):** 3
+  subsystem rows (#25 net-game setup screens; #35 in-round debug/cheat keys,
+  closed 2026-07-09 — each of the five key groups [1/4/18/274-305/288]
+  individually traced and found N/A: decompiler-unresolvable dump target,
+  a raw-VGA-text-page hardware primitive with no modern equivalent, a
+  live colour-tuning dialog whose math is ported but whose tool needs a
+  debug-mode flag and live texture regeneration the port has neither of,
+  a diagnostics window that is 3/5 netplay and 2/5 unmappable engine
+  counters, and the already-established netplay stats dump — see
+  in-match-shell.md's "Row #35 closure"; #42 the in-round "cornerhead"
   KFACE.ANI face bubble, closed 2026-07-09 after a full trace of
   `dword_45BE3C` showed it to be a netplay-replicated, joystick-exclusive
   global with no local-multiplayer analogue — in-match-shell.md) + the §4
@@ -384,20 +394,30 @@ VALUELST 1010 gold-player "twinkle" sparkle (`Renderer::update_gold_sparkles`/
 draw, replacing the previous unpinned `sy - 78.0f` guess). All three landed
 in `libs/game` only — `libs/sim` untouched, golden hashes byte-identical.
 
-What remains open, in priority order:
+**Nothing remains open.** Every subsystem row is now either **done** or
+**N/A (confirmed negative, individually justified)**:
 
 1. (none — every id-audit gap is now closed: the "Fire In The Hole" taunt
    650/651+1200-1299, the gold twinkle 1010, the 500-506 carry arc, and the
    single-level 340-350/695 tile-regen + 449-460 ice-delay mechanics — see
    table rows #45/#46 and `docs/re/facts.md`.)
-2. Low-priority polish: in-round debug/cheat keys (#35, developer/QA-only).
+2. In-round debug/cheat keys (#35) — **CLOSED 2026-07-09**, not deferred:
+   each of the five key groups (`1`/`4`/`18`/`274-305`/`288`) was traced to
+   its actual function bodies in `pseudo.c` and individually classified N/A
+   — a decompiler-unresolvable dump target, a raw-VGA-text-page hardware
+   primitive, a live colour-tuning dialog whose math is already ported but
+   whose developer-tool chrome needs capabilities (a debug-mode flag, live
+   texture regeneration) the port doesn't have for zero player-facing value,
+   a diagnostics window that's 3/5 netplay-only and 2/5 unmappable engine
+   counters, and the already-established netplay stats dump. See
+   in-match-shell.md's "Row #35 closure" section and table row #35 above.
    (Editor chrome #32 — Ctrl+B reset, '0' toggle, brush-preview, exact
    dialog chrome — closed in the same day's editor pass; campaign clause 5
    closed per the paragraph above. The in-round "cornerhead" `KFACE.ANI`
-   face bubble, #42, is likewise off this list — 2026-07-09's full
-   `dword_45BE3C` trace closed it N/A, not a residual: it is a netplay-only,
-   joystick-gated broadcast with no same-screen-multiplayer analogue, see
-   table row #42 and in-match-shell.md.)
+   face bubble, #42, is likewise closed N/A — 2026-07-09's full
+   `dword_45BE3C` trace closed it: a netplay-only, joystick-gated broadcast
+   with no same-screen-multiplayer analogue, see table row #42 and
+   in-match-shell.md.)
 
 `.BMP`/`.TXT`/`.DAT` asset spot-checks (§3) — **CLOSED 2026-07-09**: the
 single `.BMP` (`WINEREG/INTER.BMP`) belongs to the bundled
