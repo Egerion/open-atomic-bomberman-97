@@ -91,7 +91,7 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 | BM help-screen | `.BM` | 10 | pinned | ported | `docs/formats/bm.md`, `bmscreen`/HelpBrowser | — | done |
 | Resource list | `.RES` | 8 (incl. VALUELST.RES, SOUNDLST.RES, EXTRA*.RES) | pinned | ported | `reslist.hpp`, `extra.hpp`, facts.md, stage-actors.md (EXTRA*.RES actor registry) | — | done |
 | Font | `.FON` | 3 | pinned | ported | `docs/formats/fon.md`, `bmfont.hpp`, `test_bmfont.cpp` | — | done |
-| Misc data | `.DAT` | 3 (LEVELS.DAT, bmstats.dat, + 1 more) | `LEVELS.DAT` + `bmstats.dat` RE'd | **absent** | `docs/re/facts.md`: `LEVELS.DAT` "NOT READ by the shipped game" (installer artifact, never opened); `bmstats.dat`/`bmstats.txt` "write-only play-telemetry dump, no reader, no reachable UI" — `sub_40200C` (0x40200C-0x40214F) writes a 100×`int32` counter blob + a `messages.txt`-labelled (ids 900/905/910-928) text report at shutdown (registered via the generic deinit mechanism, `sub_410EBF`/`sub_410F00`), fed by live inline counters (e.g. `sub_410F81`'s match-start `inc`), but exhaustively confirmed **never read back** by any shipped binary and **never displayed** by any reachable menu/screen | none for either file — `LEVELS.DAT` is dead/tooling data; `bmstats.dat`/`.txt` is live but write-only debug telemetry with no player-facing consumer, so no parser/writer warranted per the docs-only decision path | done (LEVELS.DAT, bmstats.dat); 3rd `.DAT` file still unchecked, low priority |
+| Misc data | `.DAT` | 3 (LEVELS.DAT, bmstats.dat, WINEREG/EReg058.dat) | pinned — all 3 identified | N/A | `docs/re/facts.md`: `LEVELS.DAT` "NOT READ by the shipped game" (installer artifact, never opened); `bmstats.dat`/`bmstats.txt` "write-only play-telemetry dump, no reader, no reachable UI" — `sub_40200C` (0x40200C-0x40214F) writes a 100×`int32` counter blob + a `messages.txt`-labelled (ids 900/905/910-928) text report at shutdown (registered via the generic deinit mechanism, `sub_410EBF`/`sub_410F00`), fed by live inline counters (e.g. `sub_410F81`'s match-start `inc`), but exhaustively confirmed **never read back** by any shipped binary and **never displayed** by any reachable menu/screen; the 3rd `.DAT` — **`WINEREG/EReg058.dat`** (1079 bytes) — identified 2026-07-09: hexdump shows a plain-text `[Public User Data]` INI-style key list (`Salutation=`, `FirstName=`, `LastName=`, `Company=`, `Address1/2=`, `Phone=`, `EMailAddress=`, `HaveModem=`, `HaveJoystick=`, etc., all blank — the wizard's un-filled registration-form template), sitting alongside `WINEREG.EXE`/`EREGUI32.DLL`/`EREG3201.DLL`/`INTER.BMP` in the bundled product-registration-wizard's own `WINEREG/` folder; grepped `pseudo.c` for "EReg", "058.dat", "registration" — zero hits, confirming BM95.EXE never opens it. Same non-gameplay tooling class as the already-closed `.BMP` row (`WINEREG/INTER.BMP`) | none — `LEVELS.DAT` is dead/tooling data; `bmstats.dat`/`.txt` is live but write-only debug telemetry with no player-facing consumer; `EReg058.dat` belongs to the separate bundled WINEREG tool, not the game. No parser/writer warranted for any of the three | done — all 3 `.DAT` files identified and closed 2026-07-09 |
 | Campaign | `.CAM` | 3 (CROUTON.CAM, GHOSTS.CAM, SIMPLE.CAM) | pinned | ported | `docs/re/campaign.md` — reachability CONFIRMED: hidden 'C'×5 trigger on the local player-setup screen (`sub_410F81` → picker → `sub_401085` loader → `dword_46489C` flag read at ~12 sites). `.CAM` parser (`libs/assets/campaign.hpp/.cpp`, `test_campaign.cpp`); `CampaignFilePicker` (`libs/game/campaign_screen.hpp/.cpp`); stage sequencing (`AppInput::CampaignContinue`, `GameApp::load_campaign_stage`), AI-count roster seeding (`sub_40151B` CORRECTED, `seed_campaign_ai_slots`), stage banner (`present_campaign_banner`), round pacing (`sub_4016DA` PINNED, `hazard_clear_timer`), and the rover/ghost hazard actors themselves (RoverSystem, table row #13) are all ported. field-8 (`ai_difficulty`) CONFIRMED dead code — grepped every read site, none exists beyond the loader's own write | none required for the confirmed-reachable scope; remaining edge case: mutual-wipeout stage-replay fallback (campaign.md "Round pacing" clause 5) is independently portable but left as a documented follow-up, no test pressure yet | done |
 | Palette | `.PAL` | 1 (COLOR.PAL) | pinned | ported (via PCX palette loading) | RE-NOTES.md | — | done |
 | Bitmap | `.BMP` | 1 | pinned | N/A | `WINEREG/INTER.BMP` — confirmed 2026-07-09: lives inside the bundled `WINEREG.EXE`/`EREGUI32.DLL` registration-wizard tool's own folder (product registration, not the game), not referenced anywhere in `pseudo.c` (BM95.EXE never opens it). Non-gameplay, same class as the `.EXE`/`.DLL` tooling row | none | done |
@@ -129,12 +129,27 @@ files break down as:
   discrepancy rather than silently double as an inventory of our own tooling
   byproducts.
 
-**Format doc gap (structural, not a missing parser):** `docs/formats/` only
-has `ani.md`, `bm.md`, `fon.md`. PCX/SCH/RES-list/RSS/RMP/VALUELST are all
-*parsed* (code exists, tests exist) but have no standalone `docs/formats/*.md`
-writeup — the knowledge lives only in facts.md prose and code comments. Not
-blocking, but inconsistent with the architecture note in CLAUDE.md ("formats
-in `docs/formats/`"). Low-priority documentation debt.
+**Format doc gap (structural, not a missing parser) — CLOSED 2026-07-09.**
+`docs/formats/` used to have only `ani.md`, `bm.md`, `fon.md`; PCX/SCH/
+RES-list/RSS/RMP/VALUELST were all *parsed* (code exists, tests exist) but
+had no standalone `docs/formats/*.md` writeup — the knowledge lived only in
+facts.md prose and code comments, inconsistent with the architecture note in
+CLAUDE.md ("formats in `docs/formats/`"). Fixed: six new writeups added,
+each consolidating the existing parser (`libs/assets/src/*.cpp`) + the
+relevant `docs/re/*.md`/`docs/valuelst-map.md` prose into a standalone
+byte/line-layout reference, matching the style of the three existing files —
+`docs/formats/pcx.md`, `docs/formats/sch.md`, `docs/formats/res.md` (covers
+both the commented `id,value` grammar shared by VALUELST.RES/SOUNDLST.RES and
+the unrelated dash-command `EXTRA<N>.RES` actor-placement grammar),
+`docs/formats/rss.md`, `docs/formats/rmp.md`, `docs/formats/valuelst.md`
+(VALUELST.RES's `getvalue` runtime-lookup contract specifically; the id
+meaning table itself stays at `docs/valuelst-map.md`, not duplicated).
+`docs/formats/` now has 9 files, one per parsed asset format. While writing
+`valuelst.md` this pass found and flagged (not fixed, out of this task's
+scope) a pre-existing address mislabel in `facts.md`'s "VALUELST lookup
+mechanism" section — see that file's own note for detail; every OTHER
+mention of `getvalue`/`getstring` in the repo's docs is self-consistent and
+was used instead.
 
 ## 4. Netplay boundary (ADR-0003 — excluded, not a gap)
 
@@ -267,16 +282,18 @@ asset-format rows in §3 (excluding pure-tooling extensions marked N/A:
   31 at the 2026-07-08 snapshot — #13 rover/ghost mover, #18 attract mode,
   and #30 clogs prize (effect + wheel icon render) closed earlier in this
   2026-07-09 pass; #15 wall-slam SFX and #23 INPUT.BM menu-row binding
-  closed in the same day's SFX/audit sweep) + 13 of 14 asset formats (up
-  from 11 — .CAM/campaign, then `.BMP` closed this pass) — the large
-  majority of 1:1 gameplay and front-end fidelity.
+  closed in the same day's SFX/audit sweep) + **14 of 14** asset formats (up
+  from 11 — .CAM/campaign, then `.BMP`, then the `.DAT` row's 3rd file
+  (`WINEREG/EReg058.dat`) closed this pass) — the large majority of 1:1
+  gameplay and front-end fidelity, and every asset-format row now closed.
 - **Partial/open (RE pinned, port absent or a small residual):** 2 subsystem
-  rows — #32 editor chrome polish, #35 in-round debug/cheat keys — plus 1
-  asset format (the `.DAT` row: `LEVELS.DAT` and `bmstats.dat` are now both
-  RE'd — `LEVELS.DAT` confirmed dead/tooling data, `bmstats.dat`/`.txt`
-  confirmed live-but-write-only debug telemetry with no reader and no
-  reachable UI consumer — neither needed a port, but the row stays open
-  since the 3rd `.DAT` file is still unchecked).
+  rows — #32 editor chrome polish, #35 in-round debug/cheat keys. No asset
+  format rows remain open: the `.DAT` row closed 2026-07-09 (`LEVELS.DAT`
+  confirmed dead/tooling data, `bmstats.dat`/`.txt` confirmed
+  live-but-write-only debug telemetry with no reader/reachable UI, and the
+  3rd file — `WINEREG/EReg058.dat`, a blank registration-wizard user-data
+  template — identified and confirmed non-gameplay tooling, same class as
+  the `.BMP` row).
 - **N/A / excluded (netplay per ADR-0003, or non-gameplay tooling):** 1
   subsystem row (#25 net-game setup screens) + the §4 netplay function
   cluster + several tooling file extensions (.ICO/.EXE/.DLL/.IDB/.BMP).
@@ -310,15 +327,23 @@ What remains open, in priority order:
    simultaneously mid-stage).
 2. Low-priority polish: editor chrome (#32: Ctrl+B reset, '0' toggle,
    brush-preview, exact dialog chrome), in-round debug/cheat keys (#35,
-   developer/QA-only), the still-unchecked 3rd `.DAT` file (§3 .DAT row) —
-   `bmstats.dat` itself is now closed, see above.
+   developer/QA-only).
 
-`.BMP`/`.TXT` asset spot-checks (§3) — **CLOSED 2026-07-09**: the single
-`.BMP` (`WINEREG/INTER.BMP`) belongs to the bundled registration-wizard tool,
-not the game; all 18 (16 install-shipped) `.TXT` files are accounted for
-(1 parsed, 1 readme, 2 game-generated output logs, 12 belonging to separate
-bundled tools, 2 our own RE-tooling scratch files miscounted in the "18").
-See §3's detail note.
+`.BMP`/`.TXT`/`.DAT` asset spot-checks (§3) — **CLOSED 2026-07-09**: the
+single `.BMP` (`WINEREG/INTER.BMP`) belongs to the bundled
+registration-wizard tool, not the game; all 18 (16 install-shipped) `.TXT`
+files are accounted for (1 parsed, 1 readme, 2 game-generated output logs,
+12 belonging to separate bundled tools, 2 our own RE-tooling scratch files
+miscounted in the "18"); the 3rd `.DAT` file is `WINEREG/EReg058.dat` (1079
+bytes, a blank `[Public User Data]` registration-form template), also
+belonging to the bundled registration-wizard tool, not BM95.EXE — grepped
+`pseudo.c` for "EReg"/"058.dat"/"registration", zero hits. See §3's detail
+note and the `.DAT` row.
+
+The **format-doc gap is CLOSED 2026-07-09**: `docs/formats/pcx.md`,
+`sch.md`, `res.md`, `rss.md`, `rmp.md`, `valuelst.md` added, bringing
+`docs/formats/` to 9 files (one per parsed asset format) alongside the
+pre-existing `ani.md`/`bm.md`/`fon.md`. See §3's "Format doc gap" note.
 
 See the "TODO(RE) / TODO(§) crumbs still in the tree" list below for the
 exact file:line inline markers a future session can pick off directly.
