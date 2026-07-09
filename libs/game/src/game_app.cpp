@@ -2453,6 +2453,58 @@ sim::TickInputs GameApp::collect_inputs() const {
     return in;
 }
 
+// docs/re/in-match-shell.md "The player row" — CONFIRMED, pixel-exact
+// against the VALUELST file's own comments (ids 113/114 = "two vertical (Y)
+// coordinates of each player row across the top", 115-119 = "left (X)
+// coordinates of each player column across the top"). Message 37 = "S:%d
+// K:%d" (MESSAGES.TXT); the two values are sub_421AC8(i) (win_count_, the
+// SAME field the RESULTS screen's "score" already uses) and sub_421B0F(i)
+// (kill_count_, ditto "kills") — sub_420F07's own two accessors, already
+// wired to these exact members for the RESULTS screen (present_scoreboard,
+// docs/re/results-and-options.md §1). No panel/background art backs this
+// row (no draw call site found behind it in sub_420F07) — a bare overlay
+// directly on the live field, ported the same way.
+void GameApp::draw_player_row(const sim::State& s) {
+    auto splice_next = [](std::string& f, int v) {
+        auto p = f.find('%');
+        if (p == std::string::npos) return;
+        std::size_t q = p + 1;
+        while (q < f.size() && f[q] != 'u' && f[q] != 'd' && f[q] != 'i') ++q;
+        if (q < f.size()) f = f.substr(0, p) + std::to_string(v) + f.substr(q + 1);
+    };
+    for (int i = 0; i < sim::kMaxPlayers; ++i) {
+        // byte_461BD4 (+0x10, "alive/on-screen" per facts.md's "Player struct"
+        // entry) gates the whole row entry -> sim::Player::present, which is
+        // set once at match setup and stays true for the rest of the match
+        // regardless of round elimination (unlike `alive`, checked below).
+        if (!s.players[i].present) continue;
+        int col = i / 2;   // getvalue(115 + i/2): 5 columns, VALUELST 10/110/210/310/410
+        int row = i & 1;   // getvalue(113 + i&1): 2 rows, VALUELST 6/26
+        float x = static_cast<float>(values_.column_or(115 + col, 0, 10 + 100 * col));
+        float y = static_cast<float>(values_.column_or(113 + row, 0, 6 + 20 * row));
+
+        std::string line = assets_.getstring(37, "S:%d K:%d");
+        splice_next(line, win_count_[i]);
+        splice_next(line, kill_count_[i]);
+        std::uint8_t c[3];
+        assets_.slot_color(i, c);
+        front_font_.draw(sdl_renderer_.get(), line, x, y, c[0], c[1], c[2]);
+
+        // dword_461BC4 (+0x00, "active/moving state") gates the "xxx" overlay
+        // -> sim::Player::alive, the per-ROUND flag (reset every round,
+        // unlike `present` above) — a player dead THIS round still keeps
+        // their score visible underneath the marker.
+        if (!s.players[i].alive && !seqs_.eliminated_marker.steps.empty()) {
+            const Sprite& sp = seqs_.eliminated_marker.steps[0];
+            if (sp.tex) {
+                SDL_FRect dst{x - static_cast<float>(sp.hx), y - static_cast<float>(sp.hy),
+                              static_cast<float>(sp.w), static_cast<float>(sp.h)};
+                SDL_RenderTexture(sdl_renderer_.get(), sp.tex, nullptr, &dst);
+            }
+        }
+    }
+}
+
 AppInput GameApp::run_match() {
     start_match(next_seed_++);
     const std::uint64_t tick_ms = 1000 / sim::kTicksPerSecond;
@@ -2585,6 +2637,13 @@ AppInput GameApp::run_match() {
 
         audio_.update_music();
         renderer_->draw_frame(sim_.state());  // NOLINT(bugprone-unchecked-optional-access)
+        // The player-row HUD strip (docs/re/in-match-shell.md "The player
+        // row") needs GameApp's own win_count_/kill_count_/front_font_, none
+        // of which Renderer owns — drawn as a GameApp-side overlay on top of
+        // Renderer's frame, same layering the original has (sub_420F07 draws
+        // it every tick, after the field/world but the clock/hurry HUD is
+        // logically part of the same pass).
+        draw_player_row(sim_.state());
         SDL_RenderPresent(sdl_renderer_.get());
         SDL_Delay(2);
     }

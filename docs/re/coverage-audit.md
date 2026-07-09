@@ -77,6 +77,8 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 | 37 | Multi-round best-of-N + win_by_kills clinch | pinned | ported | ROADMAP "Multi-round best-of-N loop", "Kill attribution + win_by_kills — DONE 2026-07-08" | — | done |
 | 38 | Faithful screen inks (RGB555 LUT) | pinned | ported | ROADMAP "Faithful screen inks — DONE 2026-07-08" | — | done |
 | 39 | SDL3 gamepad support | pinned (`sub_421E80` cycle order) | ported | ROADMAP "SDL3 gamepad support — DONE 2026-07-08" | — | done |
+| 40 | In-round "player row" HUD (S:/K: score+kill grid, "xxx" dead-slot marker) | pinned | ported | in-match-shell.md "The player row — CONFIRMED (`sub_420F07`, corrects the point above)" (2026-07-09) — corrects row #34's/this doc's own earlier "no score/kill HUD" claim; `GameApp::draw_player_row`, `SequenceSet::eliminated_marker` | — | done |
+| 41 | In-round "cornerhead" face bubble (`KFACE.ANI`, follows one designated player slot `dword_45BE3C`) | pinned (call site + asset located) | **absent** | in-match-shell.md "The player row" section, "A separate, NOT ported, lower-confidence finding" | `dword_45BE3C`'s exact "which slot is this" semantics need more tracing before porting — a same-screen multiplayer port has no obvious single "local" slot the way a netplay client would, so guessing an index risks an invented visual | low |
 
 ## 3. Asset-format coverage (libs/assets vs install tree)
 

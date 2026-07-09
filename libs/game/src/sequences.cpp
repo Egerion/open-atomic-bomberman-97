@@ -15,6 +15,13 @@ void SequenceSet::resolve(const AssetStore& a) {
     digits = resolve_sequence(a.kfont(), "numeric font");
     infinity = resolve_sequence(a.kfont(), "infinity");
     hurry = resolve_sequence(a.hurry(), "hurry");
+    // The in-round "player row" HUD's dead-slot marker (docs/re/
+    // in-match-shell.md "The player row"): sub_420F07 resolves the literal
+    // sequence name "xxx" (aXxx, `char aXxx[4] = "xxx"`) via sub_41D957 and
+    // blits it over a round-eliminated player's score entry. MISC.ANI
+    // carries this sequence verbatim (frame 10, XXXX.TGA, 77x20) — CONFIRMED
+    // present in the shipped install, not synthesized text.
+    eliminated_marker = resolve_sequence(a.misc(), "xxx");
 
     // Every original sequence name ends in "green" — the engine recolors the
     // green master sprites per player, and so do we (AssetStore).

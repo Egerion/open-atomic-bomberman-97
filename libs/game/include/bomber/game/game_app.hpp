@@ -260,6 +260,19 @@ private:
     // reaches Results).
     AppInput run_match();
 
+    // The in-round "player row" HUD strip (docs/re/in-match-shell.md "The
+    // player row" — corrects that document's earlier "no score/kill HUD
+    // element exists" claim, which missed this block inside sub_420F07):
+    // for every slot that has ever been in this match, draws "S:<wins>
+    // K:<kills>" in that player's own colour at a 5-column x 2-row grid
+    // across the top of the screen (VALUELST 113-119), overlaying the
+    // MISC.ANI "xxx" marker on a slot that is dead THIS round. Called once
+    // per rendered frame from run_match, after Renderer::draw_frame — needs
+    // GameApp's own win_count_/kill_count_/front_font_/seqs_, none of which
+    // Renderer owns (CLAUDE.md's libs/game boundary: Renderer reads sim
+    // State + events only).
+    void draw_player_row(const sim::State& s);
+
     // The winner of the round just ended: the sole surviving player's index, or
     // -1 for a draw (no survivor, or the clock ran out). Drives the Results
     // screen's DRAW-vs-VICTORY choice and the "player N wins" naming.
