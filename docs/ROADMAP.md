@@ -376,7 +376,11 @@ behaviour changes (cite the facts.md entry) → tick the box here.
 - [ ] Known parked fidelity gaps (need their own golden recaptures, flagged as
       task chips): flame-arm stops, flying-bomb landing on powerups, scatter
       occupancy test.
-- [ ] Campaign later.
+- [ ] Campaign later — now RE'd and confirmed REACHABLE (not vestigial):
+      hidden 'C'×5 trigger on the local player-setup screen loads a `.CAM`
+      stage sequence (`docs/re/campaign.md`). Small, self-contained port:
+      `.CAM` parser (libs/assets) + picker/trigger/stage-sequencer above
+      libs/match; zero sim impact. Still low priority.
 
 ## Done (highlights)
 

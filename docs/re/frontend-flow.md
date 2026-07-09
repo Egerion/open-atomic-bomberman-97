@@ -293,9 +293,12 @@ accept sting always fires; the unbuilt leaves just stay put after the sting
 instead of dead-ending); **Escape plays 20 + 10 then the exit sting 2600** (the
 "any key" blip + the 17/27 accept + the Quit-handler `sub_427BFB(2600)`, collapsed
 since we have no confirm dialog); **Enter on the Quit row also plays 10 + 2600**.
-The **campaign easter egg** (key 5 ×5 → `sub_40330E`) and the **280/315 direct
-jumps to Editor/Roulette** target features not yet built, so they are documented
-gaps — not faked. The **WASD nav aliases** (`SDLK_W`/`SDLK_S` = Up/Down) are a
+The **Ctrl+E ×6 editor trigger** (key 5 → `sub_40330E`; formerly mislabelled
+here as a "campaign easter egg" — it opens the map editor, see
+`docs/re/results-and-options.md` §5; the REAL campaign trigger is 'C'×5 on
+the player-setup screen, `docs/re/campaign.md`) and the **280/315 direct
+jumps to Editor/Roulette** targeted features not yet built at the time, so
+they were documented gaps — not faked. The **WASD nav aliases** (`SDLK_W`/`SDLK_S` = Up/Down) are a
 deliberate modern convenience: in the binary raw 'w'(119)/'s'(115) fall through to
 `LABEL_44` (blip only, no move), so binding them to nav is a superset, not a
 misrepresentation.
