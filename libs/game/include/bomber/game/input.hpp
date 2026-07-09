@@ -118,6 +118,22 @@ constexpr int attract_stage_pick(unsigned roll, int level_count) {
     return static_cast<int>(roll % static_cast<unsigned>(level_count));
 }
 
+// Per-slot TEAM default on EVERY entry to the setup screen (sub_4049C0,
+// pseudo.c line 6716: `dword_46481C[12*j+8] = j & 1`, unconditionally
+// re-applied by `sub_410F81`'s own `sub_4046CC()` -> `sub_403EEE()` ->
+// `sub_4049C0()` chain at pseudo.c lines 15046/6573/6321 before the screen
+// draws a single frame — docs/re/setup-screens.md "TEAM default —
+// CORRECTED"): alternating 0/1/0/1/... by slot parity, NOT a flat 0.
+// Getting this wrong (this port's original behaviour) meant Team Play ON
+// without anyone pressing 'T' put every player on the SAME sim side.
+// Pure/SDL-free so it is unit-testable without a window.
+constexpr int default_setup_team(int slot) { return slot & 1; }
+
+template <std::size_t N>
+constexpr void reset_setup_teams(std::array<int, N>& team) {
+    for (std::size_t i = 0; i < N; ++i) team[i] = default_setup_team(static_cast<int>(i));
+}
+
 // Cycle a slot's (type, sub) one step FORWARD (sub_421E80 @0x421E80, CONFIRMED
 // shape): off -> computer -> keyboard set 0 -> keyboard set 1 -> joystick 0 ..
 // joystick (joystick_count-1) -> off. `joystick_count` is the number of

@@ -2205,6 +2205,24 @@ void GameApp::cycle_input_type(int slot) {
 // goes on to the LEVEL screen, Escape cancels to the menu. Presentation only.
 AppInput GameApp::present_setup() {
     audio_.start_music(kWinMusicId);  // 1020, the Play-handler track (sub_42A3F6)
+    // TEAM default — CORRECTED 2026-07-09 (docs/re/setup-screens.md "TEAM
+    // default — CORRECTED"): sub_410F81 unconditionally calls sub_4046CC()
+    // first thing, which (CD present) calls sub_403EEE(), which itself
+    // unconditionally calls sub_4049C0() before anything else. sub_4049C0
+    // sets `dword_46481C[12*j+8] = j & 1` for j in [0,10) (pseudo.c line
+    // 6716) — i.e. every slot's TEAM byte resets to an ALTERNATING 0/1/0/1
+    // pattern by slot parity every time this screen loads, not to a flat 0.
+    // sub_403EEE's own file-parse loop only ever overwrites a slot's COLOUR
+    // (dword_46481C+0/+4) from disk, never TEAM, unless a rare "-S
+    // slot,x,y,team" 5-field profile line is present (pseudo.c line 6427) —
+    // a hidden colour-profile file this port doesn't implement — so in
+    // practice the alternating default always stands here. Getting this
+    // wrong (old behaviour: every slot defaulted to 0) meant Team Play ON
+    // without anyone pressing 'T' put every player on the SAME side: (a)
+    // everybody got the team-1/WHITE 0.RMP override instead of half going
+    // red (render_colour, docs/re/player-colour.md), and (b)
+    // sides_remaining() read <=1 from tick 0, clinching the round instantly.
+    reset_setup_teams(setup_team_);
     const std::string glue = pick_glue();
     // Layout (VALUELST X,Y,YS,colour -> consecutive getvalue ids): header 705,
     // list 710, joystick pane heading 715, joystick pane list 720.

@@ -27,6 +27,7 @@ using bomber::game::attract_stage_pick;
 using bomber::game::campaign_round_needs_replay;
 using bomber::game::clock_warning;
 using bomber::game::cycle_slot_input_type;
+using bomber::game::default_setup_team;
 using bomber::game::fill_attract_roster;
 using bomber::game::format_clock;
 using bomber::game::is_terminal;
@@ -36,6 +37,7 @@ using bomber::game::kKeyActionCount;
 using bomber::game::kKeyboardSets;
 using bomber::game::KeySet;
 using bomber::game::next;
+using bomber::game::reset_setup_teams;
 using bomber::game::seed_campaign_ai_slots;
 using bomber::game::SlotInputType;
 using bomber::game::tally_kills;
@@ -254,6 +256,67 @@ TEST_CASE("a full lap of the cycle returns to OFF, for any joystick count") {
         CHECK(type == static_cast<int>(SlotInputType::Off));
         CHECK(sub == 0);
     }
+}
+
+// Locks the setup-screen's TEAM default (sub_4049C0, pseudo.c line 6716:
+// `dword_46481C[12*j+8] = j & 1`, re-applied on EVERY entry to the setup
+// screen via sub_410F81 -> sub_4046CC -> sub_403EEE -> sub_4049C0 —
+// docs/re/setup-screens.md "TEAM default — CORRECTED 2026-07-09"). Before
+// this fix `present_setup()` left every slot's team at its all-0 default, so
+// Team Play ON without anyone pressing 'T' put every player on the SAME sim
+// side: everyone got the WHITE colour override and sides_remaining() read
+// <=1 from tick 0 (round "ends instantly").
+TEST_CASE("default_setup_team alternates 0/1 by slot parity") {
+    CHECK(default_setup_team(0) == 0);
+    CHECK(default_setup_team(1) == 1);
+    CHECK(default_setup_team(2) == 0);
+    CHECK(default_setup_team(3) == 1);
+    CHECK(default_setup_team(9) == 1);
+}
+
+TEST_CASE("reset_setup_teams fills every slot with the alternating default, "
+          "clobbering any earlier value") {
+    std::array<int, kMaxPlayers> team{};
+    team.fill(1);  // simulate a stale all-1 roster from a previous visit
+    reset_setup_teams(team);
+    for (int i = 0; i < kMaxPlayers; ++i) CHECK(team[i] == (i & 1));
+    // In particular: two active players in the default two-player layout
+    // (slots 0 and 1) land on DIFFERENT sides, not the same one.
+    CHECK(team[0] != team[1]);
+}
+
+TEST_CASE("the setup-byte -> sim-team mapping (setup_team_[i] + 1, "
+          "game_app.cpp start_match) turns the alternating default into two "
+          "real, distinct sim sides") {
+    // Mirrors GameApp::start_match's `cfg.team[i] =
+    // static_cast<uint8_t>(setup_team_[i] + 1)` shift documented at that call
+    // site: the sim reserves team 0 for "no team", so team play shifts the
+    // raw 0/1 setup byte up by one. With the OLD all-0 default this collapsed
+    // every player onto sim team 1 (one side, instant round-over); with the
+    // alternating default it produces two distinct, non-zero sim sides.
+    std::array<int, kMaxPlayers> team{};
+    reset_setup_teams(team);
+    std::array<std::uint8_t, kMaxPlayers> sim_team{};
+    for (int i = 0; i < kMaxPlayers; ++i)
+        sim_team[i] = static_cast<std::uint8_t>(team[i] + 1);
+    CHECK(sim_team[0] == 1);
+    CHECK(sim_team[1] == 2);
+    CHECK(sim_team[0] != sim_team[1]);  // two players, two different sides
+    for (auto t : sim_team) CHECK(t != 0);  // never collapses to "no team"
+}
+
+TEST_CASE("the 'T' toggle (present_setup's SDLK_T handler: team ? 0 : 1) "
+          "still flips a slot away from its alternating default") {
+    std::array<int, kMaxPlayers> team{};
+    reset_setup_teams(team);
+    CHECK(team[0] == 0);
+    // Mirrors game_app.cpp's `setup_team_[cursor] = setup_team_[cursor] ? 0 : 1;`.
+    team[0] = team[0] ? 0 : 1;
+    CHECK(team[0] == 1);
+    team[0] = team[0] ? 0 : 1;
+    CHECK(team[0] == 0);  // toggles back
+    // Untouched slots keep the alternating default.
+    CHECK(team[1] == 1);
 }
 
 // Locks the key-remap UI's data shape (docs/re/results-and-options.md §2,

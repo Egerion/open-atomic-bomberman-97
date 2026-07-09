@@ -444,6 +444,10 @@ private:
     std::array<int, sim::kMaxPlayers> setup_sub_{};
     // Per-slot TEAM (the original's +84, toggled by 'T'): 0 or 1. Fed into the
     // config's non-hashed MatchConfig::team[]; team MODE itself is deferred.
+    // Defaulted here to all-0 (matches "every slot OFF" at construction /
+    // campaign roster reset); present_setup() re-derives the REAL default
+    // (alternating slot & 1, sub_4049C0) on every entry to the setup screen
+    // — see that function's comment.
     std::array<int, sim::kMaxPlayers> setup_team_{};
     // The level chosen on the LEVEL screen (sub_406DDE dword_45E0B8/464998):
     // -1 = RANDOM (keep pick_stage over the enabled rotation), else 0..10 = a
