@@ -183,13 +183,25 @@ private:
     // resolved/loaded, so the caller can bail out of campaign mode cleanly
     // instead of starting a match with a stale board.
     bool load_campaign_stage(int index);
+    // The campaign-activation confirmation dialog (sub_4015C6, docs/re/
+    // campaign.md "Campaign-activation confirmation dialog"): the REAL
+    // sub_43C734-chromed two-line modal the picker shows right after a
+    // successful pick/parse — getstring(95)="NOTE!" on top, getstring(1210)=
+    // "Campaign Mode Activated!" below (line order CONFIRMED from
+    // sub_414340's own draw order plus sub_4015C6's explicit LODWORD
+    // assignment, not guessed — see the .cpp comment and the doc section).
+    // Dismiss keys mirror sub_414340's key loop exactly: Enter/Space/Escape
+    // confirm, every other key is a no-op (dialog stays up). Replaces the
+    // former accept-sting stand-in (formerly a coverage-audit.md crumb, now closed).
+    AppInput present_campaign_confirm();
     // The campaign stage-start banner (docs/re/campaign.md "Stage banner"):
     // a blocking two-line dialog, "(<stage name>)" (getstring 1235="(%s)")
     // over "Prepare to begin Campaign!" (getstring 1230), shown once per
     // stage transition (both the first stage, from present_campaign_picker,
     // and every auto-advance in run_app's Results handler). Dismissed by any
-    // key or a short dwell; presentation-only, mirrors the confirm-overlay
-    // shape present_campaign_picker's own sound-sting stand-in already uses.
+    // key or a short dwell; presentation-only — a separate sub_414340 call
+    // from present_campaign_confirm's above (different getstring ids,
+    // different content), but the same dialog FAMILY.
     AppInput present_campaign_banner();
     // The IPLOGO -> HSLOGO -> TITLE boot presentation (sub_42B060). LINEAR — no
     // attract re-run: each screen advances on a key OR the getvalue(12) = 7 s
@@ -264,6 +276,18 @@ private:
     // -1 for a draw (no survivor, or the clock ran out). Drives the Results
     // screen's DRAW-vs-VICTORY choice and the "player N wins" naming.
     int round_winner() const;
+
+    // Campaign round-pacing clauses 4-5 (docs/re/campaign.md "Round pacing",
+    // sub_4016DA): true when every PRESENT, ALIVE slot is COMPUTER
+    // (setup_type_[i] == 1), i.e. no human/joystick player survives this
+    // round — regardless of whether an AI side is still alive and would
+    // otherwise be sim::winning_side()'s pick. The original force-ends (and,
+    // via `--dword_4648B0` undoing sub_40133F's next `++`, REPLAYS) the
+    // stage the instant this holds, so an AI "winning" a campaign round with
+    // no human left standing must NOT be credited as a win. Strictly wider
+    // than round_winner()'s plain draw (mutual total wipeout) — this also
+    // fires when a COMPUTER side is the sole sim-declared survivor.
+    bool campaign_no_human_survivor() const;
 
     // True when at least two ACTIVE players share a MatchConfig team
     // (docs/re/setup-screens.md dword_464964). Factored out so run_app's

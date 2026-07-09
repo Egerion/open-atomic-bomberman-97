@@ -1154,7 +1154,8 @@ void GameApp::present_editor() {
 }
 
 void GameApp::present_campaign_picker() {
-    // sub_4015C6 (docs/re/campaign.md §3): glob "*.cam" in the install root,
+    // sub_4015C6 (docs/re/campaign.md "Trace: string refs -> loader ->
+    // trigger -> entry point"): glob "*.cam" in the install root,
     // list, pick, parse, arm campaign mode. Runs its own nested loop exactly
     // like present_editor's chooser/picker loops — no AppState/AppInput slot,
     // since there is no menu row for this screen either.
@@ -1190,13 +1191,17 @@ void GameApp::present_campaign_picker() {
             return;
         }
         campaign_active_ = true;  // dword_46489C = 1
-        // sub_4015C6 also shows a confirmation overlay (getstring 1210 + 95)
-        // here; the port's accept sting (already played by the trigger
-        // above) stands in for that minimal fidelity gap (TODO(RE): no
-        // dedicated confirmation dialog). The SEPARATE stage-start banner
+        // sub_4015C6's own confirmation overlay (getstring 1210 + 95) —
+        // PORTED 2026-07-09 (present_campaign_confirm, above), replacing the
+        // former accept-sting stand-in. The SEPARATE stage-start banner
         // (sub_40133F, getstring 1235/1230 — docs/re/campaign.md "Stage
         // banner") follows right after, same as the original's sub_410B6E
         // showing it for the freshly-armed stage 0.
+        if (present_campaign_confirm() == AppInput::Quit) {
+            campaign_active_ = false;
+            campaign_stages_.clear();
+            return;
+        }
         if (present_campaign_banner() == AppInput::Quit) {
             campaign_active_ = false;
             campaign_stages_.clear();
@@ -1280,15 +1285,93 @@ bool GameApp::load_campaign_stage(int index) {
     // sub_40133F formats getstring(1235)="(%s)" with the stage's OWN name
     // (campaign record field 0, the first bytes of the 112-byte record) and
     // shows it alongside getstring(1230)="Prepare to begin Campaign!" as a
-    // blocking two-line dialog at every stage transition (same
-    // sub_414340 dialog family present_campaign_picker's confirm overlay
-    // already approximates). Stored here for present_setup/run_app to draw;
+    // blocking two-line dialog at every stage transition (same sub_414340
+    // dialog family present_campaign_picker's OWN confirm dialog,
+    // present_campaign_confirm, now ports with the real chrome). Stored here
+    // for present_setup/run_app to draw;
     // levelno (field 1) has no further consumer beyond this banner and the
     // scheme/roster application above — selected_level_ stays -1
     // (RANDOM/pick_stage) since a campaign stage supplies its own SCHEME,
     // not one of the 11 built-in level tilesets.
     campaign_banner_ = "(" + stage.name + ")";
     return true;
+}
+
+// The campaign-activation confirmation dialog (sub_4015C6, docs/re/
+// campaign.md "Campaign-activation confirmation dialog") — PORTED
+// 2026-07-09, replacing the accept-sting stand-in
+// (formerly a coverage-audit.md crumb, now closed). Uses the SAME sub_43C734 chrome
+// primitive (DialogRect/draw_dialog_chrome, above) as the quit-confirm
+// dialog, sized from BOTH lines' text extents (sub_414340's own v24 =
+// max(measure(top), measure(bottom)), traced from the raw disassembly at
+// 0x41436c-0x4143a1: it measures LODWORD's text, then HIDWORD's, and keeps
+// the wider) — width = max(that, 80)+64, height = 4*fontheight+64+2*
+// fontheight (two lines).
+//
+// Line order/content — CONFIRMED via raw disassembly (BM95.EXE, imagebase
+// 0x400000, capstone; see docs/re/campaign.md "Round pacing" provenance note
+// for the same disassembly method), NOT guessed:
+//   sub_4015C6 @ 0x401653-0x401669: `mov eax,0x4ba(1210); call getstring;
+//   mov edx,eax; mov eax,0x5f(95); call getstring; call sub_414340` — so at
+//   the call, EDX=getstring(1210)="Campaign Mode Activated!", EAX=
+//   getstring(95)="NOTE!".
+//   sub_414340 @ 0x414471-0x4144bb: draws the caller's EAX-sourced text
+//   FIRST at the top y (fontheight+32), then the EDX-sourced text SECOND,
+//   fontheight+2 further down — i.e. LODWORD/EAX is the TOP line, HIDWORD/
+//   EDX is the BOTTOM line. So "NOTE!" (95) is on top, "Campaign Mode
+//   Activated!" (1210) is below it — matching the SAME header-word-on-top
+//   pattern the sibling error dialog uses (getstring(97)="Warning!" over
+//   getstring(1215)="Campaigns not available!...", identical EAX/EDX
+//   assignment at 0x4016b6-0x4016cc).
+//   Both lines draw in the general white ink (byte_49D38F): the pushed
+//   stack args at the sub_4172BA call sites are [byte_495390[0]=black,
+//   byte_49D38F=white], and the register/ink wiring matches every other
+//   sub_414340 call site already pinned in this file.
+//   Position: y=(480-height)/2, x=(640-width)/2 — BOTH axes explicitly
+//   computed by sub_414340 itself (0x4143fe-0x414425, against
+//   dword_464A70=640/dword_464A6C=480), matching (and confirming, not just
+//   approximating) the port's existing horizontal-centering convention for
+//   this whole dialog family (dialog_rect/dialog_rect_vcentered, above).
+//
+// Dismiss behaviour — traced from sub_414340's own key loop
+// (0x414510-0x414548, pseudo.c 17085-17106): every real key event plays the
+// nav-blip (sub_427961(20)); only Enter(13)/Space(32)/Escape(27) close the
+// dialog (v33=1 branch) — any OTHER key (arrows, letters, extended codes)
+// just loops, waiting for another key. No Yes/No choice — it is a plain
+// acknowledgement modal.
+AppInput GameApp::present_campaign_confirm() {
+    const float h = static_cast<float>(front_font_.loaded() ? front_font_.line_height() : 12);
+    std::string top_line = assets_.getstring(95, "NOTE!");
+    std::string bottom_line = assets_.getstring(1210, "Campaign Mode Activated!");
+    float top_w = front_font_.loaded() ? static_cast<float>(front_font_.measure(top_line)) : 0.0f;
+    float bottom_w =
+        front_font_.loaded() ? static_cast<float>(front_font_.measure(bottom_line)) : 0.0f;
+    float win_w = std::max(std::max(top_w, bottom_w), 80.0f) + 64.0f;
+    float win_h = 4.0f * h + 64.0f + 2.0f * h;
+    DialogRect win = dialog_rect_vcentered(win_h, win_w);
+    while (true) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
+            if (ev.type != SDL_EVENT_KEY_DOWN) continue;
+            const SDL_Keycode k = ev.key.key;
+            audio_.play(20);  // nav blip, EVERY key (sub_427961(20))
+            if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE || k == SDLK_ESCAPE) {
+                return AppInput::Advance;
+            }
+        }
+        audio_.update_music();
+        SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
+        SDL_RenderClear(sdl_renderer_.get());
+        renderer_->draw_frame(sim_.state());  // NOLINT(bugprone-unchecked-optional-access) — last frame as backdrop, like the stage banner
+        draw_dialog_chrome(sdl_renderer_.get(), win);
+        front_font_.draw(sdl_renderer_.get(), top_line, win.x + (win.w - top_w) / 2.0f,
+                         win.y + h + 32.0f, 255, 255, 255);  // byte_49D38F
+        front_font_.draw(sdl_renderer_.get(), bottom_line, win.x + (win.w - bottom_w) / 2.0f,
+                         win.y + h + 32.0f + h + 2.0f, 255, 255, 255);
+        SDL_RenderPresent(sdl_renderer_.get());
+        SDL_Delay(2);
+    }
 }
 
 // The stage-start banner (sub_40133F, docs/re/campaign.md "Stage banner"):
@@ -1336,6 +1419,28 @@ int GameApp::round_winner() const {
     const sim::State& s = sim_.state();
     if (s.ticks_left == 0) return -1;  // time up -> draw
     return sim::winning_side(s);
+}
+
+bool GameApp::campaign_no_human_survivor() const {
+    // sub_4016DA clauses 4-5 (docs/re/campaign.md "Round pacing"), confirmed
+    // against pseudo.c 4634-4648: `for (i=0;i<10;++i) { sub_421DD2(i,&type,0);
+    // if (type!=1 && type && sub_4228C4(i)) return; }` — bail (no override)
+    // the instant ANY present, non-COMPUTER, ALIVE slot is found; falling
+    // through the loop means every human/joystick slot is dead. type==1 is
+    // COMPUTER (setup_type_'s own convention, matching sub_421DD2's "type"
+    // out-param) — a live COMPUTER slot does NOT stop the fall-through. The
+    // actual predicate is the SDL-free campaign_round_needs_replay
+    // (results.hpp, unit-tested in test_frontend.cpp) — this wrapper just
+    // gathers the three per-slot arrays it needs from sim::State/setup_type_.
+    if (!campaign_active_) return false;
+    const sim::State& s = sim_.state();
+    std::array<bool, sim::kMaxPlayers> present{};
+    std::array<bool, sim::kMaxPlayers> alive{};
+    for (int i = 0; i < sim::kMaxPlayers; ++i) {
+        present[i] = s.players[i].present;
+        alive[i] = s.players[i].alive;
+    }
+    return campaign_round_needs_replay(present, alive, setup_type_);
 }
 
 bool GameApp::is_team_mode() const {
@@ -2108,14 +2213,27 @@ AppInput GameApp::present_setup() {
                 // screen" — cancelling the whole Play flow here also forfeits
                 // any gold player pending from an earlier match.
                 gold_player_ = -1;
-                // Campaign quit semantics (docs/re/campaign.md does not pin
-                // how the original itself leaves campaign mode — TODO(RE)):
-                // Esc here returns to the menu AND clears the campaign flag,
-                // a port convenience rather than a confirmed fact. This only
-                // fires if a *.cam pick from THIS visit to present_setup
-                // hasn't been confirmed into a running match yet; an
-                // in-progress campaign is abandoned via run_match's own
-                // Esc/Ctrl+Q (below).
+                // Campaign quit semantics — CONFIRMED negative, docs/re/
+                // campaign.md "Campaign-exit key": grepped every read/write
+                // of dword_46489C in the binary; it is written in exactly
+                // TWO places total (sub_4015C6's `=1` and sub_42A3F6's own
+                // entry `=0`, pseudo.c 29692) — there is NO key anywhere,
+                // Escape or otherwise, that explicitly clears it. The
+                // original's own Escape-on-setup just aborts the current
+                // sub_42A3F6 call to the menu (dword_464A68=2); dword_46489C
+                // is left stale until the NEXT "Play" click resets it at
+                // entry, which is behaviourally invisible (that stale value
+                // is never read before being overwritten). Our explicit
+                // clear here produces the identical observable outcome
+                // (back at the menu, campaign not running) via an immediate
+                // reset instead of an implicit one — a faithful convenience,
+                // not a guess. This only fires if a *.cam pick from THIS
+                // visit to present_setup hasn't been confirmed into a
+                // running match yet; an in-progress campaign is abandoned
+                // via run_match's own Esc/Ctrl+Q (below), which — matching
+                // the original — doesn't touch campaign_active_ either;
+                // it only clears on the NEXT Menu->StartMatch transition
+                // (see that path's own comment).
                 campaign_active_ = false;
                 campaign_stages_.clear();
                 campaign_stage_index_ = 0;
@@ -2580,6 +2698,31 @@ int GameApp::run_app() {
             case AppState::Menu: {
                 ev = present_menu();  // navigable; resolves the selected row
                 if (ev == AppInput::StartMatch) {
+                    // Campaign-flag reset — PORTED 2026-07-09 (docs/re/
+                    // campaign.md "Campaign-exit key"): `dword_46489C = 0` is
+                    // the LITERAL FIRST statement of sub_42A3F6 (pseudo.c
+                    // 29692), unconditionally, every time "Play" is entered
+                    // fresh from the menu — there is no dedicated exit KEY
+                    // anywhere in the binary (grepped every read/write of
+                    // dword_46489C: exactly two writes total, this entry
+                    // reset and sub_4015C6's own `=1`), but this unconditional
+                    // entry-point reset IS the mechanism that keeps a
+                    // previous campaign run from leaking into a fresh one.
+                    // Without it, aborting mid-campaign (Ctrl+Q/Esc during
+                    // Match -> Results -> Back to Menu, none of which clear
+                    // campaign_active_) would leave a stale campaign_active_/
+                    // campaign_stages_/campaign_stage_index_ armed for the
+                    // NEXT Play, silently skipping present_map_select() and
+                    // resuming the abandoned stage instead of a normal game —
+                    // matching this reset closes that gap. Placed first, same
+                    // as the original's ordering, before the attract/goldman/
+                    // present_setup steps below (present_setup's OWN 'C'x5
+                    // trigger can re-arm it later in this same StartMatch
+                    // pass, exactly like sub_410F81 re-arming dword_46489C
+                    // after sub_42A3F6's entry reset).
+                    campaign_active_ = false;
+                    campaign_stages_.clear();
+                    campaign_stage_index_ = 0;
                     // The pre-match flow reached from Play (sub_42A3F6): the PLAYER
                     // INPUT screen (sub_410F81) then the LEVEL & ROUNDS screen
                     // (sub_406DDE), then the match. Escape backs up ONE step at
@@ -2688,6 +2831,14 @@ int GameApp::run_app() {
                 // RESULTS/VICTORY screens played under whatever music was
                 // left running, a silent-vs-original gap now closed.
                 int w = round_winner();
+                // Round-pacing clauses 4-5 override (docs/re/campaign.md
+                // "Round pacing", sub_4016DA, PORTED 2026-07-09): in campaign
+                // mode, a round where every human/joystick slot is dead is
+                // force-ended and REPLAYED regardless of what round_winner()
+                // says — even an AI side "winning" (w>=0, no human alive)
+                // does not count. Route it exactly like a plain draw (below)
+                // so it neither tallies a win nor advances the stage.
+                if (w >= 0 && campaign_no_human_survivor()) w = -1;
                 if (w >= 0) ++win_count_[w];  // tally the round win
                 // The match-over check (§1 v73): the default win-count target,
                 // or (team mode + win_by_kills) the kill-count clinch —
@@ -2777,17 +2928,20 @@ int GameApp::run_app() {
                     audio_.play_random_in_range(2000, 2299);  // "we have a winner", under RESULTS
                     ev = present_scoreboard();
                 } else {
-                    // DRAW (no survivor / time-up): nobody scores; replay a round.
-                    // This is ALSO clauses 4-5 of docs/re/campaign.md "Round
-                    // pacing" (sub_4016DA): "all humans/network players dead
-                    // -> undo the pending stage advance, replay the SAME
-                    // stage". Our port never needs an explicit undo because
+                    // DRAW (no survivor / time-up), OR the campaign_no_human_
+                    // survivor() override above forcing an AI-only "win" into
+                    // this branch: nobody scores; replay a round. This IS
+                    // clauses 4-5 of docs/re/campaign.md "Round pacing"
+                    // (sub_4016DA): "all humans/network players dead -> undo
+                    // the pending stage advance, replay the SAME stage".
                     // campaign_stage_index_ is only ever incremented in the
-                    // match_over branch above, which requires w>=0 (a
-                    // survivor) — a draw (w==-1, this branch) never reaches
-                    // that increment in the first place, so "replay a round"
-                    // on a draw is already exactly "replay the same campaign
-                    // stage" for free, with no separate decrement needed.
+                    // match_over branch above, which requires w>=0 AFTER the
+                    // override — so a plain draw (w==-1 from round_winner())
+                    // never reached that increment to begin with, and the
+                    // override now catches the one case that WOULD have
+                    // (an AI side surviving with no human left): both land
+                    // here, "replay a round" is exactly "replay the same
+                    // campaign stage", with no separate decrement needed.
                     audio_.start_music(kDrawMusicId);  // 1130 draw track under DRAW
                     audio_.play_random_in_range(kDrawStingLo, kDrawStingHi);
                     ev = present_screen(draw_screen());
