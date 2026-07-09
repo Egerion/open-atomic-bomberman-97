@@ -35,6 +35,68 @@ the pipeline cannot parse yet** — but it only backs the deep menu leaves
 (options/credits/manual), which are out of scope for the spine. (Provenance:
 `head -c 200 CREDITS.BM`; `find` for codec extensions.)
 
+## The boot LOADING dialog — PINNED (2026-07-09), BEFORE `sub_42B060` ever runs
+
+The user's memory of a boot-time "loading" screen is CONFIRMED, but it is
+**not** a fourth full-screen PCX bolted onto the IPLOGO/HSLOGO/TITLE chain —
+it is a small **modal progress dialog**, shown **twice**, entirely before
+`sub_42B060` (the logo/title chain) starts. The real app entry is
+`sub_42BE22` (`__noreturn`, decompile 30947-30953):
+
+```
+void __noreturn sub_42BE22()
+{
+  sub_41095A();   // init — INCLUDES the two LOADING dialogs, below
+  sub_42B060();   // IPLOGO -> HSLOGO -> TITLE (see "Top-level flow" below)
+  sub_42B9CE();   // the menu
+}
+```
+
+`sub_41095A` (the config/subsystem-init routine, decompile 14602-14663) calls,
+in order: … `sub_42971F()` → **`sub_41D695()`** → **`sub_42896E()`** → …
+(decompile 14622-14624). Those two calls are the loading dialogs:
+
+1. **`sub_41D695`** (decompile 21653-21689) — `sub_4124A4(201)` (getmessage
+   201 = **"Loading data..."**, MESSAGES.TXT), then opens `MASTER.ALI` and
+   reads it in a loop, calling `sub_412E33(100*read/total, ...)` each
+   iteration — a **live percent** readout tied to real bytes read.
+2. **`sub_42896E`** (decompile 28498-28556) → **`sub_4287B9`**
+   (decompile 28395-28423) — `sub_4124A4(200)` (getmessage 200 = **"Loading
+   sound..."**), then FIVE `sub_412E33(pct, ...)` calls at fixed percents
+   (5/20/40/60/80/100) as it preloads SOUNDLST groups 200/400/700/1400/2300 —
+   a **coarse, hardcoded** percent sequence (not measured), matching this
+   phase's much smaller/faster workload.
+
+Both route through the **same generic dialog-window primitive**
+`sub_43C734` (the same one the Yes/No confirm below and several other
+overlays use) and the **same percent-bar renderer** `sub_412E33`
+(decompile 16157-16211): a small window (`sub_43C734(200, 8·h, 360, 256, 4)`)
+captioned **"Completion"** (`aCompletion`), with a `%d` readout and a
+two-tone filled/unfilled bar (`sub_43D1C0` × 2, widths `3·pct` /
+`3·(100-pct)`). **This is drawn programmatically — there is no LOADING*.PCX
+or similar asset anywhere in the install or the decompile** (confirmed by an
+exhaustive `find`/grep over both); it is a DOS4GW-style dialog box, not a
+full-screen `sub_42A088` image. Neither `sub_41D695` nor `sub_42896E`
+touches the boot music (`sub_42741E(0x3E8)`, started later inside
+`sub_42B060` — see "Top-level flow" below), so the two LOADING dialogs run
+in silence.
+
+**Port status: DONE, coarsely.** `GameApp::init` (`game_app.cpp`) now flashes
+a small dialog (`draw_boot_loading_dialog`, a dark panel + a filled
+percent-bar rect + `SDL_RenderDebugText` caption — SDL's built-in debug font,
+since FONT6.FON itself is one of the things `AssetStore::load()` loads, so
+it isn't available yet at the FIRST flash) at the same two points in the same
+order: once captioned "Loading data..." immediately before `assets_.load()`,
+and once captioned `getstring(200)` ("Loading sound...", read from the
+now-loaded MESSAGES.TXT) immediately before `audio_.init()`. **Documented
+simplification:** our loaders have no per-file/per-byte progress callback
+(`AssetStore::load` is one monolithic try-block) and complete in well under a
+second on modern hardware, so each flash presents the bar already full (100%)
+for one rendered frame rather than animating a real or synthetic percent —
+inventing progress data we don't have would be less faithful than a same-order
+same-caption flash. Skipped in `--demo` mode (matching that `audio_.init` is
+also skipped there). No PCX/font asset dependency, no `libs/sim` involvement.
+
 ## Top-level flow — `sub_42B060` then `sub_42B9CE`
 
 The two calls that make up the whole app entry sit back-to-back
@@ -285,15 +347,62 @@ Options, Credits, Help browser, Quit** with an animated bomb-trigger cursor
 (the map editor and the roulette wheel exist but have no menu row — hidden
 trigger / automatic respectively).
 
-**Port fidelity of the menu sounds (FIXED).** `present_menu` now matches the
-table: Up/Down play the blip 20 (correct already); **Enter/Space play the accept
-10 on EVERY row** including the previously "inert" Editor/Roulette stubs (the
-original has no inert-row concept — every row 0..6 is a live dispatch, so the
-accept sting always fires; the unbuilt leaves just stay put after the sting
-instead of dead-ending); **Escape plays 20 + 10 then the exit sting 2600** (the
-"any key" blip + the 17/27 accept + the Quit-handler `sub_427BFB(2600)`, collapsed
-since we have no confirm dialog); **Enter on the Quit row also plays 10 + 2600**.
-The **Ctrl+E ×6 editor trigger** (key 5 → `sub_40330E`; formerly mislabelled
+### Escape / Quit-row dispatch — `sub_412987` -> `sub_41456C` — PINNED (2026-07-09)
+
+Escape does **not** exit the app directly, and neither does Enter on the Quit
+row — both just *select* row 6, and row 6's dispatch is `sub_412987`
+(decompile 16018-16040), which pops a real **Yes/No confirm dialog** before
+anything is torn down:
+
+```
+void sub_412987()
+{
+  sub_431178();                       // freeze/enter-dialog bracket
+  v3 = sub_41456C(getmessage(10), byte_49A390, ...);  // "Are you sure...?" Y/N
+  sub_431360();                       // thaw/leave-dialog bracket
+  if (v3 == 1) {                      // Yes
+    sub_427342();                     // stop the current music
+    if (!sub_413D01())                // skip-logos flag NOT set
+      sub_427BFB(2600);               // exit sting group (2600..2699)
+      sub_452012(0xFA0);              // Sleep(4000 ms) — let the sting finish
+    sub_4128C9(0);                    // __noreturn — the REAL process exit
+  }
+  // v3 == 0 (No): falls straight through, back to the menu loop. Nothing
+  // else happens — no sting, no sleep, no exit.
+}
+```
+
+`sub_41456C` (decompile 17129-17278) is the generic Yes/No dialog primitive
+(also used by several other confirm sites in the binary): it draws a
+`sub_43C734` window with **getstring(10)** = `"Are you sure you want to
+exit?"` as the prompt and two buttons, **getstring(26)** = `" Yes "` and
+**getstring(25)** = `" No "`. Its own key loop (decompile ~17220-17270) blips
+(SFX 20) on every real key, then resolves the answer from the raw key code:
+**Y/y (89/121), Enter (13), Space (32) → Yes** (returns 1); **N/n (78/110),
+Escape (0x1B) → No** (returns 0); every other key is ignored and the dialog
+stays up. So the terminal "confirm" sting (SFX 10) and the 2600 exit-sting
+group only ever fire on an explicit **Yes** — Escape *inside* the dialog is a
+**cancel**, not a second-level exit.
+
+**Port fidelity of the menu sounds (FIXED 2026-07-08, RE-FIXED 2026-07-09
+with the real confirm dialog).** `present_menu` now matches the table: Up/Down
+play the blip 20; **Enter/Space play the accept 10 on EVERY row** including the
+"inert" Editor/net-setup stubs (the original has no inert-row concept — every
+row 0..6 is a live dispatch); **Escape plays blip 20 + accept 10, sets the
+highlighted row to 6, and opens the SAME Yes/No confirm modal Enter-on-row-6
+opens** (`quit_confirm_`, `game_app.cpp`) — a floating box over the menu
+backdrop with `getstring(10)`/`getstring(26)`/`getstring(25)` (fallback text
+if MESSAGES.TXT lacks those ids), drawn with the front-end FontTextures the
+same way `EditorScreen`'s SaveConfirm/FillConfirm prompts already do. Inside
+that modal: **Y/Enter/Space confirm** — blip 20 (already fired on keydown) +
+accept 10 + the exit-sting group `play_random_in_range(2600, 2699)` + a 4 s
+`SDL_Delay` (mirroring `sub_452012(0xFA0)`, so the sting is audible instead of
+being cut off by window teardown) before returning `AppInput::Quit`; **N/Escape
+cancel** — accept 10 (the dialog's own dismiss sound) and the menu resumes,
+nothing else happens. The attract-mode idle trigger is held off while the
+modal is up (the original's dialog is itself modal/blocking, so an idle-timeout
+demo match could not interrupt it either). The **Ctrl+E ×6 editor trigger**
+(key 5 → `sub_40330E`; formerly mislabelled
 here as a "campaign easter egg" — it opens the map editor, see
 `docs/re/results-and-options.md` §5; the REAL campaign trigger is 'C'×5 on
 the player-setup screen, `docs/re/campaign.md`) and the **280/315 direct

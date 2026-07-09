@@ -28,6 +28,62 @@ namespace fs = std::filesystem;
 // per-frame render/event loops) would be pure churn around a precondition
 // that's already true by construction, so these are deliberate one-offs
 // rather than fixed.
+
+namespace {
+
+// The boot LOADING dialog — PINNED 2026-07-09 (docs/re/frontend-flow.md "The
+// boot LOADING dialog"). This is NOT the IPLOGO/HSLOGO/TITLE screen chain
+// (sub_42B060, a separate later step): it is a small modal progress window
+// (sub_43C734, the same generic dialog-window primitive the Yes/No confirm
+// uses) that the entry point sub_42BE22 shows TWICE before sub_42B060 ever
+// runs — once for "Loading data..." (getstring(201), sub_41D695's MASTER.ALI
+// read) and once for "Loading sound..." (getstring(200), sub_4287B9's
+// SOUNDLST group preload) — both driven by the shared percent-bar primitive
+// sub_412E33 (a two-tone bar plus a "%d" readout, "Completion" caption). It
+// is programmatically drawn (box + bar + text), NOT a PCX asset — no
+// LOADING*.PCX exists anywhere in the install or the decompile.
+//
+// Our AssetStore::load() has no per-file progress callback (a monolithic
+// try-block of ANI/PCX loads), and on modern hardware the whole thing is
+// sub-second — so a live animated percent would be fake motion. Faithful
+// simplification (documented per CLAUDE.md's RE workflow): flash the SAME
+// two captions in the SAME order, each fully "complete" (bar full, 100%)
+// for one presented frame, matching the original's caption-then-bar shape
+// without inventing progress data we don't have. No PCX/font asset is
+// loaded yet at this point in boot, so the text uses SDL's built-in debug
+// font (SDL_RenderDebugText) rather than FONT6 (which load() itself
+// provides) or a frontend PCX (also loaded during/after this phase).
+void draw_boot_loading_dialog(SDL_Renderer* ren, const char* caption) {
+    SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
+    SDL_RenderClear(ren);
+
+    // sub_43C734's window: roughly centered, a dark panel with a light frame —
+    // we don't have the original's exact pixel geometry (no getvalue id owns
+    // it), so this is a reasonable dialog-sized box, not a pinned rect.
+    SDL_FRect panel{static_cast<float>(kScreenW) / 2 - 140, static_cast<float>(kScreenH) / 2 - 30,
+                     280, 60};
+    SDL_SetRenderDrawColor(ren, 40, 40, 48, 255);
+    SDL_RenderFillRect(ren, &panel);
+    SDL_SetRenderDrawColor(ren, 200, 200, 210, 255);
+    SDL_RenderRect(ren, &panel);
+
+    // The "Completion" percent bar (sub_412E33): two-tone fill, shown full
+    // since we present each phase already-done (the simplification above).
+    SDL_FRect bar_bg{panel.x + 16, panel.y + 34, panel.w - 32, 10};
+    SDL_SetRenderDrawColor(ren, 70, 70, 80, 255);
+    SDL_RenderFillRect(ren, &bar_bg);
+    SDL_FRect bar_fg{bar_bg.x, bar_bg.y, bar_bg.w, bar_bg.h};
+    SDL_SetRenderDrawColor(ren, 120, 200, 120, 255);
+    SDL_RenderFillRect(ren, &bar_fg);
+
+    SDL_SetRenderDrawColor(ren, 255, 255, 255, 255);
+    SDL_RenderDebugText(ren, panel.x + 16, panel.y + 12, caption);
+
+    SDL_RenderPresent(ren);
+}
+
+}  // namespace
+
 bool GameApp::init() {
     fs::path game = !opts_.game_dir.empty() ? opts_.game_dir : assets::default_game_dir();
     if (game.empty() || !fs::is_directory(game / "DATA")) {
@@ -118,6 +174,16 @@ bool GameApp::init() {
     SDL_SetRenderLogicalPresentation(ren, kScreenW, kScreenH,
                                      SDL_LOGICAL_PRESENTATION_LETTERBOX);
 
+    // The boot LOADING dialog (sub_42BE22 -> sub_41095A -> sub_41D695/
+    // sub_42896E, PINNED — see draw_boot_loading_dialog's comment): the ORIGINAL
+    // shows "Loading data..." (getstring 201) before its asset preload and
+    // "Loading sound..." (getstring 200) before its sound preload, BOTH before
+    // the IPLOGO/HSLOGO/TITLE chain (sub_42B060) ever runs. MESSAGES.TXT is not
+    // loaded yet at this first flash (it lives inside assets_.load()), so it
+    // uses the literal fallback text; the second flash below reads the real
+    // string once it's available.
+    draw_boot_loading_dialog(ren, "Loading data...");
+
     if (!assets_.load(ren, game)) return false;
     seqs_.resolve(assets_);
 
@@ -126,8 +192,14 @@ bool GameApp::init() {
     // so a stick plugged in after boot still shows up without a restart.
     gamepads_.refresh();
 
-    if (!opts_.demo && !audio_.init(game))
-        std::fprintf(stderr, "audio unavailable, continuing silent\n");
+    // Second phase of the boot LOADING dialog: "Loading sound..." (getstring
+    // 200), shown before the sound-preload step (sub_42896E/sub_4287B9) — here,
+    // audio_.init(). Skipped in --demo mode, matching that the demo path never
+    // calls audio_.init either.
+    if (!opts_.demo) {
+        draw_boot_loading_dialog(ren, assets_.getstring(200, "Loading sound...").c_str());
+        if (!audio_.init(game)) std::fprintf(stderr, "audio unavailable, continuing silent\n");
+    }
 
     base_tuning_ = match::build_match_config(scheme_, 2, 0, &values_).tuning;
     // Seed setup-screen slot colours from VALUELST for any colour without a .RMP
@@ -1258,6 +1330,21 @@ AppInput GameApp::present_menu() {
     menu_idle_since_ms_ = SDL_GetTicks();
     const std::int64_t idle_s = values_.at_or(92, kAttractIdleFallbackS);
     const bool attract_enabled = idle_s > kAttractIdleMinS;  // legend: <=5 disables attract
+    // The Quit confirm overlay (sub_412987 @0x412987, PINNED 2026-07-09): Escape
+    // does NOT quit directly. It selects row 6 (Quit, with the usual blip-20 +
+    // accept-10 sound pair), and the row-6 dispatch calls sub_412987, which pops
+    // a modal yes/no dialog — sub_41456C(getstring(10), ...) — BEFORE anything
+    // exits. getstring(10) = "Are you sure you want to exit?", buttons
+    // getstring(26)=" Yes "/getstring(25)=" No ". sub_41456C's own key loop
+    // (pseudo.c ~17220-17270) accepts Y/y/Enter/Space as Yes (returns 1) and
+    // N/n/Escape as No (returns 0) — confirmed by the raw key-code ranges
+    // (0x1B/78/110 -> No; 13/32/89/121 -> Yes). Only on Yes does sub_412987 play
+    // the exit sting (sub_427BFB(2600), skip-logos-gated) and Sleep(0xFA0 = 4 s)
+    // before the real process exit (sub_4128C9(0)); No just closes the dialog
+    // and returns to the menu with nothing else touched. The port mirrors this
+    // exactly: quit_confirm gates a small modal drawn over the menu backdrop
+    // (same box-plus-FontTextures convention as EditorScreen's SaveConfirm).
+    bool quit_confirm = false;
     while (true) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -1270,6 +1357,33 @@ AppInput GameApp::present_menu() {
                 ev.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN)
                 menu_idle_since_ms_ = SDL_GetTicks();
             if (ev.type != SDL_EVENT_KEY_DOWN) continue;
+
+            if (quit_confirm) {
+                // sub_41456C's key loop: any real key blips (20); Yes accepts
+                // (Y/Enter/Space), No cancels (N/Escape) — every other key is
+                // ignored and the dialog stays up.
+                audio_.play(20);
+                switch (ev.key.key) {
+                    case SDLK_Y:
+                    case SDLK_RETURN:
+                    case SDLK_KP_ENTER:
+                    case SDLK_SPACE:
+                        audio_.play(10);  // accept sting, sub_41456C returning 1
+                        audio_.play_random_in_range(kQuitStingLo, kQuitStingHi);  // 2600 group
+                        // sub_412987 Sleep(0xFA0)s before sub_4128C9(0) exits, so the
+                        // exit sting is audible rather than cut off by window teardown.
+                        SDL_Delay(4000);
+                        return AppInput::Quit;
+                    case SDLK_N:
+                    case SDLK_ESCAPE:
+                        audio_.play(10);  // sub_41456C returning 0 is also a real dismiss
+                        quit_confirm = false;
+                        break;
+                    default:
+                        break;
+                }
+                continue;  // modal: no other input reaches the row switch below
+            }
 
             // Hidden scheme-editor trigger (docs/re/results-and-options.md
             // §5, CONFIRMED): sub_42B9CE's input loop tracks a same-key
@@ -1308,14 +1422,15 @@ AppInput GameApp::present_menu() {
                     // then Escape (27) reaches the accept branch `if (v8>=17 &&
                     // (v8<=17 || v8==27)) { sub_427961(10); v10=6; }` — the accept
                     // sting (SFX 10) — and selects row 6 = Quit. The Quit row then
-                    // dispatches to sub_412987, which on confirm plays the exit
-                    // sting group sub_427BFB(2600) (2600..2699, "go outside and
-                    // play now!"). We have no confirm dialog, so Escape = blip +
-                    // accept + the exit sting, then back out.
+                    // dispatches to sub_412987, which pops the "Are you sure you
+                    // want to exit?" confirm dialog (PINNED, see quit_confirm's
+                    // comment above) — it does NOT exit directly. Only a Yes in
+                    // that dialog plays the 2600 exit sting and quits.
                     audio_.play(20);   // nav blip on the key (SFX 20)
                     audio_.play(10);   // accept sting selecting Quit (SFX 10)
-                    audio_.play_random_in_range(kQuitStingLo, kQuitStingHi);  // exit sting 2600
-                    return AppInput::Quit;  // Escape backs out of the top menu
+                    menu_index_ = 6;   // v10 = 6, matches the cursor landing on Quit
+                    quit_confirm = true;
+                    break;
                 case SDLK_RETURN:
                 case SDLK_KP_ENTER:
                 case SDLK_SPACE: {
@@ -1344,13 +1459,12 @@ AppInput GameApp::present_menu() {
                     // destination is a deferred effort.)
                     if (!kMenuItems[menu_index_].live) break;
                     AppInput sel = kMenuItems[menu_index_].action;
-                    // Quit selected from the menu: sub_412987 plays the exit sting
-                    // group sub_427BFB(2600) on confirm. Quitting does not wipe to a
-                    // match, so play the exit sting and return Quit directly (no
-                    // head-to-head transition, which is the menu->match effect).
+                    // Quit selected from the menu (Enter/Space on row 6): the SAME
+                    // sub_412987 dispatch Escape reaches, so it pops the SAME confirm
+                    // dialog rather than quitting outright.
                     if (sel == AppInput::Quit) {
-                        audio_.play_random_in_range(kQuitStingLo, kQuitStingHi);
-                        return AppInput::Quit;
+                        quit_confirm = true;
+                        break;
                     }
                     // Otherwise wipe out, then hand the selection to the flow.
                     transition_->start(SDL_GetTicks());
@@ -1390,7 +1504,10 @@ AppInput GameApp::present_menu() {
         // the sub_4224E2 save + the roster/stage rolls; run_app's StartMatch
         // handler (game_app.cpp) checks attract_ and skips the goldman wheel/
         // setup/level screens, matching sub_410F81's short-circuit.
-        if (attract_enabled &&
+        // The quit-confirm dialog is modal (sub_41456C blocks sub_42B9CE's own
+        // loop until answered) — hold off the attract idle trigger while it is
+        // up so a demo match cannot yank the confirm away mid-decision.
+        if (attract_enabled && !quit_confirm &&
             SDL_GetTicks() - menu_idle_since_ms_ >= static_cast<std::uint64_t>(idle_s) * 1000) {
             roll_attract_match();
             return AppInput::StartMatch;
@@ -1432,6 +1549,21 @@ AppInput GameApp::present_menu() {
                 SDL_SetRenderDrawColor(sdl_renderer_.get(), 255, 220, 60, pulse);
                 SDL_RenderFillRect(sdl_renderer_.get(), &bar);
             }
+        }
+        // The Quit confirm modal (sub_412987 -> sub_41456C, PINNED): a floating
+        // box over the menu backdrop with getstring(10) ("Are you sure you want
+        // to exit?") and the getstring(26)/getstring(25) " Yes "/" No " button
+        // legend. Same box-plus-FontTextures convention as EditorScreen's
+        // SaveConfirm/FillConfirm prompts.
+        if (quit_confirm) {
+            SDL_SetRenderDrawBlendMode(sdl_renderer_.get(), SDL_BLENDMODE_BLEND);
+            SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 200);
+            SDL_FRect box{140, 200, 360, 60};
+            SDL_RenderFillRect(sdl_renderer_.get(), &box);
+            std::string prompt =
+                assets_.getstring(10, "Are you sure you want to exit?") + "   Y/ENTER =" +
+                assets_.getstring(26, " Yes ") + " N/ESC =" + assets_.getstring(25, " No ");
+            front_font_.draw(sdl_renderer_.get(), prompt, 156.0f, 222.0f, 255, 220, 80);
         }
         SDL_RenderPresent(sdl_renderer_.get());
         SDL_Delay(2);
