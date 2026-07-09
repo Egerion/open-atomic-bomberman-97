@@ -18,6 +18,23 @@ checkboxes, `grep -rn TODO libs/ apps/ tests/`, and the install's file-format
 inventory vs `libs/assets` parsers. This file is a work-queue source, not
 prose — keep entries terse and re-sort by priority as items close.
 
+**"Is the attributed set actually complete?" — see `docs/re/dark-matter.md`
+(2026-07-09).** That sweep starts from a fuller `pseudo.c` snapshot (1134
+decompiled functions, a later/larger batch-decompile than the 330-function
+figure above) and a broader attributed-address scan (337 addresses, adding
+`docs/formats/*.md`/`docs/adr/*.md`/`docs/valuelst-map.md`/`docs/ROADMAP.md`/
+`docs/RE-NOTES.md`/code comments to this file's `docs/re/*.md`-only sweep),
+then call-graph-walks every unattributed function to find the ones no
+documented code ever calls. Verdict: no unattributed *gameplay* code
+remains — the entire unreachable-from-known-code pool resolves to CRT/
+runtime, gfx/sound engine internals, netplay transport (plus a previously
+uncatalogued modem/serial-COM driver cluster, worth folding into this file's
+§4 netplay list), and generic dialog plumbing, with a single exception: a
+3-function AI direction-scoring routine that turned out to be **dead code**
+(zero callers anywhere in the decompiled corpus, not part of the documented
+8-slot AI behavior table) rather than a live unRE'd mechanic. This file's
+own subsystem/asset-format counts are unaffected.
+
 ## Legend
 
 RE status: **pinned** (facts.md entry + address + evidence) · **partial**
