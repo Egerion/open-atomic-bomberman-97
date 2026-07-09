@@ -72,7 +72,7 @@ every comparison in the chain is accounted for below):
 | `1` | `sub_413D01()` (debug/skip-logos flag) | `sub_42A325()` — dumps a debug text file | **debug cheat**, see below |
 | `4` | none | `sub_413BB0()` — arms the DOS text-mode debug overlay (`dword_45BCD4=1`, `sub_42C098(0)`) | **debug cheat**, see below; no visible in-game effect without the mono/color text-page overlay actually being read by a debugger/second monitor — effectively inert on a normal VGA session |
 | `0x11` = **17** | none | `dword_46492C=-1; dword_464A68=2;` — **abort round, forfeit, back to menu** | the SAME target the menu's Escape handler jumps to (`docs/re/frontend-flow.md`'s `v8>=17 && (v8<=17\|\|v8==27)` Escape/Quit dispatch uses the identical 17/27 pairing) — see "Esc negative finding" below for why only 17 fires here |
-| `18` | `sub_413D01()` | `sub_4165D2()` — toggles a display mode (`dword_460BA4` ? `sub_416591` : `sub_4162F0`) | **debug cheat**, gated |
+| `18` | `sub_413D01()` | `sub_4165D2()` — toggles a display mode (`dword_460BA4` ? `sub_416591` : `sub_4162F0`) | **debug cheat**, gated — now fully characterized, see below |
 | `0x111` = **273** | none | `dword_4646B4 = 1` | **not an abort** — arms a flag consumed only by the DRAW/RESULTS wait loops' 6 s auto-advance test (`(sub_42247A()\|\|dword_4646B4) && time>t0+6000`, pseudo.c 29838/30062); reset to 0 at round entry (29704). Effectively a "skip the outcome screens quickly" latch, not a live pause/skip of the round itself |
 | `288` | none | `sub_413D45()` — opens the **"Internal debugging information window"** (MESSAGES.TXT id 400) | **debug cheat**, NOT gated by `sub_413D01()` — reachable in retail; shows total/audio mem, local net id, BOMBER_ID, critical-retrans rate, audio cache hit % (msg ids 405/410/411/415/420); dismissed by Enter/Esc. Same handler the main menu binds to raw code 288 (`docs/re/frontend-flow.md`'s table) |
 | `[0x112, 0x131]` = **274..305** | none | `sub_40C678()` | **network-only stats dump** — gated internally on `sub_413D01()`, writes a per-tick statistics text file (`aStatisticsForA` header, 200 `sec/byte-in/byte` lines) via `fopen(..., "at")`; a no-op with no visible effect in local play beyond the file I/O |
@@ -128,9 +128,66 @@ things LOOK like a pause and are not, for the record:
    entire modal duration to the round clock in one lump. Reading the manual
    mid-round costs you round time.
 
+3. **The engine's own "Paused" dialog exists — and is explicitly disabled at
+   boot (CONFIRMED 2026-07-09, closes a coverage question raised against this
+   doc).** The literal string `aPaused` (pseudo.c 1640, `"Paused"`) IS built
+   into a real modal window with a "Done" button (hotkey 27/Esc) — but the
+   function that builds it is **`sub_43A7C0`** (pseudo.c 42103-42134,
+   `sub_43C734`/`sub_432298` dialog chrome — the SAME primitives
+   `docs/re/frontend-flow.md`'s "sub_43C734 dialog-chrome primitive" section
+   already pins), not "`sub_43A7D4`" — that address is merely an inline
+   Hex-Rays comment inside `sub_43A7C0`'s own body ("43A7D4: variable 'v4' is
+   possibly undefined"), not a separate function; no `sub_43A7D4` function
+   exists in the binary. Tracing every caller, root to leaf:
+   - `sub_43A7C0` is reachable **only** as the default value of a function
+     pointer, `dword_4A37BC = sub_43A7C0` (pseudo.c 41809, set once at
+     windowing-engine init, `sub_43A400`).
+   - `dword_4A37BC` is called from exactly one site: `sub_43A784()` (pseudo.c
+     42082-42096) — `dword_4A37BC(); while (sub_43A508(v0) != 27); ...` —
+     i.e. open the dialog, then loop the SAME low-level key-poll primitive
+     `sub_43A508` (`docs/re/in-match-shell.md`'s own round-driver section
+     already cites this as the primitive every context — round loop, menu
+     loop — reads keys through) until it returns 27 (Esc), then tear the
+     window down. This genuinely IS a generic, reusable "Paused" modal in the
+     engine layer, callable from anywhere `sub_43A508` runs.
+   - `sub_43A784` itself is called from exactly one site: `sub_43A594`
+     (pseudo.c 41897-41927), the raw-key dispatcher every `sub_43A508` call
+     runs through BEFORE the caller-specific key remap — `if (a1 ==
+     dword_4A37B4) sub_43A784();` where **`dword_4A37B4` is the "pause key"
+     id, defaulted to `281`** at the same `sub_43A400` init (pseudo.c 41808).
+     Had this default survived, key 281 would have opened "Paused" from
+     EVERY `sub_43A508` call site in the whole binary (menu, round loop,
+     everywhere) — a genuine engine-level pause feature, likely shared with
+     other titles built on this same GNW-style windowing layer.
+   - **It doesn't survive.** BM95's own boot sequence,
+     `sub_414DF4` (the `WIN_INIT` log line owner, pseudo.c 17522-17561),
+     calls **`sub_43A8BC(-1, 0)`** (pseudo.c 17542) — the very first
+     statement after confirming the window system came up — which sets
+     `dword_4A37B4 = -1`. Since `sub_43A594`'s outer guard is `if (a1 != -1)
+     { if (a1 == dword_4A37B4) ... }`, and `dword_4A37B4` is now itself -1,
+     the pause branch can **never** fire again: a real key's raw id is only
+     ever compared against -1 while already known not to equal -1. This
+     makes `sub_43A7C0`/`sub_43A784` provably unreachable for the rest of
+     the process's life — a deliberate, one-line opt-out, not a coincidence
+     or an unremapped key.
+   - (Aside, not this lead's scope: the sibling pause-key global,
+     `dword_4A37B0` = **302** — a DIFFERENT `sub_43A594` branch calling
+     `sub_43A8D4`, a video-mode-toggle-looking routine — is never touched by
+     `sub_43A8BC`, so it is NOT proven dead by this trace; out of scope
+     here.)
+
+   **Conclusion: this doesn't contradict "NO PAUSE KEY EXISTS" — it explains
+   the mechanism.** The engine BM95 is built on ships a real, working, generic
+   pause dialog; BM95 turns it off with one call before any menu or gameplay
+   code runs. There is no reachable trigger for it anywhere in the retail
+   EXE. Nothing to port; the finding is recorded here because it pins the
+   *reason* no pause exists (an explicit opt-out of a real feature) rather
+   than leaving it as "no code path happens to call it".
+
 So: our port having no pause handling in `run_match` is **faithful** — a
-pause key would be an invention. If we ever port the mid-round F1 help, the
-faithful behaviour is "freeze the sim, let the clock keep running".
+pause key would be an invention (doubly so now: the original's own engine
+offers one and BM95 explicitly declines it). If we ever port the mid-round F1
+help, the faithful behaviour is "freeze the sim, let the clock keep running".
 
 ### Esc negative finding — CONFIRMED, and it changes what our port's Esc should do
 
@@ -621,7 +678,7 @@ VALUELST.RES text.)
 |---|---|---|
 | in-round key `1` | `sub_413D01()` (the `-nologo`/debug global) | writes a debug text dump (`sub_42A325`) — one line per something in a `v6[0]`-sized buffer, format `"%s\n"`, opened `"wt"` |
 | in-round key `4` | none (always live) | arms a DOS text-mode debug overlay pointer (mono/color text page, `0xB0000`/`0xB8000`) — invisible under normal VGA graphics mode, a leftover text-mode debug hook |
-| in-round key `18` | `sub_413D01()` | toggles a display mode via `sub_4165D2` (`dword_460BA4` ? `sub_416591` : `sub_4162F0`) — not further characterized, out of scope for this pass |
+| in-round key `18` | `sub_413D01()` | toggles a display mode via `sub_4165D2` (`dword_460BA4` ? `sub_416591` : `sub_4162F0`) — FULLY CHARACTERIZED below, a colour-remap QA overlay, not a keyboard-remap screen |
 | in-round key `288` | none (always live, also live in the main menu per `docs/re/frontend-flow.md`) | opens the "Internal debugging information window" — mem/audio-mem/net-id/BOMBER_ID/retrans-rate/cache-hit stats |
 | in-round keys `274..305` | `sub_413D01()` (internal to `sub_40C678`) | dumps a 200-line per-tick statistics file, `"at"` append mode |
 | main-menu Ctrl+E ×6 | none | the map editor (`docs/re/results-and-options.md` §5, already fully RE'd — not re-covered here) |
@@ -724,6 +781,75 @@ them a residual port gap — each for a distinct, evidenced reason, not a blanke
 decision") to **N/A** ("decision made, individually justified per key") — a
 genuine closure, not a deferral. No `libs/sim` or `libs/game` code changed by
 this pass; nothing in the determinism contract is touched.
+
+### Key `18`'s dialog — a colour-remap QA overlay, NOT a keyboard-remap screen (CONFIRMED 2026-07-09)
+
+A separate string-literal sweep of the decompile flagged `aChangeWhichRem`
+("change which remap...", pseudo.c 1492, drawn at (70,200) via `sub_43CD44`
+inside `sub_4162F0`) as a possible match for `docs/re/results-and-options.md`
+§2's key-remap UI (`sub_407B9D`, "Keyboard definitions"). Tracing
+`sub_4162F0` in full (pseudo.c 18349-18387) rules that out — it is a
+completely different, developer-only screen:
+
+- **Reachability.** `sub_4162F0` is called from exactly one place:
+  `sub_4165D2` (pseudo.c 18408-18415, `dword_460BA4 ? sub_416591 :
+  sub_4162F0` — open if closed, close if open), which itself is called from
+  exactly one place: the in-round debug key `18` handler (pseudo.c 29734,
+  gated `sub_413D01()`). It is NOT reachable from `sub_4080DC` (the Options
+  screen), `sub_407B9D` (the real key-remap UI), or anywhere else — a full
+  grep of `sub_4162F0`/`sub_4165D2`/`sub_416591` confirms these three call
+  sites are the only ones in the binary.
+- **It is about player COLOUR, not player keys.** The window's own button
+  callback is `sub_41627C` (pseudo.c 18339-18345): `byte_460BD0[dword_460BA0]
+  = getvalue(5*dword_460BA0+200)`, `byte_460BDA[...] = getvalue(+201)`,
+  `byte_460BE4[...] = getvalue(+202)` — these are the SAME three arrays
+  `docs/re/results-and-options.md` §1 already cites as *"the `.RMP` tail
+  bytes"* (the per-player-colour RGB override bytes read by the recolour
+  pipeline `docs/re/player-colour.md` documents), and `dword_460BA0` is a
+  0-9 cursor cycled by one of the dialog's own buttons (`sub_41624E`,
+  pseudo.c 18330-18336, `++dword_460BA0 >= 10 → 0`) — i.e. **"which [of the
+  ten player .RMP colour] remap[s to reload/inspect]"**, not "which keyboard
+  set". The button's own label (also a raw literal, not a `getstring()` id)
+  is `aReloadDefaultC` = `"Reload Default Color"` (pseudo.c 1493) — spelling
+  out exactly what it does.
+- **It's a hardcoded, non-localized debug string — proof this never shipped
+  as player-facing UI.** `aChangeWhichRem`/`aReloadDefaultC` are drawn by
+  passing the raw `char*` literal straight to `sub_43CD44`/`sub_432298`,
+  never through `sub_4124A4`(`getstring`)/MESSAGES.TXT the way every other
+  UI string in the front end is (contrast §2's real remap UI, whose every
+  label — `getstring(1100)`, `(1110)`, `(1120-1125)`, `(1130)`, `(1140)` — is
+  a message-table lookup). A real, localized, ship-quality screen would not
+  hardcode its captions.
+- **Layout, for completeness:** 3 rows of paired arrow-icon buttons
+  (`unk_4591FA`/`unk_4591FC`, raw icon bitmaps — not `getstring()` text —
+  at y=40/80/120, x=10/90) around an unread `.RMP`-adjacent index (the
+  buttons' own callbacks, `sub_4160D6`/`sub_416094`/`sub_41615A`/
+  `sub_416118`/`sub_4161DE`/`sub_41619C`, were not further traced — out of
+  scope, since the screen as a whole is confirmed non-shippable), the
+  "Reload Default Color" button at (10,186), the "change which remap..."
+  label at (70,200), and two more buttons at (10,226)/(40,226) —
+  `sub_41624E` (cycle `dword_460BA0` 0-9) and `sub_416220` (untraced).
+
+**Conclusion: no relationship to `KeyRemapScreen`/`sub_407B9D` and no port
+gap.** `docs/re/results-and-options.md` §2's key-remap UI facts (header
+"Keyboard definitions", the 2×6 action-button grid, `sub_407AD9`'s capture
+modal) remain the complete and only player-facing remap flow; our
+`KeyRemapScreen` does not need a "which keyboard set" prompt because the
+original's real remap screen never has one (both keyboard sets' six actions
+are shown together in one 2×6 grid, per §2). `aChangeWhichRem` belongs to
+this dead-in-retail-for-normal-players, `-nologo`-gated colour-remap QA tool
+instead — same class of finding as this document's `288`/`274..305`
+debug-cheat rows above, recorded here for completeness, not for porting.
+
+(Provenance: `sub_4162F0` @ 0x4162F0 pseudo.c 18348-18387; `sub_416591`
+@ 0x416591 pseudo.c 18393-18403; `sub_4165D2` @ 0x4165D2 pseudo.c 18407-18414
+[already cited above]; `sub_41624E` @ 0x41624E pseudo.c 18330-18335;
+`sub_41627C` @ 0x41627C pseudo.c 18338-18345; `aChangeWhichRem` pseudo.c
+1492; `aReloadDefaultC` pseudo.c 1493; call-site grep across the full
+decompile confirming exactly one caller per function in this chain;
+cross-reference `docs/re/results-and-options.md` §2 [`sub_407B9D`, the real
+key-remap UI] and §1 [`byte_460BD0`/`BDA`/`BE4` ".RMP tail bytes"
+cross-reference already in that doc].)
 
 ## Cross-reference
 

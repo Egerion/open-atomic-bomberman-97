@@ -62,9 +62,12 @@ std::size_t Renderer::timed_step(const Anim& a, int remaining, int total) {
     return idx < a.steps.size() ? idx : a.steps.size() - 1;
 }
 
-Uint8 Renderer::disease_flash_channel() {
+int Renderer::disease_flash_colour() {
     flash_lcg_ = flash_lcg_ * 1664525u + 1013904223u;
-    return static_cast<Uint8>(48 + ((flash_lcg_ >> 16) % 208));  // 48..255, always lively
+    // rand() % 10 in the original (sub_41F29B ~23252) — one of the ten real
+    // player-colour sprite sets, not an arbitrary tint. See draw_world's
+    // disease_flash comment for the full citation.
+    return static_cast<int>((flash_lcg_ >> 16) % kLocalPlayers);
 }
 
 std::uint32_t Renderer::panic_roll() {
@@ -481,25 +484,39 @@ void Renderer::draw_world(const sim::State& s) {
         if (p.bounce <= 0) draw_anim(q.shadow, 0, sx, sy);
         sy -= lift;  // raise the body (and anything anchored to it) by the hop arc
         int pv = render_colour(s, i);
-        const Anim* a = moving_[i] ? &q.walk[pv][dir] : &q.stand[pv][dir];
+        // A diseased player's body sprite strobes — CONFIRMED exact mechanism
+        // (sub_41F29B ~23252, traced 2026-07-09): after the shadow blit, the
+        // per-player draw-colour byte (+0x3C) that normally selects the FRAME
+        // within the current pose sequence (one frame per player colour, 0-9)
+        // is replaced by `rand() % 10` whenever the disease-age word's bit 3
+        // is set (`v111[60] & 8`, a WORD field distinct from +0x3C): the body
+        // is redrawn each tick in a RANDOM one of the ten real player colours,
+        // not an arbitrary tint. `body_colour` reproduces that by swapping in
+        // a presentation-RNG colour index for every pose branch below (walk/
+        // stand/cornerhead/kick/punch/carry/spin all key off it) on alternating
+        // sim ticks (the original redraws every tick; halving it here keeps the
+        // flash readable at render framerate, an existing deliberate deviation).
+        bool disease_flash = p.disease_timer > 0 && (s.tick & 1);
+        int body_colour = disease_flash ? disease_flash_colour() : pv;
+        const Anim* a = moving_[i] ? &q.walk[body_colour][dir] : &q.stand[body_colour][dir];
         std::size_t ph = moving_[i] ? walk_phase_[i] : 0;
         // Boxed-in idle: replace the stand pose with the current "cornerhead"
         // fidget (direction-independent). sample_movement already rolled the
         // variant/duration this tick; the phase just rides the sim tick so the
         // frames advance. Falls back to stand if the CORNER ANI is missing.
         if (!moving_[i] && panic_ticks_[i] > 0 &&
-            !q.cornerhead[pv][panic_variant_[i]].steps.empty()) {
-            a = &q.cornerhead[pv][panic_variant_[i]];
+            !q.cornerhead[body_colour][panic_variant_[i]].steps.empty()) {
+            a = &q.cornerhead[body_colour][panic_variant_[i]];
             ph = static_cast<std::size_t>(s.tick);
         }
         // A recent kick/punch overrides walk/stand with the action pose, played
         // once over its lifetime (falls back to walk/stand if the ANI is
         // missing so nothing ever blanks out).
-        if (kick_pose_[i] > 0 && !q.kick[pv][dir].steps.empty()) {
-            a = &q.kick[pv][dir];
+        if (kick_pose_[i] > 0 && !q.kick[body_colour][dir].steps.empty()) {
+            a = &q.kick[body_colour][dir];
             ph = static_cast<std::size_t>(kActionPoseTicks - kick_pose_[i]);
-        } else if (punch_pose_[i] > 0 && !q.punch[pv][dir].steps.empty()) {
-            a = &q.punch[pv][dir];
+        } else if (punch_pose_[i] > 0 && !q.punch[body_colour][dir].steps.empty()) {
+            a = &q.punch[body_colour][dir];
             ph = static_cast<std::size_t>(kActionPoseTicks - punch_pose_[i]);
         }
         // Carrying a grabbed bomb wins over the idle fidget and the kick/punch
@@ -508,7 +525,8 @@ void Renderer::draw_world(const sim::State& s) {
         // Falls back to the plain walk/stand already selected if the ANI is
         // missing so nothing ever blanks out.
         if (p.carrying) {
-            const Anim* c = moving_[i] ? &q.walkbomb[pv][dir] : &q.standbomb[pv][dir];
+            const Anim* c =
+                moving_[i] ? &q.walkbomb[body_colour][dir] : &q.standbomb[body_colour][dir];
             if (!c->steps.empty()) {
                 a = c;
                 ph = moving_[i] ? walk_phase_[i] : 0;
@@ -521,19 +539,11 @@ void Renderer::draw_world(const sim::State& s) {
         // 18→0, so elapsed = kWarpTicks - warp drives the frame; draw_anim's
         // `% statecnt` cycles the spin art across the 9-out + 9-in ticks. Falls
         // back to the pose already selected if WALK.ANI has no "spin".
-        if (p.warp > 0 && !q.spin[pv].steps.empty()) {
-            a = &q.spin[pv];
+        if (p.warp > 0 && !q.spin[body_colour].steps.empty()) {
+            a = &q.spin[body_colour];
             ph = static_cast<std::size_t>(kWarpTicks - p.warp);
         }
-        // A diseased player's sprite strobes through random colours — the
-        // original redraws it with rand()%10 while a disease-age bit is set
-        // (sub_41F29B). Tint on alternating sim ticks so it visibly flashes.
-        if (p.disease_timer > 0 && (s.tick & 1)) {
-            draw_anim(*a, ph, sx, sy, disease_flash_channel(), disease_flash_channel(),
-                      disease_flash_channel());
-        } else {
-            draw_anim(*a, ph, sx, sy);
-        }
+        draw_anim(*a, ph, sx, sy);
         if (p.carrying) {  // held bomb rides above the head
             int bo = render_colour(s, p.carried_owner);
             // Bomb-pickup carry arc (docs/re/id-audit.md item 4; VALUELST
