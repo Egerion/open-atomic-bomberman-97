@@ -315,6 +315,26 @@ bool GameApp::init() {
     sdl_renderer_.reset(ren);
     SDL_SetRenderLogicalPresentation(ren, kScreenW, kScreenH,
                                      SDL_LOGICAL_PRESENTATION_LETTERBOX);
+    // Vsync the present loop (best-effort; a no-op on a driver that can't,
+    // e.g. the dummy/offscreen video driver some CI runs use). The original
+    // is a DirectDraw flip loop with no getvalue()-backed frame-rate id
+    // anywhere in VALUELST, so its own pacing is whatever the display's
+    // vertical blank gave it (front-end loops like sub_42B9CE's menu poll
+    // once per iteration with no separate throttle — the flip IS the
+    // throttle). Every front-end screen that free-runs its own cosmetic
+    // frame counter once per render iteration (docs/re/frontend-flow.md
+    // "Cursor anchor" — present_menu's `++frame` driving the animated
+    // bomb-trigger cursor is the specific case that surfaced this, but the
+    // same pattern recurs in the Goldman wheel spin, boot logo timing, and
+    // attract idle) was, pre-fix, advancing at this loop's uncapped
+    // `SDL_Delay(2)` rate (~500 Hz) instead of the original's
+    // vsync-limited rate (~60-75 Hz) — a visibly-too-fast flicker with no
+    // faithful fixed millisecond constant to substitute, since the
+    // original's own pacing IS "one step per displayed frame". Syncing our
+    // present to the display's refresh is the faithful fix: it makes "one
+    // step per displayed frame" true here too, the same relationship the
+    // original had, without guessing a magic delay.
+    SDL_SetRenderVSync(ren, 1);
 
     // FONT6, loaded standalone BEFORE the boot LOADING dialogs — matching the
     // real init order (docs/re/frontend-flow.md "FONT6 timing", CONFIRMED):
