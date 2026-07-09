@@ -62,8 +62,15 @@ public:
     // exit-time write-back": sub_405DE3 only runs through sub_410EBF's
     // atexit-style hook on normal exit, never per-edit). run() calls this
     // itself before returning; the destructor is a backstop for any other
-    // exit path (e.g. a test harness that never calls run()'s tail).
-    ~GameApp() { flush_options(); }
+    // exit path (e.g. a test harness that never calls run()'s tail). The
+    // write does filesystem I/O that can throw; destructors are implicitly
+    // noexcept, so swallow — losing an options write on a failing disk is
+    // strictly better than std::terminate (bugprone-exception-escape).
+    ~GameApp() {
+        try {
+            flush_options();
+        } catch (...) {}
+    }
 
     // Runs to completion; returns the process exit code.
     int run();
