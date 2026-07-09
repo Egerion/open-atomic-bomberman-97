@@ -21,8 +21,11 @@
 using bomber::game::AppInput;
 using bomber::game::AppState;
 using bomber::game::assign_gold_player;
+using bomber::game::attract_computer_count;
+using bomber::game::attract_stage_pick;
 using bomber::game::clock_warning;
 using bomber::game::cycle_slot_input_type;
+using bomber::game::fill_attract_roster;
 using bomber::game::format_clock;
 using bomber::game::is_terminal;
 using bomber::game::KeyAction;
@@ -379,4 +382,138 @@ TEST_CASE("clock_warning fires at the confirmed <=30s threshold") {
     CHECK(clock_warning(30));
     CHECK(clock_warning(1));
     CHECK(clock_warning(0));
+}
+
+// docs/re/frontend-flow.md "Attract mode" (sub_410F81's attract branch,
+// pseudo.c 15125-15143): `rand()%10 + 1`, clamped to a MINIMUM of 3 —
+// i.e. the roll only ever widens the floor, never narrows the ceiling.
+TEST_CASE("attract_computer_count rolls 1..10 clamped to a floor of 3") {
+    // roll % 10 == 0 -> n = 0 + 1 = 1, clamped up to 3.
+    CHECK(attract_computer_count(0) == 3);
+    CHECK(attract_computer_count(10) == 3);   // 10 % 10 == 0 -> same as roll 0
+    // roll % 10 == 1 -> n = 2, still clamped to 3.
+    CHECK(attract_computer_count(1) == 3);
+    // roll % 10 == 2 -> n = 3, right at the floor already (no clamp needed).
+    CHECK(attract_computer_count(2) == 3);
+    // roll % 10 == 3 -> n = 4, above the floor, passes through untouched.
+    CHECK(attract_computer_count(3) == 4);
+    // roll % 10 == 9 -> n = 10, the maximum roster size.
+    CHECK(attract_computer_count(9) == 10);
+    CHECK(attract_computer_count(19) == 10);  // 19 % 10 == 9
+
+    // Every possible roll lands in the documented [3, 10] range.
+    for (unsigned r = 0; r < 200; ++r) {
+        int n = attract_computer_count(r);
+        CHECK(n >= 3);
+        CHECK(n <= 10);
+    }
+}
+
+// fill_attract_roster (doc "Attract mode" point 1): every slot OFF first,
+// then exactly `computer_count` of them (the FIRST N, slot order) flipped to
+// COMPUTER; team is zeroed everywhere ("forces team play off").
+TEST_CASE("fill_attract_roster sets the first N slots COMPUTER, the rest OFF, no team") {
+    std::array<int, kMaxPlayers> type{}, sub{}, team{};
+    // Poison the arrays first so the helper's own reset is what's tested,
+    // not a lucky zero-initialized default.
+    type.fill(static_cast<int>(SlotInputType::Keyboard));
+    sub.fill(1);
+    team.fill(1);
+
+    fill_attract_roster(4, type, sub, team);
+    for (int i = 0; i < kMaxPlayers; ++i) {
+        if (i < 4) {
+            CHECK(type[i] == static_cast<int>(SlotInputType::Computer));
+        } else {
+            CHECK(type[i] == static_cast<int>(SlotInputType::Off));
+        }
+        CHECK(sub[i] == 0);
+        CHECK(team[i] == 0);  // team play forced off for every slot
+    }
+}
+
+TEST_CASE("fill_attract_roster handles the documented extremes: 3 and 10") {
+    std::array<int, kMaxPlayers> type{}, sub{}, team{};
+
+    fill_attract_roster(3, type, sub, team);
+    int on = 0;
+    for (int i = 0; i < kMaxPlayers; ++i)
+        if (type[i] == static_cast<int>(SlotInputType::Computer)) ++on;
+    CHECK(on == 3);
+
+    fill_attract_roster(10, type, sub, team);
+    for (int i = 0; i < kMaxPlayers; ++i)
+        CHECK(type[i] == static_cast<int>(SlotInputType::Computer));
+}
+
+// attract_stage_pick (doc "Attract mode": `rand() % getvalue(35)` DIRECTLY,
+// bypassing the VALUELST 1150-1160 random-level enable-flag rotation a
+// normal RANDOM-level pick honours).
+TEST_CASE("attract_stage_pick wraps into [0, level_count) regardless of enable flags") {
+    CHECK(attract_stage_pick(0, 11) == 0);
+    CHECK(attract_stage_pick(10, 11) == 10);
+    CHECK(attract_stage_pick(11, 11) == 0);   // wraps
+    CHECK(attract_stage_pick(24, 11) == 2);   // 24 % 11 == 2
+
+    // Every roll stays in range for a variety of level counts, including the
+    // degenerate "stripped VALUELST" case of a count < 1 (clamped to 1).
+    for (int count : {0, 1, 5, 11}) {
+        int effective_count = count < 1 ? 1 : count;
+        for (unsigned r = 0; r < 50; ++r) {
+            int stage = attract_stage_pick(r, count);
+            CHECK(stage >= 0);
+            CHECK(stage < effective_count);
+        }
+    }
+}
+
+// Attract-mode selection save/restore roundtrip (docs/re/frontend-flow.md
+// "Attract mode" point 3, sub_4224E2/sub_422552): this doctest exercises the
+// SAME snapshot/overwrite/restore shape GameApp::roll_attract_match /
+// restore_from_attract implement (game_app.hpp's AttractSaved struct), using
+// a local stand-in so the roundtrip is testable without SDL/GameApp. Locks
+// the CONTRACT — save before overwrite, restore puts every touched field
+// back byte-for-byte — independent of the SDL-linked call sites.
+TEST_CASE("attract selection save/restore roundtrips every touched field") {
+    struct AttractSaved {
+        std::array<int, kMaxPlayers> type{};
+        std::array<int, kMaxPlayers> sub{};
+        std::array<int, kMaxPlayers> team{};
+        int level = -1;
+        bool team_play = false;
+    };
+
+    // The player's own pre-attract configuration.
+    std::array<int, kMaxPlayers> type{2, 1, 3, 0, 0, 0, 0, 0, 0, 0};
+    std::array<int, kMaxPlayers> sub{0, 0, 1, 0, 0, 0, 0, 0, 0, 0};
+    std::array<int, kMaxPlayers> team{0, 1, 1, 0, 0, 0, 0, 0, 0, 0};
+    int level = 4;
+    bool team_play = true;
+
+    // Save (sub_4224E2).
+    AttractSaved saved;
+    saved.type = type;
+    saved.sub = sub;
+    saved.team = team;
+    saved.level = level;
+    saved.team_play = team_play;
+
+    // Overwrite with a demo roster (mirrors roll_attract_match()).
+    fill_attract_roster(attract_computer_count(7), type, sub, team);
+    level = attract_stage_pick(3, 11);
+    team_play = false;
+    CHECK(type != saved.type);  // sanity: the overwrite actually changed something
+
+    // Restore (sub_422552) — every field lands back exactly where it started.
+    type = saved.type;
+    sub = saved.sub;
+    team = saved.team;
+    level = saved.level;
+    team_play = saved.team_play;
+
+    CHECK(type == std::array<int, kMaxPlayers>{2, 1, 3, 0, 0, 0, 0, 0, 0, 0});
+    CHECK(sub == std::array<int, kMaxPlayers>{0, 0, 1, 0, 0, 0, 0, 0, 0, 0});
+    CHECK(team == std::array<int, kMaxPlayers>{0, 1, 1, 0, 0, 0, 0, 0, 0, 0});
+    CHECK(level == 4);
+    CHECK(team_play == true);
 }

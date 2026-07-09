@@ -181,9 +181,63 @@ private:
     // The navigable main menu (sub_42B9CE): MAINMENU.PCX + an up/down highlight
     // over the item rows, Enter selects, Escape quits. Resolves the highlighted
     // row into a concrete AppInput (StartMatch / OpenOptions / ... / Quit).
+    //
+    // ALSO owns the ATTRACT-MODE idle timer (docs/re/frontend-flow.md "Attract
+    // mode", sub_42B9CE's idle path pseudo.c 30887-30894): getvalue(92) = 30 s
+    // (gated > 5, per the file's own legend — < 5 disables attract) of NO
+    // key/mouse/pad input resets `menu_idle_since_ms_`'s deadline; hitting it
+    // sets attract_, calls roll_attract_match() (the sub_4224E2 save + the
+    // roster/stage rolls), and returns StartMatch exactly as if row 0 (Play)
+    // had been selected — matching the original's `v10 = 0` force. This is
+    // presentation-level gating around the EXISTING Menu->StartMatch edge in
+    // app_flow.hpp; no new AppState/AppInput was needed (task brief: prefer
+    // the existing StartMatch edge). run_app's StartMatch handler checks
+    // attract_ and skips the goldman wheel / present_setup / present_map_select
+    // (doc: "neither the player screen nor the LEVEL & ROUNDS screen is
+    // shown"), going straight into run_match with the rolled roster/stage.
     AppInput present_menu();
+    // Attract-mode entry (sub_4224E2's save + sub_410F81's attract branch,
+    // doc "Attract mode" point 1): snapshots the CURRENT roster/level/team
+    // selections into attract_saved_ (so the player's own choices are
+    // untouched, doc "Menu re-entry restores everything" / sub_422552), then
+    // overwrites setup_type_/setup_sub_/setup_team_ with a random 3..10
+    // COMPUTER-only roster and selected_level_ with a random stage that
+    // BYPASSES the VALUELST 1150-1160 enable flags (input.hpp's
+    // fill_attract_roster/attract_stage_pick — pure helpers, unit-tested).
+    // Also forces team_play_ off (doc: "forces team play off") and clears any
+    // pending campaign/goldman state so they stay inert for the duration (doc
+    // point 2's "campaign trigger inert during attract" requirement + goldman
+    // §2's `!dword_464938` gate — the wheel is skipped by run_app's own
+    // attract_ check at the StartMatch call site, not by clearing
+    // gold_player_ here, so a real pending prize still survives an attract
+    // interlude). The two rolls advance attract_lcg_, a dedicated
+    // presentation LCG (never State::rng) — same shape as setup_lcg_/
+    // goldman_lcg_ elsewhere in this file.
+    void roll_attract_match();
+    // Attract-mode exit (sub_422552, doc "Menu re-entry restores everything"):
+    // writes attract_saved_ back over setup_type_/setup_sub_/setup_team_/
+    // selected_level_/team_play_ and clears attract_. Called on EVERY path
+    // back to the menu after an attract match — both a natural round end
+    // (doc point 2's "Round end skips ALL outcome screens": DRAW/RESULTS/
+    // VICTORY never render, so run_app's Results branch is bypassed entirely
+    // for an attract round) and an input-triggered abort (doc point 3: "ANY
+    // key/mouse/pad input ... aborts immediately back to the menu", run_match
+    // below). Idempotent no-op if attract_ is already false.
+    void restore_from_attract();
     // Runs one match to its end (one player left or time up). Returns Quit if
     // the window closed mid-match, else MatchOver.
+    //
+    // In attract_ mode this ALSO returns MatchOver the instant ANY key,
+    // mouse-button, or gamepad-button input arrives (docs/re/frontend-flow.md
+    // "Attract mode" point 3 / doc's abort requirement, mirroring sub_42A3F6's
+    // round-loop tail `if (dword_464938) goto LABEL_34` on a keypress) — a
+    // real (non-attract) match only reacts to the specific keys already wired
+    // above (Ctrl+Q, Esc, F1), so this abort check is additive and attract_-
+    // gated, never firing for a human-played round. run_app's StartMatch
+    // caller calls restore_from_attract() unconditionally once this returns,
+    // whether the round ended naturally or was aborted (doc point 2 "Round
+    // end skips ALL outcome screens" applies to BOTH exits — attract never
+    // reaches Results).
     AppInput run_match();
 
     // The winner of the round just ended: the sole surviving player's index, or
@@ -320,6 +374,42 @@ private:
     // specific built-in level whose stage index start_match uses directly.
     int selected_level_ = -1;
     std::uint32_t setup_lcg_ = 0x5E7C0DE5u;  // presentation RNG for the glue pick
+
+    // ATTRACT MODE (docs/re/frontend-flow.md "Attract mode", sub_42B9CE's idle
+    // path + sub_410F81's attract branch, dword_464938). Presentation/config-
+    // only, like campaign_active_ below — never sim::State, never hashed; the
+    // sim runs the demo match through the ordinary start_match seed path, so
+    // determinism (ADR-0003) is untouched.
+    //
+    // `menu_idle_since_ms_` is present_menu's own idle clock, reset to "now"
+    // on every real key/mouse/pad event it sees — separate from a Screen's
+    // getvalue(12)=7s dwell (this is getvalue(92)=30s, a different id/timer).
+    // present_menu compares elapsed time against it every frame and fires
+    // attract once it exceeds getvalue(92)*1000 ms (gated > 5 s, doc: "< 5
+    // disables attract"). 0 is a sentinel meaning "not yet initialised for
+    // this menu visit" — present_menu seeds it to the current tick on entry.
+    std::uint64_t menu_idle_since_ms_ = 0;
+    // dword_464938: true for the duration of an attract demo match. Set by
+    // roll_attract_match() (present_menu's idle-timeout branch), read by
+    // run_app's StartMatch handler (skip the goldman wheel / present_setup /
+    // present_map_select / the Results outcome screens) and by run_match
+    // (abort on any input). Cleared by restore_from_attract().
+    bool attract_ = false;
+    // The roster/level/team snapshot roll_attract_match() saves before
+    // overwriting them for the demo roster (sub_4224E2), restored by
+    // restore_from_attract() (sub_422552) — doc: "Menu re-entry restores
+    // everything", so the player's own pre-attract choices survive untouched.
+    struct AttractSaved {
+        std::array<int, sim::kMaxPlayers> type{};
+        std::array<int, sim::kMaxPlayers> sub{};
+        std::array<int, sim::kMaxPlayers> team{};
+        int level = -1;
+        bool team_play = false;
+    };
+    AttractSaved attract_saved_{};
+    // Dedicated presentation LCG (never State::rng) for the two attract rolls
+    // (roster-count, stage) — same shape as setup_lcg_/goldman_lcg_.
+    std::uint32_t attract_lcg_ = 0x0A77AC70u;
 
     // Campaign mode (docs/re/campaign.md, dword_46489C): armed only by the
     // 'C'x5 trigger + a successful *.cam pick on present_setup
