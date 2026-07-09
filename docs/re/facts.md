@@ -1456,6 +1456,62 @@ Capstone/PE-parsing script per `docs/re/method.md`; `sub_40200C`
 increment; `sub_4124A4` shared id lookup, already documented above as
 `getvalue`; `messages.txt` ids 900/905/910-928 in this install's own copy.)
 
+## Third `.DAT` file identified — `WINEREG/EReg058.dat` (2026-07-09)
+
+Read for coverage-audit.md §3's `.DAT` row: `LEVELS.DAT` and `bmstats.dat`
+were RE'd above; a `find`-based inventory of the install tree counted 3
+`.DAT` files total but never named the third.
+
+**Finding: `D:\...\BOMBRMAN\WINEREG\EReg058.dat`** (1079 bytes, plain text).
+Hexdump shows an un-filled INI-style form:
+
+```
+[Public User Data]
+Salutation=
+FirstName=
+Initial=
+LastName=
+JobTitle=
+Company=
+Division=
+Address1=
+Address2=
+City=
+State=
+Zip=
+Country=
+Phone=
+Extension=
+Fax=
+EMailAddress=
+EMailService=
+HaveModem=
+ModemSpeed=
+HaveCDROM=
+CDROMSpeed=
+HaveJoystick=
+HaveGamepad=
+LocationCountry=
+OutsideLineAccess=
+...
+```
+
+— every key blank: the bundled product-registration wizard's un-filled
+"Public User Data" template, not user data actually entered on this
+install. It sits in `WINEREG/` alongside `WINEREG.EXE`, `EREGUI32.DLL`,
+`EREG3201.DLL`, `EREGUI.INI`, and `INTER.BMP` — the exact same bundled
+registration-wizard tool folder already closed as non-gameplay by the
+`.BMP` row (`docs/re/coverage-audit.md` §3: "lives inside the bundled
+WINEREG.EXE/EREGUI32.DLL registration-wizard tool's own folder").
+
+`grep -in "ereg\|058\.dat\|registration" pseudo.c` — **zero matches**,
+confirming `BM95.EXE` never opens this file (same negative-evidence method
+as the `LEVELS.DAT`/`bmstats.dat` entries above).
+
+**Conclusion: non-gameplay tooling data, same class as `WINEREG/INTER.BMP`.**
+Closes the `.DAT` row's outstanding "3rd file unchecked" item; no parser
+warranted (it belongs to a separate bundled EXE, not the game).
+
 ## Still guessed — not yet extracted from the binary
 
 | Constant | Current value | Status |
