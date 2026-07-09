@@ -178,9 +178,14 @@ ONE deliberate deviation: on close the frame accumulator is reset, so the
 round clock does NOT absorb the modal's wall-clock duration (the original's
 documented lump-sum clock burn under "Pause negative finding" point 2 is a
 bug we chose not to reproduce). The 288 debug window and the other
-debug-gated keys remain unwired. Faithfully matching the original key-for-key
-would mean binding forfeit to Ctrl+Q and leaving Esc inert, which would be a
-worse player experience than what we have; this is flagged as a fact, not a
+debug-gated keys (1/4/18/274-305) were audited 2026-07-09 (see "Debug/cheat
+keys — summary" below, `docs/re/coverage-audit.md` row #35) and confirmed
+**N/A, not a port gap**: each is either OS/hardware-specific dead weight,
+unresolvable at the decompiler level, netplay-only (ADR-0003), or would
+require inventing diagnostic content our engine has no equivalent
+instrumentation for. Faithfully matching the original key-for-key would mean
+binding forfeit to Ctrl+Q and leaving Esc inert, which would be a worse
+player experience than what we have; this is flagged as a fact, not a
 recommendation to regress the binding.
 
 ## The in-round HUD — CONFIRMED: a live countdown clock IS drawn (refutes "bare field")
@@ -614,6 +619,99 @@ None of these are gated behind a documented "debug build" flag distinct from
 sting/timeout logic already uses) — the retail EXE ships every one of these
 live, and two (`4`, `288`) have no gate at all. They are genuine,
 shippable-binary developer cheats, not decompiler artifacts.
+
+### Row #35 closure — CONFIRMED N/A for every key, individually justified (2026-07-09)
+
+`docs/re/coverage-audit.md` row #35 tracked these five key groups (`1`, `4`,
+`18`, `274..305`, `288`) as "absent (F1 only)". Each was re-read function-body
+by function-body against `pseudo.c` this pass (not just the dispatch-table
+one-liners above) to decide port-vs-N/A per the task's classification rule
+(gameplay state → port only if sim-safe; presentation/diagnostic → port
+directly; netplay → N/A per ADR-0003). Verdict: **all five are N/A**, none of
+them a residual port gap — each for a distinct, evidenced reason, not a blanket
+"low priority, skip":
+
+- **Key `1` (debug text dump, `sub_42A325`, pseudo.c 29577-29603).** Reading
+  the full body: `v1 = fopen_(v1, aWt_3)` — the filename argument register is
+  flagged by the decompiler itself as **"variable 'v1' is possibly
+  undefined"** (pseudo.c 29604), and the dump's own content buffer
+  (`v6[1]`, fed to `fprintf_(v7, aS_7)` in a loop) is built through
+  `sub_41D826`/`sub_41485A`, neither of which resolves what data is being
+  serialized without further RE this pass didn't do. This is the SAME class
+  of decompiler gap `docs/re/coverage-audit.md`'s existing TODO(RE) crumb
+  (`sub_43D398`'s "possibly undefined" X register, table row after §6) is
+  explicitly allowed to stay unresolved rather than guessed. **N/A — cannot
+  be faithfully reproduced; the original's own filename and payload are not
+  recoverable from this decompile, and guessing either would be an invented
+  substitute, not a port.**
+- **Key `4` (DOS text-mode debug overlay arm, `sub_413BB0`+`sub_42C098`,
+  pseudo.c 16683-16688 / 31004-31020).** Full trace: `sub_413BB0` sets
+  `dword_45BCD4=1` then calls `sub_42C098(0)`, which — reading its body —
+  only ever clears/reinstalls a raw function-pointer callback
+  (`dword_45BFD0`) and closes a file handle (`dword_45BFC4`) if one is open;
+  the paired "read" side (not reached by this key at all, per the exhaustive
+  key-table trace above) writes text glyphs directly into the `0xB0000`/
+  `0xB8000` MDA/CGA video segments — physical memory-mapped text-mode video
+  RAM that does not exist as an addressable concept under a modern protected
+  Win32/SDL3 process, let alone a cross-platform one. **N/A — the underlying
+  hardware primitive (raw VGA text-page memory) has no substitute to port
+  to; even the original doc already notes this is "effectively inert on a
+  normal VGA session" in the shipped game itself.**
+- **Key `18` (live HSL colour-remap tuning dialog, `sub_4162F0`/`sub_416591`/
+  `sub_415ED1`/`sub_41604C..sub_41627C`, pseudo.c 18190-18415).** Full trace
+  (not done by the earlier "not further characterized" pass): this opens a
+  `sub_43C734`-family dialog — the SAME dialog-chrome primitive this repo's
+  own boot/quit-confirm dialogs pin pixel-exact (`sub_43C734`/`sub_432298`/
+  `sub_412E33`, per the "Pin sub_43C734 dialog chrome" commits) — with 9
+  buttons (R/G/B ±5-step sliders, prev/next slot, "Reload Default Color") that
+  live-edit `byte_460BD0/BDA/BE4[slot]` (10 slots) and call `sub_41604C` →
+  **`sub_414A65`** to regenerate that slot's player-colour remap table
+  in-memory from the edited R/G/B percentages and redraw a live swatch
+  preview (`sub_43D1C0`, RGB555 → palette LUT). `sub_414A65` itself IS
+  already RE'd and ported — it's the exact `.RMP` fallback builder
+  `docs/re/player-colour.md` documents (table row #26, `recolor_image`/
+  `recolor_image_rmp`) — so the underlying colour math is not the blocker.
+  What IS missing: (a) our port has **no equivalent of `dword_460260`/
+  `sub_413D01()`** — no "debug mode" concept exists anywhere in `GameApp` to
+  gate a developer-only dialog behind (confirmed: `grep -rn
+  "debug_mode\|nologo" libs/game/src` finds nothing); and (b) our port's
+  colour pipeline recolours whole PRE-BUILT texture sets once at
+  `AssetStore::build_player_sets` load time (`docs/re/player-colour.md` "Our
+  port"), not a live per-pixel remap-and-reblit the original's DirectDraw
+  path does — wiring a "live edit, see the swatch AND every on-screen sprite
+  update instantly" tool would mean adding texture-regeneration-on-the-fly to
+  `AssetStore`, a real new capability, not a key binding. **N/A — the colour
+  math has a home (already ported), but the tool built around it needs two
+  things the port doesn't have (a debug-mode flag, live texture
+  regeneration) for a feature with zero player-facing value; out of
+  proportion to a "low priority, developer/QA-only" row.**
+- **Key `288` (Internal debugging information window, `sub_413D45`, pseudo.c
+  16752-16832).** Full trace of its 5 stat lines: total/audio mem
+  (`sub_418713`, msg 405), local net id (`sub_40FBFD`, msg 410), BOMBER_ID
+  (`sub_40FC22`, msg 411), critical retrans rate (`dword_464950/dword_46495C`,
+  msg 415), audio cache hit % (`sub_42717D`, msg 420). **3 of 5 lines are
+  pure netplay** (net id / BOMBER_ID / retrans rate — N/A per ADR-0003, same
+  bucket as `sub_40C678` below); **the remaining 2** (mem stats, audio cache
+  hit %) are Watcom-CRT/DirectSound-specific engine instrumentation our SDL3
+  port's `AssetStore`/`AudioEngine` has no equivalent counters for (no
+  "audio cache" concept exists — samples are loaded directly). Porting the
+  window would mean either 3 blank rows or fabricated numbers standing in for
+  metrics the port doesn't track — inventing displayed content, which this
+  repo's "no invented visuals/content" rule rules out just as much for a
+  debug readout as for game art. **N/A — ungated and reachable, but every
+  field is either explicitly out of scope (netplay) or has no honest local
+  value to show.**
+- **Keys `274..305` (network per-tick statistics dump, `sub_40C678`).**
+  Already established elsewhere in this document and in
+  `docs/re/coverage-audit.md` §4 as the network-stats-dump function —
+  **N/A per ADR-0003**, no new finding this pass, listed here only for the
+  row's completeness.
+
+**Net effect on `docs/re/coverage-audit.md` row #35:** RE status stays
+**pinned** (it already was); Port status changes from **absent** ("needs a
+decision") to **N/A** ("decision made, individually justified per key") — a
+genuine closure, not a deferral. No `libs/sim` or `libs/game` code changed by
+this pass; nothing in the determinism contract is touched.
 
 ## Cross-reference
 
