@@ -13,6 +13,7 @@ add_library(bomber_game_core STATIC
   src/gamepad.cpp
   src/screen.cpp
   src/bmscreen.cpp
+  src/dialog_chrome.cpp
   src/options_screen.cpp
   src/keyremap_screen.cpp
   src/goldman_screen.cpp

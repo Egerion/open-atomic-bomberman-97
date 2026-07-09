@@ -132,6 +132,22 @@ TEST_CASE("move_start / toggle_start_team ignore out-of-range slots") {
     CHECK(g.start(0).x != 1);
 }
 
+TEST_CASE("toggle_editor_tileset — '0' key's dword_45B7B8 increment-clamp, PINNED pseudo.c 5654-5657") {
+    // `if (++v > 0) v = -1;` — NOT a plain flip: from 0 it increments to 1,
+    // which is >0, so it clamps to -1; from -1 it increments to 0, which is
+    // NOT >0, so it stays 0. Net effect over {0,-1} is a strict toggle, but
+    // the exact arithmetic matters if the session ever starts from some
+    // other value (it never does in the port — enter() always seeds 0).
+    CHECK(toggle_editor_tileset(0) == -1);
+    CHECK(toggle_editor_tileset(-1) == 0);
+    CHECK(toggle_editor_tileset(toggle_editor_tileset(0)) == 0);  // round-trips
+    // Documented as a dead end (§5d): any OTHER starting value keeps
+    // incrementing without ever re-clamping back down past 0, since only
+    // values strictly >0 get clamped to -1.
+    CHECK(toggle_editor_tileset(1) == -1);
+    CHECK(toggle_editor_tileset(-2) == -1);
+}
+
 TEST_CASE("new grid seeds exactly kEditorPowerupKinds default rows") {
     EditorGrid g;
     REQUIRE(g.powerups().size() == static_cast<std::size_t>(kEditorPowerupKinds));

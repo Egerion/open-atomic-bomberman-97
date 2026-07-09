@@ -11,6 +11,7 @@
 #include "bomber/assets/install.hpp"
 #include "bomber/game/anim_pace.hpp"
 #include "bomber/game/bmscreen.hpp"
+#include "bomber/game/dialog_chrome.hpp"
 #include "bomber/game/sprites.hpp"
 #include "bomber/match/match_factory.hpp"
 
@@ -31,87 +32,12 @@ namespace fs = std::filesystem;
 
 namespace {
 
-// The shared sub_43C734 dialog-chrome primitive — PINNED 2026-07-09
-// (docs/re/frontend-flow.md "The sub_43C734 dialog-chrome primitive"). Both
-// the boot LOADING dialog (sub_412E33's percent-bar window) and the Yes/No
-// confirm (sub_41456C) open through this ONE window constructor, and its
-// "chrome" is exactly two things: a single flat filled rectangle (colormode
-// 256 -> the theme default fill, byte_495390[dword_45C46C], decoded RGB555
-// offset 10570 -> (82,82,82) grey) and NOTHING else — no border, no shadow,
-// no bevel anywhere in the window body (sub_43D398/sub_4428E4, the placement
-// + blit steps, never draw a decorative outline). The earlier port's guessed
-// light-frame outline had no basis in the decompile and is removed here.
-//
-// sub_43C734's real signature is `(y, height, width, colormode, flags)`, NOT
-// `(x, y, width, ...)` as an earlier pass assumed — confirmed against the
-// master 640x480 root window's own construction
-// (`sub_43C734(0, 480, 640, black, 1)`, only sensible as y=0/height=480/
-// width=640). Neither dialog caller ever computes an explicit X; the
-// confirm dialog computes only a vertical center. The X-placement source
-// register is one IDA's decompiler lost (`sub_43D398`'s internal x value,
-// "possibly undefined" — TODO(RE): needs a disassembler pass, unavailable
-// here) — every visual call site's evident intent is a horizontally
-// centered dialog, so the port centers against the 640-px screen width.
-struct DialogRect {
-    float x, y, w, h;
-};
-
-constexpr Uint8 kChromeFillR = 82, kChromeFillG = 82, kChromeFillB = 82;  // dword_45C46C=10570
-
-// X is never an explicit sub_43C734 parameter anywhere in this family (see
-// the block comment above) — the port horizontally centers every dialog
-// against the 640-px screen width, the one behaviour consistent with every
-// call site's visible intent.
-DialogRect dialog_rect(float y_px, float height_px, float width_px) {
-    return DialogRect{(static_cast<float>(kScreenW) - width_px) / 2, y_px, width_px, height_px};
-}
-
-// The confirm dialog's Y IS an explicit, CONFIRMED expression
-// (`(dword_464A6C - height) / 2` = vertical screen-center, sub_41456C
-// pseudo.c 17197) — unlike the loading dialog, which hardcodes y=200.
-DialogRect dialog_rect_vcentered(float height_px, float width_px) {
-    return dialog_rect((static_cast<float>(kScreenH) - height_px) / 2, height_px, width_px);
-}
-
-// The one flat fill sub_43C734/sub_43D1C0 draw — see the block comment above.
-void draw_dialog_chrome(SDL_Renderer* ren, const DialogRect& r) {
-    SDL_FRect box{r.x, r.y, r.w, r.h};
-    SDL_SetRenderDrawColor(ren, kChromeFillR, kChromeFillG, kChromeFillB, 255);
-    SDL_RenderFillRect(ren, &box);
-}
-
-// sub_432298 — the button widget (PINNED, docs/re/frontend-flow.md
-// "sub_432298 — the button widget"). Size is text-derived (width =
-// measure(label)+16, height = fontheight+6, pseudo.c ~35197-35199), with a
-// real 2px-inset bevel (unlike the plain window body above): light tone
-// (123,123,123, dword_45C470) on the top/left ring, dark tone (66,66,66,
-// dword_45C474) on the bottom/right ring — a raised "up" look, the only
-// state this port draws (no press animation needed for a Yes/No choice) —
-// closed with a 1px black outline, then the label in the text-shadow ink
-// (165,165,165, dword_45C478). `x, y` are the button's top-left in
-// WINDOW-relative pixels (matching sub_41456C's own button call sites).
-void draw_dialog_button(SDL_Renderer* ren, const FontTextures& font, float x, float y,
-                        const std::string& label) {
-    const float label_w = font.loaded() ? static_cast<float>(font.measure(label)) : 0.0f;
-    const float h = static_cast<float>(font.loaded() ? font.line_height() : 12);
-    const float w = label_w + 16.0f;
-    const float bh = h + 6.0f;
-
-    SDL_FRect outline{x, y, w, bh};
-    SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);  // byte_495390[0]
-    SDL_RenderFillRect(ren, &outline);
-    SDL_FRect ring1{x + 1, y + 1, w - 2, bh - 2};
-    SDL_SetRenderDrawColor(ren, 66, 66, 66, 255);  // dword_45C474, bottom/right (drawn full then...)
-    SDL_RenderFillRect(ren, &ring1);
-    SDL_FRect ring1_lit{x + 1, y + 1, w - 3, bh - 3};  // ...top/left overpainted light
-    SDL_SetRenderDrawColor(ren, 123, 123, 123, 255);  // dword_45C470
-    SDL_RenderFillRect(ren, &ring1_lit);
-    SDL_FRect face{x + 2, y + 2, w - 4, bh - 4};
-    SDL_SetRenderDrawColor(ren, kChromeFillR, kChromeFillG, kChromeFillB, 255);
-    SDL_RenderFillRect(ren, &face);
-
-    font.draw(ren, label, x + (w - label_w) / 2.0f, y + 3.0f, 165, 165, 165);  // dword_45C478
-}
+// The DialogRect/dialog_rect*/draw_dialog_chrome/draw_dialog_button
+// primitives moved to bomber/game/dialog_chrome.hpp (2026-07-09) so the
+// scheme editor's own sub_41456C/sub_42E938 dialogs (docs/re/
+// results-and-options.md #5, "exact dialog chrome") can reuse the SAME
+// pinned facts instead of re-deriving them — see that header for the full
+// sub_43C734/sub_432298 provenance comments.
 
 // The boot LOADING dialog — PINNED 2026-07-09 (docs/re/frontend-flow.md "The
 // boot LOADING dialog" + "The percent-bar dialog, sub_412E33"). This is NOT
@@ -1099,14 +1025,30 @@ void GameApp::present_editor() {
                     editor.on_mouse_down(eev.button.button, gx, gy);
                     continue;
                 }
+                if (eev.type == SDL_EVENT_MOUSE_MOTION) {
+                    // §5d, PINNED: sub_431804 reads the live cursor position
+                    // every loop iteration to draw the brush preview AT it
+                    // (pseudo.c 5520-5524) — same logical-coordinate mapping
+                    // as the button-down case above, but RAW pixels (no
+                    // grid-cell snapping; EditorScreen::on_mouse_move does
+                    // its own hotspot-anchored draw).
+                    float lx = 0, ly = 0;
+                    SDL_RenderCoordinatesFromWindow(sdl_renderer_.get(), eev.motion.x, eev.motion.y,
+                                                    &lx, &ly);
+                    editor.on_mouse_move(lx, ly);
+                    continue;
+                }
                 if (eev.type != SDL_EVENT_KEY_DOWN) continue;
-                // Ctrl+F (§5's flood fill) needs the modifier; every other
-                // editor key is unmodified, so only gate 'F' on Ctrl here
-                // and let plain 'F' pass straight through untouched (the
-                // powerup sub-editor's own 'F' — forbidden toggle — is a
-                // SEPARATE screen/handler and never sees this event).
-                bool ctrl_f = (eev.key.key == SDLK_F) && (eev.key.mod & SDL_KMOD_CTRL) != 0;
-                if (ctrl_f || eev.key.key != SDLK_F) editor.on_key(eev.key.key, audio_);
+                // Ctrl+F (flood fill) and Ctrl+B (reset, §5) both need the
+                // modifier; every other editor key (including '0's tileset
+                // toggle) is unmodified — editor_key_needs_ctrl
+                // (editor_screen.hpp) lists exactly those two, so plain
+                // 'F'/'B' (e.g. the powerup sub-editor's own 'F' forbidden
+                // toggle — a SEPARATE screen/handler) never reach here
+                // ungated.
+                bool needs_ctrl = editor_key_needs_ctrl(eev.key.key);
+                bool ctrl_down = (eev.key.mod & SDL_KMOD_CTRL) != 0;
+                if (!needs_ctrl || ctrl_down) editor.on_key(eev.key.key, audio_);
             }
             audio_.update_music();
             SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
@@ -1784,23 +1726,10 @@ AppInput GameApp::present_menu() {
         // width/2+22 (No). Behaviour (Y/Enter/Space confirm, N/Escape
         // cancel, sound path, 4s exit delay) is UNCHANGED — chrome-only pass.
         if (quit_confirm) {
-            const float h = static_cast<float>(front_font_.loaded() ? front_font_.line_height() : 12);
             std::string prompt = assets_.getstring(10, "Are you sure you want to exit?");
             std::string yes_label = assets_.getstring(26, " Yes ");
             std::string no_label = assets_.getstring(25, " No ");
-            float prompt_w =
-                front_font_.loaded() ? static_cast<float>(front_font_.measure(prompt)) : 0.0f;
-            float win_w = std::max(prompt_w, 80.0f) + 64.0f;
-            float win_h = 4.0f * h + 64.0f + h;
-            DialogRect win = dialog_rect_vcentered(win_h, win_w);
-            draw_dialog_chrome(sdl_renderer_.get(), win);
-            front_font_.draw(sdl_renderer_.get(), prompt, win.x + (win.w - prompt_w) / 2.0f,
-                             win.y + h + 32.0f, 255, 255, 255);  // byte_49D38F
-            float btn_y = win.y + win.h - 32.0f - h - 6.0f;
-            draw_dialog_button(sdl_renderer_.get(), front_font_, win.x + win.w / 2.0f - 80.0f,
-                               btn_y, yes_label);
-            draw_dialog_button(sdl_renderer_.get(), front_font_, win.x + win.w / 2.0f + 22.0f,
-                               btn_y, no_label);
+            draw_confirm_dialog(sdl_renderer_.get(), front_font_, prompt, "", yes_label, no_label);
         }
         SDL_RenderPresent(sdl_renderer_.get());
         SDL_Delay(2);

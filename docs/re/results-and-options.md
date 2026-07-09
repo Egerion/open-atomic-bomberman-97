@@ -655,10 +655,58 @@ editor_screen}.{hpp,cpp}` + `AssetStore::misc()`: single-cell painting,
 documented deviation), §5c's 13-row picker at (100,100) with `-N` name
 suffixes, the Ctrl+F fill confirm, and the real TILES0/MISC.ANI canvas
 art (stage 0 loaded at editor entry; flat swatches remain only as the
-missing-asset fallback). Still NOT reproduced (all presentation minutiae,
-none gameplay-affecting): the Ctrl+B board reset, the '0' dead tileset
-toggle, the brush-preview-at-cursor, and `sub_42E938`'s exact dialog
-chrome (Done/Cancel button frame).
+missing-asset fallback).
+
+2026-07-09: the four remaining items closed out —
+
+- **Ctrl+B board reset** (case 2, pseudo.c 5584-5599): PINNED and ported.
+  While the board is untouched it resets immediately with NO confirm;
+  once touched, the getstring(740)/97 confirm gates it — `EditorScreen`'s
+  own `dirty_` flag mirrors the original's `v49` exactly, including the
+  easy-to-miss detail that Ctrl+B marks the board dirty EVEN WHEN THE
+  CONFIRM IS CANCELLED (`++v49` runs unconditionally after the if/else,
+  pseudo.c 5598). The same `v49`/`dirty_` gate also closes a second,
+  previously-unported fact: the Esc/'Q' exit case wraps its WHOLE
+  save-confirm+write body in `if (v49)` (pseudo.c 5621-5643) — an
+  untouched board now exits silently with no prompt and no write, which
+  the port's Esc/Q handler did not do before this pass (it always asked).
+- **'0' dead tileset toggle** (case 48, pseudo.c 5654-5657): PINNED and
+  ported as `editor_grid.hpp`'s free function `toggle_editor_tileset`
+  (doctest-covered, SDL-free) plus `EditorScreen::tileset_` +
+  `refresh_tile_sequences()`, which re-resolves the "tile %d
+  blank/solid/brick" Anims from the live tileset id instead of the
+  previously-hardcoded "0".
+- **Brush-preview-at-cursor** (pseudo.c 5518-5524): PINNED — every frame,
+  AFTER the grid draw and BEFORE the start-marker/status-text draws, the
+  original re-draws the CURRENT brush's own tile frame at the live mouse
+  position via the SAME `sub_415920` primitive the grid cells use. Ported
+  via `EditorScreen::on_mouse_move` (fed from `game_app.cpp`'s
+  `SDL_EVENT_MOUSE_MOTION`, logical-coordinate-mapped like the existing
+  mouse-down handler) and a `draw_step` call in `draw()` at the raw
+  cursor pixel instead of a cell centre.
+- **`sub_41456C`/`sub_42E938` exact dialog chrome**: PINNED (already
+  documented above, `docs/re/frontend-flow.md` "The sub_43C734
+  dialog-chrome primitive" / "sub_432298 — the button widget", pinned
+  2026-07-09 for the boot LOADING dialog + main-menu quit confirm).
+  `libs/game/{include/bomber/game,src}/dialog_chrome.{hpp,cpp}` extracts
+  those primitives out of `game_app.cpp` into a shared, reusable form —
+  `draw_confirm_dialog` (the two-line `sub_41456C` family: the editor's
+  Ctrl+B/Ctrl+F/Esc-save confirms) and `draw_text_entry_dialog` (the
+  `sub_42E938` family: the density/name prompts, y=180 CONFIRMED literal)
+  — so every editor dialog now draws through the SAME pinned grey-fill/
+  bevel primitive as the rest of the front-end, replacing the earlier
+  ad hoc solid-black boxes. NOT pinned (documented, not guessed): which of
+  `sub_41456C`'s two packed prompt lines draws on top at the pixel level
+  (`dialog_chrome.hpp`'s own TODO(RE) — the same class of register-spill
+  ambiguity as `sub_43C734`'s X-placement) and `sub_42EDE0`'s/
+  `sub_42E938`'s exact width baseline (both reuse the confirm family's
+  content-driven-width-with-minimum-clamp shape rather than the precise,
+  decompiler-ambiguous register-spilled term — `dialog_chrome.hpp`'s own
+  comments on `draw_compact_confirm_dialog`/`draw_text_entry_dialog`); the
+  powerup sub-editor's `sub_42EDE0` Forbidden/HasOverride prompts still
+  draw their own minimal reproduction (`PowerupRulesScreen::draw`) rather
+  than routing through `draw_compact_confirm_dialog` — a follow-up, not a
+  blocker for this item.
 
 MESSAGES ids: 720-721 (picker error/header), 728-729 (name prompt /
 default new-scheme name), 730-733 (editor menu), 735-740 (save-confirm,

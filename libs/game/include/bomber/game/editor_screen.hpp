@@ -209,6 +209,15 @@ public:
     // caller does the pixel->cell mapping via the drawn grid's origin/cell
     // size, mirroring sub_42665C/sub_4266A3, §5).
     void on_mouse_down(int button, int gx, int gy);
+    // Raw mouse PIXEL position (NOT grid-snapped) — feeds the brush-preview
+    // draw, §5d: "The brush preview draws the brush's tile frame AT the
+    // mouse cursor each frame (sub_402206(v53) + sub_415920(mouse_x,
+    // mouse_y, frame))", pseudo.c 5518-5524 (`sub_431804(&v55,&v56)` reads
+    // the live cursor position every loop iteration).
+    void on_mouse_move(float px, float py) {
+        mouse_px_ = px;
+        mouse_py_ = py;
+    }
 
     void draw(SDL_Renderer* ren) const;
 
@@ -237,8 +246,10 @@ public:
 private:
     // FillConfirm: sub_4028D2's Ctrl+F case asks the getstring(760)/97
     // yes/no confirm BEFORE flood-filling (the fill itself is the k/j loop
-    // over sub_4048EB).
-    enum class PromptKind : std::uint8_t { None, Density, Name, SaveConfirm, FillConfirm };
+    // over sub_4048EB). ResetConfirm: Ctrl+B's getstring(740)/97 confirm
+    // (§5, PINNED — pseudo.c 5584-5599), gated on `dirty_` exactly like the
+    // original's `v49` "touched" flag (see the on_key doc below).
+    enum class PromptKind : std::uint8_t { None, Density, Name, SaveConfirm, FillConfirm, ResetConfirm };
 
     const AssetStore* assets_ = nullptr;
     const FontTextures* font_ = nullptr;
@@ -247,6 +258,26 @@ private:
     EditorGrid grid_;
     EditorBrush brush_ = EditorBrush::Blank;
     int selected_start_ = 0;     // '+'/'='/'-'/'_' cycles this, §5
+
+    // Ctrl+B's own reset target — sub_4049C0's VALUELST 600..619 start
+    // positions, the SAME table `enter()`'s "new scheme" path uses. Stored
+    // (not just passed through once) because Ctrl+B can re-run the reset
+    // any number of times during one session (sub_4028D2 case 2). Never
+    // owned; the caller's array (game_app.cpp's `default_starts`) outlives
+    // the whole editor session.
+    const std::array<std::array<int, 2>, kEditorMaxStarts>* default_starts_ = nullptr;
+
+    // §5 case 48's own dead-end tileset toggle (docs/re/editor_grid.hpp's
+    // toggle_editor_tileset) — only ever 0 or -1 in practice; kept here
+    // (not in EditorGrid) since it's canvas-art state, not board data.
+    int tileset_ = 0;
+
+    // Raw mouse pixel position for the brush-preview draw (§5d) — see
+    // on_mouse_move's doc. Defaults to the canvas origin so the very first
+    // frame (before any SDL_EVENT_MOUSE_MOTION arrives) previews somewhere
+    // on-canvas rather than off-screen at (0,0).
+    float mouse_px_ = kOriginX;
+    float mouse_py_ = kOriginY;
 
     // Canvas art, resolved in enter(): the match tile sequences ("tile 0
     // blank/solid/brick" — dword_45B7B8 is only ever 0, see the class doc)
@@ -261,6 +292,16 @@ private:
     bool editing_powerups_ = false;
     PowerupRulesScreen powerups_screen_;
 
+    // sub_4028D2's own `v49` "touched" flag (PINNED, pseudo.c 5513/5555-5710):
+    // starts false each session; set true by paint, start-move, an ACCEPTED
+    // Ctrl+F fill, an ACCEPTED density/name edit, ANY team-flag toggle, and
+    // ANY powerup-sub-editor open (whether or not it changes anything) — see
+    // each site's own comment below for the exact case-label citation.
+    // Gates BOTH Ctrl+B (silent reset while false, confirm-gated once true)
+    // AND the Esc/'Q' exit (no save prompt/write at all while false — the
+    // original's exit case wraps its WHOLE confirm+write body in `if (v49)`).
+    bool dirty_ = false;
+
     bool done_ = false;
     bool save_requested_ = false;
 
@@ -268,6 +309,22 @@ private:
     void start_density_prompt();
     void start_name_prompt();
     void start_save_confirm();
+    void start_reset_confirm();
+    // Re-resolves tile_blank_/solid_/brick_ from `tileset_` — called once in
+    // enter() and again whenever the '0' key changes `tileset_` (§5 case
+    // 48), formatting sub_402206's "tile %d blank/solid/brick" names with
+    // the live tileset id rather than the hardcoded "0" the port used before
+    // this pass.
+    void refresh_tile_sequences();
 };
+
+// The exact caller-Ctrl gate present_editor() applies at the SDL event level
+// (game_app.cpp): both Ctrl+F (raw code 6) and Ctrl+B (raw code 2) are ASCII
+// control codes the original's key stream encodes directly, which SDL
+// instead reports as the plain letter keycode plus KMOD_CTRL — so the
+// driver must gate 'F'/'B' on the Ctrl modifier itself before forwarding to
+// EditorScreen::on_key (every other editor key is unmodified and passes
+// straight through).
+inline bool editor_key_needs_ctrl(SDL_Keycode key) { return key == SDLK_F || key == SDLK_B; }
 
 }  // namespace bomber::game

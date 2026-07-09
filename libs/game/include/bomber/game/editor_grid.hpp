@@ -51,6 +51,23 @@ inline EditorBrush cell_char_to_brush(char c) {
     return EditorBrush::Blank;
 }
 
+// '0' key — sub_4028D2 case 48 (docs/re/results-and-options.md §5, PINNED
+// from the body, pseudo.c 5654-5657): `if (++dword_45B7B8 > 0)
+// dword_45B7B8 = -1;`. NOT a plain 0/-1 flip — it is this exact
+// increment-then-clamp sequence, which happens to toggle strictly between 0
+// and -1 for any starting value in {0, -1} (0 -> 1 -> clamped to -1; -1 -> 0,
+// not >0, stays 0). A dead-end feature in the original: `dword_45B7B8`
+// formats the "tile %d blank/solid/brick" sequence name (sub_402206), and no
+// shipped TILES ANI owns a "tile -1 *" sequence, so the -1 state always
+// misses the sequence lookup — the port's canvas falls back to its flat-
+// swatch rendering in that state, same as a missing-asset install. A free
+// function (not an EditorGrid method) since it's pure int arithmetic with no
+// grid state involved — independently testable without SDL.
+inline int toggle_editor_tileset(int v) {
+    if (++v > 0) v = -1;
+    return v;
+}
+
 // One of the 10 movable player-start markers (§5: "the 10 player-start
 // markers... plus a teamring%u ANI sprite showing each start's team flag").
 struct EditorStart {
