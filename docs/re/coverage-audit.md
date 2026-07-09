@@ -91,7 +91,7 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 | BM help-screen | `.BM` | 10 | pinned | ported | `docs/formats/bm.md`, `bmscreen`/HelpBrowser | — | done |
 | Resource list | `.RES` | 8 (incl. VALUELST.RES, SOUNDLST.RES, EXTRA*.RES) | pinned | ported | `reslist.hpp`, `extra.hpp`, facts.md, stage-actors.md (EXTRA*.RES actor registry) | — | done |
 | Font | `.FON` | 3 | pinned | ported | `docs/formats/fon.md`, `bmfont.hpp`, `test_bmfont.cpp` | — | done |
-| Misc data | `.DAT` | 3 (LEVELS.DAT, bmstats.dat, + 1 more) | `LEVELS.DAT` RE'd | **absent** | `docs/re/facts.md` "`LEVELS.DAT` — NOT READ by the shipped game" — exhaustive grep of `pseudo.c` and `strings` on every shipped `.EXE` (incl. `FREDIT.EXE`) finds zero "level" references anywhere; file is 4 bytes, installer-copied, never opened at runtime | none — confirmed dead/tooling data, not load-bearing for any reachable feature; no parser warranted | done (LEVELS.DAT); bmstats.dat / 3rd `.DAT` still unchecked, low priority |
+| Misc data | `.DAT` | 3 (LEVELS.DAT, bmstats.dat, + 1 more) | `LEVELS.DAT` + `bmstats.dat` RE'd | **absent** | `docs/re/facts.md`: `LEVELS.DAT` "NOT READ by the shipped game" (installer artifact, never opened); `bmstats.dat`/`bmstats.txt` "write-only play-telemetry dump, no reader, no reachable UI" — `sub_40200C` (0x40200C-0x40214F) writes a 100×`int32` counter blob + a `messages.txt`-labelled (ids 900/905/910-928) text report at shutdown (registered via the generic deinit mechanism, `sub_410EBF`/`sub_410F00`), fed by live inline counters (e.g. `sub_410F81`'s match-start `inc`), but exhaustively confirmed **never read back** by any shipped binary and **never displayed** by any reachable menu/screen | none for either file — `LEVELS.DAT` is dead/tooling data; `bmstats.dat`/`.txt` is live but write-only debug telemetry with no player-facing consumer, so no parser/writer warranted per the docs-only decision path | done (LEVELS.DAT, bmstats.dat); 3rd `.DAT` file still unchecked, low priority |
 | Campaign | `.CAM` | 3 (CROUTON.CAM, GHOSTS.CAM, SIMPLE.CAM) | pinned | ported | `docs/re/campaign.md` — reachability CONFIRMED: hidden 'C'×5 trigger on the local player-setup screen (`sub_410F81` → picker → `sub_401085` loader → `dword_46489C` flag read at ~12 sites). `.CAM` parser (`libs/assets/campaign.hpp/.cpp`, `test_campaign.cpp`); `CampaignFilePicker` (`libs/game/campaign_screen.hpp/.cpp`); stage sequencing (`AppInput::CampaignContinue`, `GameApp::load_campaign_stage`), AI-count roster seeding (`sub_40151B` CORRECTED, `seed_campaign_ai_slots`), stage banner (`present_campaign_banner`), round pacing (`sub_4016DA` PINNED, `hazard_clear_timer`), and the rover/ghost hazard actors themselves (RoverSystem, table row #13) are all ported. field-8 (`ai_difficulty`) CONFIRMED dead code — grepped every read site, none exists beyond the loader's own write | none required for the confirmed-reachable scope; remaining edge case: mutual-wipeout stage-replay fallback (campaign.md "Round pacing" clause 5) is independently portable but left as a documented follow-up, no test pressure yet | done |
 | Palette | `.PAL` | 1 (COLOR.PAL) | pinned | ported (via PCX palette loading) | RE-NOTES.md | — | done |
 | Bitmap | `.BMP` | 1 | pinned | N/A | `WINEREG/INTER.BMP` — confirmed 2026-07-09: lives inside the bundled `WINEREG.EXE`/`EREGUI32.DLL` registration-wizard tool's own folder (product registration, not the game), not referenced anywhere in `pseudo.c` (BM95.EXE never opens it). Non-gameplay, same class as the `.EXE`/`.DLL` tooling row | none | done |
@@ -272,9 +272,11 @@ asset-format rows in §3 (excluding pure-tooling extensions marked N/A:
   majority of 1:1 gameplay and front-end fidelity.
 - **Partial/open (RE pinned, port absent or a small residual):** 2 subsystem
   rows — #32 editor chrome polish, #35 in-round debug/cheat keys — plus 1
-  asset format (the `.DAT` row: `LEVELS.DAT` was RE'd this pass and
-  confirmed dead/non-gameplay data with no port needed, but `bmstats.dat`/
-  the 3rd `.DAT` file are still unchecked so the row stays open).
+  asset format (the `.DAT` row: `LEVELS.DAT` and `bmstats.dat` are now both
+  RE'd — `LEVELS.DAT` confirmed dead/tooling data, `bmstats.dat`/`.txt`
+  confirmed live-but-write-only debug telemetry with no reader and no
+  reachable UI consumer — neither needed a port, but the row stays open
+  since the 3rd `.DAT` file is still unchecked).
 - **N/A / excluded (netplay per ADR-0003, or non-gameplay tooling):** 1
   subsystem row (#25 net-game setup screens) + the §4 netplay function
   cluster + several tooling file extensions (.ICO/.EXE/.DLL/.IDB/.BMP).
@@ -287,16 +289,20 @@ asset-format rows in §3 (excluding pure-tooling extensions marked N/A:
 Everything that was "open" at the 2026-07-08 snapshot's top of this list
 (attract mode, the three fidelity gaps, the VICTORY music row, the clogs
 prize decision) is now **done** — see §6 items 7-9 and table rows #13/#18/
-#30. `LEVELS.DAT` (formerly item 1) is now also **done** — RE'd 2026-07-09
-and confirmed dead/tooling data, not load-bearing; see §3 and
-`docs/re/facts.md`. The Goldman wheel clogs prize-icon render (§2 #30's
-former residual) is likewise **done**: goldman-roulette.md §9.5 pins
-`sub_425C7F`'s `"power %s"` + `off_45BE50[13]="clog"` lookup and the shipped
-`DATA/ANI/POWERS.ANI` "power clog" sequence; `SequenceSet::clogs_anim` +
-`GoldmanScreen::draw()`'s slot-13 branch draw it, landed in `f374e22`.
-The wall-slam SFX call site and the INPUT.BM menu-row binding were closed
-in the same day's SFX/audit sweep — see table rows #15/#23 and facts.md/
-frontend-flow.md for the evidence. What remains open, in priority order:
+#30. `LEVELS.DAT` and `bmstats.dat`/`.txt` (formerly item 1 and part of the
+"low-priority polish" bucket) are now also **done** — both RE'd 2026-07-09:
+`LEVELS.DAT` confirmed dead/tooling data; `bmstats.dat`/`.txt` confirmed live
+write-only debug telemetry (a real writer exists, `sub_40200C`, run
+automatically at shutdown) but with no reader anywhere and no reachable UI,
+so neither is load-bearing; see §3 and `docs/re/facts.md`. The Goldman wheel
+clogs prize-icon render (§2 #30's former residual) is likewise **done**:
+goldman-roulette.md §9.5 pins `sub_425C7F`'s `"power %s"` +
+`off_45BE50[13]="clog"` lookup and the shipped `DATA/ANI/POWERS.ANI`
+"power clog" sequence; `SequenceSet::clogs_anim` + `GoldmanScreen::draw()`'s
+slot-13 branch draw it, landed in `f374e22`. The wall-slam SFX call site and
+the INPUT.BM menu-row binding were closed in the same day's SFX/audit sweep
+— see table rows #15/#23 and facts.md/frontend-flow.md for the evidence.
+What remains open, in priority order:
 
 1. **Campaign round-pacing clause 5** (mutual-wipeout stage-replay fallback,
    campaign.md "Round pacing") — pinned but not ported; independently
@@ -304,7 +310,8 @@ frontend-flow.md for the evidence. What remains open, in priority order:
    simultaneously mid-stage).
 2. Low-priority polish: editor chrome (#32: Ctrl+B reset, '0' toggle,
    brush-preview, exact dialog chrome), in-round debug/cheat keys (#35,
-   developer/QA-only), `bmstats.dat`/3rd `.DAT` file (§3 .DAT row).
+   developer/QA-only), the still-unchecked 3rd `.DAT` file (§3 .DAT row) —
+   `bmstats.dat` itself is now closed, see above.
 
 `.BMP`/`.TXT` asset spot-checks (§3) — **CLOSED 2026-07-09**: the single
 `.BMP` (`WINEREG/INTER.BMP`) belongs to the bundled registration-wizard tool,
