@@ -113,6 +113,21 @@ struct Player {
     std::int32_t disease_timer = 0;
     std::int32_t disease_fresh = 0;
 
+    // Ice / input-lag ring buffer (VALUELST ids 450-460, Hockey Rink;
+    // docs/re/facts.md "Ice / input-lag"). The original keeps a 30-slot
+    // per-player history of the desired movement direction (dword_4621C8)
+    // and, for HUMAN players only, feeds the mover the OLDEST sample whose
+    // age has reached the level's ice-delay threshold instead of the fresh
+    // one — a fixed input-response lag, not a physics/friction change.
+    // index 0 = most recent tick's want_godir (-1 = no direction, 0..3 =
+    // Up/Right/Down/Left); index k = k ticks ago. Only ever written/read by
+    // MovementSystem::ice_delay, and only when the current level's
+    // ice_delay_ms > 0 (every other level leaves this all-zero, so it hashes
+    // as mix(0) there — see hash.cpp). Hashed: it is live gameplay state
+    // that determines a future tick's effective movement direction.
+    static constexpr int kIceHistoryLen = 30;  // mirrors the original's 30-slot buffer
+    std::array<std::int8_t, kIceHistoryLen> ice_history{};
+
     int tile_x() const { return static_cast<int>(x / kTileWF); }
     int tile_y() const { return static_cast<int>(y / kTileHF); }
     bool sick(Disease d) const { return disease[static_cast<int>(d)]; }

@@ -1523,6 +1523,265 @@ as the `LEVELS.DAT`/`bmstats.dat` entries above).
 Closes the `.DAT` row's outstanding "3rd file unchecked" item; no parser
 warranted (it belongs to a separate bundled EXE, not the game).
 
+## Per-level tile regeneration — CONFIRMED (2026-07-09, `sub_426704`, called from `sub_426818`)
+
+VALUELST ids 340-350 (per-level, one per stage: "which levels have
+regenerating tiles, and how many seconds between tile regeneration attempts
+(zero means no regeneration)") and 695 ("clear cell radius that must exist
+around a potentially-regenerating tile spot; nobody can be within this
+radius"). Shipped values: **340-350 are all 0 except id 347 = 4** ("cemetary/
+mortuary" — the file's own inline comment; this is level index **7**, which
+the port's own `level_fallback`/VALUELST-450 naming — see "Ice / input-lag"
+below — independently confirms is **Haunted House**, so the dev-internal
+codename and the shipped level name are the same board). **695 = 4**.
+
+**Call site — `sub_426818` (pseudo.c ~27169-27170), the enclosure stepper**
+(already pinned in `docs/re/enclosure.md` for the HURRY wall-closing spiral):
+
+```
+if ( sub_40C06A() != 1 && sub_412135(dword_46499C + 340) )
+    sub_426704();
+```
+
+`sub_40C06A() != 1` is "not the editor"; `sub_412135` is `getvalue` (see the
+2026-07-09 correction at the top of this file — `sub_4124A4` is `getstring`,
+NOT `getvalue`; every `id-audit.md`/older-doc citation of `sub_4124A4` as
+"getvalue" for this feature is the same pre-correction mislabel). This whole
+call — and thus `sub_426704` and its 100-attempt RNG loop below — is
+**short-circuited to never run at all** on any level whose regen id is 0, so
+levels other than Haunted House draw **zero extra RNG** from this mechanic.
+The call is nested inside `sub_426818`'s own outer `sub_421969() > 1` gate
+(the same "round actually running" gate the wall-closing spiral itself uses),
+which our per-tick sim already implies for the whole of `run_tick`.
+
+**`sub_426704`** (pseudo.c 27093-27132):
+
+```
+result = sub_40C06A();
+if ( result != 1 ) {                         // not editor (redundant w/ the caller's gate)
+    v3 = sub_412135(dword_46499C + 340);     // regen interval, SECONDS, this level
+    v4 = sub_43ACF8();                        // timeGetTime()
+    if ( v4 - dword_464978 > 1000 * v3 ) {   // elapsed since last ATTEMPT > interval
+        dword_464978 = v4;                    // reset the attempt clock UNCONDITIONALLY
+        for ( i = 0; i < 100; ++i ) {         // up to 100 random candidate tiles
+            v5 = rand_() % dword_4648AC;      // tile X in [0,15)
+            v6 = rand_() % dword_4648B4;      // tile Y in [0,11)
+            if ( !sub_425FB9(v5,v6) && !sub_42542D(v5,v6) && !sub_422E48(v5,v6) ) {
+                // blank tile (sub_425FB9==0), no powerup record, no grounded bomb
+                v1 = sub_412135(695);          // clear radius
+                if ( sub_422351(v1) ) {        // no player within radius v1
+                    sub_425F79(v5, v6, 2);     // write the tile BRICK (type 2)
+                    return sub_40FDE8(v5, v6, v2, 2);  // see below — NOT a visual/sound call
+                }
+            }
+        }
+    }
+}
+```
+
+**Exactly ONE brick regrows per successful attempt cycle** — the loop
+`return`s the instant the first eligible candidate is found; the remaining
+`100 - i` attempts of that cycle are never drawn. If ALL 100 attempts fail
+(no eligible tile that cycle), `dword_464978` was still reset at the top —
+the next attempt cycle is a full interval later regardless of success. RNG
+draws are exactly 2 per attempt (x then y), 2..200 per cycle depending on
+when/if it succeeds — the draw COUNT is part of the contract, the exact
+number of draws in a given cycle is data-dependent (matches the codebase's
+existing `PowerupSystem`'s "Random powerup" re-roll idiom, `simulation.cpp`'s
+`field_vs_players`, same 1-draw-per-attempt/stop-on-success shape).
+
+**Eligibility, in order** (each a pre-existing, already-pinned tile-occupancy
+helper — see "Explosion physics" / "Options toggles" entries above for
+`sub_425FB9`/`sub_42542D`/`sub_422E48`'s own pinning):
+1. `sub_425FB9(x,y) == 0` — the tile is BLANK (not brick, not solid).
+2. `sub_42542D(x,y)` false — no floor/hidden powerup record on the tile.
+3. `sub_422E48(x,y)` false — no grounded bomb on the tile.
+4. `sub_422351(radius)` true — no live player within `radius` tiles.
+
+**`sub_422351(radius)` — the clear-radius check.** High confidence on the
+FORMULA (Manhattan distance, matching id 695's own comment "nobody can be
+within this radius"), lower confidence on exactly HOW the candidate tile
+reaches the callee: the decompiled call site shows only `sub_422351(v1)` (the
+radius) as an explicit argument, no `(x,y)`. `sub_422351`'s body iterates
+the 10-slot player array, converts each player's PIXEL position to TILE
+coordinates via the same `sub_42665C`/`sub_4266A3` helpers used everywhere
+else in the binary for pixel→tile conversion (confirmed via their OTHER call
+sites, e.g. pseudo.c 24207: `sub_42665C(i[7]) == a1 && sub_4266A3(i[8]) ==
+a2`, an explicit tile-coordinate COMPARISON), then combines two per-axis
+`abs()` results into a single check against the radius. Both this function
+AND its sibling call site (`sub_4019C2` pseudo.c ~4777, `sub_422351(3)` — an
+apparent "place something 3 tiles from every player" spawn-placement helper)
+call it with ONLY the radius as a visible argument, which — under Watcom's
+EAX/EDX/EBX/ECX register calling convention (`docs/re/facts.md` "Binary
+profile") — is consistent with the candidate (x,y) surviving in registers
+left live by the immediately-preceding occupancy checks rather than being
+freshly reloaded for this call (a Hex-Rays argument-reconstruction blind spot
+for implicit register reuse, not a hidden global). The FORMULA itself is not
+in doubt (own VALUELST comment + the `abs`+`abs` shape); the register
+mechanism is inferred, not literally read off the call site.
+
+**Port** (`libs/sim/src/systems/tile_regen.hpp/.cpp`, `TileRegenSystem`):
+`Tuning::regen_seconds[11]` (ids 340-350) and `Tuning::regen_clear_radius`
+(id 695), indexed by the new `Tuning::level_index` (NOT itself a VALUELST id
+— the "which of the 11 stages is this" selector, set by `bomber::match`/
+`GameApp::start_match` from the resolved stage number, the same value the
+original calls `dword_46499C`). `TileRegenSystem::update()` mirrors the loop
+above 1:1: a per-match `State::regen_timer` (ticks, hashed) counting down
+from `regen_seconds * kTicksPerSecond`; on 0, ONE attempt cycle (≤100 random
+tiles via `State::rng`, Manhattan-distance clear-radius check against every
+PRESENT+ALIVE player — see below), then reset. Called from `simulation.cpp`
+step 6, immediately before `EnclosureSystem::update()`, mirroring
+`sub_426704` being nested inside `sub_426818`.
+
+**`clear_of_players` gates on `present && alive`, not the original's raw
+10-slot scan.** The decompiled `sub_422351` has no visible active-player
+check (unlike its sibling `sub_42247A`, which does check a liveness byte) —
+but the original's fixed 10-entry struct array always holds SOME position for
+every slot, occupied or not, while our `State::players` is likewise a fixed
+`kMaxPlayers`-size array whose unused slots default-construct to tile (0,0).
+Iterating unconditionally would make every unused slot in any match with
+fewer than 10 players permanently block regeneration within `regen_clear_
+radius` of the top-left corner — clearly not the intended behaviour.
+Gating on `present && alive` (the SAME convention already used throughout
+this codebase — `grid::player_at`, `EnclosureSystem::drop_wall`,
+`alive_count`) is the faithful, sensible interpretation; a dead player's last
+known position does not block regrowth, matching how "dead" is treated
+everywhere else in the sim.
+
+**Visual/sound — CONFIRMED there is neither.** `sub_40FDE8` (the function
+`sub_426704` calls after writing the brick) is a **netplay replication
+packet send** (packs `(x,y,type)` into a buffer, `sub_40CE27((__int16*)0x30,
+…)`, gated on `dword_460058 == 2` — the same shape as the OTHER netplay-packet
+senders `sub_40FE88`/`sub_40FF14` nearby in the same source region), not a
+visual/animation trigger — out of scope per ADR-0003 (netplay deferred).
+The brick write itself goes through `sub_425F79` → `sub_425E9B` →
+`sub_425D22`, the SAME general-purpose tile-write path used for every cell
+mutation (confirmed already for the enclosure wall drop, `enclosure.md` §4):
+`sub_425D22` (pseudo.c 26737-26773) formats `"TILE%u_BRICK"` for the current
+level and blits frame 0 of that ANI directly to the cell's rect — the level's
+ordinary static brick art, instantly, no distinct "regrow" animation, no
+`sub_427961`/`sub_4278F2` sound-play call anywhere in `sub_426704`. Port:
+`Event::Type::TileRegrew` exists only so the presentation can react/redraw
+without diffing the grid every frame — it does not imply a distinct sound or
+animation; `SoundDirector` maps nothing to it (there is nothing to map).
+
+**Cadence: process-lifetime clock, mapped to a per-match countdown.**
+`dword_464978` (the last-attempt timestamp) has no init call site anywhere in
+`pseudo.c` — it is a zero-initialised global that persists across ROUNDS
+within the same process, not reset per-round. In the overwhelmingly common
+case (the first time this code path ever runs in a session) `dword_464978 ==
+0` and `timeGetTime()` is already well past `1000*4 = 4000` ms since boot, so
+the FIRST attempt cycle fires on the very first tick the mechanic is live.
+Our per-match sim has no meaningful analogue of "ms since process boot" to
+carry across matches, so `State::regen_timer` starts at 0 (first attempt
+cycle on tick 1 of any Haunted House match) rather than trying to emulate
+cross-round timestamp leakage, which would not be reproducible/faithful
+for a deterministic per-match model anyway.
+
+**GOLDEN: no impact, proved by running the full suite before/after.**
+`Tuning::level_index` defaults to 0 ("new traditionalist"), whose
+`regen_seconds[0] == 0`, so `TileRegenSystem::update()` takes its very first
+early-return branch on every existing scenario — zero RNG draws, `regen_
+timer` pinned at 0 forever. Two NEW hashed fields were unavoidable
+(`State::regen_timer`, and `Player::ice_history` from the ice mechanic below,
+added in the same commit) — see hash.cpp's own comments and `tests/
+test_golden.cpp`'s "UPDATE 2026-07-09 (per-level tile regeneration +
+ice/input-lag)" note for the recapture and the byte-for-byte proof that every
+non-hash assertion (RNG streams, jelly bounce count) is unchanged. New
+suite: `tests/test_regen.cpp`.
+
+## Ice / input-lag — CONFIRMED (2026-07-09, `sub_41F29B` ~23058-23078)
+
+VALUELST ids 449-460 ("these are the 'ice delay' values (how much the
+controls are slowed by the presence of ice on each level). This is measured
+in milliseconds"). id 449 is a documented sentinel ("just to prevent invalid
+access in case the net screws up...") that the confirmed call site never
+reads (see below) — the real per-level block is **450-460**, one per stage,
+same index order as the ice-delay comments themselves (`450 = "new
+traditionalist"`, `451 = "classic green acres"`, `452 = "hockey rink"`, …
+`460 = "inner city trash"`) and as `libs/game/src/game_app.cpp`'s own
+`level_fallback` table. Shipped values: **all 0 except id 452 = 250** (level
+index **2**, Hockey Rink).
+
+**Call site — inside `sub_41F29B`** (the per-player-per-tick updater,
+pseudo.c 23058-23078; NOT a separate function):
+
+```
+if ( *((_BYTE *)v111 + 16) != 1 ) {          // NOT a computer player
+    v93 = per-player 30-slot history buffer (dword_4621C8[playerIndex]);
+    for (k = 0; k < 30; ++k) v93[2*k] += dword_464958;   // age every slot by the frame delta
+    for (k = 29; k > 0; --k) { v93[2*k] = v93[2*k-2]; v93[2*k+1] = v93[2*k-1]; }  // shift down
+    v93[0] = 0;                               // fresh slot: age 0
+    v93[1] = desired_godir_this_tick;         // -1 (none) or 0..3, from the input decode moments earlier
+    for (k = 0; k < 30; ++k) {
+        v111[23] = v93[2*k+1];                // candidate effective godir
+        if ( v16 /* = getvalue(dword_46499C+450) */ <= v93[2*k] ) break;  // old enough?
+    }
+    // v111[23] now holds the delayed direction the mover (sub_41EC84) reads.
+}
+```
+
+`*((_BYTE*)v111+16) == 1` is the SAME player-type byte already pinned
+elsewhere in this file and in `simulation.cpp`'s own AI-dispatch comment
+("the original calls `sub_40A1C6` instead of reading DirectInput …, gated on
+the +16==1 tag") — **1 means computer-controlled**. So the WHOLE history
+buffer push+resolve is skipped for AI players: an AI's desired direction
+reaches the mover UNDELAYED even on Hockey Rink. Human (and would-be network)
+players are the only ones subject to the lag.
+
+**The math is a plain FIFO ring buffer, not a physics/friction change.** At
+the locked 20 Hz tick rate (`dword_464958 == dword_46494C == 1000/getvalue(30)
+== 50` ms/tick, confirmed cadence unit shared with `enclosure.md` §3's 250ms=
+5-tick derivation), "age every slot by the frame delta, then shift" collapses
+to a plain per-tick FIFO push: after the push, the sample now sitting at
+ring-buffer index `k` is exactly `k` ticks old (`k * 50` ms). The resolve loop
+then walks from the FRESHEST sample (k=0) toward the OLDEST, returning the
+first whose age has reached the level's delay — i.e. the smallest `k` with
+`k*50 >= delay_ms`, i.e. `ceil(delay_ms / 50)`. For Hockey Rink (250 ms):
+`k = 5` — the player's movement this tick uses the direction it WANTED
+exactly 5 ticks ago, not the current one. For every other level (0 ms):
+`k = 0` always immediately satisfies the break — the "delayed" sample IS the
+fresh one, i.e. **zero effective delay**, functionally identical to no buffer
+at all.
+
+**Port** (`MovementSystem::ice_delay`, `libs/sim/src/systems/movement.hpp/
+.cpp`; `Player::ice_history`, `libs/sim/include/bomber/sim/player.hpp`):
+`Tuning::ice_delay_ms[11]` (ids 450-460), indexed by the SAME `Tuning::
+level_index` the regen mechanic uses. `Player::ice_history` is a 30-entry
+`std::int8_t` ring (mirrors the original's 30-slot capacity; `-1` = no
+direction, `0..3` = the godir) pushed/read by `MovementSystem::ice_delay`,
+called from `simulation.cpp`'s `player_turn` right before the movement
+block, replacing `want_godir`/`moving`/`want` with the delayed values for
+the REST of that tick's turn (movement AND the walked-into-bomb kick check —
+the original has only one resolved `v111[23]` field downstream, no separate
+raw/delayed split). `ice_delay` is safe to call unconditionally every tick
+for every player: it returns the input UNCHANGED, without touching the
+buffer, whenever the player is AI (`p.ai`) or the current level's delay is
+`<= 0` — so `ice_history` stays a fixed, unwritten field (all `-1`, see cold-
+start note below) on every level but Hockey Rink.
+
+**Cold-start default: `-1` (no direction), not the original's implicit
+zero-fill.** The original's `dword_4621C8` buffer is a process-lifetime
+global with no per-round reset — a fresh Hockey Rink round inherits whatever
+was last buffered from a PREVIOUS round/level in that session, not zeros
+(except on literally the first-ever use in a process). Our per-match `State`
+has no such cross-match history to inherit; `build_state` (`setup.cpp`)
+explicitly fills every player's `ice_history` with `-1` at match setup
+rather than leaving the struct's plain zero-init (which would read as a
+phantom "Up" sample — `0` is a valid godir, not a "no input yet" sentinel —
+for the first few ticks of a fresh match). This is a deliberate, documented
+divergence from the original's implementation ARTIFACT (an uninitialised/
+stale global), not from its RULE; the observable effect is confined to the
+first `ceil(delay_ms/50)` ticks of a match before any real input has
+propagated through the buffer.
+
+**GOLDEN: no impact, proved by running the full suite before/after.**
+`Tuning::level_index` defaults to 0, whose `ice_delay_ms[0] == 0`, so
+`MovementSystem::ice_delay` takes its early-return branch (buffer untouched,
+input unchanged) on every existing scenario. `Player::ice_history` was a
+NEW hashed field (added in the same commit as `State::regen_timer` above);
+see `tests/test_golden.cpp`'s recapture note. New suite: `tests/test_ice.cpp`.
+
 ## Still guessed — not yet extracted from the binary
 
 | Constant | Current value | Status |

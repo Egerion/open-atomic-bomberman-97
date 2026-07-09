@@ -51,6 +51,9 @@ mirrors instead; both fixed below).
 | 121, 123–125, 129, 130–138 | disease behavior flags, cure chance, freshness, per-disease durations (`docs/re/facts.md` "Disease system") | 1/1/1/10/10/300×9 |
 | 1200 | campaign rover/ghost 1-in-N chance to turn at an open intersection | 3 |
 | 1300, 1310, 1320 | campaign-only kill scores: AI / rover / ghost | 250 / 15 / 25 |
+| 340–350 | per-level tile-regen ATTEMPT interval, seconds (0 = never); one value per stage, indexed by `Tuning::level_index`. Only level 7 (Haunted House, "cemetary/mortuary") is non-zero. `TileRegenSystem`, `docs/re/facts.md` "Per-level tile regeneration" | 0×10, 4 (idx 7) |
+| 695 | tile-regen clear radius, tiles (Manhattan) — no live player may be within this of a candidate regrow tile. `TileRegenSystem` | 4 |
+| 450–460 | per-level ice/input-lag, ms (0 = none); one value per stage, indexed by `Tuning::level_index`. Only level 2 (Hockey Rink) is non-zero. `MovementSystem::ice_delay`, `docs/re/facts.md` "Ice / input-lag" | 0×9, 250 (idx 2) |
 
 Powerup kind order (matches scheme `-P` rows and the id blocks above): extra bomb, flame, disease, kick, skate, punch, grab, spooger, goldflame, trigger, jelly, super-disease, random.
 
@@ -111,8 +114,6 @@ id-audit pass:
 | 650, 651 | **NEW (id-audit.md A(i)) — genuine gap.** "Fire In The Hole"/"Clear" taunt on a long bomb-drop string: 650 = 1-in-N chance, 651 = drop-count threshold. `sub_41F29B` pseudo.c ~23358-23372, plays SOUNDLST 1200 group. No `Tuning` field, no consumer. Highest-value open gap in this audit. |
 | 500, 502, 504, 506 | **NEW (id-audit.md A(i)).** Bomb-pickup-carry arc, 4-point curve `(12,10)/(25,20)/(25,30)/(12,40)` — presentation-only, same shape as the already-ported 660/661 punch arc |
 | 681 | trampoline hop arc height (px/frame) — presentation-only; id 680 (bounce frames) is now consumed above |
-| 340–350, 695 | per-level tile regeneration + clear radius — only level index 7 (id 347 = 4s, "cemetary/mortuary") is non-zero; 695 = the companion proximity-clear-radius gate |
-| 449–460 | per-level ice (input lag) in ms — only level 2 (id 452 = 250ms, Hockey Rink) is non-zero |
 | 905 | reserved/unused AI slot — no `getvalue(905)` call exists in the binary and VALUELST has no `905,<n>` line; only the editor's label writer touches it (`docs/re/ai.md` §9.5) |
 | 1010 (VALUELST sense) | **id-namespace collision with SOUNDLST's own 1010 (MENU.RSS music, already ported).** "Gold twinkle" duration, seconds — pinned addresses `sub_420D4E`/`sub_420F07` (`docs/re/goldman-roulette.md` §6) but never wired into `Renderer`/`GameApp`. Presentation-only sparkle overlay on the gold-wheel-winning player. |
 | 1100–1110 | net protocol retransmit timing / count — netplay, out of scope (ADR-0003) |

@@ -74,6 +74,8 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 | 13 | AI: campaign "rover"/"ghost" mover (`sub_401AAE`/`sub_401B05` spawn, `sub_401B5C` per-tick mover) | pinned | ported | `docs/re/campaign.md` "Rover/ghost/AI roster — CORRECTED", `libs/sim/src/systems/rovers.cpp/.hpp` (wander AI, human-avoidance bias, flame-death + kill-score, landing-tile player kill), hashed `State::rovers`, `tests/test_rovers.cpp`; wired via `simulation.cpp`, rendered (`renderer.cpp`), campaign pacing clause 1/3 consumed in `game_app.cpp` | — | done |
 | 14 | AI: `sub_4245DA` "column-guard" comparand | pinned | ported | ai.md §9.3 RESOLVED (2026-07-09, raw-disasm re-pin): comparand = max-bombs byte +86, and `sub_4245DA` counts the actor's OWN live bombs (owner word at bomb +62), not bombs-in-column; port CORRECTED to the spare-capacity gate (`ai.cpp` behaviours 3/4, `test_ai.cpp` pins) | — | done |
 | 15 | Wall-slam SFX ids 140–146 | pinned | ported (fixed) | facts.md "Wall-slam SFX — CONFIRMED (2026-07-09, `sub_426818`/`sub_4278F2`)": call site is the enclosure stepper's drop loop, `dword_462244 = rand()%3` drawn ONCE per arm; SOUNDLST.RES's own "hard-coded to play one of the three below" comment corroborates 140/141/142-only, 143-146 dead. `SoundDirector`/`AudioEngine::roll` fixed to latch one id per round instead of re-picking per drop | — | done |
+| 41 | Per-level tile regeneration (VALUELST 340-350/695, Haunted House) | pinned | ported | facts.md "Per-level tile regeneration — CONFIRMED (2026-07-09, `sub_426704`, called from `sub_426818`)", `libs/sim/src/systems/tile_regen.cpp`, `tests/test_regen.cpp`; one-time hash-layout growth (`State::regen_timer`), recaptured in `test_golden.cpp` | — | done |
+| 42 | Ice / input-lag (VALUELST 450-460, Hockey Rink) | pinned | ported | facts.md "Ice / input-lag — CONFIRMED (2026-07-09, `sub_41F29B` ~23058-23078)", `MovementSystem::ice_delay` (`libs/sim/src/systems/movement.cpp`), `tests/test_ice.cpp`; one-time hash-layout growth (`Player::ice_history`), recaptured in `test_golden.cpp` | — | done |
 
 ## 2. Front-end / presentation subsystems (libs/game)
 
@@ -304,18 +306,20 @@ still correctly empty).
 
 ## Summary counts
 
-Counting the 40 numbered subsystem rows (§1+§2) + the 14 distinct
+Counting the 42 numbered subsystem rows (§1+§2) + the 14 distinct
 asset-format rows in §3 (excluding pure-tooling extensions marked N/A:
 .ICO/.EXE/.DLL/.IDB):
 
-- **Covered (RE pinned + ported, "done"):** 39 of 40 subsystem rows (up from
+- **Covered (RE pinned + ported, "done"):** 41 of 42 subsystem rows (up from
   31 at the 2026-07-08 snapshot — #13 rover/ghost mover, #18 attract mode,
   and #30 clogs prize (effect + wheel icon render) closed earlier in this
   2026-07-09 pass; #15 wall-slam SFX and #23 INPUT.BM menu-row binding
   closed in the same day's SFX/audit sweep; #32's editor Ctrl+B reset/'0'
   tileset toggle/brush-preview/dialog-chrome polish closed in the same
   day's editor pass; #40 Team Play colour split closed in the comprehensive
-  team-mode RE pass the same day) + **14 of 14** asset formats (up from 11
+  team-mode RE pass the same day; #41 per-level tile regeneration and #42
+  ice/input-lag — new rows, closed the same day the id-audit surfaced them,
+  see docs/re/facts.md) + **14 of 14** asset formats (up from 11
   — .CAM/campaign, then `.BMP`, then the `.DAT` row's 3rd file
   (`WINEREG/EReg058.dat`) closed this pass) — the large majority of 1:1
   gameplay and front-end fidelity, and every asset-format row now closed.
@@ -363,11 +367,13 @@ What remains open, in priority order:
 1. **VALUELST 650/651 + SOUNDLST 1200 "Fire In The Hole" taunt**
    (`docs/re/id-audit.md`, its #1 verdict item) — pinned call site
    (`sub_41F29B`), self-contained (drop counter + chance roll + group-play),
-   no dependency on any unported subsystem. Highest-value gap the id-level
-   audit found. Also open from the same pass: VALUELST 1010 "gold twinkle"
-   sparkle (addresses already pinned in goldman-roulette.md §6, just not
-   wired into the renderer), the 500/502/504/506 bomb-pickup arc curve, and
-   the single-level 340-350/695 tile-regen + 449-460 ice-delay gaps.
+   no dependency on any unported subsystem. Highest-value remaining gap the
+   id-level audit found. Also open from the same pass: VALUELST 1010 "gold
+   twinkle" sparkle (addresses already pinned in goldman-roulette.md §6,
+   just not wired into the renderer) and the 500/502/504/506 bomb-pickup
+   arc curve. The single-level 340-350/695 tile-regen + 449-460 ice-delay
+   gaps from the same pass are **CLOSED 2026-07-09** — see table rows
+   #41/#42 and `docs/re/facts.md`.
 2. Low-priority polish: in-round debug/cheat keys (#35, developer/QA-only).
    (Editor chrome #32 — Ctrl+B reset, '0' toggle, brush-preview, exact
    dialog chrome — closed in the same day's editor pass; campaign clause 5

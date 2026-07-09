@@ -42,6 +42,16 @@ State build_state(const MatchConfig& config) {
         p.alive = true;
         p.ai = config.ai[i];      // computer-driven slot (ADR-0005); default false
         p.team = config.team[i];  // setup-screen +84 byte (docs/re/setup-screens.md); default 0
+        // Ice/input-lag ring buffer (docs/re/facts.md "Ice / input-lag"):
+        // reset to "no direction" at match setup. The original's history
+        // buffer is a process-lifetime global with no per-round reset, so a
+        // fresh Hockey Rink round inherits whatever was last buffered; our
+        // per-match sim has no such history to inherit, and starting from a
+        // plain zero-initialised array would read as a phantom godir-0 (Up)
+        // sample for the first few ticks — an artifact of OUR value's
+        // encoding, not a faithful behaviour to reproduce. -1 (no direction)
+        // is the safe, non-surprising choice for a freshly built match.
+        p.ice_history.fill(-1);
         int tx = std::clamp(config.spawns[i].x, 0, kGridWidth - 1);
         int ty = std::clamp(config.spawns[i].y, 0, kGridHeight - 1);
         // The original clears the spawn tile and its orthogonal neighbours

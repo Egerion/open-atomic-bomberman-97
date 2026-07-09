@@ -565,6 +565,11 @@ void GameApp::start_match(std::uint32_t seed) {
         stage = selected_level_;
         if (stage > 10) stage = 10;
     }
+    // The sim's per-level gates (tile regeneration ids 340-350/695, ice/
+    // input-lag ids 450-460 — docs/re/facts.md "Per-level tile regeneration",
+    // "Ice / input-lag") are indexed by the SAME stage number as dword_46499C
+    // in the original, i.e. exactly this `stage` value.
+    cfg.tuning.level_index = stage;
     // Overlay this board's stage actors (conveyors/trampolines/etc) from
     // EXTRA<stage>.RES before constructing the sim — the actor layout is a
     // hashed setup input like the cell grid (docs/re/stage-actors.md). A board
