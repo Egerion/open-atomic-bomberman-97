@@ -278,6 +278,53 @@ TEST_CASE("options.ini: string/int passthrough rows (schemefilename, playtime-ad
     fs::remove(p);
 }
 
+TEST_CASE("options.ini: fullscreen is a port-only bool key, round-trips like the RE'd toggles") {
+    // Not one of §3's confirmed 22 keys (install.hpp's Options::fullscreen
+    // doc) — the 1997 binary has no fullscreen concept — but it must parse,
+    // clamp-free, and read-modify-write exactly like every RE'd bool row.
+    auto p = write_temp("levelno=1\nfullscreen=1\n");
+    auto opts = load_options(p);
+    REQUIRE(opts.fullscreen.has_value());
+    CHECK(*opts.fullscreen == true);
+    fs::remove(p);
+
+    auto p2 = write_temp("levelno=1\n");
+    auto opts2 = load_options(p2);
+    CHECK(!opts2.fullscreen.has_value());  // absent key -> windowed (caller's default)
+    fs::remove(p2);
+}
+
+TEST_CASE("save_options: fullscreen= is appended/rewritten in place, preserving unknown lines") {
+    auto p = write_temp(";Bomberman Options file.\nlevelno=1\n");
+
+    Options opts;
+    opts.fullscreen = true;
+    save_options(p, opts);
+
+    auto reread = load_options(p);
+    REQUIRE(reread.fullscreen.has_value());
+    CHECK(*reread.fullscreen == true);
+
+    // Flip it and re-save: must rewrite in place, not duplicate the line.
+    opts.fullscreen = false;
+    save_options(p, opts);
+    std::string body;
+    {
+        std::ifstream in(p);
+        std::ostringstream ss;
+        ss << in.rdbuf();
+        body = ss.str();
+    }
+    CHECK(body.find(";Bomberman Options file.") != std::string::npos);  // untouched line survives
+    std::size_t first = body.find("fullscreen=");
+    REQUIRE(first != std::string::npos);
+    CHECK(body.find("fullscreen=", first + 1) == std::string::npos);
+    auto reread2 = load_options(p);
+    REQUIRE(reread2.fullscreen.has_value());
+    CHECK(*reread2.fullscreen == false);
+    fs::remove(p);
+}
+
 TEST_CASE("options.ini: keydef= triples parse into KeyDef, out-of-range set/action drops the line") {
     auto p = write_temp(
         "keydef=0,0,200\n"

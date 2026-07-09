@@ -129,6 +129,11 @@ Options load_options(const fs::path& path) {
                 if (!opts.keydef) opts.keydef = KeyDef{};
                 opts.keydef->scancode[set][action] = scancode;
             }
+        } else if (iequals(key, "fullscreen")) {
+            // PORT-ONLY key (install.hpp's Options::fullscreen doc) — not one
+            // of the original's 22 keys, so it never hits the original's own
+            // stricmp chain; still parsed the same normalized-bool way.
+            opts.fullscreen = as_bool();
         }
         // Any other key hits the original's final `else` (a debug log line,
         // not a user-facing effect) and is intentionally ignored here — still
@@ -185,6 +190,9 @@ void save_options(const fs::path& path, const Options& opts) {
     if (opts.modemdial) set_key("modemdial", *opts.modemdial);
     if (opts.netprotocol) set_key("netprotocol", std::to_string(*opts.netprotocol));
     if (opts.smallmemory) set_bool("smallmemory", *opts.smallmemory);
+    // "fullscreen=" — PORT-ONLY key (install.hpp's Options::fullscreen doc),
+    // same read-modify-write shape as every RE'd key above.
+    if (opts.fullscreen) set_bool("fullscreen", *opts.fullscreen);
     if (opts.keydef) {
         // The writer (sub_405DE3) always emits all 20 triples in a fixed
         // (set, action) order; we do the same but skip a triple whose

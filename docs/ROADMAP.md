@@ -486,6 +486,34 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       Renderer draws the actors (`renderer.cpp`); `tests/test_rovers.cpp`
       (spawn/wander/flame-death/knockback); golden hashes recaptured (rover-
       free scenarios byte-identical, per test_golden.cpp's updated cases).
+- [x] Widescreen/fullscreen window support — DONE 2026-07-09. **Deliberate
+      PORT ENHANCEMENT, not an RE fidelity item** (like the Ctrl+Q/Esc-forfeit
+      note above): the 1997 binary is a hardcoded 640x480 window with no
+      resize or fullscreen concept at all. `GameApp::init` (`game_app.cpp`)
+      now creates the window with `SDL_WINDOW_RESIZABLE` (the OS maximize
+      button/drag-resize work) and keeps `SDL_LOGICAL_PRESENTATION_LETTERBOX`
+      pinned to the untouched 640x480 sim resolution (`kScreenW`/`kScreenH`,
+      `renderer.hpp`), so any window/monitor size scales with correct aspect
+      ratio and black bars, never stretched. Alt+Enter and F11 toggle
+      borderless-desktop fullscreen via a global `SDL_EventFilter`
+      (`GameApp::sdl_event_filter`/`handle_global_event`/`toggle_fullscreen`)
+      installed once after window creation — it runs before the keypress ever
+      reaches any of the file's many per-screen `SDL_PollEvent` loops, so the
+      toggle works everywhere and never leaks into a screen's "any key"
+      handling. Mouse coordinates were already correctly mapped through the
+      logical-presentation transform for the one consumer that reads them
+      (the scheme editor's `SDL_RenderCoordinatesFromWindow` call,
+      `game_app.cpp`'s editor mouse-down handler) — verified, no fix needed.
+      Persisted via a new `fullscreen=` `options.ini` key, explicitly marked
+      PORT-ONLY (not one of results-and-options.md §3's confirmed 22 keys)
+      in `install.hpp`'s `Options::fullscreen` doc comment, round-tripped
+      through the same read-modify-write `load_options`/`save_options`
+      machinery and covered by `tests/test_options.cpp`. No Options-screen
+      row was added — `options_screen.hpp`'s row list is a tight 1:1 mirror
+      of the original's 19 positions (§3), and grafting an unRE'd 20th row
+      onto it would violate the no-invented-visuals rule; Alt+Enter/F11 +
+      silent persistence covers the requirement instead. `libs/sim` and the
+      golden hashes are untouched.
 
 ## Done (highlights)
 

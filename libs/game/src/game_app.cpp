@@ -250,6 +250,14 @@ bool GameApp::init() {
         // absent/invalid, and the LEVEL & ROUNDS screen's WINS row still
         // overrides per-match on top of whichever default won.
         num_to_win_match_ = loaded_opts.num_to_win_match;
+        // "fullscreen=" — PORT-ONLY key, NOT one of the original's confirmed
+        // 22 options.ini keys (results-and-options.md §3): the 1997 binary is
+        // a fixed 640x480 window with no resize/fullscreen concept at all. A
+        // deliberate port enhancement (task: "widescreen/fullscreen support"),
+        // persisted through the SAME read-modify-write options.ini machinery
+        // so it round-trips like every other toggle; absent key -> windowed,
+        // matching the original's only mode.
+        fullscreen_ = loaded_opts.fullscreen.value_or(false);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "%s\n", e.what());
         return false;
@@ -260,10 +268,19 @@ bool GameApp::init() {
         std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return false;
     }
+    // PORT ENHANCEMENT (task: "widescreen/fullscreen support", not an RE
+    // fidelity item — the original is a hardcoded 640x480 window, no resize
+    // or fullscreen path exists in the binary at all). SDL_WINDOW_RESIZABLE
+    // makes the OS maximize button/drag-resize work; the sim's logical
+    // resolution stays exactly 640x480 (kScreenW/kScreenH, untouched) via
+    // SDL_LOGICAL_PRESENTATION_LETTERBOX below, which scales+letterboxes to
+    // whatever window/monitor size the player picks without stretching. Any
+    // fullscreen toggle (Alt+Enter/F11, sdl_event_filter below) just resizes
+    // the OS window/output — it never touches kScreenW/kScreenH or the sim.
     SDL_Window* win = nullptr;
     SDL_Renderer* ren = nullptr;
-    if (!SDL_CreateWindowAndRenderer("Open Bomberman", kScreenW * 2, kScreenH * 2, 0, &win,
-                                     &ren)) {
+    if (!SDL_CreateWindowAndRenderer("Open Bomberman", kScreenW * 2, kScreenH * 2,
+                                     SDL_WINDOW_RESIZABLE, &win, &ren)) {
         std::fprintf(stderr, "SDL_CreateWindowAndRenderer: %s\n", SDL_GetError());
         return false;
     }
@@ -271,6 +288,15 @@ bool GameApp::init() {
     sdl_renderer_.reset(ren);
     SDL_SetRenderLogicalPresentation(ren, kScreenW, kScreenH,
                                      SDL_LOGICAL_PRESENTATION_LETTERBOX);
+    if (fullscreen_) SDL_SetWindowFullscreen(win, true);  // restore last session's choice
+    // Global Alt+Enter/F11 fullscreen toggle (task item 1): an SDL_EventFilter
+    // runs synchronously inside SDL_PumpEvents (before the event ever reaches
+    // any of this file's many per-screen SDL_PollEvent loops), so it works
+    // everywhere at once and swallows the keypress (returns false) rather
+    // than leaking it into a screen's "any key" handling (present_screen's
+    // advance-on-any-key, the editor's text input, etc). Installed once here,
+    // for the window's whole lifetime.
+    SDL_SetEventFilter(&GameApp::sdl_event_filter, this);
 
     // FONT6, loaded standalone BEFORE the boot LOADING dialogs — matching the
     // real init order (docs/re/frontend-flow.md "FONT6 timing", CONFIRMED):
@@ -2835,6 +2861,32 @@ int GameApp::run_app() {
     return 0;
 }
 
+// PORT ENHANCEMENT (task item 1, see init()'s window-creation comment): the
+// Alt+Enter/F11 fullscreen toggle. Not an RE'd behaviour — the original has
+// no fullscreen concept — so this lives outside any sub_XXXX-cited code path.
+bool GameApp::handle_global_event(const SDL_Event& ev) {
+    if (ev.type != SDL_EVENT_KEY_DOWN || ev.key.repeat) return true;  // keep; ignore key-repeat spam
+    bool alt_enter = ev.key.key == SDLK_RETURN && (ev.key.mod & SDL_KMOD_ALT) != 0;
+    bool f11 = ev.key.key == SDLK_F11;
+    if (!alt_enter && !f11) return true;  // not ours: keep the event for the caller's own loop
+    toggle_fullscreen();
+    return false;  // swallow: don't let Enter/F11 also drive whatever screen is up
+}
+
+bool GameApp::sdl_event_filter(void* userdata, SDL_Event* event) {
+    return static_cast<GameApp*>(userdata)->handle_global_event(*event);
+}
+
+void GameApp::toggle_fullscreen() {
+    fullscreen_ = !fullscreen_;
+    // SDL3's borderless "desktop" fullscreen (no explicit SDL_DisplayMode) —
+    // resizes the OS window/output only; kScreenW/kScreenH and the sim are
+    // untouched (SDL_LOGICAL_PRESENTATION_LETTERBOX keeps scaling correctly
+    // at any output size, task item 2).
+    SDL_SetWindowFullscreen(window_.get(), fullscreen_);
+    options_dirty_ = true;  // persist the choice (task item 4), flush_options() below is the writer
+}
+
 void GameApp::flush_options() {
     // Write-on-exit (docs/re/results-and-options.md §2 "Persistence —
     // CONFIRMED via an exit-time write-back": sub_405DE3, the writer, is only
@@ -2855,6 +2907,9 @@ void GameApp::flush_options() {
     to_write.assign_keyboards = std::nullopt;  // row omitted — never edited by this port
     to_write.diseases_destroyable = options_.diseases_destroyable;
     to_write.disable_game_music = options_.disable_game_music;
+    // "fullscreen=" — PORT-ONLY key (see init()'s and toggle_fullscreen()'s
+    // comments), always mirrored alongside the RE'd keys above.
+    to_write.fullscreen = fullscreen_;
     // keydef=: always write the live KeyboardMapper bindings (both sets, all
     // 6 UI-exposed actions) so a rebind through the remap screen survives a
     // restart. Slots 6-9 per set (no in-game UI, §2) are left at -1/absent
