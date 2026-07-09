@@ -58,6 +58,19 @@ struct SequenceSet {
     Anim warphole;
     Anim trampoline;
 
+    // Campaign rover/ghost hazard actors (docs/re/campaign.md "Per-tick
+    // mover" step 5): the original formats sequence names "rover
+    // <north|east|south|west>" / "ghost <...>" (sub_4518D0(buf, aGhostS/
+    // aRoverS, dir)), but NO shipped install (or any known install) carries
+    // a GHOST.ANI/ROVER.ANI or a sequence match by that name anywhere in
+    // BM95.RES/DATA/RES/*.RES — confirmed cut content at the asset level,
+    // not just "we didn't look". AssetStore has no load slot for a filename
+    // that never exists, so there is nothing to resolve() here; the renderer
+    // draws a plain fallback marker instead (Renderer::draw_world's rover/
+    // ghost block). No Anim fields for this reason — a future modded install
+    // that ships the art would need a new AssetStore slot AND these fields,
+    // added together, not speculatively ahead of any file to load.
+
     // Resolves the stage-independent sequences (call again after
     // build_player_sets so the recolored copies get picked up).
     void resolve(const AssetStore& a);

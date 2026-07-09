@@ -13,6 +13,7 @@ add_library(bomber_sim STATIC
   src/systems/enclosure.cpp
   src/systems/stage_actors.cpp
   src/systems/ai.cpp
+  src/systems/rovers.cpp
 )
 add_library(bomber::sim ALIAS bomber_sim)
 

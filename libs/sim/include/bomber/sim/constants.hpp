@@ -26,4 +26,11 @@ inline constexpr int kPowerupKinds = 13;
 // The nine skull diseases, in the original's rand()%9 index order.
 inline constexpr int kDiseaseKinds = 9;
 
+// Campaign-only grace period after the last rover/ghost dies, ticks
+// (docs/re/campaign.md "Round pacing" clause 3). The original expresses this
+// as wall-clock ms (`2 * dword_46494C(50ms) * getvalue(25)(20)` = 2000ms);
+// at our locked 20 Hz that is exactly 40 ticks, so the port counts ticks
+// directly instead of reproducing the ms/frame-delta indirection.
+inline constexpr int kHazardClearTicks = 2 * kTicksPerSecond;  // 40
+
 }  // namespace bomber::sim

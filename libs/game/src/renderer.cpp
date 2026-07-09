@@ -455,6 +455,28 @@ void Renderer::draw_world(const sim::State& s) {
         }
     }
 
+    // Campaign rover/ghost hazards (docs/re/campaign.md "Per-tick mover").
+    // No known install ships GHOST.ANI/ROVER.ANI (confirmed cut content —
+    // see sequences.hpp's rover/ghost comment), so there is no Anim to draw;
+    // a small filled marker keeps the actor visible instead of invisible,
+    // distinct per kind (rover = brown/orange, ghost = pale blue-white) and
+    // per-tile bottom-anchored like every other world entity here.
+    for (const auto& r : s.rovers) {
+        if (!r.alive) continue;
+        float sx = kFieldOriginX + r.x / static_cast<float>(sim::kScale);
+        float sy = kFieldOriginY + r.y / static_cast<float>(sim::kScale) +
+                  sim::kTileH / 2.0f - 1.0f;
+        constexpr float kMarkerW = 24.0f, kMarkerH = 24.0f;
+        SDL_FRect dst{sx - kMarkerW / 2.0f, sy - kMarkerH - 4.0f, kMarkerW, kMarkerH};
+        if (r.kind == sim::RoverKind::Rover)
+            SDL_SetRenderDrawColor(ren_, 170, 90, 30, 255);   // rover: brown/orange
+        else
+            SDL_SetRenderDrawColor(ren_, 210, 225, 255, 220);  // ghost: pale blue-white
+        SDL_RenderFillRect(ren_, &dst);
+        SDL_SetRenderDrawColor(ren_, 20, 20, 20, 255);
+        SDL_RenderRect(ren_, &dst);  // outline so it reads against similar floor colours
+    }
+
     // Death animations (cosmetic, play once, advance at sim tick rate).
     for (std::size_t di = 0; di < deaths_.size();) {
         auto& fx = deaths_[di];

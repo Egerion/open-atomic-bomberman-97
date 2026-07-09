@@ -165,40 +165,135 @@ non-empty count is folded into COMPUTER slots") was a mislabelling based on
 
 ### Spawning — `sub_401AAE`/`sub_401B05` (pseudo.c 4793-4847)
 
-Both take `(count, speed)` and loop `count` times calling `sub_4019C2`, which
-claims a free slot in `dword_45E020` (`sub_401914`) and places it at a random
-WALKABLE tile (`rand()%board_w/h`, retried up to 200 times, rejecting
-non-walkable via `sub_425FB9`/`sub_422351`). The claimed slot's `+1` byte is
-set to the caller's type constant (`sub_401AAE`→1=rover, `sub_401B05`→2=ghost)
-and `+28` (dword) is set to the caller's SPEED argument — i.e. `.CAM` fields 4
-and 6 (rover_speed/ghost_speed) ARE consumed, just not by anything sim-side:
-they set the spawned actor's own per-tick move-budget increment.
+Both take `(count, speed)` and loop `count` times calling `sub_4019C2`
+(pseudo.c 4763-4791), which claims a free slot in `dword_45E020`
+(`sub_401914`) and places it at a random tile: `v4=rand()%W, v5=rand()%H`,
+accepted when `sub_425FB9(v4,v5) != 1` (rejects SOLID only, code 1 — bricks,
+code 2, ARE an acceptable spawn tile; this check is NOT type-dependent the
+way the mover's per-tick `sub_4017FA` is, since `dword_45E01C` is only ever
+set by `sub_401F76`'s per-tick drive loop, not during spawn) **AND**
+`sub_422351(3)` is truthy, retried up to 200 times. The claimed slot's `+4`
+dword is set to the caller's type constant (`sub_401AAE`→1=rover,
+`sub_401B05`→2=ghost) and `+112` (dword index 28) is set to the caller's
+SPEED argument — i.e. `.CAM` fields 4 and 6 (rover_speed/ghost_speed) ARE
+consumed, just not by anything sim-side prior to this port: they set the
+spawned actor's own per-tick move-budget increment (`+116 += +112 *
+frameDelta/frameRef + 100`, the same budget arithmetic as the mover, docs
+below).
+
+**`sub_422351(a1)` — AMBIGUOUS, not confidently pinned.** Read in full
+(pseudo.c 24535-24555): takes a single argument `a1` (here always `3`) and
+loops the 10 player slots computing `abs(sub_42665C(player.x)) +
+abs(sub_4266A3(player.y))` (each player's OWN tile coordinate converted from
+its pixel position) compared against `a1`; returns 0 (reject) the first time
+a player's `|tileX| + |tileY| <= a1`, else 1 (accept) after all 10 checked.
+**The candidate spawn tile (`v4`,`v5`) is never passed into this function or
+referenced by it** — Hex-Rays shows no argument beyond `a1@<ebx>`, and the
+two `abs_()` calls read back an implicit value the decompiler couldn't
+attribute to a register-passed second argument (the same class of
+"possibly undefined" register-tracking loss seen in `sub_401B5C`'s `v5/v7/
+v9/v11`). Two readings are consistent with the visible code: (a) as literally
+decompiled, a global near-origin-avoidance check unrelated to the spawn
+candidate (implausible as a spawn gate, but that IS what the visible
+arguments show); (b) the intended/likely original semantics — a
+distance-from-EVERY-player gate on the candidate tile, with the second
+operand lost to decompilation (`ebx`/another register carrying `v4,v5` that
+Hex-Rays failed to surface as a parameter). No raw disassembly is retained
+in this repo to resolve the ambiguity further (`CLAUDE.md`: no disassembly
+dumps committed), and re-deriving it would require re-opening the .idb.
+**Treated as reading (b) for the port** (a minimum Manhattan distance of 3
+tiles from every player, evaluated against the CANDIDATE tile) since that is
+the only reading that makes sense as a spawn-placement gate and matches the
+function's obvious purpose (called only from the spawn path, nowhere else);
+flagged here explicitly as the LOWER-confidence pin in this whole
+investigation, unlike everything else in this section.
 
 ### Per-tick mover — `sub_401B5C` (pseudo.c 4839-4977), driven by `sub_401F76`
 
 `sub_401F76` (pseudo.c 4993-5021, called every campaign tick from
 `sub_4016DA`) walks all 100 particle-table slots; for any live entry whose
-type is 1 or 2 (rover/ghost) it calls `sub_401B5C(entry)` — the mover — and
-counts it into `dword_464820` (live-rover/ghost count, consumed by the round-
-pacing clause below). Any OTHER stray live type is cleared to 0 (defensive;
-in practice only 1/2 are ever written by the spawn functions above).
+type is 1 or 2 (rover/ghost) it stores the type into `dword_45E01C` (read by
+`sub_4017FA` below — the walkability test branches on it) and calls
+`sub_401B5C(entry)` — the mover — and counts it into `dword_464820`
+(live-rover/ghost count, consumed by the round-pacing clause below). Any
+OTHER stray live type is cleared to 0 (defensive; in practice only 1/2 are
+ever written by the spawn functions above).
 
-`sub_401B5C` is a full per-pixel stepper (same `+112`=speed, `+116`=move-
-budget, "100 units per pixel" shape as the player/bomb steppers, `docs/re/
-stage-actors.md` §3's budget arithmetic):
+**Struct layout** (offsets used by the mover, decoded from the DWORD-array
+writes; the same 38-dword/152-byte stride as the spawn table): `+0`=live
+flag, `+4`=type (1 rover/2 ghost), `+8`=dead flag (reaped next
+`sub_401F76` pass, mirrors the player `+8` death flag `sub_41DCB2` sets),
+`+20/+24`=spawn-tile pixel pos (written once at spawn, read back only by the
+one-shot rover init below), `+28/+32`=CURRENT pixel x/y (the position the
+mover advances every tick — mirrors the player stepper's `+0x1c/+0x20`),
+`+42`=godir in the HIGH WORD (`>>16`, values 0-3) with the SAME word also
+addressable as `+44` (`*(WORD*)(v28+44)` — little-endian overlay of the high
+half of the `+42` dword; confirmed because the direction-name lookup at the
+end of the function reads `BYTE2(+42)` == `*(BYTE*)(v28+44)`), exactly the
+16.16 godir field `docs/re/facts.md`'s player-stepper section documents at
+player `+0x2c`, `+48`=per-tick step counter (word, feeds the draw-frame
+index), `+112`=speed (the spawn call's `speed` arg), `+116`=move budget
+(spent 100 units/pixel, same contract as `Player::move_budget`), `+146`=a
+ONE-SHOT "already initialised" latch (rover-only, see step 0 below).
 
-1. **Wander with human-avoidance bias.** At each tile-centre crossing it
-   walkability-tests (`sub_4017FA`) the tile straight ahead; if blocked (or,
-   even when clear, with probability `1 - 1/max(1,getvalue(1200))`, i.e.
-   `getvalue(1200)=3` ⇒ 2-in-3 chance to turn anyway) it randomly turns ±90°
-   (`rand()%2` ? `+44 += 1` : `+44 -= 1`, masked `&3`). VALUELST
-   1200/1205 (install values 3/3) are titled, verbatim, "chance that a ghost
-   or rover will change directions at an intersection" / "chance that the
-   direction change will NOT [be] towards a human" — confirming a human-
-   seeking bias exists as a documented mechanism, though the exact use of
-   id 1205 is not disassembled further here (out of scope: no sim consumer
-   exists to wire it into).
-2. **Dies on stepping into active flame.** After moving, `sub_42708D(tileX,
+0. **One-shot rover spawn cleanup (rover only, NOT ghost).** On the actor's
+   very first `sub_401B5C` call (`type==1 && !+146`), BEFORE any movement: set
+   the latch, then call `sub_42583B(spawn_tx, spawn_ty, 0)` — for the spawn
+   tile and each of its 4 orthogonal neighbours that is walkable
+   (`sub_425FB9 != 1`), `sub_425704(tx,ty,a3=0)` checks the FLOOR-POWERUP
+   grid (`dword_462214`, `sub_42542D`'s own backing store) for a live record
+   at that tile; if one exists, it draws up to 200 random tiles
+   (`rand()%W,rand()%H` per attempt) looking for one that is a BRICK
+   (`sub_425FB9==2`) with no visible powerup there yet, and relocates the
+   record there verbatim (`qmemcpy`, 0x98=152 bytes) — i.e. **a rover's
+   landing tile and its neighbours get any powerup silently teleported under
+   a random brick** so the rover doesn't spawn standing on one. This is a
+   real, RNG-drawing, gameplay-affecting one-shot per rover (never per
+   ghost) — up to 5 tiles × up to 200 draw-pairs each, though in practice 0
+   draws unless a powerup happens to already occupy the spawn footprint (rare
+   at match start, since powerups are hidden under bricks, not on the floor,
+   until a wall burns). **Port status: DEFERRED** (see Port status below) —
+   documented here in full so a future pass can wire it without re-RE'ing;
+   left out of the v1 port because it only fires when a powerup is ALREADY
+   sitting exposed on the rover's spawn footprint at spawn time, which no
+   existing scenario produces (powerups start hidden, not floored) and
+   campaign spawn happens at round start before any brick has burned.
+1. **Walkability test is TYPE-DEPENDENT — ghosts phase through bricks,
+   rovers do not.** `sub_4017FA(tx,ty)`: blocked by a grounded bomb
+   (`sub_422E48`) always; otherwise if `dword_45E01C==2` (current mover is a
+   GHOST) the tile is passable unless the collision grid reads exactly `1`
+   (solid) — code `2` (brick) is NOT blocking, so **ghosts walk straight
+   through bricks**; for a ROVER (or anything else) the tile must read
+   exactly `0` (fully blank) — bricks DO block rovers, same as a player. This
+   is a genuine, previously-undocumented rover/ghost behavioural difference,
+   not a guess: confirmed from the collision-grid fill (`sub_404852`, 0=
+   blank/1=solid/2=brick, `docs/re/facts.md` "0=blank, 1=solid, 2=brick
+   candidate") and the two distinct comparisons in `sub_4017FA`.
+2. **Wander with human-avoidance bias.** At each tile-centre crossing (the
+   "along/perp" rotation matches the player stepper's centring math; the
+   turn-decision block is skipped entirely — `goto LABEL_20` — whenever the
+   actor is off-centre on the perpendicular axis, so turns are ONLY decided
+   exactly at a tile centre) it walkability-tests the tile straight ahead via
+   `sub_4017FA`; if blocked (or, even when clear, with probability
+   `1 - 1/max(1,getvalue(1200))`, i.e. `getvalue(1200)=3` ⇒ 2-in-3 chance to
+   turn anyway — ONE `rand()%v25` draw) it randomly turns ±90° (ONE
+   `rand()%2` draw: nonzero → `+44 += 1`, zero → `+44 -= 1`, then masked
+   `&3`), then re-tests the (now different) ahead tile and if STILL blocked
+   zeroes the move budget (stops early, doesn't overshoot into a wall this
+   tick — no further draw). VALUELST 1200/1205 (install values 3/3) are
+   titled, verbatim, "chance that a ghost or rover will change directions at
+   an intersection" / "chance that the direction change will NOT [be]
+   towards a human" — confirming a human-seeking bias exists as a documented
+   mechanism, but id 1205 has **no read anywhere in `sub_401B5C`** (grepped
+   the full function body) — it is read nowhere in the mover at all; the
+   "human-avoidance" the VALUELST comment promises is NOT implemented in
+   this function (possibly dead/aspirational tuning, or implemented
+   elsewhere and never wired to the turn roll — out of scope to chase
+   further, but the id is NOT a live input to `sub_401B5C`, correcting the
+   earlier hedge here). Draw count per intersection: 1 (turn-chance) or 2
+   (turn-chance + coin-flip direction) or 0 (off-centre tick, no roll at
+   all) — NOT a fixed count; see the sim port's RNG-order note.
+3. **Dies on stepping into active flame.** After moving, `sub_42708D(tileX,
    tileY)` probes the FLAME grid (`dword_46224C`, the SAME array
    `docs/re/facts.md`'s "Flame is NEVER checked" note and the arm-stop fix
    both cite) — if the new tile is currently on fire, the actor is killed
@@ -207,19 +302,65 @@ stage-actors.md` §3's budget arithmetic):
    awarded points via `sub_421C71`: `HIWORD(dword_461BC4[38*owner+26]) +=
    points`. VALUELST 1310 (rover, 15 pts) / 1320 (ghost, 25 pts) — both
    explicitly commented "(in campaign mode only)". (id 1300 = 250 pts "for
-   killing an AI" is the same field, presumably written by the NORMAL
-   player-kill path elsewhere, not traced further here — out of scope.)
-3. **Knocks players off its landing tile.** After moving, any OTHER actor
-   found at the new tile via `sub_421CB5` (a live, non-team-locked PLAYER
-   lookup) whose slot type (`+16`) isn't exactly 1 (COMPUTER) is punched
-   (`sub_41DE63(actor, -1)` — the same head-stun/knockback helper used
-   elsewhere, `getvalue(105)` stun-duration roll) — i.e. rovers/ghosts shove
-   HUMAN and NETWORK players out of their tile on contact, but pass through
-   AI-controlled players without incident.
-4. Draws itself via `sub_4518D0(buf, aGhostS/aRoverS, personality_byte)` —
+   killing an AI" is the same field, written by the NORMAL player-death path
+   `sub_41DCB2` — pseudo.c 21913-21962, the shared death routine BOTH normal
+   flame-death and the rover/ghost kill below funnel through — not traced
+   further here beyond confirming it is the SAME award mechanism, just a
+   different VALUELST id per killer-kind.) No RNG draw on this branch.
+4. **KILLS players on its landing tile — CORRECTED 2026-07-09, this is not a
+   punch.** After moving, any live player found at the new tile via
+   `sub_421CB5` (`present && !dead(+8) && tile match` — exactly
+   `grid::player_at`'s predicate) whose slot type (`+16`) isn't exactly 1
+   (COMPUTER/AI) is passed to **`sub_41DE63(actor, -1)`** — traced end to
+   end (pseudo.c 21989-22016) and confirmed to be the SAME function the
+   normal per-tick flame-probe calls on a walking player
+   (pseudo.c 22690-22706, `sub_41DE63(i, flame_owner)`) and the enclosure
+   crush calls (`docs/re/facts.md` "stomped_bombs_detonate", `sub_421D3F`→
+   `sub_41DE63`) — **it is the player-death entry point, not a stun/
+   knockback helper.** Body: early-outs while state-gated (network-spectator
+   byte `+16==4`, or mid-bounce/warp states 5/6/7 — `return 0`, no death, no
+   RNG); otherwise picks a RANDOM DEATH ANIMATION —
+   `rand() % max(1,getvalue(105)) + 1` stored at victim `+4` — **VALUELST 105
+   is titled "how many different death animations do we have? (die 1 through
+   die 24)", = 24 in the shipped file**, confirming this is a cosmetic
+   death-anim index draw, NOT a stun-duration roll as an earlier reading of
+   this doc guessed (id 105 was never checked against VALUELST.RES's own
+   comment before now) — then calls `sub_41DCB2(victim, a2=killer_or_-1, ...)`,
+   the shared death routine (deaths tally `dword_4642B0`++, per-killer kill
+   tally `word_461C30[76*killer]`++ when killer != victim slot, the id-1300
+   campaign AI-kill-score award when `dword_46489C` is set and the killer
+   isn't the victim, sound 300 + an anim trigger, `+8=1` dead flag,
+   `+48=0`). **So a rover/ghost stepping onto a HUMAN or NETWORK player's
+   tile KILLS them outright** (with owner = -1, i.e. no kill-tally credit —
+   the `a2>=0 && a2<10` guard in `sub_41DCB2` excludes owner `-1` from both
+   the per-killer tally and the id-1300 award, so a rover/ghost kill is
+   scoreless for the rover/ghost itself; only a FLAME killing the rover/
+   ghost awards points, per clause 3, and that's the flame owner's score,
+   not the rover's own). AI-controlled players are completely immune — the
+   rover/ghost passes through them without incident, no death, no anim roll,
+   no RNG. The random-death-anim roll (when it fires) draws exactly ONE
+   `rand()`; `sub_41DCB2` itself draws none.
+5. Draws itself via `sub_4518D0(buf, aGhostS/aRoverS, personality_byte)` —
    `aGhostS="ghost %s"`/`aRoverS="rover %s"` — then a sequence lookup
    (`sub_41D957`/`sub_41DAA7`), i.e. it IS an on-screen animated sprite, not
-   an invisible stat modifier.
+   an invisible stat modifier. The personality/direction byte
+   (`BYTE2(+42)`, i.e. the low byte of the godir high-word — masked `&3` at
+   the lookup site `sub_413AED`) selects a direction NAME (`off_45BCC4` =
+   `{"north","east","south","west"}`) substituted into the format string,
+   producing sequence names like `"ghost north"` / `"rover south"`. **No
+   ANI file in the shipped install (`D:\...\BOMBRMAN`) contains sequences by
+   these names** — grepped every `.RES`/`.ANI` in the install (`BM95.RES`,
+   `DATA/RES/*.RES`) for "ghost"/"rover": the only hits are the three
+   `.CAM` files themselves (campaign definitions) and the `GHOSTS.CAM` name
+   — there is no `GHOST.ANI`/`ROVER.ANI` and no sequence-name string match
+   anywhere in the install's binary assets. **The art was never shipped** —
+   this is confirmed cut content at the asset level, not just "we didn't
+   find it": `resolve_sequence` (`libs/game/src/sprites.cpp:126`) already
+   returns an empty `Anim` (no steps) for an unmatched name and callers
+   already no-op on an empty `Anim`, so the port's fallback path (a static
+   marker sprite / colored tile, see Presentation below) is not a guess
+   patched over a gap — it is the correct behaviour for content that has no
+   art in ANY known install.
 
 ### AI difficulty (field 8) — CONFIRMED dead, not a guess
 
@@ -238,20 +379,44 @@ input — `docs/re/ai.md` §1 — and nothing feeds the campaign record's field 
 into that seed). **Port status: correctly left unapplied; no TODO remains
 open on this field.**
 
-### Port status
+### Port status — PORTED 2026-07-09
 
 **Applied:** the AI COUNT (field 7) roster seed now matches `sub_422928`'s
 RANDOM-slot-pick shape (`bomber::game::seed_campaign_ai_slots`, `libs/game/
 include/bomber/game/results.hpp`, driven by the existing presentation-only
 `setup_lcg_`, never `State::rng`) instead of the prior sequential fill.
-**Deliberately NOT ported (scope call, not an oversight):** rovers/ghosts
-themselves — a real `libs/sim` feature (a new actor kind: spawn, wander-AI,
-flame-death, player-knockback, hashed state, golden recapture, art). This is
-substantially larger than "wire up a speed number" and is out of scope for
-this doc-and-port pass; flagged as follow-up work rather than silently
-punted. `rover_speed`/`ghost_speed` (fields 4/6) have no effect until that
-actor kind exists — they are real inputs to the ORIGINAL (an actor's move-
-budget increment), just with no sim-side consumer in this port yet.
+
+**Now ported:** rovers/ghosts as a `libs/sim` actor kind — `State::rovers`
+(hashed `std::vector<Rover>`), `RoverSystem` (`libs/sim/src/systems/
+rovers.{hpp,cpp}`), spawn/wander/flame-death/kill/score, wired from
+`MatchConfig` (rover/ghost count+speed, threaded through `libs/match` and
+`GameApp::load_campaign_stage`). See "Sim port" below for the exact
+placement and the deliberate simplifications:
+
+- **Spawn placement**: `RoverSystem::spawn` mirrors `sub_4019C2` exactly —
+  a candidate tile is drawn (`rand()%W, rand()%H`, TWO draws), accepted when
+  it is not SOLID (code 1; bricks/code 2 are an acceptable SPAWN tile for
+  BOTH rover and ghost — the type-dependent brick rule is a MOVER-only
+  distinction, clause 1 above, not a spawn-time one) and the distance-3
+  gate (`sub_422351(3)`, reading (b) above) passes, retried up to 200 times.
+  Draws 2 per attempt; a spawn that never finds a legal tile draws 400 and
+  silently spawns nothing for that slot, matching the original's `return 0`
+  (`sub_401AAE`/`sub_401B05` don't check the spawn result before
+  incrementing `i`, so a full board just yields fewer live rovers/ghosts
+  than requested — ported the same way).
+- **NOT ported**: the one-shot rover-spawn powerup-relocation cleanup
+  (mover step 0, `sub_42583B`/`sub_425704`) — deferred, see that step's own
+  note; it is a rare, currently-unreachable-in-practice branch (no golden
+  scenario spawns a rover onto an already-floored powerup) and adding it
+  means extra RNG draws that would need golden coverage to prove are dormant
+  — better done as a follow-up with a dedicated test that actually floors a
+  powerup under a rover spawn.
+- **VALUELST 1205** ("human-avoidance bias") is confirmed NOT read by
+  `sub_401B5C` (see clause 2) — correctly left unconsumed; there is no
+  "avoid humans" steering to port, despite the tuning id's name.
+- `rover_speed`/`ghost_speed` (fields 4/6) ARE now consumed — they set
+  `Rover::speed`, the actor's own per-tick move-budget increment, exactly as
+  in the original.
 
 ## Round pacing — PINNED (`sub_4016DA`, pseudo.c 4612-4651, 2026-07-09)
 
@@ -296,10 +461,11 @@ Five distinct clauses, not one:
    "round over now", but both reach the SAME `sub_410B6E()` dialog/advance
    call at the round-tick level, `=2` additionally showing the getstring
    1245/1240 "Campaign unsuccessful!"/"Oh Well!" message per the consumer at
-   pseudo.c 29793-29799). **Not ported**: this clause only makes sense once
-   rovers/ghosts exist sim-side (its whole purpose is "wait a couple seconds
-   after the last monster dies before ending the stage") — see the roster
-   section's port-status note.
+   pseudo.c 29793-29799). **PORTED 2026-07-09** now that rovers/ghosts exist
+   sim-side — `State::hazard_clear_timer` (ticks, not wall-clock ms: at the
+   locked 20 Hz the original's `2 * dword_46494C(50ms) * getvalue(25)(20)`
+   is a fixed 2000ms == 40 ticks, so the port counts ticks directly instead
+   of reproducing the ms/frame-delta indirection — see "Sim port" below).
 4. **The `for i in 0..9` early-out** re-checks EVERY non-COMPUTER (human or
    network) player slot; if ANY is still alive, the whole function returns
    immediately, skipping clause 5 entirely. This means clause 5 below can
@@ -310,19 +476,31 @@ Five distinct clauses, not one:
    replays the SAME stage) and forces immediate round-over. This is a
    "campaign doesn't skip a stage just because everyone died" safety net.
 
-**Port status.** Clause 2 (survivor count) is already exactly what our port's
-existing best-of-N `sides_remaining(s)<=1`/`ticks_left==0` round-end check
-implements — no new code needed, it was already right for the reason stated
-here rather than the reason the pre-2026-07-09 TODO guessed. Clauses 1 and 3
-require rovers/ghosts to exist sim-side and are deliberately deferred with
-them (see previous section's port-status note) — reusing best-of-N clinch as
-"stage done" remains the correct stand-in until then, now for a PINNED
-reason instead of an unpinned guess. Clause 5 (mutual-wipeout stage replay)
-is a small independent behaviour that COULD be ported without rovers/ghosts
-(it only needs "did every human/network slot die"), but is left for a
-follow-up alongside the rest of this function rather than split out, since
-on its own it's an edge case (mutual wipeout while the map is already clear
-of monsters) with no test coverage pressure yet.
+**Port status — PORTED 2026-07-09, all 5 clauses.** Clause 2 (survivor count)
+was already exactly what our port's existing best-of-N
+`sides_remaining(s)<=1`/`ticks_left==0` round-end check implements — no new
+code needed there. Clauses 1, 3, 4, 5 are now driven by `RoverSystem` and a
+small campaign-pacing helper:
+
+- Clause 1 (`sub_401F76` mover drive) = `RoverSystem::tick`, called from
+  `run_tick` — see "Sim port" below for the exact placement.
+- Clause 3 (grace timer) = `State::hazard_clear_timer`, incremented by
+  `RoverSystem::tick` once `state.rovers` has no live entries, compared
+  against a fixed 40-tick threshold (the ms→tick simplification above);
+  exposed via `RoverSystem::hazards_just_cleared()` for the campaign layer
+  to raise its own "stage clear, pending" flag — kept OUTSIDE `libs/sim`'s
+  own win-condition logic (sim has no concept of "campaign stage"), mirrored
+  in `GameApp`'s round loop exactly like the original's `dword_464894`
+  hand-off to `sub_410B6E`.
+- Clauses 4/5 (mutual-wipeout stage replay) are campaign-layer logic (need
+  "is this campaign mode", not a sim concept) — ported in `GameApp::run_app`
+  alongside the existing stage-advance handling: on round end, if every
+  non-COMPUTER slot is dead, the pending stage index is NOT advanced (undoes
+  the `present_campaign_banner` stage-advance for this round), matching
+  `--dword_4648B0` before the immediate round-over.
+
+Clause 2 needed no change. See "Sim port" and "Presentation" below for file-
+level detail.
 
 ## Stage banner — CONFIRMED (`sub_40133F`, pseudo.c 4443-4504) and PORTED 2026-07-09
 

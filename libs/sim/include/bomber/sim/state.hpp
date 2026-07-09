@@ -9,6 +9,7 @@
 #include "bomber/sim/constants.hpp"
 #include "bomber/sim/event.hpp"
 #include "bomber/sim/player.hpp"
+#include "bomber/sim/rover.hpp"
 #include "bomber/sim/tuning.hpp"
 #include "bomber/sim/types.hpp"
 
@@ -66,6 +67,29 @@ struct State {
     // one-time hash-layout growth). Filled by AISystem::decide before movement.
     std::array<Brain, kMaxPlayers> brains{};
     std::vector<Bomb> bombs;
+    // Campaign-mode autonomous hazard actors (docs/re/campaign.md "Rover/
+    // ghost/AI roster", "Per-tick mover"). Empty on every non-campaign match
+    // (MatchConfig::rovers/ghosts default to 0), so this vector stays empty
+    // and RoverSystem::tick draws zero RNG for every existing scenario — a
+    // ONE-TIME hash-layout growth (CLAUDE.md determinism contract rule 5),
+    // not a behaviour change, on every scenario with no rovers/ghosts.
+    std::vector<Rover> rovers;
+    // True for the lifetime of a campaign match that spawned at least one
+    // rover/ghost (set once by build_state when MatchConfig::campaign_rovers/
+    // campaign_ghosts > 0; never cleared mid-match). Distinguishes "never had
+    // campaign hazards" (RoverSystem::tick must stay a true no-op) from "had
+    // them, all now dead" (the grace timer below must still accumulate even
+    // though `rovers` is empty) — mirrors the original's dword_46489C
+    // campaign-active flag gating sub_4016DA's own logic. False (0) for
+    // every existing scenario, so this is mix(0) in the golden hash.
+    bool campaign_hazards_active = false;
+    // Campaign-only "all hazards dead" grace timer (docs/re/campaign.md
+    // "Round pacing" clause 3, `dword_4646C0`). Ticks (not wall-clock ms —
+    // see RoverSystem::tick's note on the ms->tick simplification), reset to
+    // 0 while any rover/ghost is alive, else incremented until it reaches
+    // kHazardClearTicks. Always 0 while campaign_hazards_active is false, so
+    // this field is mix(0) for every existing golden scenario.
+    std::int32_t hazard_clear_timer = 0;
 
     // Cleared at the start of every tick; excluded from state_hash().
     std::vector<Event> events;

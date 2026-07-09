@@ -76,6 +76,16 @@ struct MatchConfig {
     // identical to before this field existed (golden hashes unaffected).
     std::array<std::int32_t, kMaxPlayers> born_with_clogs{};
 
+    // Campaign rover/ghost hazard counts + speeds (.CAM fields 3-6,
+    // docs/re/campaign.md "Rover/ghost/AI roster", "Spawning"). Zero on
+    // every non-campaign config (the default) — build_state's spawn calls
+    // are then no-ops (RoverSystem::spawn with count<=0 draws no RNG),
+    // exactly matching every existing scenario's golden hash.
+    std::int32_t campaign_rovers = 0;
+    std::int32_t campaign_rover_speed = 0;
+    std::int32_t campaign_ghosts = 0;
+    std::int32_t campaign_ghost_speed = 0;
+
     MatchConfig() {
         spawn_override.fill(kNoOverride);
         active.fill(true);  // default roster = contiguous player_count (tests/golden)

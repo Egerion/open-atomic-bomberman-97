@@ -18,6 +18,7 @@
 #include "systems/flames.hpp"
 #include "systems/movement.hpp"
 #include "systems/powerups.hpp"
+#include "systems/rovers.hpp"
 #include "systems/stage_actors.hpp"
 
 namespace bomber::sim {
@@ -260,6 +261,7 @@ void run_tick(State& s, const TickInputs& inputs) {
     StageActorSystem stage{s, movement};
     EnclosureSystem enclosure{s, flames};
     AISystem ai{s};
+    RoverSystem rovers{s};
 
     // 1. Players: movement (with conveyor/trampoline actors), bomb drop,
     //    throw/grab/trigger/punch. The conveyor push is part of the move budget
@@ -296,7 +298,21 @@ void run_tick(State& s, const TickInputs& inputs) {
     // 5. Flames kill players; floor powerups get picked up.
     field_vs_players(s, powerups, diseases);
 
-    // 5b. Diseases: spread on contact, age the freshness gate, and expire.
+    // 5b. Campaign rover/ghost hazards: drive the mover 1 tick (spawn/wander/
+    // flame-death/landing-tile kill) and the "all hazards dead" grace timer
+    // (docs/re/campaign.md "Round pacing", sub_4016DA). The original calls
+    // sub_401F76 from a SEPARATE per-frame campaign callback (sub_4016DA, via
+    // sub_42A191), not from inside the player loop sub_41F29B — there is no
+    // RE'd ordering constraint pinning it relative to our step numbering, so
+    // it is placed here, immediately after players react to this tick's
+    // flame grid (step 5): both consumers (players in field_vs_players and
+    // rovers/ghosts here) read the SAME s.flame grid armed this tick before
+    // it fades in the NEXT tick's step 4, so reading it back-to-back keeps
+    // both reactions faithful to "this tick's fire". No-op (zero RNG draws,
+    // zero cost) when s.rovers is empty — see RoverSystem::tick.
+    rovers.tick();
+
+    // 5c. Diseases: spread on contact, age the freshness gate, and expire.
     diseases.spread_and_age();
 
     // 6. Match clock, and walls closing in during the hurry phase.
