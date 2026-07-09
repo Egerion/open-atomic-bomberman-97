@@ -80,6 +80,129 @@ void OptionsScreen::enter(const OptionsSnapshot& current, std::string backdrop) 
     backdrop_ = std::move(backdrop);
 }
 
+// CONFIRMED 2026-07-09 re-read of sub_4080DC's key-dispatch tail (pseudo.c
+// 9297-9406): `v165` is the raw key code; the ONLY branch that sets the
+// loop's exit flag (`v167 = 1`) is `v165 == 0x1B` (Escape) — Enter (13) and
+// Space (32) both `goto LABEL_29`, the EXACT SAME per-row switch Right
+// (`v165 == 0x14D`) dispatches to (toggle / cycle-forward / open sub-screen).
+// Left (`v165 == 0x14B`) runs a second, separately-listed switch with the
+// SAME 19 cases: toggles do the SAME toggle (direction is ignored for them,
+// matching this file's existing per-row comments), cyclers decrement instead
+// of increment, and every "opens a sub-screen" row (2/8/14/15/16/17/18)
+// dispatches the SAME open action Right/Enter/Space use — e.g. row 15
+// ("Define keyboard layouts", sub_407B9D) opens via ALL FOUR of Left, Right,
+// Enter, and Space in the original, not Enter-only. The port's previous
+// `done_ = true` default on Enter/Space (falling out of the screen on any
+// non-KeyRemap row) had no such branch in sub_4080DC at all — it was
+// invented, and is the reported "rows drop you back to the main menu" bug.
+// Escape is the ONLY key that ends the screen.
+void OptionsScreen::activate_row(int dir) {
+    switch (static_cast<OptionRow>(row_)) {
+        case OptionRow::TeamPlay:
+            snap_.team_play = !snap_.team_play;
+            // §3 row 0: "forces win_by_kills off" when Team Play is on.
+            if (snap_.team_play) snap_.win_by_kills = false;
+            // pseudo.c 9310-9311/9410-9412: toggling Team Play ALSO
+            // clears `dword_46492C` inline, every press — not just
+            // Gold Bomberman's own row (doc §2's "Cleared to -1 by"
+            // list previously missed this).
+            team_play_touched_ = true;
+            changed_ = true;
+            break;
+        case OptionRow::RandomStart:
+            snap_.random_start = !snap_.random_start;
+            changed_ = true;
+            break;
+        case OptionRow::NodeName:
+        case OptionRow::SchemeFile:
+        case OptionRow::Modem:
+        case OptionRow::NetProtocol:
+        case OptionRow::AdjustAudio:
+            // Display-only rows (options_screen.hpp's file doc) — the
+            // original's handlers here (sub_4074DC text-entry prompt,
+            // sub_407582 `.SCH` file browser, sub_40798B/sub_407F4F nested
+            // net sub-screens, sub_407542 volume dialog) are real UI this
+            // port does not implement; every direction (Left/Right/Enter/
+            // Space all reach this same case in the original) stays a no-op
+            // here rather than inventing one.
+            break;
+        case OptionRow::ConveyorSpeed: {
+            int v = snap_.conveyor_speed_index + dir;
+            if (v < 0) v = 2;
+            if (v > 2) v = 0;
+            snap_.conveyor_speed_index = v;
+            changed_ = true;
+            break;
+        }
+        case OptionRow::StompedBombs:
+            snap_.stomped_bombs_detonate = !snap_.stomped_bombs_detonate;
+            changed_ = true;
+            break;
+        case OptionRow::WinByKills:
+            // §3 row 5: "forced off whenever Team Play is on" — a
+            // no-op toggle attempt while Team Play holds it down,
+            // matching the original's one-way gate (row 0 -> row 5,
+            // not the reverse).
+            if (!snap_.team_play) {
+                snap_.win_by_kills = !snap_.win_by_kills;
+                changed_ = true;
+            }
+            break;
+        case OptionRow::GoldBomberman:
+            snap_.goldman = !snap_.goldman;
+            // pseudo.c 9334-9335/9436-9437: cleared inline on every
+            // press, matching team_play_touched_ above.
+            goldman_touched_ = true;
+            changed_ = true;
+            break;
+        case OptionRow::EnclosementDepth: {
+            int v = snap_.enclosement_depth + dir;
+            if (v < 0) v = 3;
+            if (v > 3) v = 0;
+            snap_.enclosement_depth = v;
+            changed_ = true;
+            break;
+        }
+        case OptionRow::PlayTime: {
+            int idx = playtime_index(snap_.playtime_seconds) + dir;
+            if (idx < 0) idx = kPlayTimeChoiceCount - 1;
+            if (idx >= kPlayTimeChoiceCount) idx = 0;
+            snap_.playtime_seconds = kPlayTimeChoices[idx];
+            changed_ = true;
+            break;
+        }
+        case OptionRow::AssignKeyboard:
+            snap_.assign_keyboards = !snap_.assign_keyboards;
+            changed_ = true;
+            break;
+        case OptionRow::DiseasesDestroy:
+            snap_.diseases_destroyable = !snap_.diseases_destroyable;
+            changed_ = true;
+            break;
+        case OptionRow::LostNetRevertAI:
+            snap_.lost_net_revert_ai = !snap_.lost_net_revert_ai;
+            changed_ = true;
+            break;
+        case OptionRow::DisableMusic:
+            snap_.disable_game_music = !snap_.disable_game_music;
+            changed_ = true;
+            break;
+        case OptionRow::KeyRemap:
+            // CONFIRMED (pseudo.c case 15, both the LABEL_29 forward switch
+            // AND the Left-arrow switch `goto LABEL_53`): all four of
+            // Left/Right/Enter/Space open the remap sub-screen — not
+            // Enter/Space only.
+            open_keyremap_ = true;
+            break;
+        case OptionRow::SmallMemory:
+            snap_.small_memory = !snap_.small_memory;
+            changed_ = true;
+            break;
+        default:
+            break;
+    }
+}
+
 void OptionsScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
     open_keyremap_ = false;
     // CONFIRMED (pseudo.c 9298-9299): sub_4080DC plays SFX 20 (nav blip) for
@@ -100,128 +223,24 @@ void OptionsScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
             row_ = (row_ + 1) % kCursorRowCount;
             break;
         case SDLK_LEFT:
-        case SDLK_RIGHT: {
-            int dir = (key == SDLK_LEFT) ? -1 : 1;
-            switch (static_cast<OptionRow>(row_)) {
-                case OptionRow::TeamPlay:
-                    snap_.team_play = !snap_.team_play;
-                    // §3 row 0: "forces win_by_kills off" when Team Play is on.
-                    if (snap_.team_play) snap_.win_by_kills = false;
-                    // pseudo.c 9310-9311/9410-9412: toggling Team Play ALSO
-                    // clears `dword_46492C` inline, every press — not just
-                    // Gold Bomberman's own row (doc §2's "Cleared to -1 by"
-                    // list previously missed this).
-                    team_play_touched_ = true;
-                    changed_ = true;
-                    break;
-                case OptionRow::RandomStart:
-                    snap_.random_start = !snap_.random_start;
-                    changed_ = true;
-                    break;
-                case OptionRow::NodeName:
-                case OptionRow::SchemeFile:
-                case OptionRow::Modem:
-                case OptionRow::NetProtocol:
-                    // Display-only rows (options_screen.hpp's file doc) — the
-                    // original's handlers here are a text-entry prompt / a
-                    // `.SCH` file-list stepper / nested sub-screens this port
-                    // does not implement; Left/Right/Enter are no-ops, same
-                    // as the original leaves them for an unbuilt feature.
-                    break;
-                case OptionRow::ConveyorSpeed: {
-                    int v = snap_.conveyor_speed_index + dir;
-                    if (v < 0) v = 2;
-                    if (v > 2) v = 0;
-                    snap_.conveyor_speed_index = v;
-                    changed_ = true;
-                    break;
-                }
-                case OptionRow::StompedBombs:
-                    snap_.stomped_bombs_detonate = !snap_.stomped_bombs_detonate;
-                    changed_ = true;
-                    break;
-                case OptionRow::WinByKills:
-                    // §3 row 5: "forced off whenever Team Play is on" — a
-                    // no-op toggle attempt while Team Play holds it down,
-                    // matching the original's one-way gate (row 0 -> row 5,
-                    // not the reverse).
-                    if (!snap_.team_play) {
-                        snap_.win_by_kills = !snap_.win_by_kills;
-                        changed_ = true;
-                    }
-                    break;
-                case OptionRow::GoldBomberman:
-                    snap_.goldman = !snap_.goldman;
-                    // pseudo.c 9334-9335/9436-9437: cleared inline on every
-                    // press, matching team_play_touched_ above.
-                    goldman_touched_ = true;
-                    changed_ = true;
-                    break;
-                case OptionRow::EnclosementDepth: {
-                    int v = snap_.enclosement_depth + dir;
-                    if (v < 0) v = 3;
-                    if (v > 3) v = 0;
-                    snap_.enclosement_depth = v;
-                    changed_ = true;
-                    break;
-                }
-                case OptionRow::PlayTime: {
-                    int idx = playtime_index(snap_.playtime_seconds) + dir;
-                    if (idx < 0) idx = kPlayTimeChoiceCount - 1;
-                    if (idx >= kPlayTimeChoiceCount) idx = 0;
-                    snap_.playtime_seconds = kPlayTimeChoices[idx];
-                    changed_ = true;
-                    break;
-                }
-                case OptionRow::AssignKeyboard:
-                    snap_.assign_keyboards = !snap_.assign_keyboards;
-                    changed_ = true;
-                    break;
-                case OptionRow::DiseasesDestroy:
-                    snap_.diseases_destroyable = !snap_.diseases_destroyable;
-                    changed_ = true;
-                    break;
-                case OptionRow::LostNetRevertAI:
-                    snap_.lost_net_revert_ai = !snap_.lost_net_revert_ai;
-                    changed_ = true;
-                    break;
-                case OptionRow::DisableMusic:
-                    snap_.disable_game_music = !snap_.disable_game_music;
-                    changed_ = true;
-                    break;
-                case OptionRow::KeyRemap:
-                    open_keyremap_ = true;
-                    break;
-                case OptionRow::SmallMemory:
-                    snap_.small_memory = !snap_.small_memory;
-                    changed_ = true;
-                    break;
-                default:
-                    break;
-            }
+            activate_row(-1);
             break;
-        }
+        case SDLK_RIGHT:
         case SDLK_RETURN:
         case SDLK_KP_ENTER:
         case SDLK_SPACE:
-            // Enter/Space on the "Define keyboard layouts" row opens the
-            // remap sub-screen (§3 row 15, sub_407B9D) exactly like
-            // Left/Right does for a cycler row elsewhere in the list — every
-            // OTHER row's Enter/Space is a no-op (they are toggles/cyclers,
-            // not text-entry, per §3's "Input model": only Left/Right/Enter
-            // dispatch the per-row handler, and for a toggle "direction is
-            // ignored").
-            if (static_cast<OptionRow>(row_) == OptionRow::KeyRemap) {
-                open_keyremap_ = true;
-                break;
-            }
-            done_ = true;
+            // CONFIRMED: Right/Enter/Space are the SAME "forward" dispatch
+            // in the original (see activate_row's file doc above) — none of
+            // them end the screen.
+            activate_row(1);
             break;
         case SDLK_ESCAPE:
             // Esc leaves without discarding an already-made change — the caller
             // (present_options_screen) decides whether to persist based on
             // changed(), same on Enter or Esc. Only the *screen's* dismissal
             // semantics differ (Back vs Advance) for the app-flow graph.
+            // CONFIRMED (pseudo.c 9374-9378, `v165 <= 0x1B` -> `v167 = 1`):
+            // Escape is the ONLY key that sets sub_4080DC's own exit flag.
             done_ = true;
             break;
         default:
