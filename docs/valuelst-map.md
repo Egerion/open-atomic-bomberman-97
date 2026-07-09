@@ -4,11 +4,21 @@
 
 Units: speeds are hundredths of a pixel per frame; probabilities are 1-in-N; frame counts assume the nominal frame rate below.
 
+See `docs/re/id-audit.md` for the full data-driven cross-check this file was
+reconciled against 2026-07-09 (every `getvalue` call site vs every id vs
+every port consumer), including the SOUNDLST.RES side and the fixed
+post-death-taunt range bug.
+
 ## Consumed by `sim::Tuning` today
+
+Verified 2026-07-09 against `libs/sim/include/bomber/sim/tuning.hpp`'s actual
+`Tuning::apply` switch/range table (`docs/re/id-audit.md`) — this table had
+drifted from the code (it was missing several ids `apply` already handles,
+and wrongly implied 25/30/31 route through `apply` when they're hardcoded
+mirrors instead; both fixed below).
 
 | id | meaning | original value |
 |---|---|---|
-| 25 / 30 | nominal/target frame rate — defines our tick rate | 20 |
 | 41 | bomb fuse length, frames | 40 (= 2 s) |
 | 42 | starting walk speed | 923 |
 | 90 | speed added per skate | 150 |
@@ -16,11 +26,20 @@ Units: speeds are hundredths of a pixel per frame; probabilities are 1-in-N; fra
 | 300 | kicked bomb speed | 1000 |
 | 301 | punched bomb speed | 1300 |
 | 100 | match length, seconds | 150 |
+| 95 | post-death taunt chance, 1-in-N (`sound_director.cpp`'s `PlayerDied` handler; SOUNDLST 700-999 group — id-audit.md fixed the range, was wrongly 500-999) | 5 |
+| 101 | in-round "hurry" threshold, seconds remaining | 60 |
+| 27 | default enclosement depth (0 none / 1 = 2 rows / 2 = 4 rows / 3 = all the way) | 1 |
+| 46 | closing enclosement wall lands on a grounded bomb: 1 = detonate (queued full explosion), 0 = silently destroy (`sub_426818` ~27260). The DEFAULT seed of the "Stomped Bombs Detonate" option: `sub_41095A` sets dword_464940 = getvalue(46), then options.ini `stomped_bombs_detonate=` / the Options row override it — `docs/re/facts.md` "Options toggles" | 1 |
 | 20 | brick disintegration animation, frames | 10 |
+| 10 | flame lifetime / regular-flame animation cycle, frames | 10 |
+| 660, 661 | punched-bomb arc: initial three-tile bounce height / subsequent one-tile hop height, px | 65 / 20 |
+| 665 | movement pause when grabbing a bomb, ticks | 2 |
+| 667 | flying jelly veers ±90° at a 0,0 intersection, 1-in-N | 3 |
+| 670, 671 | powers lost on a head hit: minimum / additional-random-modulus | 1 / 3 |
+| 320–323 | dud-bomb gate: base seconds / additional random seconds / 1-in-N chance / fizzle duration frames | 180 / 180 / 3 / 120 |
 | 50–62 | starting inventory per powerup kind | 1 bomb, 2 flame, rest 0 |
 | 400–412 | powerups hidden under bricks per match (negative N = \|N\| tries at 1-in-10) | 10,10,3,4,8,2,2,1,−2,−4,1,−4,−2 |
 | 550–562 | per-player accumulation caps (0 = uncapped) | 8,8,0,1,4,1,1,1,1,1,1,0,0 |
-| 31 | elapsed-ms clamp per frame (`dword_464958`) — defines the ~1.0 frame/tick budget ratio at 20 Hz | 150 |
 | 189 | number of conveyor speeds (count) | 3 |
 | 190–192 | conveyor belt speeds low/med/high (1/100 px, same budget units as id 42); selected by the "Conveyor Speed" game option (default 1=medium; this install's options.ini=2) | 250 / 350 / 450 |
 | 680 | trampoline bounce length, frames ("how many frames do you bounce"; `sub_41F29B` ~23160) | 30 |
@@ -28,38 +47,80 @@ Units: speeds are hundredths of a pixel per frame; probabilities are 1-in-N; fra
 | 910 | closing-wall ("fire-god") danger look-ahead, tiles — the AI danger grid marks the next 910 spiral bricks with a decaying threat (`docs/re/ai.md` §4.3) | 15 |
 | 915 | blast-bricks drop chance, 1-in-N (behaviour 3 `sub_40AD8D`, Stage 4) — `docs/re/ai.md` §3.3 | 5 |
 | 920 | powerup-seek range/BFS depth (behaviour 5 `sub_40BAF5`, Stage 3) — how close a powerup must be for an AI to chase it | 4 |
-| 46 | closing enclosement wall lands on a grounded bomb: 1 = detonate (queued full explosion), 0 = silently destroy (`sub_426818` ~27260). The DEFAULT seed of the "Stomped Bombs Detonate" option: `sub_41095A` sets dword_464940 = getvalue(46), then options.ini `stomped_bombs_detonate=` / the Options row override it — `docs/re/facts.md` "Options toggles" | 1 |
 | 120 | "can diseases be blown up like all other powerups?" (`gbl_diseases_can_be_destroyed`). DEFAULT seed of the "Diseases Can Be Destroyed" option (dword_464990 = getvalue(120), overridden by `diseases_destroyable=`); 0 ⇒ a destroyed floor skull relocates via `sub_4255B2(2)` instead of being lost — `docs/re/facts.md` "Options toggles" | 1 |
 | 121, 123–125, 129, 130–138 | disease behavior flags, cure chance, freshness, per-disease durations (`docs/re/facts.md` "Disease system") | 1/1/1/10/10/300×9 |
+| 1200 | campaign rover/ghost 1-in-N chance to turn at an open intersection | 3 |
+| 1300, 1310, 1320 | campaign-only kill scores: AI / rover / ghost | 250 / 15 / 25 |
 
 Powerup kind order (matches scheme `-P` rows and the id blocks above): extra bomb, flame, disease, kick, skate, punch, grab, spooger, goldflame, trigger, jelly, super-disease, random.
 
-## Mapped, not yet consumed
+**25 / 30 / 31 are NOT routed through `Tuning::apply`, despite an earlier
+version of this table implying they were** (`docs/re/id-audit.md` A(ii)).
+25/30 (nominal/target frame rate, both = 20) are mirrored as the hardcoded
+`sim::kTicksPerSecond = 20` (`constants.hpp`); 31 (elapsed-ms-per-frame
+clamp, 150) has no consumer at all — the port's fixed-tick lockstep loop
+doesn't need a wall-clock disk-hit clamp the way the original's real-time
+loop did. Values match, but a modified VALUELST changing these ids would
+have no live effect on the port. Not a functional gap (id 25's own comment
+says "do not change this value"), just a doc-accuracy fix.
+
+## Consumed directly by `libs/game` (not via `Tuning`)
+
+Ids read live from the parsed `ValueList` by the presentation layer, outside
+`sim::Tuning` (`docs/re/id-audit.md` method step 3; `grep -rn "VALUELST\|
+getvalue" libs/game`):
 
 | id(s) | area |
 |---|---|
-| 92 | menu attract-mode delay, seconds (30; legend: < 5 disables attract) — after it, `sub_42B9CE` runs a live all-CPU demo match (frontend-flow.md "Attract mode") |
+| 12 | boot/title/logo dwell timeout, seconds |
+| 15 | "is the online manual enabled?" — gates the help browser glob |
+| 16 | GLUE\<n\> backdrop count for pre-match screens |
+| 35 | number of built-in levels |
+| 92 | main-menu attract-mode idle timeout, seconds (gated > 5) |
+| 110–112 | in-round MM:SS clock HUD position + digit spacing |
+| 200–247 | player-colour `.RMP` percent-RGB fallback table |
+| 310 | default "wins to win a match" |
+| 330 | cornerhead fidget-duration spread (presentation RNG) |
+| 600–619 | editor default start positions (10 players × x,y) |
+| 700–702 | main-menu cursor anchor (x, y, y-step) |
+| 705, 710, 711, 715, 720–722 | PLAYER INPUT TYPE screen layout (heading/list/joystick-pane tuples) |
+| 730–733 | Options screen sample-block preview geometry |
+| 735–738 | LEVEL & ROUNDS screen layout |
+| 745–748 | Options/Settings screen row layout (x, y0, ystep, colour) |
+| 780–788 | RESULTS scoreboard header + per-player row layout |
+| 800–803 | RESULTS outcome-line layout |
+| 810–818 | hidden scheme/map editor menu layout |
+| 1000, 1002, 1004, 1006 | Goldman wheel centre / radii / circle resolution / lissajous params — confirmed live at `game_app.cpp:1979-1984` |
+| 1150–1160 | random-stage-rotation enable flags |
+
+## Mapped, not yet consumed
+
+Trimmed 2026-07-09 (`docs/re/id-audit.md`): the previous version of this
+table listed several ids as unconsumed that `Tuning::apply` or `libs/game`
+already handle (92, 110-112, 660/661/665/667, 670/671, 15, 27/28, 745-748,
+780-788, 1000-1010, 810/815) — moved to the two "Consumed" tables above.
+What's left is the **genuine** open list, plus newly-found gaps from the
+id-audit pass:
+
+| id(s) | area |
+|---|---|
 | 40 | "do we randomize player starting positions?" — the DEFAULT seed of the Random Start option (dword_464AE8 = getvalue(40) = 1 at `sub_41095A`, overridden by options.ini `random_start=`); consumed by the game layer as the absent-key default, `docs/re/facts.md` "Options toggles" |
-| 101, 102 | 101 **= 60 (CONFIRMED)**: in-round "hurry" threshold, seconds remaining — when the round clock enters the (getvalue(101)−5, getvalue(101)) window the tick callback one-shots SFX 2700 and flashes the "hurry" ANI at screen centre on alternating `frame & 4` ticks (`sub_42A191` ~29531-29549, `docs/re/in-match-shell.md` "hurry flash"); 102 = late-game powerup gating, still unpinned |
-| 110, 111, 112 | in-round countdown-clock HUD (**CONFIRMED**, `sub_4105D2` @ 0x4105D2, drawn every tick): 110/111 **= 525/36** = x/y of the MM:SS digits (drawn glyph-by-glyph with the `numeric font` ANI, message 281 `"%u:%02u"`; an "∞" glyph when the round is untimed), 112 **= 4** = extra px between digits (the file's own comment). Ink switches to the warning colour at ≤30 s remaining — the 30 is hardcoded, not a VALUELST id (`docs/re/in-match-shell.md` "in-round HUD") |
-| 120–138 | disease behavior flags and durations (300 frames each); 122 = diseases_will_recycle (0) — not yet consumed |
-| 320–324 | dud-bomb timing and chance |
-| 330 | **= 13 (CONFIRMED).** File comment: "how many cornerhead animations there are" — id 330 is BOTH the number of cornerhead sequences AND the idle "cornerhead" fidget duration spread (`sub_41F29B` ~23011 rolls `20 + rand()%getvalue(330)`, guarded so the modulus ≥1). Presentation-only (renderer `panic_lcg_`, never `State::rng`); renderer's `kPanicSpread` now = 13 (was the 40 stub). Equals `kCornerheadVariants` by construction, not coincidence |
-| 660/661, 665, 667 | punched-bomb arcs, pickup pause, jelly craziness |
-| 670/671 | powers lost when a bomb lands on your head |
+| 102 | late-game "overpowerful powers won't appear" gating period, seconds — still unpinned |
+| 120–138 | disease behavior flags and durations mostly consumed (see table above); 122 = diseases_will_recycle (0) — genuinely not yet consumed |
+| 324 | dud-bomb fizzle duration's random-additional-frames component (320-323 are consumed; 324 is a leftover 5th value in the same VALUELST block, unconfirmed whether the original even reads it — no `getvalue(324)` call site found) |
+| 650, 651 | **NEW (id-audit.md A(i)) — genuine gap.** "Fire In The Hole"/"Clear" taunt on a long bomb-drop string: 650 = 1-in-N chance, 651 = drop-count threshold. `sub_41F29B` pseudo.c ~23358-23372, plays SOUNDLST 1200 group. No `Tuning` field, no consumer. Highest-value open gap in this audit. |
+| 500, 502, 504, 506 | **NEW (id-audit.md A(i)).** Bomb-pickup-carry arc, 4-point curve `(12,10)/(25,20)/(25,30)/(12,40)` — presentation-only, same shape as the already-ported 660/661 punch arc |
 | 681 | trampoline hop arc height (px/frame) — presentation-only; id 680 (bounce frames) is now consumed above |
-| 340–350 | per-level tile regeneration |
-| 450–460 | per-level ice (input lag) in ms |
+| 340–350, 695 | per-level tile regeneration + clear radius — only level index 7 (id 347 = 4s, "cemetary/mortuary") is non-zero; 695 = the companion proximity-clear-radius gate |
+| 449–460 | per-level ice (input lag) in ms — only level 2 (id 452 = 250ms, Hockey Rink) is non-zero |
 | 905 | reserved/unused AI slot — no `getvalue(905)` call exists in the binary and VALUELST has no `905,<n>` line; only the editor's label writer touches it (`docs/re/ai.md` §9.5) |
-| 1100–1110 | net protocol retransmit timing |
-| 15 | "is the online manual enabled?" flag gating the main-menu help browser (`docs/re/results-and-options.md` §4) |
-| 27, 28 | enclosement-depth option: `27` = default depth, `28` = count of depths (4: None/A Little/A Lot/All the way) — Options screen row 7 |
-| 745–748 | Options/Settings screen layout: x, y0, ystep, colour for the 19-item list (`docs/re/results-and-options.md` §3) |
-| 780–788 | RESULTS scoreboard layout: header (780–783) and per-player row (785–788) (`docs/re/results-and-options.md` §1) |
-| 790, 795, 800–803 | RESULTS screen "press F1", "continue with same net game?", and outcome-line (won/not-yet-clinched) coordinates |
-| 805, 1000–1010 | Goldman Roulette Wheel — 1000/1002/1004/1006 (+ second columns) = centre, radii, circle resolution, Lissajous params (`sub_4034BC`); 1010 = gold-twinkle seconds, consumed in-round by `sub_420D4E`, not the wheel; 805 ("title at top") has NO getvalue call in the binary — unreferenced (`docs/re/goldman-roulette.md` §7) |
-| 810, 815 | map editor menu layout: header pos and item x/y0/ystep (`sub_403184`, `docs/re/results-and-options.md` §5) |
+| 1010 (VALUELST sense) | **id-namespace collision with SOUNDLST's own 1010 (MENU.RSS music, already ported).** "Gold twinkle" duration, seconds — pinned addresses `sub_420D4E`/`sub_420F07` (`docs/re/goldman-roulette.md` §6) but never wired into `Renderer`/`GameApp`. Presentation-only sparkle overlay on the gold-wheel-winning player. |
+| 1100–1110 | net protocol retransmit timing / count — netplay, out of scope (ADR-0003) |
+| 790, 795 | RESULTS screen "press F1" / "continue with same net game?" coordinates |
+| 805 | Goldman Roulette Wheel "title at top" legend row — **no `getvalue(805)` call exists in the binary**; the title is presumably baked into ROULETTE.PCX (`docs/re/goldman-roulette.md` §7) |
 | 1100–1140 | key-remap UI (`sub_407B9D`) labels: screen header, per-slot "press key for", action names, bound-key display |
+| 43 | default bomb type (0 regular/1 trigger/2 jelly) — no `getvalue(43)` call site found; likely superseded by per-player powerup-driven kind selection, unconfirmed dead vs. gap |
+| 106 | death anim #9 ("the angel") upward px/frame — port discovers the DIE\*.ANI pool from the install directly rather than needing this id; unresolved whether it's redundant with the asset's own frame data or a real gap |
 
 ## Not in VALUELST (hardcoded in BM95.EXE, now confirmed — no open tunables)
 

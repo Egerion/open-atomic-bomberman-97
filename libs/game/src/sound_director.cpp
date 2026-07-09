@@ -113,9 +113,17 @@ void SoundDirector::on_tick(const sim::State& s) {
             }
             case sim::Event::Type::PlayerDied: {
                 audio_.play_random_in_range(300, 309);
-                // Post-death taunt from a survivor (VALUELST id 95: 1-in-N).
+                // Post-death taunt from a survivor (VALUELST id 95: 1-in-N,
+                // sub_427961(700) call site). FIXED (docs/re/id-audit.md):
+                // the taunt group is SOUNDLST 700..999 ("after a player
+                // death", the file's own comment block starts at 701 and
+                // ends "999 is the last possible death taunt"), NOT
+                // 500..999 — the old range wrongly overlapped the unrelated
+                // "ploppy poop" splat group at 550-554 (the diarrhea-bomb
+                // drop sound, played elsewhere via BombPlaced), so a dying
+                // player had a small chance of "taunting" with a fart splat.
                 if (audio_.chance(s.tuning.taunt_chance))
-                    pending_.push_back({s.tick + 25, {500, 999}});
+                    pending_.push_back({s.tick + 25, {700, 999}});
                 break;
             }
             default: break;

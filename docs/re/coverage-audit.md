@@ -18,6 +18,15 @@ checkboxes, `grep -rn TODO libs/ apps/ tests/`, and the install's file-format
 inventory vs `libs/assets` parsers. This file is a work-queue source, not
 prose — keep entries terse and re-sort by priority as items close.
 
+**Complementary pass:** `docs/re/id-audit.md` (2026-07-09) is a *data-driven*
+audit at the id level rather than the function level — every VALUELST.RES
+and SOUNDLST.RES id cross-checked against every `getvalue`/sound-play call
+site and every port consumer. It found and fixed a real SOUNDLST range bug
+(post-death taunt playing the wrong sound group) and surfaced a handful of
+small, self-contained, previously-undocumented gaps (see its own "Verdict /
+work queue") that this subsystem-level table doesn't itemize individually —
+folded into item 2 below rather than duplicated as new numbered rows here.
+
 ## Legend
 
 RE status: **pinned** (facts.md entry + address + evidence) · **partial**
@@ -308,7 +317,15 @@ What remains open, in priority order:
    campaign.md "Round pacing") — pinned but not ported; independently
    portable, no test pressure yet (edge case: every side wiped out
    simultaneously mid-stage).
-2. Low-priority polish: editor chrome (#32: Ctrl+B reset, '0' toggle,
+2. **VALUELST 650/651 + SOUNDLST 1200 "Fire In The Hole" taunt**
+   (`docs/re/id-audit.md`, its #1 verdict item) — pinned call site
+   (`sub_41F29B`), self-contained (drop counter + chance roll + group-play),
+   no dependency on any unported subsystem. Highest-value gap the id-level
+   audit found. Also open from the same pass: VALUELST 1010 "gold twinkle"
+   sparkle (addresses already pinned in goldman-roulette.md §6, just not
+   wired into the renderer), the 500/502/504/506 bomb-pickup arc curve, and
+   the single-level 340-350/695 tile-regen + 449-460 ice-delay gaps.
+3. Low-priority polish: editor chrome (#32: Ctrl+B reset, '0' toggle,
    brush-preview, exact dialog chrome), in-round debug/cheat keys (#35,
    developer/QA-only), the still-unchecked 3rd `.DAT` file (§3 .DAT row) —
    `bmstats.dat` itself is now closed, see above.
