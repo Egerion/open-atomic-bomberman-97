@@ -1275,6 +1275,145 @@ interprets, which is exactly the kind of unfounded content CLAUDE.md's
 faithful-port rule forbids. Closing this as **dead/tooling data**, not a
 gap in the port.
 
+## `bmstats.dat` / `bmstats.txt` — write-only play-telemetry dump, no reader, no reachable UI (2026-07-09)
+
+Read for coverage-audit.md §3 / "Top open items" #5: unlike `LEVELS.DAT`,
+`bmstats.dat`'s file timestamp (post-dates the other installed files) implied
+the game *writes* it at runtime. Confirmed — this is a debug/QA telemetry
+feature, not a level table. `pseudo.c`'s partial decompile (1134/1533
+functions) does not cover the responsible code (`grep -in "bmstats" pseudo.c`
+and every individual stat-label word are all zero matches), so this entry was
+pinned via targeted Capstone disassembly of `BM95.EXE` directly (per
+`docs/re/method.md`'s documented fallback), anchored off the `bmstats.dat`/
+`bmstats.txt` string literals (raw file offset `0x57484`, image VA
+`0x458084`/`0x458090`) and their cross-references.
+
+**The two files, byte-for-byte:**
+
+- `bmstats.dat` is exactly 400 bytes = a flat array of **100 little-endian
+  `int32` counters**. Only the first **19 slots** are ever populated (indices
+  0-18); slots 19-99 are always zero (reserved/unused capacity). Verified by
+  decoding this install's actual file and checking every dword against the
+  human-readable `bmstats.txt` dumped alongside it — all 19 values match
+  exactly, in order.
+- `bmstats.txt` is a formatted two-column ("Total" / "Last Run") report of
+  those same 19 counters. Its title, column header, and all 19 row labels are
+  **not embedded in `BM95.EXE`** — they are pulled at runtime from
+  `messages.txt` (already parsed by `libs/assets/src/messages.cpp`, ids are a
+  flat lookup): id **900** = "Bomberman Statistics File:" (title), id **905**
+  = the "Total      Last Run" column header, ids **910-928** = the 19 stat
+  labels in file order (Matches Started, Games Started, Frames Rendered,
+  Graphic Requests Serviced, Bombs Dropped, Player Deaths (all), Local AI
+  Player Deaths, Bricks Destroyed, Total Pixel Distances Run, Net Games
+  Hosted, Net Games Joined, Total Network Bytes In/Out, Total Network Packets
+  In/Out, Attract Modes Started, Network Packet Retransmits, Ghost Bomb
+  Actions Found/Lost). Confirmed by grepping the install's own `messages.txt`
+  for these exact strings — found at ids 900-928, verbatim.
+
+**The writer — `sub_40200C` (0x40200C-0x40214F), CONFIRMED:**
+
+1. `0x40201A-0x402049`: loop `i = 0..99`, `Total[i] += Current[i]` where
+   `Total` = a 100-dword array at VA `0x46442C` and `Current` = a 100-dword
+   array at VA `0x46429C` (both plain zero-initialized process memory, well
+   past `DGROUP`'s file-backed range — i.e. ordinary `.bss`-style globals,
+   not resource data).
+2. `0x40204B-0x40207D`: opens the file named by `*(char**)0x45B7B0` (a
+   static-initialized global pointer; its compiled data value is
+   `0x458084` = the `"bmstats.dat"` string — confirmed by dereferencing the
+   global directly in the PE image) in mode `"wb"`, `fwrite`s exactly 400
+   (`0x190`) bytes from `Total[]`, closes.
+3. `0x402082-0x402145`: opens `*(char**)0x45B7B4` (statically = `0x458090` =
+   `"bmstats.txt"`) in mode `"wt"`. Writes msg-id 900 and msg-id 905 each via
+   format `"%s\n\n"` (reproducing the title line, blank line, column-header
+   line, blank line seen in the file). Then loops `i = 0..18`: fetches msg-id
+   `910+i` via `sub_4124A4` (the **same** id→value lookup routine already
+   documented above as VALUELST.RES's `getvalue`, called here with an id in
+   the 900s — MESSAGES.TXT-sourced string ids and VALUELST.RES's numeric
+   tuning ids apparently share one flat id-indexed table; the loading paths
+   themselves weren't traced further, out of scope here), `sprintf`s
+   `"<label>:"`, then `fprintf`s `"%-30s %13u %13u\n"` with the label,
+   `Total[i]`, and `Current[i]` — i.e. **"Last Run" is literally
+   `Current[i]`, un-accumulated**, not a before/after diff. Closes.
+
+This fully explains both files: `bmstats.dat`'s 100-slot/19-populated layout,
+and `bmstats.txt`'s exact title/header/row text and column semantics.
+
+**Runs automatically at shutdown, not on a menu/key:** `sub_402150` ends with
+`mov eax, 0x40200C; call sub_410EBF` — `sub_410EBF` (0x410EBF-0x410EFE) is a
+generic "register a deinitializer" helper (append `fn` to a ≤32-slot table at
+`0x4601C0`, bump a count at `0x460240` — confirmed by its body, and by the 20
+distinct direct callers found across the binary registering their own
+per-subsystem cleanup). The table is walked and every registered function
+pointer invoked by `sub_410F00`, which logs `"Calling deinitializer
+functions (%u total)"` (string cross-reference confirms this is the
+dispatcher) — i.e. `sub_40200C` is wired to run once, automatically, whenever
+the game's deinit sequence executes (process exit / return-to-DOS), not from
+any menu, screen, or key the player can reach. (`sub_402150`'s own remaining
+body — it opens a file via the same `0x45B7B0` global and a *different*
+string, `"Statistics for a %u-player game."`, and writes the same `Total[]`
+buffer through a different write call — wasn't fully resolved; it looks
+adjacent to the separate `netstats.txt`/`critlog.txt` net-traffic logging
+strings found in the same string pool, which is netplay-only and out of
+scope per ADR-0003 regardless.)
+
+**The 19 counters are live, not vestigial:** `Current[]` (`0x46429C`) is
+incremented inline at real gameplay event sites, not through a single
+"stat++" helper. Example, `sub_410F81` — already documented above/in
+`docs/re/campaign.md` as the local player-setup / match-start entry point —
+contains `inc dword ptr [0x46429C]` (index 0 = "Matches Started") right at
+match start, alongside its (also already-documented) `sub_40C06A`
+network-mode check and campaign/goldman-wheel dispatch. This confirms the
+counters are fed by actual play, not dead instrumentation left disconnected.
+
+**Negative finding — `bmstats.dat` is never read back, by anything:**
+exhaustively searched the *entire* PE image (every section, not just code)
+for every raw 4-byte occurrence of: the `Total[]`/`Current[]` array base
+addresses (`0x46442C`, `0x46429C`), the `"rb"`/`"rt"` read-mode strings, and
+the `bmstats.dat`/`bmstats.txt` string VAs themselves. Every hit resolves to
+one of the two write call sites documented above — there is no third call
+site, and no `"rb"` (read-binary) `fopen` anywhere in the binary references
+these globals or this filename. Consequently:
+
+- `Total[]` starts at zero on every process launch (it is uninitialized
+  process memory, not loaded from the file) and only ever accumulates
+  *within* that one run before being overwritten to disk at exit.
+- The apparent cross-session accumulation visible in a populated
+  `bmstats.dat`/`.txt` (e.g. this install's own copy shows "Total" values —
+  115 matches, 13.9M frames rendered — far exceeding a single "Last Run") is
+  **not produced by `BM95.EXE` re-reading and folding in its own prior
+  totals**; nothing in this binary does that. It is an artifact of however
+  that particular file came to be (most plausibly one very long-lived
+  process run, or a copied-in/pre-populated file) — not something the port
+  needs to, or sensibly could, reproduce.
+
+**Reachability — confirmed nothing consumes these files either:**
+`bmstats.txt` is written to the install directory and never opened for
+reading, displayed, or referenced by any menu/screen/results-tally code path
+in the RE'd frontend flow (`docs/re/frontend-flow.md`,
+`docs/re/results-and-options.md`) — it is invisible during play, a debug/QA
+artifact dropped next to the executable, not a player-facing "statistics"
+screen. `bmstats.dat` has no reader at all, in this binary or any other
+shipped executable (same exhaustive-search method as the `LEVELS.DAT` entry
+above, repeated for this file).
+
+**Conclusion — pinned, not ported (docs-only), and why:** every byte of
+`bmstats.dat`/`.txt` is now fully explained (layout, labels, trigger, and the
+fact that the "Total" column is not really cross-session-persistent in the
+original either). It fails every one of CLAUDE.md's porting gates: it does
+not gate a reachable feature (nothing displays it), the sim/determinism
+contract explicitly forbids wall-clock/file I/O of this kind in `libs/sim`,
+and adding a `libs/game`-side writer would only reproduce an invisible,
+write-only side file with no observable effect on any test or on-screen
+behavior — pure surface-area for zero player-facing value. Per the task's own
+guidance ("if it's write-only telemetry with no user-visible consumer,
+document that as a negative finding... if in doubt, docs-only"): **docs-only,
+no port.** (Provenance: string literals + PE section table via a one-off
+Capstone/PE-parsing script per `docs/re/method.md`; `sub_40200C`
+0x40200C-0x40214F; `sub_402150` partial, 0x402150-0x4021A7; `sub_410EBF`
+0x410EBF-0x410EFE; `sub_410F00` dispatcher; `sub_410F81` +0x410FDE inline
+increment; `sub_4124A4` shared id lookup, already documented above as
+`getvalue`; `messages.txt` ids 900/905/910-928 in this install's own copy.)
+
 ## Still guessed — not yet extracted from the binary
 
 | Constant | Current value | Status |
