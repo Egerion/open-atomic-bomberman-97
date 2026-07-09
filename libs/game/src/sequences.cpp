@@ -29,9 +29,16 @@ void SequenceSet::resolve(const AssetStore& a) {
         bomb[p] = resolve_sequence(a.bombs(p), "bomb regular green");
         if (bomb[p].steps.empty()) bomb[p] = resolve_sequence(a.bombs(-1), "bomb regular green");
         bomb_dud[p] = resolve_sequence(a.duds(p), "bomb regular green dud");
-        // Armed trigger (remote) bomb: TRIGBOMB.ANI "bomb trigger green".
+        // Armed trigger (remote) bomb: TRIGANIM.ANI "bomb trigger green" (the
+        // file MASTER.ALI actually loads; TRIGBOMB.ANI's same-named 7-step
+        // sequence is dead art — see AssetStore::trigbomb_'s doc comment).
         // Empty if the file is missing -> the bomb draw falls back to the pulse.
         bomb_trigger[p] = resolve_sequence(a.trigbomb(p), "bomb trigger green");
+        // Jelly bomb wobble: BOMBS.ANI "bomb jelly green" (sub_42331C's
+        // "bomb %s green" with kind "jelly"). Falls back to the pulse if absent.
+        bomb_jelly[p] = resolve_sequence(a.bombs(p), "bomb jelly green");
+        if (bomb_jelly[p].steps.empty())
+            bomb_jelly[p] = resolve_sequence(a.bombs(-1), "bomb jelly green");
         FlameSet& f = flames[p];
         const AniTextures& fa = a.flame(p);
         f.center = resolve_sequence(fa, "flame center green");
@@ -55,10 +62,8 @@ void SequenceSet::resolve(const AssetStore& a) {
         for (int d = 0; d < 4; ++d) {
             stand[p][d] = resolve_sequence(a.stand(p), std::string("stand ") + kDirs[d]);
             walk[p][d] = resolve_sequence(a.walk(p), std::string("walk ") + kDirs[d]);
-            // KICK.ANI names its steps "kick <dir>" (no "green"); PUNCH.ANI
-            // uses "punch <dir> green" like the other player sprites.
+            // KICK.ANI names its steps "kick <dir>" (no "green").
             kick[p][d] = resolve_sequence(a.kick(p), std::string("kick ") + kDirs[d]);
-            punch[p][d] = resolve_sequence(a.punch(p), std::string("punch ") + kDirs[d] + " green");
             // The "carrying a bomb" walk/stand poses live one direction per
             // BWALK*.ANI file, so probe every file until one owns the name.
             std::string wname = std::string("walkbomb ") + kDirs[d];
@@ -71,6 +76,20 @@ void SequenceSet::resolve(const AssetStore& a) {
                 wout = resolve_sequence(a.bwalk(f, p), wname);
             for (int f = 0; f < AssetStore::bwalk_files() && sout.steps.empty(); ++f)
                 sout = resolve_sequence(a.bwalk(f, p), sname);
+            // Punch pose: PUNBOMB1..4.ANI names its steps "punch <dir>" (no
+            // "green"), one direction per file — probe every file.
+            std::string pname = std::string("punch ") + kDirs[d];
+            Anim& pout = punch[p][d];
+            pout = {};
+            for (int f = 0; f < AssetStore::punch_files() && pout.steps.empty(); ++f)
+                pout = resolve_sequence(a.punch(f, p), pname);
+            // Pickup pose: PUP1..4.ANI names its steps "pickup <dir>" (no
+            // "green"), one direction per file — probe every file.
+            std::string upname = std::string("pickup ") + kDirs[d];
+            Anim& upout = pickup[p][d];
+            upout = {};
+            for (int f = 0; f < AssetStore::pickup_files() && upout.steps.empty(); ++f)
+                upout = resolve_sequence(a.pickup(f, p), upname);
         }
         // The 13 "cornerhead N" fidgets are unevenly distributed across the 8
         // CORNER*.ANI files, so probe every file until one owns the name.
@@ -125,6 +144,14 @@ void SequenceSet::resolve(const AssetStore& a) {
     }
     warphole = resolve_sequence(a.extras(), "extra warp 1");
     trampoline = resolve_sequence(a.extras(), "extra trampoline");
+
+    // Campaign rover/ghost hazard art (ALIENS1.ANI "ghost <dir>"/"rover
+    // <dir>", godir-indexed like the stage actors above). Missing entries
+    // leave the renderer's plain marker fallback in place.
+    for (int g = 0; g < 4; ++g) {
+        ghost[g] = resolve_sequence(a.aliens1(), std::string("ghost ") + kGodirCompass[g]);
+        rover[g] = resolve_sequence(a.aliens1(), std::string("rover ") + kGodirCompass[g]);
+    }
 }
 
 }  // namespace bomber::game

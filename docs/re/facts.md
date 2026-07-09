@@ -2006,6 +2006,34 @@ pseudo.c 28498-28556 [already cited by `docs/re/frontend-flow.md`]; shipped
 134 [`.INI` files]; `docs/re/results-and-options.md` "The full options.ini
 key list" [confirms `soundonoff` is absent from that table, correctly].)
 
+## ANI sequence-name audit — CONFIRMED (MASTER.ALI + `sub_41D695`/`sub_41D957`, 2026-07-09)
+
+Full systematic parity pass over every sequence name the original composes
+vs every name our `libs/game` requests; the complete truth table lives in
+**`docs/re/sequence-map.md`**. The load-bearing mechanism fact: the boot
+loader `sub_41D695` (0x41D695) reads `DATA/ANI/MASTER.ALI`, loads every
+listed `.ANI` into ONE global name-sorted sequence pool (`dword_461B5C`,
+`qsort`+`stricmp`), and `sub_41D957` binary-searches that pool — so a file
+absent from (or `;`-commented in) MASTER.ALI contributes nothing, and
+same-named sequences in unlisted files are dead art. That single fact
+produced seven fixes: punch pose is PUNBOMB1-4.ANI `"punch <dir>"` (not
+PUNCH.ANI's `"punch <dir> green"`); the pickup pose (PUP1-4.ANI
+`"pickup <dir>"`, `sub_41F29B` action-state 4) was missing entirely; the
+trigger bomb (and the main menu's cursor) is TRIGANIM.ANI's 19-step
+`"bomb trigger green"` (TRIGBOMB.ANI is commented out); jelly bombs have
+their own BOMBS.ANI `"bomb jelly green"` wobble (`sub_42331C`'s
+`"bomb %s green"` over kinds regular/trigger/jelly); flames are MFLAME.ANI's
+5-step cycles (FLAME.ANI is commented out); the scheme editor's `'0'`
+tileset toggle's `-1` state resolves EDIT.ANI's `"tile -1 blank/brick/
+solid"` (not a dead state); and the campaign rover/ghost hazards ship as
+ALIENS1.ANI `"ghost <dir>"`/`"rover <dir>"` (the earlier "cut content"
+conclusion looked for a GHOST/ROVER.ANI filename that never existed).
+Original-only leftover: `"kface %s"` (KFACE.ANI, `sub_41F29B` ~23272, gated
+on `dword_45BE3C` — a net/AI player-highlight marker, default −1, not
+ported). All presentation-layer; sim/golden untouched. (Provenance: shipped
+`MASTER.ALI` text; `abtool ani` dumps of all 95 `DATA/ANI` files;
+pseudo.c cites in sequence-map.md.)
+
 ## Still guessed — not yet extracted from the binary
 
 | Constant | Current value | Status |

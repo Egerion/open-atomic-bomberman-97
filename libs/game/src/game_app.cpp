@@ -1835,9 +1835,12 @@ AppInput GameApp::present_menu() {
         // Animated "bomb trigger green" cursor at the CONFIRMED anchor
         // (sub_42B9CE: x=getvalue(700), y=getvalue(701)+getvalue(702)*row; frame
         // = counter % statecnt). Anchor read live from VALUELST row 700's
-        // columns, with this install's values as fallback. TRIGBOMB.ANI holds
-        // the "bomb trigger green" sequence; if it is absent we draw a pulsing
-        // highlight bar instead so the selection stays visible.
+        // columns, with this install's values as fallback. The sequence comes
+        // from TRIGANIM.ANI (the file MASTER.ALI actually loads — the
+        // original's menu resolves the name from the same global pool the
+        // in-match trigger bomb uses; TRIGBOMB.ANI's 7-step twin is dead art,
+        // docs/re/facts.md "ANI sequence-name audit"); if it is absent we
+        // draw a pulsing highlight bar instead so the selection stays visible.
         {
             ++frame;
             int cx = static_cast<int>(values_.column_or(700, 0, kMenuCursorXFallback));

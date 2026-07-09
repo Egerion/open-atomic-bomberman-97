@@ -136,10 +136,16 @@ private:
     std::array<sim::Fixed, sim::kMaxPlayers> last_x_{}, last_y_{};
     std::array<bool, sim::kMaxPlayers> moving_{};
     std::array<std::uint32_t, sim::kMaxPlayers> walk_phase_{};
-    // Action-pose countdowns (ticks): a recent kick/punch shows KICK/PUNCH.ANI
-    // instead of walk/stand. Driven by the (unhashed) BombKicked/BombPunched
-    // events, so this is purely cosmetic and never touches the sim.
+    // Action-pose countdowns (ticks): a recent kick/punch shows KICK.ANI/
+    // PUNBOMB*.ANI instead of walk/stand. Driven by the (unhashed)
+    // BombKicked/BombPunched events, so this is purely cosmetic and never
+    // touches the sim.
     std::array<int, sim::kMaxPlayers> kick_pose_{}, punch_pose_{};
+    // "Picking up a bomb" transitional pose (PUP*.ANI "pickup <dir>",
+    // sub_41F29B action-state 4): counts down from the sequence length after
+    // a BombGrabbed event, overriding the carry pose while it runs. Cosmetic,
+    // event-driven like kick/punch above.
+    std::array<int, sim::kMaxPlayers> pickup_pose_{};
     // Idle "cornerhead" fidget: while a player is boxed in and standing still it
     // cycles random fidgets (sub_41F29B). Purely cosmetic — reads the sim state,
     // never mutates it, and rolls off the panic LCG below (never State::rng).

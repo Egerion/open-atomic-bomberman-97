@@ -169,6 +169,7 @@ void Renderer::reset_match(bool untimed) {
     untimed_ = untimed;
     kick_pose_.fill(0);
     punch_pose_.fill(0);
+    pickup_pose_.fill(0);
     panic_ticks_.fill(0);
 }
 
@@ -178,6 +179,7 @@ void Renderer::on_events(const sim::State& s) {
     for (int i = 0; i < sim::kMaxPlayers; ++i) {
         if (kick_pose_[i] > 0) --kick_pose_[i];
         if (punch_pose_[i] > 0) --punch_pose_[i];
+        if (pickup_pose_[i] > 0) --pickup_pose_[i];
     }
     for (const auto& ev : s.events) {
         switch (ev.type) {
@@ -191,6 +193,18 @@ void Renderer::on_events(const sim::State& s) {
             case sim::Event::Type::BombPunched:
                 if (ev.player >= 0 && ev.player < sim::kMaxPlayers)
                     punch_pose_[ev.player] = kActionPoseTicks;
+                break;
+            case sim::Event::Type::BombGrabbed:
+                // "Picking up a bomb" transitional pose (PUP*.ANI "pickup
+                // <dir>", sub_41F29B action-state 4 — the state exits when
+                // the anim counter passes the sequence's own statecnt,
+                // pseudo.c ~23396-23407, so the countdown is the sequence
+                // length; the shipped PUP sequences are 10 steps).
+                if (ev.player >= 0 && ev.player < sim::kMaxPlayers) {
+                    const auto& seq = seqs_->pickup[render_colour(s, ev.player)]
+                                                   [static_cast<int>(s.players[ev.player].facing)];
+                    pickup_pose_[ev.player] = static_cast<int>(seq.steps.size());
+                }
                 break;
             case sim::Event::Type::PlayerDied: {
                 // Every real emitter (simulation.cpp/enclosure.cpp/rovers.cpp)
@@ -427,9 +441,12 @@ void Renderer::draw_world(const sim::State& s) {
         float sx = kFieldOriginX + bx;
         float sy = kFieldOriginY + by + sim::kTileH / 2.0f - 1.0f - lift;
         int bo = render_colour(s, b.owner);
-        // Bomb sprite selection (mirrors the original's per-state pick):
+        // Bomb sprite selection (mirrors the original's "bomb %s green" pick
+        // from the EXCLUSIVE kind set at creation — trigger overrides jelly,
+        // sub_41EB13 — plus the dud state suffix, sub_42331C):
         //   fizzling dud  -> DUDS.ANI "bomb regular green dud"
-        //   armed trigger -> TRIGBOMB.ANI "bomb trigger green"
+        //   armed trigger -> TRIGANIM.ANI "bomb trigger green"
+        //   jelly         -> BOMBS.ANI "bomb jelly green"
         //   otherwise     -> the normal owner-coloured pulse
         // Each special-case falls back to the pulse if its ANI/sequence is
         // missing so a bomb never blanks out.
@@ -438,6 +455,8 @@ void Renderer::draw_world(const sim::State& s) {
             ba = &q.bomb_dud[bo];
         else if (b.trigger && !q.bomb_trigger[bo].steps.empty())
             ba = &q.bomb_trigger[bo];
+        else if (b.jelly && !b.trigger && !q.bomb_jelly[bo].steps.empty())
+            ba = &q.bomb_jelly[bo];
         draw_anim(*ba, pulse, sx, sy);
     }
 
@@ -533,6 +552,16 @@ void Renderer::draw_world(const sim::State& s) {
                 a = c;
                 ph = moving_[i] ? walk_phase_[i] : 0;
             }
+            // The "picking up" transitional pose (PUP*.ANI, sub_41F29B
+            // action-state 4) wins over the steady carry pose while its
+            // countdown runs — the original enters state 4 on the grab and
+            // only then settles into the carry poses. Played once, front to
+            // back (its length was set from this very sequence's step count).
+            const Anim& up = q.pickup[body_colour][dir];
+            if (pickup_pose_[i] > 0 && !up.steps.empty()) {
+                a = &up;
+                ph = static_cast<std::size_t>(static_cast<int>(up.steps.size()) - pickup_pose_[i]);
+            }
         }
         // Warp/teleport pose wins over everything: while warping the player is
         // fully state-gated (states 6/7, no walk/kick/carry), and the original
@@ -588,16 +617,22 @@ void Renderer::draw_world(const sim::State& s) {
     }
 
     // Campaign rover/ghost hazards (docs/re/campaign.md "Per-tick mover").
-    // No known install ships GHOST.ANI/ROVER.ANI (confirmed cut content —
-    // see sequences.hpp's rover/ghost comment), so there is no Anim to draw;
-    // a small filled marker keeps the actor visible instead of invisible,
-    // distinct per kind (rover = brown/orange, ghost = pale blue-white) and
-    // per-tile bottom-anchored like every other world entity here.
+    // ALIENS1.ANI "ghost <dir>"/"rover <dir>" (CORRECTED 2026-07-09,
+    // sequences.hpp's rover/ghost comment — was previously believed cut
+    // content under the wrong filename). Bottom-anchored like every other
+    // world entity here. Falls back to a plain filled marker (rover =
+    // brown/orange, ghost = pale blue-white) when the sequence is missing,
+    // so a partial install still shows something instead of nothing.
     for (const auto& r : s.rovers) {
         if (!r.alive) continue;
         float sx = kFieldOriginX + r.x / static_cast<float>(sim::kScale);
         float sy =
             kFieldOriginY + r.y / static_cast<float>(sim::kScale) + sim::kTileH / 2.0f - 1.0f;
+        const Anim& a = (r.kind == sim::RoverKind::Rover) ? q.rover[r.dir & 3] : q.ghost[r.dir & 3];
+        if (!a.steps.empty()) {
+            draw_anim(a, r.anim_step, sx, sy);
+            continue;
+        }
         constexpr float kMarkerW = 24.0f, kMarkerH = 24.0f;
         SDL_FRect dst{sx - kMarkerW / 2.0f, sy - kMarkerH - 4.0f, kMarkerW, kMarkerH};
         if (r.kind == sim::RoverKind::Rover)

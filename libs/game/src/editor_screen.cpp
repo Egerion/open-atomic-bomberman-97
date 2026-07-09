@@ -436,11 +436,11 @@ void EditorScreen::enter(std::optional<assets::sch::Scheme> initial, std::string
     save_requested_ = false;
 
     // Canvas art (§5, PINNED): the tile brush/grid draws the "tile %d
-    // blank/solid/brick" sequences with %d = dword_45B7B8 — which is only
-    // ever 0 (its '0'-key toggle flips to -1, a dead state: no TILES ANI
-    // owns a "tile -1" sequence) — and each start's team flag draws
-    // MISC.ANI's "teamring%u". Missing art leaves the Anim empty and
-    // draw() falls back to flat swatches.
+    // blank/solid/brick" sequences with %d = dword_45B7B8 — 0 (stage-0 match
+    // art) or, after the '0'-key toggle, -1 (EDIT.ANI's schematic tiles; see
+    // refresh_tile_sequences) — and each start's team flag draws MISC.ANI's
+    // "teamring%u". Missing art leaves the Anim empty and draw() falls back
+    // to flat swatches.
     refresh_tile_sequences();
     teamring_[0] = teamring_[1] = Anim{};
     if (assets_) {
@@ -453,15 +453,25 @@ void EditorScreen::refresh_tile_sequences() {
     // sub_402206 (§5d, pseudo.c 5120-5145) formats "tile %d blank/solid/
     // brick" with %d = dword_45B7B8 (our tileset_) — called once at entry
     // and again whenever the '0' key (case 48) changes tileset_. tileset_
-    // is only ever 0 or -1 in practice; -1 misses every shipped TILES ANI's
-    // sequence table, so resolve_sequence returns empty Anims and draw()
-    // falls back to its flat swatches, same as a missing-asset install.
+    // is only ever 0 or -1 in practice. CORRECTED 2026-07-09 (docs/re/
+    // facts.md "ANI sequence-name audit"): -1 is NOT a dead state — the
+    // original resolves names in one GLOBAL pool merged from every
+    // MASTER.ALI file (sub_41D957), and EDIT.ANI (listed there) owns
+    // "tile -1 blank/brick/solid", the editor's schematic tiles. Our
+    // per-file model probes TILES then EDIT to reproduce that. A miss in
+    // both leaves the Anim empty and draw() falls back to flat swatches.
     tile_blank_ = tile_solid_ = tile_brick_ = Anim{};
     if (!assets_) return;
     const std::string n = std::to_string(tileset_);
     tile_blank_ = resolve_sequence(assets_->tiles(), "tile " + n + " blank");
     tile_solid_ = resolve_sequence(assets_->tiles(), "tile " + n + " solid");
     tile_brick_ = resolve_sequence(assets_->tiles(), "tile " + n + " brick");
+    if (tile_blank_.steps.empty())
+        tile_blank_ = resolve_sequence(assets_->edit(), "tile " + n + " blank");
+    if (tile_solid_.steps.empty())
+        tile_solid_ = resolve_sequence(assets_->edit(), "tile " + n + " solid");
+    if (tile_brick_.steps.empty())
+        tile_brick_ = resolve_sequence(assets_->edit(), "tile " + n + " brick");
 }
 
 void EditorScreen::cycle_brush() {
@@ -645,10 +655,9 @@ void EditorScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
             break;
         case SDLK_0:
             // '0' (48, §5/§5d): sub_402206's dword_45B7B8 tileset toggle —
-            // editor_grid.hpp's toggle_editor_tileset. A dead-end feature
-            // (no TILES ANI ships a "tile -1 *" sequence), but it still
-            // changes which sequence NAME the canvas resolves, so re-fetch
-            // the tile Anims from the (possibly now-missing) sequence.
+            // editor_grid.hpp's toggle_editor_tileset. Toggles between the
+            // stage-0 match art and EDIT.ANI's schematic "tile -1" tiles
+            // (see refresh_tile_sequences' correction note).
             tileset_ = toggle_editor_tileset(tileset_);
             refresh_tile_sequences();
             audio.play(20);
