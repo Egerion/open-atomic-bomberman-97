@@ -31,7 +31,7 @@ inline constexpr int kEditorPowerupKinds = sim::kPowerupKinds;  // 13
 // The three paintable cell kinds (§5: "the status line uses the `tile %d
 // blank/solid/brick` strings"), in the SAME '1'/'2'/'3' key order §5 pins:
 // '1' blank, '2' solid, '3' brick.
-enum class EditorBrush {
+enum class EditorBrush : std::uint8_t {
     Blank = 0,
     Solid = 1,
     Brick = 2,

@@ -97,7 +97,7 @@ namespace bomber::game {
 
 // The live-row subset, in the original 19-row order (see the file doc above
 // for the full disposition and the omitted rows).
-enum class OptionRow {
+enum class OptionRow : std::uint8_t {
     TeamPlay,        // row 0
     RandomStart,     // row 1
     ConveyorSpeed,   // row 3
