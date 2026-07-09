@@ -406,19 +406,49 @@ The two calls that make up the whole app entry sit back-to-back
    @ 30915.)
 
    **The MENU music id is `0x3F2` = 1010 (CONFIRMED, id corrected).** On entering
-   the menu, `sub_42B9CE` plays the menu track **once** via `sub_42741E(0x3F2)`
-   guarded by a run-once flag (`v14`: `if (v14) { sub_42741E(0x3F2); v14 = 0; }`).
+   the menu, `sub_42B9CE` plays the menu track via `sub_42741E(0x3F2)` guarded
+   by `v14`: `if (v14) { sub_42741E(0x3F2); v14 = 0; }`.
    `0x3F2` = **1010** = MENU.RSS (SOUNDLST label `menu`) — this *switches* the
-   looping music from the boot track (1000) to the menu track and keeps it
-   playing while in the menu. **Do not confuse this with `0x3FC` (1020):** that id
-   is played by the **Play/round handler `sub_42A3F6`** at its entry
-   (`sub_42741E(0x3FC)`, decompile ~29696) — the "win" track for a game round,
-   NOT the menu; the same handler plays `0x46A` (1130, `draw`) on the draw branch
-   (~29820). The SOUNDLST labels (1000=title, 1010=menu, 1020=win, 1130=draw)
-   therefore **agree with the code** — there is no label/code mismatch here; the
-   only correction is that the menu-entry track is 1010, played in `sub_42B9CE`,
+   looping music to the menu track and keeps it playing while in the menu.
+   **Do not confuse this with `0x3FC` (1020):** that id is played by the
+   **Play/round handler `sub_42A3F6`** at its entry (`sub_42741E(0x3FC)`,
+   decompile ~29696) — the "win" track for a game round, NOT the menu; the
+   same handler plays `0x46A` (1130, `draw`) on the draw branch (~29820). The
+   SOUNDLST labels (1000=title, 1010=menu, 1020=win, 1130=draw) therefore
+   **agree with the code** — there is no label/code mismatch here; the only
+   correction is that the menu-entry track is 1010, played in `sub_42B9CE`,
    while 1020 belongs to `sub_42A3F6`'s round path. (Provenance: `sub_42B9CE`
    `sub_42741E(0x3F2)` call; `sub_42A3F6` `sub_42741E(0x3FC)`/`(0x46A)` calls.)
+
+   **`v14` is NOT a run-once-per-process flag — CORRECTED 2026-07-09.** An
+   earlier pass read it as "sub_42B9CE is `__noreturn`, so v14 is cleared
+   exactly once for the app's whole lifetime" and gated the port's
+   `start_music(1010)` behind a `menu_music_started_` bool that, once set,
+   never fired again — this broke returning from a match/results screen
+   (which switch the music to 1020/1130) back to the menu: 1010 never
+   reclaimed the loop, so 1020/1130 kept looping forever. The actual shape
+   (pseudo.c ~30744-30927) is a nested double loop: an OUTER `while(1)` (one
+   iteration per menu *visit*) wraps an INNER `while(1)` (the per-frame
+   input-poll loop). `v14 = 1` is set once per OUTER iteration (~30766),
+   immediately before the inner loop starts; the inner loop's `if (v14) {
+   sub_42741E(0x3F2); v14 = 0; }` (~30781) only stops it from re-firing every
+   polled FRAME within that one visit — it is a per-frame debounce, not a
+   per-process latch. Every dispatch at the bottom of the outer loop (Play,
+   setup screens, Credits, Quit-confirm, the idle-timeout->attract path, ...,
+   pseudo.c ~30896-30927) falls through back to the top of the outer loop,
+   which re-arms `v14 = 1`, so `sub_42741E(0x3F2)` fires again on **every**
+   return to the menu. `sub_42741E` -> `sub_4273A4` (~27640) has no same-id
+   no-op either: it unconditionally frees the previous handle
+   (`sub_427342`), reloads the clip from disk, and restarts it looping from
+   sample 0 — every single time. So the original's real behaviour is: the
+   menu track restarts (audible reload-and-restart, not a silent continue)
+   on every trip back to the menu, and this is exactly how it reclaims the
+   loop from whatever track a match/results screen left playing. The port's
+   `present_menu()` calls `start_music(1010)` unconditionally once per Menu
+   (re-)entry (one call per outer-loop iteration) — that IS the faithful
+   port; no gate needed. (Provenance: `sub_42B9CE` pseudo.c 30744-30927,
+   `v14` decl/use at 30739/30766/30781/30784; `sub_42741E` @ 0x42741E;
+   `sub_4273A4` @ 0x4273A4, `sub_427342` free-old-handle @ 0x427342.)
 
 ## The generic Screen primitive — `sub_42A088(name, wait)`
 
@@ -1021,8 +1051,12 @@ The **boot-music model** at the port level (`GameApp::run_boot_attract`,
    title (no per-screen restart, because `Screen` never touches music).
 2. The one-shot title sting `play(2800)` fires right before the title image,
    over the still-playing boot track.
-3. `present_menu` calls `start_music(1010)` on menu entry, which replaces the
-   boot track with the menu track and keeps it looping while in the menu.
+3. `present_menu` calls `start_music(1010)` unconditionally on every Menu
+   (re-)entry — not just the first — matching `sub_42B9CE`'s `v14` re-arming
+   once per outer-loop iteration (see the `v14` correction above): this
+   replaces whatever track is currently playing (boot 1000, or a
+   match/results track left at 1020/1130) with the menu track and keeps it
+   looping while in the menu.
 4. Screen skips (`Screen::on_key`) only ever call `play(20)` / `play(10)` — one
    shots — so no skip stops the music; only the presented image changes.
 
@@ -1037,7 +1071,7 @@ randomness (SFX group pick) uses `AudioEngine`'s own LCG, never `State::rng`.
 | `getvalue(92)` | main-menu attract-mode delay | **30 s** (VALUELST `92,30`) | CONFIRMED: after `getvalue(92)` s idle (gated `> 5`; legend: < 5 disables attract) `sub_42B9CE` enters ATTRACT MODE — saves config, forces Play, runs a live all-CPU demo match (see "Attract mode"); distinct from `getvalue(12)` |
 | `getvalue(700/701/702)` | main-menu cursor x / y-base / y-step | **332 / 140 / 38** (VALUELST `700,332,140,38,0`) | CONFIRMED anchor + values (`sub_42B9CE`): x=getvalue(700), y=getvalue(701)+getvalue(702)·row |
 | SOUNDLST 1000 | boot/title music (`title`), looping, started ONCE in `sub_42B060`, continuous across logos+title | TITLE.RSS | CONFIRMED (`sub_42741E(0x3E8)` @ boot, loop 0xFFFF) |
-| SOUNDLST 1010 | main-menu music (`menu`), looping, started on menu entry (`sub_42741E(0x3F2)`, v14-gated) — replaces the boot track | MENU.RSS | CONFIRMED (`sub_42B9CE`); NOT 0x3FC/1020 (that is `sub_42A3F6`'s round "win" track) |
+| SOUNDLST 1010 | main-menu music (`menu`), looping, started on **every** menu (re-)entry (`sub_42741E(0x3F2)`, `v14` re-armed once per `sub_42B9CE` outer-loop iteration — CORRECTED 2026-07-09, not a once-per-process gate) — replaces whatever track is currently playing (boot 1000, or 1020/1130 left by a match/results screen) | MENU.RSS | CONFIRMED (`sub_42B9CE`); NOT 0x3FC/1020 (that is `sub_42A3F6`'s round "win" track) |
 | SOUNDLST 1020 | **setup-screens music** (label `win`), looping, started at `sub_42A3F6` entry (`sub_42741E(0x3FC)`) — CORRECTED: plays under player/level setup, replaced at round init by the stage track; it does NOT underlie VICTORY | WIN.RSS | CONFIRMED (corrected 2026-07-08); port fixed — `game_app.cpp`'s `kWinMusicId` (1020) is now scoped to the Play/setup path only, never started for VICTORY (see "Results MUSIC") |
 | SOUNDLST 1130 | **outcome-tier music** (label `draw`), looping, started unconditionally at round end (`sub_42741E(0x46A)` BEFORE the survivor test) — under DRAW **and** RESULTS **and** VICTORY | DRAW.RSS | CONFIRMED (corrected 2026-07-08); port fixed — `game_app.cpp`'s `kDrawMusicId` (1130) now starts under DRAW, RESULTS, **and** VICTORY/TEAM alike (`audio_.start_music(kDrawMusicId)` in every outcome branch) |
 | SOUNDLST 1100+level, 1120 | per-level in-round stage music (`sub_4293E5` @ 0x4293E5, called from `sub_410B6E` round init unless the "Disable music during gameplay" option frees the music instead); 1120 (0x460) is the fallback when the level has no entry | per-level RSS | CONFIRMED (`docs/re/in-match-shell.md` step 2); port plays no in-round music — gap |

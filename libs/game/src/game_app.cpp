@@ -1608,31 +1608,34 @@ AppInput GameApp::run_boot_attract() {
 AppInput GameApp::present_menu() {
     // The navigable main menu (sub_42B9CE @0x42B9CE): MAINMENU.PCX as the
     // backdrop, an up/down highlight over the item rows (wrapping), Enter
-    // selects, Escape quits. On entry the original plays sub_42741E(0x3F2) once
-    // (v14-gated) — the CONFIRMED menu track 1010 (0x3F2 == MENU.RSS; the RE
-    // brief's 0x3FC/1020 was the round/results path sub_42A3F6, not this). This
-    // switches the looping music from the boot track to the menu track and keeps
-    // it playing while in the menu. Returns the AppInput the highlighted row
-    // resolves to, or Quit on window close.
+    // selects, Escape quits. On entry the original plays sub_42741E(0x3F2)
+    // (the CONFIRMED menu track 1010, 0x3F2 == MENU.RSS; the RE brief's
+    // 0x3FC/1020 was the round/results path sub_42A3F6, not this). This
+    // switches the looping music to the menu track and keeps it playing while
+    // in the menu. Returns the AppInput the highlighted row resolves to, or
+    // Quit on window close.
     //
-    // menu_music_started_ IS the v14 gate (game_app.hpp's doc on the member):
-    // sub_42B9CE is __noreturn and only ever loops back into ITS OWN wait loop
-    // between sub-screens, so the original calls sub_42741E(0x3F2) exactly
-    // once, ever. present_menu() is a discrete function re-invoked on every
-    // Menu re-entry (Options/Credits/Network/Controllers/Results -> Menu, the
-    // app's hub), so an earlier unconditional start_music() call here replayed
-    // that ~2.7 MB MENU.RSS decode-and-restart on EVERY hop back to the menu —
-    // measured ~6 ms of redundant disk read + PCM decode per hop (dwarfed by
-    // the frame budget on its own) PLUS an audible restart glitch each time,
-    // since start_music always resets the stream to sample 0 — the original
-    // never has either: the track just keeps looping. That glitch, on every
-    // single trip back to the hub, is what reads as "switching screens feels
-    // laggy". Gating this to the first call reproduces the original's
-    // "once ever" shape and removes both the waste and the glitch.
-    if (!menu_music_started_) {
-        audio_.start_music(kMenuMusicId);
-        menu_music_started_ = true;
-    }
+    // v14 (docs/re/frontend-flow.md "sub_42B9CE") is NOT a run-once-per-process
+    // flag: sub_42B9CE has an OUTER while(1) (one iteration per menu visit,
+    // pseudo.c ~30744) wrapping an INNER while(1) (the per-frame input-poll
+    // loop, ~30768). `v14 = 1` is set once per OUTER iteration, right before
+    // the inner loop starts; the inner loop's `if (v14) { sub_42741E(0x3F2);
+    // v14 = 0; }` just stops it from re-firing on every polled FRAME within
+    // that one visit. Every switch case at the bottom of the outer loop
+    // (Play/setup cancel, Credits, Options, Quit-confirm-cancel, Results,
+    // idle-timeout->attract, ...) falls through back to the top of the outer
+    // loop, which re-arms v14=1, so sub_42741E(0x3F2) — a full free +
+    // reload-from-disk + restart-from-sample-0 (sub_4273A4, no same-id
+    // no-op) — fires again on EVERY return to the menu. present_menu() is
+    // called once per Menu (re-)entry from run_app's dispatcher, i.e. once
+    // per outer-loop iteration, so an unconditional start_music() call here
+    // is the faithful port: it also switches back from the round/results
+    // tracks (1020/1130) to 1010, which is exactly the audible "menu music
+    // reclaims the loop when you back out" behaviour of the original. A
+    // once-per-process gate (menu_music_started_, removed) broke that: after
+    // the first call it never started 1010 again, so returning from a match
+    // or the results screen left 1020/1130 stuck looping forever.
+    audio_.start_music(kMenuMusicId);
     std::uint64_t frame = 0;
     // ATTRACT idle timer (docs/re/frontend-flow.md "Attract mode"): seeded to
     // "now" on every fresh visit to the menu (including a re-entry after an
