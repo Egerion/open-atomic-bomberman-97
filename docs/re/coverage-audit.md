@@ -360,14 +360,7 @@ dialog"/"Campaign-exit key" sections and the `.CAM` table row above.
 
 What remains open, in priority order:
 
-<<<<<<< HEAD
-1. Low-priority polish: editor chrome (#32: Ctrl+B reset, '0' toggle,
-=======
-1. **Campaign round-pacing clause 5** (mutual-wipeout stage-replay fallback,
-   campaign.md "Round pacing") — pinned but not ported; independently
-   portable, no test pressure yet (edge case: every side wiped out
-   simultaneously mid-stage).
-2. **VALUELST 650/651 + SOUNDLST 1200 "Fire In The Hole" taunt**
+1. **VALUELST 650/651 + SOUNDLST 1200 "Fire In The Hole" taunt**
    (`docs/re/id-audit.md`, its #1 verdict item) — pinned call site
    (`sub_41F29B`), self-contained (drop counter + chance roll + group-play),
    no dependency on any unported subsystem. Highest-value gap the id-level
@@ -375,10 +368,10 @@ What remains open, in priority order:
    sparkle (addresses already pinned in goldman-roulette.md §6, just not
    wired into the renderer), the 500/502/504/506 bomb-pickup arc curve, and
    the single-level 340-350/695 tile-regen + 449-460 ice-delay gaps.
-3. Low-priority polish: editor chrome (#32: Ctrl+B reset, '0' toggle,
->>>>>>> worktree-agent-a65ca16f71c171b97
-   brush-preview, exact dialog chrome), in-round debug/cheat keys (#35,
-   developer/QA-only).
+2. Low-priority polish: in-round debug/cheat keys (#35, developer/QA-only).
+   (Editor chrome #32 — Ctrl+B reset, '0' toggle, brush-preview, exact
+   dialog chrome — closed in the same day's editor pass; campaign clause 5
+   closed per the paragraph above.)
 
 `.BMP`/`.TXT`/`.DAT` asset spot-checks (§3) — **CLOSED 2026-07-09**: the
 single `.BMP` (`WINEREG/INTER.BMP`) belongs to the bundled
