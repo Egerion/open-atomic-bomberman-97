@@ -181,32 +181,58 @@ spawned actor's own per-tick move-budget increment (`+116 += +112 *
 frameDelta/frameRef + 100`, the same budget arithmetic as the mover, docs
 below).
 
-**`sub_422351(a1)` — AMBIGUOUS, not confidently pinned.** Read in full
-(pseudo.c 24535-24555): takes a single argument `a1` (here always `3`) and
-loops the 10 player slots computing `abs(sub_42665C(player.x)) +
-abs(sub_4266A3(player.y))` (each player's OWN tile coordinate converted from
-its pixel position) compared against `a1`; returns 0 (reject) the first time
-a player's `|tileX| + |tileY| <= a1`, else 1 (accept) after all 10 checked.
-**The candidate spawn tile (`v4`,`v5`) is never passed into this function or
-referenced by it** — Hex-Rays shows no argument beyond `a1@<ebx>`, and the
-two `abs_()` calls read back an implicit value the decompiler couldn't
-attribute to a register-passed second argument (the same class of
-"possibly undefined" register-tracking loss seen in `sub_401B5C`'s `v5/v7/
-v9/v11`). Two readings are consistent with the visible code: (a) as literally
-decompiled, a global near-origin-avoidance check unrelated to the spawn
-candidate (implausible as a spawn gate, but that IS what the visible
-arguments show); (b) the intended/likely original semantics — a
-distance-from-EVERY-player gate on the candidate tile, with the second
-operand lost to decompilation (`ebx`/another register carrying `v4,v5` that
-Hex-Rays failed to surface as a parameter). No raw disassembly is retained
-in this repo to resolve the ambiguity further (`CLAUDE.md`: no disassembly
-dumps committed), and re-deriving it would require re-opening the .idb.
-**Treated as reading (b) for the port** (a minimum Manhattan distance of 3
-tiles from every player, evaluated against the CANDIDATE tile) since that is
-the only reading that makes sense as a spawn-placement gate and matches the
-function's obvious purpose (called only from the spawn path, nowhere else);
-flagged here explicitly as the LOWER-confidence pin in this whole
-investigation, unlike everything else in this section.
+**`sub_422351(a1, a2, a3)` — CONFIRMED 2026-07-09 from raw disassembly**
+(same method as the `sub_4245DA` column-guard re-pin, `docs/re/ai.md` §9.3:
+BM95.EXE mapped VA->file offset from its own PE section table — Watcom-
+linked, no `.text`/`.data` names, `BEGTEXT`/`DGROUP`/etc — and disassembled
+with capstone; no dump retained, `CLAUDE.md`). Hex-Rays had lost the
+function's true 3-argument Watcom register-convention signature (EAX/EDX/
+EBX, the same convention that produced the identical class of loss on
+`sub_401B5C`'s `v5/v7/v9/v11` and the original `sub_4245DA` misreading) and
+showed only `a1@<ebx>`; the raw prologue resolves it fully:
+
+```
+sub_422351:
+    mov [ebp-0x1c], eax   ; a1 = candidate tile X
+    mov [ebp-0x18], edx   ; a2 = candidate tile Y
+    mov [ebp-0x14], ebx   ; a3 = threshold (caller passes 3)
+```
+
+and the call site inside `sub_4019C2`'s spawn-candidate loop confirms the
+same three registers are loaded with the CANDIDATE tile immediately after
+the `sub_425FB9` solid check, not with anything player-derived:
+
+```
+    mov ebx, 3                  ; a3 = 3
+    mov edx, [ebp-8]            ; a2 = v5 (candidate tile Y, rand()%H)
+    mov eax, [ebp-0xc]          ; a1 = v4 (candidate tile X, rand()%W)
+    call sub_422351
+```
+
+Inside, the loop over the 10 player slots (`dword_461BC4`, stride 0x98)
+computes, per slot: `tileX = sub_42665C(player.+0x1C)`,
+`tileY = sub_4266A3(player.+0x20)` (pixel->tile conversions, confirming
+these ARE the player's own tile position, unchanged from the earlier
+reading), then `d = abs(a1 - tileX) + abs(a2 - tileY)` (Manhattan distance
+from the CANDIDATE tile — `a1`/`a2` — to that player, not the literal
+`abs(tileX) + abs(tileY)` a single-register misreading might suggest) and
+rejects (returns 0) the first slot where `d <= a3`; accepts (returns 1) only
+if all 10 slots clear the gate. **This pins reading (b) definitively — the
+prior "AMBIGUOUS" hedge is resolved, not merely reaffirmed by plausibility.**
+
+**Also newly confirmed: the 10-slot loop has NO presence/liveness guard.**
+The disassembly shows no test of any "slot type"/"present"/"alive" field
+(the kind `sub_421DD2` exposes elsewhere, e.g. the round-pacing early-out at
+`campaign.md` line ~436) before a slot's `+0x1C`/`+0x20` are read and
+distance-checked — EVERY one of the 10 `dword_461BC4` records is checked
+unconditionally, empty/COMPUTER/dead slots included. An empty or
+never-populated slot's raw `+0x1C`/`+0x20` bytes (never written by the
+campaign loader for slots beyond the roster) are whatever the array's
+static/zeroed backing holds, which tile-converts to a fixed low-magnitude
+tile (consistent with a (0,0)-ish origin), so in practice unused slots
+contribute a constant, roster-independent near-origin exclusion zone rather
+than a real per-player check — an authentic, if minor, engine quirk, not a
+port bug to chase further.
 
 ### Per-tick mover — `sub_401B5C` (pseudo.c 4839-4977), driven by `sub_401F76`
 
@@ -398,12 +424,22 @@ placement and the deliberate simplifications:
   it is not SOLID (code 1; bricks/code 2 are an acceptable SPAWN tile for
   BOTH rover and ghost — the type-dependent brick rule is a MOVER-only
   distinction, clause 1 above, not a spawn-time one) and the distance-3
-  gate (`sub_422351(3)`, reading (b) above) passes, retried up to 200 times.
-  Draws 2 per attempt; a spawn that never finds a legal tile draws 400 and
-  silently spawns nothing for that slot, matching the original's `return 0`
-  (`sub_401AAE`/`sub_401B05` don't check the spawn result before
-  incrementing `i`, so a full board just yields fewer live rovers/ghosts
-  than requested — ported the same way).
+  gate (`sub_422351(candidateX, candidateY, 3)`, CONFIRMED above) passes,
+  retried up to 200 times. Draws 2 per attempt; a spawn that never finds a
+  legal tile draws 400 and silently spawns nothing for that slot, matching
+  the original's `return 0` (`sub_401AAE`/`sub_401B05` don't check the spawn
+  result before incrementing `i`, so a full board just yields fewer live
+  rovers/ghosts than requested — ported the same way). **Discrepancy found
+  by the CONFIRMED re-pin**: `sub_422351`'s 10-slot loop has no presence/
+  liveness guard (see above), but `RoverSystem::spawn`
+  (`libs/sim/src/systems/rovers.cpp`) skips `!p.present || !p.alive` slots
+  before computing the distance. Practical effect is negligible (an unused
+  original slot contributes only a fixed near-origin exclusion, not a real
+  per-player check, per the note above) and the port's filtered version is
+  arguably the more sensible behaviour, but it is a literal deviation from
+  the disassembly; left as-is here per this task's scope (docs-only —
+  flagging for the sim-owning agent rather than editing `libs/sim`
+  concurrently).
 - **NOT ported**: the one-shot rover-spawn powerup-relocation cleanup
   (mover step 0, `sub_42583B`/`sub_425704`) — deferred, see that step's own
   note; it is a rare, currently-unreachable-in-practice branch (no golden

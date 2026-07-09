@@ -48,11 +48,19 @@ void RoverSystem::spawn(RoverKind kind, int count, std::int32_t speed) {
             // "Spawning".
             if (s.cells[ty][tx] == Cell::Solid) continue;
             if (grid::bomb_at(s, tx, ty) != nullptr) continue;
-            // sub_422351(3): reject if any player's OWN tile is within
-            // Manhattan distance 3 of the candidate (docs/re/campaign.md's
-            // "AMBIGUOUS" note -- ported under the higher-confidence reading,
-            // since the alternative literal reading makes no sense as a
-            // spawn gate).
+            // sub_422351(candidateX, candidateY, 3): reject if any player's
+            // OWN tile is within Manhattan distance 3 of the CANDIDATE tile.
+            // CONFIRMED 2026-07-09 from raw disassembly (docs/re/campaign.md
+            // "Spawning" section) -- Hex-Rays had lost the Watcom
+            // register-convention 3-argument signature (EAX=candidateX,
+            // EDX=candidateY, EBX=threshold) and showed only a single
+            // ebx-bound arg, but the call site in sub_4019C2 and the
+            // function's own prologue both confirm the candidate tile IS the
+            // distance operand, not a per-player self-check. NOTE: the
+            // original's 10-slot loop has no presence/liveness guard (every
+            // slot is distance-checked unconditionally); this port filters
+            // to present+alive players, a deliberate, documented deviation
+            // (see campaign.md) with negligible practical effect.
             bool near_player = false;
             for (const auto& p : s.players) {
                 if (!p.present || !p.alive) continue;
