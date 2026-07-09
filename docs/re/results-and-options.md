@@ -316,6 +316,99 @@ being dismissed the same way as its siblings (a `< 0x1B` / `<= 0x1B`
 early-exit already covered by the generic list-screen pattern used
 throughout `sub_42B9CE`'s children).
 
+### 2026-07-09 full 1:1 audit of the port vs `sub_4080DC`'s actual body
+
+A user report ("the OPTIONS screen likely has gaps vs the original") prompted
+a full re-read of `sub_4080DC`'s decompiled body (pseudo.c 8914-9491, not
+just the summary table above) against `libs/game/src/options_screen.cpp`.
+Five confirmed mismatches, all now fixed in the port:
+
+1. **All 19 rows draw unconditionally, in the SAME ink, always** — the
+   render loop (pseudo.c 9097-9290) calls `sub_41696C` once per row for
+   EVERY row 0-18 with no gating, and every single call passes the SAME ink
+   argument, `byte_49D38F` (`v112`/`v113`/.../`v129` in the decompile, all
+   assigned from the identical global right before the draw). There is no
+   "hide the unsupported rows" branch and no per-row/selected recolour
+   anywhere in the function. The port previously hid rows 2/8/10/12/14/16/
+   17/18 (net/modem/legacy) entirely — this was the invented deviation, not
+   an omission the original also makes. Fixed: all 19 rows now draw, in the
+   original's order, in the same ink; the 5 rows this port genuinely cannot
+   act on (Node Name/Scheme File-browsing/Modem/Net Protocol/Adjust Audio's
+   sub-screen) are shown with a static `(N/A)` value and their Left/Right/
+   Enter are documented no-ops, matching CLAUDE.md's "no invented visuals"
+   the other direction — showing what the original shows, not fabricating
+   an interaction it doesn't have.
+2. **No title/header text** — no `getstring`/`sub_41696C` call exists in the
+   function before the row loop, and the caller (the row-3 dispatch,
+   pseudo.c ~30910-30913) doesn't wrap the call with one either (contrast
+   e.g. the key-remap sub-screen's own confirmed `getstring(1100)` header,
+   §2). The port's previous "OPTIONS" text at a guessed `(55, 20)` had no
+   citation. Removed. Caveat: the four chrome primitives this function calls
+   with no visible body in the decompile (`sub_41043C`/`sub_415CA4`/
+   `sub_415C1F`/`sub_429790`) can't be proven header-free from pseudo.c
+   alone — this is documented as an open question, not a certainty, but
+   nothing supports drawing a SPECIFIC guessed string/position either.
+3. **The selection indicator is a real sprite, not a text recolour** —
+   `sub_413BD6`'s own body (pseudo.c 16691-16721, a separate, fully-
+   decompiled routine, not just a citation) resolves the ANI sequence name
+   `"cursor1"` (`aCursor1`) and blits it via the standard single-frame blit
+   primitive at `(getvalue(745)-20, row_y)`, self-timed by its own
+   getvalue(690)/(691)-driven frame counter — completely independent of the
+   row text's ink, which (per #1) never changes for the selected row. The
+   port's previous yellow-recolour + `"> "` prefix was a stand-in with no
+   pixel citation. Fixed: `"cursor1"` is resolved from `AssetStore::misc()`
+   (MISC.ANI, already loaded for the editor's teamring markers; its
+   sequence table is confirmed `cursor1, goldman, ring, safe, scan,
+   teamring0, teamring1`) and drawn as a real sprite at `(x-20, row_y)`,
+   paced by a simple per-drawn-frame counter (not an exact reproduction of
+   the original's random-delay timing, which is cosmetic-only and out of
+   scope for a presentation screen).
+4. **Row-navigation wraps over 18, not 19 — row 18 is permanently
+   unreachable** — `v168 = 18;` (pseudo.c 9086) is a plain literal, used
+   verbatim by both the Up-key underflow wrap (`v166 = v168 - 1`) and the
+   Down-key overflow wrap (`++v166 >= v168 → v166 = 0`). With 19 rows (msg
+   ids 250-268 inclusive) but a wrap modulus of 18, the cursor variable can
+   only ever hold 0-17; the switch statements' `case 18` (Adjust Audio) is
+   therefore genuinely dead code in the shipped binary — not an RE
+   ambiguity, an actual off-by-one in the original. Faithfully reproduced
+   (not "fixed") as `kCursorRowCount = 18` in `options_screen.hpp`: row 18
+   draws every frame but never receives the cursor and never dispatches.
+5. **No distinct "accept" sound** — `sub_427961(20)` is the ONLY sound this
+   function ever plays, unconditionally for any real keypress (pseudo.c
+   9298-9299, `if (v165 != -1 && v165 != -2) sub_427961(20);`, evaluated
+   BEFORE the Enter/Esc/arrow dispatch). There is no `sub_427961(10)` call
+   anywhere in `sub_4080DC`. The port's previous `audio.play(10)` on Enter/
+   Escape/opening the key-remap screen was invented; replaced with the same
+   uniform SFX 20 every other key already gets.
+
+Two more corrections that follow directly from re-reading rows 0 and 6's
+handler bodies (pseudo.c 9309-9314, 9333-9336, and the mirrored Left/Right
+switch at 9410-9438): **toggling Team Play (row 0) ALSO clears the pending
+Goldman winner** (`dword_46492C = -1`), the exact same side effect row 6
+(Gold Bomberman) has — the port's caller (`GameApp::present_options_screen`)
+previously only compared the `goldman` field before/after to decide whether
+to reset `gold_player_`; it now also compares `team_play`.
+
+Three rows (10 Assign Keyboard Player, 12 Lost net players revert to AI, 17
+Use Enhanced Memory Model) were previously "shown as no-op" candidates but
+turned out to be trivial to wire for real: each is a plain boolean with an
+existing, already-round-tripped `assets::Options` field
+(`assign_keyboards`/`lost_net_revert_ai`/`smallmemory`) and no gameplay
+consumer either way, so they are now LIVE toggles like every other boolean
+row rather than static placeholders — closer to the original (which also has
+no consumer for these beyond the options.ini round-trip) than a hardcoded
+`(N/A)` would have been. Row 17's displayed label is INVERTED versus its
+backing value (`getstring((dword_464824==0)+25)`, pseudo.c 9280:
+`smallmemory==0` shows "YES", `==1` shows "NO") — ported as-is, not
+normalized, since the original genuinely displays it this way.
+
+(Provenance: full re-read of `sub_4080DC` pseudo.c 8914-9491; `sub_413BD6`
+pseudo.c 16691-16721; row-0/row-6 handler bodies pseudo.c 9309-9314/9333-
+9336/9410-9438; MISC.ANI sequence table cross-check against the install,
+2026-07-08 per §5d. Port changes: `libs/game/{include/bomber/game,src}/
+options_screen.{hpp,cpp}`, `libs/game/src/game_app.cpp`
+(`present_options_screen`, `init`, `flush_options`).)
+
 ### The full options.ini key list — CONFIRMED via the writer/reader positional match
 
 `docs/re/setup-screens.md`'s note that only `conveyor_speed=` was mapped is
