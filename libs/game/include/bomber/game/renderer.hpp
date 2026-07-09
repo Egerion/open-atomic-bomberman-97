@@ -30,10 +30,28 @@ class Renderer {
 public:
     Renderer(SDL_Renderer* ren, const AssetStore& assets, const SequenceSet& seqs,
              const assets::res::ValueList& values)
-        : ren_(ren), assets_(&assets), seqs_(&seqs), values_(&values) {}
+        : ren_(ren), assets_(&assets), seqs_(&seqs), values_(&values) {
+        // Gold Bomberman "twinkle" sparkle sprite (docs/re/goldman-roulette.md
+        // §6): MISC.ANI's "goldman" sequence (pseudo.c aGoldman_0 = "goldman",
+        // sub_420E39). Resolved once; an empty Anim (missing MISC.ANI/sequence)
+        // just draws nothing — see draw_anim's own empty-steps guard.
+        goldman_anim_ = resolve_sequence(assets.misc(), "goldman");
+    }
 
     // Clears, then draws background, powerups, world, and HUD.
     void draw_frame(const sim::State& s);
+
+    // Tells the renderer which player is the pending Goldman-wheel winner,
+    // for the twinkle overlay (docs/re/goldman-roulette.md §6). `who` is -1
+    // for none; otherwise a player SLOT index in solo play or a TEAM id in
+    // team play (mirrors dword_46492C's dual encoding — see
+    // bomber::game::assign_gold_player's doc comment). Call every frame from
+    // the live match loop; cheap, and gold_player_ changes only between
+    // rounds.
+    void set_gold_player(int who, bool team_mode) {
+        gold_player_ = who;
+        gold_team_mode_ = team_mode;
+    }
 
     // Consumes this tick's events for the visual effects: death animations
     // and the HURRY! banner.
@@ -95,6 +113,14 @@ private:
     // Cosmetic render-side LCG for the idle-fidget rolls (never the sim's).
     std::uint32_t panic_roll();
 
+    // Cosmetic render-side LCG for the gold-twinkle sparkle rolls (never the
+    // sim's). See update_gold_sparkles.
+    std::uint32_t gold_roll();
+    // Spawns/ages the gold-player twinkle particle pool (docs/re/
+    // goldman-roulette.md §6, sub_420D4E/sub_420E39/sub_420F07). Called once
+    // per sim tick from sample_movement.
+    void update_gold_sparkles(const sim::State& s);
+
     SDL_Renderer* ren_ = nullptr;
     const AssetStore* assets_ = nullptr;
     const SequenceSet* seqs_ = nullptr;
@@ -116,12 +142,35 @@ private:
     // never mutates it, and rolls off the panic LCG below (never State::rng).
     std::array<int, sim::kMaxPlayers> panic_ticks_{};
     std::array<int, sim::kMaxPlayers> panic_variant_{};
+    // Bomb-pickup carry arc (docs/re/id-audit.md item 4, VALUELST 500/502/
+    // 504/506): ticks elapsed since this player started carrying a bomb,
+    // clamped 0..3 (see update_carry_arc / the carried-bomb draw in
+    // draw_world). Cosmetic-only — never touches the sim.
+    std::array<int, sim::kMaxPlayers> carry_ticks_{};
+    std::array<bool, sim::kMaxPlayers> carrying_prev_{};
 
     std::vector<DeathFx> deaths_;
     std::uint64_t hurry_until_ = 0;  // HURRY! banner flashes until this tick
     bool untimed_ = false;  // draw the KFONT 'infinity' glyph instead of MM:SS
     std::uint32_t flash_lcg_ = 0x2545F491u;
     std::uint32_t panic_lcg_ = 0x9E3779B9u;
+
+    // Gold Bomberman "twinkle" (docs/re/goldman-roulette.md §6): a fixed
+    // 100-slot particle pool, matching the original's `dword_4621CC` array.
+    // Each entry is an independent floating spark, screen-position fixed at
+    // spawn time (NOT re-anchored to the player every frame), aged once per
+    // sim tick and retired after `goldman_anim_`'s own frame count.
+    struct GoldSparkle {
+        bool active = false;
+        float x = 0, y = 0;
+        int age = 0;
+    };
+    static constexpr int kGoldSparkleSlots = 100;
+    std::array<GoldSparkle, kGoldSparkleSlots> gold_sparkles_{};
+    Anim goldman_anim_;            // MISC.ANI "goldman" sequence
+    int gold_player_ = -1;         // -1 = no pending gold player (see set_gold_player)
+    bool gold_team_mode_ = false;
+    std::uint32_t gold_lcg_ = 0xB16B00B5u;
 };
 
 }  // namespace bomber::game

@@ -72,6 +72,65 @@ std::uint32_t Renderer::panic_roll() {
     return panic_lcg_ >> 16;
 }
 
+std::uint32_t Renderer::gold_roll() {
+    gold_lcg_ = gold_lcg_ * 1664525u + 1013904223u;
+    return gold_lcg_ >> 16;
+}
+
+// Gold Bomberman "twinkle" (docs/re/goldman-roulette.md §6, VALUELST id 1010,
+// SOUNDLST-adjacent id collision noted in docs/re/id-audit.md — this is the
+// VALUELST sense, "how many seconds the twinkling of goldman lasts"). Ported
+// from `sub_420D4E` (spawn, pseudo.c 23549-23583) and `sub_420E39` (age/draw,
+// pseudo.c 23591-23625), called once per player per tick by `sub_420F07`'s
+// main per-tick loop while `!dword_464938 && dword_4648BC` (goldman option on,
+// not the attract/no-match state) and a gold player is pending.
+void Renderer::update_gold_sparkles(const sim::State& s) {
+    // Age + retire (sub_420E39): the pool ages on the SIM tick clock (its own
+    // `dword_4621F0 != dword_464994` gate), not the render-frame clock — this
+    // runs from sample_movement, already gated to once per new tick. Lifetime
+    // = the "goldman" sequence's own frame count (`sub_41DA5C`'s return).
+    const int lifetime = static_cast<int>(goldman_anim_.steps.size());
+    for (auto& sp : gold_sparkles_) {
+        if (sp.active && (lifetime <= 0 || ++sp.age > lifetime)) sp.active = false;
+    }
+    if (gold_player_ < 0) return;
+    // getvalue(1010): twinkle duration in seconds; the file's own legend says
+    // 0 = indefinitely. A fresh bomber::sim::Simulation is built per round
+    // (GameApp::start_match), so s.tick already IS the round-elapsed clock —
+    // no separate "round start" bookkeeping needed.
+    const std::int64_t duration = values_ ? values_->at_or(1010, 5) : 5;
+    if (duration != 0 &&
+        static_cast<std::int64_t>(s.tick) / sim::kTicksPerSecond >= duration)
+        return;
+    for (int i = 0; i < sim::kMaxPlayers; ++i) {
+        const sim::Player& p = s.players[i];
+        if (!p.present || !p.alive) continue;
+        // Team play: dword_46492C holds the clinching player's TEAM id (see
+        // bomber::game::assign_gold_player's doc comment), and the original
+        // sparkles every teammate (`byte_461C18[152*i] ? 2 : 0 == dword_46492C`).
+        // Solo play: dword_46492C is the player slot index directly.
+        const bool is_gold = gold_team_mode_ ? (p.team == gold_player_) : (i == gold_player_);
+        if (!is_gold) continue;
+        // sub_420D4E: scan for the first empty slot; exactly one attempt (spawn
+        // or not) per matching player per tick, never a fresh scan per particle.
+        for (auto& sp : gold_sparkles_) {
+            if (sp.active) continue;
+            if (gold_roll() % 6 != 0) {  // 5-in-6 chance to actually place it
+                const float px = kFieldOriginX + p.x / static_cast<float>(sim::kScale);
+                const float py = kFieldOriginY + p.y / static_cast<float>(sim::kScale) +
+                                 sim::kTileH / 2.0f - 1.0f;
+                sp.active = true;
+                sp.age = 0;
+                // rand()%40 + player_x - 20, rand()%50 + player_y - 48 — fixed
+                // at spawn, the particle does not track the player afterward.
+                sp.x = px + static_cast<float>(gold_roll() % 40) - 20.0f;
+                sp.y = py + static_cast<float>(gold_roll() % 50) - 48.0f;
+            }
+            break;
+        }
+    }
+}
+
 int Renderer::render_colour(const sim::State& s, int slot) {
     if (slot < 0 || slot >= sim::kMaxPlayers) return 0;
     return match::team_render_colour(s.players[slot].team, slot);
@@ -200,7 +259,17 @@ void Renderer::sample_movement(const sim::State& s) {
         } else {
             panic_ticks_[i] = 0;
         }
+
+        // Bomb-pickup carry arc bookkeeping (docs/re/id-audit.md item 4):
+        // ticks elapsed since carrying started, clamped 0..3, mirroring the
+        // original's player+80 "elapsed since state entry" counter (see the
+        // carried-bomb draw in draw_world for the full citation).
+        const bool carrying_now = p.present && p.alive && p.carrying;
+        if (carrying_now)
+            carry_ticks_[i] = carrying_prev_[i] ? std::min(carry_ticks_[i] + 1, 3) : 0;
+        carrying_prev_[i] = carrying_now;
     }
+    update_gold_sparkles(s);
     last_tick_ = s.tick;
 }
 
@@ -467,7 +536,44 @@ void Renderer::draw_world(const sim::State& s) {
         }
         if (p.carrying) {  // held bomb rides above the head
             int bo = render_colour(s, p.carried_owner);
-            draw_anim(q.bomb[bo], pulse, sx, sy - 78.0f);
+            // Bomb-pickup carry arc (docs/re/id-audit.md item 4; VALUELST
+            // 500/502/504/506, "the curve (upwards) of a bomb being picked
+            // up"). Pinned consumer: the BOMB tick function `sub_42331C`'s
+            // "carried" state-3 branch (pseudo.c ~25488-25497), gated on the
+            // CARRIER's player-state field +78 == 4 ("picking up"):
+            //   v60 = clamp((carrier.+80 elapsed-frames) - 1, 0, 3);
+            //   x = 10*dx[dir] + carrier.x;  bomb.x = x + getvalue(2*v60+500)*dx[dir];
+            //   y = 10*dy[dir] + carrier.y;  bomb.y = y - getvalue(2*v60+501);
+            // i.e. a small forward nudge (+10px) plus the curve's own forward
+            // reach in the facing direction, and a vertical lift that grows
+            // from the curve's Y column (10/20/30/40 px) as the carry ages;
+            // v60 clamps at 3 so the bomb settles at the LAST curve point
+            // (12,40) for the remainder of the carry, not just a 4-frame pop.
+            // carry_ticks_ (sample_movement) mirrors the +80 elapsed-frames
+            // counter, already clamped 0..3. Read live off VALUELST so a
+            // modified install's curve/columns change the arc; falls back to
+            // the shipped values. dx/dy match our Direction enum order
+            // (Up,Down,Left,Right — grid::dir_dx/dir_dy are sim-internal, so
+            // this mirrors them locally for the renderer).
+            static constexpr int kCarryArcIds[4] = {500, 502, 504, 506};
+            static constexpr float kCarryArcXDefault[4] = {12, 25, 25, 12};
+            static constexpr float kCarryArcYDefault[4] = {10, 20, 30, 40};
+            static constexpr float kCarryDirDx[4] = {0, 0, -1, 1};  // Up,Down,Left,Right
+            static constexpr float kCarryDirDy[4] = {-1, 1, 0, 0};
+            const int t = carry_ticks_[i];
+            const float cx = values_ ? static_cast<float>(
+                                            values_->column_or(kCarryArcIds[t], 0,
+                                                               static_cast<std::int64_t>(
+                                                                   kCarryArcXDefault[t])))
+                                     : kCarryArcXDefault[t];
+            const float cy = values_ ? static_cast<float>(
+                                            values_->column_or(kCarryArcIds[t], 1,
+                                                               static_cast<std::int64_t>(
+                                                                   kCarryArcYDefault[t])))
+                                     : kCarryArcYDefault[t];
+            const float bx = sx + kCarryDirDx[dir] * (cx + 10.0f);
+            const float by = sy + kCarryDirDy[dir] * 10.0f - cy;
+            draw_anim(q.bomb[bo], pulse, bx, by);
         }
     }
 
@@ -510,6 +616,13 @@ void Renderer::draw_world(const sim::State& s) {
         draw_sprite(a.steps[step], fx.x, fx.y);
         ++di;
     }
+
+    // Gold Bomberman twinkle overlay (docs/re/goldman-roulette.md §6): drawn
+    // last so the sparkles read on top of the player sprite, matching the
+    // original's dedicated post-pass (`sub_420E39`, called after the main
+    // per-player loop in `sub_420F07`).
+    for (const auto& sp : gold_sparkles_)
+        if (sp.active) draw_anim(goldman_anim_, static_cast<std::size_t>(sp.age), sp.x, sp.y);
 }
 
 void Renderer::draw_hud(const sim::State& s) {

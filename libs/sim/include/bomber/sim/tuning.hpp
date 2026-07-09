@@ -62,6 +62,15 @@ struct Tuning {
                                            // +58 countdown; not a VALUELST id)
     std::int32_t punch_arc_first = 65;     // id 660: three-tile punch arc height, px
     std::int32_t punch_arc_hop = 20;       // id 661: subsequent one-tile hops
+    // "Fire In The Hole" taunt (docs/re/id-audit.md item 1, sub_41F29B pseudo.c
+    // ~23362-23368, the plain single-bomb-drop path): id 651 ("what constitutes
+    // 'many' dropped bombs") gates a player's CURRENT bomb-count powerup level
+    // (max_bombs); id 650 ("the chance (1 in N) of the Clear/Fire In The Hole
+    // audio playing") is the roll denominator. Consumed presentation-side only
+    // (SoundDirector) — see that file's BombPlaced case for the full citation,
+    // including the register-provenance caveat on the 651 comparison.
+    std::int32_t taunt_many_bombs = 4;     // id 651
+    std::int32_t taunt_many_chance = 4;    // id 650
     std::int32_t jelly_turn_chance = 3;    // id 667: flying jelly veers ±90°, 1-in-N per boundary
     // Duds (sub_422EDE / sub_422C13): only regular bombs fizzle, gated by a
     // global timer that re-arms base + rand(spread) ticks ahead.
@@ -169,6 +178,8 @@ struct Tuning {
             case 670: powers_lost_min = v; return true;
             case 671: powers_lost_rand = v; return true;
             case 661: punch_arc_hop = v; return true;
+            case 650: taunt_many_chance = v; return true;
+            case 651: taunt_many_bombs = v; return true;
             case 667: jelly_turn_chance = v; return true;
             case 320: dud_gate_base = v; return true;
             case 321: dud_gate_rand = v; return true;

@@ -2766,6 +2766,11 @@ AppInput GameApp::run_match() {
         }
 
         audio_.update_music();
+        // Gold Bomberman twinkle (docs/re/goldman-roulette.md §6): tell the
+        // renderer which player/team is the pending gold winner every frame —
+        // gold_player_ only changes between rounds, but this is a cheap int
+        // pair and keeps the renderer decoupled from GameApp's own state.
+        renderer_->set_gold_player(gold_player_, is_team_mode());  // NOLINT(bugprone-unchecked-optional-access)
         renderer_->draw_frame(sim_.state());  // NOLINT(bugprone-unchecked-optional-access)
         // The player-row HUD strip (docs/re/in-match-shell.md "The player
         // row") needs GameApp's own win_count_/kill_count_/front_font_, none
