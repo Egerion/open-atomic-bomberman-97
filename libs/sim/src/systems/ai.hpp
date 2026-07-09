@@ -76,10 +76,12 @@ private:
     // entity list is empty here; see docs/re/ai.md §3.3). Used by behaviour 3.
     bool drop_tile_clear(int tx, int ty) const;
 
-    // sub_4245DA(x): count of live grounded bombs whose tile-X == x (the anti-
-    // stacking "bombs in my column" guard). Behaviour 3 drops only when this is 0
-    // (the "< v2" gate reduces to "no bomb already in my column", §9.3).
-    int count_column_bombs(int tx) const;
+    // The behaviours-3/4 entry gate, `sub_4245DA(me) < maxBombs(+86)` inverted:
+    // sub_4245DA counts the player's OWN live bomb slots (owner word at bomb
+    // +62), and the comparand is the bomb capacity byte +86 — both byte-
+    // confirmed from the raw disasm (docs/re/ai.md §9.3 RESOLVED). bombs_placed
+    // is the sim's maintained equivalent of that owner scan.
+    bool out_of_bomb_slots(const Player& p) const;
 
     // Behaviour 0 (sub_40BD44) — grab-glove drop/lob (Stage 4). Only when the
     // player holds Grab: if already carrying a grabbed bomb, write the bomb key up
@@ -95,8 +97,9 @@ private:
     // boxed in. Returns true if it acted (wrote `out` and short-circuits).
     bool behave_walk_path(int i, PlayerInput& out);
 
-    // Behaviour 3 (sub_40AD8D) — blast bricks (Stage 4). When the column holds no
-    // own bomb, the player is not constipated, at least one orthogonally-adjacent
+    // Behaviour 3 (sub_40AD8D) — blast bricks (Stage 4). When a spare bomb slot
+    // exists (live own bombs < max_bombs, docs/re/ai.md §9.3 RESOLVED), the
+    // player is not constipated, at least one orthogonally-adjacent
     // tile is a brick (cell type 2), and the standing tile is clear to drop on
     // (sub_423188), press the bomb key on a 1-in-getvalue(915)=5 whim to place a
     // bomb and set state_flag = 9 ("committed to the drop"). Does NOT flee here:
@@ -122,7 +125,7 @@ private:
     // 5-tile cross (the sub_40ABED offset tables — see the OOB note in the .cpp)
     // for a live enemy player (sub_421CB5, self excluded); a same-team hit ends
     // the behaviour without dropping (same_team, docs/re/ai.md TEAM follow-up);
-    // otherwise, if the column guard + drop-tile clearance gates pass, drop a
+    // otherwise, if the capacity guard + drop-tile clearance gates pass, drop a
     // bomb on a 1-in-5 whim (rand()%5==0). Sits below behaviour 3, above
     // behaviour 5. Returns true if it acted. The bomb-key edge routes to the
     // normal BombSystem::drop.

@@ -179,16 +179,17 @@ bool AISystem::drop_tile_clear(int tx, int ty) const {
     return s_.cells[ty][tx] == Cell::Blank && s_.burning[ty][tx] == 0;  // sub_425FB9 == 0
 }
 
-// sub_4245DA(x) (0x4245DA): count of live grounded bombs whose tile-X == x — the
-// "bombs in my column" anti-stacking guard. Airborne bombs occupy no tile (they
-// have no column), matching the original's live-slot scan. Behaviour 3 drops
-// only when this is 0 (the undefined-edx "< v2" gate, safest interpretation
-// "no bomb already in my column ⇒ may drop"; docs/re/ai.md §9.3).
-int AISystem::count_column_bombs(int tx) const {
-    int n = 0;
-    for (const auto& b : s_.bombs)
-        if (b.active && !b.flying && b.tile_x() == tx) ++n;
-    return n;
+// sub_4245DA(idx) (0x4245DA): count of live bomb slots OWNED by player idx —
+// the bomb dword at +60's high word is the owner index written at creation
+// (sub_422EDE word-store to +62), not a tile X. Behaviours 3/4 gate on
+// `sub_4245DA(me) < maxBombs(+86)` (the comparand Hex-Rays lost as an
+// "undefined edx" is `mov dl, [actor+0x56]` in the raw disasm) — i.e. the
+// standard spare-bomb-capacity check, the very count the mover compares at a
+// normal drop. Player::bombs_placed is the sim's maintained equivalent of
+// that owner scan (BombSystem::drop gates on the same counter), so the AI
+// reads it directly instead of rescanning. docs/re/ai.md §9.3 (RESOLVED).
+bool AISystem::out_of_bomb_slots(const Player& p) const {
+    return p.bombs_placed >= p.max_bombs;
 }
 
 // ---------------------------------------------------------------------------
@@ -600,8 +601,8 @@ bool AISystem::behave_walk_path(int i, PlayerInput& out) {
 // Behaviour 3 — sub_40AD8D, blast bricks (docs/re/ai.md §3.3). Drops a bomb to
 // open the board when standing next to a destroyable brick, gated on a 1-in-
 // getvalue(915)=5 whim. Structure (byte-exact):
-//   1. column guard: sub_4245DA(tileX) must be < the (undefined-edx) comparand;
-//      safest reading "no bomb already in my column" (§9.3) -> count == 0;
+//   1. capacity guard: sub_4245DA(me) — my live-bomb count — must be < my
+//      maxBombs(+86) (the disasm-confirmed comparand, §9.3 RESOLVED);
 //   2. constipation (+134) blocks the drop;
 //   3. count the orthogonally-adjacent BRICK tiles (cell type 2);
 //   4. if none: clear state_flag 9->0 (situation resolved) and pass down;
@@ -610,8 +611,8 @@ bool AISystem::behave_walk_path(int i, PlayerInput& out) {
 // It does NOT flee here: state_flag=9 is a "committed to the drop" marker; the
 // danger grid lights up under the new bomb next tick and behaviour 2 (higher
 // priority) paths the AI out (docs/re/ai.md §3.3). state_flag=9 self-clears when
-// there are no adjacent bricks / the column fills — i.e. once the AI has moved.
-// RNG (§8 row b3): the rand()%5 fires ONLY when the column/constipation/brick/
+// there are no adjacent bricks / capacity fills — i.e. once the AI has moved.
+// RNG (§8 row b3): the rand()%5 fires ONLY when the capacity/constipation/brick/
 // clearance gates all pass; otherwise this behaviour draws nothing.
 // ---------------------------------------------------------------------------
 bool AISystem::behave_blast_bricks(int i, PlayerInput& out) {
@@ -619,16 +620,17 @@ bool AISystem::behave_blast_bricks(int i, PlayerInput& out) {
     Brain& br = s_.brains[i];
     const int px = p.tile_x(), py = p.tile_y();
 
-    // (1) Column guard (sub_4245DA < v2). Safest interpretation: a bomb already
-    // in my column suppresses the drop (§9.3). On the "column full" branch the
-    // original also clears a stale state_flag 9 before returning 0.
-    if (count_column_bombs(px) != 0) {
+    // (1) Capacity guard (sub_4245DA(me) >= maxBombs(+86) -> pass down; §9.3
+    // RESOLVED from the raw disasm — NOT a bombs-in-my-column rule). On the
+    // "no spare slot" branch the original also clears a stale state_flag 9
+    // before returning 0.
+    if (out_of_bomb_slots(p)) {
         if (br.state_flag == 9) br.state_flag = 0;
         return false;
     }
 
     // (2) Constipation (+134): can't drop at all. (No state clear on this branch,
-    // matching the original — the `if (+134) return 0` is inside the column-ok
+    // matching the original — the `if (+134) return 0` is inside the capacity-ok
     // block, before the brick count / state handling.)
     if (p.sick(Disease::Constipation)) return false;
 
@@ -782,9 +784,9 @@ bool AISystem::behave_punch(int i, PlayerInput& out) {
 // ---------------------------------------------------------------------------
 // Behaviour 4 — sub_40ABED, drop a bomb next to an enemy (docs/re/ai.md §3.4).
 // Byte-exact (0x40ABED). Structure:
-//   1. column guard: sub_4245DA(tileX) < the (undefined-edx) comparand — the
-//      same anti-stacking gate as behaviour 3, safest reading "no bomb already
-//      in my column" (§9.3) -> count == 0;
+//   1. capacity guard: sub_4245DA(me) — my live-bomb count — must be < my
+//      maxBombs(+86), the same disasm-confirmed spare-slot gate as behaviour 3
+//      (§9.3 RESOLVED);
 //   2. a Manhattan gate on the actor's SNAPPED position (+20/+24): abs(tileX) +
 //      abs(tileY) >= 3. In the original +20/+24 is a stale spawn/punch snapshot
 //      (set to the current position only at spawn/punch, NOT during walking), so
@@ -809,9 +811,9 @@ bool AISystem::behave_bomb_enemy(int i, PlayerInput& out) {
     Player& p = s_.players[i];
     const int px = p.tile_x(), py = p.tile_y();
 
-    // (1) Column guard (sub_4245DA >= v2). Safest interpretation "a bomb already
-    // in my column suppresses the drop" (§9.3), matching behaviour 3.
-    if (count_column_bombs(px) != 0) return false;
+    // (1) Capacity guard (sub_4245DA(me) >= maxBombs(+86) -> return 0; §9.3
+    // RESOLVED), matching behaviour 3.
+    if (out_of_bomb_slots(p)) return false;
 
     // (2) Manhattan gate: abs(tileX) + abs(tileY) >= 3 over the actor's snapped
     // position. See the header note — we use the current tile as the faithful
