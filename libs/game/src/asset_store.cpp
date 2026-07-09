@@ -13,6 +13,21 @@ namespace bomber::game {
 
 namespace fs = std::filesystem;
 
+void AssetStore::load_frontend_font(const fs::path& game_dir) {
+    // FONT6.FON lives in the install ROOT (not under DATA/) and is otherwise
+    // independent of every other asset load() performs below — safe to load
+    // standalone, ahead of load() (docs/re/frontend-flow.md's sub_41095A
+    // trace: sub_414DF4 pins FONT6 before the boot LOADING dialogs run).
+    // Idempotent: a second call (from load() itself) with the font already
+    // populated is a cheap re-parse, not a correctness issue.
+    try {
+        auto p = game_dir / "FONT6.FON";
+        if (fs::exists(p)) frontend_font_ = assets::bmfont::load(p);
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "FONT6.FON load failed: %s\n", e.what());
+    }
+}
+
 bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
     ren_ = ren;
     auto ani_dir = game_dir / "DATA" / "ANI";
@@ -114,18 +129,13 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
             }
         }
 
-        // Front-end bitmap font for the .BM help/credits screens. The engine
-        // draws every text string through the active font, which graphics-init
-        // pins to FONT6 (sub_431E9C(6), BM95.EXE @ 0x417600). The FONT<n>.FON
-        // files live in the install ROOT, not under DATA/. Presentation-only and
-        // optional: a missing/broken font must NOT abort the load — the BM
-        // viewer then simply renders no glyphs. (docs/formats/fon.md.)
-        try {
-            auto p = game_dir / "FONT6.FON";
-            if (fs::exists(p)) frontend_font_ = assets::bmfont::load(p);
-        } catch (const std::exception& e) {
-            std::fprintf(stderr, "FONT6.FON load failed: %s\n", e.what());
-        }
+        // Front-end bitmap font for the .BM help/credits screens AND the dialog
+        // chrome (sub_43C734 family). GameApp::init now calls
+        // load_frontend_font() standalone before this, matching sub_41095A's
+        // real order (sub_414DF4 pins FONT6 before the boot LOADING dialogs);
+        // this call stays so load() alone (e.g. tools that skip the early call)
+        // still gets the font. (docs/formats/fon.md.)
+        load_frontend_font(game_dir);
 
         // The MESSAGES.TXT string table (getstring / sub_4124A4): the setup and
         // net-game screens format their labels from it. Install ROOT, like the

@@ -29,6 +29,16 @@ public:
     // Loads the stage-independent assets. Returns false (and logs) on failure.
     bool load(SDL_Renderer* ren, const std::filesystem::path& game_dir);
 
+    // Loads just FONT6.FON standalone, ahead of the full load() pass. RE fact
+    // (docs/re/frontend-flow.md "sub_43C734 dialog chrome"): sub_41095A calls
+    // sub_414DF4 (which ends by pinning FONT6 via sub_431E9C(6)) BEFORE it calls
+    // sub_41D695/sub_42896E, the two boot LOADING dialogs — so the ORIGINAL has
+    // FONT6 ready for both flashes, not just assets loaded later. GameApp::init
+    // calls this before the first loading-dialog paint so the port matches that
+    // order; load() below still calls it too (idempotent — a no-op once loaded)
+    // so a caller that skips this early call still gets the font.
+    void load_frontend_font(const std::filesystem::path& game_dir);
+
     // Builds per-player recolored copies of the player-facing sprite sets
     // (walk/stand/bombs/flames/deaths). Prefers each slot's authentic .RMP index
     // remap; `colors` (VALUELST 200..247) is the truecolour fallback for a slot

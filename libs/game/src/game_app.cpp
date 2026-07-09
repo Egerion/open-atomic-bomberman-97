@@ -31,53 +31,151 @@ namespace fs = std::filesystem;
 
 namespace {
 
+// The shared sub_43C734 dialog-chrome primitive — PINNED 2026-07-09
+// (docs/re/frontend-flow.md "The sub_43C734 dialog-chrome primitive"). Both
+// the boot LOADING dialog (sub_412E33's percent-bar window) and the Yes/No
+// confirm (sub_41456C) open through this ONE window constructor, and its
+// "chrome" is exactly two things: a single flat filled rectangle (colormode
+// 256 -> the theme default fill, byte_495390[dword_45C46C], decoded RGB555
+// offset 10570 -> (82,82,82) grey) and NOTHING else — no border, no shadow,
+// no bevel anywhere in the window body (sub_43D398/sub_4428E4, the placement
+// + blit steps, never draw a decorative outline). The earlier port's guessed
+// light-frame outline had no basis in the decompile and is removed here.
+//
+// sub_43C734's real signature is `(y, height, width, colormode, flags)`, NOT
+// `(x, y, width, ...)` as an earlier pass assumed — confirmed against the
+// master 640x480 root window's own construction
+// (`sub_43C734(0, 480, 640, black, 1)`, only sensible as y=0/height=480/
+// width=640). Neither dialog caller ever computes an explicit X; the
+// confirm dialog computes only a vertical center. The X-placement source
+// register is one IDA's decompiler lost (`sub_43D398`'s internal x value,
+// "possibly undefined" — TODO(RE): needs a disassembler pass, unavailable
+// here) — every visual call site's evident intent is a horizontally
+// centered dialog, so the port centers against the 640-px screen width.
+struct DialogRect {
+    float x, y, w, h;
+};
+
+constexpr Uint8 kChromeFillR = 82, kChromeFillG = 82, kChromeFillB = 82;  // dword_45C46C=10570
+
+// X is never an explicit sub_43C734 parameter anywhere in this family (see
+// the block comment above) — the port horizontally centers every dialog
+// against the 640-px screen width, the one behaviour consistent with every
+// call site's visible intent.
+DialogRect dialog_rect(float y_px, float height_px, float width_px) {
+    return DialogRect{(static_cast<float>(kScreenW) - width_px) / 2, y_px, width_px, height_px};
+}
+
+// The confirm dialog's Y IS an explicit, CONFIRMED expression
+// (`(dword_464A6C - height) / 2` = vertical screen-center, sub_41456C
+// pseudo.c 17197) — unlike the loading dialog, which hardcodes y=200.
+DialogRect dialog_rect_vcentered(float height_px, float width_px) {
+    return dialog_rect((static_cast<float>(kScreenH) - height_px) / 2, height_px, width_px);
+}
+
+// The one flat fill sub_43C734/sub_43D1C0 draw — see the block comment above.
+void draw_dialog_chrome(SDL_Renderer* ren, const DialogRect& r) {
+    SDL_FRect box{r.x, r.y, r.w, r.h};
+    SDL_SetRenderDrawColor(ren, kChromeFillR, kChromeFillG, kChromeFillB, 255);
+    SDL_RenderFillRect(ren, &box);
+}
+
+// sub_432298 — the button widget (PINNED, docs/re/frontend-flow.md
+// "sub_432298 — the button widget"). Size is text-derived (width =
+// measure(label)+16, height = fontheight+6, pseudo.c ~35197-35199), with a
+// real 2px-inset bevel (unlike the plain window body above): light tone
+// (123,123,123, dword_45C470) on the top/left ring, dark tone (66,66,66,
+// dword_45C474) on the bottom/right ring — a raised "up" look, the only
+// state this port draws (no press animation needed for a Yes/No choice) —
+// closed with a 1px black outline, then the label in the text-shadow ink
+// (165,165,165, dword_45C478). `x, y` are the button's top-left in
+// WINDOW-relative pixels (matching sub_41456C's own button call sites).
+void draw_dialog_button(SDL_Renderer* ren, const FontTextures& font, float x, float y,
+                        const std::string& label) {
+    const float label_w = font.loaded() ? static_cast<float>(font.measure(label)) : 0.0f;
+    const float h = static_cast<float>(font.loaded() ? font.line_height() : 12);
+    const float w = label_w + 16.0f;
+    const float bh = h + 6.0f;
+
+    SDL_FRect outline{x, y, w, bh};
+    SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);  // byte_495390[0]
+    SDL_RenderFillRect(ren, &outline);
+    SDL_FRect ring1{x + 1, y + 1, w - 2, bh - 2};
+    SDL_SetRenderDrawColor(ren, 66, 66, 66, 255);  // dword_45C474, bottom/right (drawn full then...)
+    SDL_RenderFillRect(ren, &ring1);
+    SDL_FRect ring1_lit{x + 1, y + 1, w - 3, bh - 3};  // ...top/left overpainted light
+    SDL_SetRenderDrawColor(ren, 123, 123, 123, 255);  // dword_45C470
+    SDL_RenderFillRect(ren, &ring1_lit);
+    SDL_FRect face{x + 2, y + 2, w - 4, bh - 4};
+    SDL_SetRenderDrawColor(ren, kChromeFillR, kChromeFillG, kChromeFillB, 255);
+    SDL_RenderFillRect(ren, &face);
+
+    font.draw(ren, label, x + (w - label_w) / 2.0f, y + 3.0f, 165, 165, 165);  // dword_45C478
+}
+
 // The boot LOADING dialog — PINNED 2026-07-09 (docs/re/frontend-flow.md "The
-// boot LOADING dialog"). This is NOT the IPLOGO/HSLOGO/TITLE screen chain
-// (sub_42B060, a separate later step): it is a small modal progress window
-// (sub_43C734, the same generic dialog-window primitive the Yes/No confirm
-// uses) that the entry point sub_42BE22 shows TWICE before sub_42B060 ever
-// runs — once for "Loading data..." (getstring(201), sub_41D695's MASTER.ALI
-// read) and once for "Loading sound..." (getstring(200), sub_4287B9's
-// SOUNDLST group preload) — both driven by the shared percent-bar primitive
-// sub_412E33 (a two-tone bar plus a "%d" readout, "Completion" caption). It
-// is programmatically drawn (box + bar + text), NOT a PCX asset — no
+// boot LOADING dialog" + "The percent-bar dialog, sub_412E33"). This is NOT
+// the IPLOGO/HSLOGO/TITLE screen chain (sub_42B060, a separate later step):
+// it is a small modal progress window (sub_43C734, above) that the entry
+// point sub_42BE22 shows TWICE before sub_42B060 ever runs — once for
+// "Loading data..." (getstring(201), sub_41D695's MASTER.ALI read) and once
+// for "Loading sound..." (getstring(200), sub_4287B9's SOUNDLST group
+// preload) — both driven by the shared percent-bar primitive sub_412E33 (a
+// two-tone bar plus a "%d" readout, "Completion" caption). It is
+// programmatically drawn (box + bar + text), NOT a PCX asset — no
 // LOADING*.PCX exists anywhere in the install or the decompile.
+//
+// Pinned geometry (sub_412E33, pseudo.c 16157-16211): window
+// y=200 (CONFIRMED literal, not centered — contrast the confirm dialog
+// below), height=8*fontheight, width=360 (x auto-centered, see the chrome
+// comment above); caption "Completion" centered at y=1.5*fontheight in
+// white (byte_49D38F); "%d" readout centered at y=3.5*fontheight in YELLOW
+// (byte_49D37A, RGB (255,255,90) — corrects an earlier pass's assumption
+// that it shared the caption's white); two-tone bar at x=31, y=5.5*
+// fontheight+1, height=fontheight-1, width 300 split at 3*pct, filled
+// portion byte_49A624 mid-grey (168,168,164), unfilled black.
 //
 // Our AssetStore::load() has no per-file progress callback (a monolithic
 // try-block of ANI/PCX loads), and on modern hardware the whole thing is
 // sub-second — so a live animated percent would be fake motion. Faithful
-// simplification (documented per CLAUDE.md's RE workflow): flash the SAME
-// two captions in the SAME order, each fully "complete" (bar full, 100%)
-// for one presented frame, matching the original's caption-then-bar shape
-// without inventing progress data we don't have. No PCX/font asset is
-// loaded yet at this point in boot, so the text uses SDL's built-in debug
-// font (SDL_RenderDebugText) rather than FONT6 (which load() itself
-// provides) or a frontend PCX (also loaded during/after this phase).
-void draw_boot_loading_dialog(SDL_Renderer* ren, const char* caption) {
+// simplification (documented per CLAUDE.md's RE workflow, UNCHANGED by this
+// pass): flash the SAME two captions in the SAME order, each fully
+// "complete" (bar full, 100%) for one presented frame, matching the
+// original's caption-then-bar shape without inventing progress data we
+// don't have.
+//
+// Font: FONT6 is CONFIRMED ready before BOTH flashes (docs/re/
+// frontend-flow.md "FONT6 timing" — sub_414DF4 pins it via sub_431E9C(6)
+// before sub_41095A ever calls the loading dialogs), correcting the earlier
+// port comment that assumed a readiness gap at the first flash. GameApp::init
+// now loads FONT6 standalone ahead of this call, so both flashes render with
+// the real glyph textures; SDL_RenderDebugText is no longer used here.
+void draw_boot_loading_dialog(SDL_Renderer* ren, const FontTextures& font, const char* caption) {
     SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
     SDL_RenderClear(ren);
 
-    // sub_43C734's window: roughly centered, a dark panel with a light frame —
-    // we don't have the original's exact pixel geometry (no getvalue id owns
-    // it), so this is a reasonable dialog-sized box, not a pinned rect.
-    SDL_FRect panel{static_cast<float>(kScreenW) / 2 - 140, static_cast<float>(kScreenH) / 2 - 30,
-                     280, 60};
-    SDL_SetRenderDrawColor(ren, 40, 40, 48, 255);
-    SDL_RenderFillRect(ren, &panel);
-    SDL_SetRenderDrawColor(ren, 200, 200, 210, 255);
-    SDL_RenderRect(ren, &panel);
+    const float h = static_cast<float>(font.loaded() ? font.line_height() : 12);
+    const DialogRect win = dialog_rect(200.0f, 8.0f * h, 360.0f);
+    draw_dialog_chrome(ren, win);
 
-    // The "Completion" percent bar (sub_412E33): two-tone fill, shown full
-    // since we present each phase already-done (the simplification above).
-    SDL_FRect bar_bg{panel.x + 16, panel.y + 34, panel.w - 32, 10};
-    SDL_SetRenderDrawColor(ren, 70, 70, 80, 255);
-    SDL_RenderFillRect(ren, &bar_bg);
-    SDL_FRect bar_fg{bar_bg.x, bar_bg.y, bar_bg.w, bar_bg.h};
-    SDL_SetRenderDrawColor(ren, 120, 200, 120, 255);
-    SDL_RenderFillRect(ren, &bar_fg);
+    // Caption "Completion" — white (byte_49D38F), horizontally centered,
+    // y = 1.5*fontheight (window-relative).
+    std::string cap_str = caption;
+    float cap_w = font.loaded() ? static_cast<float>(font.measure(cap_str)) : 0.0f;
+    font.draw(ren, cap_str, win.x + (win.w - cap_w) / 2, win.y + 1.5f * h, 255, 255, 255);
 
-    SDL_SetRenderDrawColor(ren, 255, 255, 255, 255);
-    SDL_RenderDebugText(ren, panel.x + 16, panel.y + 12, caption);
+    // The bar sits at a fixed "complete" 100% (the documented simplification
+    // above) — the filled segment spans the full 300 px track, so the
+    // never-drawn unfilled segment is omitted rather than drawn zero-width.
+    SDL_FRect bar{win.x + 31.0f, win.y + 5.5f * h + 1.0f, 300.0f, h - 1.0f};
+    SDL_SetRenderDrawColor(ren, 168, 168, 164, 255);  // byte_49A624
+    SDL_RenderFillRect(ren, &bar);
+
+    // "%d" readout (100, matching the always-complete bar) — yellow
+    // (byte_49D37A), y = 3.5*fontheight, horizontally centered.
+    std::string pct_str = "100";
+    float pct_w = font.loaded() ? static_cast<float>(font.measure(pct_str)) : 0.0f;
+    font.draw(ren, pct_str, win.x + (win.w - pct_w) / 2, win.y + 3.5f * h, 255, 255, 90);
 
     SDL_RenderPresent(ren);
 }
@@ -174,6 +272,18 @@ bool GameApp::init() {
     SDL_SetRenderLogicalPresentation(ren, kScreenW, kScreenH,
                                      SDL_LOGICAL_PRESENTATION_LETTERBOX);
 
+    // FONT6, loaded standalone BEFORE the boot LOADING dialogs — matching the
+    // real init order (docs/re/frontend-flow.md "FONT6 timing", CONFIRMED):
+    // sub_41095A calls sub_414DF4 (which pins FONT6 via sub_431E9C(6) as its
+    // very last step) BEFORE it calls sub_41D695/sub_42896E, the two dialogs.
+    // FONT6.FON is install-root and independent of assets_.load()'s ANI/PCX
+    // work, so hoisting just this one file out is cheap and safe. A missing
+    // font leaves front_font_ empty; draw_dialog_chrome's text calls then
+    // silently no-op (FontTextures::draw on an unbuilt font), same fallback
+    // behaviour the .BM viewer already relies on.
+    assets_.load_frontend_font(game);
+    front_font_.build(ren, assets_.frontend_font());
+
     // The boot LOADING dialog (sub_42BE22 -> sub_41095A -> sub_41D695/
     // sub_42896E, PINNED — see draw_boot_loading_dialog's comment): the ORIGINAL
     // shows "Loading data..." (getstring 201) before its asset preload and
@@ -181,8 +291,9 @@ bool GameApp::init() {
     // the IPLOGO/HSLOGO/TITLE chain (sub_42B060) ever runs. MESSAGES.TXT is not
     // loaded yet at this first flash (it lives inside assets_.load()), so it
     // uses the literal fallback text; the second flash below reads the real
-    // string once it's available.
-    draw_boot_loading_dialog(ren, "Loading data...");
+    // string once it's available. Both flashes now render with FONT6 (above),
+    // matching the trace — there is no font-readiness gap at the FIRST flash.
+    draw_boot_loading_dialog(ren, front_font_, "Loading data...");
 
     if (!assets_.load(ren, game)) return false;
     seqs_.resolve(assets_);
@@ -197,7 +308,7 @@ bool GameApp::init() {
     // audio_.init(). Skipped in --demo mode, matching that the demo path never
     // calls audio_.init either.
     if (!opts_.demo) {
-        draw_boot_loading_dialog(ren, assets_.getstring(200, "Loading sound...").c_str());
+        draw_boot_loading_dialog(ren, front_font_, assets_.getstring(200, "Loading sound...").c_str());
         if (!audio_.init(game)) std::fprintf(stderr, "audio unavailable, continuing silent\n");
     }
 
@@ -212,9 +323,11 @@ bool GameApp::init() {
     renderer_.emplace(ren, assets_, seqs_, values_);
     screen_.emplace(assets_, audio_);
     transition_.emplace(assets_);
-    // Upload FONT6.FON glyph textures for the .BM help/credits screens. Empty
-    // when the font is missing (the BM viewer then draws no glyphs).
-    front_font_.build(ren, assets_.frontend_font());
+    // front_font_ (FONT6.FON glyph textures for the dialog chrome and the .BM
+    // help/credits screens) was already built above, before the boot LOADING
+    // dialogs — matching sub_41095A's real init order. assets_.load() reloads
+    // the same FONT6.FON into assets_.frontend_font() (harmless — identical
+    // file), so no second build() is needed here.
     return true;
 }
 
@@ -1550,20 +1663,35 @@ AppInput GameApp::present_menu() {
                 SDL_RenderFillRect(sdl_renderer_.get(), &bar);
             }
         }
-        // The Quit confirm modal (sub_412987 -> sub_41456C, PINNED): a floating
-        // box over the menu backdrop with getstring(10) ("Are you sure you want
-        // to exit?") and the getstring(26)/getstring(25) " Yes "/" No " button
-        // legend. Same box-plus-FontTextures convention as EditorScreen's
-        // SaveConfirm/FillConfirm prompts.
+        // The Quit confirm modal (sub_412987 -> sub_41456C, PINNED — docs/re/
+        // frontend-flow.md "Escape/Quit-row confirm dialog"): the SAME
+        // sub_43C734 chrome as the loading dialog, sized from the actual
+        // button label extents (v29=max(textwidth,80), v30=v29+64=width,
+        // v32=4*fontheight+64+fontheight=height for this one-line prompt),
+        // centered on screen (both axes — see the chrome comment's X-
+        // placement TODO(RE)). Prompt at y=fontheight+32 (window-relative,
+        // centered), general white ink (byte_49D38F); two sub_432298 buttons
+        // at the pinned y=height-32-fontheight-6, x=width/2-80 (Yes) /
+        // width/2+22 (No). Behaviour (Y/Enter/Space confirm, N/Escape
+        // cancel, sound path, 4s exit delay) is UNCHANGED — chrome-only pass.
         if (quit_confirm) {
-            SDL_SetRenderDrawBlendMode(sdl_renderer_.get(), SDL_BLENDMODE_BLEND);
-            SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 200);
-            SDL_FRect box{140, 200, 360, 60};
-            SDL_RenderFillRect(sdl_renderer_.get(), &box);
-            std::string prompt =
-                assets_.getstring(10, "Are you sure you want to exit?") + "   Y/ENTER =" +
-                assets_.getstring(26, " Yes ") + " N/ESC =" + assets_.getstring(25, " No ");
-            front_font_.draw(sdl_renderer_.get(), prompt, 156.0f, 222.0f, 255, 220, 80);
+            const float h = static_cast<float>(front_font_.loaded() ? front_font_.line_height() : 12);
+            std::string prompt = assets_.getstring(10, "Are you sure you want to exit?");
+            std::string yes_label = assets_.getstring(26, " Yes ");
+            std::string no_label = assets_.getstring(25, " No ");
+            float prompt_w =
+                front_font_.loaded() ? static_cast<float>(front_font_.measure(prompt)) : 0.0f;
+            float win_w = std::max(prompt_w, 80.0f) + 64.0f;
+            float win_h = 4.0f * h + 64.0f + h;
+            DialogRect win = dialog_rect_vcentered(win_h, win_w);
+            draw_dialog_chrome(sdl_renderer_.get(), win);
+            front_font_.draw(sdl_renderer_.get(), prompt, win.x + (win.w - prompt_w) / 2.0f,
+                             win.y + h + 32.0f, 255, 255, 255);  // byte_49D38F
+            float btn_y = win.y + win.h - 32.0f - h - 6.0f;
+            draw_dialog_button(sdl_renderer_.get(), front_font_, win.x + win.w / 2.0f - 80.0f,
+                               btn_y, yes_label);
+            draw_dialog_button(sdl_renderer_.get(), front_font_, win.x + win.w / 2.0f + 22.0f,
+                               btn_y, no_label);
         }
         SDL_RenderPresent(sdl_renderer_.get());
         SDL_Delay(2);
