@@ -6,8 +6,14 @@ namespace bomber::game {
 
 void EditorGrid::reset(int width, int height,
                        const std::array<std::array<int, 2>, kEditorMaxStarts>* start_xy) {
-    width_ = width;
-    height_ = height;
+    // Guard against a non-positive size: every caller today passes the fixed
+    // 15x11 board, but this is a public, independently-testable entry point
+    // (class doc: "unit-testable without a renderer"), and the start_xy wrap
+    // loops below (`while (x < 0) x += width_` etc.) spin forever on
+    // width_/height_ <= 0. Same fallback idiom as load_from_scheme's own
+    // `scheme.width() > 0 ? ... : kEditorGridWidth` clamp.
+    width_ = width > 0 ? width : kEditorGridWidth;
+    height_ = height > 0 ? height : kEditorGridHeight;
     // sub_4049C0 (PINNED): even rows are memcpy'd from ":::::::::::::::"
     // (all brick), odd rows from ":#:#:#:#:#:#:#:" (brick/solid alternating)
     // — the classic pillar field, fully bricked. Generalised per-cell for a

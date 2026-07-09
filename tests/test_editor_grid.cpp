@@ -48,6 +48,21 @@ TEST_CASE("reset alternates the start team flags (j & 1) and wraps positions") {
     for (int j = 0; j < kEditorMaxStarts; ++j) CHECK(g.start(j).team == ((j & 1) != 0));
 }
 
+TEST_CASE("reset falls back to the 15x11 default for a non-positive size") {
+    // reset() is a public, independently-testable entry point; a 0/negative
+    // width or height must NOT be allowed to reach the start_xy wrap loops
+    // (`while (x < 0) x += width_`), which would spin forever rather than
+    // crash. Regression guard for that hang, not a documented original
+    // behaviour (no known caller passes anything but 15x11 today).
+    EditorGrid g;
+    g.reset(0, 0);
+    CHECK(g.width() == kEditorGridWidth);
+    CHECK(g.height() == kEditorGridHeight);
+    g.reset(-5, -1);
+    CHECK(g.width() == kEditorGridWidth);
+    CHECK(g.height() == kEditorGridHeight);
+}
+
 TEST_CASE("to_scheme emits the shipped -V,2 version") {
     EditorGrid g;
     CHECK(g.to_scheme().version == 2);  // every install scheme is "-V,2"
