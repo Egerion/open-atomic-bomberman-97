@@ -380,12 +380,15 @@ Three facts this pins that §6 alone did not:
   other `dword_464994`-gated per-frame effect in the engine (e.g. the same
   guard shape at pseudo.c 25331/26036).
 
-**Port status:** unaffected by this doc-only pass (the scope note above:
-sparkle-render porting is deliberately deferred to a parallel worktree using
-these exact addresses) — this section exists so that port can cross-check
-its result against `sub_420E39`'s asset name, non-additive blit, and
-frame-count-bound (not getvalue(1010)-bound) per-particle lifetime, none of
-which the original §6 text mentioned.
+**Port status: PORTED (2026-07-09).** Landed the same day as this section,
+in the parallel worktree the scope note above anticipated
+(`33669ec`, "Port id-audit.md presentation-side gaps... gold twinkle"):
+`Renderer::update_gold_sparkles`/`draw_world` (`libs/game/src/renderer.cpp`),
+fed by `GameApp::set_gold_player`. Matches every fact this section pins —
+`goldman_anim_.steps.size()` bounds each particle's lifetime (not
+getvalue(1010)), the draw is a plain opaque `draw_anim` call (no
+additive/glow blend), and getvalue(1010) only gates whether new sparkles
+keep spawning, exactly as `sub_420E39`/`sub_420D4E` do.
 
 (Provenance: `sub_420E39` @0x420E39 pseudo.c 23590-23620; `aGoldman_0`
 pseudo.c 1555; frame-count accessor `sub_41DA5C` pseudo.c 21815-21821;

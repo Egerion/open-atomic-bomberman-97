@@ -7,11 +7,14 @@ and `docs/re/frontend-flow.md` for the companion facts this doc extends).
 
 ## 1. RESULTS cumulative-tally screen — `sub_42A3F6` middle tier (CONFIRMED)
 
-`docs/re/frontend-flow.md` flags the RESULTS tier of the Play handler
-(`sub_42A3F6`, pseudo.c ~29886-30106) as deferred because the spine plays one
-round and returns to the menu. The screen logic itself is fully present in the
-decompile — only the multi-round match/scoreboard *state* is the missing
-piece on our side. Confirmed layout:
+`docs/re/frontend-flow.md` flagged the RESULTS tier of the Play handler
+(`sub_42A3F6`, pseudo.c ~29886-30106) as deferred when this section was
+written, because the spine at the time played one round and returned to the
+menu. The screen logic itself is fully present in the decompile; the
+multi-round match/scoreboard *state* that was then the missing piece has
+since shipped (ROADMAP "Multi-round best-of-N loop + RESULTS tally 1:1 —
+DONE 2026-07-08"; `docs/re/frontend-flow.md` now reads "RESULTS tally tier
+— RE'd, port DONE"). Confirmed layout:
 
 - **Backdrop:** `aResultsPlt` = `"results.plt"` → **RESULTS.PCX** (palette
   loaded via `sub_411D17`/`sub_4151CC` @ 29888-29889), a plain image load —

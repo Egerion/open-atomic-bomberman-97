@@ -576,19 +576,17 @@ behaviour changes (cite the facts.md entry) → tick the box here.
 
 ## Done (highlights)
 
-**State of the port, 2026-07-09.** 35 doctest suites registered in
-`tests/CMakeLists.txt`, all green. RE + port coverage is complete for every
-in-scope subsystem in `docs/re/coverage-audit.md` except a handful of
-low-priority residuals (wall-slam SFX call site, editor chrome polish,
-in-round debug keys) — see that file's "Top open items" list.
-(`LEVELS.DAT`'s purpose was resolved 2026-07-09: confirmed dead/tooling
-data never read by the shipped game, no port needed. The Goldman-wheel
-clogs icon render was closed the same day: the port had already landed in
-`f374e22`; goldman-roulette.md §9.5 now pins the icon fact.) The sole
-**deliberate**
-exclusion is netplay (ADR-0003: the sim stays pure so lockstep netplay is
-possible later, but no netcode is written now) — everything else the
-original binary does has either shipped or has a tracked, pinned follow-up.
+**State of the port, end of day 2026-07-09.** 37 doctest suites registered
+in `tests/CMakeLists.txt`, all green. RE + port coverage is complete for
+every in-scope subsystem in `docs/re/coverage-audit.md` except a single
+low-priority residual (in-round debug/cheat keys, #35, developer/QA-only) —
+see that file's "Top open items" list. (Earlier same-day snapshots of this
+paragraph also listed the wall-slam SFX call site and editor chrome polish
+as open; both closed later the same day — see the 2026-07-09 sweep summary
+below.) The sole **deliberate** exclusion is netplay (ADR-0003: the sim
+stays pure so lockstep netplay is possible later, but no netcode is written
+now) — everything else the original binary does has either shipped or has a
+tracked, pinned follow-up.
 **The pre-push `lefthook` gate is currently NOT installed in this worktree**
 (no `.git/hooks/pre-push`) — re-enable it (`lefthook install`, see README
 "Git hooks") before resuming normal development so the headless build/ctest
@@ -598,3 +596,43 @@ Asset pipeline · deterministic sim core · exact movement port (sub_41EC84) ·
 bombs/kick/punch/grab/throw/spooger · 9 diseases (contagion/cure/visual) ·
 HURRY enclosement · head-stun scatter · owner-coloured bombs/flames · music +
 voice lines · stage rotation · component architecture + golden-hash suite.
+
+## 2026-07-09 sweep summary
+
+~15 concurrent agent branches merged into `main` this day. Grouped, terse
+recap (see `git log --oneline` for the individual commits; full detail is in
+each topic's own doc):
+
+- **RE closures (docs-only):** `LEVELS.DAT` and `bmstats.dat`/`.txt`
+  confirmed dead/write-only telemetry (no reader, no port); 3rd `.DAT` file
+  identified (`WINEREG/EReg058.dat`, bundled registration-wizard template);
+  dark-matter sweep triaged all 1134 decompiled functions (no unattributed
+  gameplay code, one dead AI trio); data-driven VALUELST/SOUNDLST id-audit
+  (`docs/re/id-audit.md`, fixed a taunt SFX range bug); format docs for
+  PCX/SCH/RES/RSS/RMP/VALUELST added to `docs/formats/`.
+- **Sim mechanics ported:** per-level tile regeneration (Haunted House,
+  `sub_426704`) and ice/input-lag (Hockey Rink, `sub_41F29B`) — table rows
+  #45/#46, one-time hash-layout recapture in `test_golden.cpp`.
+- **Presentation fixes/ports:** boot LOADING dialog + main-menu Quit
+  confirm, pixel-exact dialog chrome (`sub_43C734`/`sub_432298`/`sub_412E33`,
+  shared `dialog_chrome.hpp`), main-menu cursor-pacing vsync fix, in-round
+  "player row" S:/K: HUD (`sub_420F07`), Team Play colour split
+  (`sub_4214BC` red/white override), Team Play match-clinch outcome screen
+  (TEAM0/1.PCX, was always VICTORY\<player\>.PCX), Options screen full 19-row
+  1:1 audit (real `cursor1` sprite, uniform SFX 20), id-audit presentation
+  gaps (Fire In The Hole taunt, gold twinkle sparkle, carry arc), Goldman
+  gold-sweep fixes (map-select Esc abort, Options gold-clear semantics),
+  editor polish (Ctrl+B reset, '0' tileset toggle, brush preview), wall-slam
+  SFX call site fix, random-map boot-seed reseed fix, widescreen/fullscreen
+  window support (deliberate port enhancement).
+- **Confirmed N/A (no port needed):** the in-round "cornerhead" `KFACE.ANI`
+  face bubble (`dword_45BE3C`, netplay-replicated joystick-chord easter egg,
+  no local-multiplayer analogue) and INPUT.BM controller-binding (folded
+  into the existing generic `.BM` help browser).
+- **Doc hygiene:** coverage-audit row numbering/status reconciled after each
+  merge, several stale ROADMAP/facts.md/valuelst-map.md notes fixed, leftover
+  merge-conflict markers cleaned up.
+
+Net effect: coverage-audit's open subsystem count dropped to a single
+low-priority residual (#35, in-round debug keys); every asset-format row and
+all §4 netplay-boundary bookkeeping stayed closed/out-of-scope as before.

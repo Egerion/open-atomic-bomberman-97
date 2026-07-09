@@ -136,9 +136,13 @@ outside an authored block.
 
 ## Verdict / work queue
 
-Ranked by evidence strength × player-facing value. **Items 1, 2, 3, and 4 were
-ported 2026-07-09** (`docs/re/facts.md` "id-audit.md presentation-side
-follow-ups"); the rest remain open.
+Ranked by evidence strength × player-facing value. **Items 1-8 were all
+resolved 2026-07-09**: 1/2/4 ported the same day as this audit
+(`docs/re/facts.md` "id-audit.md presentation-side follow-ups"), 3/7/8 fixed
+as doc/data corrections within this audit itself, and 5/6 ported later the
+same day as new `libs/sim` mechanics (`docs/re/facts.md` "Ice / input-lag",
+"Per-level tile regeneration"). Only 9 and 10 remain — both explicitly
+low-priority/out-of-scope flags, not tracked work-queue items.
 
 1. ~~**VALUELST 650/651 + SOUNDLST 1200 group — "Fire In The Hole" taunt on a long bomb string.**~~ **PORTED.** Fully pinned call site (`sub_41F29B`), self-contained (a bomb-count-powerup-level gate + a chance roll + a group-play), no dependency on any unported subsystem. `sound_director.cpp`'s `BombPlaced` handler.
 2. ~~**VALUELST 1010 (twinkle) + `sub_420D4E`/`sub_420F07` — gold-player sparkle.**~~ **PORTED.** `Renderer::update_gold_sparkles`/`draw_world`, fed by `GameApp::set_gold_player` every frame. Purely cosmetic, zero determinism risk.

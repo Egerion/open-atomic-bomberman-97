@@ -849,8 +849,9 @@ winner), each as a normal `Screen` with a bounded 6 s dwell (the `sub_42A3F6`
 attract auto-advance) then a return to the menu. The winner voice group (2000)
 is played by `run_match` on match-over, matching `sub_427BFB(2000)`. RESOLVED
 2026-07-09: `Player::team` landed (docs/re/setup-screens.md "team mode
-landed"), so `game_app.cpp`'s `team_victory_screen()` now picks TEAM0/TEAM1
-instead of always falling through to VICTORY<player> under Team Play — the
+landed"), so `results.hpp`'s `victory_background_name()` (called from
+`game_app.cpp`) now picks TEAM0/TEAM1 instead of always falling through to
+VICTORY<player> under Team Play — the
 prior always-VICTORY<player> behaviour was a genuine gap (TEAM%u was still a
 "future hook" note left over from before team state existed), not a deliberate
 simplification.
@@ -941,25 +942,31 @@ parser + the new `bmfont` parser):
   `byte_49D38F` index → a fixed light ink on a dark panel — a cosmetic port
   choice, layout/advance are faithful).
 
-**Interactive settings — Options screen BUILT (clean-room) and now RE'd;
-controller-remap RE'd, port still DEFERRED.** These `.BM` files are the **HELP
-overlays** listed by the help browser (`sub_41431C`, corrected above). The
-**Options screen** (`libs/game/src/options_screen.cpp`) is a fully-interactive
-Team Play / Conveyor Speed editor persisting to `options.ini`
-(read-modify-write, `bomber::assets::save_options`); its F1 key still reaches
-OPTIONS.BM. It was built clean-room against the glue-screen conventions
-(random `GLUE<n>` backdrop, FONT6 text, SFX 20 nav / 10 accept) BEFORE the
-real screen was RE'd; the original (`sub_4080DC` — a 19-item list including
-team play, random start, conveyor speed, "Define keyboard layouts", persisting
-to `options.ini` only on app exit via `sub_405DE3`/`sub_410EBF`) is now fully
-pinned in `docs/re/results-and-options.md` §3 (+ the complete 22-key
-`options.ini` table), so aligning our screen's item list/layout/write-timing
-to it is a tracked follow-up. The **key-remap UI** (`sub_407B9D`, reached from
-the Options screen's "Define keyboard layouts" row — NOT the
-`sub_42B0CE`/`sub_42B47D` net-game screens) is RE'd in the same doc §2;
-porting that widget is still a separate implementation effort. The `AppState`
+**Interactive settings — Options screen and key-remap UI both RE'd and
+ported, 1:1 aligned.** These `.BM` files are the **HELP overlays** listed by
+the help browser (`sub_41431C`, corrected above). The **Options screen**
+(`libs/game/src/options_screen.cpp`) is a fully-interactive 19-row editor
+persisting to `options.ini` (read-modify-write, `bomber::assets::save_options`);
+its F1 key still reaches OPTIONS.BM. It was originally built clean-room
+against the glue-screen conventions (random `GLUE<n>` backdrop, FONT6 text,
+SFX 20 nav) BEFORE the real screen was RE'd; the original (`sub_4080DC` — a
+19-item list including team play, random start, conveyor speed, "Define
+keyboard layouts", persisting to `options.ini` only on app exit via
+`sub_405DE3`/`sub_410EBF`) is now fully pinned in
+`docs/re/results-and-options.md` §3 (+ the complete 22-key `options.ini`
+table), and the port's item list/layout/selection-sprite/SFX/write-timing
+were aligned to it in the 2026-07-09 full 1:1 audit (same doc §3, "2026-07-09
+full 1:1 audit of the port vs `sub_4080DC`'s actual body"; `docs/re/
+coverage-audit.md` table row #27). The **key-remap UI** (`sub_407B9D`,
+reached from the Options screen's "Define keyboard layouts" row — NOT the
+`sub_42B0CE`/`sub_42B47D` net-game screens) is RE'd in the same doc §2 and
+ported as `KeyRemapScreen` (`libs/game/{include/bomber/game,src}/
+keyremap_screen.{hpp,cpp}`; coverage-audit table row #28). The `AppState`
 hooks (`Options`, `Network`, `Controllers`) are in place; Network/Controllers
-currently show the help text.
+show the help text — `Controllers` is a confirmed-negative leaf, unreachable
+from any menu row in the original either (`docs/re/frontend-flow.md`
+"INPUT.BM menu-row binding — CONFIRMED NEGATIVE"; coverage-audit table
+row #23).
 
 ## The transition — HEADWIPE.ANI, driven by the standard ANI pacer
 

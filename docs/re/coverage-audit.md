@@ -71,7 +71,7 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 | 10 | Options toggles → sim (stomped-bombs-detonate, diseases-destroyable, random-start) | pinned | ported | facts.md "Options toggles", `test_options.cpp` | — | done |
 | 11 | Team mode (sim side: `Player::team`, round-end side logic) | pinned | ported | ROADMAP "TEAM MODE, sim side — DONE 2026-07-08", `test_team.cpp` | — | done |
 | 12 | AI — all 8 behaviours (`ai.c`/VALUELST 900-series) | pinned | ported | `docs/re/ai.md`, ADR-0005, `ai.cpp`, `test_ai.cpp` | — | done (Phase 2 complete) |
-| 13 | AI: campaign "rover"/"ghost" mover (`sub_401AAE`/`sub_401B05` spawn, `sub_401B5C` per-tick mover) | pinned | ported | `docs/re/campaign.md` "Rover/ghost/AI roster — CORRECTED", `libs/sim/src/systems/rovers.cpp/.hpp` (wander AI, human-avoidance bias, flame-death + kill-score, landing-tile player kill), hashed `State::rovers`, `tests/test_rovers.cpp`; wired via `simulation.cpp`, rendered (`renderer.cpp`), campaign pacing clause 1/3 consumed in `game_app.cpp` | — | done |
+| 13 | AI: campaign "rover"/"ghost" mover (`sub_401AAE`/`sub_401B05` spawn, `sub_401B5C` per-tick mover) | pinned | ported (2 minor documented deviations, both dormant) | `docs/re/campaign.md` "Rover/ghost/AI roster — CORRECTED", `libs/sim/src/systems/rovers.cpp/.hpp` (wander AI, human-avoidance bias, flame-death + kill-score, landing-tile player kill), hashed `State::rovers`, `tests/test_rovers.cpp`; wired via `simulation.cpp`, rendered (`renderer.cpp`), campaign pacing clause 1/3 consumed in `game_app.cpp`. Two known deviations, both documented in campaign.md's "Port status" section: `RoverSystem::spawn`'s distance-3 gate filters `!present`/`!alive` slots (the disassembly's `sub_422351` doesn't) — negligible practical effect; the one-shot rover-spawn powerup-relocation cleanup (`sub_42583B`/`sub_425704`, mover step 0) is NOT ported — unreachable in practice (no scenario spawns a rover onto an already-floored powerup) | low — wire the powerup-relocation cleanup if a golden scenario ever needs it | done |
 | 14 | AI: `sub_4245DA` "column-guard" comparand | pinned | ported | ai.md §9.3 RESOLVED (2026-07-09, raw-disasm re-pin): comparand = max-bombs byte +86, and `sub_4245DA` counts the actor's OWN live bombs (owner word at bomb +62), not bombs-in-column; port CORRECTED to the spare-capacity gate (`ai.cpp` behaviours 3/4, `test_ai.cpp` pins) | — | done |
 | 15 | Wall-slam SFX ids 140–146 | pinned | ported (fixed) | facts.md "Wall-slam SFX — CONFIRMED (2026-07-09, `sub_426818`/`sub_4278F2`)": call site is the enclosure stepper's drop loop, `dword_462244 = rand()%3` drawn ONCE per arm; SOUNDLST.RES's own "hard-coded to play one of the three below" comment corroborates 140/141/142-only, 143-146 dead. `SoundDirector`/`AudioEngine::roll` fixed to latch one id per round instead of re-picking per drop | — | done |
 | 45 | Per-level tile regeneration (VALUELST 340-350/695, Haunted House) | pinned | ported | facts.md "Per-level tile regeneration — CONFIRMED (2026-07-09, `sub_426704`, called from `sub_426818`)", `libs/sim/src/systems/tile_regen.cpp`, `tests/test_regen.cpp`; one-time hash-layout growth (`State::regen_timer`), recaptured in `test_golden.cpp` | — | done |
@@ -94,7 +94,7 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 | 26 | Player colour `.RMP` remap pipeline | pinned | ported | player-colour.md (no open gaps), `rmp.cpp`, `test_rmp.cpp` | — | done |
 | 27 | Options screen (19-row `sub_4080DC`) | pinned | ported (full 19-row audit, 2026-07-09) | results-and-options.md §3 "2026-07-09 full 1:1 audit": all 19 rows now draw (previously 8 net/modem/legacy rows were hidden — CORRECTED, the original shows them too, in the same ink); real `cursor1` MISC.ANI selection sprite replaces the earlier text-recolour stand-in; no invented "OPTIONS" header (none in the decompile); row-nav wrap faithfully reproduces the original's `v168=18` off-by-one (row 18 "Adjust Audio" permanently unreachable, matching the shipped binary); uniform SFX 20 (no invented accept jingle); Team Play toggle now also resets the pending Goldman winner, matching row 6; rows 10/12/17 upgraded from omitted to LIVE round-tripped toggles | — | done |
 | 28 | Key-remap UI (`sub_407B9D`) | pinned | ported | results-and-options.md, `KeyRemapScreen` | — | done |
-| 29 | Goldman Roulette wheel | pinned | ported | goldman-roulette.md, ROADMAP "Goldman Roulette wheel — DONE 2026-07-08". 2026-07-09 full gold sweep (§2.1): fixed two previously-missed `dword_46492C`-clear sites — the LEVEL & ROUNDS screen's Esc was wrongly ported as "back to the player screen" (original aborts the whole Play flow, same as the wheel's own Esc) and the Options screen's Team Play toggle never forfeited a pending gold player (only the Gold Bomberman row did) — plus pinned §6.1, the twinkle's actual RENDER mechanism (`sub_420E39`, the `"goldman"` MISC.ANI sequence, particle lifetime bound by the ANI's own frame count rather than getvalue(1010), non-additive draw) for the parallel sparkle-render port's cross-check; that render code itself is intentionally NOT touched here (separate in-flight work) | — | done (RE); render-port cross-check pending in its own worktree |
+| 29 | Goldman Roulette wheel | pinned | ported | goldman-roulette.md, ROADMAP "Goldman Roulette wheel — DONE 2026-07-08". 2026-07-09 full gold sweep (§2.1): fixed two previously-missed `dword_46492C`-clear sites — the LEVEL & ROUNDS screen's Esc was wrongly ported as "back to the player screen" (original aborts the whole Play flow, same as the wheel's own Esc) and the Options screen's Team Play toggle never forfeited a pending gold player (only the Gold Bomberman row did) — plus pinned §6.1, the twinkle's actual RENDER mechanism (`sub_420E39`, the `"goldman"` MISC.ANI sequence, particle lifetime bound by the ANI's own frame count rather than getvalue(1010), non-additive draw); the parallel sparkle-render port (`Renderer::update_gold_sparkles`/`draw_world`, `GameApp::set_gold_player`) landed the same day (`33669ec`) and matches §6.1's pins | — | done |
 | 30 | Goldman wheel prize id 13 (clogs, speed-penalty booby prize) | pinned | ported | goldman-roulette.md §9 "RESOLVED 2026-07-08": hashed `Player::clogs` count + `MatchConfig::born_with_clogs` overlay (not a 14th `PowerupType` — permanent design decision, not a stub), speed-penalty folded into the walk-speed term per `tuning.hpp`'s `clogs_speed_penalty` (id 91); `f374e22`/`228a33f`. Wheel prize-icon render for slot 13 also done: goldman-roulette.md §9.5 "RESOLVED 2026-07-09" pins `sub_425C7F`/`off_45BE50[13]="clog"` and confirms `DATA/ANI/POWERS.ANI` ships a real `"power clog"` sequence; `SequenceSet::clogs_anim` + `GoldmanScreen::draw()`'s slot-13 branch (landed in `f374e22`) draw it | — | done |
 | 31 | Hidden scheme/map editor (`sub_4028D2`) | pinned | ported | results-and-options.md, ROADMAP "Hidden scheme editor — DONE 2026-07-08" | — | done |
 | 32 | Editor: Ctrl+B reset, '0' dead-tileset toggle, brush-preview-at-cursor, exact dialog chrome | pinned | ported | results-and-options.md §5/§5d "2026-07-09: the four remaining items closed out" (Ctrl+B's `dirty_`/`v49` gate — including the Esc/Q silent-exit-when-untouched corollary — `editor_grid.hpp`'s `toggle_editor_tileset` + doctest, `EditorScreen::on_mouse_move`, `dialog_chrome.{hpp,cpp}` shared confirm/text-entry chrome wired into `EditorScreen::draw`/`PowerupRulesScreen::draw`) | — | done |
@@ -107,7 +107,7 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 | 39 | SDL3 gamepad support | pinned (`sub_421E80` cycle order) | ported | ROADMAP "SDL3 gamepad support — DONE 2026-07-08" | — | done |
 | 40 | Team Play colour split (the red/white sprite override) | pinned | ported | player-colour.md "Team Play colour override" (`sub_4214BC` round-init +60 override, CONFIRMED 2026-07-09), `bomber::match::team_render_colour` (`libs/match/include/bomber/match/team_colour.hpp`), `Renderer::render_colour` (`renderer.cpp`, every player/bomb/flame/carried-bomb/death-anim colour site), `present_setup`'s trailing team-marker glyph (`game_app.cpp`), `test_team.cpp` | — | done |
 | 41 | In-round "player row" HUD (S:/K: score+kill grid, "xxx" dead-slot marker) | pinned | ported | in-match-shell.md "The player row — CONFIRMED (`sub_420F07`, corrects the point above)" (2026-07-09) — corrects row #34's/this doc's own earlier "no score/kill HUD" claim; `GameApp::draw_player_row`, `SequenceSet::eliminated_marker` | — | done |
-| 42 | In-round "cornerhead" face bubble (`KFACE.ANI`, follows one designated player slot `dword_45BE3C`) | pinned (fully traced, 2026-07-09) | **N/A — confirmed negative** | in-match-shell.md "the cornerhead face bubble — CONFIRMED N/A for a same-screen port (2026-07-09)": exhaustive 5-site trace of `dword_45BE3C` (declaration, round-reset `sub_421793`, joystick-only write `sub_41E61E` case 3 gated on an obscure `dwButtons` chord [74/138], network-send `sub_4101F1` msg 57, receive-mirror `sub_40E2D8`→`sub_4226F6`) — netplay-replicated, joystick-exclusive, no stable "which slot" identity to translate | none — netplay-only broadcast with no local-multiplayer analogue (no joystick input in this port, no "peer" to broadcast to on one machine, no fixed slot identity to reuse without inventing one) | N/A |
+| 42 | In-round "cornerhead" face bubble (`KFACE.ANI`, follows one designated player slot `dword_45BE3C`) | pinned (fully traced, 2026-07-09) | **N/A — confirmed negative** | in-match-shell.md "the cornerhead face bubble — CONFIRMED N/A for a same-screen port (2026-07-09, corrected same day — `21bc184`)": exhaustive 5-site trace of `dword_45BE3C` (declaration, round-reset `sub_421793`, joystick-chord-only write `sub_41E61E` case 3 gated on the RAW `dwButtons` bitmask being exactly 74 (set) / 138 (clear), network-send `sub_4101F1` msg 57, receive-mirror `sub_40E2D8`→`sub_4226F6`) — netplay-replicated, joystick-chord-exclusive, no stable "which slot" identity to translate | none — netplay-only broadcast with no local-multiplayer analogue (the port DOES drive type-3 joystick slots via SDL3 `GamepadMapper`, table row #39, but the mapper only exposes d-pad/left-stick + south/east buttons, no raw button-bitmask surface on which "exactly 74/138" could be reproduced faithfully; no "peer" to broadcast to on one machine either, and no fixed slot identity to reuse without inventing one) | N/A |
 | 43 | Main-menu (and other front-end loops') animated-cursor pacing vs. an uncapped render loop | pinned | **RESOLVED** | frontend-flow.md "Cursor pacing — CORRECTED (2026-07-09)": `sub_42B9CE`'s cursor-frame counter advances once per menu-loop iteration with no separate throttle (the DirectDraw flip's own vsync IS the pacing); our port's equivalent `++frame` was uncapped (`SDL_Delay(2)` only, ~500 Hz, ~8x too fast) — fixed with one `SDL_SetRenderVSync(ren, 1)` call in `GameApp::init()`, which also corrects the same pattern in the Goldman wheel spin / boot logos / attract idle | — | done |
 | 44 | Team Play match-clinch outcome screen (TEAM0/1.PCX vs VICTORY\<player\>.PCX) | pinned | **fixed 2026-07-09** | frontend-flow.md "VICTORY" §3 (`aTeamU`/`aVictoryU`) — the port's `victory_screen()` always resolved `VICTORY<player>` even under Team Play, a real end-to-end gap left over from before `Player::team` landed (frontend-flow.md's "Spine mapping" note used to say "TEAM%u is a documented future hook"); fixed with `victory_background_name()` (`results.hpp`/`game_app.cpp`, TEAM0/TEAM1.PCX confirmed shipped in the install), gated on `is_team_mode()` at the match-clinch call site, naming the clinching player's raw setup-screen team id (same id `present_scoreboard`'s "TEAM %u WINS" line and the setup-screen marker already use) | — | done |
 
@@ -178,11 +178,14 @@ the unrelated dash-command `EXTRA<N>.RES` actor-placement grammar),
 (VALUELST.RES's `getvalue` runtime-lookup contract specifically; the id
 meaning table itself stays at `docs/valuelst-map.md`, not duplicated).
 `docs/formats/` now has 9 files, one per parsed asset format. While writing
-`valuelst.md` this pass found and flagged (not fixed, out of this task's
-scope) a pre-existing address mislabel in `facts.md`'s "VALUELST lookup
-mechanism" section — see that file's own note for detail; every OTHER
-mention of `getvalue`/`getstring` in the repo's docs is self-consistent and
-was used instead.
+`valuelst.md` this pass found (but did not fix, out of this task's scope) a
+pre-existing address mislabel in `facts.md`'s "VALUELST lookup mechanism"
+section: `sub_4124A4` was mislabelled `getvalue` when it is actually
+`getstring` (the real `getvalue` is `sub_412135`). **Fixed later the same
+day** (`7f76c4c`, verified against pseudo.c arithmetic vs. text-drawer call
+sites) — see `facts.md`'s own correction note at the top of the "VALUELST
+lookup mechanism" section for detail; every OTHER mention of
+`getvalue`/`getstring` in the repo's docs was already self-consistent.
 
 ## 4. Netplay boundary (ADR-0003 — excluded, not a gap)
 
@@ -314,9 +317,12 @@ Counting the 46 numbered subsystem rows (§1+§2) + the 14 distinct
 asset-format rows in §3 (excluding pure-tooling extensions marked N/A:
 .ICO/.EXE/.DLL/.IDB):
 
-- **Covered (RE pinned + ported, "done"):** 44 of 46 subsystem rows (up from
-  31 at the 2026-07-08 snapshot — #13 rover/ghost mover, #18 attract mode,
-  and #30 clogs prize (effect + wheel icon render) closed earlier in this
+- **Covered (RE pinned + ported):** 43 of 46 subsystem rows — 42 rows marked
+  "done" in the table above, plus #33 (editor powerup sub-editor,
+  keyboard-substitute for mouse-only interaction — ported with an accepted,
+  documented deviation, so counted as covered despite its "low" priority
+  label). Up from 31 at the 2026-07-08 snapshot: #13 rover/ghost mover, #18
+  attract mode, and #30 clogs prize (effect + wheel icon render) closed earlier in this
   2026-07-09 pass; #15 wall-slam SFX and #23 INPUT.BM menu-row binding
   closed in the same day's SFX/audit sweep; #32's editor Ctrl+B reset/'0'
   tileset toggle/brush-preview/dialog-chrome polish closed in the same
@@ -421,33 +427,51 @@ exact file:line inline markers a future session can pick off directly.
 ## TODO(RE) / TODO(§) crumbs still in the tree
 
 Grepped `TODO(RE)` and `TODO(§` across `docs/`, `libs/`, `apps/`, `tests/`
-(re-checked 2026-07-09, after closing the campaign confirmation-dialog and
-campaign-exit-key crumbs — see below). The two campaign crumbs this list
-previously tracked (`game_app.cpp`'s former lines 993 and 1832) are now
-**CLOSED**: the confirmation dialog is ported (`present_campaign_confirm`,
-`docs/re/campaign.md` "Campaign-activation confirmation dialog") and the
-campaign-exit key is a CONFIRMED negative (`docs/re/campaign.md`
-"Campaign-exit key") — both comments were rewritten in place, removing the
-literal `TODO(RE)` markers. Two crumbs remain, both pointing at the SAME
-unresolved gap (not two independent ones):
+(re-checked 2026-07-09 end-of-day — the line numbers below drifted since the
+editor-polish pass extracted the dialog-chrome primitives out of
+`game_app.cpp` into `dialog_chrome.hpp` (`43fe187`/`50f076e`), and this list
+had not been refreshed since). The campaign crumbs this list previously
+tracked are **CLOSED**: the confirmation dialog is ported
+(`present_campaign_confirm`, `docs/re/campaign.md` "Campaign-activation
+confirmation dialog", which itself notes "coverage-audit.md TODO(RE) crumb,
+now closed") and the campaign-exit key is a CONFIRMED negative
+(`docs/re/campaign.md` "Campaign-exit key"). Two genuine crumbs remain,
+plus one historical false-positive:
 
-1. `libs/game/src/game_app.cpp:52` and `:1781` — the `sub_43C734` dialog
-   family's explicit horizontal-centering X value: `sub_43D398`'s own
-   internal X computation is a Hex-Rays "possibly undefined" register the
-   decompile alone can't resolve; every call site's visible intent is a
-   horizontally-centered dialog (matching the port's `dialog_rect`
-   convention), but pinning the EXACT source register/expression needs a
-   disassembler pass this environment doesn't have. Low priority: the port's
-   centering behaviour already matches every dialog's visible on-screen
-   intent, so this is a provenance gap, not an observable-behaviour gap.
-2. `libs/game/include/bomber/game/editor_grid.hpp:102` — `// earlier "brush
-   sizes 1/2/3, anchor rule TODO(RE)" is resolved by`. Not a live TODO: this
-   is a comment *referencing* a past TODO(RE) that was already resolved (the
-   original has no multi-cell brush, confirmed). Matched by the grep but not
-   actionable — safe to leave as historical context, or reword to drop the
-   literal "TODO(RE)" substring if a future pass wants the grep clean.
+1. **The `sub_43C734`/`sub_43D398` dialog-chrome X-placement gap** — one
+   provenance gap, cited at multiple call sites now that the chrome lives in
+   one shared header: `libs/game/include/bomber/game/dialog_chrome.hpp:33`
+   (the primary note), `:75` and `:92` (cross-references from the
+   two-line-prompt ordering and the compact-dialog width baseline, "same
+   class of gap"), `libs/game/src/game_app.cpp:1842` (the quit-confirm modal
+   comment, cross-reference only), `docs/re/results-and-options.md:796`
+   (cross-reference), and the RE source itself,
+   `docs/re/frontend-flow.md:148` (`sub_43D398`'s exact X-default formula —
+   a Hex-Rays "possibly undefined" register the decompile alone can't
+   resolve). Every call site's visible intent is a horizontally-centered
+   dialog (matching the port's `dialog_rect` convention), but pinning the
+   EXACT source register/expression needs a disassembler pass this
+   environment doesn't have. Low priority: the port's centering behaviour
+   already matches every dialog's visible on-screen intent, so this is a
+   provenance gap, not an observable-behaviour gap.
+2. **`sub_43D080`'s exact role** — `docs/re/frontend-flow.md:263`, a
+   separate, smaller RE gap in the LOADING dialog's progress-bar readout: a
+   call between the caption and the readout whose third geometry argument is
+   read from the window's own stored fields (same class of register-spill
+   loss as item 1, but a different function/call site). Already resolved as
+   a deliberate omission, not open work: "visually inconsequential either
+   way (the bar redraws that same band), so the port omits it rather than
+   guess a specific 1px line."
+3. `libs/game/include/bomber/game/editor_grid.hpp:119` (line number
+   corrected from a stale `:102` citation) — `// earlier "brush sizes 1/2/3,
+   anchor rule TODO(RE)" is resolved by`. Not a live TODO: this is a comment
+   *referencing* a past TODO(RE) that was already resolved (the original has
+   no multi-cell brush, confirmed). Matched by the grep but not actionable —
+   safe to leave as historical context, or reword to drop the literal
+   "TODO(RE)" substring if a future pass wants the grep clean.
 
-No other `TODO(RE)`/`TODO(§` markers exist in the tree. (Plain `TODO` without
-those tags also appears at `libs/game/include/bomber/game/options_screen.hpp`
-lines 49/53 — Network screen and Goldman-wheel-consumer follow-ups already
-tracked via table rows #23/#29 — and is not double-counted here.)
+No plain `TODO` (without the `(RE)`/`(§` tag) exists anywhere in `libs/`,
+`apps/`, or `tests/` as of this pass — the `options_screen.hpp` lines 49/53
+this list previously cited no longer carry one (Network screen and
+Goldman-wheel-consumer follow-ups are tracked via table rows #23/#29
+instead, with no inline marker needed).
