@@ -308,8 +308,16 @@ VALUELST legend (`; OPTIONS SCREEN:`):
   `sub_40FAD5` applies it.
 - **Confirm/cancel:** any real key → SFX 20. **Enter (13)** →
   `sub_427961(10)`; **commit `dword_464998 = dword_45E0B8` (level) and
-  `dword_464A7C = dword_45E0B4` (wins)**; done. **Esc (27)** → back
-  (`dword_464A68=2`). Up(328)/Down(336) move between the 2 rows (wrap).
+  `dword_464A7C = dword_45E0B4` (wins)**; done. **Esc (27)** → `dword_46492C
+  = -1` (forfeits any pending Goldman gold player — CORRECTED 2026-07-09,
+  `docs/re/goldman-roulette.md` §2.1: previously undocumented here) THEN
+  `dword_464A68 = 2` (pseudo.c 8186-8191). This does **NOT** step back to
+  the player-setup screen — `sub_406DDE` is called from `sub_410F81`'s own
+  TAIL (§ below, "How the level flows into the match") with nothing after
+  it but a return, so Esc here aborts the WHOLE Play flow straight to the
+  menu, the same shape as the Goldman wheel's own Esc
+  (`goldman-roulette.md` §5). Up(328)/Down(336) move between the 2 rows
+  (wrap).
 
 **How the level flows into the match (`sub_410B6E` @0x410B6E):** at match init
 it resolves the committed level:

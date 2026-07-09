@@ -165,6 +165,16 @@ public:
     // True if any setting differs from what enter() was called with — the
     // caller only writes options.ini when this is true.
     bool changed() const { return changed_; }
+    // True if the Team Play or Gold Bomberman row was pressed at ALL during
+    // this visit, regardless of the net before/after value (pseudo.c
+    // 9310-9311/9334-9335/9410-9412/9436-9437, docs/re/results-and-
+    // options.md §3 rows 0/6): the original clears `dword_46492C` INLINE,
+    // unconditionally, on every press of either row — so toggling one an
+    // even number of times (ending back at its original value) still
+    // forfeits a pending gold player in the original, which a plain
+    // snapshot-diff at screen-exit would miss. The caller (GameApp) checks
+    // this instead of comparing snapshots for the gold-player clear.
+    bool gold_forfeiting_row_touched() const { return goldman_touched_ || team_play_touched_; }
     // True for exactly one frame's worth of on_key() calls: the highlighted
     // row was "Define keyboard layouts" and Enter/Right was pressed. The
     // caller checks this AFTER on_key(), pushes the key-remap screen, then
@@ -185,6 +195,8 @@ private:
     bool changed_ = false;
     bool done_ = false;
     bool open_keyremap_ = false;
+    bool goldman_touched_ = false;    // see gold_forfeiting_row_touched()
+    bool team_play_touched_ = false;
 };
 
 }  // namespace bomber::game

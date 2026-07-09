@@ -60,6 +60,8 @@ void OptionsScreen::enter(const OptionsSnapshot& current, std::string backdrop) 
     done_ = false;
     changed_ = false;
     open_keyremap_ = false;
+    goldman_touched_ = false;
+    team_play_touched_ = false;
     snap_ = current;
     if (snap_.conveyor_speed_index < 0) snap_.conveyor_speed_index = 0;
     if (snap_.conveyor_speed_index > 2) snap_.conveyor_speed_index = 2;
@@ -95,6 +97,11 @@ void OptionsScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
                     snap_.team_play = !snap_.team_play;
                     // §3 row 0: "forces win_by_kills off" when Team Play is on.
                     if (snap_.team_play) snap_.win_by_kills = false;
+                    // pseudo.c 9310-9311/9410-9412: toggling Team Play ALSO
+                    // clears `dword_46492C` inline, every press — not just
+                    // Gold Bomberman's own row (doc §2's "Cleared to -1 by"
+                    // list previously missed this).
+                    team_play_touched_ = true;
                     changed_ = true;
                     break;
                 case OptionRow::RandomStart:
@@ -125,6 +132,9 @@ void OptionsScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
                     break;
                 case OptionRow::GoldBomberman:
                     snap_.goldman = !snap_.goldman;
+                    // pseudo.c 9334-9335/9436-9437: cleared inline on every
+                    // press, matching team_play_touched_ above.
+                    goldman_touched_ = true;
                     changed_ = true;
                     break;
                 case OptionRow::EnclosementDepth: {

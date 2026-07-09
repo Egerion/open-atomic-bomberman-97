@@ -364,6 +364,32 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       own prize-icon render for slot 13 is also DONE (`f374e22`,
       goldman-roulette.md §9.5): `sub_425C7F`/`off_45BE50[13]="clog"` pinned,
       `SequenceSet::clogs_anim` draws the real "power clog" POWERS.ANI icon.
+- [x] Full gold sweep — DONE 2026-07-09 (goldman-roulette.md §2.1/§6.1):
+      re-audited every `dword_46492C`/`dword_4648BC` read/write site in the
+      binary against the port. Found and fixed two presentation-only
+      mismatches (no golden impact — `gold_player_` is a `GameApp` int, never
+      sim state): (1) the LEVEL & ROUNDS screen's Esc was ported as "go back
+      to the player-setup screen"; the original aborts the WHOLE Play flow to
+      the menu (`sub_406DDE` is called from `sub_410F81`'s own tail with no
+      loop back) and also forfeits the pending gold player, neither of which
+      the port did; (2) the Options screen's Team Play toggle never forfeited
+      a pending gold player — only the Gold Bomberman row did, but the
+      original clears it on EITHER row, inline on every press (not gated on
+      the net before/after value, so an even number of presses back to the
+      original value still clears it in the original). `OptionsScreen` now
+      tracks per-row `_touched_` flags instead of a snapshot diff.
+      Also pinned §6.1: the twinkle's actual RENDER mechanism (`sub_420E39`,
+      never previously documented) — the `"goldman"` MISC.ANI sequence, a
+      plain (non-additive) sprite blit via the same `sub_415A9F` the player
+      body sprite uses, and a per-particle lifetime bound by that sequence's
+      own frame count rather than getvalue(1010) (which only gates NEW
+      spawns) — for the parallel sparkle-render port (VALUELST 1010,
+      `sub_420D4E`/`sub_420F07`) to cross-check against; that render code is
+      deliberately NOT touched here. Swept for other gaps (team-mode gold
+      interactions, in-round visual/status differences, RESULTS/scoreboard
+      differences, voice lines) and found none beyond the two fixes above —
+      the existing §2/§4/§9 pins (gold-player assignment, +1 born-with award,
+      clogs) already held up against a fresh read of every consumer site.
 - [x] Hidden scheme editor — DONE 2026-07-08 (results-and-options.md §5):
       Ctrl+E ×6 menu trigger, chooser + 15×11 mouse editor + powerup-rules
       sub-editor, .SCH writer with parse(write(s))==s round-trip; detail pass

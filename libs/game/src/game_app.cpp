@@ -930,10 +930,14 @@ AppInput GameApp::present_options_screen() {
     // is untouched here; flush_options() (run()'s tail) is the sole writer.
     if (opt.changed()) {
         // doc §2: "Cleared to -1 by: ... the Options-screen Gold Bomberman
-        // toggle" — ANY edit of that row (on or off) forfeits a pending gold
-        // player, checked before options_ is overwritten with the new
-        // snapshot so this compares old vs new.
-        if (opt.snapshot().goldman != options_.goldman) gold_player_ = -1;
+        // toggle" AND, per the 2026-07-09 gold sweep, the Team Play toggle
+        // (pseudo.c 9310-9311/9334-9335/9410-9412/9436-9437) — ANY PRESS of
+        // either row forfeits a pending gold player in the original, inline
+        // at toggle time, not gated on the net before/after value (an even
+        // number of presses back to the original value still clears it) —
+        // gold_forfeiting_row_touched() tracks that faithfully instead of
+        // this snapshot diff.
+        if (opt.gold_forfeiting_row_touched()) gold_player_ = -1;
         options_ = opt.snapshot();
         team_play_ = options_.team_play;
         conveyor_speed_index_ = options_.conveyor_speed_index;
@@ -2438,7 +2442,21 @@ AppInput GameApp::present_map_select() {
             if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
             if (ev.type != SDL_EVENT_KEY_DOWN) continue;
             const SDL_Keycode k = ev.key.key;
-            if (k == SDLK_ESCAPE) { audio_.play(20); return AppInput::Back; }  // back to setup
+            if (k == SDLK_ESCAPE) {
+                // sub_406DDE's own Esc handler (pseudo.c 8186-8191) is called
+                // straight from sub_410F81's TAIL (pseudo.c 15516, gated
+                // `if (!dword_464A68)`) with NO loop back to the player
+                // screen afterwards — so this aborts the WHOLE Play flow to
+                // the menu, exactly like the Goldman wheel's own Esc (doc §5),
+                // NOT "back one screen" to present_setup. It also forfeits any
+                // pending gold player (`dword_46492C = -1`, doc §2's "Cleared
+                // to -1 by" list) — a fact the prior pass of this screen and
+                // of goldman-roulette.md §2 missed entirely (only sub_4034BC's
+                // and sub_410F81's OWN Esc handlers were pinned there).
+                audio_.play(20);
+                gold_player_ = -1;
+                return AppInput::Back;
+            }
             if (k == SDLK_RETURN || k == SDLK_KP_ENTER) {  // commit + start (LABEL_101)
                 audio_.play(10);
                 waiting = false;
@@ -2847,12 +2865,18 @@ int GameApp::run_app() {
                     campaign_stage_index_ = 0;
                     // The pre-match flow reached from Play (sub_42A3F6): the PLAYER
                     // INPUT screen (sub_410F81) then the LEVEL & ROUNDS screen
-                    // (sub_406DDE), then the match. Escape backs up ONE step at
-                    // each screen: cancel on the level screen -> back to the player
-                    // screen; cancel on the player screen -> back to the menu.
-                    // reset_match_scores() clears the tally; the level screen owns
-                    // the win target so we reset FIRST, then let the level screen
-                    // adjust win_target_.
+                    // (sub_406DDE), then the match. CORRECTED: Escape does NOT
+                    // back up one step at a time — sub_406DDE is called from
+                    // sub_410F81's own TAIL (pseudo.c 15504-15517, `if
+                    // (!dword_464A68) { ...; sub_406DDE(); }`) with nothing
+                    // after that call but `sub_401312()` and return, so an Esc
+                    // on EITHER screen aborts the WHOLE Play flow straight back
+                    // to the menu (same shape as the Goldman wheel's own Esc,
+                    // doc §5) — there is no "go back to the player screen"
+                    // path anywhere in the original. reset_match_scores()
+                    // clears the tally; the level screen owns the win target
+                    // so we reset FIRST, then let the level screen adjust
+                    // win_target_.
                     reset_match_scores();
                     // ATTRACT short-circuit (docs/re/frontend-flow.md
                     // "Attract mode" point 1, sub_410F81 pseudo.c 15125-15143):
@@ -2911,10 +2935,14 @@ int GameApp::run_app() {
                         // roster (present_campaign_picker), so a confirmed
                         // setup screen goes STRAIGHT to the match.
                         if (campaign_active_) { started = true; break; }
-                        // Player screen accepted -> the LEVEL screen.
+                        // Player screen accepted -> the LEVEL screen. Esc here
+                        // aborts the WHOLE flow (see the comment above this
+                        // loop) -- NOT a loop back to present_setup — so this
+                        // mirrors the wheel-abort and player-screen-Esc
+                        // branches above, not the campaign short-circuit.
                         AppInput lvl = present_map_select();
                         if (lvl == AppInput::Quit) return 0;
-                        if (lvl == AppInput::Back) continue;  // back to the player screen
+                        if (lvl == AppInput::Back) { ev = AppInput::Advance; break; }
                         started = true;  // both screens confirmed -> start the match
                     }
                     if (!started) ev = AppInput::Advance;  // cancelled all the way out
