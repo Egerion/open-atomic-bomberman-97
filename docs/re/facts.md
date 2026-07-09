@@ -1523,6 +1523,88 @@ as the `LEVELS.DAT`/`bmstats.dat` entries above).
 Closes the `.DAT` row's outstanding "3rd file unchecked" item; no parser
 warranted (it belongs to a separate bundled EXE, not the game).
 
+## id-audit.md presentation-side follow-ups — PORTED (2026-07-09)
+
+Three presentation-only gaps from `docs/re/id-audit.md`'s work queue, ported
+this pass. All three are cosmetic (sound picks / sprite overlays), so none
+touch `libs/sim`, `State::rng`, or the golden hashes (determinism contract
+rule 6) — see `docs/valuelst-map.md` for the id-to-consumer table entries.
+
+**1. "Fire In The Hole" taunt (VALUELST 650/651, SOUNDLST 1200 group).**
+`sub_41F29B` pseudo.c ~23343-23368 (the plain single-bomb-drop branch of the
+LABEL_246 drop block, file comment "after laying out a HUGE string of
+bombs"): `v60 = getvalue(651); if (v61 >= v60 && player.bombCount - 1 ==
+bombs_placed_before) { v65 = max(1, getvalue(650)); if (!(rand()%v65))
+sub_427961(1200); }`. `v61` is read from a register the decompiler itself
+flags "possibly undefined" (`420C49`) — no visible assignment anywhere in the
+function. Best-supported reading (matches the VALUELST comment "what
+constitutes 'many' dropped bombs" and reuses the max_bombs byte already in a
+register a few lines up for the drop-eligibility gate): v61 = the player's
+current bomb-count powerup level (max_bombs). Ported to
+`sound_director.cpp`'s `BombPlaced` handler: `pl.max_bombs >=
+tuning.taunt_many_bombs(651) && pl.bombs_placed == pl.max_bombs` (post-
+increment, since `BombSystem::place` bumps `bombs_placed` before emitting
+the event) gates a `audio_.chance(tuning.taunt_many_chance(650))` roll.
+Layering: the trigger reads straight off already-hashed sim state carried by
+the event (no new `State` field); the roll itself is `AudioEngine`'s RNG,
+never `State::rng`. Not gated to the single-drop-only path the original uses
+(spooge's multi-drop loop shares `BombSystem::place` and could also complete
+the cap) — an unobservable, cosmetic-only widening.
+
+**SOUNDLST range correction:** id-audit.md described the sound group as
+1200-1203 ("clear"/"fireinh"/"lookout"/"litemup") with 1204+ as an unrelated
+"runaway/DMB/ZAE/JMB" pool. The raw `SOUNDLST.RES` has no gap or comment
+between 1203 and 1204 — the block runs contiguously through id 1279, and the
+file's own closing comment reads `;1299 is last "huge string of bombs" sound
+value`. So 1200-1299 is ONE authored block for this taunt (mirroring the
+700-999 death-taunt range fix already in `sound_director.cpp`), not just the
+first four slots. Fixed to `play_random_in_range(1200, 1299)`.
+
+**2. Gold-player "twinkle" sparkle (VALUELST 1010, `docs/re/goldman-
+roulette.md` §6).** Addresses already pinned there: `sub_420D4E` (spawn,
+pseudo.c 23549-23583) scans a fixed 100-slot particle pool for the first
+empty slot and, while round-elapsed < getvalue(1010) seconds (0 =
+indefinitely), rolls a 5-in-6 chance (`rand()%6 != 0`) to spawn a particle at
+`(player_x + rand()%40-20, player_y + rand()%50-48)` — three presentation
+rand draws per attempt, one attempt per matching player per tick.
+`sub_420E39` ages/draws each active particle every tick (`sub_41DAA7(seq,
+age)`, sequence name `"goldman"` — `pseudo.c` `aGoldman_0[8] = "goldman"`,
+confirmed present in `MISC.ANI`'s sequence table alongside "ring"/"safe"/
+"scan") and retires it once its age exceeds the sequence's own frame count.
+`sub_420F07`'s per-tick loop (pseudo.c 23628-23670) selects WHICH player(s)
+sparkle: solo play compares `dword_46492C == playerIndex` directly; team
+play compares `dword_46492C == (player.team ? 2 : 0)` — i.e. in team mode
+the stored value is a TEAM id, not a slot index, matching
+`bomber::game::assign_gold_player`'s own documented dual encoding. Ported to
+`Renderer::update_gold_sparkles` (spawn/age, called once per tick from
+`sample_movement`) + a draw pass at the end of `draw_world`; `GameApp`
+feeds the live `gold_player_`/`is_team_mode()` pair in every frame via the
+new `Renderer::set_gold_player`. Presentation-only: the pool, its LCG
+(`gold_lcg_`), and the resolved "goldman" `Anim` all live in `Renderer`,
+never `State`.
+
+**3. Bomb-pickup carry arc (VALUELST 500/502/504/506, "the curve (upwards)
+of a bomb being picked up").** Consuming function pinned: `sub_42331C`'s
+bomb state-3 ("carried") branch, pseudo.c ~25478-25497, entered every tick a
+bomb is in the carried state. Gated on the CARRIER's player-state field +78
+== 4 ("picking up"): `v60 = clamp((carrier.+80 elapsed-frames) - 1, 0, 3)`
+(the same +78/+80 state+counter packing documented for the trampoline hop,
+`Player::bounce`'s doc comment) indexes a 4-point curve, ids 500/502/504/506
+each holding an (X,Y) pair (`ValueList::column_or`, the VALUELST multi-
+column flattening documented in `docs/formats/valuelst.md`):
+`bomb.x = 10*dx[dir] + carrier.x + getvalue(2*v60+500)*dx[dir]`,
+`bomb.y = 10*dy[dir] + carrier.y - getvalue(2*v60+501)`, where `dx[dir]`/
+`dy[dir]` are the standard {Up,Right,Down,Left} unit-vector tables
+(`dword_45BECC`/`dword_45BEDC`). `v60` clamps at 3 and never resets while
+carrying continues, so the bomb ramps up over the first ~4 ticks of the
+grab then SETTLES at the last curve point `(12,40)` for the remainder of the
+carry — not a one-shot pop. Ported to the carried-bomb draw in
+`Renderer::draw_world`, replacing the previous unpinned fixed `sy - 78.0f`
+offset guess; `Renderer::carry_ticks_` (updated once per tick in
+`sample_movement`, gated on a `carrying_prev_` edge-detect so it starts at
+index 0 on the grab tick) mirrors the +80 counter. Presentation-only, read
+live via `ValueList::column_or` with the shipped values as fallback.
+
 ## Still guessed — not yet extracted from the binary
 
 | Constant | Current value | Status |

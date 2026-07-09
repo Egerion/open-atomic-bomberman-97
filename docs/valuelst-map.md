@@ -51,6 +51,7 @@ mirrors instead; both fixed below).
 | 121, 123–125, 129, 130–138 | disease behavior flags, cure chance, freshness, per-disease durations (`docs/re/facts.md` "Disease system") | 1/1/1/10/10/300×9 |
 | 1200 | campaign rover/ghost 1-in-N chance to turn at an open intersection | 3 |
 | 1300, 1310, 1320 | campaign-only kill scores: AI / rover / ghost | 250 / 15 / 25 |
+| 650, 651 | "Fire In The Hole"/"Clear" taunt (id-audit.md item 1, `sound_director.cpp`'s `BombPlaced` handler): 651 gates the carrying player's bomb-count powerup level ("many" bombs), 650 = 1-in-N roll once they place the LAST bomb of that allotment. `sub_41F29B` pseudo.c ~23362-23368, plays SOUNDLST 1200-1299 (corrected range — see that id below). Presentation-side roll (`AudioEngine`), never `State::rng`; see the handler's own comment for the register-provenance caveat on the 651 comparison | 4 / 4 |
 
 Powerup kind order (matches scheme `-P` rows and the id blocks above): extra bomb, flame, disease, kick, skate, punch, grab, spooger, goldflame, trigger, jelly, super-disease, random.
 
@@ -92,6 +93,8 @@ getvalue" libs/game`):
 | 810–818 | hidden scheme/map editor menu layout |
 | 1000, 1002, 1004, 1006 | Goldman wheel centre / radii / circle resolution / lissajous params — confirmed live at `game_app.cpp:1979-1984` |
 | 1150–1160 | random-stage-rotation enable flags |
+| 500, 502, 504, 506 | Bomb-pickup-carry arc (id-audit.md item 4), 4-point curve `(12,10)/(25,20)/(25,30)/(12,40)` — `Renderer`'s carried-bomb draw in `draw_world`, read via `ValueList::column_or`. Pinned consumer: `sub_42331C`'s bomb state-3 ("carried") branch, pseudo.c ~25488-25497, gated on the carrier's player-state field +78 == 4; same curve shape as the already-ported 660/661 punch arc but with its own forward/vertical offset math (see the draw site's comment for the full formula) |
+| 1010 (VALUELST sense — id-namespace collision with SOUNDLST's own 1010, MENU.RSS music, unrelated) | Gold-player "twinkle" duration, seconds; 0 = indefinite (id-audit.md item 2). `Renderer::update_gold_sparkles`, read via `ValueList::at_or`. Pinned consumer: `sub_420D4E` (spawn) / `sub_420E39` (age+draw) / `sub_420F07` (per-tick dispatch), `docs/re/goldman-roulette.md` §6 |
 
 ## Mapped, not yet consumed
 
@@ -108,13 +111,10 @@ id-audit pass:
 | 102 | late-game "overpowerful powers won't appear" gating period, seconds — still unpinned |
 | 120–138 | disease behavior flags and durations mostly consumed (see table above); 122 = diseases_will_recycle (0) — genuinely not yet consumed |
 | 324 | dud-bomb fizzle duration's random-additional-frames component (320-323 are consumed; 324 is a leftover 5th value in the same VALUELST block, unconfirmed whether the original even reads it — no `getvalue(324)` call site found) |
-| 650, 651 | **NEW (id-audit.md A(i)) — genuine gap.** "Fire In The Hole"/"Clear" taunt on a long bomb-drop string: 650 = 1-in-N chance, 651 = drop-count threshold. `sub_41F29B` pseudo.c ~23358-23372, plays SOUNDLST 1200 group. No `Tuning` field, no consumer. Highest-value open gap in this audit. |
-| 500, 502, 504, 506 | **NEW (id-audit.md A(i)).** Bomb-pickup-carry arc, 4-point curve `(12,10)/(25,20)/(25,30)/(12,40)` — presentation-only, same shape as the already-ported 660/661 punch arc |
 | 681 | trampoline hop arc height (px/frame) — presentation-only; id 680 (bounce frames) is now consumed above |
 | 340–350, 695 | per-level tile regeneration + clear radius — only level index 7 (id 347 = 4s, "cemetary/mortuary") is non-zero; 695 = the companion proximity-clear-radius gate |
 | 449–460 | per-level ice (input lag) in ms — only level 2 (id 452 = 250ms, Hockey Rink) is non-zero |
 | 905 | reserved/unused AI slot — no `getvalue(905)` call exists in the binary and VALUELST has no `905,<n>` line; only the editor's label writer touches it (`docs/re/ai.md` §9.5) |
-| 1010 (VALUELST sense) | **id-namespace collision with SOUNDLST's own 1010 (MENU.RSS music, already ported).** "Gold twinkle" duration, seconds — pinned addresses `sub_420D4E`/`sub_420F07` (`docs/re/goldman-roulette.md` §6) but never wired into `Renderer`/`GameApp`. Presentation-only sparkle overlay on the gold-wheel-winning player. |
 | 1100–1110 | net protocol retransmit timing / count — netplay, out of scope (ADR-0003) |
 | 790, 795 | RESULTS screen "press F1" / "continue with same net game?" coordinates |
 | 805 | Goldman Roulette Wheel "title at top" legend row — **no `getvalue(805)` call exists in the binary**; the title is presumably baked into ROULETTE.PCX (`docs/re/goldman-roulette.md` §7) |

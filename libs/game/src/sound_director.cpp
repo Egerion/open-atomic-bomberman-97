@@ -20,12 +20,58 @@ void SoundDirector::on_tick(const sim::State& s) {
 
     for (const auto& ev : s.events) {
         switch (ev.type) {
-            case sim::Event::Type::BombPlaced:
+            case sim::Event::Type::BombPlaced: {
+                // "Fire In The Hole" taunt (docs/re/id-audit.md item 1; VALUELST
+                // 650/651, SOUNDLST 1200 group; sub_41F29B pseudo.c ~23360-23368,
+                // the plain single-bomb-drop path — the file's own comment reads
+                // "after laying out a HUGE string of bombs"). Literal decompile:
+                //   v60 = getvalue(651);
+                //   if (v61 >= v60 && player.bombCount - 1 == bombs_placed_before)
+                //       if (!(rand() % max(1, getvalue(650)))) sub_427961(1200);
+                // `v61` is read from a register the decompiler itself flags
+                // "possibly undefined" at this call site (no visible assignment
+                // anywhere in sub_41F29B) — its provenance can't be pinned from
+                // the text decompile alone. The best-supported reading, matching
+                // the VALUELST author's own comment ("what constitutes 'many'
+                // dropped bombs") and the adjacent code (which already holds
+                // player+86 = max_bombs in a register a few lines up for the
+                // drop-eligibility gate), is that v61 is that same cached
+                // max_bombs read. Ported on that basis: a player whose bomb-count
+                // powerup level is >= id 651 ("many") who has just placed the
+                // LAST bomb of their current allotment (bombs_placed, already
+                // incremented by BombSystem::place before this event, equals
+                // max_bombs) rolls a 1-in-id-650 chance. Layering: the counter
+                // reads straight off the already-hashed sim state the event
+                // carries (no new State field), and the roll uses AudioEngine's
+                // RNG, never State::rng (determinism contract rule 6) — purely
+                // cosmetic, no golden impact. Not gated to the single-drop-only
+                // path the original uses (spooge's multi-drop loop shares
+                // BombSystem::place and could also complete the cap) — an
+                // unobservable, cosmetic-only widening, not worth a new event
+                // field to disambiguate.
+                //
+                // SOUNDLST correction: id-audit.md described 1200-1203 ("clear/
+                // fireinh/lookout/litemup") as the taunt and 1204+ as an
+                // unrelated "runaway/DMB/ZAE/JMB" pool. The raw SOUNDLST.RES
+                // shows NO gap or comment between 1203 and 1204 — the block
+                // is contiguous through id 1279, and the file's own closing
+                // comment reads `;1299 is last "huge string of bombs" sound
+                // value`. So the whole 1200-1299 span is this ONE taunt group
+                // (mirroring the 700-999 death-taunt range fix already in this
+                // file), not just the first four slots.
+                if (ev.player >= 0 && ev.player < sim::kMaxPlayers) {
+                    const sim::Player& pl = s.players[ev.player];
+                    if (pl.max_bombs >= s.tuning.taunt_many_bombs &&
+                        pl.bombs_placed == pl.max_bombs &&
+                        audio_.chance(s.tuning.taunt_many_chance))
+                        audio_.play_random_in_range(1200, 1299);
+                }
                 // Diarrhea/super drop = random "poops" splat (SOUNDLST 550-554,
                 // sub_41F29B v112 branch); a normal drop is 100/101.
                 if (ev.data) audio_.play_random_in_range(550, 554);
                 else audio_.play_one_of({100, 101});
                 break;
+            }
             case sim::Event::Type::BombKicked: audio_.play_random_in_range(120, 123); break;
             case sim::Event::Type::Explosion: audio_.play_random_in_range(200, 299); break;
             case sim::Event::Type::TimeUp: audio_.play_random_in_range(1700, 1999); break;

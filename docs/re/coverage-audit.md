@@ -358,16 +358,23 @@ residuals this list previously tracked — are **all CLOSED 2026-07-09**: see
 `docs/re/campaign.md`'s "Round pacing"/"Campaign-activation confirmation
 dialog"/"Campaign-exit key" sections and the `.CAM` table row above.
 
+The id-level audit's (`docs/re/id-audit.md`) top three presentation-side
+items are now **done**, ported 2026-07-09 (`docs/re/facts.md` "id-audit.md
+presentation-side follow-ups"): the VALUELST 650/651 + SOUNDLST 1200-1299
+"Fire In The Hole" taunt (`sound_director.cpp`'s `BombPlaced` handler), the
+VALUELST 1010 gold-player "twinkle" sparkle (`Renderer::update_gold_sparkles`/
+`draw_world`, fed by `GameApp::set_gold_player`), and the VALUELST
+500/502/504/506 bomb-pickup carry arc (`Renderer::draw_world`'s carried-bomb
+draw, replacing the previous unpinned `sy - 78.0f` guess). All three landed
+in `libs/game` only — `libs/sim` untouched, golden hashes byte-identical.
+
 What remains open, in priority order:
 
-1. **VALUELST 650/651 + SOUNDLST 1200 "Fire In The Hole" taunt**
-   (`docs/re/id-audit.md`, its #1 verdict item) — pinned call site
-   (`sub_41F29B`), self-contained (drop counter + chance roll + group-play),
-   no dependency on any unported subsystem. Highest-value gap the id-level
-   audit found. Also open from the same pass: VALUELST 1010 "gold twinkle"
-   sparkle (addresses already pinned in goldman-roulette.md §6, just not
-   wired into the renderer), the 500/502/504/506 bomb-pickup arc curve, and
-   the single-level 340-350/695 tile-regen + 449-460 ice-delay gaps.
+1. **VALUELST 340-350/695 (tile regen) + 449-460 (ice delay)** — the
+   remaining id-audit.md gaps: single-level Cemetery/Mortuary brick regrowth
+   (347=4s, needs the companion 695 clear-radius check designed together)
+   and single-level Hockey Rink control lag (452=250ms). Both scoped to one
+   stage each, lower player-facing value than the three items just closed.
 2. Low-priority polish: in-round debug/cheat keys (#35, developer/QA-only).
    (Editor chrome #32 — Ctrl+B reset, '0' toggle, brush-preview, exact
    dialog chrome — closed in the same day's editor pass; campaign clause 5
