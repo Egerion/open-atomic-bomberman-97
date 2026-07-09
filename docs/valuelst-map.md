@@ -36,7 +36,7 @@ mirrors instead; both fixed below).
 | 665 | movement pause when grabbing a bomb, ticks | 2 |
 | 667 | flying jelly veers ±90° at a 0,0 intersection, 1-in-N | 3 |
 | 670, 671 | powers lost on a head hit: minimum / additional-random-modulus | 1 / 3 |
-| 320–323 | dud-bomb gate: base seconds / additional random seconds / 1-in-N chance / fizzle duration frames | 180 / 180 / 3 / 120 |
+| 320–323 | dud-bomb gate: base SECONDS / additional random SECONDS / 1-in-N chance / fizzle duration frames. 320/321 are converted ×`kTicksPerSecond` at consumption (`BombSystem::place` re-arm, `setup.cpp` initial arm) — one dud opportunity per 3–6 **minutes**; the re-arm `+=`s the previous deadline (`sub_422C13`). Corrected 2026-07-10 (`docs/re/facts.md` "Dud bombs" — the old port read them as ticks, duds ~20× too frequent) | 180 / 180 / 3 / 120 |
 | 50–62 | starting inventory per powerup kind | 1 bomb, 2 flame, rest 0 |
 | 400–412 | powerups hidden under bricks per match (negative N = \|N\| tries at 1-in-10) | 10,10,3,4,8,2,2,1,−2,−4,1,−4,−2 |
 | 550–562 | per-player accumulation caps (0 = uncapped) | 8,8,0,1,4,1,1,1,1,1,1,0,0 |

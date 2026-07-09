@@ -163,6 +163,36 @@ TEST_CASE("a punched bomb hops over a floor powerup instead of landing on it") {
     CHECK(s.state().floor[0][4] == PowerupType::ExtraBomb);
 }
 
+// ---- Core-feel audit 2026-07-10 (facts.md "Core-feel audit" §5) ------------
+
+TEST_CASE("a thrown bomb restarts its fuse from scratch (LABEL_246 zeroes elapsed +68)") {
+    Simulation s(open_config());
+    s.state().players[1].alive = false;
+    Player& p = s.state().players[0];
+    p.grab = true;
+    p.facing = Direction::Down;
+
+    s.tick(press1(0));  // drop underfoot at (0,0): fuse starts at fuse_frames
+    REQUIRE(s.state().bombs.size() == 1);
+    run(s, 10);         // let the fuse burn well down
+    const std::int32_t burnt = s.state().bombs[0].fuse;
+    REQUIRE(burnt < s.state().tuning.fuse_frames - 5);
+
+    s.tick(press1(0));  // grab it (standing on own bomb, rising edge)
+    REQUIRE(p.carrying);
+    bool thrown = false;
+    for (int i = 0; i < 6 && !thrown; ++i) {
+        s.tick(TickInputs{});  // release past the pickup stun -> throw
+        thrown = !s.state().bombs.empty();
+    }
+    REQUIRE(thrown);
+    const Bomb& b = s.state().bombs[0];
+    REQUIRE(b.flying);
+    // Airborne, fuse frozen — and RESET to the full creation-time duration,
+    // not the burnt remnant it froze with at grab time.
+    CHECK(b.fuse == s.state().tuning.fuse_frames);
+}
+
 TEST_CASE("punch/throw feedback stays deterministic across replays") {
     MatchConfig cfg = open_config();
     Simulation a(cfg), b(cfg);

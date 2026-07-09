@@ -50,6 +50,12 @@ struct Event {
         // react to the change without diffing the grid every frame; it does
         // not imply a distinct visual.
         TileRegrew,
+        // A bomb drop was refused because the player stands on a WARPHOLE
+        // (sub_41F29B drop block: actor type 1 short-circuits the placement
+        // and plays SOUNDLST 40/41 "enrt" instead — never during auto-drop,
+        // which is refused silently; the sim emits this only for the audible
+        // case). facts.md "Core-feel audit" §3.
+        DropRefused,
     };
     Type type{};
     std::int8_t player = -1;  // acting/affected player, -1 if n/a

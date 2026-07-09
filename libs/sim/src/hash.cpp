@@ -188,9 +188,17 @@ std::uint64_t state_hash(const State& s) {
             // Bomb warphole latch (stage-actors.md §6): 0 on non-warp boards →
             // golden E (no warpholes) unchanged.
             (static_cast<std::uint64_t>(b.warp_latch) << 42) |
+            // Kick+action2 stop flag (sub_4247C5/sub_42331C +57, facts.md
+            // "Core-feel audit" §4): gameplay state (it decides where a
+            // sliding bomb halts), so hashed.
+            (static_cast<std::uint64_t>(b.stop_pending) << 43) |
             (static_cast<std::uint64_t>(b.owner) << 48) |
             (static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.fly_ticks) & 0x3F) << 56));
-        mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.dud_left)));
+        // fuse_init (creation-time duration, sub_422EDE word +74; facts.md
+        // "Core-feel audit" §2/§5): feeds the throw restart and the trigger-
+        // eviction relight, so hashed alongside dud_left in the same word.
+        mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.dud_left)) |
+            (static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.fuse_init)) << 32));
     }
     // Campaign rover/ghost hazards (docs/re/campaign.md "Rover/ghost/AI
     // roster", "Per-tick mover"). Empty on every non-campaign match, so this

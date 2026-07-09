@@ -126,3 +126,36 @@ TEST_CASE("clogs and molasses disease compose in the pinned order: clogs folds i
     }
     CHECK(moved == static_cast<int>(expected));
 }
+
+// ---- Core-feel audit 2026-07-10 (facts.md "Core-feel audit" §1) ------------
+
+TEST_CASE("skate arithmetic: speed = 923 + n*150, count capped at 4 (ids 42/90/554)") {
+    // Five Skate tokens along row 0; the pickup cap (VALUELST 554 = 4) stops
+    // the count at 4, so the top walking speed is exactly 923 + 4*150 = 1523.
+    Simulation s(open_config());
+    Player& p = s.state().players[0];
+    for (int x = 1; x <= 5; ++x) s.state().floor[0][x] = PowerupType::Skate;
+    TickInputs right;
+    right.players[0].right = true;
+    run(s, 40, right);  // sweep the row (speed grows as skates accumulate)
+    CHECK(p.skates == 4);
+    CHECK(p.speed == s.state().tuning.start_speed + 4 * s.state().tuning.skate_speed_bonus);
+}
+
+TEST_CASE("a skate pickup's speed recompute keeps the clogs penalty term") {
+    // sub_41F29B recomputes per tick as base + skates*getvalue(90) -
+    // clogs*getvalue(91); our baked `speed` must preserve the clogs term
+    // across skate pickups (the old recompute dropped it).
+    MatchConfig cfg = open_config();
+    cfg.born_with_clogs[0] = 1;
+    Simulation s(cfg);
+    Player& p = s.state().players[0];
+    REQUIRE(p.speed == cfg.tuning.start_speed - cfg.tuning.clogs_speed_penalty);
+    s.state().floor[0][1] = PowerupType::Skate;
+    TickInputs right;
+    right.players[0].right = true;
+    run(s, 10, right);  // walk onto the skate
+    REQUIRE(p.skates == 1);
+    CHECK(p.speed == cfg.tuning.start_speed + cfg.tuning.skate_speed_bonus -
+                         cfg.tuning.clogs_speed_penalty);
+}

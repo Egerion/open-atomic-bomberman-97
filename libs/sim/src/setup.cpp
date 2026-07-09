@@ -129,11 +129,15 @@ State build_state(const MatchConfig& config) {
     }
 
     // Arm the dud gate (the original arms it once at match init, sub_422C7A
-    // -> sub_422C13): base + rand(spread) ticks from now.
+    // -> sub_422C13): base + rand(spread) SECONDS ahead — VALUELST 320/321's
+    // own legend ("minimum/additional random number of SECONDS between
+    // potential dud bombs"), i.e. 3-6 minutes, converted to ticks. facts.md
+    // "Dud bombs" (units corrected 2026-07-09).
     s.dud_gate =
-        static_cast<std::uint64_t>(s.tuning.dud_gate_base) +
-        random_below(s,
-                     static_cast<std::uint32_t>(std::max<std::int32_t>(1, s.tuning.dud_gate_rand)));
+        (static_cast<std::uint64_t>(s.tuning.dud_gate_base) +
+         random_below(
+             s, static_cast<std::uint32_t>(std::max<std::int32_t>(1, s.tuning.dud_gate_rand)))) *
+        kTicksPerSecond;
     return s;
 }
 

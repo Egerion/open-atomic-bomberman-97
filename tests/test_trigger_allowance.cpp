@@ -114,6 +114,82 @@ TEST_CASE("a non-trigger player never consumes trigger allowance") {
     CHECK(s.state().players[0].trigger_placed == 0);
 }
 
+// ---- Core-feel audit 2026-07-10 (facts.md "Core-feel audit" §2) ------------
+
+TEST_CASE("a mutually-exclusive pickup SCATTERS the evicted token (sub_41E16A)") {
+    Simulation s(open_config());
+    Player& p = s.state().players[0];
+    p.punch = true;
+    s.state().floor[0][1] = PowerupType::Trigger;  // one tile east
+
+    TickInputs right;
+    right.players[0].right = true;
+    run(s, 8, right);  // walk onto the token
+
+    REQUIRE(p.trigger);
+    CHECK(!p.punch);  // evicted...
+    int punch_tokens = 0;
+    for (int y = 0; y < kGridHeight; ++y)
+        for (int x = 0; x < kGridWidth; ++x)
+            if (s.state().floor[y][x] == PowerupType::Punch) ++punch_tokens;
+    CHECK(punch_tokens == 1);  // ...and returned to the board, not destroyed
+}
+
+TEST_CASE("evicting Trigger downgrades the live trigger bombs to fresh timed bombs (sub_424C47)") {
+    Simulation s(open_config());
+    Player& p = s.state().players[0];
+    p.trigger = true;
+    p.flame = 1;
+    s.state().floor[0][2] = PowerupType::Jelly;  // two tiles east
+
+    s.tick(press1(0));  // trigger bomb at (0,0)
+    REQUIRE(s.state().bombs.size() == 1);
+    REQUIRE(s.state().bombs[0].trigger);
+    REQUIRE(s.state().bombs[0].fuse < 0);
+
+    TickInputs right;
+    right.players[0].right = true;
+    int t = 0;
+    for (; t < 20 && !p.jelly; ++t) s.tick(right);  // walk onto the Jelly token
+    REQUIRE(p.jelly);
+    CHECK(!p.trigger);
+    const Bomb& b = s.state().bombs[0];
+    CHECK(!b.trigger);                                   // downgraded in place
+    CHECK(b.fuse > 0);                                   // ...and relit
+    CHECK(b.fuse >= s.state().tuning.fuse_frames - 2);   // from SCRATCH (elapsed = 0)
+    int trigger_tokens = 0;
+    for (int y = 0; y < kGridHeight; ++y)
+        for (int x = 0; x < kGridWidth; ++x)
+            if (s.state().floor[y][x] == PowerupType::Trigger) ++trigger_tokens;
+    CHECK(trigger_tokens == 1);  // the evicted Trigger scattered back
+}
+
+TEST_CASE("a SLIDING trigger bomb can be detonated remotely (sub_424B41)") {
+    // The detonate scan only exempts carried (3) and flying (2) bombs.
+    Simulation s(open_config());
+    Player& p = s.state().players[0];
+    p.trigger = true;
+    p.flame = 1;
+    Bomb b;
+    b.active = true;
+    b.owner = 0;
+    b.trigger = true;
+    b.fuse = -1;
+    b.flame = 1;
+    b.x = 4 * kTileWF + kTileWF / 2;
+    b.y = kTileHF / 2;
+    b.moving = true;  // mid-slide
+    b.dir = Direction::Right;
+    s.state().bombs.push_back(b);
+
+    s.tick(press2(0));
+    CHECK(s.state().bombs.empty());  // went off despite sliding
+    bool flame_seen = false;
+    for (int x = 0; x < kGridWidth && !flame_seen; ++x)
+        if (s.state().flame[0][x] > 0) flame_seen = true;
+    CHECK(flame_seen);
+}
+
 TEST_CASE("trigger allowance stays deterministic across replays") {
     MatchConfig cfg = open_config();
     Simulation a(cfg), b(cfg);

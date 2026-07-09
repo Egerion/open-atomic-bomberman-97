@@ -44,12 +44,15 @@ void DiseaseSystem::give(int idx, Disease d, bool announce) {
 }
 
 void DiseaseSystem::assign_random(int idx, int count) {
+    // One rand % 9 per disease (sub_41DFB6; the 200-try reroll loop there is
+    // NET-GAME-only — a local game accepts the first roll). A Swap with no
+    // valid target is simply LOST (the original's 200-try random-player scan
+    // finds nobody and falls through assigning nothing) — it does NOT reroll
+    // into a different disease. Our target pick inside give() replaces that
+    // scan with one draw over the valid set (same outcome distribution,
+    // documented internal-RNG deviation).
     for (int c = 0; c < count; ++c) {
-        Disease d;
-        int guard = 0;
-        do {
-            d = static_cast<Disease>(random_below(s_, kDiseaseKinds));
-        } while (d == Disease::Swap && !has_swap_target(idx) && ++guard < 64);
+        auto d = static_cast<Disease>(random_below(s_, kDiseaseKinds));
         if (d == Disease::Swap && !has_swap_target(idx)) continue;
         give(idx, d, c == 0);
     }

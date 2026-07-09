@@ -109,6 +109,14 @@ void SoundDirector::on_tick(const sim::State& s) {
                 break;
             case sim::Event::Type::BombBounced: audio_.play(160); break;
             case sim::Event::Type::BombStopped: audio_.play(130); break;   // "bombstop"
+            case sim::Event::Type::DropRefused:
+                // Drop attempted on a warphole (sub_41F29B ~23354): the
+                // placement is skipped and sub_427961(40) plays — SOUNDLST
+                // 40/41 "enrt1"/"enrt2" load contiguously, so the original
+                // random-picks across both. The sim already suppresses the
+                // event for disease-forced auto-drops (silent in the binary).
+                audio_.play_one_of({40, 41});
+                break;
             case sim::Event::Type::JellyBounced: audio_.play(135); break;  // "bombboun"
             case sim::Event::Type::BombGrabbed:
                 // Pickup "grab1". sub_41F29B's +92 grab branch (~0x41F4CA) calls

@@ -291,3 +291,28 @@ TEST_CASE("a bomb warps through a warphole while sliding") {
     CHECK(st.bombs[0].tile_x() >= 10);  // crossed (5,0) and jumped east
     CHECK(st.rng == rng_before);        // bomb warp draws no RNG
 }
+
+// ---- Core-feel audit 2026-07-10 (facts.md "Core-feel audit" §3) ------------
+
+TEST_CASE("no bomb can be dropped while standing on a warphole (sub_41F29B ~23354)") {
+    Simulation s(open_config());
+    State& st = s.state();
+    st.actor_type[0][2] = ActorType::Warphole;
+    st.warp_dest_x[0][2] = 6;
+    st.warp_dest_y[0][2] = 0;
+    st.actor_type[0][6] = ActorType::Warphole;
+    st.warp_dest_x[0][6] = 2;
+    st.warp_dest_y[0][6] = 0;
+
+    Player& p = st.players[0];
+    p.x = centre_x(2);  // parked on the warp mouth...
+    p.y = centre_y(0);
+    p.warp_latch = true;  // ...latched (just arrived through it), so no re-warp
+
+    s.tick(press1(0));
+    CHECK(st.bombs.empty());  // the drop was refused
+    bool refused = false;
+    for (const auto& e : s.state().events)
+        if (e.type == Event::Type::DropRefused) refused = true;
+    CHECK(refused);  // ...audibly (SOUNDLST 40/41 via the SoundDirector)
+}
