@@ -69,7 +69,7 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 | 29 | Goldman Roulette wheel | pinned | ported | goldman-roulette.md, ROADMAP "Goldman Roulette wheel — DONE 2026-07-08" | — | done |
 | 30 | Goldman wheel prize id 13 (clogs, speed-penalty booby prize) | pinned | ported | goldman-roulette.md §9 "RESOLVED 2026-07-08": hashed `Player::clogs` count + `MatchConfig::born_with_clogs` overlay (not a 14th `PowerupType` — permanent design decision, not a stub), speed-penalty folded into the walk-speed term per `tuning.hpp`'s `clogs_speed_penalty` (id 91); `f374e22`/`228a33f`. Wheel prize-icon render for slot 13 also done: goldman-roulette.md §9.5 "RESOLVED 2026-07-09" pins `sub_425C7F`/`off_45BE50[13]="clog"` and confirms `DATA/ANI/POWERS.ANI` ships a real `"power clog"` sequence; `SequenceSet::clogs_anim` + `GoldmanScreen::draw()`'s slot-13 branch (landed in `f374e22`) draw it | — | done |
 | 31 | Hidden scheme/map editor (`sub_4028D2`) | pinned | ported | results-and-options.md, ROADMAP "Hidden scheme editor — DONE 2026-07-08" | — | done |
-| 32 | Editor: Ctrl+B reset, '0' dead-tileset toggle, brush-preview-at-cursor, exact dialog chrome | pinned | **absent** | results-and-options.md: "Still NOT reproduced" | low-value polish pass on editor_screen.cpp/editor_grid.cpp | low |
+| 32 | Editor: Ctrl+B reset, '0' dead-tileset toggle, brush-preview-at-cursor, exact dialog chrome | pinned | ported | results-and-options.md §5/§5d "2026-07-09: the four remaining items closed out" (Ctrl+B's `dirty_`/`v49` gate — including the Esc/Q silent-exit-when-untouched corollary — `editor_grid.hpp`'s `toggle_editor_tileset` + doctest, `EditorScreen::on_mouse_move`, `dialog_chrome.{hpp,cpp}` shared confirm/text-entry chrome wired into `EditorScreen::draw`/`PowerupRulesScreen::draw`) | — | done |
 | 33 | Editor: powerup sub-editor mouse-only interaction | pinned | ported (keyboard substitute) | results-and-options.md: "documented deviation" | none required — accepted deviation, note if mouse support is later added | low |
 | 34 | In-round HUD (clock/warning ink/hurry flash/SFX 2700) | pinned | ported | in-match-shell.md "Port status: DONE — no longer a gap" (already fixed by the prior §6 pass), ROADMAP "MM:SS clock HUD... reconciled" | — | done |
 | 35 | In-round debug/cheat keys (1/4/18/274-305/288) | pinned | **absent** (F1 only) | in-match-shell.md: "remain unwired except F1" | low priority — these are developer/QA keys, not player-facing; port only if debug tooling is wanted | low |
@@ -263,20 +263,22 @@ Counting the 39 numbered subsystem rows (§1+§2) + the 14 distinct
 asset-format rows in §3 (excluding pure-tooling extensions marked N/A:
 .ICO/.EXE/.DLL/.IDB):
 
-- **Covered (RE pinned + ported, "done"):** 37 of 39 subsystem rows (up from
+- **Covered (RE pinned + ported, "done"):** 38 of 39 subsystem rows (up from
   31 at the 2026-07-08 snapshot — #13 rover/ghost mover, #18 attract mode,
   and #30 clogs prize (effect + wheel icon render) closed earlier in this
   2026-07-09 pass; #15 wall-slam SFX and #23 INPUT.BM menu-row binding
-  closed in the same day's SFX/audit sweep) + 13 of 14 asset formats (up
-  from 11 — .CAM/campaign, then `.BMP` closed this pass) — the large
-  majority of 1:1 gameplay and front-end fidelity.
-- **Partial/open (RE pinned, port absent or a small residual):** 2 subsystem
-  rows — #32 editor chrome polish, #35 in-round debug/cheat keys — plus 1
-  asset format (the `.DAT` row: `LEVELS.DAT` and `bmstats.dat` are now both
-  RE'd — `LEVELS.DAT` confirmed dead/tooling data, `bmstats.dat`/`.txt`
-  confirmed live-but-write-only debug telemetry with no reader and no
-  reachable UI consumer — neither needed a port, but the row stays open
-  since the 3rd `.DAT` file is still unchecked).
+  closed in the same day's SFX/audit sweep; #32's editor Ctrl+B reset/'0'
+  tileset toggle/brush-preview/dialog-chrome polish closed in the same
+  day's editor pass) + 13 of 14 asset formats (up from 11 — .CAM/campaign,
+  then `.BMP` closed this pass) — the large majority of 1:1 gameplay and
+  front-end fidelity.
+- **Partial/open (RE pinned, port absent or a small residual):** 1 subsystem
+  row — #35 in-round debug/cheat keys — plus 1 asset format (the `.DAT`
+  row: `LEVELS.DAT` and `bmstats.dat` are now both RE'd — `LEVELS.DAT`
+  confirmed dead/tooling data, `bmstats.dat`/`.txt` confirmed
+  live-but-write-only debug telemetry with no reader and no reachable UI
+  consumer — neither needed a port, but the row stays open since the 3rd
+  `.DAT` file is still unchecked).
 - **N/A / excluded (netplay per ADR-0003, or non-gameplay tooling):** 1
   subsystem row (#25 net-game setup screens) + the §4 netplay function
   cluster + several tooling file extensions (.ICO/.EXE/.DLL/.IDB/.BMP).

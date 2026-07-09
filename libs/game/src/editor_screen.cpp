@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include "bomber/game/dialog_chrome.hpp"
+
 namespace bomber::game {
 
 namespace {
@@ -369,21 +371,50 @@ void PowerupRulesScreen::draw(SDL_Renderer* ren) const {
                                           : std::string("(default)");
         font_->draw(ren, ov, 450.0f, y, kInkR, kInkG, kInkB);
     }
-    // The open chain prompt (sub_42E938 / sub_42EDE0 modal), minimal chrome.
-    if (step_ != ChainStep::None) {
-        SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
-        SDL_SetRenderDrawColor(ren, 0, 0, 0, 220);
-        SDL_FRect box{120, 200, 400, 60};
-        SDL_RenderFillRect(ren, &box);
-        std::string label;
+    // The open chain prompt — sub_4023A2's own sub_42E938/sub_42EDE0 calls,
+    // ALL at the CONFIRMED literal y=400 (pseudo.c 5225 `v16 = 400`, reused
+    // unchanged by every one of the 4 calls at 5230/5239/5245/5254), each
+    // labelled `getstring(<id>)` formatted with the row's own powerup name
+    // (`sub_4518D0`'s "%s%s"-style pack, pseudo.c 5226-5229 etc — exact
+    // format string not RE'd, id cited). Routes through the SAME pinned
+    // dialog_chrome primitives as the parent editor's own confirms/prompts.
+    if (step_ != ChainStep::None && rows_ && !rows_->empty()) {
+        const auto& pr = (*rows_)[static_cast<std::size_t>(row_)];
+        std::string name = assets_ ? assets_->getstring(850 + pr.id, "") : std::string();
+        if (name.empty()) name = "POWERUP " + std::to_string(pr.id);
         switch (step_) {
-            case ChainStep::BornWith: label = "BORN-WITH COUNT: " + entry_; break;
-            case ChainStep::Forbidden: label = "FORBIDDEN?  Y/N"; break;
-            case ChainStep::HasOverride: label = "OVERRIDE AMOUNT IN BRICKS?  Y/N"; break;
-            case ChainStep::OverrideValue: label = "OVERRIDE VALUE: " + entry_; break;
+            case ChainStep::BornWith: {
+                std::string label =
+                    (assets_ ? assets_->getstring(762, "Born with:") : std::string("Born with:")) +
+                    " " + name;
+                draw_text_entry_dialog(ren, *font_, 400.0f, label, entry_, "Done", "Cancel");
+                break;
+            }
+            case ChainStep::Forbidden: {
+                std::string label =
+                    (assets_ ? assets_->getstring(764, "Forbidden?") : std::string("Forbidden?")) +
+                    " " + name;
+                // sub_42EDE0's HARDCODED literal "Yes"/"No" labels (not a
+                // message-table lookup — dialog_chrome.hpp).
+                draw_compact_confirm_dialog(ren, *font_, label, "Yes", "No");
+                break;
+            }
+            case ChainStep::HasOverride: {
+                std::string label = (assets_ ? assets_->getstring(766, "Override amount?")
+                                              : std::string("Override amount?")) +
+                                     " " + name;
+                draw_compact_confirm_dialog(ren, *font_, label, "Yes", "No");
+                break;
+            }
+            case ChainStep::OverrideValue: {
+                std::string label = (assets_ ? assets_->getstring(768, "Override value:")
+                                              : std::string("Override value:")) +
+                                     " " + name;
+                draw_text_entry_dialog(ren, *font_, 400.0f, label, entry_, "Done", "Cancel");
+                break;
+            }
             default: break;
         }
-        font_->draw(ren, label, 136.0f, 222.0f, kSelR, kSelG, kSelB);
     }
     font_->draw(ren, "UP/DOWN ROW   E/RIGHT EDIT ROW   ENTER/ESC/SPACE/Q DONE", 40.0f, 460.0f,
                 kHintR, kHintG, kHintB);
@@ -395,17 +426,20 @@ void PowerupRulesScreen::draw(SDL_Renderer* ren) const {
 void EditorScreen::enter(std::optional<assets::sch::Scheme> initial, std::string backdrop,
                          const std::array<std::array<int, 2>, kEditorMaxStarts>* default_starts) {
     backdrop_ = std::move(backdrop);
+    default_starts_ = default_starts;  // Ctrl+B's own reset target, §5 case 2
     if (initial) {
         grid_.load_from_scheme(*initial);
     } else {
         // sub_4028D2(1), "new scheme": sub_4049C0's board (editor_grid.cpp)
         // + the default name getstring(729) applied by the caller right
         // after it in sub_4028D2's own prologue.
-        grid_.reset(kEditorGridWidth, kEditorGridHeight, default_starts);
+        grid_.reset(kEditorGridWidth, kEditorGridHeight, default_starts_);
         if (assets_) grid_.set_name(assets_->getstring(729, "UNNAMED"));
     }
     brush_ = EditorBrush::Blank;
     selected_start_ = 0;
+    tileset_ = 0;      // dword_45B7B8 starts at 0 every session, §5 case 48
+    dirty_ = false;    // sub_4028D2's own v49, pseudo.c 5514
     prompt_kind_ = PromptKind::None;
     prompt_text_.clear();
     editing_powerups_ = false;
@@ -418,15 +452,27 @@ void EditorScreen::enter(std::optional<assets::sch::Scheme> initial, std::string
     // owns a "tile -1" sequence) — and each start's team flag draws
     // MISC.ANI's "teamring%u". Missing art leaves the Anim empty and
     // draw() falls back to flat swatches.
-    tile_blank_ = tile_solid_ = tile_brick_ = Anim{};
+    refresh_tile_sequences();
     teamring_[0] = teamring_[1] = Anim{};
     if (assets_) {
-        tile_blank_ = resolve_sequence(assets_->tiles(), "tile 0 blank");
-        tile_solid_ = resolve_sequence(assets_->tiles(), "tile 0 solid");
-        tile_brick_ = resolve_sequence(assets_->tiles(), "tile 0 brick");
         teamring_[0] = resolve_sequence(assets_->misc(), "teamring0");
         teamring_[1] = resolve_sequence(assets_->misc(), "teamring1");
     }
+}
+
+void EditorScreen::refresh_tile_sequences() {
+    // sub_402206 (§5d, pseudo.c 5120-5145) formats "tile %d blank/solid/
+    // brick" with %d = dword_45B7B8 (our tileset_) — called once at entry
+    // and again whenever the '0' key (case 48) changes tileset_. tileset_
+    // is only ever 0 or -1 in practice; -1 misses every shipped TILES ANI's
+    // sequence table, so resolve_sequence returns empty Anims and draw()
+    // falls back to its flat swatches, same as a missing-asset install.
+    tile_blank_ = tile_solid_ = tile_brick_ = Anim{};
+    if (!assets_) return;
+    const std::string n = std::to_string(tileset_);
+    tile_blank_ = resolve_sequence(assets_->tiles(), "tile " + n + " blank");
+    tile_solid_ = resolve_sequence(assets_->tiles(), "tile " + n + " solid");
+    tile_brick_ = resolve_sequence(assets_->tiles(), "tile " + n + " brick");
 }
 
 void EditorScreen::cycle_brush() {
@@ -450,16 +496,20 @@ void EditorScreen::start_name_prompt() {
 
 void EditorScreen::start_save_confirm() { prompt_kind_ = PromptKind::SaveConfirm; }
 
+void EditorScreen::start_reset_confirm() { prompt_kind_ = PromptKind::ResetConfirm; }
+
 void EditorScreen::on_mouse_down(int button, int gx, int gy) {
     if (prompting() || editing_powerups_) return;  // modal sub-screens own input
     if (button == SDL_BUTTON_LEFT) {
         // §5, PINNED: exactly one cell per click — sub_4028D2's paint path
         // is sub_4048EB(cell_x, cell_y, brush); no multi-cell brush exists.
         grid_.paint(gx, gy, brush_);
+        dirty_ = true;  // v57&1 branch's unconditional `++v49`, pseudo.c 5561
     } else if (button == SDL_BUTTON_RIGHT) {
         // §5: "MOVE the currently-selected player-start marker to the
         // hovered cell".
         grid_.move_start(selected_start_, gx, gy);
+        dirty_ = true;  // v57&2 branch's unconditional `++v49`, pseudo.c 5577
     }
 }
 
@@ -481,6 +531,7 @@ void EditorScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
         } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
             grid_.set_density(prompt_text_.empty() ? 0 : std::atoi(prompt_text_.c_str()));
             prompt_kind_ = PromptKind::None;
+            dirty_ = true;  // case 68/100's ACCEPTED-only `++v49`, pseudo.c 5678
             audio.play(10);
         } else if (key == SDLK_ESCAPE) {
             prompt_kind_ = PromptKind::None;  // discard the in-progress edit
@@ -496,6 +547,7 @@ void EditorScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
         } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
             grid_.set_name(prompt_text_);
             prompt_kind_ = PromptKind::None;
+            dirty_ = true;  // case 78/110's ACCEPTED-only `++v49`, pseudo.c 5688
             audio.play(10);
         } else if (key == SDLK_ESCAPE) {
             prompt_kind_ = PromptKind::None;
@@ -519,9 +571,28 @@ void EditorScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
     }
     if (prompt_kind_ == PromptKind::FillConfirm) {
         // sub_4028D2 case 6 (Ctrl+F): the getstring(760)/97 yes/no confirm
-        // gates the fill; only "yes" runs the sub_4048EB loop.
+        // gates the fill; only "yes" runs the sub_4048EB loop AND marks the
+        // board dirty (`++v49` is INSIDE the accepted branch, pseudo.c
+        // 5605-5613 — unlike Ctrl+B below, a cancelled fill leaves v49
+        // untouched).
         if (key == SDLK_Y || key == SDLK_RETURN || key == SDLK_KP_ENTER) {
             grid_.flood_fill(brush_);
+            dirty_ = true;
+            prompt_kind_ = PromptKind::None;
+            audio.play(10);
+        } else if (key == SDLK_N || key == SDLK_ESCAPE) {
+            prompt_kind_ = PromptKind::None;
+            audio.play(10);
+        }
+        return;
+    }
+    if (prompt_kind_ == PromptKind::ResetConfirm) {
+        // sub_4028D2 case 2 (Ctrl+B), pseudo.c 5584-5599: the confirm only
+        // gates whether sub_4049C0 actually RUNS — `++v49` happens
+        // unconditionally after the if/else, so dirty_ is already true from
+        // the SDLK_B case below regardless of the answer here.
+        if (key == SDLK_Y || key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+            grid_.reset(kEditorGridWidth, kEditorGridHeight, default_starts_);
             prompt_kind_ = PromptKind::None;
             audio.play(10);
         } else if (key == SDLK_N || key == SDLK_ESCAPE) {
@@ -553,6 +624,33 @@ void EditorScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
             prompt_kind_ = PromptKind::FillConfirm;
             audio.play(20);
             break;
+        case SDLK_B:
+            // Ctrl+B (raw code 2, §5) — gated on KMOD_CTRL by the caller
+            // (game_app.cpp's editor_key_needs_ctrl), same as Ctrl+F above.
+            // PINNED (pseudo.c 5584-5599): while the board is untouched
+            // (!dirty_), sub_4049C0 runs immediately with NO confirm; once
+            // dirty_, the getstring(740)/97 confirm gates it instead. Either
+            // way `++v49` executes UNCONDITIONALLY right after the if/else
+            // — even a CANCELLED confirm still marks the board dirty — so
+            // Ctrl+B always sets dirty_ = true.
+            if (dirty_) {
+                start_reset_confirm();
+            } else {
+                grid_.reset(kEditorGridWidth, kEditorGridHeight, default_starts_);
+            }
+            dirty_ = true;
+            audio.play(20);
+            break;
+        case SDLK_0:
+            // '0' (48, §5/§5d): sub_402206's dword_45B7B8 tileset toggle —
+            // editor_grid.hpp's toggle_editor_tileset. A dead-end feature
+            // (no TILES ANI ships a "tile -1 *" sequence), but it still
+            // changes which sequence NAME the canvas resolves, so re-fetch
+            // the tile Anims from the (possibly now-missing) sequence.
+            tileset_ = toggle_editor_tileset(tileset_);
+            refresh_tile_sequences();
+            audio.play(20);
+            break;
         case SDLK_EQUALS:
         case SDLK_KP_PLUS:
             selected_start_ = (selected_start_ + 1) % kEditorMaxStarts;
@@ -565,6 +663,7 @@ void EditorScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
             break;
         case SDLK_T:
             grid_.toggle_start_team(selected_start_);
+            dirty_ = true;  // case 84/116's unconditional `++v49`, pseudo.c 5699
             audio.play(20);
             break;
         case SDLK_D:
@@ -578,11 +677,21 @@ void EditorScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
         case SDLK_P:
             editing_powerups_ = true;
             powerups_screen_.enter(&grid_.powerups());
+            dirty_ = true;  // case 80/112's unconditional `++v49`, pseudo.c 5694
             audio.play(20);
             break;
         case SDLK_ESCAPE:
         case SDLK_Q:
-            start_save_confirm();
+            // sub_4028D2's exit case (27/81/113, pseudo.c 5621-5643) wraps
+            // its WHOLE save-confirm+write body in `if (v49)` — an
+            // untouched board (!dirty_) exits immediately with NO prompt
+            // and NO write at all.
+            if (dirty_) {
+                start_save_confirm();
+            } else {
+                save_requested_ = false;
+                done_ = true;
+            }
             audio.play(20);
             break;
         default:
@@ -647,6 +756,20 @@ void EditorScreen::draw(SDL_Renderer* ren) const {
         }
     }
 
+    // Brush preview at cursor — PINNED (pseudo.c 5518-5524): every frame,
+    // BEFORE the start markers/status text but AFTER the grid, the original
+    // draws the CURRENT brush's own "tile %d blank/solid/brick" frame
+    // (`sub_402206(v53)`, v53 being the SAME brush-selection variable '1'/
+    // '2'/'3'/Tab write) at the raw mouse pixel position (`sub_431804`) via
+    // the SAME sub_415920 primitive the grid cells above use — i.e. the
+    // same hotspot anchor, just centred on the cursor instead of a cell.
+    if (have_tiles) {
+        const Anim& preview = brush_ == EditorBrush::Solid   ? tile_solid_
+                              : brush_ == EditorBrush::Brick ? tile_brick_
+                                                              : tile_blank_;
+        draw_step(preview, mouse_px_, mouse_py_);
+    }
+
     // Player-start markers — PINNED (sub_4028D2's draw loop): each slot
     // draws its number ("%u", i+1) at (cell_centre_x - 20, cell_bottom - 36)
     // in the slot's own ink (sub_41672F -> AssetStore::slot_color; the
@@ -703,34 +826,52 @@ void EditorScreen::draw(SDL_Renderer* ren) const {
                   selected_start_ + 1, grid_.start(selected_start_).team ? "[T]" : "",
                   grid_.density(), grid_.name().empty() ? "(none)" : grid_.name().c_str());
     font_->draw(ren, status, 20.0f, 5.0f, kInkR, kInkG, kInkB);
-    font_->draw(ren,
-                "1/2/3 BRUSH  TAB CYCLE  CTRL+F FILL  +/- START  T TEAM  D DENSITY  N NAME  P POWERUPS  ESC SAVE/EXIT",
-                20.0f, 460.0f, kHintR, kHintG, kHintB);
+    font_->draw(
+        ren,
+        "1/2/3 BRUSH  TAB CYCLE  CTRL+F FILL  CTRL+B RESET  0 TILESET  +/- START  T TEAM  D DENSITY  N NAME  P POWERUPS  ESC SAVE/EXIT",
+        20.0f, 460.0f, kHintR, kHintG, kHintB);
 
+    // Every editor prompt now routes through the SAME pinned sub_41456C/
+    // sub_42E938 chrome (dialog_chrome.hpp) the boot LOADING dialog and
+    // main-menu quit confirm already use — the earlier per-screen ad hoc
+    // black boxes had no basis in the decompile (this doc's own #32
+    // "Still NOT reproduced" item).
     if (prompt_kind_ == PromptKind::Density || prompt_kind_ == PromptKind::Name) {
-        SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
-        SDL_SetRenderDrawColor(ren, 0, 0, 0, 200);
-        SDL_FRect box{160, 200, 320, 60};
-        SDL_RenderFillRect(ren, &box);
-        std::string label = (prompt_kind_ == PromptKind::Density ? "DENSITY (0-100): " : "NAME: ") +
-                             prompt_text_;
-        font_->draw(ren, label, 176.0f, 222.0f, kSelR, kSelG, kSelB);
+        // sub_42E938 text-entry chrome (§5 'D'/'N', y=180 CONFIRMED literal,
+        // pseudo.c cases 68/78) — label getstring(739)/(728), Done/Cancel
+        // HARDCODED literals (not message-table lookups, dialog_chrome.hpp).
+        bool is_density = prompt_kind_ == PromptKind::Density;
+        std::string label = assets_ ? assets_->getstring(is_density ? 739 : 728,
+                                                          is_density ? "DENSITY (0-100):" : "NAME:")
+                                    : std::string(is_density ? "DENSITY (0-100):" : "NAME:");
+        draw_text_entry_dialog(ren, *font_, 180.0f, label, prompt_text_, "Done", "Cancel");
     } else if (prompt_kind_ == PromptKind::SaveConfirm) {
-        // getstring(735), §5 — text paraphrased (id cited, not RE'd verbatim).
-        SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
-        SDL_SetRenderDrawColor(ren, 0, 0, 0, 200);
-        SDL_FRect box{140, 200, 360, 60};
-        SDL_RenderFillRect(ren, &box);
-        font_->draw(ren, "SAVE CHANGES TO THIS SCHEME?  Y/ENTER = YES   N/ESC = NO", 156.0f, 222.0f,
-                    kSelR, kSelG, kSelB);
+        // sub_41456C two-line chrome — getstring(735) + the shared yes/no
+        // line getstring(95) (§5 exit case, pseudo.c 5626-5629).
+        std::string line1 = assets_ ? assets_->getstring(735, "Save changes to this scheme?")
+                                    : std::string("Save changes to this scheme?");
+        std::string line2 = assets_ ? assets_->getstring(95, "") : std::string();
+        std::string yes_label = assets_ ? assets_->getstring(26, " Yes ") : std::string(" Yes ");
+        std::string no_label = assets_ ? assets_->getstring(25, " No ") : std::string(" No ");
+        draw_confirm_dialog(ren, *font_, line1, line2, yes_label, no_label);
     } else if (prompt_kind_ == PromptKind::FillConfirm) {
-        // getstring(760)/getstring(97) — the Ctrl+F fill confirm (id cited).
-        SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
-        SDL_SetRenderDrawColor(ren, 0, 0, 0, 200);
-        SDL_FRect box{140, 200, 360, 60};
-        SDL_RenderFillRect(ren, &box);
-        font_->draw(ren, "FILL THE WHOLE BOARD WITH THE BRUSH?  Y/N", 156.0f, 222.0f, kSelR, kSelG,
-                    kSelB);
+        // sub_41456C two-line chrome — getstring(760) + getstring(97) (§5
+        // Ctrl+F, pseudo.c 5601-5604).
+        std::string line1 = assets_ ? assets_->getstring(760, "Fill the whole board with the brush?")
+                                    : std::string("Fill the whole board with the brush?");
+        std::string line2 = assets_ ? assets_->getstring(97, "") : std::string();
+        std::string yes_label = assets_ ? assets_->getstring(26, " Yes ") : std::string(" Yes ");
+        std::string no_label = assets_ ? assets_->getstring(25, " No ") : std::string(" No ");
+        draw_confirm_dialog(ren, *font_, line1, line2, yes_label, no_label);
+    } else if (prompt_kind_ == PromptKind::ResetConfirm) {
+        // sub_41456C two-line chrome — getstring(740) + getstring(97) (§5
+        // Ctrl+B, pseudo.c 5587-5590).
+        std::string line1 = assets_ ? assets_->getstring(740, "Reset the board to a blank scheme?")
+                                    : std::string("Reset the board to a blank scheme?");
+        std::string line2 = assets_ ? assets_->getstring(97, "") : std::string();
+        std::string yes_label = assets_ ? assets_->getstring(26, " Yes ") : std::string(" Yes ");
+        std::string no_label = assets_ ? assets_->getstring(25, " No ") : std::string(" No ");
+        draw_confirm_dialog(ren, *font_, line1, line2, yes_label, no_label);
     }
 }
 
