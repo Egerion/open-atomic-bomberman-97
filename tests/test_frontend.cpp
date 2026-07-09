@@ -24,6 +24,7 @@ using bomber::game::AppState;
 using bomber::game::assign_gold_player;
 using bomber::game::attract_computer_count;
 using bomber::game::attract_stage_pick;
+using bomber::game::campaign_round_needs_replay;
 using bomber::game::clock_warning;
 using bomber::game::cycle_slot_input_type;
 using bomber::game::fill_attract_roster;
@@ -390,6 +391,57 @@ TEST_CASE("seed_campaign_ai_slots is deterministic for a fixed lcg seed/count (p
     std::uint32_t lcg_b = 42;
     CHECK(seed_campaign_ai_slots(lcg_a, 5) ==
           seed_campaign_ai_slots(lcg_b, 5));
+}
+
+// docs/re/campaign.md "Round pacing" clauses 4-5 (sub_4016DA, pseudo.c
+// 4634-4648): `for (i=0;i<10;++i) { sub_421DD2(i,&type,0); if (type!=1 &&
+// type && sub_4228C4(i)) return; }` falling through -> replay the stage.
+TEST_CASE("campaign_round_needs_replay: an all-COMPUTER roster replays even with a live side") {
+    std::array<bool, kMaxPlayers> present{};
+    std::array<bool, kMaxPlayers> alive{};
+    std::array<int, kMaxPlayers> slot_type{};
+    present[0] = alive[0] = true;
+    slot_type[0] = 1;  // COMPUTER — the sole survivor, but doesn't save the round
+    present[1] = alive[1] = true;
+    slot_type[1] = 1;  // COMPUTER, also alive
+    CHECK(campaign_round_needs_replay(present, alive, slot_type) == true);
+}
+
+TEST_CASE("campaign_round_needs_replay: a single live human/joystick slot blocks the replay") {
+    std::array<bool, kMaxPlayers> present{};
+    std::array<bool, kMaxPlayers> alive{};
+    std::array<int, kMaxPlayers> slot_type{};
+    present[0] = alive[0] = true;
+    slot_type[0] = 1;  // COMPUTER, alive
+    present[3] = alive[3] = true;
+    slot_type[3] = 2;  // human, alive — bails the early-out loop
+    CHECK(campaign_round_needs_replay(present, alive, slot_type) == false);
+}
+
+TEST_CASE("campaign_round_needs_replay: a DEAD human slot does not block the replay") {
+    std::array<bool, kMaxPlayers> present{};
+    std::array<bool, kMaxPlayers> alive{};
+    std::array<int, kMaxPlayers> slot_type{};
+    present[0] = true;
+    alive[0] = false;  // human present but dead -> sub_4228C4's liveness check fails
+    slot_type[0] = 2;
+    CHECK(campaign_round_needs_replay(present, alive, slot_type) == true);
+}
+
+TEST_CASE("campaign_round_needs_replay: an absent (not present) slot does not block the replay") {
+    std::array<bool, kMaxPlayers> present{};
+    std::array<bool, kMaxPlayers> alive{};
+    std::array<int, kMaxPlayers> slot_type{};
+    alive[0] = true;  // alive but never present — an empty/never-seeded slot
+    slot_type[0] = 2;
+    CHECK(campaign_round_needs_replay(present, alive, slot_type) == true);
+}
+
+TEST_CASE("campaign_round_needs_replay: a fully empty roster replays (vacuous fall-through)") {
+    std::array<bool, kMaxPlayers> present{};
+    std::array<bool, kMaxPlayers> alive{};
+    std::array<int, kMaxPlayers> slot_type{};
+    CHECK(campaign_round_needs_replay(present, alive, slot_type) == true);
 }
 
 // docs/re/in-match-shell.md §3 (sub_4105D2): MM:SS via MESSAGES.TXT id 281 =

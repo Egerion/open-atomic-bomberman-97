@@ -413,8 +413,11 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       `test_frontend.cpp`) — kept distinct from `RoundContinue` since
       campaign stage-advance changes the roster/scheme, breaking that
       event's "same roster/settings" contract. Esc on present_setup clears
-      the campaign flag (port convenience — the doc does not pin the
-      original's own campaign-exit key). GOLDEN: no impact — zero libs/sim
+      the campaign flag; the original's own campaign-exit key is now
+      CONFIRMED negative — no dedicated key exists (`docs/re/campaign.md`
+      "Campaign-exit key", 2026-07-09) — and the port also resets the flag
+      unconditionally at the Menu -> StartMatch entry, mirroring
+      `sub_42A3F6`'s own entry-point reset exactly. GOLDEN: no impact — zero libs/sim
       changes; campaign only sequences which `match::build_match_config`
       runs next, same anti-corruption boundary `start_match` already
       crosses for a manual game.
@@ -445,21 +448,30 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       left to wire up, and no dormant AI-personality link either (VALUELST
       900=1 in the shipped file ⇒ `rand()%900` always yields personality 0
       regardless of any campaign input). (4) **`sub_4016DA` round pacing
-      PINNED** (5 clauses: rover/ghost mover driver, the SAME survivor-count
-      check the normal round-end already uses, a campaign-only 2s grace
-      timer once every rover/ghost is dead, a human/network-alive early-out
-      guard, and a mutual-wipeout stage-replay fallback) — clause 2 is
-      already exactly our port's existing best-of-N `sides_remaining<=1`
-      check, so no change there; clauses 1/3 need rovers/ghosts to exist
-      sim-side (deferred with them, now for a pinned reason instead of an
-      unpinned guess); clause 5 (mutual-wipeout replay) is independently
-      portable but left for a follow-up (edge case, no test pressure yet).
+      PINNED and PORTED, all 5 clauses** (rover/ghost mover driver, the SAME
+      survivor-count check the normal round-end already uses, a
+      campaign-only 2s grace timer once every rover/ghost is dead, a
+      human/network-alive early-out guard, and the mutual-wipeout
+      stage-replay fallback) — clause 2 is already exactly our port's
+      existing best-of-N `sides_remaining<=1` check; clauses 1/3 are driven
+      by `RoverSystem`/`State::hazard_clear_timer`; clauses 4/5 are
+      `bomber::game::campaign_round_needs_replay` (`results.hpp`, SDL-free,
+      doctested in `test_frontend.cpp`) wired into `run_app` via
+      `GameApp::campaign_no_human_survivor()` — DONE 2026-07-09, closing the
+      one remaining campaign residual `coverage-audit.md` tracked.
       **Stage banner PORTED**: `GameApp::present_campaign_banner()` shows
       `"(<stage name>)"` (getstring 1235) over `"Prepare to begin
       Campaign!"` (getstring 1230) at every stage transition (first stage
       via the picker, subsequent stages via the Results handler); the
       stage-list-exhausted variant (getstring 1220/1225) is NOT ported,
       consistent with the port's existing dialog-less exhaustion path.
+      **Activation confirmation dialog PORTED 2026-07-09**:
+      `GameApp::present_campaign_confirm()` (`sub_4015C6`) shows
+      `"NOTE!"` (getstring 95) over `"Campaign Mode Activated!"`
+      (getstring 1210) using the same `sub_43C734` chrome as the quit-confirm
+      dialog, replacing the former accept-sting stand-in — see
+      `docs/re/campaign.md` "Campaign-activation confirmation dialog" for the
+      line-order derivation.
       **Remaining scope calls** (unchanged from before, still deliberate):
       mid-round abandon (Esc/Ctrl+Q inside `run_match`) is indistinguishable
       from a real draw/time-up and so does not itself clear campaign state

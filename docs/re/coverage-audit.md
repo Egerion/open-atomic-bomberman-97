@@ -92,7 +92,7 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 | Resource list | `.RES` | 8 (incl. VALUELST.RES, SOUNDLST.RES, EXTRA*.RES) | pinned | ported | `reslist.hpp`, `extra.hpp`, facts.md, stage-actors.md (EXTRA*.RES actor registry) | — | done |
 | Font | `.FON` | 3 | pinned | ported | `docs/formats/fon.md`, `bmfont.hpp`, `test_bmfont.cpp` | — | done |
 | Misc data | `.DAT` | 3 (LEVELS.DAT, bmstats.dat, WINEREG/EReg058.dat) | pinned — all 3 identified | N/A | `docs/re/facts.md`: `LEVELS.DAT` "NOT READ by the shipped game" (installer artifact, never opened); `bmstats.dat`/`bmstats.txt` "write-only play-telemetry dump, no reader, no reachable UI" — `sub_40200C` (0x40200C-0x40214F) writes a 100×`int32` counter blob + a `messages.txt`-labelled (ids 900/905/910-928) text report at shutdown (registered via the generic deinit mechanism, `sub_410EBF`/`sub_410F00`), fed by live inline counters (e.g. `sub_410F81`'s match-start `inc`), but exhaustively confirmed **never read back** by any shipped binary and **never displayed** by any reachable menu/screen; the 3rd `.DAT` — **`WINEREG/EReg058.dat`** (1079 bytes) — identified 2026-07-09: hexdump shows a plain-text `[Public User Data]` INI-style key list (`Salutation=`, `FirstName=`, `LastName=`, `Company=`, `Address1/2=`, `Phone=`, `EMailAddress=`, `HaveModem=`, `HaveJoystick=`, etc., all blank — the wizard's un-filled registration-form template), sitting alongside `WINEREG.EXE`/`EREGUI32.DLL`/`EREG3201.DLL`/`INTER.BMP` in the bundled product-registration-wizard's own `WINEREG/` folder; grepped `pseudo.c` for "EReg", "058.dat", "registration" — zero hits, confirming BM95.EXE never opens it. Same non-gameplay tooling class as the already-closed `.BMP` row (`WINEREG/INTER.BMP`) | none — `LEVELS.DAT` is dead/tooling data; `bmstats.dat`/`.txt` is live but write-only debug telemetry with no player-facing consumer; `EReg058.dat` belongs to the separate bundled WINEREG tool, not the game. No parser/writer warranted for any of the three | done — all 3 `.DAT` files identified and closed 2026-07-09 |
-| Campaign | `.CAM` | 3 (CROUTON.CAM, GHOSTS.CAM, SIMPLE.CAM) | pinned | ported | `docs/re/campaign.md` — reachability CONFIRMED: hidden 'C'×5 trigger on the local player-setup screen (`sub_410F81` → picker → `sub_401085` loader → `dword_46489C` flag read at ~12 sites). `.CAM` parser (`libs/assets/campaign.hpp/.cpp`, `test_campaign.cpp`); `CampaignFilePicker` (`libs/game/campaign_screen.hpp/.cpp`); stage sequencing (`AppInput::CampaignContinue`, `GameApp::load_campaign_stage`), AI-count roster seeding (`sub_40151B` CORRECTED, `seed_campaign_ai_slots`), stage banner (`present_campaign_banner`), round pacing (`sub_4016DA` PINNED, `hazard_clear_timer`), and the rover/ghost hazard actors themselves (RoverSystem, table row #13) are all ported. field-8 (`ai_difficulty`) CONFIRMED dead code — grepped every read site, none exists beyond the loader's own write | none required for the confirmed-reachable scope; remaining edge case: mutual-wipeout stage-replay fallback (campaign.md "Round pacing" clause 5) is independently portable but left as a documented follow-up, no test pressure yet | done |
+| Campaign | `.CAM` | 3 (CROUTON.CAM, GHOSTS.CAM, SIMPLE.CAM) | pinned | ported | `docs/re/campaign.md` — reachability CONFIRMED: hidden 'C'×5 trigger on the local player-setup screen (`sub_410F81` → picker → `sub_401085` loader → `dword_46489C` flag read at ~12 sites). `.CAM` parser (`libs/assets/campaign.hpp/.cpp`, `test_campaign.cpp`); `CampaignFilePicker` (`libs/game/campaign_screen.hpp/.cpp`); stage sequencing (`AppInput::CampaignContinue`, `GameApp::load_campaign_stage`), AI-count roster seeding (`sub_40151B` CORRECTED, `seed_campaign_ai_slots`), stage banner (`present_campaign_banner`), the campaign-activation confirmation dialog (`sub_4015C6`, `present_campaign_confirm`, PORTED 2026-07-09), round pacing (`sub_4016DA` PINNED, all 5 clauses now ported — `hazard_clear_timer` + `campaign_round_needs_replay`/`campaign_no_human_survivor` for the mutual-wipeout replay fallback, doctested in `test_frontend.cpp`), and the rover/ghost hazard actors themselves (RoverSystem, table row #13) are all ported. field-8 (`ai_difficulty`) CONFIRMED dead code — grepped every read site, none exists beyond the loader's own write. The original's campaign-exit key is CONFIRMED negative (no dedicated key exists — `dword_46489C` has exactly two writes total, `sub_4015C6`'s `=1` and `sub_42A3F6`'s entry `=0`); the port's Esc-clears-flag plus a matching entry-point reset at Menu→StartMatch reproduce the same observable behaviour | none — every previously-open edge case above is closed | done |
 | Palette | `.PAL` | 1 (COLOR.PAL) | pinned | ported (via PCX palette loading) | RE-NOTES.md | — | done |
 | Bitmap | `.BMP` | 1 | pinned | N/A | `WINEREG/INTER.BMP` — confirmed 2026-07-09: lives inside the bundled `WINEREG.EXE`/`EREGUI32.DLL` registration-wizard tool's own folder (product registration, not the game), not referenced anywhere in `pseudo.c` (BM95.EXE never opens it). Non-gameplay, same class as the `.EXE`/`.DLL` tooling row | none | done |
 | Icon | `.ICO` | 1 (BM95.ICO) | N/A | N/A | application icon, not game data | none | N/A |
@@ -174,10 +174,13 @@ below aren't misread as gaps.
 ## 5. Known non-gameplay parked items (ROADMAP, verbatim carry-forward)
 
 - Campaign mode — CLOSED 2026-07-09. Fully ported: `.CAM` parser, 'C'×5
-  trigger, picker, stage sequencing, AI-count roster seeding, stage banner,
-  round pacing, and the rover/ghost hazard actors themselves (a new
-  `libs/sim` actor system with hashed state). See asset-table `.CAM` row
-  above and table row #13. No longer a parked item.
+  trigger, picker, activation confirmation dialog, stage sequencing,
+  AI-count roster seeding, stage banner, round pacing (all 5 clauses,
+  including the mutual-wipeout stage-replay fallback), and the rover/ghost
+  hazard actors themselves (a new `libs/sim` actor system with hashed
+  state). The original's campaign-exit key is CONFIRMED negative (no
+  dedicated key exists). See asset-table `.CAM` row above and table row
+  #13. No longer a parked item, no remaining residuals.
 - Random Start Options-row wording — intentionally left unguessed until RE'd
   (per ROADMAP note under Interactive Options screen); superseded — random
   start IS now RE'd and ported (facts.md "Options toggles", `random_start=`).
@@ -319,13 +322,16 @@ goldman-roulette.md §9.5 pins `sub_425C7F`'s `"power %s"` +
 slot-13 branch draw it, landed in `f374e22`. The wall-slam SFX call site and
 the INPUT.BM menu-row binding were closed in the same day's SFX/audit sweep
 — see table rows #15/#23 and facts.md/frontend-flow.md for the evidence.
+Campaign round-pacing clause 5 (mutual-wipeout stage-replay fallback,
+campaign.md "Round pacing"), the campaign-activation confirmation dialog
+(`sub_4015C6`), and the campaign-exit key targeted RE pass — the three
+residuals this list previously tracked — are **all CLOSED 2026-07-09**: see
+`docs/re/campaign.md`'s "Round pacing"/"Campaign-activation confirmation
+dialog"/"Campaign-exit key" sections and the `.CAM` table row above.
+
 What remains open, in priority order:
 
-1. **Campaign round-pacing clause 5** (mutual-wipeout stage-replay fallback,
-   campaign.md "Round pacing") — pinned but not ported; independently
-   portable, no test pressure yet (edge case: every side wiped out
-   simultaneously mid-stage).
-2. Low-priority polish: editor chrome (#32: Ctrl+B reset, '0' toggle,
+1. Low-priority polish: editor chrome (#32: Ctrl+B reset, '0' toggle,
    brush-preview, exact dialog chrome), in-round debug/cheat keys (#35,
    developer/QA-only).
 
@@ -351,28 +357,31 @@ exact file:line inline markers a future session can pick off directly.
 ## TODO(RE) / TODO(§) crumbs still in the tree
 
 Grepped `TODO(RE)` and `TODO(§` across `docs/`, `libs/`, `apps/`, `tests/`
-(2026-07-09). Four hits found; one (`game_app.cpp:1608`) turned out to be
-itself stale and was fixed in place during this pass rather than left as a
-crumb, since it directly contradicted the up-to-date declaration comment
-next to it (`kill_count_` is a live, tallied, cumulative-per-match counter,
-not a stub returning 0 — `game_app.hpp`'s own field comment already said so).
-Three genuine crumbs remain, all in `libs/game`:
+(re-checked 2026-07-09, after closing the campaign confirmation-dialog and
+campaign-exit-key crumbs — see below). The two campaign crumbs this list
+previously tracked (`game_app.cpp`'s former lines 993 and 1832) are now
+**CLOSED**: the confirmation dialog is ported (`present_campaign_confirm`,
+`docs/re/campaign.md` "Campaign-activation confirmation dialog") and the
+campaign-exit key is a CONFIRMED negative (`docs/re/campaign.md`
+"Campaign-exit key") — both comments were rewritten in place, removing the
+literal `TODO(RE)` markers. Two crumbs remain, both pointing at the SAME
+unresolved gap (not two independent ones):
 
-1. `libs/game/include/bomber/game/editor_grid.hpp:102` — `// earlier "brush
+1. `libs/game/src/game_app.cpp:52` and `:1781` — the `sub_43C734` dialog
+   family's explicit horizontal-centering X value: `sub_43D398`'s own
+   internal X computation is a Hex-Rays "possibly undefined" register the
+   decompile alone can't resolve; every call site's visible intent is a
+   horizontally-centered dialog (matching the port's `dialog_rect`
+   convention), but pinning the EXACT source register/expression needs a
+   disassembler pass this environment doesn't have. Low priority: the port's
+   centering behaviour already matches every dialog's visible on-screen
+   intent, so this is a provenance gap, not an observable-behaviour gap.
+2. `libs/game/include/bomber/game/editor_grid.hpp:102` — `// earlier "brush
    sizes 1/2/3, anchor rule TODO(RE)" is resolved by`. Not a live TODO: this
    is a comment *referencing* a past TODO(RE) that was already resolved (the
    original has no multi-cell brush, confirmed). Matched by the grep but not
    actionable — safe to leave as historical context, or reword to drop the
    literal "TODO(RE)" substring if a future pass wants the grep clean.
-2. `libs/game/src/game_app.cpp:993` — `// above) stands in for that minimal
-   fidelity gap (TODO(RE): no`. Live gap: the campaign 'C'×5 trigger's accept
-   sting stands in for `sub_4015C6`'s dedicated confirmation dialog
-   (getstring 1210+95), which is not built. Small, cosmetic, campaign-only.
-3. `libs/game/src/game_app.cpp:1832` — `// how the original itself leaves
-   campaign mode — TODO(RE)):`. Live gap: the original's own campaign-exit
-   key/behaviour is unpinned; the port's Esc-clears-campaign-flag is a
-   documented convenience, not a confirmed fact. Needs a targeted RE pass on
-   the campaign-exit path if exactness here ever matters.
 
 No other `TODO(RE)`/`TODO(§` markers exist in the tree. (Plain `TODO` without
 those tags also appears at `libs/game/include/bomber/game/options_screen.hpp`

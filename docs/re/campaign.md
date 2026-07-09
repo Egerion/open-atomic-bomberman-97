@@ -529,11 +529,22 @@ small campaign-pacing helper:
   in `GameApp`'s round loop exactly like the original's `dword_464894`
   hand-off to `sub_410B6E`.
 - Clauses 4/5 (mutual-wipeout stage replay) are campaign-layer logic (need
-  "is this campaign mode", not a sim concept) — ported in `GameApp::run_app`
-  alongside the existing stage-advance handling: on round end, if every
-  non-COMPUTER slot is dead, the pending stage index is NOT advanced (undoes
-  the `present_campaign_banner` stage-advance for this round), matching
-  `--dword_4648B0` before the immediate round-over.
+  "is this campaign mode", not a sim concept) — the predicate itself is
+  `bomber::game::campaign_round_needs_replay` (`results.hpp`, SDL-free,
+  doctested in `test_frontend.cpp`: all-COMPUTER-alive replays, a single live
+  human/joystick slot blocks it, a dead or absent human slot does not, and an
+  empty roster replays vacuously), wired into `GameApp::run_app` via the
+  `campaign_no_human_survivor()` wrapper (gathers `sim::State::players[]`
+  present/alive plus `setup_type_[]` into the arrays the predicate needs). On
+  round end, `w = round_winner()` is overridden to `-1` (a plain draw) the
+  instant `campaign_no_human_survivor()` holds — even when `round_winner()`
+  itself returned a "winner" (a COMPUTER-only survivor) — so the round is
+  routed into the SAME draw/replay branch a mutual total wipeout already
+  used. `campaign_stage_index_` is only ever incremented in the `w>=0`
+  match-over branch, which the override already excludes, so "replay a
+  round" on this path is exactly "replay the same campaign stage" for free —
+  matching `--dword_4648B0` before the immediate round-over without a
+  separate decrement.
 
 Clause 2 needed no change. See "Sim port" and "Presentation" below for file-
 level detail.
@@ -578,6 +589,100 @@ active_ = false`) has no dedicated dialog of its own either, consistent
 with how the port already treats that transition; flagged as a smaller
 follow-up alongside `sub_4016DA`'s remaining round-pacing gap rather than
 addressed here.
+
+## Campaign-activation confirmation dialog — PORTED 2026-07-09 (`sub_4015C6`)
+
+`sub_4015C6` (pseudo.c 4550-4598, the same function that opens the `*.cam`
+picker and sets `dword_46489C = 1`) shows a two-line acknowledgement dialog
+right after a successful pick/parse, BEFORE the stage-0 banner:
+
+```c
+sub_401085(pickedPath);           // load the .CAM file
+sub_4124A4(1210);                 // getstring(1210) = "Campaign Mode Activated!" -> EDX (preserved)
+LODWORD(v7) = sub_4124A4(95);     // getstring(95)    = "NOTE!"                    -> EAX
+sub_414340(v7, v8, byte_49D38F);  // a1@<edx:eax>: two-line modal, white ink
+dword_46489C = 1;
+```
+
+**Line order — CONFIRMED from `sub_414340` itself** (pseudo.c 17004-17108,
+`void __usercall sub_414340(__int64 a1@<edx:eax>, ...)`): the two-line branch
+draws `LODWORD(a1)` FIRST, at `y = fontheight+32` (`v30`, the TOP line), then
+`HIDWORD(a1)` SECOND, at `y = v30 + fontheight + 2` (`v31`, the BOTTOM line) —
+see the draw calls `sub_4172BA(v28, v22, v30, ...)` (LODWORD, top) followed by
+`sub_4172BA(v28, SHIDWORD(v22), v31, ...)` (HIDWORD, bottom). Since
+`sub_4015C6` explicitly assigns `LODWORD(v7) = getstring(95)` (unambiguous —
+no register-loss hedge needed here, unlike the `.CAM`-record cases elsewhere
+in this doc), **getstring(95)="NOTE!" is the TOP line**; `HIDWORD(v7)` is
+whatever the compiler carried over from the PREVIOUS `sub_4124A4(1210)` call
+(the standard two-sequential-calls-into-two-registers pattern — the first
+call's `EAX` is preserved into `EDX` before the second call clobbers `EAX`),
+so **getstring(1210)="Campaign Mode Activated!" is the BOTTOM line**.
+
+Geometry is the SAME `sub_43C734` chrome primitive as the quit-confirm dialog
+(`DialogRect`/`draw_dialog_chrome`, `game_app.cpp`), sized from `sub_414340`'s
+own two-line branch: `width = max(max(measure(top), measure(bottom)), 80) +
+64`, `height = 4*fontheight + 64 + 2*fontheight`, centered on both axes
+(`(640-width)/2`, `(480-height)/2` — `sub_41456C`, the sibling one-line
+variant, computes the same centering explicitly at pseudo.c 17197, confirming
+the pattern this two-line sibling shares). Ink is `byte_49D38F` (white) for
+both lines, the same ink every other `sub_414340`/`sub_41456C` call site in
+this file uses.
+
+**Dismiss keys** — traced from `sub_414340`'s own key loop (pseudo.c
+17085-17106): every real key event plays the nav-blip (`sub_427961(20)`);
+only `Enter(13)`/`Space(32)`/`Escape(27)` close the dialog; any OTHER key
+(arrows, letters) just loops, waiting for another key. No Yes/No choice — a
+plain acknowledgement modal, identical shape to `sub_41456C`'s Escape/Space/
+Enter handling the quit-confirm dialog already ports.
+
+**Ported**: `GameApp::present_campaign_confirm()` (`game_app.cpp`), called
+from `present_campaign_picker` right after `campaign_active_ = true` and
+before `present_campaign_banner()` — replacing the former accept-sting
+stand-in this dialog previously approximated (`coverage-audit.md` TODO(RE)
+crumb, now closed).
+
+## Campaign-exit key — CONFIRMED negative (no dedicated key exists)
+
+`docs/re/campaign.md`'s prior text (and `ROADMAP.md`'s campaign entry) left
+open whether the original has a dedicated key/action that explicitly clears
+`dword_46489C` when leaving campaign mode early (e.g. Escape on the
+player-setup screen after a `*.cam` pick but before a match starts). Grepped
+**every** read and write of `dword_46489C` across the whole decompile
+(pseudo.c): it is read at ~12 sites (gates in `sub_40133F`, `sub_4016DA`,
+`sub_406DDE`'s map-select skip, `sub_41DCB2`'s campaign kill-score award,
+etc. — see "What campaign mode actually does once active" above) but
+**written in exactly two places, total**:
+
+1. `sub_4015C6` (pseudo.c 4585): `dword_46489C = 1` — set on a successful
+   `*.cam` pick.
+2. `sub_42A3F6` (pseudo.c 29692): `dword_46489C = 0` — the LITERAL FIRST
+   executable statement of the function, unconditionally, every time it
+   runs. `sub_42A3F6` is the already-confirmed "Play" entry point (calls
+   `sub_410F81`, the PLAYER INPUT screen, right after this reset — pseudo.c
+   29693-29697).
+
+**There is no third write anywhere** — no Escape handler, no dedicated
+"leave campaign" key, no cleanup path in the round-loop or results screen
+clears `dword_46489C` directly. The original's own Escape-on-setup (and any
+mid-match abort) just routes `dword_464A68` (a menu-return sentinel written
+at dozens of other screens' Escape handlers, e.g. pseudo.c 6092/6564/7156)
+back to the menu; `dword_46489C` is left stale until the NEXT "Play" click
+resets it unconditionally at `sub_42A3F6`'s entry — which is behaviourally
+invisible, since that stale value is never read before being overwritten by
+the same function that would read it next.
+
+**Port status**: the port's Esc-on-setup clear (`campaign_active_ = false`,
+`present_setup`, `game_app.cpp`) and the equivalent unconditional reset now
+added at the Menu -> StartMatch transition (`run_app`'s `AppState::Menu`
+case, mirroring `sub_42A3F6`'s entry reset exactly) together reproduce the
+identical observable behaviour via explicit resets instead of the original's
+implicit "next entry overwrites stale state" — a faithful convenience, not a
+guess dressed up as a fact. The entry-point reset closes a real port gap the
+Esc-only clear did not cover: aborting mid-campaign from `run_match`'s own
+Esc/Ctrl+Q (which, matching the original, does not touch `campaign_active_`
+either) previously left `campaign_active_`/`campaign_stages_`/
+`campaign_stage_index_` armed for the next "Play", silently resuming the
+abandoned stage instead of starting a normal game.
 
 ## `.CAM` format — confirmed against RE-NOTES.md
 

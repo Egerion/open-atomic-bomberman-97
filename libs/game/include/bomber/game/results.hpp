@@ -127,4 +127,25 @@ inline std::vector<int> seed_campaign_ai_slots(std::uint32_t& lcg, int ai_count)
     return slots;
 }
 
+// Campaign round-pacing clauses 4-5 (docs/re/campaign.md "Round pacing",
+// sub_4016DA), confirmed against pseudo.c 4634-4648: `for (i=0;i<10;++i) {
+// sub_421DD2(i,&type,0); if (type!=1 && type && sub_4228C4(i)) return; }` —
+// bail (false, "a human/joystick survivor exists") the instant ANY present,
+// non-COMPUTER, ALIVE slot is found; falling through the loop means every
+// human/joystick slot is dead (true). `slot_type[i]==1` is COMPUTER, matching
+// setup_type_'s own convention (0=OFF, 1=COMPUTER, 2/3=human). Strictly wider
+// than a plain draw (mutual TOTAL wipeout) — this also fires when a COMPUTER
+// side is the sole survivor, which the original force-replays rather than
+// crediting as a campaign win.
+inline bool campaign_round_needs_replay(const std::array<bool, sim::kMaxPlayers>& present,
+                                        const std::array<bool, sim::kMaxPlayers>& alive,
+                                        const std::array<int, sim::kMaxPlayers>& slot_type) {
+    for (int i = 0; i < sim::kMaxPlayers; ++i) {
+        if (!present[i] || !alive[i]) continue;
+        if (slot_type[i] == 1) continue;  // COMPUTER: doesn't save the round
+        return false;                     // a human/joystick slot is alive
+    }
+    return true;
+}
+
 }  // namespace bomber::game
