@@ -74,6 +74,50 @@ sim::TickInputs demo_inputs(int t);
 // setup-screen switch statements (present_setup) read directly against it.
 enum class SlotInputType { Off = 0, Computer = 1, Keyboard = 2, Joystick = 3, Other = 4 };
 
+// ATTRACT-MODE roster/stage rolls (docs/re/frontend-flow.md "Attract mode",
+// sub_410F81's attract branch, pseudo.c 15125-15143). The menu idle timeout
+// forces v10=0 (Play) with the attract flag set; sub_410F81 then short-
+// circuits: every slot OFF, then `rand()%10 + 1` (clamped to a MINIMUM of 3)
+// slots flipped to COMPUTER, and the level set to `rand() % getvalue(35)`
+// DIRECTLY — bypassing the VALUELST 1150-1160 random-level enable flags the
+// normal RANDOM pick honours, so attract can land on a disabled stage. Both
+// rolls are presentation-side (never bomber::sim::State::rng) — the caller
+// supplies raw LCG draws, pre-masked the same way pick_glue()/the goldman
+// wheel already fold their own draws into a bounded range. Pure/SDL-free so
+// the bounds/composition are unit-testable without a window.
+constexpr int attract_computer_count(unsigned roll) {
+    int n = static_cast<int>(roll % 10) + 1;  // rand()%10 + 1 -> 1..10
+    return n < 3 ? 3 : n;                      // "clamped to a minimum of 3"
+}
+
+// Fills 10 roster slots for an attract demo: the first `computer_count`
+// become COMPUTER (sub 0), the rest OFF — sub_410F81's attract branch sets
+// every slot OFF first, then flips exactly `computer_count` of them in slot
+// order. Team is zeroed for every slot too (doc: "forces team play off").
+// `type`/`sub`/`team` must each have exactly `count` elements (kMaxPlayers,
+// 10) — the caller (GameApp) supplies its own std::array<int, kMaxPlayers>.
+template <std::size_t N>
+constexpr void fill_attract_roster(int computer_count, std::array<int, N>& type,
+                                   std::array<int, N>& sub, std::array<int, N>& team) {
+    for (std::size_t i = 0; i < N; ++i) {
+        bool on = static_cast<int>(i) < computer_count;
+        type[i] =
+            on ? static_cast<int>(SlotInputType::Computer) : static_cast<int>(SlotInputType::Off);
+        sub[i] = 0;
+        team[i] = 0;
+    }
+}
+
+// Attract-mode stage pick: `rand() % level_count` DIRECTLY, ignoring the
+// enable-flag rotation `pick_stage` (match/setup) honours for a normal
+// RANDOM-level match — the doc is explicit that attract "bypasses" those
+// flags. `level_count` is getvalue(35) (11 in the shipped VALUELST); `roll`
+// is the caller's presentation LCG draw.
+constexpr int attract_stage_pick(unsigned roll, int level_count) {
+    if (level_count < 1) level_count = 1;
+    return static_cast<int>(roll % static_cast<unsigned>(level_count));
+}
+
 // Cycle a slot's (type, sub) one step FORWARD (sub_421E80 @0x421E80, CONFIRMED
 // shape): off -> computer -> keyboard set 0 -> keyboard set 1 -> joystick 0 ..
 // joystick (joystick_count-1) -> off. `joystick_count` is the number of

@@ -196,6 +196,15 @@ constexpr int kQuitStingHi = 2699;
 // ms (getvalue(12) * 1000) so it is resolution-independent.
 constexpr std::uint32_t kBootDwellMs = 7000;  // getvalue(12) == 7 s
 
+// The main-menu ATTRACT idle timeout — CONFIRMED getvalue(92) = 30 (VALUELST
+// `92,30`), gated `> 5` (the file's own legend: values < 5 disable attract
+// entirely), distinct from the waited-screen getvalue(12) above
+// (docs/re/frontend-flow.md "Attract mode" / "Tunables"). Expressed as a
+// fallback in ms; present_menu reads the live VALUELST value via
+// values_.at_or(92, ...) so a modified install's timeout is honoured.
+constexpr std::int64_t kAttractIdleFallbackS = 30;
+constexpr std::int64_t kAttractIdleMinS = 5;  // getvalue(92) <= 5 disables attract
+
 ScreenDef logo_screen(const char* bg) {
     return ScreenDef{bg, {}, /*dwell_ms*/ kBootDwellMs, /*skippable*/ true};
 }
@@ -1161,10 +1170,25 @@ AppInput GameApp::present_menu() {
     // resolves to, or Quit on window close.
     audio_.start_music(kMenuMusicId);
     std::uint64_t frame = 0;
+    // ATTRACT idle timer (docs/re/frontend-flow.md "Attract mode"): seeded to
+    // "now" on every fresh visit to the menu (including a re-entry after an
+    // attract match itself, so an unattended machine cycles demo matches
+    // forever, one getvalue(92)-second gap apart — matching sub_42B9CE's
+    // idle counter, which is never suppressed after firing once).
+    menu_idle_since_ms_ = SDL_GetTicks();
+    const std::int64_t idle_s = values_.at_or(92, kAttractIdleFallbackS);
+    const bool attract_enabled = idle_s > kAttractIdleMinS;  // legend: <=5 disables attract
     while (true) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
+            // ANY real input resets the idle clock (doc: "any input resets
+            // the timer") — key, mouse button, or gamepad button, mirroring
+            // the original's "any real key" blip path plus this port's own
+            // mouse/pad input surfaces (sub_42B9CE only had a keyboard).
+            if (ev.type == SDL_EVENT_KEY_DOWN || ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
+                ev.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN)
+                menu_idle_since_ms_ = SDL_GetTicks();
             if (ev.type != SDL_EVENT_KEY_DOWN) continue;
 
             // Hidden scheme-editor trigger (docs/re/results-and-options.md
@@ -1278,6 +1302,20 @@ AppInput GameApp::present_menu() {
             }
         }
 
+        // ATTRACT trigger (docs/re/frontend-flow.md "Attract mode"): once the
+        // idle clock exceeds getvalue(92) seconds (gated > 5), fire the SAME
+        // Play dispatch a real Enter-on-row-0 would — sub_42B9CE forces
+        // v10=0 regardless of the highlighted row, so this returns StartMatch
+        // directly rather than nudging menu_index_. roll_attract_match() does
+        // the sub_4224E2 save + the roster/stage rolls; run_app's StartMatch
+        // handler (game_app.cpp) checks attract_ and skips the goldman wheel/
+        // setup/level screens, matching sub_410F81's short-circuit.
+        if (attract_enabled &&
+            SDL_GetTicks() - menu_idle_since_ms_ >= static_cast<std::uint64_t>(idle_s) * 1000) {
+            roll_attract_match();
+            return AppInput::StartMatch;
+        }
+
         audio_.update_music();
         SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
         SDL_RenderClear(sdl_renderer_.get());
@@ -1318,6 +1356,54 @@ AppInput GameApp::present_menu() {
         SDL_RenderPresent(sdl_renderer_.get());
         SDL_Delay(2);
     }
+}
+
+// Attract-mode entry — sub_4224E2's save + sub_410F81's attract branch
+// (docs/re/frontend-flow.md "Attract mode" point 1, pseudo.c 15125-15143).
+void GameApp::roll_attract_match() {
+    // sub_4224E2: snapshot the CURRENT selections before overwriting them, so
+    // restore_from_attract() (sub_422552) can put them back untouched.
+    attract_saved_.type = setup_type_;
+    attract_saved_.sub = setup_sub_;
+    attract_saved_.team = setup_team_;
+    attract_saved_.level = selected_level_;
+    attract_saved_.team_play = team_play_;
+
+    attract_ = true;  // dword_464938 = 1
+
+    // "forces team play off" (doc point 2) — a demo match is never team mode,
+    // regardless of what the player had configured.
+    team_play_ = false;
+
+    // Two presentation-LCG rolls (never State::rng), advanced in order —
+    // roster count then stage, matching the doc's read order (roster is
+    // rolled first in sub_410F81, the level right after).
+    attract_lcg_ = attract_lcg_ * 1664525u + 1013904223u;
+    int computer_count = attract_computer_count(attract_lcg_ >> 16);
+    fill_attract_roster(computer_count, setup_type_, setup_sub_, setup_team_);
+
+    attract_lcg_ = attract_lcg_ * 1664525u + 1013904223u;
+    int level_count = static_cast<int>(values_.column_or(35, 0, 11));  // getvalue(35)
+    selected_level_ = attract_stage_pick(attract_lcg_ >> 16, level_count);
+
+    // Campaign trigger inert during attract (task point 2): an attract match
+    // never has campaign state armed (it can only be armed by present_setup's
+    // 'C'x5 trigger, which the attract short-circuit never visits), so there
+    // is nothing to suppress here beyond simply not touching
+    // campaign_active_ — documented for the reader, not a defensive reset.
+}
+
+// Attract-mode exit — sub_422552 (doc point 3 "Menu re-entry restores
+// everything"). Idempotent: a no-op if attract_ is already false, so callers
+// on both the natural-end and abort paths can call it unconditionally.
+void GameApp::restore_from_attract() {
+    if (!attract_) return;
+    setup_type_ = attract_saved_.type;
+    setup_sub_ = attract_saved_.sub;
+    setup_team_ = attract_saved_.team;
+    selected_level_ = attract_saved_.level;
+    team_play_ = attract_saved_.team_play;
+    attract_ = false;  // dword_464938 = 0
 }
 
 void GameApp::reset_match_scores() {
@@ -1893,6 +1979,21 @@ AppInput GameApp::run_match() {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
+            // ATTRACT abort (docs/re/frontend-flow.md "Attract mode" point 3,
+            // mirroring sub_42A3F6's round-loop tail `if (dword_464938) goto
+            // LABEL_34` on a keypress): ANY key, mouse button, or gamepad
+            // button input during an attract demo returns to the menu
+            // IMMEDIATELY — checked first, ahead of the specific-key
+            // handling below, and only while attract_ is armed (a real match
+            // never takes this branch, so a human round's own key bindings
+            // are unaffected). run_app's StartMatch handler calls
+            // restore_from_attract() unconditionally once this returns,
+            // whether the round ended naturally or was aborted here — an
+            // attract match never shows Results either way (point 2).
+            if (attract_ && (ev.type == SDL_EVENT_KEY_DOWN ||
+                             ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
+                             ev.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN))
+                return AppInput::MatchOver;
             // Ctrl+Q = CONFIRMED instant, unconfirmed-dialog forfeit
             // (docs/re/in-match-shell.md "Esc negative finding": raw key 0x11
             // = 17 = Ctrl+Q is the ONLY key that aborts a round mid-match in
@@ -2035,13 +2136,43 @@ int GameApp::run_app() {
                     // the win target so we reset FIRST, then let the level screen
                     // adjust win_target_.
                     reset_match_scores();
+                    // ATTRACT short-circuit (docs/re/frontend-flow.md
+                    // "Attract mode" point 1, sub_410F81 pseudo.c 15125-15143):
+                    // present_menu() already rolled the demo roster/stage into
+                    // setup_type_/setup_sub_/setup_team_/selected_level_ (via
+                    // roll_attract_match()) and set attract_ before returning
+                    // StartMatch here, so this path goes STRAIGHT to the
+                    // match — no goldman wheel (doc §2's `!dword_464938`
+                    // gate — a real pending prize is simply left untouched
+                    // for the NEXT non-attract Play entry, not forfeited),
+                    // no present_setup, no present_map_select ("neither the
+                    // player screen nor the LEVEL & ROUNDS screen is shown").
+                    // run_match's own attract_ check aborts back to the menu
+                    // on any input; either way (natural end or abort) run_match
+                    // returns MatchOver and this block calls run_match()
+                    // DIRECTLY (bypassing the normal Match/Results AppState
+                    // walk) so Results never renders — point 2's "Round end
+                    // skips ALL outcome screens" (DRAW/RESULTS/VICTORY).
+                    if (attract_) {
+                        AppInput attractResult = run_match();
+                        if (attractResult == AppInput::Quit) return 0;
+                        // Doc point 2: an attract round NEVER shows DRAW/
+                        // RESULTS/VICTORY — restore immediately and drop
+                        // straight back to the menu, bypassing next()'s
+                        // normal Match->Results->Menu walk entirely (there is
+                        // no scoreboard/outcome state to fold into the flow
+                        // graph for this round).
+                        restore_from_attract();
+                        ev = AppInput::Advance;  // Menu -> (stays) Menu
+                        break;
+                    }
                     // The Goldman wheel (docs/re/goldman-roulette.md §2): at
                     // the head of every Play entry, before present_setup —
-                    // gated on not-attract (always true here, no attract
-                    // match yet), the goldman option, local-only (always
-                    // true), and a gold player actually pending from a
-                    // previous match's rounds. An Esc abort forfeits the
-                    // whole Play flow (skip straight back to the menu,
+                    // gated on not-attract (checked above — this is the
+                    // normal, non-attract path), the goldman option, local-
+                    // only (always true), and a gold player actually pending
+                    // from a previous match's rounds. An Esc abort forfeits
+                    // the whole Play flow (skip straight back to the menu,
                     // mirroring sub_410F81's post-call `if (dword_464A68)
                     // return`).
                     if (options_.goldman && gold_player_ >= 0) {
