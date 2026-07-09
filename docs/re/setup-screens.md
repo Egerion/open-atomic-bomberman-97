@@ -259,10 +259,12 @@ VALUELST legend (confirmed by the file's own comments before the 700 block):
 | `32` Space | in NET only (`sub_40C06A()==1`) — bind detect; local = inert |
 | `1` | dev: set all 10 slots to COMPUTER (local only) |
 | `288`/`315` | menu toggles / roulette (`sub_413D45`/`sub_41431C`) |
+| `67` 'C' ×5 (local only) | **CAMPAIGN picker** — 5 consecutive presses (same-key counter `v115`, any other key resets it; `!sub_40C06A()` guard) open the `*.cam` file picker `sub_4015C6` (pseudo.c 15357-15365). Missed by the original "EXHAUSTIVE" pass — full chain in `docs/re/campaign.md` |
 
 So the local-play controls are: **Up/Down pick a slot; Right cycles its type
 (OFF→CPU→KBD0→KBD1→JOY…→OFF); Left/'0' set it OFF; 'T' toggles its team; Enter
-starts; Esc cancels.** No colour key.
+starts; Esc cancels.** No colour key. Plus the hidden 'C'×5 campaign easter
+egg above.
 
 ### Screen 2 — LEVEL & ROUNDS (`sub_406DDE` @0x406DDE) = the "map select"
 

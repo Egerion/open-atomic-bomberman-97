@@ -88,7 +88,7 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 | Resource list | `.RES` | 8 (incl. VALUELST.RES, SOUNDLST.RES, EXTRA*.RES) | pinned | ported | `reslist.hpp`, `extra.hpp`, facts.md, stage-actors.md (EXTRA*.RES actor registry) | — | done |
 | Font | `.FON` | 3 | pinned | ported | `docs/formats/fon.md`, `bmfont.hpp`, `test_bmfont.cpp` | — | done |
 | Misc data | `.DAT` | 3 (LEVELS.DAT, bmstats.dat, + 1 more) | **unRE'd** | **absent** | RE-NOTES.md: "🟡 Minor/low priority (fonts, key remaps)" — stale since FON/RMP are now done, but `LEVELS.DAT` itself was never RE'd | grep pseudo.c for `LEVELS.DAT` read site, determine purpose (level unlock state? campaign progress?), RE + parse only if it gates any reachable feature | low-medium — unknown purpose, verify it isn't load-bearing for something already "done" |
-| Campaign | `.CAM` | 3 (CROUTON.CAM, GHOSTS.CAM, SIMPLE.CAM) | **partial** | **absent** | RE-NOTES.md "✅ Campaign/stage info, commented" (format itself is trivial text) but pseudo.c shows only 2 weak string refs (`aTotalOfUCampai`, `aCouldnTOpenCam`) — campaign LOADING is barely present in the binary, feature may be vestigial/unfinished in the original itself | confirm whether campaign mode is reachable from any menu path at all before investing; if reachable, RE `sub_42C0C8`-adjacent call sites first | low — ROADMAP already parks this ("Campaign later") |
+| Campaign | `.CAM` | 3 (CROUTON.CAM, GHOSTS.CAM, SIMPLE.CAM) | **pinned** (RE'd 2026-07-09) | **absent** | `docs/re/campaign.md` — reachability CONFIRMED: hidden 'C'×5 trigger on the local player-setup screen (`sub_410F81` → `sub_4015C6` picker → `sub_401085` loader → `dword_46489C` flag read at ~12 sites: level-select skip, stage auto-advance, round pacing, roster auto-fill). The "may be vestigial" hedge is resolved — feature is fully wired, just undiscoverable (easter-egg trigger, 3 joke-named `.CAM` files). Format confirmed trivial text (9 comma fields, `-C` line marker) matching RE-NOTES.md | port when wanted: `.CAM` parser in `libs/assets` (MESSAGES.TXT-tier), 'C'×5 trigger + picker + stage-sequencer above `libs/match` (no sim impact) — see campaign.md "Port implication" | low — small hidden feature, but now a real port item, not a stub |
 | Palette | `.PAL` | 1 (COLOR.PAL) | pinned | ported (via PCX palette loading) | RE-NOTES.md | — | done |
 | Bitmap | `.BMP` | 1 | **unchecked** | **unchecked** | not mentioned in any doc; likely a tool/icon asset, not gameplay data | identify the single `.BMP` file's role (icon export?), likely no action needed | low |
 | Icon | `.ICO` | 1 (BM95.ICO) | N/A | N/A | application icon, not game data | none | N/A |
@@ -125,8 +125,10 @@ below aren't misread as gaps.
 
 ## 5. Known non-gameplay parked items (ROADMAP, verbatim carry-forward)
 
-- Campaign mode — "Campaign later" (see asset-table `.CAM`/`.DAT` rows above;
-  likely low value given the binary's own thin campaign-loading code).
+- Campaign mode — "Campaign later" (see asset-table `.CAM`/`.DAT` rows above).
+  UPDATE 2026-07-09: reachability confirmed, NOT vestigial — the loading code
+  is thin but fully wired behind a hidden 'C'×5 trigger; full chain in
+  `docs/re/campaign.md`. Stays parked as a small low-priority port item.
 - Random Start Options-row wording — intentionally left unguessed until RE'd
   (per ROADMAP note under Interactive Options screen); superseded — random
   start IS now RE'd and ported (facts.md "Options toggles", `random_start=`).
