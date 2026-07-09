@@ -94,6 +94,20 @@ public:
     const AniTextures& extras() const { return extras_; }
     SDL_Texture* field() const { return field_.get(); }
 
+    // One built-in level's SAMPLE-BLOCK preview art (docs/re/setup-screens.md
+    // "The sample block preview", sub_406AA3): the level's own "tile <n>
+    // solid"/"tile <n> brick" sequences (TILES<n>.ANI) plus its FIELD<n>.PCX
+    // backdrop swatch, loaded independently of load_stage()'s live match slot
+    // so the LEVEL & ROUNDS screen can cycle through every level's preview
+    // without disturbing (or being disturbed by) an in-progress match's own
+    // stage art. Cached by stage index; a missing/broken file leaves the
+    // corresponding entry empty/null (drawn as nothing), never throws.
+    struct StagePreview {
+        Anim solid, brick;
+        SDL_Texture* field = nullptr;
+    };
+    const StagePreview& stage_preview(int stage) const;
+
     // Front-end full-screen art (docs/re/frontend-flow.md), loaded lazily on
     // first request so the match path pays nothing for it and a missing file
     // just yields an empty Sprite the Screen skips. Keyed by the same base name
@@ -201,6 +215,13 @@ private:
     Sprite powerups_[sim::kPowerupKinds]{};
     std::vector<sdl::TexturePtr> powerup_textures_;    // owners for powerups_
     sdl::TexturePtr field_;
+
+    // stage_preview() cache: keyed by stage index, populated lazily. Separate
+    // AniTextures/texture owners from the live match slots above (tiles_/
+    // xbrick_/field_) so map-select preview cycling never touches them.
+    mutable std::map<int, StagePreview> stage_preview_;
+    mutable std::map<int, AniTextures> stage_preview_tiles_;
+    mutable std::map<int, sdl::TexturePtr> stage_preview_field_;
 
     AniTextures headwipe_;  // screen-transition wipe (HEADWIPE.ANI), shared
     AniTextures ring_;      // Goldman wheel pointer ("ring" seq), shared — see ring() doc comment
