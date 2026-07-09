@@ -71,27 +71,32 @@ Both route through the **same generic dialog-window primitive**
 `sub_43C734` (the same one the Yes/No confirm below and several other
 overlays use) and the **same percent-bar renderer** `sub_412E33`
 (decompile 16157-16211): a small window (`sub_43C734(200, 8·h, 360, 256, 4)`)
-captioned **"Completion"** (`aCompletion`), with a `%d` readout and a
-two-tone filled/unfilled bar (`sub_43D1C0` × 2, widths `3·pct` /
-`3·(100-pct)`). **This is drawn programmatically — there is no LOADING*.PCX
-or similar asset anywhere in the install or the decompile** (confirmed by an
-exhaustive `find`/grep over both); it is a DOS4GW-style dialog box, not a
-full-screen `sub_42A088` image. Neither `sub_41D695` nor `sub_42896E`
-touches the boot music (`sub_42741E(0x3E8)`, started later inside
-`sub_42B060` — see "Top-level flow" below), so the two LOADING dialogs run
-in silence.
+skinned with the **WINZ.PCX 9-patch (BLUE — see "The WINZ.PCX 9-patch
+window skin" below)**, captioned with the CALLER's loading message (the
+`aCompletion` buffer is strcpy-overwritten with getmessage 201/200 before
+each run — see the RE-PINNED percent-bar section below), with a `%d`
+readout and a two-tone filled/unfilled bar (`sub_43D1C0` × 2, widths
+`3·pct` / `3·(100-pct)`) in a white frame. **This is drawn programmatically
+— there is no LOADING*.PCX or similar asset anywhere in the install or the
+decompile** (confirmed by an exhaustive `find`/grep over both); it is a
+window-manager dialog box, not a full-screen `sub_42A088` image. Neither
+`sub_41D695` nor `sub_42896E` touches the boot music (`sub_42741E(0x3E8)`,
+started later inside `sub_42B060` — see "Top-level flow" below), so the two
+LOADING dialogs run in silence.
 
-**Port status: DONE, chrome now pixel-pinned (2026-07-09 chrome pass).**
+**Port status: DONE, re-skinned 2026-07-10 (WINZ pass).**
 `GameApp::init` (`game_app.cpp`) flashes a small dialog
 (`draw_boot_loading_dialog`) at the same two points in the same order: once
 captioned "Loading data..." immediately before `assets_.load()`, and once
 captioned `getstring(200)` ("Loading sound...", read from the now-loaded
-MESSAGES.TXT) immediately before `audio_.init()`. Both flashes now render
-through the pinned `sub_43C734` chrome (below) with the real FONT6 glyph
-textures — FONT6 is loaded standalone before the first flash, matching the
-CONFIRMED init order (`sub_41095A` pins FONT6 via `sub_414DF4` before it
-calls either loading dialog; see "FONT6 timing" below), correcting the
-earlier port's assumption of a font-readiness gap at the first flash.
+MESSAGES.TXT) immediately before `audio_.init()`. Both flashes render
+through the RE-PINNED chrome (below): the WINZ.PCX 9-patch window (WINZ is
+loaded standalone before the first flash via
+`AssetStore::load_frontend_winz`, mirroring `sub_414DF4`'s own "winz.plt"
+load) with the real FONT6 glyph textures — FONT6 is loaded standalone
+before the first flash, matching the CONFIRMED init order (`sub_41095A`
+pins FONT6 via `sub_414DF4` before it calls either loading dialog; see
+"FONT6 timing" below).
 **Documented simplification (unchanged):** our loaders have no per-file/
 per-byte progress callback (`AssetStore::load` is one monolithic try-block)
 and complete in well under a second on modern hardware, so each flash
@@ -101,7 +106,7 @@ have would be less faithful than a same-order same-caption flash. Skipped in
 `--demo` mode (matching that `audio_.init` is also skipped there). No PCX
 asset dependency, no `libs/sim` involvement.
 
-### The `sub_43C734` dialog-chrome primitive — PINNED (2026-07-09)
+### The `sub_43C734` dialog-chrome primitive — PINNED (2026-07-09, REVISED 2026-07-10: base coat only, WINZ skin on top)
 
 `sub_43C734` is the shared window-object constructor both the boot LOADING
 dialog (`sub_412E33`'s percent-bar window) and the Yes/No confirm
@@ -152,31 +157,112 @@ width, which is faithful to every visual call site's evident intent (nothing
 in the binary ever repositions these dialogs off-center) even though the
 literal source expression for that default isn't independently confirmed.**
 
-**There is NO border/frame draw anywhere in this primitive.** The
-"chrome" is exactly two steps, both already in the constructor:
+**The constructor's own paint is only a BASE COAT — the visible chrome is
+the WINZ.PCX 9-patch (CORRECTED 2026-07-10).** The constructor does exactly
+two paint-adjacent steps:
 1. `sub_43D1C0(id, 0, width, 0, height, fillColour)` — ONE flat filled
    rectangle spanning the whole window, in `fillColour`.
 2. `sub_43D398(id, y)` — clamps/stores the final on-screen rect and blits the
-   (still just flat-filled) buffer via `sub_43D4D0`/`sub_4428E4`, a generic
-   dirty-rect pixel copy, not a decorative draw.
+   buffer via `sub_43D4D0`/`sub_4428E4`, a generic dirty-rect pixel copy,
+   not a decorative draw.
 
-No outline, no drop shadow, no bevel anywhere in the WINDOW body — the
-earlier port's guessed light-frame `SDL_RenderRect` outline around the
-loading-dialog panel has no basis in the decompile and is removed. (The
-BUTTON widget, `sub_432298` below, *does* have a real bevel — that is a
-property of buttons, not of `sub_43C734` windows in general.)
+An earlier pass stopped here and concluded "flat grey, no border" — WRONG
+for every dialog this file covers, because the CALLERS then overpaint the
+whole window with a textured skin (next section): `sub_412E33` (the boot
+percent dialog) calls `sub_41726B(win)` @ pseudo.c 16181, and BOTH
+`sub_41456C` confirm variants do too (@ 17070 for `sub_414340`'s
+acknowledge-modal sibling, @ 17200 for the Yes/No confirm), as do the
+600×440 and 450×300 windows @ 16423/16787. The flat base coat is only ever
+VISIBLE in the callers that skip `sub_41726B` — the editor's text-entry/
+compact prompts (`sub_42E938` @ 32800, `sub_42EDE0` @ 32892/32963 — no
+`sub_41726B` call anywhere in their bodies). (The BUTTON widget,
+`sub_432298` below, additionally has a real bevel of its own.)
 
-**Fill colour resolution (a4=colormode).** `sub_43C734`/`sub_43D1C0` share
-one decode: `a4==256` → the THEME DEFAULT fill, `(unsigned
-__int8)byte_495390[dword_45C46C]`; `BYTE1(a4)!=0` (high byte set) → an
-indexed palette lookup via `dword_45C068[a4 & 0xFFFF]`; otherwise `a4` is
-used as a raw palette index directly. Both boot-chrome dialogs here pass
-literal `256` — the theme default. `dword_45C46C` is a **fixed literal LUT
-offset set once at window-system init** (`sub_414DF4`'s constructor block,
-same as the button bevel colours below) — **`10570`**, which decodes via the
-established RGB555-offset formula (`docs/re/results-and-options.md` "screen-
-ink byte globals") to `r5,g5,b5 = 10,10,10` → **RGB (82, 82, 82)**, a
-mid-dark grey. This is the ONE fill colour both boot dialogs use.
+### The WINZ.PCX 9-patch window skin — `sub_41726B` / `sub_416B43` (PINNED 2026-07-10)
+
+`sub_41726B(win)` @ 0x41726B paints the window with the image the graphics
+init loaded as **`winz.plt`** (`sub_414DF4` @ pseudo.c 17545-17546:
+`dword_460BAC = sub_4150F0(sub_411D17("winz.plt"), &w, &dword_460BB8)`).
+`sub_411D17`'s extension map sends both `pcx` AND `plt` to the
+`DATA/RES/%s.PCX` path (the same mapping that resolves every screen's
+`<name>.plt` palette load), so `winz.plt` = **`DATA/RES/WINZ.PCX`** — a
+72×72 image: dark BLUE noise interior with a baked-in bevel border. **This
+is the blue the user remembers** — the loading dialog (and every confirm) is
+a blue textured window, not the flat grey the base coat alone would give.
+
+`sub_416B43(src, srcW, dstBuf, srcH, dstW, dstH)` @ 0x416B43 is a classic
+**9-patch tiler**: it splits the source into a fixed 3×3 grid (`v22 =
+srcW/3`, `v23 = srcH/3` — 24-px cells for WINZ), then:
+- tiles the CENTER cell across the WHOLE window (first loop, full range),
+- tiles the top/bottom EDGE cells across the top/bottom strips,
+- tiles the left/right EDGE cells down the side strips,
+- stamps the four CORNER cells last, pinned.
+Partial tiles clip via `if (i + cell < extent) v = cell; else v = extent −
+i`. Later bands overpaint the earlier full-range center tiling, so the net
+result is the standard corners-pinned / edges-tiled / center-tiled skin.
+(Provenance: `sub_41726B` @ pseudo.c 18682-18693, `sub_416B43` @
+18585-18680; caller list = grep for `sub_41726B` — 16181, 16423, 16787,
+17070, 17200 and NOTHING in the 32xxx editor-prompt range.)
+
+**Fill colour resolution (a4=colormode) — the base coat.**
+`sub_43C734`/`sub_43D1C0` share one decode: `a4==256` → the THEME DEFAULT —
+IF a window-manager background texture `dword_4A39AC` is set, a tiled
+texture fill (`sub_442AC0`, with the per-window random phase pair
+`rand_() & 0xFFFE` stored at creation, v10[9]/v10[10]); otherwise the flat
+`byte_495390[dword_45C46C]`. `BYTE1(a4)!=0` (high byte set) → an indexed
+palette lookup via `dword_45C068[a4 & 0xFFFF]`; otherwise `a4` is a raw
+palette index. Both boot-chrome dialogs pass literal `256`.
+**`dword_4A39AC` is ALWAYS 0 at runtime** — it belongs to a vestigial
+"window theme file" system living in an IDA-undecompiled gap between
+`sub_43CA60` and `sub_43CD44` (absent from pseudo.c; recovered by a raw
+byte pass over BM95.EXE): a reset routine @ **0x43CB90** (frees the texture,
+zeroes `dword_4A39AC`, and re-writes the six literal ink LUT offsets — this
+is where pseudo.c's "init block ~43614-43626" values actually come from) and
+a theme-file LOADER @ **0x43CC00** (fopen mode `"rt"` @ 0x45AD50; line 1 =
+a texture image name → `dword_4A39AC`, then six `sscanf "%d %d %d"`
+(@ 0x45AD54) percent-RGB lines → `(x*32−1)/100`-packed RGB555 offsets
+written over `dword_45C46C..dword_45C480`). An exhaustive E8/E9/pointer
+scan finds NO caller of 0x43CC00 anywhere in the binary — dead code — so
+the theme texture never loads and colormode 256 always resolves to the flat
+`byte_495390[10570]` base coat.
+
+### COLOR.PAL — `byte_495390` decoded for real (CORRECTS the ink-decode method)
+
+`byte_495390` has **zero write sites** in the entire decompile, and
+`color.pal` appears as a string in BM95.EXE but nowhere in pseudo.c (the
+loader is in the same class of undecompiled code as the theme functions
+above). The resolution: **the install-root `COLOR.PAL` (33536 bytes) IS the
+buffer** — layout `768-byte master palette (6-bit VGA values; entry 0
+stored as a (255,255,255) sentinel and forced to (0,0,0) at load — the
+fread(3)-then-zero-`byte_46059C/D/E` block in sub_414DF4 @ pseudo.c
+17554-17563) followed by the 32768-byte RGB555→palette-index LUT` that
+`byte_495390[b5 | g5<<5 | r5<<10]` indexes. So the REAL decode of every ink
+global is: `idx = COLOR.PAL_LUT[offset]`, `RGB = activePalette[idx] << 2` —
+NOT the earlier "nearest palette entry to the RGB555 target" search, which
+gave close-but-wrong values. The indices land in a "reserved UI colours"
+palette region that is byte-identical between COLOR.PAL's master palette
+and MAINMENU.PCX's embedded palette (verified by direct byte reads), so the
+same RGB shows at boot and in the menu:
+
+| global | LUT offset | LUT idx | decoded RGB | role | old (nearest-search) value |
+|---|---|---|---|---|---|
+| `dword_45C46C` | 10570 | 205 | **(88, 84, 80)** | window base coat (`a4==256`, no theme texture) | (82,82,82) |
+| `dword_45C470` | 15855 | 60 | **(108, 116, 128)** | button bevel "light" (a cool blue-grey, not neutral) | (123,123,123) |
+| `dword_45C474` | 8456 | 142 | **(60, 68, 56)** | button bevel "dark" (a green-grey) | (66,66,66) |
+| `dword_45C478` | 21140 | 178 | **(168, 168, 164)** | button label ink | (165,165,165) |
+| `byte_49D38F` | 0x7FFF | 72 | **(240, 248, 252)** | general dialog text ink ("white") | (255,255,255) |
+| `byte_49D37A` | 0x7FEA | 182 | **(252, 248, 88)** | percent readout yellow | (255,255,90) |
+| `byte_49A624` | 0x5294 | 178 | **(168, 168, 164)** | percent-bar filled segment | (168,168,164) |
+| `byte_49A390` | 0x5000 | 248 | **(164, 0, 0)** | quit-confirm prompt ink (dark red — see below) | — (was drawn white) |
+| `byte_495390[0]` | 0 | 255 | **(0, 0, 0)** | black | (0,0,0) |
+
+(Provenance: COLOR.PAL byte reads at `768+offset` for the LUT and `idx*3`
+for the palette; MAINMENU.PCX tail-768 cross-check byte-identical at every
+index above. The old table in `docs/re/results-and-options.md` "screen-ink
+byte globals" used the nearest-search method — its values for the inks it
+pinned (white/team-red/yellow/mid-grey/cyan) are within a few counts of the
+LUT-true ones because that region's entries sit close to their RGB555
+targets, but the LUT-true values above supersede them where they differ.)
 
 **Flags (a5) do not affect visible appearance.** Loading dialog passes `4`;
 the confirm dialog passes `20` (0x14 = bits 2|4). Every flags-bit tested
@@ -188,44 +274,46 @@ flags difference between the two dialogs (4 vs 20) is a genuine but
 INVISIBLE difference (window-manager stacking behaviour only); the port does
 not need to (and cannot meaningfully) reproduce it.
 
-**Window default fill and the button bevel colours are siblings from the
-SAME init block** (`sub_414DF4`, pseudo.c ~43614-43626 — all four are
-literal LUT offsets assigned once, never reassigned elsewhere):
+**The ink LUT offsets are assigned in the window-system init block**
+(pseudo.c ~43614-43626, inside `sub_43C150`'s init path — the same literal
+set the dead theme-reset routine 0x43CB90 re-writes; all are assigned once,
+never reassigned at runtime): `dword_45C46C=10570`, `dword_45C470=15855`,
+`dword_45C474=8456`, `dword_45C478=21140` (+ `dword_45C47C=32747`,
+`dword_45C480=31744`). Their TRUE decoded RGBs are in the COLOR.PAL table
+above — the old per-offset `r5,g5,b5 → grey` readings in this section's
+earlier revision used the superseded nearest-search method.
 
-| global | LUT offset | r5,g5,b5 | decoded RGB | role |
-|---|---|---|---|---|
-| `dword_45C46C` | 10570 | 10,10,10 | **(82, 82, 82)** | window default fill (`a4==256`) |
-| `dword_45C470` | 15855 | 15,15,15 | **(123, 123, 123)** | button bevel "light" tone |
-| `dword_45C474` | 8456 | 8,8,8 | **(66, 66, 66)** | button bevel "dark" tone |
-| `dword_45C478` | 21140 | 20,20,20 | **(165, 165, 165)** | button label text-shadow ink |
-
-(Provenance: literal assignments @ pseudo.c ~43614-43626, inside the same
-window-subsystem init block that also sets `dword_45C468=1`
-(`dword_45C468` gates every accessor in this family — "is the window system
-initialized"); decode formula per `docs/re/results-and-options.md` "screen-
-ink byte globals".)
-
-### `sub_432298` — the button widget (PINNED)
+### `sub_432298` — the button widget (RE-PINNED 2026-07-10)
 
 Buttons ARE where a real 3D bevel exists. `sub_432298(win, x, ?, y, ?, ?,
 hotkeyChar, labelPtr, ?)` (9 params; the `?` slots are `-1` sentinels at both
-confirm-dialog call sites and not needed to reproduce the visible geometry):
+confirm-dialog call sites and not needed to reproduce the visible geometry).
+Full draw order for the "up" bitmap (pseudo.c 35192-35236):
 
 - **Size is text-derived, not caller-specified:** width = `measure(label) +
   16`, height = `fontheight + 6` (pseudo.c ~35197-35199, `v13`/`v15`).
-- **Two 8-bit-alpha bitmaps are built per button — "up" and "down"** — each
-  gets the SAME two-ring inset bevel (`sub_44240C` called twice, insets 1px
-  and 2px from the edge) using the two grey tones above, **colour order
-  swapped between the two bitmaps**: light-then-dark for "up" (top/left lit,
-  bottom/right shadowed — a raised look), dark-then-light for "down"
-  (a pressed/sunken look). A 1px flat outline in black (`byte_495390[0]`)
-  closes each bevel (`sub_442384`, the rect-fill primitive, drawn at the
-  bitmap's own edge). The port draws only the "up" state (there is no
-  press-animation requirement here) as a 2px inset bevel: `(123,123,123)`
-  top/left ring, `(66,66,66)` bottom/right ring, 1px black outline.
-- **Label ink uses the text-shadow colour** `dword_45C478` = **(165, 165,
-  165)** (`dword_45C378(...)|0x10000` call immediately before each bevel
-  pass) — a lighter grey than pure white, distinct from the window-fill grey.
+- **Face fill = the WINDOW's stored fill colour** `v22[8]` (pseudo.c 35213 —
+  the flat branch; the `v24[8]==256 && dword_4A39AC` textured branch is dead
+  with the theme system, above) = `byte_495390[10570]` = idx 205,
+  (88,84,80)…
+- **…then a whole-bitmap brightness WASH** (`sub_442C28(v16,w,w,h)` @ 35216):
+  every pixel is remapped through `byte_475390[p*256 + 0x93]` — row `p` of
+  the brightness-ramp table `sub_42C68C`/`sub_42C794` build per palette
+  index (128 darken entries then 128 lighten entries; entry 0x93 = lighten
+  step 19). Per channel (5-bit): `c' = c + (k·(31−c))>>16` with the ramp
+  scale at step 19 ≈ `19<<9` (the exact scale register is decompiler-lost;
+  the canonical 128-step `<<9` ramp is the reconstruction). Fill (11,10,10)
+  → washed (13,13,13) → LUT idx 123 → **face (108,112,108)** — the button
+  face is a touch lighter than the window base coat. (The "down" bitmap
+  skips the wash — only "up" gets it.)
+- **Two-ring inset bevel** (`sub_44240C` twice, insets 2 then 1): light
+  top/left `dword_45C470` → **(108,116,128)**, dark bottom/right
+  `dword_45C474` → **(60,68,56)** for "up"; colour pair swapped for "down"
+  (pressed look). A 1px black outline (`sub_442384` — a rect OUTLINE
+  primitive, drawn AFTER the rings without erasing them) closes the edge.
+  The port draws only the "up" state.
+- **Label ink** `dword_45C478` → idx 178 → **(168,168,164)**
+  (`dword_45C378(...)|0x10000` call before each bevel pass).
 - **Confirm-dialog button positions (from `sub_41456C`, both CONFIRMED
   literal expressions):** Yes at `x = width/2 − 80`, No at `x = width/2 +
   22` (both window-relative, `width` = the dialog's own computed width
@@ -235,49 +323,82 @@ confirm-dialog call sites and not needed to reproduce the visible geometry):
   loop (already pinned below), not in the button widget.
 
 (Provenance: `sub_432298` @ 0x432298 pseudo.c 35167-35276; `sub_44240C` @
-0x44240C two-colour inset-rect primitive; `sub_442384` @ 0x442384 filled-rect
-primitive; button geometry read directly from `sub_41456C` @ 0x41456C
-pseudo.c 17211-17216.)
+0x44240C = four `sub_4421A0` edge lines; `sub_442384` @ 0x442384 rect
+outline; `sub_442C28` @ 0x442C28 = per-pixel `byte_475423[p<<8]` remap,
+`byte_475423` = `byte_475390 + 0x93`; ramp builder `sub_42C68C` @ 0x42C68C /
+`sub_42C794` @ 0x42C794; button geometry read directly from `sub_41456C` @
+0x41456C pseudo.c 17211-17216.)
 
-### The percent-bar dialog, `sub_412E33` — geometry CONFIRMED, one residual gap
+### `sub_41696C` — outlined dialog text (PINNED 2026-07-10)
 
-Re-verifying against the corrected `sub_43C734` signature: the window is
-`sub_43C734(200, 8·h, 360, 256, 4)` = **y=200, height=8·fontheight, width=360**
-(`h` = the active font's char-height getter, `dword_45C37C`), themed grey
-fill `(82,82,82)`, x auto-centered (see the X-placement gap above). Contents,
-window-relative (all CONFIRMED by direct read, pseudo.c 16181-16204):
+Every text draw in this dialog family routes through `sub_41696C(win, text,
+x, w, y, inkA6, inkA7)` @ pseudo.c 18515-18573: it renders the string into a
+colour-key-0 scratch bitmap **FIVE times — four passes in the `a7` colour,
+then one in the `a6` colour on top** (the four `dword_45C378(..., a7 |
+0x2000000)` calls @ 18556-18559 then the single `a6` call @ 18560), and
+blits the scratch with `sub_4428E4` (the colour-key-0 MMX blit — background
+transparent, NOT a filled box). So dialog text = **ink glyphs with a 1-px
+4-way OUTLINE** in the a7 colour; every visible call site passes
+`byte_495390[0]` (black) as a7. The per-pass offsets are register-lost; the
+four cardinal ±1 offsets are the only reading consistent with the pass
+count. The a6/a7 argument order ("ink, then outline") is confirmed by the
+percent dialog's own calls (white/black and yellow/black) and `sub_41456C`'s
+caller @ 5713 (`black, white` in `(a2, a3)` caller order = outline black,
+ink white after the `sub_4172BA(…, a3, a2)` swap).
 
-- **Caption "Completion"** (`aCompletion`): `sub_41696C(win, text, (360−tw)/2,
-  tw, 1.5·h, ink=white(255,255,255), bg=black)` — horizontally centered, y =
-  `h/2 + h` = 1.5·fontheight.
-- **"%d" percent readout:** drawn via a SECOND `sub_41696C` call at **y =
-  3.5·fontheight** (`v12+3·v13`, `v12=h/2`) — **CORRECTION to an earlier
-  investigation pass:** its ink is `byte_49D37A` (**yellow**, RGB ≈
-  (255,255,90) — a fifth screen-ink global, same LUT-offset decode, offset
-  `32747` → r5,g5,b5=31,31,11), NOT the caption's white. The two text draws
-  use two different inks.
-- **Two-tone bar** (`sub_43D1C0` × 2, already pinned): filled segment `x=31,
-  width=3·pct, y=5·h+1+h/2, height=h−1`, colour `byte_49A624` mid-grey
-  (168,168,164); unfilled remainder `x=3·pct+31, width=3·(100−pct)`, same
-  rect, colour black.
-- **`TODO(RE): sub_43D080`'s exact role** — a call between the caption and
-  the readout (`sub_43D080(win, 5·h, 6·h, white)`) that this pass could not
-  fully resolve: its signature takes only (win, a2, a3, colormode) yet reads
-  a THIRD geometry value from the window's own stored fields internally
-  (offsets 6/11, "possibly undefined" in the decompile — the same
-  register-spill loss as `sub_43D398`'s X value above), consistent with
-  either a full-width horizontal rule/divider or a redundant background
-  strip in the 5.5h–6.5h band, immediately overpainted by the bar draw one
-  line below it. Visually inconsequential either way (the bar redraws that
-  same band), so the port omits it rather than guess a specific 1px line;
-  flagged here rather than silently dropped.
+### The percent-bar dialog, `sub_412E33` — RE-PINNED 2026-07-10 (it is BLUE)
 
-**Port status: chrome now pinned and reimplemented** (`draw_boot_loading_dialog`,
-`libs/game/src/game_app.cpp`) — grey fill window, "Completion" caption in
-white, "%d" readout in yellow, two-tone bar in the decoded greys, all via
-FONT6 (see the timing trace below), keeping the already-documented
+The window is `sub_43C734(200, 8·h, 360, 256, 4)` = **y=200,
+height=8·fontheight, width=360** (`h` = the active font's char-height
+getter, `dword_45C37C`), x auto-centered (see the X-placement gap above),
+then **immediately skinned with the WINZ.PCX 9-patch** (`sub_41726B(win)` @
+pseudo.c 16181 — the very first thing `sub_412E33` does after ensuring the
+window exists). The visible dialog is therefore the dark BLUE textured
+window with WINZ's baked bevel border — the user-reported "the loading box
+was blue" memory is CONFIRMED; the earlier flat-grey reading only described
+the constructor's base coat, which WINZ fully overpaints. Contents,
+window-relative (all CONFIRMED by direct read, pseudo.c 16181-16204, inks
+re-decoded through COLOR.PAL):
+
+- **The caption is the CALLER's loading message, not "Completion"
+  (CORRECTED).** The caption draw passes the buffer at **0x45BC5C** — IDA
+  symbolizes it `aCompletion` because its on-disk INITIAL value is
+  "Completion", but it is a writable DGROUP buffer: `sub_412E0C` (raw bytes
+  @ 0x412E0C: `mov edx,<arg>; mov eax,0x45BC5C; call strcpy`) copies the
+  caller's `sub_4124A4(201)/(200)` text over it before every percent run
+  (`sub_41D695` @ 21668-21669: getmessage(201) = "Loading data...";
+  `sub_4287B9`: getmessage(200) = "Loading sound..."; every other percent
+  user follows the same `getmessage → sub_412E0C → sub_412E33` pattern). So
+  the visible caption IS "Loading data..."/"Loading sound..."; the string
+  "Completion" never shows at boot. Drawn via `sub_41696C` (outlined text,
+  above): centered, y = `h/2 + h` = 1.5·fontheight, ink `byte_49D38F` →
+  **(240,248,252)** with the black 4-way outline.
+- **"%d" percent readout:** second `sub_41696C` call at **y =
+  3.5·fontheight** (`v12+3·v13`, `v12=h/2`), ink `byte_49D37A` → LUT idx 182
+  → **(252,248,88)** yellow (NOT the caption's white), black outline.
+- **White bar FRAME (`sub_43D080` RESOLVED — the earlier TODO(RE)):**
+  `sub_43D080(win, 5.5·h, 6.5·h, byte_49D38F)` is a thin wrapper over
+  `sub_442384` — the rect-OUTLINE primitive (proven by the button widget,
+  which draws it AFTER its bevel rings without erasing them) — i.e. a **1-px
+  white frame around the 5.5h..6.5h bar band**. Its x extent rides window
+  fields the decompiler lost (the same register-spill class as the X
+  placement); the only geometry consistent with the band is one px around
+  the 300-px track, x≈30..331. The bar then fills rows 5.5h+1..6.5h−1
+  strictly inside the frame.
+- **Two-tone bar** (`sub_43D1C0` × 2): filled segment `x=31, width=3·pct,
+  y=5·h+1+h/2, height=h−1`, colour `byte_49A624` → idx 178 →
+  **(168,168,164)**; unfilled remainder `x=3·pct+31, width=3·(100−pct)`,
+  same rect, black.
+
+**Port status: re-skinned 2026-07-10** (`draw_boot_loading_dialog`,
+`libs/game/src/game_app.cpp` + `draw_dialog_chrome`/`draw_dialog_text`,
+`libs/game/src/dialog_chrome.cpp`) — WINZ.PCX 9-patch window (loaded
+standalone before the first flash via `AssetStore::load_frontend_winz`,
+mirroring `sub_414DF4`'s own winz.plt load), caption/readout as outlined
+text in the LUT-true inks, white bar frame, bar in (168,168,164)/black,
+all via FONT6 (see the timing trace below), keeping the already-documented
 "presented already-complete" percent simplification (no per-byte load
-callback) and the boot-order/caption content unchanged.
+callback) and the boot order unchanged.
 
 ### FONT6 timing — CONFIRMED ready before BOTH loading-dialog flashes
 
@@ -308,23 +429,37 @@ with the real FONT6 glyph textures; `SDL_RenderDebugText` is no longer used
 by either dialog. (Provenance: call order pseudo.c 14602-14663 read in full;
 `sub_414DF4` body pseudo.c 17523-17602, `sub_431E9C(6)` @ 17600.)
 
-### Escape/Quit-row confirm dialog — chrome now exact
+### Escape/Quit-row confirm dialog — chrome RE-PINNED 2026-07-10
 
-The quit-confirm modal (`sub_412987` → `sub_41456C`, already pinned above for
-its behaviour/sound path) now uses the SAME `sub_43C734` chrome as the
-loading dialog (grey `(82,82,82)` fill, no border) sized from the ACTUAL
-button label extents (`FontTextures::measure` on getstring(26)/(25) = " Yes
-"/" No ", matching `v29 = max(text-width, 80)` and `v30 = v29+64`, `v32 =
-4·fontheight+64+fontheight` for a one-line prompt), vertically centered
+The quit-confirm modal (`sub_412987` → `sub_41456C`, already pinned above
+for its behaviour/sound path) uses the SAME `sub_43C734` chrome as the
+loading dialog — which after the 2026-07-10 pass means the **WINZ.PCX
+9-patch skin** (`sub_41456C` calls `sub_41726B(v33)` @ pseudo.c 17200,
+right after creating its window @ 17197; its acknowledge-modal sibling
+`sub_414340` does the same @ 17070), NOT the earlier flat grey. Geometry
+(unchanged, all CONFIRMED — with one phrasing fix: `v29` measures the
+PROMPT line(s), not the button labels): width `v30 = max(prompt-width, 80)
++ 64`, height `v32 = 4·fontheight+64+fontheight` for a one-line prompt
+(buttons getstring(26)/(25) = " Yes "/" No " size themselves from their own
+labels inside `sub_432298`), vertically centered
 (`y=(480−v32)/2`) and horizontally centered against the 640-px screen width
-(the X-placement gap above), with the two buttons drawn via the pinned
-`sub_432298` bevel geometry and colours instead of a single inline text
-line. The prompt text itself (getstring(10)) is drawn window-relative at
-`y = fontheight+32`, horizontally centered, in the general white ink
-(`byte_49D38F`, already pinned) — replacing the previous ad hoc
-`" Y/ENTER =… N/ESC =…"` single-line hint with the real prompt-plus-two-
-buttons layout. Behaviour (Y/Enter/Space confirm, N/Escape cancel, the sound
-path, the 4 s exit delay) is UNCHANGED — this pass is chrome-only.
+(the X-placement gap above), two `sub_432298` buttons at the pinned
+positions/colours (RE-PINNED button section above).
+
+**The prompt ink is DARK RED, not white (CORRECTED 2026-07-10).**
+`sub_412987` passes its OWN foreground ink to `sub_41456C`: `v0 =
+byte_49A390` (pseudo.c 16027) lands in the a3/foreground slot — the same
+slot the editor's caller @ 5713 fills with `byte_49D38F` (white), which is
+how the a3=foreground mapping is confirmed. `byte_49A390` = LUT offset
+0x5000 → idx 248 → **(164,0,0)** under both the master and MAINMENU
+palettes. So "Are you sure you want to exit?" (getstring(10)) renders in
+dark red, window-relative `y = fontheight+32`, horizontally centered,
+via `sub_41696C` = 1-px black 4-way outline under the ink (the outline
+colour rides `sub_412987`'s a2 argument, decompiler-lost — black per every
+sibling call site). The port draws exactly this (`draw_confirm_dialog` ink
+args, `quit_confirm` in `game_app.cpp`). Behaviour (Y/Enter/Space confirm,
+N/Escape cancel, the sound path, the 4 s exit delay) is UNCHANGED — this
+pass is chrome-only.
 
 ## Top-level flow — `sub_42B060` then `sub_42B9CE`
 
@@ -649,12 +784,14 @@ play the blip 20; **Enter/Space play the accept 10 on EVERY row** including the
 "inert" Editor/net-setup stubs (the original has no inert-row concept — every
 row 0..6 is a live dispatch); **Escape plays blip 20 + accept 10, sets the
 highlighted row to 6, and opens the SAME Yes/No confirm modal Enter-on-row-6
-opens** (`quit_confirm`, `game_app.cpp`) — since 2026-07-09 drawn with the
-pinned `sub_43C734` chrome ("Escape/Quit-row confirm dialog" below): a
-centered grey window sized from the actual `getstring(26)`/`getstring(25)`
-(" Yes "/" No ", fallback text if MESSAGES.TXT lacks those ids) button label
-extents, `getstring(10)` as the prompt, and two real `sub_432298`-bevel
-buttons — not the earlier flat single-line hint. Inside
+opens** (`quit_confirm`, `game_app.cpp`) — since 2026-07-10 drawn with the
+RE-PINNED `sub_43C734` chrome ("Escape/Quit-row confirm dialog" above): a
+centered WINZ.PCX-9-patch (blue) window sized from the prompt extent
+(`v29 = max(prompt-width, 80)`, width `v29+64`), `getstring(10)` as the
+prompt in the dark-red `byte_49A390` ink with a black outline, and two real
+`sub_432298`-bevel buttons labelled `getstring(26)`/`getstring(25)`
+(" Yes "/" No ", fallback text if MESSAGES.TXT lacks those ids) — not the
+earlier flat single-line hint. Inside
 that modal: **Y/Enter/Space confirm** — blip 20 (already fired on keydown) +
 accept 10 + the exit-sting group `play_random_in_range(2600, 2699)` + a 4 s
 `SDL_Delay` (mirroring `sub_452012(0xFA0)`, so the sting is audible instead of
@@ -684,6 +821,24 @@ fills by splitting each `id,a,b,c` line into consecutive slots, so
 `getvalue(700/701/702/703)` == columns 0/1/2/3 of row 700 == `{332, 140, 38,
 0}`. Confirmed cursor: **x = 332, y = 140 + 38·row**. (The menu's own idle
 timeout is `getvalue(92)`, not the waited-screen `getvalue(12)`.)
+
+**Cursor blit + frame lookup — VERIFIED end-to-end (2026-07-10 audit).** The
+menu's draw chain is `sub_41D957("bomb trigger green")` (sequence lookup —
+resolves to TRIGANIM.ANI's 19-step ping-pong sequence, docs/re/
+sequence-map.md) → `sub_41DAA7(seq, v13++)` @ 0x41DAA7 = frame at step
+`n % statecnt` (the modulo is explicit in its body) → `sub_415920(x, y,
+frame)` @ 0x415920, which queues a type-0 display-list entry that
+`sub_415B22` flushes through `sub_41537F` @ 0x41537F — and `sub_41537F`
+subtracts the frame's OWN hotspot (`v4 = x − hotx; v6 = y − hoty` from
+`sub_41C5E0`'s frame header) before the clipped blit. So the anchor point
+(332, 140+38·row) is the frame's HOTSPOT position, exactly what the port's
+`cx - sp.hx / cy - sp.hy` draw does; with TRIGANIM's uniform 40×40
+hot(20,39) frames the sprite sits ~(312, 101+38·row)..(351, 140+38·row).
+Cadence: one `sub_41DAA7` step per menu-loop pass at the flip rate — the
+port's `anim_step_index(frame, steps)` under vsync (below) matches. No
+port change needed by this audit; the 2026-07-09/-10 source-file fix
+(TRIGANIM, not the `;`-commented TRIGBOMB) plus the vsync pacing fix
+together close the "cursor looks wrong" report.
 
 **Cursor pacing — CORRECTED (2026-07-09).** The cursor's animation-frame
 counter is `v13`, declared once at `sub_42B9CE`'s top (`v13 = 0`) and

@@ -28,6 +28,15 @@ void AssetStore::load_frontend_font(const fs::path& game_dir) {
     }
 }
 
+const Sprite& AssetStore::load_frontend_winz(SDL_Renderer* ren, const fs::path& game_dir) {
+    // frontend_pcx() needs the renderer + install root; load() re-assigns the
+    // same values later, so seeding them here is safe and keeps this a plain
+    // pre-warm of the shared cache (idempotent, logs a miss once).
+    ren_ = ren;
+    game_dir_ = game_dir;
+    return frontend_pcx("WINZ");
+}
+
 bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
     ren_ = ren;
     auto ani_dir = game_dir / "DATA" / "ANI";
