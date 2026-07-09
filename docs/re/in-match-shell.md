@@ -390,11 +390,14 @@ no others exist):
 show a face-bubble over" broadcast, with no local-multiplayer analogue.**
 Three independent facts rule out a same-screen port rather than merely
 leaving it "lower confidence":
-1. It is **joystick-exclusive** — the write path lives solely in `case 3` of
-   the input decoder; keyboard input (the only human input type our port
-   currently drives — `setup-screens.md`: "We support OFF / COMPUTER /
-   KEYBOARD now; joystick (3) is a later controller-detect pass") has no
-   code path that could ever reach it, faithfully or otherwise.
+1. It is **joystick-chord-exclusive** — the write path lives solely in
+   `case 3` of the input decoder and triggers on the RAW `dwButtons` bitmask
+   being exactly 74 (set) / 138 (clear), multi-button chords tied to a 1997
+   stick's physical button layout. Our port DOES drive type-3 joystick slots
+   (SDL3 `GamepadMapper`, ROADMAP 2026-07-08), but the mapper deliberately
+   exposes only d-pad/left-stick + south/east buttons — there is no raw
+   button-bitmask surface on which "exactly 74" could be reproduced
+   faithfully; any substitute chord would be invented.
 2. It is **network-replicated, not locally computed** — the write is
    immediately mirrored to every peer over message 57, and the receive
    handler (`sub_4226F6`) applies a peer's value with no local identity
