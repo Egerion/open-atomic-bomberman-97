@@ -14,7 +14,13 @@ namespace bomber::assets::res {
 // and is kept verbatim (it may contain commas and printf-style % specifiers,
 // which sub_4518D0 == sprintf formats). The file is the user's own game data,
 // loaded at runtime — never committed.
-struct Messages {
+// bugprone-exception-escape (NOLINT below) — std::map's default ctor can
+// throw bad_alloc (standard-allowed); clang-tidy flags the aggregate's
+// implicit ctor for this in every std::map-holding struct in this codebase's
+// tree (verified: an equivalent std::vector-only struct is NOT flagged, only
+// std::map is). Marking noexcept would be a lie (std::terminate on OOM
+// instead of propagating); there's no fix that isn't a container-type change.
+struct Messages {  // NOLINT(bugprone-exception-escape)
     std::map<int, std::string> strings;   // id -> format string
     std::vector<std::string> warnings;    // lines that looked like data but didn't parse
 
