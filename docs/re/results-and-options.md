@@ -412,6 +412,78 @@ pseudo.c 16691-16721; row-0/row-6 handler bodies pseudo.c 9309-9314/9333-
 options_screen.{hpp,cpp}`, `libs/game/src/game_app.cpp`
 (`present_options_screen`, `init`, `flush_options`).)
 
+### 2026-07-09 (2nd pass) — Enter/Space regression fix, and a layout re-verification
+
+A playtest of the above audit (merge `9ee04ce`) reported two problems: the
+row list looked shifted over the backdrop, and pressing a row (not just
+navigating) dropped straight back to the main menu. Investigation:
+
+**The exit bug — CONFIRMED and fixed.** Re-reading `sub_4080DC`'s key tail
+in full (pseudo.c 9297-9406, not just the "Input model" paragraph's summary
+above, which was already correct but never actually implemented) pins the
+EXACT dispatch: `v165` is the raw key code; the ONLY branch that sets the
+loop's own exit flag (`v167 = 1`) is `v165 == 0x1B` (Escape,
+pseudo.c 9374-9378). Enter (13) and Space (32) both `goto LABEL_29`
+(pseudo.c 9306), the identical per-row switch Right (`v165 == 0x14D`,
+pseudo.c 9406) dispatches to; Left (`v165 == 0x14B`) runs a second,
+textually-separate switch with the SAME 19 cases (pseudo.c 9408-9485) —
+toggles do the same toggle regardless of direction, cyclers step backward
+instead of forward, and the "opens a sub-screen" rows (2/8/14/15/16/17/18)
+dispatch the SAME open action Right/Enter/Space use (e.g. row 15's
+`sub_407B9D`, pseudo.c 9362/9469, is reachable via ALL FOUR keys, not
+Enter-only). The port's `OptionsScreen::on_key` had `done_ = true` on
+Enter/Space for every row except KeyRemap — that branch does not exist
+anywhere in `sub_4080DC`; it was invented (predates this session — traceable
+back to the original interactive-Options commit `9a237b4`, not something the
+2026-07-09 1:1 audit introduced) and is the reported "rows kick you to the
+main menu" bug. Fixed: `on_key`'s Enter/Space/Right cases now all call a
+shared `activate_row(dir)` (dir=+1) — the exact same per-row switch Left
+(dir=-1) already ran — and Escape is the only key that sets `done_`. The
+KeyRemap row (15) now also opens via Left/Right, not Enter/Space only,
+matching the original's `goto LABEL_53` from both switches.
+
+**The layout complaint — re-verified, no numeric error found.** Re-checked
+every input to the `55/40/22/500` constants against primary sources rather
+than re-deriving from the decompile's noisy register tracking:
+- `DATA/RES/VALUELST.RES` (a plain-text resource, not opaque binary) line
+  454-456 literally reads `; SETTINGS SCREEN:` / `; the actual listing of
+  options items` / `745, 55, 40, 22,500` — one entry, four columns,
+  confirming `getvalue(745/746/747/748)` = `55/40/22/500` exactly as coded
+  (`ValueList::columns[745] = [55,40,22,500]`, the same flattening
+  `reslist.hpp`'s `column_or` documents for `getvalue(745+N) ==
+  columns[745][N]`).
+- The SAME "id,X,Y0,YSTEP,W" 4-column shape is already load-bearing,
+  RE-confirmed, working code elsewhere in this port: `GameApp::
+  present_scoreboard` reads the §1 RESULTS-screen row list via
+  `values_.column_or(785, 0/1/2, ...)` = X/Y0/YSTEP, and the main menu
+  cursor block (`700,332,140,38,0`, `reslist.hpp`'s own doc comment) uses
+  the identical layout. Column order (X, Y0, YSTEP, W) is therefore
+  cross-validated against a second, independently-working consumer, not
+  just this screen's own reading of the decompile.
+- `MISC.ANI`'s `cursor1` sequence (dumped via `abtool ani`) is frames
+  11-14 (`POINTER1..4.TGA`), each 32x32 with hotspot `(16,31)` — i.e. the
+  original's row-selection indicator is a fairly large animated pointer
+  graphic anchored near its own bottom edge, not a slim `>` marker; at
+  `(x-20, row_y)` with a 22px row pitch it visibly extends into the row
+  above by design (confirmed from the asset itself, not a port bug).
+- `GLUE1.PCX`'s header confirms 640x480 — the same as
+  `SDL_SetRenderLogicalPresentation`'s logical size — so there is no
+  backdrop/logical-resolution scale mismatch either.
+No wrong constant, sign, or off-by-one was found in `kListX`/`kListY0`/
+`kListYStep`/`kCursorX` against any of the above. The likeliest explanation
+for the reported "kayık" impression is the exit bug above: a screen where
+most rows kick you back to the menu on the natural "select" key reads as
+broken/disoriented as a whole, independent of the actual per-row pixel
+coordinates. If a specific row/coordinate is still visibly wrong after this
+fix, it needs a fresh screenshot to pin — nothing in the primary sources
+above supports changing the numbers further.
+
+(Provenance: pseudo.c 9297-9406 re-read in full, not summarized; `DATA/RES/
+VALUELST.RES` lines 452-456 read directly as text; `abtool ani DATA/ANI/
+MISC.ANI` frame/sequence dump; `GLUE1.PCX` header bytes 4-11. Port changes:
+`libs/game/{include/bomber/game,src}/options_screen.{hpp,cpp}` only — no
+layout constant changed.)
+
 ### The full options.ini key list — CONFIRMED via the writer/reader positional match
 
 `docs/re/setup-screens.md`'s note that only `conveyor_speed=` was mapped is

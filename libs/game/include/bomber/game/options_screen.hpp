@@ -216,9 +216,11 @@ public:
     // random-GLUE<n> convention present_setup/present_map_select use).
     void enter(const OptionsSnapshot& current, std::string backdrop);
 
-    // Feed one SDL keycode. Returns true once Enter/Escape ends the screen;
-    // check changed()/confirmed() to see what the caller should persist. A
-    // Right/Enter on the "Define keyboard layouts" row instead sets
+    // Feed one SDL keycode. CONFIRMED (pseudo.c 9297-9406, activate_row's own
+    // file doc in options_screen.cpp): Escape is the ONLY key that ends the
+    // screen (done() becomes true) — Enter/Space/Right/Left all just act on
+    // the highlighted row, exactly like Left/Right always did, and NEVER
+    // exit. Left/Right/Enter/Space on the "Define keyboard layouts" row sets
     // open_keyremap() so the caller can push the KeyRemapScreen on top
     // (§2 — that sub-screen is not part of this class, it edits
     // KeyboardMapper's live bindings directly via the caller).
@@ -247,7 +249,8 @@ public:
     // this instead of comparing snapshots for the gold-player clear.
     bool gold_forfeiting_row_touched() const { return goldman_touched_ || team_play_touched_; }
     // True for exactly one frame's worth of on_key() calls: the highlighted
-    // row was "Define keyboard layouts" and Enter/Right was pressed. The
+    // row was "Define keyboard layouts" and Left/Right/Enter/Space was
+    // pressed (all four, per activate_row's file doc). The
     // caller checks this AFTER on_key(), pushes the key-remap screen, then
     // must clear it is not needed — enter() resets it, and it is only ever
     // read once per press in the app's own loop (see game_app.cpp).
@@ -256,6 +259,13 @@ public:
     const OptionsSnapshot& snapshot() const { return snap_; }
 
 private:
+    // The per-row action a Left/Right/Enter/Space press dispatches to
+    // (options_screen.cpp's file doc on this function has the full pseudo.c
+    // citation): toggles ignore `dir`, cyclers step by `dir`, and the
+    // KeyRemap row opens regardless of `dir` — all matching sub_4080DC's own
+    // "every direction reaches the same per-row case" dispatch table.
+    void activate_row(int dir);
+
     const AssetStore* assets_ = nullptr;
     const FontTextures* font_ = nullptr;
 
