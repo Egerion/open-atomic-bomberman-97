@@ -31,10 +31,6 @@ struct Bomb {
     // the bomb onto the next tile centre it reaches (sub_42331C `+57 && at-or-
     // past-centre`). A DIRARROW clears it (~25535). facts.md "Core-feel audit" §4.
     bool stop_pending = false;
-    // Warphole one-shot latch (docs/re/stage-actors.md §6): set when a sliding
-    // bomb teleports through a warp, cleared once it leaves the warp tile — the
-    // bomb analogue of Player::warp_latch, preventing a warp-to-warp ping-pong.
-    bool warp_latch = false;
     Direction dir = Direction::Up;
     // Airborne (punched/thrown): travels from_* -> to_* in fly_total ticks.
     // While flying it doesn't block, can't chain, and its fuse is paused.

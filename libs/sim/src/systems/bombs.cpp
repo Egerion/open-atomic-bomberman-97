@@ -336,15 +336,23 @@ void BombSystem::slide(std::size_t index, std::int32_t budget) {
             // tile centre (both axes) — the original's `!v79 && !v80` gate
             // (sub_42331C ~25532). Testing only the move axis would re-fire every
             // pixel as the bomb slides away from a dirarrow, snapping it back
-            // forever. dirarrow (type 0) turns the bomb to the arrow's godir;
-            // warphole (type 1) teleports it to the linked exit (no RNG) and
-            // latches against an immediate re-warp at the exit.
+            // forever. dirarrow (type 0) turns the bomb to the arrow's godir.
+            //
+            // Warphole (type 1) is deliberately NOT handled here — a sliding
+            // bomb can never be centred on a warphole tile in the first place:
+            // the cell-entry probe below (mirroring sub_4230A5) blocks entry to
+            // ANY tile whose actor is type 1, unconditionally, before the bomb
+            // can ever step onto it. Bombs never call the warp resolver
+            // (sub_405A81) anywhere in the binary — that call site is unique to
+            // the player stepper (sub_41EC84, pseudo.c 22594). A prior port
+            // taught a sliding bomb to teleport here; that was unfaithful and
+            // has been removed. See facts.md "Bomb/warphole reconciliation
+            // 2026-07-10" for the full truth table and evidence.
             const bool at_centre = (b.x == cx && b.y == cy);
             if (at_centre && grid::in_grid(tx, ty)) {
                 const ActorType at = s.actor_type[ty][tx];
                 if (at == ActorType::DirArrow) {
                     b.dir = grid::from_godir(s.actor_dir[ty][tx]);
-                    b.warp_latch = false;
                     // A dirarrow overrides a pending kick-stop (sub_42331C
                     // ~25535 clears +57 in the same branch that re-steers).
                     b.stop_pending = false;
@@ -352,24 +360,7 @@ void BombSystem::slide(std::size_t index, std::int32_t budget) {
                     axis = (grid::dir_dx(b.dir) != 0) ? b.x : b.y;
                     center = (grid::dir_dx(b.dir) != 0) ? cx : cy;
                     sign = grid::dir_dx(b.dir) + grid::dir_dy(b.dir);
-                } else if (at == ActorType::Warphole) {
-                    if (!b.warp_latch) {
-                        const int dx = s.warp_dest_x[ty][tx], dy = s.warp_dest_y[ty][tx];
-                        b.x = grid::tile_center_x(dx);
-                        b.y = grid::tile_center_y(dy);
-                        b.warp_latch = true;
-                        s.events.push_back({Event::Type::WarpUsed, -1,
-                                            static_cast<std::int8_t>(dx),
-                                            static_cast<std::int8_t>(dy), 0});
-                        return;  // resume next tick from the exit tile
-                    }
-                } else {
-                    b.warp_latch = false;  // left a warphole: allow future warps
                 }
-            } else if (!at_centre && grid::in_grid(tx, ty) &&
-                       s.actor_type[ty][tx] != ActorType::Warphole) {
-                // moved off a non-warp tile mid-slide: allow future warps
-                b.warp_latch = false;
             }
             // Kick+action2 stop (sub_42331C `if (+57 && v81 >= 0)`): a pending
             // stop is consumed the moment the bomb is at/past a tile centre —
@@ -410,6 +401,14 @@ void BombSystem::slide(std::size_t index, std::int32_t budget) {
                     powerups_.scatter(PowerupType::Disease);
             }
             if (!grid::tile_open(s, nx, ny)) blocked = true;
+            // sub_4230A5's final verdict is `(!v8 || v8[1] != 1) && blank==0`:
+            // a WARPHOLE actor (type 1) makes the cell impassable regardless of
+            // its underlying (blank) cell type — a sliding/kicked/conveyor bomb
+            // is blocked at a warphole's doorstep exactly like a wall, and can
+            // never enter or teleport through it. facts.md "Bomb/warphole
+            // reconciliation 2026-07-10".
+            if (grid::in_grid(nx, ny) && s.actor_type[ny][nx] == ActorType::Warphole)
+                blocked = true;
             if (blocked) {
                 b.x = cx;
                 b.y = cy;

@@ -68,11 +68,17 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       BOMB-ONLY (the player mover `sub_41F29B` has no type-0 branch; confirmed);
       a sliding bomb turns to the arrow godir at a tile centre (`sub_42331C`
       ~25532). WARPHOLES teleport via `sub_405A81` (idno/linkto scan, ZERO RNG),
-      pre-resolved to a hashed `warp_dest` grid at setup, sound 1330; player &
-      bomb both warp, latched against ping-pong. Bomb-on-conveyor slides at belt
-      speed (`sub_42331C` case 0). Bombs do NOT bounce on trampolines (confirmed:
-      sound 350 fires from the player stepper only). Ported: hashed
-      `actor_type`/`actor_dir`/`warp_dest_*` + `Player::warp_latch`/`Bomb::
+      pre-resolved to a hashed `warp_dest` grid at setup, sound 1330; **PLAYER
+      ONLY** warps, latched against ping-pong — **CORRECTED 2026-07-10**
+      (facts.md "Bomb/warphole reconciliation"): `sub_405A81` is called from
+      exactly one site in the binary (the player stepper `sub_41EC84`); a
+      sliding/kicked/conveyor bomb is BLOCKED at a warphole tile's doorstep by
+      the cell-entry probe `sub_4230A5` (type-1 actor ⇒ impassable, regardless
+      of cell type) exactly like a wall, and never warps. `Bomb::warp_latch`
+      was removed (dead once bomb-warping is unreachable). Bomb-on-conveyor
+      slides at belt speed (`sub_42331C` case 0). Bombs do NOT bounce on
+      trampolines (confirmed: sound 350 fires from the player stepper only).
+      Ported: hashed `actor_type`/`actor_dir`/`warp_dest_*` + `Player::
       warp_latch`; `StageActorSystem::{move_on_actor,trampoline_after_move,
       warphole_after_move}`; `BombSystem::{slide(budget),conveyor_carry}`;
       `match::apply_actors` warphole link resolution; sound_director 350/1330;

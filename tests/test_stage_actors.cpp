@@ -1,7 +1,10 @@
 // Stage-actor mechanics that go beyond the standalone conveyor/trampoline
-// suites: dirarrows (type 0, bomb-only re-steer), warpholes (type 1, teleport),
-// and the bomb-on-conveyor slide. Faithful to sub_42331C (bomb mover) and
-// sub_41EC84 (player warp step-on). See docs/re/stage-actors.md §5-6.
+// suites: dirarrows (type 0, bomb-only re-steer), warpholes (type 1,
+// PLAYER-ONLY teleport — a bomb of any kind is blocked at the doorstep and
+// never warps, sub_4230A5), and the bomb-on-conveyor slide. Faithful to
+// sub_42331C (bomb mover) and sub_41EC84 (player warp step-on). See
+// docs/re/stage-actors.md §5-6 and facts.md "Bomb/warphole reconciliation
+// 2026-07-10".
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
@@ -270,7 +273,17 @@ TEST_CASE("a bomb resting on a conveyor slides along the belt") {
     CHECK(st.bombs[0].dir == Direction::Right);
 }
 
-TEST_CASE("a bomb warps through a warphole while sliding") {
+// Bomb/warphole reconciliation 2026-07-10 (facts.md "Bomb/warphole
+// reconciliation 2026-07-10", correcting stage-actors.md §6 item 4): bombs
+// NEVER warp in the original. sub_4230A5 (the sliding-bomb cell-entry probe)
+// treats ANY tile occupied by a type-1 (warphole) actor as impassable,
+// regardless of the underlying cell type, and the warp resolver sub_405A81 is
+// called from exactly one site in the whole binary — the player stepper
+// (sub_41EC84). A sliding/kicked/conveyor-carried bomb is blocked at a
+// warphole's doorstep exactly like a wall; it stops one tile short and never
+// enters, warps, or teleports.
+
+TEST_CASE("a sliding bomb is blocked at a warphole (never warps, sub_4230A5)") {
     Simulation s(open_config());
     State& st = s.state();
     // Warphole pair on row 0: (5,0) -> (10,0).
@@ -281,15 +294,68 @@ TEST_CASE("a bomb warps through a warphole while sliding") {
     st.warp_dest_x[0][10] = 5;
     st.warp_dest_y[0][10] = 0;
 
-    // Bomb at (3,0), sliding east; it should reach (5,0) and warp to (10,0).
+    // Bomb at (3,0), sliding east; it must stop at (4,0) — the doorstep of the
+    // warphole at (5,0) — and never cross onto it.
     add_bomb(st, 3, 0, /*moving=*/true, Direction::Right);
 
     const std::uint32_t rng_before = st.rng;
-    run(s, 12, TickInputs{});  // let it roll east into the warphole
+    // Events are per-tick outputs (rebuilt every tick, never accumulated), so
+    // watch for BombStopped tick-by-tick rather than only after the last tick.
+    bool stopped = false;
+    bool warped = false;
+    for (int t = 0; t < 20; ++t) {
+        s.tick(TickInputs{});
+        for (const auto& e : s.state().events) {
+            if (e.type == Event::Type::BombStopped) stopped = true;
+            if (e.type == Event::Type::WarpUsed) warped = true;
+        }
+    }
 
     REQUIRE_FALSE(st.bombs.empty());
-    CHECK(st.bombs[0].tile_x() >= 10);  // crossed (5,0) and jumped east
-    CHECK(st.rng == rng_before);        // bomb warp draws no RNG
+    CHECK(st.bombs[0].tile_x() == 4);   // stopped one tile short, never entered
+    CHECK_FALSE(st.bombs[0].moving);    // halted, exactly like hitting a wall
+    CHECK(st.rng == rng_before);        // no RNG either way
+    CHECK(stopped);
+    CHECK_FALSE(warped);                // WarpUsed never fires for a bomb
+}
+
+TEST_CASE("a jelly bomb bounces off a warphole instead of entering it") {
+    Simulation s(open_config());
+    State& st = s.state();
+    st.actor_type[0][5] = ActorType::Warphole;
+    st.warp_dest_x[0][5] = 10;
+    st.warp_dest_y[0][5] = 0;
+
+    Bomb& b = add_bomb(st, 3, 0, /*moving=*/true, Direction::Right);
+    b.jelly = true;
+
+    run(s, 10, TickInputs{});  // roll east and hit the warphole's doorstep
+
+    REQUIRE_FALSE(st.bombs.empty());
+    CHECK(st.bombs[0].tile_x() <= 4);       // never crossed onto (5,0)
+    CHECK(st.bombs[0].dir == Direction::Left);  // reversed (ping-pong), like a wall
+    CHECK_FALSE(saw_warp(s));
+}
+
+TEST_CASE("a bomb resting on a belt is blocked by a warphole ahead") {
+    Simulation s(open_config());
+    State& st = s.state();
+    // East belt along row 0, up to the warphole at (5,0).
+    for (int x = 0; x < 5; ++x) {
+        st.actor_type[0][x] = ActorType::Conveyor;
+        st.actor_dir[0][x] = kEast;
+    }
+    st.actor_type[0][5] = ActorType::Warphole;
+    st.warp_dest_x[0][5] = 10;
+    st.warp_dest_y[0][5] = 0;
+
+    add_bomb(st, 3, 0);  // resting on the belt, not yet moving
+
+    run(s, 40, TickInputs{});  // belt keeps trying to push it every tick
+
+    REQUIRE_FALSE(st.bombs.empty());
+    CHECK(st.bombs[0].tile_x() == 4);  // pushed up to the doorstep, no further
+    CHECK_FALSE(saw_warp(s));
 }
 
 // ---- Core-feel audit 2026-07-10 (facts.md "Core-feel audit" §3) ------------

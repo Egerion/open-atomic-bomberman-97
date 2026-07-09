@@ -185,9 +185,11 @@ std::uint64_t state_hash(const State& s) {
             (static_cast<std::uint64_t>(b.flame) << 32) |
             (static_cast<std::uint64_t>(b.moving) << 40) |
             (static_cast<std::uint64_t>(b.flying) << 41) |
-            // Bomb warphole latch (stage-actors.md §6): 0 on non-warp boards →
-            // golden E (no warpholes) unchanged.
-            (static_cast<std::uint64_t>(b.warp_latch) << 42) |
+            // Bit 42 formerly hashed a bomb warp latch; removed 2026-07-10
+            // (facts.md "Bomb/warphole reconciliation") — bombs never warp in
+            // the original (sub_4230A5 blocks entry to a warphole tile
+            // outright), so the field was dead. Left unused rather than
+            // reassigned, to keep every OTHER field's shift stable.
             // Kick+action2 stop flag (sub_4247C5/sub_42331C +57, facts.md
             // "Core-feel audit" §4): gameplay state (it decides where a
             // sliding bomb halts), so hashed.
