@@ -9,6 +9,7 @@
 #include <doctest/doctest.h>
 
 #include <array>
+#include <cstdint>
 #include <vector>
 
 #include "bomber/game/app_flow.hpp"
@@ -31,6 +32,7 @@ using bomber::game::kKeyActionCount;
 using bomber::game::kKeyboardSets;
 using bomber::game::KeySet;
 using bomber::game::next;
+using bomber::game::seed_campaign_ai_slots;
 using bomber::game::SlotInputType;
 using bomber::game::tally_kills;
 using bomber::game::win_by_kills_clinch;
@@ -353,6 +355,38 @@ TEST_CASE("assign_gold_player mirrors dword_46492C's RESULTS-tier write") {
     CHECK(assign_gold_player(true, true, 0, team_of) == 0);  // player 0 -> team 0
     // No clinch yet: -1 passes straight through, never indexed into team_of.
     CHECK(assign_gold_player(true, true, -1, team_of) == -1);
+}
+
+// docs/re/campaign.md "Rover/ghost/AI roster — CORRECTED": sub_40151B's
+// per-stage starter seeds the AI count via sub_422928 (rand()%10 + retry-
+// on-occupied), NOT a sequential fill from slot 0.
+TEST_CASE("seed_campaign_ai_slots claims exactly ai_count DISTINCT slots") {
+    std::uint32_t lcg = 0x1234u;
+    auto slots = seed_campaign_ai_slots(lcg, 4);
+    CHECK(slots.size() == 4);
+    // Distinct: no duplicate slot claimed twice (sub_422928 re-rolls on hit).
+    std::array<bool, kMaxPlayers> seen{};
+    for (int s : slots) {
+        REQUIRE(s >= 0);
+        REQUIRE(s < kMaxPlayers);
+        CHECK_FALSE(seen[static_cast<std::size_t>(s)]);
+        seen[static_cast<std::size_t>(s)] = true;
+    }
+}
+
+TEST_CASE("seed_campaign_ai_slots clamps an out-of-range count to [0, kMaxPlayers]") {
+    std::uint32_t lcg = 1;
+    CHECK(seed_campaign_ai_slots(lcg, 0).empty());
+    CHECK(seed_campaign_ai_slots(lcg, -3).empty());
+    // A count above the roster size still only claims all 10 slots, not more.
+    CHECK(seed_campaign_ai_slots(lcg, 999).size() == static_cast<std::size_t>(kMaxPlayers));
+}
+
+TEST_CASE("seed_campaign_ai_slots is deterministic for a fixed lcg seed/count (presentation RNG, not State::rng)") {
+    std::uint32_t lcg_a = 42;
+    std::uint32_t lcg_b = 42;
+    CHECK(seed_campaign_ai_slots(lcg_a, 5) ==
+          seed_campaign_ai_slots(lcg_b, 5));
 }
 
 // docs/re/in-match-shell.md §3 (sub_4105D2): MM:SS via MESSAGES.TXT id 281 =

@@ -966,7 +966,15 @@ void GameApp::present_campaign_picker() {
         // sub_4015C6 also shows a confirmation overlay (getstring 1210 + 95)
         // here; the port's accept sting (already played by the trigger
         // above) stands in for that minimal fidelity gap (TODO(RE): no
-        // dedicated confirmation dialog).
+        // dedicated confirmation dialog). The SEPARATE stage-start banner
+        // (sub_40133F, getstring 1235/1230 — docs/re/campaign.md "Stage
+        // banner") follows right after, same as the original's sub_410B6E
+        // showing it for the freshly-armed stage 0.
+        if (present_campaign_banner() == AppInput::Quit) {
+            campaign_active_ = false;
+            campaign_stages_.clear();
+            return;
+        }
     } catch (const std::exception&) {
         // aCouldnTOpenCam path (§1/§3): unreadable/corrupt file. Leave
         // campaign mode untouched, same as a cancelled picker.
@@ -1002,48 +1010,90 @@ bool GameApp::load_campaign_stage(int index) {
         return false;
     }
 
-    // Roster/level auto-fill (docs/re/campaign.md "Roster/level auto-fill",
-    // sub_42288C semantics): the campaign record's rover/ghost/AI counts
-    // seed all 10 slots instead of the player manually configuring them.
-    // libs/sim has no separate rover/ghost archetype (TODO(RE): the
-    // original's monster AI behaviours are not modelled as a distinct slot
-    // kind here) — every non-empty count is folded into COMPUTER slots, the
-    // closest existing archetype, filled in rover/ghost/AI order until the
-    // 10 slots or the counts are exhausted. Any slot beyond the filled count
-    // is set OFF. This is a faithful ROSTER COUNT port; rover/ghost SPEED
-    // and AI DIFFICULTY have no consumer yet (also TODO(RE) below).
-    int slot = 0;
-    auto fill = [&](int count) {
-        for (int n = 0; n < count && slot < sim::kMaxPlayers; ++n, ++slot) {
-            setup_type_[slot] = 1;  // COMPUTER (sub_421E33(i,1,0) semantics)
-            setup_sub_[slot] = 0;
-            setup_team_[slot] = 0;
-        }
-    };
-    fill(stage.rovers);
-    fill(stage.ghosts);
-    fill(stage.ai_count);
-    for (; slot < sim::kMaxPlayers; ++slot) {
-        setup_type_[slot] = 0;  // OFF
+    // AI roster auto-fill — CORRECTED 2026-07-09 (docs/re/campaign.md
+    // "Rover/ghost/AI roster — CORRECTED"). sub_40151B (the real per-stage
+    // starter gated dword_46489C, not sub_42288C as previously mislabelled)
+    // is the actual roster/actor seeder: `for (j=0;j<ai_count;++j)
+    // sub_422928()`, where sub_422928 picks a RANDOM currently-OFF slot
+    // (`rand()%10`, retried up to 100 times) and flips it to COMPUTER — not
+    // a sequential fill from slot 0. Only the AI COUNT (field 7) seeds
+    // player slots at all; rovers/ghosts are NOT player slots (see below),
+    // so folding them into COMPUTER slots (the prior port behaviour) was a
+    // mislabelling, now removed. Every slot starts OFF, then exactly
+    // `ai_count` distinct slots (clamped to kMaxPlayers) are flipped to
+    // COMPUTER at random, matching sub_422928's `rand()%10` + retry-on-
+    // occupied shape but using the presentation LCG (setup_lcg_), never
+    // State::rng — this only steers which slot ids get the pre-supplied
+    // roster, no sim RNG draw.
+    for (int slot = 0; slot < sim::kMaxPlayers; ++slot) {
+        setup_type_[slot] = 0;  // OFF (sub_421E33(i,0,0) semantics)
         setup_sub_[slot] = 0;
         setup_team_[slot] = 0;
     }
-    // TODO(RE): rover_speed/ghost_speed/ai_difficulty (fields 4/6/8) have no
-    // pinned consumer in libs/sim yet — the .CAM format's own header marks
-    // field 8 "(unused at present)", and facts.md/campaign.md do not pin a
-    // speed-tuning site for fields 4/6. Parsed and stored on CampaignStage
-    // (libs/assets/campaign.hpp) for a future RE pass; not applied here.
+    for (int slot : seed_campaign_ai_slots(setup_lcg_, stage.ai_count)) setup_type_[slot] = 1;
+    // TODO(RE, scoped out — docs/re/campaign.md "Rovers/ghosts are NOT
+    // player slots"): rovers/ghosts (fields 3-6) are autonomous roaming
+    // map-hazard actors spawned into a SEPARATE particle-actor table
+    // (sub_401AAE/sub_401B05, dword_45E020, distinct from both the player
+    // array and the EXTRA<N>.RES stage-actor registry stage-actors.md
+    // documents), with their own per-tick mover (sub_401B5C: random-turn
+    // wander biased away from humans at intersections, VALUELST 1200/1205;
+    // die on stepping into an active flame tile, sub_42708D, awarding the
+    // flame's owner VALUELST 1310/1320 points; punch players off their
+    // landing tile). This is a genuine new libs/sim actor kind (spawn,
+    // movement AI, flame interaction, hashed state, art) — out of scope for
+    // this doc-and-port pass; ai_difficulty (field 8) is CONFIRMED dead
+    // code (grep of the whole binary: dword_45E010's field-8 slot,
+    // v20[27]/v6[27], is written once by the loader and read NOWHERE else),
+    // matching the .CAM format's own "(unused at present)" comment exactly
+    // — not a guess, a confirmed negative.
 
-    // levelno (field 1) names the stage for display (sub_4124A4(1235)/
-    // sub_4518D0, docs/re/campaign.md "Advances through campaign stages
-    // automatically") — our port has no on-screen stage-name banner yet
-    // (TODO(RE): sub_401312/sub_40133F's display formatting is not
-    // reproduced), so the field is stored on CampaignStage but otherwise
-    // unconsumed. selected_level_ stays -1 (RANDOM/pick_stage) since a
-    // campaign stage supplies its own SCHEME, not one of the 11 built-in
-    // level tilesets — start_match's stage-tile choice is independent of
-    // which arena layout (.SCH) is playing on it.
+    // Stage display banner (docs/re/campaign.md "Stage banner — CONFIRMED"):
+    // sub_40133F formats getstring(1235)="(%s)" with the stage's OWN name
+    // (campaign record field 0, the first bytes of the 112-byte record) and
+    // shows it alongside getstring(1230)="Prepare to begin Campaign!" as a
+    // blocking two-line dialog at every stage transition (same
+    // sub_414340 dialog family present_campaign_picker's confirm overlay
+    // already approximates). Stored here for present_setup/run_app to draw;
+    // levelno (field 1) has no further consumer beyond this banner and the
+    // scheme/roster application above — selected_level_ stays -1
+    // (RANDOM/pick_stage) since a campaign stage supplies its own SCHEME,
+    // not one of the 11 built-in level tilesets.
+    campaign_banner_ = "(" + stage.name + ")";
     return true;
+}
+
+// The stage-start banner (sub_40133F, docs/re/campaign.md "Stage banner"):
+// getstring(1235)="(%s)" formatted with the stage name, over getstring(1230)
+// ="Prepare to begin Campaign!". The original's dialog (sub_414340) blocks
+// for a keypress; this port additionally dwells a couple seconds so an
+// unattended auto-advance (stage-clear -> next stage) doesn't stall forever.
+AppInput GameApp::present_campaign_banner() {
+    if (campaign_banner_.empty()) return AppInput::Advance;
+    constexpr std::uint64_t kDwellMs = 2000;
+    const std::uint64_t start = SDL_GetTicks();
+    const std::string prepare = assets_.getstring(1230, "Prepare to begin Campaign!");
+    while (true) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
+            if (ev.type == SDL_EVENT_KEY_DOWN &&
+                (ev.key.key == SDLK_RETURN || ev.key.key == SDLK_KP_ENTER ||
+                 ev.key.key == SDLK_SPACE || ev.key.key == SDLK_ESCAPE)) {
+                audio_.play(10);  // accept sting, sub_427961(10)
+                return AppInput::Advance;
+            }
+        }
+        if (SDL_GetTicks() - start >= kDwellMs) return AppInput::Advance;
+        audio_.update_music();
+        SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
+        SDL_RenderClear(sdl_renderer_.get());
+        renderer_->draw_frame(sim_.state());  // last frame as backdrop, like the help modal
+        front_font_.draw(sdl_renderer_.get(), campaign_banner_, 220.0f, 200.0f, 255, 255, 255);
+        front_font_.draw(sdl_renderer_.get(), prepare, 220.0f, 224.0f, 255, 220, 80);
+        SDL_RenderPresent(sdl_renderer_.get());
+        SDL_Delay(2);
+    }
 }
 
 int GameApp::round_winner() const {
@@ -2147,21 +2197,28 @@ int GameApp::run_app() {
                     // sub_401312/sub_40133F gated `if (dword_46489C)`): a
                     // decided match steps dword_4648B0 to the next stage and
                     // loads its scheme/roster instead of returning to the
-                    // menu. TODO(RE): sub_4016DA's own per-tick round-timeout
-                    // countdown (dword_4646C0 vs `2*dword_46494C*getvalue(25)`)
-                    // is not ported — our port re-uses the existing best-of-N
-                    // win_target_/win_by_kills clinch as "this stage is done"
-                    // instead, since facts.md/campaign.md do not pin how the
-                    // countdown interacts with a normal round win. Exhausting
-                    // the stage list falls through to the menu and clears
-                    // campaign state (port convenience; the original's own
-                    // post-last-stage behaviour is unpinned — see ROADMAP.md).
+                    // menu. sub_4016DA's per-tick round pacing (RE'd
+                    // 2026-07-09, docs/re/campaign.md "Round pacing —
+                    // PINNED") only ADDS an early-out once every rover/ghost
+                    // is dead (a 2-second wall-clock grace before ending the
+                    // stage); rovers/ghosts don't exist in libs/sim yet (see
+                    // load_campaign_stage's TODO), so there is nothing for
+                    // that clause to gate on — our port re-uses the existing
+                    // best-of-N win_target_/win_by_kills clinch as "this
+                    // stage is done" for the SAME survivor-count check the
+                    // original ALSO applies (sub_410578()<=1), which is
+                    // exactly what match_over/clinched above already is.
+                    // Exhausting the stage list falls through to the menu
+                    // and clears campaign state (port convenience; the
+                    // original's own post-last-stage behaviour is unpinned
+                    // — see ROADMAP.md).
                     if (campaign_active_ && ev != AppInput::Quit) {
                         ++campaign_stage_index_;  // ++dword_4648B0
                         if (campaign_stage_index_ <
                                 static_cast<int>(campaign_stages_.size()) &&
                             load_campaign_stage(campaign_stage_index_)) {
                             reset_match_scores();
+                            if (present_campaign_banner() == AppInput::Quit) return 0;
                             // Results -> Match with the NEXT stage's
                             // scheme/roster already loaded (app_flow.hpp's
                             // CampaignContinue), not a plain Advance (which

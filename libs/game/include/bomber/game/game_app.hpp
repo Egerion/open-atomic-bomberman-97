@@ -152,25 +152,39 @@ private:
     // `*.cam` in the install root (CampaignFilePicker, campaign_screen.hpp),
     // and on a confirmed selection parses it (assets::res::load_campaign)
     // and, if it yields at least one stage, arms campaign mode: seeds the
-    // roster from stage 0's rover/ghost/AI counts (sub_42288C semantics,
-    // §"Roster/level auto-fill") and sets campaign_active_ so the Play flow
-    // skips present_map_select() and auto-advances stages (run_app's Menu/
-    // Results handlers). A cancelled picker, an unreadable file, or a file
-    // with zero stages leaves campaign mode untouched (port convenience —
-    // the original's own error-dialog path for the analogous cases, §3).
+    // roster from stage 0's AI count (sub_40151B/sub_422928 semantics —
+    // CORRECTED 2026-07-09, see load_campaign_stage below) and sets
+    // campaign_active_ so the Play flow skips present_map_select() and
+    // auto-advances stages (run_app's Menu/Results handlers). A cancelled
+    // picker, an unreadable file, or a file with zero stages leaves campaign
+    // mode untouched (port convenience — the original's own error-dialog
+    // path for the analogous cases, §3).
     void present_campaign_picker();
     // Loads campaign stage `campaign_stage_index_`'s scheme by name
     // (resolves `<scheme>.SCH` case-insensitively under DATA/SCHEMES,
     // mirroring the case-insensitive glob every other picker already uses)
-    // into scheme_, and seeds setup_type_/setup_sub_ from its rover/ghost/AI
-    // counts (docs/re/campaign.md "Roster/level auto-fill": fields 3-8 fill
-    // all 10 slots — rovers and ghosts are AI-driven "monster" slots in our
-    // port, same as a COMPUTER slot, since libs/sim has no separate
-    // rover/ghost archetype; see the doc-cited TODO(RE) on that gap in
-    // ROADMAP.md). Returns false (and leaves state untouched) if the
-    // scheme can't be resolved/loaded, so the caller can bail out of
-    // campaign mode cleanly instead of starting a match with a stale board.
+    // into scheme_, and seeds setup_type_ from the stage's AI count
+    // (docs/re/campaign.md "Rover/ghost/AI roster — CORRECTED"): the real
+    // per-stage seeder is sub_40151B (gated dword_46489C), NOT sub_42288C
+    // (that only clears a per-slot UI latch) — it flips exactly `ai_count`
+    // RANDOMLY-chosen OFF slots to COMPUTER (sub_422928: `rand()%10` +
+    // retry-on-occupied) and separately spawns `rovers`/`ghosts` as
+    // autonomous map-hazard actors (sub_401AAE/sub_401B05) in a particle
+    // table libs/sim has no equivalent of — NOT folded into COMPUTER slots
+    // (a prior mislabelling, corrected). Also sets campaign_banner_ to the
+    // stage's display text (docs/re/campaign.md "Stage banner"). Returns
+    // false (and leaves state untouched) if the scheme can't be
+    // resolved/loaded, so the caller can bail out of campaign mode cleanly
+    // instead of starting a match with a stale board.
     bool load_campaign_stage(int index);
+    // The campaign stage-start banner (docs/re/campaign.md "Stage banner"):
+    // a blocking two-line dialog, "(<stage name>)" (getstring 1235="(%s)")
+    // over "Prepare to begin Campaign!" (getstring 1230), shown once per
+    // stage transition (both the first stage, from present_campaign_picker,
+    // and every auto-advance in run_app's Results handler). Dismissed by any
+    // key or a short dwell; presentation-only, mirrors the confirm-overlay
+    // shape present_campaign_picker's own sound-sting stand-in already uses.
+    AppInput present_campaign_banner();
     // The IPLOGO -> HSLOGO -> TITLE boot presentation (sub_42B060). LINEAR — no
     // attract re-run: each screen advances on a key OR the getvalue(12) = 7 s
     // timeout, and the title's Advance (key or timeout) returns so run_app drops
@@ -334,6 +348,12 @@ private:
     bool campaign_active_ = false;                              // dword_46489C
     std::vector<assets::res::CampaignStage> campaign_stages_;    // parsed .CAM (dword_45E010)
     int campaign_stage_index_ = 0;                               // dword_4648B0
+    // Stage display banner text, "(<stage name>)" (sub_40133F, getstring
+    // 1235="(%s)" — docs/re/campaign.md "Stage banner"), set by
+    // load_campaign_stage each time a campaign stage is (re)loaded. Drawn by
+    // present_setup for one frame-cycle at stage start alongside getstring
+    // 1230="Prepare to begin Campaign!"; empty when campaign mode is off.
+    std::string campaign_banner_;
 
     // The Goldman wheel's pending gold player (dword_46492C, docs/re/goldman-
     // roulette.md §2): -1 = none pending, else a player index (solo) or a
