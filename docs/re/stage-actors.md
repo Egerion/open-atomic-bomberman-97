@@ -476,9 +476,9 @@ tile, NOT a midpoint lookup of `warp_dest` at the current tile — because the
 loop that triggered the warp can slide the player a few px OFF the warphole
 within the trigger tick, so a midpoint tile lookup could read a non-warp tile.
 
-The bomb path (`sub_42331C`) still warps a sliding bomb in one tick (bombs have
-no warp-animation state); destination from the same `warp_dest` grid. `warp`,
-`bounce`, and `warp_to_*` pack into ONE hash word (each fits a byte: bounce ≤ 30,
+**CORRECTED 2026-07-10 (facts.md "Bomb/warphole reconciliation"): the bomb path
+does NOT warp at all — see §6 item 4, rewritten.** `warp`, `bounce`, and
+`warp_to_*` pack into ONE hash word (each fits a byte: bounce ≤ 30,
 warp ≤ 18, dest tiles ≤ 14); ALL are 0 on boards with no warpholes/trampolines,
 so that word is `mix(0)` there — byte-identical to before, and the golden
 scenarios (no actors) are unchanged.
@@ -516,14 +516,33 @@ resting bomb is `state +16 == 9`, with a movement sub-mode `switch(+46)`.
    mover `sub_42331C`. So a bomb slides straight over a trampoline tile with no
    bounce, no boing. The prior note speculating a `sub_41EC5B` bomb-bounce path
    was wrong; there is no bomb↔trampoline interaction. Nothing to port.
-4. **Bomb entering a warphole**: teleport via the same `warp_dest` grid used by
-   the player, sound 1330 (`WarpUsed`). Ported in `bombs.cpp` `slide()`; no RNG.
-   (The original's punched-bomb landing keeps rolling over a warphole rather
-   than stopping — pseudo.c 25453 `v62[1] != 1`; our kicked/conveyor bomb warps
-   on centring, the common visible case.)
+4. **Bomb entering a warphole — NEVER HAPPENS; blocked like a wall.**
+   **CORRECTED 2026-07-10** (facts.md "Bomb/warphole reconciliation";
+   supersedes the earlier "teleport via the same `warp_dest` grid" claim,
+   which was wrong). The warp resolver `sub_405A81` (idno↔linkto scan, the
+   function that actually computes a teleport destination) is called from
+   **exactly one call site in the whole binary**: `sub_41EC84` line 22594, the
+   PLAYER per-pixel stepper. `sub_42331C` (the bomb mover) never calls it.
+   Instead, the sliding-bomb cell-entry probe `sub_4230A5` (pseudo.c
+   25155-25179, invoked from the kicked/conveyor slide loop at 25555) ends
+   with `return (!v8 || v8[1] != 1) && sub_425FB9(a1,a2) == 0;` where
+   `v8 = sub_405654(a1,a2)` — so whenever the probed tile carries ANY actor of
+   type 1 (warphole), the whole expression is false **regardless of the
+   underlying cell type**: the tile is impassable to a sliding bomb, exactly
+   like a wall. A kicked or conveyor-carried bomb therefore halts (or, if
+   jelly, reverses/ping-pongs) one tile short of a warphole and can never
+   cross onto it — there is no bomb-warp code path anywhere in the binary.
+   (The punched/flying-bomb landing check similarly refuses to settle a bomb
+   on a warphole tile — pseudo.c 25453 `v62[1] != 1` — it just hops onward,
+   same as over a wall; unlike the slide probe it does NOT destroy a powerup
+   on the tile as a side effect, since it never reaches the tile-entry probe
+   at all.) Ported: `bombs.cpp` `slide()`'s cell-entry probe now includes
+   `actor_type[..] == Warphole ⇒ blocked`, matching `sub_4230A5`'s verdict;
+   the prior teleport branch (and `Bomb::warp_latch`, entirely vestigial once
+   warping is unreachable) were removed as unfaithful.
 
-All four consume the SAME `actor_type`/`actor_dir`/`warp_dest` grids in `State`,
-so no new plumbing beyond those hashed inputs.
+Three of the four consume the SAME `actor_type`/`actor_dir` grids in `State`;
+`warp_dest` remains a player-only input (§5).
 
 ## 7. Sounds  [WIRED 2026-07-04]
 
@@ -575,7 +594,8 @@ Event/sound needed.
 | sub_422E48  | trampoline BOMB test: grounded bomb (mode +46 != 2,3) on tile (== grid::bomb_at) |
 | sub_42665C/sub_4266A3 | pixel→tile X/Y; sub_426524/sub_42655F tile→pixel X/Y (relocation) |
 | 0x45a213    | warp sequence-name literal **"spin"** (strcpy'd in warp states 6/7); lives in WALK.ANI |
-| sub_42331C  | bomb mover: bomb-on-conveyor (~25365), bomb dirarrow re-steer (~25532), bomb tramp/warp |
+| sub_42331C  | bomb mover: bomb-on-conveyor (~25365), bomb dirarrow re-steer (~25532); no tramp/warp interaction (blocked by `sub_4230A5` before ever reaching a warphole tile, §6 item 4) |
+| sub_4230A5  | sliding-bomb cell-entry probe (pseudo.c 25155-25179): blocks entry to a warphole tile (`v8[1] != 1` verdict) — the reason bombs never warp |
 | sub_404DB8  | direction letter → godir (n/e/s/w → 0/1/2/3)              |
 | sub_4056CA  | actor animator: conveyor frame = +48/3; tramp bounce = 12-frame seq (case 3) |
 | sub_41DA5C  | sequence frame count (statecnt at `dword_461B5C+60*seq+52`) |

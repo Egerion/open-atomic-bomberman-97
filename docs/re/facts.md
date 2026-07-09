@@ -878,6 +878,108 @@ instead of the original's up-to-200 rejection sampling (outcome-equivalent
 distribution). These are internal-RNG/bookkeeping differences with no
 player-visible effect; our own draw-order contract stays self-consistent.
 
+## Bomb/warphole reconciliation 2026-07-10 — CONFIRMED (`sub_4230A5`, `sub_405A81`)
+
+Read 2026-07-10, following up the just-merged Core-feel audit's warphole-drop
+finding (§3a above) and a report that `sub_4230A5` (the sliding-bomb per-pixel
+cell-entry probe, already cited in "Kick nuances" #2) **blocks** warphole tiles
+for sliding bombs — apparently in tension with `docs/re/stage-actors.md` §6
+item 4, which claimed "Bomb entering a warphole: teleport via the same
+`warp_dest` grid used by the player" (and `docs/ROADMAP.md`'s "player & bomb
+both warp"). Re-read both functions end to end; the stage-actors.md claim was
+wrong and is now corrected there.
+
+**The truth table (bomb state × warphole tile → outcome):**
+
+| bomb state                       | outcome at a warphole tile                                   |
+|-----------------------------------|---------------------------------------------------------------|
+| Placement (drop)                  | **Refused** — already fixed (Core-feel audit §3a): `sub_405654` type-1 short-circuits the drop, sound 40/41, `Event::DropRefused`. |
+| Sliding — kicked (`sub_42464B`)   | **Blocked at the doorstep, stops there** (non-jelly) or **bounces** (jelly) — exactly like a wall. Never enters, never warps. |
+| Sliding — conveyor-carried (`BombSystem::conveyor_carry`/case 0) | **Same block** — shares the identical per-pixel stepper and `sub_4230A5` probe as the kicked case. |
+| Sliding — dirarrow-redirected (case default, mid-slide) | **Same block** — the redirect only changes `dir`; the very next tile-entry probe still runs `sub_4230A5`. |
+| Flying (punched/thrown, `sub_42331C` case 2) | **Cannot land there either** — pseudo.c 25453 `if (!v62 || exp_ && v62[1] != 1)` excludes a type-1 actor from the "clear to land" verdict the same way a wall does; the bomb just hops onward (`continue`), same as over a wall/bomb/powerup. (Pre-existing behaviour, untouched by this pass — see caveat below.) |
+| Resting/stationary                | **Cannot occur** — every path that could put a bomb ON a warphole tile (placement, slide-entry, flight-landing) is blocked, so a bomb is never actually located on a warphole tile in the original. |
+| — (for contrast) Player, any approach | **Warps** (two-phase, 18 ticks) — `sub_41EC84` step-on, `sub_405A81` idno↔linkto resolver. Unchanged by this entry; see §5/§6 in stage-actors.md. |
+
+**Evidence.** `sub_4230A5` (pseudo.c 25155-25179, called from the kicked/
+conveyor slide loop at 25555):
+```c
+if ( sub_422E48(a1, a2) ) return 0;   // grounded bomb blocks
+if ( sub_421CB5(a1, a2) ) return 0;   // player blocks
+v7 = sub_42542D(a1, a2);              // powerup destroyed as a side effect
+if ( v7 && *v7 == 2 ) { sub_4254F3(v7,...); if (kind==2 && !diseases_destroyable) scatter(); }
+v8 = sub_405654(a1, a2);              // level-actor lookup
+return (!v8 || v8[1] != 1) && sub_425FB9(a1, a2) == 0;
+```
+The final line is the crux: passable requires **(no actor OR actor.type != 1)
+AND blank cell**. If an actor exists and its type IS 1 (warphole, per the
+`+0=active,+4=type:0=dirarrow/1=warphole/2=conveyor/3=trampoline` layout
+already pinned in stage-actors.md §1), the whole expression is `false`
+**regardless of the underlying cell type** — a warphole tile is impassable to
+a sliding bomb exactly like a solid wall, full stop.
+
+The warp resolver `sub_405A81` (pseudo.c 7341-7388, idno↔linkto partner scan,
+zero RNG) has **exactly one call site in the entire binary**: `sub_41EC84`
+line 22594 (the PLAYER per-pixel stepper's step-on handler, `v35 == -1`
+tile-centre alignment). `grep -n "sub_405A81" pseudo.c` confirms this —
+declaration, definition, one call. `sub_42331C` (the bomb mover) calls
+`sub_405654` three times (bomb-on-conveyor check ~25365, flying-landing check
+~25452, dirarrow-restring check ~25529) and **never** calls `sub_405A81`. So
+there is no code path anywhere that computes a teleport destination for a
+bomb — the earlier stage-actors.md claim was simply never backed by a real
+call site.
+
+**Divergence found and fixed.** Our port's `BombSystem::slide()` (`libs/sim/
+src/systems/bombs.cpp`) had an `at_centre && actor_type == Warphole` branch
+that teleported a sliding bomb to `warp_dest_x/y` and set a `Bomb::warp_latch`
+one-shot guard — unfaithful, since the entry probe (our analogue of
+`sub_4230A5`) never actually treated a Warphole tile as impassable, so a
+sliding bomb could reach and "use" a warphole. Fixed:
+- The cell-entry probe now adds `actor_type[ny][nx] == Warphole ⇒ blocked`,
+  mirroring `sub_4230A5`'s `v8[1] != 1` verdict (checked after the powerup
+  squash, same order as the original: the squash is unconditional on actor
+  type, only the final passability verdict cares about it).
+- The now-unreachable teleport branch (and `Bomb::warp_latch`, a hashed field
+  that served no purpose once bomb-warping is impossible) were removed.
+  `hash.cpp` keeps bit 42 retired rather than reassigned, so no other bomb
+  field's shift moved.
+- `docs/re/stage-actors.md` §6 item 4 and `docs/ROADMAP.md` roadmap item #7
+  corrected to match.
+
+**Caveat — flying-bomb landing left untouched.** The landing check's exact
+condition is `!v62 || exp_ && v62[1] != 1`, where `exp_` decompiles to a
+reference to the imported CRT `exp()` symbol (pseudo.c 980) — almost
+certainly a Hex-Rays mis-attribution (calling `exp(double)` with no argument
+makes no sense at that site) rather than a real flag, so its true value is
+unknown. This entry does not change `BombSystem::fly`'s landing test; the
+existing port (facts.md "Flying-bomb landing on powerups") already treats a
+floor powerup as blocking but does not special-case actor tiles, and no
+concrete evidence here resolves `exp_`'s intent one way or the other. Flagged
+as a remaining open question, not acted on.
+
+**GOLDEN IMPACT: none for the shipped golden scenarios (A-E have no
+warpholes), but real for boards WITH warpholes.** Before this fix, a scenario
+with a kicked/conveyor bomb sliding into a warphole would teleport it; after,
+it stops at the doorstep. Proved by running the full suite before and after:
+golden A-E are byte-identical (no warpholes there, so `s.actor_type[..] ==
+Warphole` is never true on any tile any golden bomb slides toward — the new
+`blocked` branch never evaluates true, and the removed teleport branch was
+equally never reached, so removing it changes nothing on those boards
+either). The dedicated `tests/test_stage_actors.cpp` warphole suite (which DOES
+place warpholes) is the only place behaviour changes, and it has been rewritten
+to assert the corrected (blocked, never-warps) behaviour: "a sliding bomb is
+blocked at a warphole (never warps, sub_4230A5)", "a jelly bomb bounces off a
+warphole instead of entering it", "a bomb resting on a belt is blocked by a
+warphole ahead" (replacing the old "a bomb warps through a warphole while
+sliding" test, whose premise was wrong). The pre-existing "no bomb can be
+dropped while standing on a warphole" test is unaffected (a different code
+path, already correct).
+
+(Provenance: `sub_4230A5` pseudo.c 25155-25179; `sub_405A81` 7341-7388, sole
+call site 22594 inside `sub_41EC84`; `sub_42331C` bomb-mover call sites to
+`sub_405654` at ~25365/25452/25529, no call to `sub_405A81` anywhere in the
+function; `exp_` import declaration pseudo.c 980.)
+
 ## Punch glove feedback — CONFIRMED (`sub_424A50` handler, `sub_41F29B` dispatch)
 
 Read 2026-07-04 ("devam" #23, control/audio fidelity). The punch glove is the
