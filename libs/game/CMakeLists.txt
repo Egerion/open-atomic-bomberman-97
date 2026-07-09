@@ -18,6 +18,7 @@ add_library(bomber_game_core STATIC
   src/goldman_screen.cpp
   src/editor_grid.cpp
   src/editor_screen.cpp
+  src/campaign_screen.cpp
   src/transition.cpp
   src/game_app.cpp
 )

@@ -926,6 +926,126 @@ void GameApp::present_editor() {
     }
 }
 
+void GameApp::present_campaign_picker() {
+    // sub_4015C6 (docs/re/campaign.md §3): glob "*.cam" in the install root,
+    // list, pick, parse, arm campaign mode. Runs its own nested loop exactly
+    // like present_editor's chooser/picker loops — no AppState/AppInput slot,
+    // since there is no menu row for this screen either.
+    CampaignFilePicker picker(assets_, front_font_);
+    picker.enter(opts_.game_dir, pick_glue());
+    while (!picker.done()) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_EVENT_QUIT) return;
+            if (ev.type != SDL_EVENT_KEY_DOWN) continue;
+            picker.on_key(ev.key.key, audio_);
+        }
+        audio_.update_music();
+        SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
+        SDL_RenderClear(sdl_renderer_.get());
+        picker.draw(sdl_renderer_.get());
+        SDL_RenderPresent(sdl_renderer_.get());
+        SDL_Delay(2);
+    }
+    if (picker.cancelled() || picker.empty()) return;  // sub_4015C6's error-dialog path (port: silent)
+
+    try {
+        assets::res::Campaign parsed = assets::res::load_campaign(picker.selected());
+        if (parsed.stages.empty()) return;  // "Couldn't open..." / zero-stage file: leave state untouched
+        campaign_stages_ = std::move(parsed.stages);
+        campaign_stage_index_ = 0;  // dword_4648B0 = 0
+        if (!load_campaign_stage(0)) {
+            // The stage's scheme couldn't be resolved (e.g. a hand-authored
+            // .CAM naming a scheme the install doesn't ship) — bail out of
+            // arming campaign mode rather than starting a match against a
+            // stale/mismatched board (port convenience; unpinned by the RE).
+            campaign_stages_.clear();
+            return;
+        }
+        campaign_active_ = true;  // dword_46489C = 1
+        // sub_4015C6 also shows a confirmation overlay (getstring 1210 + 95)
+        // here; the port's accept sting (already played by the trigger
+        // above) stands in for that minimal fidelity gap (TODO(RE): no
+        // dedicated confirmation dialog).
+    } catch (const std::exception&) {
+        // aCouldnTOpenCam path (§1/§3): unreadable/corrupt file. Leave
+        // campaign mode untouched, same as a cancelled picker.
+    }
+}
+
+bool GameApp::load_campaign_stage(int index) {
+    if (index < 0 || index >= static_cast<int>(campaign_stages_.size())) return false;
+    const assets::res::CampaignStage& stage = campaign_stages_[static_cast<std::size_t>(index)];
+
+    // Resolve the stage's "scheme to use" name to a DATA/SCHEMES/<name>.SCH
+    // path, case-insensitively (DOS filenames are case-insensitive; every
+    // other picker in this codebase does a case-insensitive extension/name
+    // match for the same reason — editor_screen.cpp's SchemeFilePicker).
+    std::filesystem::path schemes_dir = opts_.game_dir / "DATA" / "SCHEMES";
+    std::error_code ec;
+    std::filesystem::path found;
+    for (const auto& entry : std::filesystem::directory_iterator(schemes_dir, ec)) {
+        if (!entry.is_regular_file()) continue;
+        std::string stem = entry.path().stem().string();
+        std::string ext = entry.path().extension().string();
+        for (auto& c : stem) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        for (auto& c : ext) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        std::string want = stage.scheme;
+        for (auto& c : want) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        if (ext == ".SCH" && stem == want) { found = entry.path(); break; }
+    }
+    if (found.empty()) return false;
+
+    try {
+        scheme_ = assets::sch::load(found);
+    } catch (const std::exception&) {
+        return false;
+    }
+
+    // Roster/level auto-fill (docs/re/campaign.md "Roster/level auto-fill",
+    // sub_42288C semantics): the campaign record's rover/ghost/AI counts
+    // seed all 10 slots instead of the player manually configuring them.
+    // libs/sim has no separate rover/ghost archetype (TODO(RE): the
+    // original's monster AI behaviours are not modelled as a distinct slot
+    // kind here) — every non-empty count is folded into COMPUTER slots, the
+    // closest existing archetype, filled in rover/ghost/AI order until the
+    // 10 slots or the counts are exhausted. Any slot beyond the filled count
+    // is set OFF. This is a faithful ROSTER COUNT port; rover/ghost SPEED
+    // and AI DIFFICULTY have no consumer yet (also TODO(RE) below).
+    int slot = 0;
+    auto fill = [&](int count) {
+        for (int n = 0; n < count && slot < sim::kMaxPlayers; ++n, ++slot) {
+            setup_type_[slot] = 1;  // COMPUTER (sub_421E33(i,1,0) semantics)
+            setup_sub_[slot] = 0;
+            setup_team_[slot] = 0;
+        }
+    };
+    fill(stage.rovers);
+    fill(stage.ghosts);
+    fill(stage.ai_count);
+    for (; slot < sim::kMaxPlayers; ++slot) {
+        setup_type_[slot] = 0;  // OFF
+        setup_sub_[slot] = 0;
+        setup_team_[slot] = 0;
+    }
+    // TODO(RE): rover_speed/ghost_speed/ai_difficulty (fields 4/6/8) have no
+    // pinned consumer in libs/sim yet — the .CAM format's own header marks
+    // field 8 "(unused at present)", and facts.md/campaign.md do not pin a
+    // speed-tuning site for fields 4/6. Parsed and stored on CampaignStage
+    // (libs/assets/campaign.hpp) for a future RE pass; not applied here.
+
+    // levelno (field 1) names the stage for display (sub_4124A4(1235)/
+    // sub_4518D0, docs/re/campaign.md "Advances through campaign stages
+    // automatically") — our port has no on-screen stage-name banner yet
+    // (TODO(RE): sub_401312/sub_40133F's display formatting is not
+    // reproduced), so the field is stored on CampaignStage but otherwise
+    // unconsumed. selected_level_ stays -1 (RANDOM/pick_stage) since a
+    // campaign stage supplies its own SCHEME, not one of the 11 built-in
+    // level tilesets — start_match's stage-tile choice is independent of
+    // which arena layout (.SCH) is playing on it.
+    return true;
+}
+
 int GameApp::round_winner() const {
     // A round win is exactly one SIDE of survivors with the clock still
     // running; a mutual wipe-out or a time-out is a draw. Mirrors sub_42A3F6,
@@ -1529,6 +1649,25 @@ AppInput GameApp::present_setup() {
             }
             if (ev.type != SDL_EVENT_KEY_DOWN) continue;
             const SDL_Keycode k = ev.key.key;
+
+            // Hidden campaign-mode trigger (docs/re/campaign.md §4,
+            // sub_410F81 pseudo.c 15357-15365): 5 CONSECUTIVE 'C' presses
+            // (any other key resets the counter — same same-key-repeat
+            // pattern as present_menu's Ctrl+E x6) opens the *.cam picker.
+            // Local-only in the original (sub_40C06A() guard); this port has
+            // no netplay (ADR-0003), so that guard is always-true and
+            // omitted. Checked BEFORE the general dispatch below so 'C'
+            // itself never falls into the row-navigation switch.
+            if (k == SDLK_C) {
+                if (++campaign_trigger_count_ == 5) {
+                    campaign_trigger_count_ = 0;
+                    audio_.play(10);  // accept sting (SFX 10), mirrors the editor trigger
+                    present_campaign_picker();
+                }
+                continue;
+            }
+            campaign_trigger_count_ = 0;  // any other key resets the counter
+
             if (k == SDLK_ESCAPE) {
                 audio_.play(20);
                 audio_.play(10);
@@ -1536,6 +1675,17 @@ AppInput GameApp::present_setup() {
                 // screen" — cancelling the whole Play flow here also forfeits
                 // any gold player pending from an earlier match.
                 gold_player_ = -1;
+                // Campaign quit semantics (docs/re/campaign.md does not pin
+                // how the original itself leaves campaign mode — TODO(RE)):
+                // Esc here returns to the menu AND clears the campaign flag,
+                // a port convenience rather than a confirmed fact. This only
+                // fires if a *.cam pick from THIS visit to present_setup
+                // hasn't been confirmed into a running match yet; an
+                // in-progress campaign is abandoned via run_match's own
+                // Esc/Ctrl+Q (below).
+                campaign_active_ = false;
+                campaign_stages_.clear();
+                campaign_stage_index_ = 0;
                 return AppInput::Back;
             }
             // Enter (< 0x20 branch in sub_410F81) leaves this screen and proceeds
@@ -1904,6 +2054,14 @@ int GameApp::run_app() {
                         AppInput setup = present_setup();
                         if (setup == AppInput::Quit) return 0;
                         if (setup == AppInput::Back) { ev = AppInput::Advance; break; }
+                        // Campaign mode SKIPS the LEVEL & ROUNDS screen
+                        // entirely (docs/re/campaign.md "Skips the normal
+                        // LEVEL & ROUNDS screen", sub_406DDE's `if
+                        // (!dword_46489C)` gate): present_setup's own 'C'x5
+                        // trigger already picked a stage and seeded the
+                        // roster (present_campaign_picker), so a confirmed
+                        // setup screen goes STRAIGHT to the match.
+                        if (campaign_active_) { started = true; break; }
                         // Player screen accepted -> the LEVEL screen.
                         AppInput lvl = present_map_select();
                         if (lvl == AppInput::Quit) return 0;
@@ -1984,6 +2142,39 @@ int GameApp::run_app() {
                     audio_.start_music(kDrawMusicId);  // 1130 under VICTORY (doc §2 correction)
                     audio_.play_random_in_range(2000, 2299);  // "we have a winner", under VICTORY
                     ev = present_screen(victory_screen(clinched));
+                    // Campaign stage advance (docs/re/campaign.md
+                    // "Advances through campaign stages automatically",
+                    // sub_401312/sub_40133F gated `if (dword_46489C)`): a
+                    // decided match steps dword_4648B0 to the next stage and
+                    // loads its scheme/roster instead of returning to the
+                    // menu. TODO(RE): sub_4016DA's own per-tick round-timeout
+                    // countdown (dword_4646C0 vs `2*dword_46494C*getvalue(25)`)
+                    // is not ported — our port re-uses the existing best-of-N
+                    // win_target_/win_by_kills clinch as "this stage is done"
+                    // instead, since facts.md/campaign.md do not pin how the
+                    // countdown interacts with a normal round win. Exhausting
+                    // the stage list falls through to the menu and clears
+                    // campaign state (port convenience; the original's own
+                    // post-last-stage behaviour is unpinned — see ROADMAP.md).
+                    if (campaign_active_ && ev != AppInput::Quit) {
+                        ++campaign_stage_index_;  // ++dword_4648B0
+                        if (campaign_stage_index_ <
+                                static_cast<int>(campaign_stages_.size()) &&
+                            load_campaign_stage(campaign_stage_index_)) {
+                            reset_match_scores();
+                            // Results -> Match with the NEXT stage's
+                            // scheme/roster already loaded (app_flow.hpp's
+                            // CampaignContinue), not a plain Advance (which
+                            // would route to the menu, per next()'s Results
+                            // case) or RoundContinue (documented as "same
+                            // roster/settings", which this breaks).
+                            ev = AppInput::CampaignContinue;
+                        } else {
+                            campaign_active_ = false;  // dword_46489C = 0 (stage list exhausted)
+                            campaign_stages_.clear();
+                            campaign_stage_index_ = 0;
+                        }
+                    }
                 } else if (w >= 0) {
                     // Round win, match not over: show the running scores. The
                     // winner sting plays under THIS screen too (§1) — the

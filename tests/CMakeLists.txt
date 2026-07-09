@@ -100,6 +100,11 @@ add_executable(bomber_messages_tests test_messages.cpp)
 target_link_libraries(bomber_messages_tests PRIVATE bomber::assets doctest::doctest bomber::warnings)
 add_test(NAME messages COMMAND bomber_messages_tests)
 
+# .CAM campaign/stage-sequence parser (bomber::assets, SDL-free), like messages.
+add_executable(bomber_campaign_tests test_campaign.cpp)
+target_link_libraries(bomber_campaign_tests PRIVATE bomber::assets doctest::doctest bomber::warnings)
+add_test(NAME campaign COMMAND bomber_campaign_tests)
+
 # .SCH writer round-trip (bomber::assets, SDL-free), like bmtext/rmp.
 add_executable(bomber_sch_write_tests test_sch_write.cpp)
 target_link_libraries(bomber_sch_write_tests PRIVATE bomber::assets doctest::doctest bomber::warnings)

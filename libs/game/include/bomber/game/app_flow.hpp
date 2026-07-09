@@ -59,6 +59,18 @@ enum class AppState {
 //                tally is still below win_target_ (docs/re/frontend-flow.md
 //                "results flow" middle tier). Routes Results -> Match for the
 //                next round (same roster/settings, sim reconstructed fresh).
+//   CampaignContinue — leaving Results when a MATCH just clinched AND
+//                campaign mode is active with stages remaining (docs/re/
+//                campaign.md "Advances through campaign stages
+//                automatically", sub_401312/sub_40133F gated
+//                `if (dword_46489C)`): routes Results -> Match exactly like
+//                RoundContinue, but the SDL shell has already loaded the
+//                NEXT campaign stage's scheme/roster before feeding this
+//                event, rather than replaying the same match. A separate
+//                event (not RoundContinue) because the graph is presentation-
+//                only bookkeeping — RoundContinue's doc contract is
+//                specifically "same roster/settings", which campaign
+//                stage-advance breaks.
 //   StartMatch — the menu's Start/Play item was chosen (Menu -> Match).
 //   OpenOptions/OpenControllers/OpenNetwork/OpenCredits — the menu opened a
 //                deep leaf; each routes Menu -> the matching leaf state.
@@ -68,6 +80,7 @@ enum class AppInput {
     Back,
     MatchOver,
     RoundContinue,
+    CampaignContinue,
     StartMatch,
     OpenOptions,
     OpenControllers,
@@ -128,11 +141,16 @@ constexpr AppState next(AppState state, AppInput input) {
 
         case AppState::Results:
             // RoundContinue (draw, or a survivor below win_target_) starts the
-            // NEXT round with the same roster/settings; any other event (a
-            // decided match's Advance, or Back) returns to the menu. The SDL
-            // shell computes which applies (round_winner() + the win tally)
-            // BEFORE feeding this event — the graph itself is data-driven.
-            return input == AppInput::RoundContinue ? AppState::Match : AppState::Menu;
+            // NEXT round with the same roster/settings; CampaignContinue (a
+            // clinched match with campaign stages remaining) starts the NEXT
+            // STAGE's match the same way; any other event (a decided
+            // non-campaign match's Advance, or Back) returns to the menu. The
+            // SDL shell computes which applies (round_winner() + the win
+            // tally + campaign_active_) BEFORE feeding this event — the graph
+            // itself is data-driven.
+            return (input == AppInput::RoundContinue || input == AppInput::CampaignContinue)
+                       ? AppState::Match
+                       : AppState::Menu;
 
         // The .BM leaves all return to the menu on any accept or Back — a
         // dismissable text/help screen has nowhere else to go (sub_42B9CE

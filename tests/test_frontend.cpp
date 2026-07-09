@@ -129,6 +129,7 @@ TEST_CASE("Quit short-circuits from every state and is terminal") {
     CHECK(next(AppState::Quit, AppInput::MatchOver) == AppState::Quit);
     CHECK(next(AppState::Quit, AppInput::StartMatch) == AppState::Quit);
     CHECK(next(AppState::Quit, AppInput::RoundContinue) == AppState::Quit);
+    CHECK(next(AppState::Quit, AppInput::CampaignContinue) == AppState::Quit);
 }
 
 TEST_CASE("best-of-N: a not-yet-decided round loops Results -> Match again") {
@@ -150,6 +151,21 @@ TEST_CASE("best-of-N: a not-yet-decided round loops Results -> Match again") {
     s = next(s, AppInput::MatchOver);
     CHECK(s == AppState::Results);
     s = next(s, AppInput::RoundContinue);
+    CHECK(s == AppState::Match);
+}
+
+TEST_CASE("campaign: CampaignContinue loops Results -> Match like RoundContinue, for a clinched match") {
+    // docs/re/campaign.md "Advances through campaign stages automatically":
+    // a clinched match (VICTORY) with campaign stages remaining routes back
+    // to Match for the NEXT stage instead of the menu -- the SDL shell has
+    // already loaded that stage's scheme/roster before feeding this event
+    // (game_app.cpp's Results handler). The pure graph treats it exactly
+    // like RoundContinue (Results -> Match); only the SDL-side state it
+    // carries differs.
+    AppState s = AppState::Match;
+    s = next(s, AppInput::MatchOver);
+    CHECK(s == AppState::Results);
+    s = next(s, AppInput::CampaignContinue);
     CHECK(s == AppState::Match);
 }
 
