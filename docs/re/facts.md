@@ -832,26 +832,68 @@ Ported: `SoundDirector` maps `Event::Type::Hurry → play_random_in_range(2700,
 **No golden impact** — SoundDirector reads unhashed events; no sim state, RNG
 draw, or hash field changed.
 
-## Wall-slam SFX (SOUNDLST 140–146) — UNCONFIRMABLE in this decompilation
+## Wall-slam SFX (SOUNDLST 140–146) — CONFIRMED (2026-07-09, `sub_426818`/`sub_4278F2`)
 
-Read 2026-07-04. SOUNDLST.RES loads `140,clikplat` / `141,sqrdrop2` /
-`142,sqrdrop4` … `146,sqrdrop8`, commented *"a solid tile slamming in place
-(after \"hurry\" is displayed)"* — clearly the per-tile wall-drop SFX. **But an
-exhaustive scan of every `sub_427961(N)` / `sub_427ABB(N)` / `sub_427BFB(N)`
-literal call site in `pseudo.c` finds NO call that plays 140–146.** The only
-literal `140` in the file is `sub_4278F2(dword_462244 + 140)` — pointer
-arithmetic on an unrelated base, not a SOUNDLST id. So in this Hex-Rays output
-the wall-slam is never triggered through the sound dispatchers.
+Read 2026-07-04, **corrected 2026-07-09**. SOUNDLST.RES loads `140,clikplat` /
+`141,sqrdrop2` / `142,sqrdrop4` … `146,sqrdrop8`, commented *"a solid tile
+slamming in place (after \"hurry\" is displayed)"* — the per-tile wall-drop
+SFX. SOUNDLST.RES's own author comment right above the block (`DATA/RES/
+SOUNDLST.RES`) settles the intended playback shape directly:
 
-- Two honest possibilities: (a) the wall-drop sound is dispatched through a path
-  this decompilation didn't surface as a literal (inlined / indirect), or (b) it
-  genuinely isn't wired in this build. I could not distinguish them from the
-  available pseudo.c, so per the strict-1:1 / no-guessing rule I did **not**
-  change our existing `WallClosed → play_one_of({140,141,142})` mapping (it is a
-  faithful choice of the labelled block if the sound does play, and removing it
-  on incomplete evidence would be a guess in the other direction). Flagged here
-  as the one remaining unconfirmed sound point in the enclosure arc; a deeper
-  (Ghidra) pass on the enclosure/wall-drop function would settle it.
+```
+; a solid tile slamming in place (after "hurry" is displayed)
+; NOTE! the code is HARD-CODED to play one of the three below randomly.
+; if you add more sounds below 142, they will not be used!!!
+140,clikplat
+141,sqrdrop2
+142,sqrdrop4
+143,sqrdrop5   <- unused (loaded but never selectable per the note above)
+144,sqrdrop6
+145,sqrdrop7
+146,sqrdrop8
+```
+
+**2026-07-04's dismissal of the one literal `140` site was a misread — it IS
+the call site.** `sub_4278F2` (pseudo.c 27879-27896) checks
+`result < dword_463080` and indexes `dword_463094`/`dword_463088` before
+calling `sub_411D17` (the actual sample-play primitive) — the SAME three
+globals `sub_427961`'s sound-play path (pseudo.c 27902-27952) uses for its own
+`result < dword_463080` / `dword_463094[]` lookup. `sub_4278F2` is therefore a
+sound-play function over the SOUNDLST table, not "pointer arithmetic on an
+unrelated base" as 2026-07-04 concluded — that base (`dword_462244 + 140`) IS
+a SOUNDLST id, exactly as `docs/re/enclosure.md` §3/§7 (a separate, earlier RE
+pass on the enclosure stepper) already documented independently:
+
+- The enclosure stepper `sub_426818`'s ARM branch (pseudo.c 27177, `docs/
+  re/enclosure.md` §2) draws `dword_462244 = rand() % 3` **once**, when the
+  walls arm (`sub_410578() <= getvalue(101) - 5`) — a presentation-only pick,
+  no `State::rng` draw.
+- Every 250 ms drop thereafter (the cadence loop, `docs/re/enclosure.md` §3)
+  calls `sub_4278F2(dword_462244 + 140)` (pseudo.c 27234) **before**
+  `sub_425E9B(...)` solidifies the tile — i.e. it plays exactly ONE of
+  {140,141,142}, decided once at arm time, and REPLAYS THE SAME id for every
+  wall drop in that enclosure sequence (not a fresh pick per drop).
+
+So the earlier "no call site found" conclusion was wrong: the call site is
+`sub_426818` (the enclosure stepper), the callee is `sub_4278F2`, and the
+mapping — SOUNDLST 140/141/142 only, 143-146 unreachable dead assets — is
+independently confirmed by BOTH the disassembly path (dword_463080/
+dword_463094 shared with `sub_427961`) AND the SOUNDLST.RES author's own
+"hard-coded to play one of the three below" comment.
+
+**Port fix (this pass):** the previous `WallClosed → play_one_of({140,141,
+142})` mapping picked a (round-robin) id on EVERY `WallClosed` event, i.e. a
+fresh pick per dropped tile — unfaithful to the "roll once per enclosure arm,
+replay for the whole sequence" behaviour above. `SoundDirector` now latches
+one of {140,141,142} (via a new `AudioEngine::roll` presentation-side draw,
+never `State::rng`) on the FIRST `WallClosed` event since the last
+`SoundDirector::reset()` (a per-round reset, matching the original's
+per-arm/per-round `dword_462244` draw — `game_app.cpp`'s `sounds_.reset()`
+runs once per round load, the same cadence the enclosure's own arm-once
+gating uses) and replays that SAME id for every subsequent `WallClosed` event
+until the next reset. See `libs/game/src/sound_director.cpp`/`.hpp`,
+`libs/game/src/audio_engine.cpp`/`.hpp`. No sim/golden-hash impact —
+`SoundDirector` reads unhashed events only.
 
 ## Final in-game 1:1 gaps — CONFIRMED (2026-07-04, "devam" #39)
 

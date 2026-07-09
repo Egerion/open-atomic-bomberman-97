@@ -496,10 +496,14 @@ struct MenuItem {
 //                       routed through AppInput/next() like rows 0-4/6 are —
 //                       its kMenuItems entry below is unused/dead for row 5.
 //   6 Quit           -> Quit         (live)
-// The Controllers help (INPUT.BM) is reachable from the interactive controller
-// setup screen in the original; here it has no dedicated main-menu row, so the
-// OpenControllers edge is exercised by the doctest/flow but not bound to a row
-// (a documented gap — the row belongs to the deferred controller-setup UI).
+// INPUT.BM has no dedicated main-menu row or controller-setup screen in the
+// original — CONFIRMED negative (docs/re/frontend-flow.md, 2026-07-09): no
+// "controller" string and no "INPUT.BM" literal exist anywhere in pseudo.c.
+// It is one of ~10 topics the generic *.BM help browser (row 5/F1,
+// HelpBrowser) already globs and lists, which this port already reproduces.
+// The OpenControllers edge below is exercised by the doctest/flow but
+// deliberately left unbound to any row — there is nothing in the original's
+// seven menu rows to bind it to.
 constexpr MenuItem kMenuItems[] = {
     {AppInput::StartMatch, true},       // 0 Play
     {AppInput::OpenNetwork, true},      // 1 START NET GAME -> network help
@@ -2801,11 +2805,15 @@ int GameApp::run_app() {
                 break;
             }
             // The .BM-backed leaves render their real help/credits text
-            // (sub_41302D via BmScreen). Network/Controllers still show the HELP
-            // overlays for those menu items (the controller-remap UI remains a
-            // documented TODO); Credits shows CREDITS.BM with its inline
+            // (sub_41302D via BmScreen). Network/Controllers show the raw
+            // NETWORK.BM/INPUT.BM text (Controllers is unreachable from any
+            // menu row — docs/re/frontend-flow.md's INPUT.BM confirmed
+            // negative, above); Credits shows CREDITS.BM with its inline
             // CREDBAR/JERM/KURT images. Options is now the fully-interactive
-            // Team Play / Conveyor Speed screen (present_options_screen); its
+            // Team Play / Conveyor Speed screen (present_options_screen),
+            // whose "Define keyboard layouts" row reaches the REAL interactive
+            // key-remap UI (`sub_407B9D`, `KeyRemapScreen` — already ported,
+            // NOT the same thing as the INPUT.BM text screen above); Options's
             // own F1 key still reaches the original OPTIONS.BM help text.
             case AppState::Options:
                 ev = present_options_screen();

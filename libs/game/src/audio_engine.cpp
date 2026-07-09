@@ -69,6 +69,11 @@ bool AudioEngine::chance(int n) {
     return n > 0 && next_rand() % static_cast<std::uint32_t>(n) == 0;
 }
 
+int AudioEngine::roll(int n) {
+    if (n <= 0) return 0;
+    return static_cast<int>(next_rand() % static_cast<std::uint32_t>(n));
+}
+
 void AudioEngine::play_one_of(std::initializer_list<int> ids) {
     if (!ok_ || ids.size() == 0) return;
     play(ids.begin()[static_cast<std::size_t>(counter_++) % ids.size()]);

@@ -47,7 +47,7 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 | 12 | AI — all 8 behaviours (`ai.c`/VALUELST 900-series) | pinned | ported | `docs/re/ai.md`, ADR-0005, `ai.cpp`, `test_ai.cpp` | — | done (Phase 2 complete) |
 | 13 | AI: campaign "rover"/"ghost" mover (`sub_401AAE`/`sub_401B05` spawn, `sub_401B5C` per-tick mover) | pinned | ported | `docs/re/campaign.md` "Rover/ghost/AI roster — CORRECTED", `libs/sim/src/systems/rovers.cpp/.hpp` (wander AI, human-avoidance bias, flame-death + kill-score, landing-tile player kill), hashed `State::rovers`, `tests/test_rovers.cpp`; wired via `simulation.cpp`, rendered (`renderer.cpp`), campaign pacing clause 1/3 consumed in `game_app.cpp` | — | done |
 | 14 | AI: `sub_4245DA` "column-guard" comparand | pinned | ported | ai.md §9.3 RESOLVED (2026-07-09, raw-disasm re-pin): comparand = max-bombs byte +86, and `sub_4245DA` counts the actor's OWN live bombs (owner word at bomb +62), not bombs-in-column; port CORRECTED to the spare-capacity gate (`ai.cpp` behaviours 3/4, `test_ai.cpp` pins) | — | done |
-| 15 | Wall-slam SFX ids 140–146 | **unconfirmed call site** | ported (best guess) | facts.md: "UNCONFIRMABLE (no call site found)... port keeps existing mapping unconfirmed" | targeted disasm search for the call site, or accept as permanently unconfirmed and document as such explicitly (currently only in facts.md prose, not this table) | low |
+| 15 | Wall-slam SFX ids 140–146 | pinned | ported (fixed) | facts.md "Wall-slam SFX — CONFIRMED (2026-07-09, `sub_426818`/`sub_4278F2`)": call site is the enclosure stepper's drop loop, `dword_462244 = rand()%3` drawn ONCE per arm; SOUNDLST.RES's own "hard-coded to play one of the three below" comment corroborates 140/141/142-only, 143-146 dead. `SoundDirector`/`AudioEngine::roll` fixed to latch one id per round instead of re-picking per drop | — | done |
 
 ## 2. Front-end / presentation subsystems (libs/game)
 
@@ -60,7 +60,7 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 | 20 | Results tail: DRAW/RESULTS/VICTORY tiers | pinned | ported | frontend-flow.md, ROADMAP "Multi-round best-of-N loop + RESULTS tally 1:1 — DONE 2026-07-08" | — | done — frontend-flow.md's older "port still DEFERRED" note fixed to match (§RESULTS tally tier) | done |
 | 21 | VICTORY music using track 1020 instead of 1130 | pinned | **RESOLVED** | `game_app.cpp`: `kDrawMusicId` (1130) is started for DRAW, RESULTS, **and** VICTORY/TEAM (`audio_.start_music(kDrawMusicId)` in every outcome branch); `kWinMusicId` (1020) is scoped to the Play/setup path only. frontend-flow.md's "Results MUSIC" section and the 1020/1130 tunables rows updated to match — this audit's snapshot was stale on this row | — | done |
 | 22 | `.BM` generic help browser (menu row 5 + in-round F1) | pinned | ported | ROADMAP "The generic .BM help BROWSER — DONE 2026-07-08" | — | done |
-| 23 | Controllers/INPUT.BM menu-row binding | pinned | **absent** | frontend-flow.md: "no menu-row binding, documented gap" | wire INPUT.BM leaf to its real menu entry point (currently reachable only as a stub leaf?) — verify against `app_flow.hpp`'s `Controllers` state | low |
+| 23 | Controllers/INPUT.BM menu-row binding | pinned | **N/A — confirmed negative** | frontend-flow.md "INPUT.BM menu-row binding — CONFIRMED NEGATIVE (2026-07-09)": no "controller"/"INPUT.BM" string anywhere in pseudo.c; INPUT.BM is just one of ~10 topics in the generic `*.BM` help browser (row 5/F1, table row #22) both the original and this port already glob/list — nothing to bind | none — the real reachability path (generic help browser) is already ported; `AppState::Controllers` stays an inert, never-triggered leaf | done |
 | 24 | Pre-match SETUP screens (player input type, level/rounds) | pinned | ported | setup-screens.md, ROADMAP "Pre-match SETUP screens... DONE 2026-07-05" | — | done |
 | 25 | Net-game setup screens (`sub_42B0CE`, `sub_42B47D`) | pinned (addresses identified) | **N/A — netplay, excluded (ADR-0003)** | setup-screens.md: "explicitly NOT reproduced (kept for reference)" | none — out of scope | N/A |
 | 26 | Player colour `.RMP` remap pipeline | pinned | ported | player-colour.md (no open gaps), `rmp.cpp`, `test_rmp.cpp` | — | done |
@@ -86,7 +86,7 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 | Animation | `.ANI` | 95 | pinned | ported | RE-NOTES.md, `docs/formats/ani.md`, `ani.cpp` | — | done |
 | Scheme (map) | `.SCH` | 67 | pinned | ported | RE-NOTES.md, `sch.hpp`, `test_sch_write.cpp` | — | done |
 | Image | `.PCX` | 62 | pinned | ported | RE-NOTES.md, `pcx.hpp` | — | done |
-| Text data (misc) | `.TXT` | 18 | pinned | ported | MESSAGES.TXT via `messages.cpp`; VALUELST.RES/SOUNDLST.RES are `.RES` (see below), not `.TXT` — confirm the 18 `.TXT` files are all covered (MESSAGES.TXT + READMEs, some non-gameplay) | spot-check remaining `.TXT` files aren't silently unparsed data | low |
+| Text data (misc) | `.TXT` | 18 (16 install-shipped — see note) | pinned | ported | MESSAGES.TXT via `messages.cpp` (the only one BM95.EXE parses — confirmed via the `"Unable to open messages.txt file."` diagnostic string, the sole `.txt` literal in pseudo.c); spot-checked 2026-07-09: none of the other 17 is silently-unparsed gameplay data — see below | none — spot-check complete | done |
 | Palette remap | `.RMP` | 10 | pinned | ported | `docs/re/player-colour.md`, `rmp.hpp/.cpp`, `test_rmp.cpp` | — | done |
 | BM help-screen | `.BM` | 10 | pinned | ported | `docs/formats/bm.md`, `bmscreen`/HelpBrowser | — | done |
 | Resource list | `.RES` | 8 (incl. VALUELST.RES, SOUNDLST.RES, EXTRA*.RES) | pinned | ported | `reslist.hpp`, `extra.hpp`, facts.md, stage-actors.md (EXTRA*.RES actor registry) | — | done |
@@ -94,11 +94,40 @@ Port status: **ported** (code + test) · **partial** · **absent** · **N/A**.
 | Misc data | `.DAT` | 3 (LEVELS.DAT, bmstats.dat, + 1 more) | `LEVELS.DAT` RE'd | **absent** | `docs/re/facts.md` "`LEVELS.DAT` — NOT READ by the shipped game" — exhaustive grep of `pseudo.c` and `strings` on every shipped `.EXE` (incl. `FREDIT.EXE`) finds zero "level" references anywhere; file is 4 bytes, installer-copied, never opened at runtime | none — confirmed dead/tooling data, not load-bearing for any reachable feature; no parser warranted | done (LEVELS.DAT); bmstats.dat / 3rd `.DAT` still unchecked, low priority |
 | Campaign | `.CAM` | 3 (CROUTON.CAM, GHOSTS.CAM, SIMPLE.CAM) | pinned | ported | `docs/re/campaign.md` — reachability CONFIRMED: hidden 'C'×5 trigger on the local player-setup screen (`sub_410F81` → picker → `sub_401085` loader → `dword_46489C` flag read at ~12 sites). `.CAM` parser (`libs/assets/campaign.hpp/.cpp`, `test_campaign.cpp`); `CampaignFilePicker` (`libs/game/campaign_screen.hpp/.cpp`); stage sequencing (`AppInput::CampaignContinue`, `GameApp::load_campaign_stage`), AI-count roster seeding (`sub_40151B` CORRECTED, `seed_campaign_ai_slots`), stage banner (`present_campaign_banner`), round pacing (`sub_4016DA` PINNED, `hazard_clear_timer`), and the rover/ghost hazard actors themselves (RoverSystem, table row #13) are all ported. field-8 (`ai_difficulty`) CONFIRMED dead code — grepped every read site, none exists beyond the loader's own write | none required for the confirmed-reachable scope; remaining edge case: mutual-wipeout stage-replay fallback (campaign.md "Round pacing" clause 5) is independently portable but left as a documented follow-up, no test pressure yet | done |
 | Palette | `.PAL` | 1 (COLOR.PAL) | pinned | ported (via PCX palette loading) | RE-NOTES.md | — | done |
-| Bitmap | `.BMP` | 1 | **unchecked** | **unchecked** | not mentioned in any doc; likely a tool/icon asset, not gameplay data | identify the single `.BMP` file's role (icon export?), likely no action needed | low |
+| Bitmap | `.BMP` | 1 | pinned | N/A | `WINEREG/INTER.BMP` — confirmed 2026-07-09: lives inside the bundled `WINEREG.EXE`/`EREGUI32.DLL` registration-wizard tool's own folder (product registration, not the game), not referenced anywhere in `pseudo.c` (BM95.EXE never opens it). Non-gameplay, same class as the `.EXE`/`.DLL` tooling row | none | done |
 | Icon | `.ICO` | 1 (BM95.ICO) | N/A | N/A | application icon, not game data | none | N/A |
 | Executable/DLL | `.EXE`/`.DLL` | 9 / 2 | N/A | N/A | tools (MAKECFG.EXE, decompile tooling), not game assets | none | N/A |
 | IDB | `.IDB` | 2 | N/A | N/A | IDA database, explicitly excluded from repo per CLAUDE.md | none — must never be committed | N/A |
 | Config | `.INI` | 4 | pinned | ported | `options.ini` via `load_options`/`save_options`; CFG.INI/nodename.ini are net/legacy config — confirm not needed | verify CFG.INI/nodename.ini are netplay-only before ignoring outright | low |
+
+**`.TXT` spot-check detail (2026-07-09).** The `find`-reported "18" `.TXT`
+files break down as:
+
+- `MESSAGES.TXT` — parsed (`messages.cpp`); the only one BM95.EXE reads (the
+  sole `.txt` literal in `pseudo.c` is the `"Unable to open messages.txt
+  file."` error string for it).
+- `README.TXT` — plain human-readable readme prose, not consumed by the game.
+- `bmstats.txt` / `critlog.txt` — game-**generated** output (a formatted stats
+  dump — "Bomberman Statistics File: ... Matches Started/Bombs Dropped/
+  Bricks Destroyed" — and a network CritPacket diagnostic log respectively),
+  not input; no literal filename string for either exists in `pseudo.c`
+  (built from a runtime path), but their content is self-evidently a
+  write-only report/log, not silently-unparsed gameplay data.
+- `TOOLS/{ANIMS,FREDSPIT,GAME,PLAYSH,PSS,STAGES,TOOLHELP}.TXT` (7) and
+  `WINEREG/{PRTBODY,PRTFAX,PRTMAIL,PRTRCRD,XMT}.TXT` (5) — belong entirely to
+  the SEPARATE bundled tools shipped alongside the game (`FREDIT.EXE`/
+  `PSS.EXE`/`PLAYSH.EXE`/`NUMBER.EXE`/`EXTPSS.EXE` level-editor toolkit;
+  `WINEREG.EXE` registration wizard), not to BM95.EXE — grepped every one of
+  these 12 filenames against `pseudo.c`, zero hits. Confirmed non-gameplay.
+- `decompile_done.txt` / `idalog.txt` — **not part of the original 1997
+  install at all**: they're this repo's own RE-tooling scratch output
+  (`decompile.bat`/`decompile_all.py`, also present in the same folder,
+  dated the same session), left behind in the install directory from a prior
+  IDA decompile run. The genuine install-shipped `.TXT` count is **16**, not
+  18; CLAUDE.md's "never commit exe-derived material" already keeps these out
+  of the repo, but the asset-table count above is corrected to note the
+  discrepancy rather than silently double as an inventory of our own tooling
+  byproducts.
 
 **Format doc gap (structural, not a missing parser):** `docs/formats/` only
 has `ani.md`, `bm.md`, `fon.md`. PCX/SCH/RES-list/RSS/RMP/VALUELST are all
@@ -234,24 +263,23 @@ Counting the 39 numbered subsystem rows (§1+§2) + the 14 distinct
 asset-format rows in §3 (excluding pure-tooling extensions marked N/A:
 .ICO/.EXE/.DLL/.IDB):
 
-- **Covered (RE pinned + ported, "done"):** 35 of 39 subsystem rows (up from
+- **Covered (RE pinned + ported, "done"):** 37 of 39 subsystem rows (up from
   31 at the 2026-07-08 snapshot — #13 rover/ghost mover, #18 attract mode,
-  and #30 clogs prize (effect + wheel icon render, both closed this pass)
-  all closed this pass) + 12 of 14 asset formats (up from 11 — .CAM/campaign
-  closed this pass) — the large majority of 1:1 gameplay and front-end
-  fidelity.
-- **Partial/open (RE pinned, port absent or a small residual):** 4 subsystem
-  rows — #15 wall-slam SFX (unconfirmed call site, permanently uncertain),
-  #23 INPUT.BM menu-row binding, #32 editor chrome polish, #35 in-round
-  debug/cheat keys — plus 2 asset formats (the `.DAT` row's `LEVELS.DAT`
-  component was RE'd this pass and confirmed dead/non-gameplay data with no
-  port needed, but `bmstats.dat`/the 3rd `.DAT` file are still unchecked so
-  the row stays open; `.BMP` unchecked).
+  and #30 clogs prize (effect + wheel icon render) closed earlier in this
+  2026-07-09 pass; #15 wall-slam SFX and #23 INPUT.BM menu-row binding
+  closed in the same day's SFX/audit sweep) + 13 of 14 asset formats (up
+  from 11 — .CAM/campaign, then `.BMP` closed this pass) — the large
+  majority of 1:1 gameplay and front-end fidelity.
+- **Partial/open (RE pinned, port absent or a small residual):** 2 subsystem
+  rows — #32 editor chrome polish, #35 in-round debug/cheat keys — plus 1
+  asset format (the `.DAT` row: `LEVELS.DAT` was RE'd this pass and
+  confirmed dead/non-gameplay data with no port needed, but `bmstats.dat`/
+  the 3rd `.DAT` file are still unchecked so the row stays open).
 - **N/A / excluded (netplay per ADR-0003, or non-gameplay tooling):** 1
   subsystem row (#25 net-game setup screens) + the §4 netplay function
-  cluster + several tooling file extensions (.ICO/.EXE/.DLL/.IDB).
+  cluster + several tooling file extensions (.ICO/.EXE/.DLL/.IDB/.BMP).
 - **Doc staleness (no code gap, just needs a note fixed):** 9 items (§6),
-  items 1-5 fixed in the 2026-07-08 pass, items 6-9 found and fixed in this
+  items 1-5 fixed in the 2026-07-08 pass, items 6-9 found and fixed in the
   2026-07-09 pass.
 
 ## Top open items, priority order
@@ -266,21 +294,24 @@ former residual) is likewise **done**: goldman-roulette.md §9.5 pins
 `sub_425C7F`'s `"power %s"` + `off_45BE50[13]="clog"` lookup and the shipped
 `DATA/ANI/POWERS.ANI` "power clog" sequence; `SequenceSet::clogs_anim` +
 `GoldmanScreen::draw()`'s slot-13 branch draw it, landed in `f374e22`.
-What remains open, in priority order:
+The wall-slam SFX call site and the INPUT.BM menu-row binding were closed
+in the same day's SFX/audit sweep — see table rows #15/#23 and facts.md/
+frontend-flow.md for the evidence. What remains open, in priority order:
 
 1. **Campaign round-pacing clause 5** (mutual-wipeout stage-replay fallback,
    campaign.md "Round pacing") — pinned but not ported; independently
    portable, no test pressure yet (edge case: every side wiped out
    simultaneously mid-stage).
-2. **Wall-slam SFX ids 140-146 call site** (§1 #15) — the RE itself may be
-   permanently unconfirmable (no call site found in the decompile); either
-   find it via a targeted disasm search or formally close this as
-   "accepted unconfirmed" in facts.md.
-3. **INPUT.BM menu-row binding** (§2 #23) — help overlay is live but there is
-   no real interactive controller-remap UI or confirmed menu-row wiring.
-4. Low-priority polish: editor chrome (#32: Ctrl+B reset, '0' toggle,
+2. Low-priority polish: editor chrome (#32: Ctrl+B reset, '0' toggle,
    brush-preview, exact dialog chrome), in-round debug/cheat keys (#35,
-   developer/QA-only), `.BMP`/`.TXT`/`bmstats.dat` asset spot-checks (§3).
+   developer/QA-only), `bmstats.dat`/3rd `.DAT` file (§3 .DAT row).
+
+`.BMP`/`.TXT` asset spot-checks (§3) — **CLOSED 2026-07-09**: the single
+`.BMP` (`WINEREG/INTER.BMP`) belongs to the bundled registration-wizard tool,
+not the game; all 18 (16 install-shipped) `.TXT` files are accounted for
+(1 parsed, 1 readme, 2 game-generated output logs, 12 belonging to separate
+bundled tools, 2 our own RE-tooling scratch files miscounted in the "18").
+See §3's detail note.
 
 See the "TODO(RE) / TODO(§) crumbs still in the tree" list below for the
 exact file:line inline markers a future session can pick off directly.

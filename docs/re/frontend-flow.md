@@ -673,10 +673,36 @@ assumed. The same browser also opens mid-round on F1
 green"` sprite (TRIGBOMB.ANI) at the pinned anchor, read live from VALUELST
 row 700's columns (`ValueList::column_or`), with `{332,140,38}` as the
 fallback; it falls back to a highlight bar only if TRIGBOMB.ANI is absent. The
-Controllers/INPUT.BM help has no dedicated main-menu row in the original (it
-hangs off the interactive controller-setup screen), so its `OpenControllers`
-edge exists in the flow graph but is not bound to a menu row here — a documented
-gap belonging to the deferred controller-setup UI.
+**INPUT.BM menu-row binding — CONFIRMED NEGATIVE (2026-07-09).** The earlier
+"it hangs off the interactive controller-setup screen" guess here was
+unsubstantiated and is now corrected: an exhaustive `pseudo.c` grep for both
+`"INPUT.BM"` and `"controller"` (any case) returns **zero** hits anywhere in
+the binary — there is no dedicated controller-setup screen, and no code path
+opens `INPUT.BM` by name. `docs/re/results-and-options.md` §4 (a separate,
+earlier-pinned pass on the SAME row 5 dispatcher) already resolved where
+`INPUT.BM` actually lives: `sub_41431C`→`sub_414235`'s generic help-file
+browser globs **every** `*.BM` in the install root (`sub_41404B("*.BM", ...)`)
+and lists `INPUT.BM` alongside `CREDITS.BM`/`MANUAL.BM`/`NETWORK.BM`/
+`OPTIONS.BM`/`README.BM`/etc. as one of ~10 selectable topics — the SAME
+mechanism table row #22 (row 5 / in-round F1, `HelpBrowser`) already ports.
+There is no separate "Controllers" leaf, menu row, or interactive
+controller-remap screen in the original for `INPUT.BM` to hang off of — the
+real interactive key-remap UI (`sub_407B9D`, `docs/re/results-and-options.md`
+§2) is a DIFFERENT, unrelated screen reached from the Options screen's "Define
+keyboard layouts" row, and it never touches `INPUT.BM`.
+
+Net effect: **our port already reproduces `INPUT.BM`'s one real reachability
+path** — it is globbed and listed by the SAME `HelpBrowser` menu row 5 / F1
+uses (`libs/game/include/bomber/game/bmscreen.hpp`'s `HelpBrowser::enter()`,
+which globs `*.BM` in the install root exactly like `sub_41404B`). The port's
+separate `AppState::Controllers` / `AppInput::OpenControllers` /
+`present_bm_screen("INPUT")` construct (`app_flow.hpp`, `game_app.cpp`) does
+not correspond to anything in the original — no key or menu row ever emits
+`OpenControllers`, and that's correct: there is nothing in `sub_42B9CE`'s
+seven rows to bind it to. It is left in place as an inert, never-triggered
+state (harmless — `INPUT.BM`'s real content is already reachable via the
+generic browser) rather than removed, since deleting it is unrelated cleanup,
+not a fidelity fix.
 
 ## Attract mode — the menu idle timeout runs a LIVE AI demo match (CONFIRMED)
 

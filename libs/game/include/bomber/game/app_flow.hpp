@@ -42,7 +42,11 @@ enum class AppState : std::uint8_t {
     Match,        // one ROUND of the deterministic sim (best-of-N loop)
     Results,      // DRAW / RESULTS tally / VICTORY end-of-round screen
     Options,      // OPTIONS.BM help viewer (interactive settings UI = deferred)
-    Controllers,  // INPUT.BM help viewer (key-remap UI = deferred)
+    Controllers,  // INPUT.BM help viewer; unreachable from any menu row by
+                  // design — CONFIRMED negative (docs/re/frontend-flow.md):
+                  // the original has no dedicated row/screen for this either,
+                  // INPUT.BM is just one topic in the generic *.BM help
+                  // browser (row 5/F1) both games already glob and list
     Network,      // NETWORK.BM help viewer
     Credits,      // CREDITS.BM viewer (text + inline images)
     Quit,         // shut down
