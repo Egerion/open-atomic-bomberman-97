@@ -279,13 +279,13 @@ confirming the `+25` idiom already seen elsewhere in the codebase.
 
 | row (v166) | msg id | label (paraphrased) | backing global | on-select (Left/Right or Enter) |
 |---|---|---|---|---|
-| 0 | 250 | Team Play | `dword_464964` (`team_play=`) | toggle; forces `win_by_kills` off |
+| 0 | 250 | Team Play | `dword_464964` (`team_play=`) | toggle; forces `win_by_kills` off; ALSO resets `dword_46492C=-1` on every press (CORRECTED 2026-07-09, `docs/re/goldman-roulette.md` §2.1 — previously only row 6 was documented as a gold-clear trigger) |
 | 1 | 251 | Random Start | `dword_464AE8` (`random_start=`) | toggle |
 | 2 | 252 | Node Name | (string, `sub_40FE34`) | `sub_4074DC` — text-entry edit (net identity, not persisted to options.ini as a `keydef`-style key; separate from the 22 keys in §3's table) |
 | 3 | 253 | Conveyor Speed | `dword_464930` (`conveyor_speed=`) | cycle 0..`getvalue(189)-1` (=0..2: Low/Medium/High, msg 295-297) |
 | 4 | 254 | Stomped Bombs Detonate | `dword_464940` (`stomped_bombs_detonate=`) | toggle |
 | 5 | 255 | Win Matches By Kill Total | `dword_46497C` (`win_by_kills=`) | toggle; forced off whenever Team Play is on |
-| 6 | 256 | Gold Bomberman | `dword_4648BC` (`goldman=`) | toggle; also resets `dword_46492C=-1` (clears the pending roulette winner) |
+| 6 | 256 | Gold Bomberman | `dword_4648BC` (`goldman=`) | toggle; also resets `dword_46492C=-1` (clears the pending roulette winner) — INLINE on every press, not gated on the net before/after value (`docs/re/goldman-roulette.md` §2.1) |
 | 7 | 257 | Enclosement Depth | `dword_464974` (`enclosement_depth=`) | cycle 0..`getvalue(28)-1` (=0..3: None/A Little/A Lot/All the way, msg 315-318) |
 | 8 | 258 | Scheme File | `byte_4648C4[100]` (`schemefilename=`) | `sub_4076FE(±1)` — step through the on-disk `.SCH` list |
 | 9 | 259 | Play Time | `dword_464948` (`playtime=`), read via `sub_4078FE()` | `sub_4076FE(±1)` — same stepper helper as Scheme File (shared cursor state) |

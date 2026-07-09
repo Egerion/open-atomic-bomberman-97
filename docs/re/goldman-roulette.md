@@ -85,10 +85,70 @@ engine) — the port stores the equivalent **raw 0/1 team id** instead (see
 `build_match_config`, which already compares it against `setup_team_[i]`
 directly), since our team-id space is 0/1 throughout, not 0/2.
 
-Cleared to -1 by: Esc on the wheel (6091), Esc on the player-setup screen,
-the Options-screen Gold Bomberman toggle, Ctrl+Q mid-round abort
-(`LABEL_34`, pseudo.c 29737), the net-game screens (30280/30504), and boot
-init (14661).
+Cleared to -1 by: Esc on the wheel (6091), Esc on the player-setup screen
+(`sub_410F81`, pseudo.c 15291), Esc on the LEVEL & ROUNDS screen
+(`sub_406DDE`, pseudo.c 8188 — CORRECTED 2026-07-09, see §2.1: previously
+undocumented, and previously mis-ported as "back one screen" rather than an
+abort), the Options-screen Gold Bomberman toggle AND Team Play toggle (both
+row 0 and row 6, pseudo.c 9310-9311/9334-9335/9410-9412/9436-9437 — the Team
+Play half was previously undocumented, see §2.1), Ctrl+Q mid-round abort
+(`LABEL_34`, pseudo.c 29737), the net-game screens (30280/30504, N/A —
+no netplay in this port), and boot init (14661). The three net-only clear
+sites (`sub_4046F5` pseudo.c 6563, `sub_410BBA` pseudo.c 14738/14817/14843)
+are `sub_40C06A()`-gated and never reachable in a local-only port; not
+pinned further.
+
+### 2.1 Two gaps found in the 2026-07-09 full gold sweep — FIXED
+
+Re-auditing every `dword_46492C`/`dword_4648BC` read/write site (not just the
+ones §2's original pass already knew about) turned up two real mismatches
+against the port, both presentation-only (no `libs/sim`/golden-hash impact —
+`gold_player_` is a `GameApp` int, never read by the sim):
+
+1. **The LEVEL & ROUNDS screen's Esc was ported as "back to the player
+   screen"; the original aborts the WHOLE Play flow to the menu.**
+   `sub_406DDE` (§2's own citation, "the following level/rounds screen") is
+   called from `sub_410F81`'s own TAIL (pseudo.c 15504-15517: `if
+   (!dword_464A68) { sub_4100B9(); sub_40EA1E(v61); sub_406DDE(); }`), with
+   nothing after that call but `sub_401312()` and return — there is no loop
+   anywhere that re-shows the player screen on `sub_406DDE`'s Esc. Its own Esc
+   handler (pseudo.c 8186-8191, inside `sub_406DDE`'s frame loop) sets
+   `dword_46492C = -1; dword_464A68 = 2;` and returns — the SAME
+   abort-to-menu shape as the wheel's own Esc (§5) and `sub_410F81`'s own Esc
+   (pseudo.c 15289-15299). `GameApp::present_map_select()`'s Escape handler
+   now mirrors this: clears `gold_player_ = -1` and returns `AppInput::Back`,
+   and the `StartMatch` caller (`game_app.cpp`, the `present_setup`/
+   `present_map_select` loop) now treats that `Back` as a full abort
+   (`ev = AppInput::Advance; break;`, matching the wheel-abort branch just
+   above it) instead of `continue`-ing back into `present_setup()`.
+2. **Toggling Team Play on the Options screen never forfeited a pending gold
+   player.** Only the Gold Bomberman row itself (case 6) was ported as a
+   clear trigger; case 0 (Team Play, pseudo.c 9310-9311/9410-9412) ALSO does
+   `dword_46492C = -1` unconditionally on every press, in both the
+   Left/Right-driven switches. `OptionsScreen` now tracks
+   `team_play_touched_`/`goldman_touched_` (set on ANY Left/Right press of
+   either row, not gated on the net before/after value — see the port note
+   below) and `GameApp::present_options_screen`'s exit path checks
+   `gold_forfeiting_row_touched()` instead of a goldman-only snapshot diff.
+
+**A third, more subtle nuance fixed at the same time:** the original clears
+`dword_46492C` INLINE, at the moment of the keypress, unconditionally — not
+by comparing the screen's entry and exit snapshots. A player who presses the
+Gold Bomberman (or Team Play) row an EVEN number of times before leaving the
+Options screen — ending back at the exact value they started with — still
+forfeits a pending gold player in the original (the clear already happened on
+the first press and nothing un-clears it). A naive "does the final value
+differ from the value on entry" check misses this. `OptionsScreen`'s new
+`goldman_touched_`/`team_play_touched_` flags are set on every press of
+either row regardless of the resulting value, closing this gap too.
+
+(Files touched: `libs/game/src/game_app.cpp` (`present_map_select`'s Esc
+handler + its `StartMatch` caller + `present_options_screen`'s exit check),
+`libs/game/include/bomber/game/options_screen.hpp` /
+`libs/game/src/options_screen.cpp` (the two `_touched_` flags +
+`gold_forfeiting_row_touched()`). Provenance: `sub_406DDE` Esc pseudo.c
+8186-8191; `sub_410F81` tail pseudo.c 15494-15519; Options screen switches
+pseudo.c 9280-9460.)
 
 ## 3. Wheel mechanics — mirror-the-arithmetic
 
@@ -234,6 +294,105 @@ call rolls `rand()%6` (spawn 5-in-6) and places a particle at
 `(player_x + rand()%40 - 20, player_y + rand()%50 - 48)` — three
 presentation-side rand draws per spawn attempt. So the gold player sparkles
 for the first ~5 s of every round while goldman is pending.
+
+**One correction to the above:** `sub_420D4E`'s 100-record pool loop finds
+only the FIRST currently-inactive slot (`!*v7`) and returns immediately after
+its spawn-roll for that one slot — it does NOT scan/fill every free slot on
+each call. So each call (once per applicable player per `sub_420F07` HUD-pass
+invocation) attempts to spawn **at most one** new particle, not a batch.
+
+### 6.1 The render/expire side — `sub_420E39` @0x420E39, NEVER PINNED — for cross-check with the parallel sparkle-render port
+
+`sub_420D4E` only SEEDS the pool (position + a live/dead flag + a per-particle
+frame counter reset to 0); it draws nothing. The actual sparkle draw+animate
+pass is a SEPARATE function, `sub_420E39` @ 0x420E39 (pseudo.c 23590-23620),
+called UNCONDITIONALLY at the very tail of every `sub_420F07` HUD pass
+(`return sub_420E39();`, pseudo.c 23701) — i.e. it runs every frame
+regardless of `dword_4648BC`/`dword_46492C`/round-elapsed; only the SEEDING
+in §6 is gated on those. This matters for the parallel port: an
+already-spawned particle keeps animating (and can still be visible) even
+after goldman is toggled off or the gold player changes mid-round, since
+nothing here checks those flags — only `sub_420D4E` stops making NEW ones.
+
+**Asset — the ANI sequence is named `"goldman"` (`aGoldman_0`, pseudo.c
+1555), resolved ONCE and cached (pseudo.c 23598-23602):**
+```c
+if ( !dword_4621EC )                              // resolved once, ever
+{
+  dword_45BE40 = sub_41D957((int)aGoldman_0);      // resolve "goldman" by name
+  dword_4621EC = sub_41DA5C(dword_45BE40);         // cache its FRAME COUNT
+}
+```
+`sub_41DA5C(seq)` (pseudo.c 21815-21821) reads the resolved sequence record's
+`+52` field, which `sub_41DAA7` (the standard frame-fetch pair used
+throughout the engine — same pair the wheel's `"ring"`/prize icons use, §3)
+takes `frame % (that same +52 field)` from — i.e. `dword_4621EC` is
+unambiguously the **"goldman" sequence's total frame count**, not a
+duration. Per the established MISC.ANI sequence table (`cursor1` / `goldman`
+/ `ring` / `safe` / `scan` / `teamring0` / `teamring1`,
+`docs/re/results-and-options.md` §5d), **`"goldman"` lives in
+`DATA/ANI/MISC.ANI`** alongside the wheel's own `"ring"` pointer — not a
+new/separate asset to locate.
+
+**Per-frame draw + expire (pseudo.c 23603-23616), for each of the 100 pool
+slots:**
+```c
+v1 = 0; v2 = (DWORD*)dword_4621CC;   // the SAME pool sub_420D4E seeds into
+while ( v1 < 100 ) {
+  if ( *v2 ) {                                          // slot active
+    v3 = sub_41DAA7(dword_45BE40, v2[3]);                // frame v2[3] of "goldman"
+    sub_415A9F(v2[1], v2[2], 0, v3);                     // plain sprite draw at (x, y)
+    if ( dword_4621F0 != dword_464994 && ++v2[3] > dword_4621EC )
+      *v2 = 0;                                           // one full playthrough -> deactivate
+  }
+  ++v1; v2 += 4;
+}
+result = dword_464994;
+dword_4621F0 = dword_464994;                             // remember this frame's tick
+return result;
+```
+Three facts this pins that §6 alone did not:
+
+- **The draw call is `sub_415A9F`, the ordinary player-sprite draw routine**
+  (the SAME function the per-tick player mover uses to draw the player's own
+  body sprite, pseudo.c 23193/23255/23259/23267/23275/23460 — cited already
+  by `movement.cpp`'s disease-scaling doc) — a plain opaque sprite blit, NOT
+  an additive/glow blend. No colour/palette argument is passed, so the
+  sparkle's colour comes entirely from the `"goldman"` ANI's own baked
+  pixels, same as every other ANI-driven sprite in the engine.
+- **Each particle's own on-screen lifetime is bounded by the `"goldman"`
+  ANI's frame count (`dword_4621EC`), NOT by getvalue(1010).** getvalue(1010)
+  only gates whether §6's `sub_420D4E` keeps rolling NEW spawns; once a
+  particle exists it plays through the `"goldman"` sequence exactly once (no
+  looping — `v2[3]` only ever counts up, `sub_41DAA7`'s own internal modulo
+  is never allowed to wrap it back because the `++v2[3] > dword_4621EC` guard
+  deactivates the slot the frame AFTER the last real frame) and then
+  disappears, INDEPENDENT of whether goldman/round-elapsed/the gold player
+  changed in the meantime. A practical consequence: a particle spawned right
+  at the getvalue(1010) cutoff can keep visibly playing for a few more real
+  frames past that cutoff while it finishes its own animation.
+- **The frame advance is gated on a GLOBAL per-real-frame tick counter**
+  (`dword_4621F0 != dword_464994`, `dword_464994` incremented once per real
+  engine loop iteration at pseudo.c 29517), not on the 20 Hz sim tick and not
+  once per `sub_420F07` call — so if `sub_420F07` were ever invoked more than
+  once within the same real frame (it normally is not), the particles would
+  still only advance one "goldman" ANI frame that real frame, matching every
+  other `dword_464994`-gated per-frame effect in the engine (e.g. the same
+  guard shape at pseudo.c 25331/26036).
+
+**Port status:** unaffected by this doc-only pass (the scope note above:
+sparkle-render porting is deliberately deferred to a parallel worktree using
+these exact addresses) — this section exists so that port can cross-check
+its result against `sub_420E39`'s asset name, non-additive blit, and
+frame-count-bound (not getvalue(1010)-bound) per-particle lifetime, none of
+which the original §6 text mentioned.
+
+(Provenance: `sub_420E39` @0x420E39 pseudo.c 23590-23620; `aGoldman_0`
+pseudo.c 1555; frame-count accessor `sub_41DA5C` pseudo.c 21815-21821;
+frame-fetch pair `sub_41DAA7` pseudo.c 21825-21836; draw call `sub_415A9F`
+first defined ~pseudo.c 18057, its other player-sprite call sites pseudo.c
+23193-23460; tick counter `dword_464994` increment pseudo.c 29517; caller
+`sub_420F07`'s tail pseudo.c 23701.)
 
 ## 7. Assets, sounds, strings, values — summary
 
