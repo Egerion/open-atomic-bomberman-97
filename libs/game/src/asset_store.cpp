@@ -279,6 +279,35 @@ bool AssetStore::load_stage(int stage) {
     return field_ != nullptr;
 }
 
+const AssetStore::StagePreview& AssetStore::stage_preview(int stage) const {
+    if (auto it = stage_preview_.find(stage); it != stage_preview_.end()) return it->second;
+    // Cache an entry (even a partial/empty one) for every stage requested, so
+    // a missing/broken file logs once and thereafter just draws nothing —
+    // same guarded-cache shape as frontend_pcx() above (docs/re/setup-
+    // screens.md "sample-block preview").
+    StagePreview sp{};
+    try {
+        AniTextures tiles;
+        tiles.load(ren_, game_dir_ / "DATA" / "ANI" / ("TILES" + std::to_string(stage) + ".ANI"));
+        const std::string n = std::to_string(stage);
+        sp.solid = resolve_sequence(tiles, "tile " + n + " solid");
+        sp.brick = resolve_sequence(tiles, "tile " + n + " brick");
+        stage_preview_tiles_.emplace(stage, std::move(tiles));
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "stage %d preview tiles load failed: %s\n", stage, e.what());
+    }
+    try {
+        auto img = assets::pcx::load(game_dir_ / "DATA" / "RES" /
+                                     ("FIELD" + std::to_string(stage) + ".PCX"));
+        sdl::TexturePtr tex{make_texture(ren_, img)};
+        sp.field = tex.get();
+        stage_preview_field_.emplace(stage, std::move(tex));
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "stage %d preview field load failed: %s\n", stage, e.what());
+    }
+    return stage_preview_.emplace(stage, std::move(sp)).first->second;
+}
+
 const std::vector<Anim>& AssetStore::deaths_for(int player) const {
     if (player >= 0 && player < kLocalPlayers && !deaths_c_[player].empty())
         return deaths_c_[player];

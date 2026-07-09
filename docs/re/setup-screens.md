@@ -319,6 +319,78 @@ already mirrored by `Tuning::level_enabled[11]` and honoured by
 200-try loop). So a specific level → override the stage index directly; RANDOM →
 keep `pick_stage`.
 
+### The "sample" block preview — CONFIRMED (`sub_406AA3` @0x406AA3)
+
+`sub_406DDE`'s frame loop calls a separate helper, `sub_406AA3()`, exactly
+once per **screen entry** and once again per **LEVEL row change** (the outer
+loop's `v35` flag: set to `1` before the loop's first pass, and
+`++v35`'d — i.e. re-armed — whenever `sub_40FAB3() != dword_45E0B8` fires,
+the net-sync path for a level edit; local play's Left/Right level cycle sets
+`dword_45E0B8` directly and takes the SAME `v35` re-arm on the next frame
+through the `sub_40C06A()==1` branch above it). WINS-row edits do **not**
+re-run it. Full body (pseudo.c 7938-8041):
+
+```c
+v18 = getvalue(730);   // X = 400
+v19 = getvalue(731);   // Y = 100
+v24 = getvalue(732);   // XSize = 5  (columns)
+v25 = getvalue(733);   // YSize = 5  (rows)
+sub_4151AD();          // apply the CURRENT (glue) palette — no new backdrop
+```
+
+1. **Field swatch panel** — `FIELD<n>.PLT` for the SELECTED level (`n =
+   dword_45E0B8`) or, for RANDOM, `n = rand() % max(getvalue(35),1)` — picked
+   ONCE per `sub_406AA3()` call, i.e. re-rolled only on entry/level-change,
+   not every frame. `sub_4150F0` decodes it into a raw framebuffer; if that
+   succeeds:
+   - `sub_4168B5(v18-22, v19-20, YSize*36+22, XSize*40+24, byte_49D38F)` — a
+     filled border/background rect, inset 22px left/20px up from the grid
+     origin, sized to the grid box + a ~20-24px margin, colour
+     `byte_49D38F` (a fixed UI ink, not level-dependent — the same byte
+     `sub_4141F8` uses for the "team 2" tint elsewhere in this doc).
+   - `sub_4152D7(&field[12*640], v18-20, XSize*40+20, v19-18, YSize*36+18,
+     …)` — crops the top 12 scanlines off the 640-wide field bitmap and
+     stretch-blits the remainder to fill a panel sized `(XSize*40+20) ×
+     (YSize*36+18)` at `(v18-20, v19-18)`. In effect: **the selected level's
+     FIELD background image, stretched to fill a panel just behind/around
+     the block grid** — a colour swatch of "what this level's backdrop looks
+     like", not gameplay geometry.
+2. **The 5×5 block grid** — `for (i in 0..YSize) for (j in 0..XSize)` at
+   cell `(v18 + 40*j, v19 + 36*i)` (40×36 = the same `TILEn.ANI` cell pitch
+   the in-match renderer uses, `sim::kTileW/kTileH` — **no stretching**, 1:1
+   native tile size):
+   - `(j&1) && (i&1)` → **always SOLID** (the checkerboard-parity cells, the
+     same parity the in-match board's outer solid lattice uses).
+   - else if `(j>1 || i>1)` → **BRICK with probability 4/5** (`rand()%5 !=
+     0`); the top-left 2×2 corner (`j<=1 && i<=1`) is reserved as guaranteed
+     clear (a "spawn corner"), matching every built-in level's own top-left
+     start-safety carve-out.
+   - else → **blank** (no tile drawn).
+   - For a drawn (solid/brick) cell, the **tileset index is re-picked per
+     cell**: a specific level draws every cell from that level's own
+     `TILE<n> solid`/`TILE<n> brick` (`n = dword_45E0B8`, CONFIRMED — pinned
+     art, no randomness beyond the brick/blank coin flip); RANDOM (-1)
+     re-rolls `n = rand() % max(getvalue(35),1)` **independently for every
+     cell**, so a RANDOM-level preview shows a patchwork of different
+     levels' tile art in the same grid — a deliberate "random" novelty
+     effect, not a bug. Blit is `sub_41532B`, a stretch-blit into the exact
+     40×36 cell rect (a no-op stretch since the source ANI frames are
+     already 40×36).
+   - The cursor row highlight (`sub_413BD6`) and everything else in the
+     outer loop draw over/around this panel every frame; the panel itself
+     is a snapshot from the last `sub_406AA3()` call, not redrawn per frame.
+3. `sub_415189()` restores the caller's palette on return (paired with the
+   `sub_4151AD()` at entry — the same apply/restore pair `sub_4148E5`'s glue
+   backdrop uses).
+
+**Reproduction note:** this is cosmetic set-dressing (a random illustrative
+maze pattern + the level's own tile art), not the level's actual layout —
+faithfully reproducing the checkerboard/4-in-5-brick/2×2-clear-corner rule
+and the per-cell RANDOM tileset re-roll is what "1:1" means here; the exact
+12px field crop is a minor pixel-level nicety the port approximates by
+stretching the whole `FIELD<n>` texture into the panel rect instead (a
+cosmetic simplification, not a gameplay fact).
+
 ### Message IDs the two screens use (purpose only; text stays in the file)
 
 | id | screen | purpose |
@@ -356,7 +428,14 @@ keep `pick_stage`.
    backdrop, **music 1020**, the LEVEL row (RANDOM + the 11 named levels,
    `getstring(150+n)` / `getstring(149)`) and the WINS row (1..100), at
    getvalue(735-738). Left/Right cycle the highlighted row's value, Up/Down move
-   between rows, Enter commits, Esc backs to the player screen.
+   between rows, Enter commits, Esc backs to the player screen. Also draws the
+   **sample-block preview panel** at getvalue(730-733) (X=400,Y=100,5x5 cells,
+   pinned above): a bordered box behind a 5x5 grid of solid/brick tiles in the
+   selected level's own `TILE<n>` art (RANDOM re-picks a level per cell, per the
+   pin), refreshed whenever the LEVEL row changes. `AssetStore::stage_preview(n)`
+   loads/caches each level's preview tiles + field swatch independently of the
+   live match's `load_stage` slot (missing/broken art draws nothing, never
+   crashes) so cycling levels never disturbs an in-progress match's own art.
 3. Flow: Menu Play → `present_setup` → `present_map_select` → match. Esc backs
    up one step at each screen.
 
@@ -382,4 +461,8 @@ above. The random glue pick uses a presentation LCG, never `State::rng`.
 Sources: `sub_42B47D` (0x42B47D), `sub_42B0CE` (0x42B0CE), `sub_4124A4`
 (getstring), `sub_42741E(0x410)` (music 1040), the glue-pick at ~17335,
 `unk_4632CC` (404 B/player), VALUELST 16/750–778, MESSAGES.TXT ids 60/62/63/66/
-70–73/80/95/100/110.
+70–73/80/95/100/110. Sample-block preview: `sub_406AA3` (0x406AA3, pseudo.c
+7938-8041), called from `sub_406DDE` (pseudo.c 8145), VALUELST 730-733,
+`dword_4648A0`/`dword_4648A4` (36/40 = tile cell pitch, pseudo.c 27013-27014,
+== `sim::kTileH`/`kTileW`), `aFieldUPlt`/`aTileUS` string templates
+(pseudo.c 1399-1402).

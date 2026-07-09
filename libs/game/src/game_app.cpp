@@ -1954,7 +1954,30 @@ AppInput GameApp::present_map_select() {
     const float ly = static_cast<float>(values_.column_or(735, 1, 170));
     const float lys = static_cast<float>(values_.column_or(735, 2, 24));
 
+    // Sample-block preview geometry (docs/re/setup-screens.md "The sample
+    // block preview", sub_406AA3, VALUELST 730-733): X,Y = grid origin,
+    // XSize/YSize = grid size IN CELLS (5x5). Cell pitch is the same 40x36
+    // the in-match renderer uses (sim::kTileW/kTileH), 1:1, no stretching.
+    const int px = static_cast<int>(values_.column_or(730, 0, 400));
+    const int py = static_cast<int>(values_.column_or(730, 1, 100));
+    const int pxsize = static_cast<int>(values_.column_or(730, 2, 5));
+    const int pysize = static_cast<int>(values_.column_or(730, 3, 5));
+
     int row = 0;  // 0 = level, 1 = wins (v34 = 2 rows in sub_406DDE)
+    // The sample-block pattern (which cells are blank/solid/brick, and which
+    // level's tile art each drawn cell uses) is re-rolled only on screen
+    // entry and on a LEVEL row change (sub_406AA3's v35 re-arm), NEVER every
+    // frame — pinned in the doc above. -2 is a sentinel forcing the first
+    // roll below.
+    int pattern_level = -2;
+    // tile_of[row][col]: the stage index whose "tile <n> solid/brick" art
+    // that cell draws, or -1 for a blank cell. Solid/brick-ness itself is
+    // re-derived below from the (j&1,i&1) parity rule, which is pure
+    // geometry and does not need re-rolling.
+    std::vector<std::vector<int>> tile_of(static_cast<std::size_t>(pysize),
+                                          std::vector<int>(static_cast<std::size_t>(pxsize), -1));
+    int field_stage = -1;  // the field-swatch stage picked alongside tile_of
+
     bool waiting = true;
     while (waiting) {
         SDL_Event ev;
@@ -1985,6 +2008,38 @@ AppInput GameApp::present_map_select() {
                 if ((win_target_ -= 5) < 1) win_target_ = 1;
             }
         }
+        // Re-roll the sample-block pattern on entry and whenever the LEVEL row
+        // changes (sub_406AA3's v35 re-arm) — never every frame.
+        if (selected_level_ != pattern_level) {
+            pattern_level = selected_level_;
+            int max_n = level_count > 1 ? level_count : 1;
+            for (int i = 0; i < pysize; ++i) {
+                for (int j = 0; j < pxsize; ++j) {
+                    bool solid_cell = (j & 1) != 0 && (i & 1) != 0;
+                    bool brick_cell = false;
+                    if (!solid_cell && (j > 1 || i > 1)) {
+                        setup_lcg_ = setup_lcg_ * 1664525u + 1013904223u;
+                        brick_cell = (setup_lcg_ >> 16) % 5 != 0;  // rand()%5 != 0
+                    }
+                    if (!solid_cell && !brick_cell) {
+                        tile_of[static_cast<std::size_t>(i)][static_cast<std::size_t>(j)] = -1;
+                        continue;
+                    }
+                    int n = selected_level_;
+                    if (n < 0) {  // RANDOM: re-pick per cell (pinned quirk)
+                        setup_lcg_ = setup_lcg_ * 1664525u + 1013904223u;
+                        n = static_cast<int>((setup_lcg_ >> 16) % static_cast<unsigned>(max_n));
+                    }
+                    tile_of[static_cast<std::size_t>(i)][static_cast<std::size_t>(j)] = n;
+                }
+            }
+            field_stage = selected_level_;
+            if (field_stage < 0) {
+                setup_lcg_ = setup_lcg_ * 1664525u + 1013904223u;
+                field_stage = static_cast<int>((setup_lcg_ >> 16) % static_cast<unsigned>(max_n));
+            }
+        }
+
         audio_.update_music();
         SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
         SDL_RenderClear(sdl_renderer_.get());
@@ -1992,6 +2047,43 @@ AppInput GameApp::present_map_select() {
         if (bg.tex) {
             SDL_FRect dst{0.0f, 0.0f, static_cast<float>(bg.w), static_cast<float>(bg.h)};
             SDL_RenderTexture(sdl_renderer_.get(), bg.tex, nullptr, &dst);
+        }
+        // Sample-block preview panel (sub_406AA3, docs/re/setup-screens.md):
+        // a bordered box around a stretched field-swatch backdrop, then the
+        // 5x5 solid/brick grid drawn at native 40x36 cell size on top.
+        {
+            const float bx = static_cast<float>(px - 22);
+            const float by = static_cast<float>(py - 20);
+            const float bw = static_cast<float>(pxsize * sim::kTileW + 24);
+            const float bh = static_cast<float>(pysize * sim::kTileH + 22);
+            SDL_SetRenderDrawColor(sdl_renderer_.get(), 40, 40, 60, 255);
+            SDL_FRect border{bx, by, bw, bh};
+            SDL_RenderFillRect(sdl_renderer_.get(), &border);
+            if (field_stage >= 0) {
+                const AssetStore::StagePreview& fprev = assets_.stage_preview(field_stage);
+                if (fprev.field) {
+                    SDL_FRect panel{static_cast<float>(px - 20), static_cast<float>(py - 18),
+                                    static_cast<float>(pxsize * sim::kTileW + 20),
+                                    static_cast<float>(pysize * sim::kTileH + 18)};
+                    SDL_RenderTexture(sdl_renderer_.get(), fprev.field, nullptr, &panel);
+                }
+            }
+            for (int i = 0; i < pysize; ++i) {
+                for (int j = 0; j < pxsize; ++j) {
+                    int n = tile_of[static_cast<std::size_t>(i)][static_cast<std::size_t>(j)];
+                    if (n < 0) continue;
+                    const AssetStore::StagePreview& prev = assets_.stage_preview(n);
+                    bool solid_cell = (j & 1) != 0 && (i & 1) != 0;
+                    const Anim& a = solid_cell ? prev.solid : prev.brick;
+                    if (a.steps.empty()) continue;
+                    const Sprite& sp = a.steps[0];
+                    if (!sp.tex) continue;
+                    SDL_FRect cell{static_cast<float>(px + j * sim::kTileW),
+                                  static_cast<float>(py + i * sim::kTileH),
+                                  static_cast<float>(sim::kTileW), static_cast<float>(sim::kTileH)};
+                    SDL_RenderTexture(sdl_renderer_.get(), sp.tex, nullptr, &cell);
+                }
+            }
         }
         // Row 0: LEVEL. getstring(210) is the level-line format (%s = name);
         // name = getstring(150+n) for a specific level, getstring(149) for RANDOM.
