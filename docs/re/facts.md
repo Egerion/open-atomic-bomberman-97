@@ -565,6 +565,83 @@ are the per-kind counts (86 bombs, 87 flame, 89 kick, 90 skate, 91 punch,
 - Per-kind limits clamp `player[86+kind]` against getvalue(550+kind) in the
   common tail — matches our `PowerupSystem::apply` clamping.
 
+## Floor-powerup icon table — AUDITED, no mismatch found (2026-07-09)
+
+Triggered by a user report that the TRIGGER powerup's floor icon "looks
+wrong — should look like a clock/timed bomb". Full audit of the icon
+pipeline: kind index -> original name table -> our ANI/PCX name tables ->
+shipped asset content. Conclusion: **every layer already matches the
+original 1:1; no code fix was needed.**
+
+**Original side.** The floor-powerup drawer is `sub_424F89` (pseudo.c
+26219-26266, the per-tick grid scanner that draws a token when its cell
+state == 2) and the shared icon builder is `sub_425C7F` (pseudo.c
+26718-26735, also reused by the Goldman wheel's 6-slot prize render, §9.5 of
+`goldman-roulette.md`). Both build the sequence name via `aPowerS` ("power
+%s", pseudo.c 1566) + `off_45BE50[kind]` (pseudo.c 2261-2280), where `kind`
+is the grid cell's raw `+4` byte — the SAME unmodified value stored by the
+token-drop writer `sub_425383` (pseudo.c 26352-26375, `*(_DWORD*)(v5+4) =
+a3` with `a3` passed straight through from the caller, e.g. `sub_4255B2`'s
+scatter roll) and read by the pickup dispatcher `sub_41E21E`'s kind switch
+(facts.md "Powerup pickup dispatcher" above) — so the drawer's index space,
+the dispatcher's case numbers, and `off_45BE50`'s index are all the SAME
+0-13 raw kind, confirmed via three independent call sites, not just one.
+
+```
+off_45BE50[18] = { "bomb", "flame", "disease", "kicker", "skate", "punch",
+  "grab", "spooge", "goldflame", "trigger", "jelly", "disease3", "random",
+  "clog", "?1", "?2", "?3", "?4" }
+```
+(pseudo.c 2261-2280; the same table `goldman-roulette.md` §9.5 already
+extracted for the clogs wheel-slot fix, here transcribed in full.)
+
+**Truth table** (kind index = `sim::PowerupType` value = original's raw
+`+4`/dispatcher-case index; verified against the real
+`DATA/ANI/POWERS.ANI` via `abtool ani`, 2026-07-09):
+
+| kind | `sim::PowerupType` | original name (`off_45BE50`) | our `kPowerNames` (`sequences.cpp`) | POWERS.ANI frame | our PCX fallback (`kPowFiles`) | status |
+|---|---|---|---|---|---|---|
+| 0 | ExtraBomb | bomb | "power bomb" | POWBOMB.TGA | POWBOMB.PCX | correct |
+| 1 | Flame | flame | "power flame" | POWFLAME.TGA | POWFLAME.PCX | correct |
+| 2 | Disease | disease | "power disease" | POWDISEA.TGA | POWDISEA.PCX | correct |
+| 3 | Kick | kicker | "power kicker" | POWKICK.TGA | POWKICK.PCX | correct |
+| 4 | Skate | skate | "power skate" | POWSKATE.TGA | POWSKATE.PCX | correct |
+| 5 | Punch | punch | "power punch" | POWPUNCH.TGA | POWPUNCH.PCX | correct |
+| 6 | Grab | grab | "power grab" | POWGRAB.TGA | POWGRAB.PCX | correct |
+| 7 | Spooger | spooge | "power spooge" | PWSPOOGE.TGA | POWSPOOG.PCX | correct |
+| 8 | Goldflame | goldflame | "power goldflame" | POWGOLD.TGA | POWGOLD.PCX | correct |
+| 9 | Trigger | trigger | "power trigger" | POWTRIG.TGA | POWTRIG.PCX | correct — see below |
+| 10 | Jelly | jelly | "power jelly" | POWJELLY.TGA | POWJELLY.PCX | correct |
+| 11 | SuperDisease | disease3 | "power disease3" | POWEBOLA.TGA | POWEBOLA.PCX | correct |
+| 12 | Random | random | "power random" | PWRANDOM.TGA (+ 11 more cycling steps) | PWRAND.PCX | correct |
+| 13 | (not a `PowerupType`; clogs) | clog | "power clog" (`clogs_anim`, outside the 13-kind loop) | TURT2.TGA | n/a | already ported, §9.5 |
+
+Every row's ANI sequence name (`libs/game/src/sequences.cpp`'s
+`kPowerNames[]`) and PCX fallback filename (`libs/game/src/asset_store.cpp`'s
+`kPowFiles[]`) already matched `off_45BE50` exactly, in the same order as
+`sim::PowerupType` (`libs/sim/include/bomber/sim/types.hpp`) — which itself
+matches the dispatcher's case numbers per "Powerup pickup dispatcher" above.
+`Renderer::draw_powerups` (`renderer.cpp`) indexes `powerup_anim[]` directly
+by `static_cast<int>(s.floor[y][x])`, so no reordering happens between the
+sim's enum and the draw call either.
+
+**The trigger icon itself, pixel-checked**: `POWTRIG.TGA` (POWERS.ANI frame
+9) and `POWTRIG.PCX` are byte-identical in content (dumped and visually
+diffed via `abtool ani`/`abtool pcx`, 2026-07-09) — a black bomb with a
+lit/sparking fuse and a yellow "Tr" mark, i.e. already the "timed bomb with
+a marker" look the bug report described wanting. There is no separate
+"clock face" asset anywhere in `POWERS.ANI`'s 15 frames; the lit-fuse bomb
++ "Tr" IS the original's trigger icon.
+
+**Conclusion**: the reported visual bug does not correspond to any
+kind-index / sequence-name / PCX-name mismatch in this codebase — every
+layer of the floor-powerup icon pipeline already reproduces `off_45BE50` +
+`aPowerS` faithfully for all 13 kinds. No code change made. If the in-game
+icon still looks wrong to a live build, the cause is outside this table
+(e.g. a stale binary, a recolour/z-order issue at render time, or a
+different UI element than the floor pickup) and needs a live screenshot to
+diagnose further.
+
 ## Trigger allowance — CONFIRMED (`sub_41EB13` placement, `sub_41E21E` case 9)
 
 Read 2026-07-04 ("devam" #9). A trigger player may only lay a limited number of
