@@ -41,26 +41,38 @@ bool FlameSystem::ignite_epicentre(int tx, int ty, std::uint8_t owner) {
     return true;
 }
 
-bool FlameSystem::spread_to(int tx, int ty, std::uint8_t owner) {
+bool FlameSystem::spread_to(int tx, int ty, std::uint8_t owner, Direction from_dir) {
     // The extending arm (sub_42331C per-direction loop, pseudo.c 25637-25678).
-    // Per tile step, in order: a GROUNDED bomb here stops the arm and chain-
-    // detonates it (sub_422E48 @ 25641) — the tile is NOT ignited by this
-    // arm at all (the bomb's own explosion will flame it separately this same
-    // tick via chain-reaction). A VISIBLE floor powerup here (sub_42542D @
-    // 25653, state==2) stops the arm and is destroyed — also not ignited.
-    // Only past both checks does the cell-type verdict run: solid stops with
-    // no ignite; brick ignites (as "brick burning") and stops; blank ignites
-    // and the arm continues. This is facts.md's flagged fidelity gap: our
-    // previous port ignited every non-solid/non-brick tile unconditionally,
-    // so a flame arm burned straight through bombs and powerups instead of
-    // stopping at them (docs/re/facts.md "Options toggles" §"Known remaining
-    // fidelity gaps").
+    // Per tile step, in order: a GROUNDED bomb here stops the arm and QUEUES
+    // it for a forced detonation next tick (sub_423209 @ 25645 — CONFIRMED a
+    // deferred queue, not a synchronous chain: see docs/re/facts.md "Chain-
+    // reaction timing") — the tile is NOT ignited by this arm at all (no
+    // sub_426FCC call on that branch); the chained bomb's OWN explosion
+    // (next tick) flames it via ITS epicentre instead. A VISIBLE floor
+    // powerup here (sub_42542D @ 25653, state==2) stops the arm and is
+    // destroyed — also not ignited. Only past both checks does the cell-type
+    // verdict run: solid stops with no ignite; brick ignites (as "brick
+    // burning") and stops; blank ignites and the arm continues. This is
+    // facts.md's flagged fidelity gap: our previous port ignited every
+    // non-solid/non-brick tile unconditionally, so a flame arm burned
+    // straight through bombs and powerups instead of stopping at them
+    // (docs/re/facts.md "Options toggles" §"Known remaining fidelity gaps").
     State& s = s_;
     if (!grid::in_grid(tx, ty)) return false;
 
     if (Bomb* hit = grid::bomb_at(s, tx, ty)) {
-        explode(static_cast<std::size_t>(hit - s.bombs.data()));
-        return false;  // arm stops at the bomb it chain-detonates
+        // Ownership transfers to the triggering bomb RIGHT NOW (pseudo.c
+        // 25644, `v48[+62] = v75[+62]`, executed before the sub_423209
+        // push) — so flame_owner/kill attribution for the eventual chain
+        // explosion credits whoever's blast actually set it off, not the
+        // chained bomb's original owner. The bomb itself detonates next
+        // tick (queue_chain), skipping a re-blast back toward this arm's
+        // direction (bomb+56 = opposite(from_dir), pseudo.c
+        // `((k+2)&3)+1`).
+        hit->owner = owner;
+        const int skip = (grid::to_godir(from_dir) + 2) & 3;
+        queue_chain(hit->id, skip);
+        return false;  // arm stops at the bomb it chain-queues
     }
     if (s.floor[ty][tx] != PowerupType::None) {
         burn_powerup_here(tx, ty);
@@ -70,14 +82,34 @@ bool FlameSystem::spread_to(int tx, int ty, std::uint8_t owner) {
     Cell& c = s.cells[ty][tx];
     if (c == Cell::Solid) return false;
     if (c == Cell::Brick) {
-        c = Cell::Blank;
+        // The brick stays Brick (blocking) for the WHOLE crumble —
+        // sub_425EFC's cell-type write nets to a no-op at ignition (blank,
+        // then reverted to brick in the very same call, pseudo.c
+        // 26826-26846/26782-26797); age_flames_and_bricks() is the ONLY
+        // place the cell actually flips, once `burning` hits 0, mirroring
+        // sub_426D06's later, conditional `sub_425E9B(x,y,0)`. The hidden
+        // powerup, however, reveals RIGHT NOW (sub_425107, called
+        // immediately after ignition, pseudo.c 26274-26343 `LABEL_33`) —
+        // well before the tile opens up, so it visibly fades in over the
+        // still-burning brick instead of popping in only once the brick is
+        // fully gone. Re-hitting an already-crumbling brick (another arm
+        // reaching this tile before `burning` expires) re-enters this same
+        // branch — since `c` is still Brick — and simply resets the timer,
+        // matching sub_426FCC's unconditional reinit on every ignite call.
+        // docs/re/facts.md "Brick crumble timing".
         s.burning[ty][tx] = static_cast<std::uint8_t>(
             std::clamp<std::int32_t>(s.tuning.brick_burn_frames, 1, 255));
+        if (s.hidden[ty][tx] != PowerupType::None) {
+            s.floor[ty][tx] = s.hidden[ty][tx];
+            s.hidden[ty][tx] = PowerupType::None;
+            s.events.push_back({Event::Type::PowerupRevealed, -1, static_cast<std::int8_t>(tx),
+                                static_cast<std::int8_t>(ty),
+                                static_cast<std::int8_t>(s.floor[ty][tx])});
+        }
         s.events.push_back({Event::Type::BrickDestroyed, -1, static_cast<std::int8_t>(tx),
                             static_cast<std::int8_t>(ty), 0});
         return false;  // flame stops at the brick it destroys
     }
-    if (s.burning[ty][tx] > 0) return false;
 
     s.flame[ty][tx] = static_cast<std::uint8_t>(
         std::clamp<std::int32_t>(s.tuning.flame_frames, 1, 255));
@@ -85,7 +117,7 @@ bool FlameSystem::spread_to(int tx, int ty, std::uint8_t owner) {
     return true;
 }
 
-void FlameSystem::explode(std::size_t bomb_index) {
+void FlameSystem::explode(std::size_t bomb_index, int skip_dir) {
     State& s = s_;
     Bomb& b = s.bombs[bomb_index];
     if (!b.active) return;
@@ -98,9 +130,55 @@ void FlameSystem::explode(std::size_t bomb_index) {
                         static_cast<std::int8_t>(cx), static_cast<std::int8_t>(cy), 0});
     ignite_epicentre(cx, cy, b.owner);
     for (Direction d : {Direction::Up, Direction::Down, Direction::Left, Direction::Right}) {
+        // A chain-triggered bomb (skip_dir >= 0) never re-casts an arm back
+        // toward the flame that triggered it (bomb+56, pseudo.c 25621:
+        // `if (!field56 || k+1 != field56)`) — every OTHER direction still
+        // gets its normal full-reach arm.
+        if (skip_dir >= 0 && grid::to_godir(d) == skip_dir) continue;
         for (int i = 1; i <= reach; ++i) {
-            if (!spread_to(cx + grid::dir_dx(d) * i, cy + grid::dir_dy(d) * i, b.owner)) break;
+            if (!spread_to(cx + grid::dir_dx(d) * i, cy + grid::dir_dy(d) * i, b.owner, d)) break;
         }
+    }
+}
+
+void FlameSystem::queue_chain(std::uint32_t bomb_id, int skip_dir) {
+    s_.pending_chain.push_back({bomb_id, static_cast<std::int8_t>(skip_dir)});
+}
+
+void FlameSystem::drain_chain_queue() {
+    State& s = s_;
+    if (s.pending_chain.empty()) return;
+    // Pull this tick's queue out before exploding anything: explode() (via
+    // spread_to) may itself push NEW entries for the tick AFTER this one, and
+    // those must not be visited by the loop below.
+    std::vector<State::PendingChain> pending;
+    pending.swap(s.pending_chain);
+    // Ascending bomb order, not push order: the original's drain loop only
+    // stamps flags (forces fuse-elapsed = fuse-duration, stashes bomb+56) —
+    // the actual explosions happen later, as each bomb's OWN slot comes up
+    // in the main per-slot pass (0..99 ascending, pseudo.c 25335-25350). Our
+    // append-only `bombs` vector has no slot reuse, so "vector position" is
+    // simply creation order among currently-active bombs — not bit-identical
+    // to the original's slot indices, but the same idea (a well-defined,
+    // deterministic order for any RNG draws a chained explosion's arm makes,
+    // e.g. a scatter() on a Disease tile). A bomb queued more than once
+    // keeps its LAST push's skip_dir (mirrors the original's unconditional
+    // per-entry overwrite of bomb+56).
+    for (std::size_t i = 0; i < s.bombs.size(); ++i) {
+        Bomb& b = s.bombs[i];
+        if (!b.active) continue;
+        bool queued = false;
+        int skip = -1;
+        for (const auto& entry : pending) {
+            if (entry.bomb_id == b.id) {
+                queued = true;
+                // bugprone-signed-char-misuse (NOLINT below): the widening
+                // sign-extension IS the intent here — skip_dir's -1 sentinel
+                // ("no restriction") must stay -1 as an int, not become 255.
+                skip = entry.skip_dir;  // NOLINT(bugprone-signed-char-misuse)
+            }
+        }
+        if (queued) explode(i, skip);
     }
 }
 
@@ -110,13 +188,13 @@ void FlameSystem::age_flames_and_bricks() {
         for (int x = 0; x < kGridWidth; ++x) {
             if (s.flame[y][x] > 0) --s.flame[y][x];
             if (s.burning[y][x] > 0 && --s.burning[y][x] == 0) {
-                if (s.hidden[y][x] != PowerupType::None) {
-                    s.floor[y][x] = s.hidden[y][x];
-                    s.hidden[y][x] = PowerupType::None;
-                    s.events.push_back({Event::Type::PowerupRevealed, -1,
-                                        static_cast<std::int8_t>(x), static_cast<std::int8_t>(y),
-                                        static_cast<std::int8_t>(s.floor[y][x])});
-                }
+                // The powerup already revealed at ignition (spread_to); this
+                // is only the deferred cell-type flip (sub_426D06's
+                // `if (sub_425FB9(x,y)==2) sub_425E9B(x,y,0)`), guarded the
+                // same way — only clear it if it is still Brick (in case
+                // something else, e.g. the enclosure/regen systems,
+                // already overwrote the tile).
+                if (s.cells[y][x] == Cell::Brick) s.cells[y][x] = Cell::Blank;
             }
         }
     }

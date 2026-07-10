@@ -13,6 +13,7 @@ void BombSystem::place(Player& p, std::uint8_t owner, int tx, int ty, int fuse_s
     State& s = s_;
     Bomb b;
     b.active = true;
+    b.id = s.next_bomb_id++;
     b.owner = owner;
     b.x = grid::tile_center_x(tx);
     b.y = grid::tile_center_y(ty);
@@ -161,6 +162,7 @@ bool BombSystem::try_grab(Player& p, int who) {
 void BombSystem::throw_carried(Player& p, int who) {
     Bomb nb;
     nb.active = true;
+    nb.id = s_.next_bomb_id++;
     nb.owner = p.carried_owner;
     nb.x = grid::tile_center_x(p.tile_x());
     nb.y = grid::tile_center_y(p.tile_y());
@@ -185,11 +187,20 @@ bool BombSystem::detonate_triggered(int owner) {
     // sub_424B41 excludes only motion 3 (carried) and 2 (flying) — a SLIDING
     // trigger bomb is a legal remote-detonation target. Our vector is in
     // creation order, so the first match is the oldest (== the original's
-    // min-creation-stamp scan).
+    // min-creation-stamp scan). The detonation itself goes through the
+    // pending-chain QUEUE, not a direct call (sub_424B41's tail is
+    // `sub_423209(bomb, 0)`, the SAME queue a flame-arm chain uses) — but
+    // unlike an arm-chain hit, it still resolves THIS tick: the original's
+    // drain runs once, at the top of the bomb-update pass, which the whole
+    // player pass (sub_41F29B ×10, where sub_424B41 is called from) already
+    // precedes within the SAME tick. Our `drain_chain_queue()` sits at the
+    // same relative point (right after all players act, before bombs move),
+    // so a same-tick trigger press is caught by that SAME tick's drain.
+    // docs/re/facts.md "Chain-reaction timing".
     for (std::size_t bi = 0; bi < s_.bombs.size(); ++bi) {
         Bomb& b = s_.bombs[bi];
         if (b.active && b.trigger && b.owner == owner && !b.flying) {
-            flames_.explode(bi);
+            flames_.queue_chain(b.id);
             return true;
         }
     }
@@ -288,8 +299,22 @@ void BombSystem::fly(Bomb& b) {
     // the same tile (walking onto one picks it up same-tick), so this nesting
     // is mostly unobservable, but it IS the literal control flow: preserved
     // here rather than checking the player unconditionally.
+    //
+    // A WARPHOLE actor also blocks landing (pseudo.c ~25453: `!v62 ||
+    // exp_ && v62[1] != 1`). `exp_` decompiles to a bare reference to the
+    // statically-linked, NEVER-CALLED CRT `exp()` routine (0x4443CC) — the
+    // ONLY xref to it in the whole binary is a `dr_O` (offset/immediate)
+    // load at 0x423B11, right here, confirmed by direct disassembly:
+    // `mov eax, 4443CCh / test eax,eax / je short 423B26h` — a compile-time-
+    // constant non-null pointer tested for truthiness, so the `je` can never
+    // be taken. The term is dead code; the REAL condition is exactly
+    // `!actor || actor.type != Warphole`, i.e. the same "type 1 blocks like
+    // a wall" rule already confirmed for the sliding-bomb probe (sub_4230A5,
+    // docs/re/facts.md "Bomb/warphole reconciliation"). Resolved 2026-07-10,
+    // see facts.md "Chain-reaction timing" sibling entry / exp_ resolution.
     bool clear = grid::tile_open(s, tx, ty) && grid::bomb_at(s, tx, ty) == nullptr &&
-                 (!grid::in_grid(tx, ty) || s.floor[ty][tx] == PowerupType::None);
+                 (!grid::in_grid(tx, ty) || s.floor[ty][tx] == PowerupType::None) &&
+                 (!grid::in_grid(tx, ty) || s.actor_type[ty][tx] != ActorType::Warphole);
 
     int victim = -1;
     if (clear) {
@@ -310,6 +335,14 @@ void BombSystem::fly(Bomb& b) {
         return;
     }
     b.flying = false;
+    // A bomb that lands on an already-flaming tile settles there AND is
+    // queued for forced detonation next tick (pseudo.c 25459-25465:
+    // `if (sub_42708D(...)) sub_423209(v75, 0);`, unconditional — no
+    // "kind 9 / brick-burn" exemption here, unlike the sliding-bomb probe;
+    // moot for us anyway since `tile_open` above already refuses to land on
+    // a still-crumbling brick tile). docs/re/facts.md "Chain-reaction
+    // timing".
+    if (grid::in_grid(tx, ty) && s.flame[ty][tx] > 0) flames_.queue_chain(b.id);
 }
 
 void BombSystem::slide(std::size_t index, std::int32_t budget) {
@@ -318,11 +351,29 @@ void BombSystem::slide(std::size_t index, std::int32_t budget) {
     Fixed dist = budget;
     while (dist > 0 && b.moving) {
         int tx = b.tile_x(), ty = b.tile_y();
-        // Sliding into a flame explodes the bomb (sub_42331C checks sub_42708D
-        // per pixel-step; our once-per-tile-entry check catches the same case).
-        // #8 gap 1: previously the bomb just kept sliding through flame.
+        // Sliding into a flame QUEUES the bomb for forced detonation next
+        // tick, not an immediate explosion (sub_42331C checks sub_42708D
+        // per pixel-step; pseudo.c 25545-25554: `sub_423209(v75, 0)` then
+        // unconditionally falls into the same "stop" code (LABEL_36) a
+        // dirarrow re-steer or a kick-stop uses — jelly REVERSES and keeps
+        // sliding, exactly like bouncing off a wall; only a non-jelly bomb
+        // actually halts. The "kind 9 / brick-burn" exemption the original
+        // has here (a currently-crumbling brick's OWN flame-cell doesn't
+        // re-trigger this) is already faithfully modelled: `s.burning` is a
+        // SEPARATE array from `s.flame`, and this check only ever reads
+        // `s.flame`. docs/re/facts.md "Chain-reaction timing". #8 gap 1:
+        // previously the bomb just kept sliding through flame.
         if (grid::in_grid(tx, ty) && s.flame[ty][tx] > 0) {
-            flames_.explode(index);
+            flames_.queue_chain(b.id);
+            if (b.jelly) {
+                b.dir = grid::from_godir(grid::to_godir(b.dir) + 2);
+                s.events.push_back({Event::Type::JellyBounced, -1, static_cast<std::int8_t>(tx),
+                                    static_cast<std::int8_t>(ty), 0});
+            } else {
+                b.moving = false;
+                s.events.push_back({Event::Type::BombStopped, -1, static_cast<std::int8_t>(tx),
+                                    static_cast<std::int8_t>(ty), 0});
+            }
             return;
         }
         Fixed cx = grid::tile_center_x(tx), cy = grid::tile_center_y(ty);

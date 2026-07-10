@@ -946,18 +946,56 @@ sliding bomb could reach and "use" a warphole. Fixed:
 - `docs/re/stage-actors.md` §6 item 4 and `docs/ROADMAP.md` roadmap item #7
   corrected to match.
 
-**Caveat — flying-bomb landing left untouched.** The landing check's exact
-condition is `!v62 || exp_ && v62[1] != 1`, where `exp_` decompiles to a
-reference to the imported CRT `exp()` symbol (pseudo.c 980) — almost
-certainly a Hex-Rays mis-attribution (calling `exp(double)` with no argument
-makes no sense at that site) rather than a real flag, so its true value is
-unknown. This entry does not change `BombSystem::fly`'s landing test; the
-existing port (facts.md "Flying-bomb landing on powerups") already treats a
-floor powerup as blocking but does not special-case actor tiles, and no
-concrete evidence here resolves `exp_`'s intent one way or the other. Flagged
-as a remaining open question, not acted on.
+**RESOLVED 2026-07-10 (flame-system audit) — flying-bomb landing now blocks
+warpholes too.** The landing check's exact condition is `!v62 || exp_ &&
+v62[1] != 1`, where `exp_` decompiles to a bare (no call parens) reference to
+`sub_4443CC` — a real, statically-linked CRT `exp()` implementation (`fld
+qword ptr [esp+4]`; `call sub_44436A`; `ret 8`, matching the declared
+`__stdcall exp_(double)`), confirmed by direct disassembly of `BM95.EXE`
+around the reference site. Two independent facts pin `exp_`'s contribution
+as inert:
+- **`idautils.XrefsTo`** against the `BM95_copy.idb` database finds exactly
+  **one** cross-reference to `sub_4443CC` in the entire binary: a `dr_O`
+  (offset/immediate load, not a call) at `0x423B11`, inside `sub_42331C`
+  (the bomb mover) — i.e. `exp()` is never called anywhere in the program;
+  its only "use" is this one address load.
+- **Direct disassembly at `0x423B08-0x423B26`** (raw bytes, capstone):
+  ```asm
+  423b08  cmp   dword ptr [ebp-0xcc], 0      ; v62 == NULL?
+  423b0f  je    423b28                        ; !v62 -> land (skips exp_ entirely)
+  423b11  mov   eax, 0x4443cc                 ; eax = &exp  (compile-time constant)
+  423b16  test  eax, eax
+  423b18  je    423b26                        ; NEVER TAKEN: eax is never 0
+  423b1a  mov   eax, [ebp-0xcc]               ; eax = v62
+  423b20  cmp   dword ptr [eax+4], 1          ; v62->type != WARPHOLE(1)?
+  423b24  jne   423b28                        ; -> land
+  423b26  jmp   423b93                        ; -> hop onward (type IS warphole)
+  ```
+  The `test eax,eax` / `je` at 423b16-423b18 tests a hardcoded non-null
+  pointer for zero — a branch that can never be taken. `exp_ &&` is
+  provably dead code, not a mislabeled integer op or a jump-table artifact;
+  the compiler could not fold it away because, at COMPILE time (before the
+  linker assigns concrete addresses), an external symbol's address is not
+  yet known to be non-null, so it still emits a real (if unreachable) test.
+  With the dead term removed, the REAL condition is exactly `!v62 ||
+  v62[1] != 1` — the identical "type 1 (warphole) blocks like a wall, any
+  other actor is fine" rule already confirmed for the sliding-bomb probe
+  (`sub_4230A5`) above.
+- (Sidenote, same disassembly window: at `0x423ab4-0x423aec`, a player found
+  under the bomb — `sub_421CB5`/`sub_421F7E`, the head-hit call — jumps
+  straight to `0x423b93` with no `continue`/settle path, i.e. a headshot
+  bounces the bomb onward exactly like a blocked tile; already matched by
+  `BombSystem::fly`'s existing `victim >= 0` handling, no change needed.)
 
-**GOLDEN IMPACT: none for the shipped golden scenarios (A-E have no
+Ported: `BombSystem::fly`'s `clear` computation gained
+`s.actor_type[ty][tx] != ActorType::Warphole` alongside the existing
+wall/bomb/powerup checks. Tests: `tests/test_stage_actors.cpp` "a flying bomb
+cannot land on a warphole; it hops onward instead" (plus a same-setup control
+over open ground, to isolate the actor check from the rest of the landing
+logic).
+
+**GOLDEN IMPACT (both the original sliding-bomb fix and the flying-bomb
+fix above): none for the shipped golden scenarios (A-E have no
 warpholes), but real for boards WITH warpholes.** Before this fix, a scenario
 with a kicked/conveyor bomb sliding into a warphole would teleport it; after,
 it stops at the doorstep. Proved by running the full suite before and after:
@@ -978,7 +1016,346 @@ path, already correct).
 (Provenance: `sub_4230A5` pseudo.c 25155-25179; `sub_405A81` 7341-7388, sole
 call site 22594 inside `sub_41EC84`; `sub_42331C` bomb-mover call sites to
 `sub_405654` at ~25365/25452/25529, no call to `sub_405A81` anywhere in the
-function; `exp_` import declaration pseudo.c 980.)
+function; `exp_` import declaration pseudo.c 980, flying-landing check
+pseudo.c 25443-25469; `exp_`/`sub_4443CC` resolution via direct `BM95.EXE`
+disassembly (capstone) at `0x423A80-0x423C48` and `0x4443CC-0x444440`, and
+`idautils.XrefsTo(0x4443CC)` against `BM95_copy.idb` — read-only queries via
+`python-idb`/`pefile`/`capstone` against a scratch copy of the idb, no
+exe-derived material committed.)
+
+## Chain-reaction timing — CONFIRMED (`sub_423209` queue, `sub_42331C` drain, 2026-07-10 flame-system audit)
+
+A full line-by-line re-read of the flame system (facts.md's own "Core-feel
+audit 2026-07-10" precedent, applied here to `flames.cpp`/`bombs.cpp` for the
+first time). The central finding: **a flame arm reaching another bomb does
+NOT detonate it synchronously.** `sub_423209` (pseudo.c 25195-25204):
+
+```c
+int __usercall sub_423209@<eax>(int result@<eax>, int a2@<edx>)
+{
+  if ( dword_462200 < 100 )
+  {
+    *(_DWORD *)(dword_4621F8 + 4 * dword_462200) = result;   // push the bomb pointer
+    result = a2;
+    *(_DWORD *)(4 * dword_462200++ + dword_4621FC) = a2;     // push the orientation byte
+  }
+  return result;
+}
+```
+
+This is a bare QUEUE PUSH (two 100-slot parallel arrays + a counter) — it
+does not touch the bomb's state at all. The drain sits at the very TOP of
+`sub_42331C` (the bomb updater), gated to run once per tick
+(`dword_462210 != dword_464994`, pseudo.c 25330-25346), **before** that same
+function's 100-slot bomb-processing loop:
+
+```c
+if ( dword_462210 != dword_464994 )
+{
+  dword_462210 = dword_464994;
+  for ( i = 0; i < dword_462200; ++i )
+  {
+    v75 = *(_DWORD *)(dword_4621F8 + 4 * i);
+    if ( v75 && *(_DWORD *)v75 )                      // still alive?
+    {
+      *(_WORD *)(v75 + 68) = *(_WORD *)(v75 + 74);    // force fuse-elapsed = duration ("expired")
+      *(_BYTE *)(v75 + 56) = *(_BYTE *)(dword_4621FC + 4 * i);  // stash the orientation byte
+    }
+    *(_DWORD *)(dword_4621F8 + 4 * i) = 0;
+  }
+  dword_462200 = 0;
+}
+/* ... THEN the 100-slot loop runs, and each affected bomb's own fuse-expiry
+   check (now forced true) detonates it as part of ITS OWN slot's normal
+   processing. */
+```
+
+**Four call sites push to this SAME queue**, all confirmed by direct
+pseudo.c reads:
+
+1. **A flame arm reaches a grounded bomb** (pseudo.c 25641-25651, inside the
+   per-direction arm loop): `*(_WORD*)(v48+62) = *(_WORD*)(v75+62)`
+   (ownership transfers from the exploding bomb `v75` to the hit bomb `v48`
+   — see "owner attribution" below) THEN `sub_423209(v48,
+   (((_BYTE)k+2)&3)+1)` — the orientation byte is `opposite(k)+1` where `k`
+   is the arm's travel direction (1-based; 0 means "no restriction").
+2. **A flying bomb lands on flame** (pseudo.c 25459-25465): settles first
+   (position/motion committed), THEN `if (sub_42708D(...))
+   sub_423209(v75, 0)` — unconditional, no exemption.
+3. **A trigger-button press** (`sub_424B41`, pseudo.c 26027-26067): scans
+   for the oldest live/grounded trigger bomb, `sub_423209(bomb, 0)`.
+4. **A sliding bomb enters flame** (pseudo.c 25545-25554, per-pixel slide
+   loop): `sub_42708D` at the stepped position; if hit AND the flame
+   cell's kind is NOT 9 (brick-burn — see "Brick crumble timing" below),
+   `sub_423209(v75, 0)`; either way (kind 9 or not) the bomb still snaps to
+   the tile centre and stops/bounces (LABEL_36) — jelly reverses and keeps
+   sliding, non-jelly halts, exactly like hitting a wall.
+
+**Same tick or next tick depends on WHEN the push happens relative to the
+drain**, not on which of the four sites pushed it. The original's overall
+per-frame order is: the whole player-input pass (`sub_41F29B` × 10, which is
+where the trigger-button call site #3 lives) runs first, THEN `sub_42331C`
+(bomb updater, containing the drain) runs once. So:
+- **Trigger-button (#3)** is pushed during the PRECEDING player pass and
+  caught by THIS SAME tick's drain — a manual detonation is effectively
+  instant, just routed through the queue instead of a direct call.
+- **Arm-hit (#1), landing-on-flame (#2), and slide-into-flame (#4)** are all
+  pushed from INSIDE `sub_42331C`'s own per-slot loop — i.e. AFTER that
+  tick's drain already ran — so they wait for the NEXT tick's drain. A chain
+  reaction resolves **one link per tick**, not the whole chain at once.
+
+**Owner attribution transfers on chain** (site #1's `v48[+62] = v75[+62]`,
+executed unconditionally before the queue push): the chained bomb's owner
+becomes the TRIGGERING bomb's owner, so `flame_owner`/kill credit follows
+whoever's blast actually set it off, not the original placer.
+
+**Flame-on-flame overlap (two INDEPENDENT bombs, no chain involved) —
+CONFIRMED IDENTICAL, no change.** `sub_426FCC` (the ignite call, pseudo.c
+27479-27504) unconditionally re-initialises the WHOLE flame-cell struct on
+every call — state, elapsed-timer, kind, AND the owner/colour byte — with no
+"already lit" check anywhere in `sub_42331C`'s arm loop or epicentre block
+(confirmed: `sub_425FB9`, the cell-TYPE read the arm-stop logic consults,
+reads a completely separate array from the flame array `sub_42708D`/
+`sub_426FCC` touch — "Scatter occupancy test" already established this same
+separation). So when a second, later (or simultaneous) explosion's arm
+crosses a tile another bomb's flame already lit, it simply overwrites that
+tile's lifetime AND owner — the freshest flame to touch a tile always wins,
+both for how long it burns and who gets kill credit there. Our
+`FlameSystem::spread_to`/`ignite_epicentre` already did exactly this before
+this audit (`s.flame[ty][tx] = fresh; s.flame_owner[ty][tx] = owner;`,
+unconditional, no "already lit" guard) — verified matching, no fix needed.
+
+**A chain-triggered bomb skips one direction of its own blast** (bomb+56,
+consumed at pseudo.c 25621: `if (!field56 || k+1 != field56)` — the block
+runs, i.e. the arm IS cast, when field56 is 0 OR this k is NOT the stashed
+one; so field56 != 0 skips exactly ONE of the four directions). Combined
+with the `(opposite(k)+1)` encoding at the push site, a chain-triggered bomb
+never re-casts an arm back toward the flame that hit it — the other three
+directions fire at full, normal reach. Trigger-button/landing/slide pushes
+always use orientation 0 (no restriction).
+
+**The "kind 9" exemption in site #4 is already faithfully modelled by our
+architecture without any extra code**: the original stores brick-burn state
+as KIND 9 of the SAME flame-cell array a real blast uses, so a sliding bomb's
+flame check has to explicitly exclude it. Our port already keeps these in
+TWO SEPARATE arrays (`State::flame` for real blast, `State::burning` for
+brick-crumble) — `BombSystem::slide`'s flame-entry check only ever reads
+`s.flame`, so it already never fires on a merely-crumbling brick tile.
+
+**Fixed:** `FlameSystem::explode` gained a `skip_dir` parameter (applied as
+a `continue` in its 4-direction loop); a new `FlameSystem::queue_chain` /
+`drain_chain_queue` pair implements the deferred queue (a new hashed
+`State::pending_chain` list of `{bomb_id, skip_dir}`, drained once per tick
+immediately after the player pass, before bombs move — the same relative
+position the original's drain occupies relative to its player pass). A new
+hashed `Bomb::id` / `State::next_bomb_id` give bombs a STABLE identity across
+the tick boundary (our `bombs` vector compacts dead entries every tick,
+which would invalidate a raw index held from one tick to the next — the
+original's slot-reuse array has an analogous, unreplicated hazard: a stale
+queue entry whose slot got reused within the same 1-tick gap would
+force-detonate the WRONG bomb; unreachable in our architecture since we
+never reuse an id). All four call sites (`FlameSystem::spread_to`'s bomb-hit
+branch, `BombSystem::fly`'s landing-on-flame check, `BombSystem::
+detonate_triggered`, `BombSystem::slide`'s flame-entry check) now push
+through the queue instead of calling `explode()` directly. The drain
+processes queued entries in ASCENDING BOMB-VECTOR-INDEX order (not push
+order) — not bit-identical to the original's slot-index order (our vector
+has no slot reuse, so "vector position" is simply creation order among
+currently-active bombs), but the same idea: a well-defined, deterministic
+order for any RNG draws a chained explosion's arm makes (e.g. a `scatter()`
+on a Disease tile).
+
+**The bug this corrects:** our previous port called `FlameSystem::explode`
+directly from all four sites — a chain reaction cascaded fully within a
+single tick (recursively, through the whole call stack), a chain-triggered
+bomb always did a full undirected 4-way blast, and a chained bomb kept its
+ORIGINAL owner instead of the triggering bomb's. `BombSystem::detonate_
+triggered`'s and `EnclosureSystem::drop_wall`'s synchronous calls were
+ALREADY flagged as known simplifications in "Options toggles" (2026-07-08,
+"queues... drained as a real explosion") but the one-tick-defer nuance
+itself was not yet investigated at that time. `detonate_triggered` is fixed
+here (same tick either way, so no observable timing change — see above);
+`EnclosureSystem::drop_wall`'s parallel `sub_423209(bomb, -1)` call
+(pseudo.c 27262, the "stomped bombs detonate" wall-crush case) is a
+DIFFERENT system with its own facts.md section and was not touched by this
+pass — flagged as a follow-up.
+
+Ported: `libs/sim/src/systems/flames.{hpp,cpp}` (`explode` skip_dir param,
+`queue_chain`, `drain_chain_queue`), `libs/sim/src/systems/bombs.cpp`
+(`detonate_triggered`, `fly`, `slide`), `libs/sim/src/simulation.cpp` (new
+step 1b, right after the player pass), `libs/sim/include/bomber/sim/
+{state.hpp,bomb.hpp}` (`State::pending_chain`/`next_bomb_id`,
+`Bomb::id`), `libs/sim/src/hash.cpp` (all three newly hashed). Tests:
+`tests/test_sim.cpp` ("flame arm stops at a bomb it chain-detonates..." —
+rewritten to check the intermediate one-tick state; "a chain-detonated bomb
+skips re-blasting back toward its trigger"), `tests/test_kick_nuances.cpp`
+("a jelly bomb sliding into flame bounces, but still chain-detonates"),
+`tests/test_stage_actors.cpp` (flying-bomb-warphole, above).
+`tests/test_dud.cpp` and the renamed `tests/test_sim.cpp` "chained bombs
+explode within a tick of the trigger, not on bomb B's own fuse" already had
+enough slack in their numeric assertions to pass unchanged — only their
+names/comments (which had claimed "instantly"/"same tick") needed
+correcting for honesty.
+
+**GOLDEN IMPACT: real, reaching every scenario with active bomb play (B, C,
+D, E); golden A (0 players, 0 bombs) is layout-only.** Proved: the full
+suite's every NON-hash assertion — golden A's final `rng`, golden D's
+`kExpectedRng` at all four checkpoints, golden E's bounce count (10,
+unchanged) and final `rng` — is BYTE-IDENTICAL before and after this change
+(7 of 24 golden-file assertions; the other 17 are exactly the hash checks
+that moved). This proves the fix draws no new RNG anywhere: it only changes
+WHEN a chain-queued bomb actually detonates and WHICH direction it skips,
+never the random stream. Recaptured all five golden hash constants (`tests/
+test_golden.cpp`) plus two supporting hash-layout-growth fields
+(`Bomb::id`, `State::next_bomb_id`, `State::pending_chain`).
+
+(Provenance: `sub_423209` pseudo.c 25195-25204; drain guard 25330-25346;
+arm-hit push 25637-25651; flying-landing-on-flame push 25459-25465;
+`sub_424B41` trigger-button push 26027-26067; slide-into-flame push
+25540-25554; bomb+56 consumption 25617-25621; owner-transfer 25644
+(`v48[+62] = v75[+62]`, distinct from the flame-CELL struct's own +62 field,
+which `sub_426FCC` pseudo.c 27479-27504 sets from an unrelated bomb+60
+upper-half value we did not chase further — looks like a rendering/tint
+detail, not re-examined here); `EnclosureSystem::drop_wall`'s parallel,
+untouched `sub_423209(bomb,-1)` call at pseudo.c 27262.)
+
+## Brick crumble timing — CONFIRMED (`sub_425EFC`/`sub_425107`/`sub_426D06`, 2026-07-10 flame-system audit)
+
+A brick hit by flame does NOT open up immediately — it stays fully solid
+(blocking movement, bombs, and later flame arms) for the entire crumble
+animation, and only becomes passable when that timer expires. Its hidden
+powerup, if any, reveals far EARLIER than that — immediately at ignition.
+These two facts are independent of each other and were BOTH backwards in our
+previous port.
+
+**The cell-type grid is untouched at ignition.** The arm-loop's brick branch
+(pseudo.c 25666-25671) calls `sub_425EFC(x, y, 0)` then `sub_425107(x, y)`.
+`sub_425EFC` (pseudo.c 26826-26846):
+
+```c
+v5 = sub_425FB9(v3, a2);       // read the CURRENT cell type (2 = brick)
+sub_425E36(v3, a2, a3);         // durably SET cell type = a3 (0 = blank)
+sub_4151AD(); sub_425D22(v3, a2); sub_415189();  // redraw/bookkeeping
+return sub_425E36(v3, a2, v5);  // durably SET it BACK to v5 (brick, 2)
+```
+
+`sub_425E36` writes straight into `dword_46222C` — the SAME array
+`sub_425FB9` (our `s.cells`) reads — with no indirection, so this is a real
+write, not a redraw-queue push. The net effect of the whole call is a
+no-op: the cell reads brick before, is briefly blank ONLY while the redraw
+calls run, and is brick again the instant `sub_425EFC` returns. The tile is
+NOT open at this point, for anyone.
+
+**The cell only actually opens up later, in the per-tick flame-cell
+animator** `sub_426D06` (pseudo.c 27391-27462), which drives BOTH the
+regular flame's 10-frame lifetime (already-confirmed, unchanged) and the
+brick-burn cell's (kind == 9) crumble:
+
+```c
+if ( *(_DWORD *)(v16 + 4) == 9 )  // this flame-cell is a brick-burn marker
+{
+  ...
+  if ( elapsed_ticks > getvalue(20) )     // brick_burn_frames (id 20, = 10 shipped)
+  {
+    if ( sub_425FB9(j, i) == 2 )          // STILL brick? (defensive)
+      sub_425E9B(j, i, 0);                // NOW durably clear it to blank
+    *(_DWORD *)v16 = -1;                  // (purely a same-call sprite-wind-down marker)
+  }
+}
+```
+
+`sub_425E9B` is the same "set + redraw" helper WITHOUT a revert — this call
+is the durable one. Between ignition and this point (`brick_burn_frames`
+ticks later — id 20, same 10-frame shipped value as the regular flame's id
+10), the cell reads brick continuously: it blocks movement/placement (same
+as a fresh, unburnt brick) AND, if a SEPARATE flame arm reaches it in that
+window, that arm hits the ordinary brick branch again — the crumble timer
+simply resets, exactly matching `sub_426FCC`'s unconditional reinit
+(`+68=0`) on every ignite call, fresh or repeat.
+
+**The hidden powerup reveals immediately, at ignition — not when the tile
+opens.** `sub_425107(x, y)` (pseudo.c 26274-26343) runs right after
+`sub_425EFC`, in the SAME ignition call. Its tail (`LABEL_33`) is
+unconditional:
+
+```c
+if ( *v12 == 1 )          // hidden (state 1, i.e. still under a standing brick)
+{
+  v12[16] = dword_464994;  // stamp the reveal tick (presentation-only)
+  *v12 = 2;                 // flip to VISIBLE (state 2)
+}
+```
+
+So the token starts being rendered as soon as the brick catches fire — well
+before a player could possibly reach it (the tile is still fully blocking,
+per the cell-type finding above) — rather than popping in only once the
+brick is fully gone.
+
+**Open question, NOT resolved, NOT ported:** `sub_425107` has an earlier,
+gated branch (before the unconditional reveal above) that, for a hidden
+token whose kind is 5, 6, or 11, searches up to 200 random tiles for another
+hidden token of a DIFFERENT kind on a still-standing brick and swaps the two
+records (or, failing that, a second 200-try search for an empty brick tile
+to relocate this one onto, clearing the original slot). The gate itself is
+murky: `if (!sub_40C06A()) { sub_4105B0(); v2 = getvalue(102); if (v3 < v2)
+{...} }` where `v3` is a register Hex-Rays could not resolve to a concrete
+assignment (flagged "possibly undefined" in the decompile) — plausibly
+`sub_4105B0()`'s return value, but not confirmed, and so it is UNKNOWN
+whether this branch ever fires in practice, how often, or whether the two
+`rand()%W`/`rand()%H` search loops draw RNG on the live code path. This is
+a genuinely separate, narrow mechanic (relocating specific powerup KINDS
+among hidden bricks) orthogonal to this audit's reach/timing/order/
+destruction/overlap focus, and is NOT ported here — flagged for a dedicated
+follow-up pass (would need the actual disassembly around `sub_4105B0`'s
+call/return to pin `v3`, the same technique used to resolve `exp_` above).
+
+**The bug this corrects:** `FlameSystem::spread_to`'s brick branch used to
+flip `s.cells[ty][tx]` to `Cell::Blank` immediately (letting movement/bombs/
+later flame arms through right away, and letting a second flame hit
+during the crumble skip past it via the unrelated `burning > 0` early-return
+instead of correctly re-triggering the brick branch), while
+`age_flames_and_bricks` revealed the hidden powerup only once `burning`
+finished — both timings backwards relative to the original.
+
+Fixed: `FlameSystem::spread_to`'s brick branch no longer touches
+`s.cells`; it only (re)sets `s.burning[ty][tx]` to a fresh
+`brick_burn_frames` and reveals `s.hidden[ty][tx]` into `s.floor[ty][tx]`
+right there. `FlameSystem::age_flames_and_bricks` is now the ONLY place
+`s.cells[ty][tx]` flips Brick → Blank, guarded on it still reading Brick
+(mirroring `sub_425FB9(...)==2`), with the (now redundant) powerup-reveal
+code removed from there. The player-movement-blocking CONSEQUENCE of the
+premature flip was already masked in practice by `grid::tile_open`'s
+separate `burning > 0` check (which already refused movement onto a
+crumbling tile regardless of `s.cells`), so this fix's only NEW observable
+effects are: (a) a second flame arm reaching a still-crumbling brick now
+correctly re-triggers the brick branch (resets the timer) instead of
+silently no-op'ing via the `burning > 0` early-return (which is now
+removed — dead code once the cell-type ordering is correct, since
+`burning > 0` can only be true while `s.cells` still reads Brick, so the
+brick branch above always catches it first), and (b) the powerup reveal
+timing, which is genuinely earlier and player-visible (the token fades in
+over the still-burning brick instead of popping in when it's gone).
+
+Ported: `libs/sim/src/systems/flames.cpp` (`spread_to`'s brick branch,
+`age_flames_and_bricks`). Tests: `tests/test_sim.cpp` ("bomb explodes at
+its fuse and burns the brick" — extended to assert the cell stays Brick
+through the crumble and only opens after `brick_burn_frames` more ticks;
+"burned brick reveals its powerup, players pick it up" — extended to assert
+the powerup is visible in `s.floor` immediately after ignition, while the
+tile is still `Cell::Brick`).
+
+**GOLDEN IMPACT:** folded into the "Chain-reaction timing" entry's combined
+proof above (both fixes landed in the same commit and were verified
+together) — golden D (the only scenario with floor/hidden powerups under
+bricks in meaningful quantity) is among the recaptured hashes; its RNG
+stream (`kExpectedRng`) is unaffected, confirming this fix draws no RNG
+either.
+
+(Provenance: `sub_425EFC` pseudo.c 26826-26846; `sub_425E36` 26782-26797;
+`sub_425E9B` 26802-26820; `sub_425107` 26274-26343; `sub_426D06`
+27365-27463 (brick-kind branch 27404-27424); `sub_426FCC` 27479-27504;
+arm-loop brick branch 25662-25678; VALUELST ids 10/20 both = 10 shipped,
+`docs/valuelst-map.md`.)
 
 ## Punch glove feedback — CONFIRMED (`sub_424A50` handler, `sub_41F29B` dispatch)
 

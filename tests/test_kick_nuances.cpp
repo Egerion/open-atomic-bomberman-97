@@ -69,6 +69,43 @@ TEST_CASE("a bomb sliding into a flame tile explodes") {
     CHECK(flame_from_blast);
 }
 
+// A jelly bomb sliding into flame BOUNCES (reverses, keeps sliding) exactly
+// like it does off a wall, instead of stopping — but it is still QUEUED for
+// a forced detonation one tick later (docs/re/facts.md "Chain-reaction
+// timing"; the queue push happens unconditionally, before the jelly/non-
+// jelly stop-vs-bounce branch, pseudo.c 25545-25554).
+TEST_CASE("a jelly bomb sliding into flame bounces, but still chain-detonates") {
+    Simulation s(open_config());
+    s.state().players[0].alive = false;
+    s.state().players[1].alive = false;
+
+    push_sliding_bomb(s, 2, 0, Direction::Right);
+    s.state().bombs[0].jelly = true;
+    // A long-lived flame at (4,0); bouncing off it must not cancel the
+    // deferred detonation the entry already queued.
+    s.state().flame[0][4] = 200;
+    s.state().flame_owner[0][4] = 1;
+
+    bool bounced = false;
+    for (int i = 0; i < 30 && !bounced; ++i) {
+        s.tick(TickInputs{});
+        for (const auto& e : s.state().events)
+            if (e.type == Event::Type::JellyBounced) bounced = true;
+    }
+    CHECK(bounced);
+    REQUIRE(!s.state().bombs.empty());
+    CHECK(s.state().bombs[0].moving);              // reversed, did NOT stop
+    CHECK(s.state().bombs[0].dir == Direction::Left);
+
+    // The queued detonation still fires, one tick after entering the flame.
+    bool gone = false;
+    for (int i = 0; i < 30 && !gone; ++i) {
+        s.tick(TickInputs{});
+        gone = s.state().bombs.empty();
+    }
+    CHECK(gone);
+}
+
 TEST_CASE("a bomb sliding through open ground does NOT explode early") {
     // Control for the flame case: no flame in the lane -> the bomb just parks.
     Simulation s(open_config());

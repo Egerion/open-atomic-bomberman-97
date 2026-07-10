@@ -1,7 +1,8 @@
 // Tick orchestration. The step ORDER below is part of the determinism
 // contract (and mirrors the original main loop, sub_42A191): players act,
-// bombs move, fuses burn, the field ages, players collide with the field,
-// diseases spread, then the clock and the closing walls.
+// queued chain-detonations resolve, bombs move, fuses burn, the field ages,
+// players collide with the field, diseases spread, then the clock and the
+// closing walls.
 
 #include "bomber/sim/simulation.hpp"
 
@@ -323,6 +324,23 @@ void run_tick(State& s, const TickInputs& inputs) {
         if (p.ai) ai.decide(i, in);
         player_turn(s, i, in, bombs, stage, movement);
     }
+
+    // 1b. Drain the chain-detonation queue (docs/re/facts.md "Chain-reaction
+    // timing", sub_423209/dword_462200): a flame arm that reached another
+    // bomb, a trigger-button press, a flying bomb landing on flame, or a
+    // sliding bomb entering flame all QUEUE their target instead of
+    // exploding it synchronously. The original drains this queue once, at
+    // the very top of its per-tick bomb pass (`sub_42331C`'s
+    // `dword_462210 != dword_464994` guard), which always runs AFTER that
+    // SAME tick's player pass — so a trigger-button press (queued during
+    // step 1, above) is caught by THIS drain, resolving the same tick,
+    // while a flame-arm/slide/landing hit (queued during bombs.advance_bombs
+    // / tick_fuses, below — i.e. during the original's per-bomb-slot loop,
+    // which runs AFTER its own drain already fired this tick) is only
+    // caught by the NEXT tick's drain — one chain LINK per tick, not the
+    // whole chain at once. Placed here, right after step 1, as the exact
+    // equivalent slot in our step-decomposed tick.
+    flames.drain_chain_queue();
 
     // 2. Kicked bombs slide; airborne bombs fly.
     bombs.advance_bombs();

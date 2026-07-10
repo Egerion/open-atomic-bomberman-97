@@ -37,6 +37,13 @@ struct State {
     // Next tick a dud roll may fire (global rate limiter, dword_464AF4 in
     // the original — armed at setup, re-armed on every open-gate placement).
     std::uint64_t dud_gate = 0;
+    // Stable per-bomb identity (docs/re/facts.md "Chain-reaction timing"):
+    // sub_423209's pending-detonation queue must still find a queued bomb one
+    // tick later, but `bombs` (below) compacts dead entries EVERY tick
+    // (step 7), which would invalidate a raw index held across that
+    // boundary. Assigned once at creation (BombSystem::place/throw_carried),
+    // never reused; 0 is not a valid id.
+    std::uint32_t next_bomb_id = 1;
     Tuning tuning;
     // Per-scheme forbidden powerups (-P rows). Static per-match config like
     // tuning — excluded from state_hash(). The Random powerup consults it
@@ -67,6 +74,27 @@ struct State {
     std::array<std::array<std::uint8_t, kGridWidth>, kGridHeight> flame_owner{};
     // Remaining ticks of a brick crumbling (blocks until it reaches 0).
     std::array<std::array<std::uint8_t, kGridWidth>, kGridHeight> burning{};
+
+    // A bomb a flame arm, a landing flying bomb, a sliding bomb entering
+    // flame, or a trigger-button press marked for forced detonation
+    // (sub_423209's queue: dword_4621F8/FC, 100 slots). Drained once per
+    // tick, right after players act and before bombs move
+    // (FlameSystem::drain_chain_queue) — mirroring the once-per-tick
+    // `dword_462210 != dword_464994` drain guard at the top of sub_42331C,
+    // which likewise follows the whole player pass. A trigger-button press
+    // (queued DURING the player pass) is therefore caught by THAT SAME
+    // tick's drain; a flame-arm/slide/landing hit (queued DURING bomb
+    // processing, after the drain already ran) is NOT — it waits for the
+    // NEXT tick's drain. So a chain reaction is genuinely one tick per link,
+    // while a manual trigger detonation is instant. skip_dir (-1 = none,
+    // else a godir 0-3) mirrors bomb+56: an arm-triggered chain skips
+    // re-blasting back toward the flame that triggered it (pseudo.c
+    // 25621/25645). docs/re/facts.md "Chain-reaction timing".
+    struct PendingChain {
+        std::uint32_t bomb_id = 0;
+        std::int8_t skip_dir = -1;
+    };
+    std::vector<PendingChain> pending_chain;
 
     std::array<Player, kMaxPlayers> players{};
     // Per-player computer-AI brains (ADR-0005 §3), one slot per player, indexed

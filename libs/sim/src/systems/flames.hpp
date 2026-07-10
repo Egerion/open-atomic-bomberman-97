@@ -19,11 +19,36 @@ public:
     FlameSystem(State& s, PowerupSystem& powerups) : s_(s), powerups_(powerups) {}
 
     // Detonates the bomb at bombs[bomb_index] (no-op if already inactive):
-    // frees the owner's slot, spreads flame in all four directions, and chains
-    // into any bomb the flame reaches within the same tick.
-    void explode(std::size_t bomb_index);
+    // frees the owner's slot, spreads flame in all four directions (skipping
+    // `skip_dir` when >= 0, a godir 0-3), and QUEUES — not immediately
+    // detonates — any bomb its own arm reaches (see queue_chain). skip_dir
+    // lets a chain-triggered bomb avoid re-blasting back toward the flame
+    // that triggered it (bomb+56, sub_42331C ~25621/25645); every other
+    // caller uses the default (no restriction). docs/re/facts.md "Chain-
+    // reaction timing".
+    void explode(std::size_t bomb_index, int skip_dir = -1);
 
-    // Tick step: flames fade; crumbling bricks finish and reveal powerups.
+    // Marks bomb_id for forced detonation at the next drain_chain_queue()
+    // call (sub_423209): used when a flame arm reaches another bomb, a
+    // flying bomb lands on flame, a trigger bomb is remote-detonated, or a
+    // sliding bomb enters flame. Whether that is THIS tick or the NEXT one
+    // depends on where in the tick the caller sits relative to the drain —
+    // see the callers (BombSystem::detonate_triggered resolves the same
+    // tick; a flame-arm/slide/landing hit waits for the next one) and
+    // docs/re/facts.md "Chain-reaction timing". Queueing the same bomb again
+    // before it drains overwrites its skip_dir (last push wins), matching
+    // the original's unconditional per-entry overwrite of bomb+56.
+    void queue_chain(std::uint32_t bomb_id, int skip_dir = -1);
+
+    // Tick step (right after players act, before bombs move): drains the
+    // pending-chain queue, exploding every still-active queued bomb in
+    // ascending bomb order. See docs/re/facts.md "Chain-reaction timing" for
+    // which pushes this catches (same tick) versus defers to next time.
+    void drain_chain_queue();
+
+    // Tick step: flames fade; crumbling bricks finish. A brick tile is left
+    // Brick (blocking) at ignition — see spread_to — so this is also where
+    // it finally opens up.
     void age_flames_and_bricks();
 
 private:
@@ -32,10 +57,11 @@ private:
     // stop applies here, only to the extending arm.
     bool ignite_epicentre(int tx, int ty, std::uint8_t owner);
 
-    // A flame ARM reaches (tx,ty) (sub_42331C per-direction loop). Returns
-    // true if the arm continues past this cell, false if it stops here
-    // (bomb chain-detonated, powerup burned, solid wall, or brick ignited).
-    bool spread_to(int tx, int ty, std::uint8_t owner);
+    // A flame ARM reaches (tx,ty), travelling in direction `from_dir`
+    // (sub_42331C per-direction loop). Returns true if the arm continues
+    // past this cell, false if it stops here (bomb chain-queued, powerup
+    // burned, solid wall, or brick ignited).
+    bool spread_to(int tx, int ty, std::uint8_t owner, Direction from_dir);
 
     // Destroys any floor powerup at (tx,ty), with the diseases_destroyable
     // skull-relocation compensation. Shared by the epicentre and the arm.

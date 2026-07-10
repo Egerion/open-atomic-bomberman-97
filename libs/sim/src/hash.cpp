@@ -22,6 +22,13 @@ std::uint64_t state_hash(const State& s) {
         (static_cast<std::uint64_t>(static_cast<std::uint32_t>(s.enclose_index)) << 8) |
         (static_cast<std::uint64_t>(static_cast<std::uint32_t>(s.enclose_timer)) << 40));
     mix(s.dud_gate);
+    // Bomb-id allocator (docs/re/facts.md "Chain-reaction timing"): grows by
+    // one per bomb ever created, so it is gameplay state (feeds the pending-
+    // chain queue below) even though it never influences arithmetic by
+    // itself. A ONE-TIME hash-layout growth; every existing scenario still
+    // creates the exact same bombs in the exact same order, so this mixes a
+    // deterministic-but-new sequence of values, not a behaviour change.
+    mix(static_cast<std::uint64_t>(s.next_bomb_id));
     // Per-level tile regeneration countdown (docs/re/facts.md "Per-level tile
     // regeneration"). A ONE-TIME hash-layout growth (CLAUDE.md determinism
     // contract rule 5; tests/test_golden.cpp recaptured in the same commit).
@@ -179,6 +186,9 @@ std::uint64_t state_hash(const State& s) {
             (static_cast<std::uint64_t>(static_cast<std::uint32_t>(br.enemy_seek.timer)) << 32));
     }
     for (const auto& b : s.bombs) {
+        // Stable id (docs/re/facts.md "Chain-reaction timing"): own word,
+        // needed by the pending-chain queue below to re-find this bomb.
+        mix(static_cast<std::uint64_t>(b.id));
         mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.x)) |
             (static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.y)) << 32));
         mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.fuse)) |
@@ -201,6 +211,17 @@ std::uint64_t state_hash(const State& s) {
         // eviction relight, so hashed alongside dud_left in the same word.
         mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.dud_left)) |
             (static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.fuse_init)) << 32));
+    }
+    // Pending chain-detonation queue (docs/re/facts.md "Chain-reaction
+    // timing", sub_423209's dword_4621F8/FC/462200): gameplay state — it
+    // determines which bomb(s) forcibly detonate at the top of next tick.
+    // Empty on every tick with no in-flight chain reaction/trigger-press/
+    // flame-landing, so this is mix(0) for the overwhelming majority of
+    // ticks in every scenario.
+    mix(static_cast<std::uint64_t>(s.pending_chain.size()));
+    for (const auto& pc : s.pending_chain) {
+        mix(static_cast<std::uint64_t>(pc.bomb_id) |
+            (static_cast<std::uint64_t>(static_cast<std::uint8_t>(pc.skip_dir)) << 32));
     }
     // Campaign rover/ghost hazards (docs/re/campaign.md "Rover/ghost/AI
     // roster", "Per-tick mover"). Empty on every non-campaign match, so this
