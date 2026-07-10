@@ -125,3 +125,68 @@ TEST_CASE("the actor layout is part of the hashed state") {
     belt_row0_east(belted.state());
     CHECK(plain.hash() != belted.hash());
 }
+
+TEST_CASE("a head-stunned player on a conveyor is still carried by the belt") {
+    // sub_41F29B decrements the +58 stun countdown every tick (~22982), but the
+    // gate it drives (v113, ~23028) blocks ONLY new-input acquisition — NOT the
+    // mover. With the new-direction word +46 left at its per-tick -1 reset
+    // (22980) a stunned player takes the IDLE movement branch (23413), where a
+    // conveyor under it still forces +46 to the belt direction and runs the
+    // per-pixel stepper (23417-23423) — identical to a keyless standing player.
+    // The prior port's full early-return froze a stunned player solid even on a
+    // belt — the divergence this pins. docs/re/facts.md "Head hit" (stunned
+    // movement RESOLVED 2026-07-10).
+    Simulation s(open_config());
+    State& st = s.state();
+    belt_row0_east(st);
+    Player& p = st.players[0];
+    p.x = kTileWF / 2;  // (0,0) dead centre
+    p.y = kTileHF / 2;
+    p.facing = Direction::Down;
+    p.stun = 16;  // the head-hit value (sub_421F7E hardcodes a1[29] = 16)
+
+    const int x0 = p.x;
+    run(s, 10, TickInputs{});  // stunned throughout (16 > 10); no key input
+
+    // Carried EXACTLY as far as the un-stunned standing player in the first
+    // test: the same belt budget, spent 100/px, remainder carried.
+    const int moved = (p.x - x0) / 100;
+    long budget = 0, expected = 0;
+    for (int t = 0; t < 10; ++t) {
+        budget += st.tuning.conveyor_speed();
+        while (budget > 0) { budget -= 100; ++expected; }
+    }
+    CHECK(moved == static_cast<int>(expected));  // the belt kept carrying it
+    CHECK(p.tile_y() == 0);                      // along the belt lane
+    CHECK(p.facing == Direction::Right);         // belt-forced facing, as when idle
+    CHECK(p.stun == 6);                          // countdown ticked 16 -> 6 meanwhile
+}
+
+TEST_CASE("a stunned player takes no new input and does not coast; input resumes after") {
+    // While +58 > 0 the v113 gate skips sub_41E61E entirely, so a HELD key never
+    // becomes a direction: +46 stays -1 and the mover's keyed branch (23430) is
+    // unreachable. There is no momentum to coast on either — the original resets
+    // +46 every tick (22980) and the budget loop drains to <= 0 within the tick
+    // that granted it (sub_41EC84 22568), so a mid-walk head-hit stops the walk
+    // dead until the countdown clears. Off a belt, a stunned player stands still.
+    Simulation s(open_config());
+    State& st = s.state();
+    Player& p = st.players[0];
+    p.x = kTileWF / 2;  // (0,0) centre, plain floor — no actor involved
+    p.y = kTileHF / 2;
+
+    TickInputs east;
+    east.players[0].right = true;
+
+    run(s, 4, east);  // walk east at full speed first (mid-movement...)
+    const int x_at_stun = p.x;
+    CHECK(x_at_stun > kTileWF / 2);  // the pre-stun walk really moved
+
+    p.stun = 3;       // ...then a stun lands (white-box, as the AI suite does)
+    run(s, 3, east);  // the key is HELD the whole time
+    CHECK(p.x == x_at_stun);  // no coasting, no new input: frozen in place
+    CHECK(p.stun == 0);       // the countdown ran 3 -> 2 -> 1 -> 0
+
+    run(s, 3, east);          // stun over: the held key moves the player again
+    CHECK(p.x > x_at_stun);
+}
