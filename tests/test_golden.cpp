@@ -201,6 +201,22 @@ MatchConfig pillars_config() {
 // byte-identical before/after). Points 1 (age-then-spread) and 3 (no
 // move_budget swap) stand.
 //
+// UPDATE 2026-07-10 (stunned-but-alive movement, docs/re/facts.md "Head hit"
+// / "Stun does NOT gate flame-death or pickup" RESOLVED box): player_turn's
+// full early-return on `stun > 0` is replaced by decrement-and-fall-through —
+// stun now skips ONLY the input decode (want_godir forced -1, the skipped
+// sub_41E61E) and the bomb-action block (the +56/+57 key bytes' per-tick 0
+// reset), while the stage-actor mover still runs (a conveyor keeps carrying a
+// stunned player; belt-driven kick probes and warp/trampoline step-ons still
+// fire). PROVEN INERT here, zero recapture: no golden board lays any stage
+// actor, so the newly-executing mover path moves nothing for a stunned
+// player; the action-block skip is behaviourally identical to the old early-
+// return (same prev_action1/2 updates); no RNG draw is added, removed, or
+// reordered. Full suite run on the change: every constant in this file — all
+// hashes, D's kExpectedRng at all four checkpoints, E's bounce count (10) and
+// final rng — passes UNCHANGED. Pinned by tests/test_conveyor.cpp's two
+// stun cases (belt carry during stun; no new input / no coasting).
+//
 // UPDATE 2026-07-10 (enclosure/HURRY arithmetic audit, docs/re/enclosure.md):
 // a DELIBERATE behaviour recapture in EnclosureSystem, all RNG-neutral (the
 // enclosure draws zero State::rng — every kExpectedRng/final-rng assertion in

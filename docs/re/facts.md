@@ -593,16 +593,65 @@ stunned player cannot change direction or start a new bomb action — plus one
 cosmetic standing-animation frame pick at ~23086. Movement-budget accrual and
 the `sub_41EC84` per-pixel-step call (~23422/23423 and ~23451/23452) are
 **inside** the +8 block but are **not** gated on `v113`/+58 at all, so a
-still-alive stunned player's PRE-EXISTING momentum keeps executing every tick
+still-alive stunned player's movement machinery keeps executing every tick
 of the stun (only issuing a *new* direction is blocked) — surprising, but
 consistent with "the player got bonked and can't react" rather than "the
 player is frozen solid." This movement-continues-during-stun behaviour is a
-separate, adjacent finding from the immunity question this entry resolves;
-our port's `player_turn` (simulation.cpp) currently does a full early return
-on `p.stun > 0` (skips movement entirely), which is a real divergence from
-the above — **flagged for separate follow-up, not changed here** (it is a
-core-control-flow change shared with trampoline/warp gating, not a flame-
-death/pickup question, and needs its own golden-impact assessment).
+separate, adjacent finding from the immunity question this entry resolves.
+
+**RESOLVED 2026-07-10 (follow-up commit): stunned-but-alive movement ported.**
+The follow-up trace pinned the exact per-tick behaviour, refining the
+"pre-existing momentum keeps executing" phrasing above — there is no momentum
+retention to coast on, the un-gated machinery matters only when a STAGE ACTOR
+drives it:
+
+- The +58 decrement (~22982-22990) runs unconditionally every alive tick
+  (also clears the head-hit action-state 3 when it hits 0); it is NOT inside
+  the movement branch.
+- The new-direction word +46 (`v111[23]`) is reset to `-1` every tick at
+  ~22980, BEFORE the v113 gate — so a keyed direction lives exactly one tick
+  and is never retained across ticks, stunned or not. While stunned,
+  sub_41E61E/AI (the only writers of a keyed +46) are skipped, so +46 stays
+  -1 into the movement dispatch.
+- With +46 == -1 the player takes the IDLE movement branch (~23413): if a
+  CONVEYOR is underfoot (~23417-23423) it forces +46 to the belt direction,
+  adds the belt budget getvalue(190+idx), and calls `sub_41EC84` — so a
+  stunned player IS still carried by a belt, still fires the in-loop kick
+  probe, and still triggers warphole/trampoline step-ons (the stepper's
+  `v35 == -1` check), all exactly as a keyless idle player. If no actor is
+  underfoot the branch goto's LABEL_155 without touching the mover.
+- The keyed branch (~23430-23453, the one that accrues the player's OWN
+  speed/disease budget) is only reachable with +46 != -1, i.e. never while
+  stunned. And `sub_41EC84`'s budget loop (22568) drains its budget to <= 0
+  within the same tick that granted it (its body is additionally gated on
+  +46 != -1 at 22572), so there is never positive leftover budget for a
+  stun to "coast" on: an off-belt stunned player stands still, full stop.
+
+Port (`player_turn`, simulation.cpp): the old full early-return on
+`p.stun > 0` is replaced by decrement-and-fall-through — the input decode is
+skipped (want_godir forced -1, mirroring the skipped sub_41E61E) and the
+bomb-action block is skipped (mirroring the +56/+57 key bytes staying at
+their per-tick 0 reset), but `move_on_actor`/kick-probe/step-on triggers all
+still run, so a belt keeps carrying a stunned player into whatever it leads
+to. Deliberately deferred narrow edge: the original still reaches LABEL_246
+while stunned, so disease AUTO-drop (the +135/+137 forced edge) and the
+release-throw of a carried bomb keep firing during a stun there; our port
+skips those two while stunned (no current scenario/test reaches either —
+head-stun with diarrhea, or a head-stun landing mid-carry — and the grab's
+own pickup_pause stun relies on the skip; revisit if a real repro appears).
+GOLDEN: proven inert — no golden board has any stage actor, so the newly
+executing path moves nothing; the action-block skip is behaviourally
+identical to the old early-return (same prev_action1/2 updates); no RNG
+draw added/removed/reordered. Full suite before/after: every constant in
+`tests/test_golden.cpp` (all hashes, kExpectedRng at all four D checkpoints,
+E's bounce count 10 and final rng) passes UNCHANGED — zero recapture.
+Pinned by `tests/test_conveyor.cpp` "a head-stunned player on a conveyor is
+still carried by the belt" / "a stunned player takes no new input and does
+not coast; input resumes after". One adjacent ordering fix rides along: a
+stunned player mid-bounce/mid-warp now ticks BOTH countdowns (the original's
++58 decrement is unconditional and the state-5/6/7 anim counters advance in
+the same tick — the old early-return froze bounce/warp while stunned; no
+scenario combines them today, golden unaffected).
 
 The flame-death check (`sub_42708D`/`sub_41DE63`) and the floor-powerup
 dispatch (`sub_42542D`/`sub_41E21E`, ~22915-22926, and again unconditionally
@@ -633,10 +682,11 @@ so all golden constants stayed byte-identical, kExpectedRng included — no RNG
 draw added or removed. The AI-dispatch stun gate (`simulation.cpp`, §7 of
 ai.md) is UNTOUCHED — that one correctly models +58 (stun blocks *new input
 acquisition*). Tests: `test_disease.cpp` (stunned-but-alive ages/spreads/swap-
-target), `test_ai.cpp` ("bombs a stunned-but-alive enemy"). Still open,
-separate: `player_turn`'s full early-return on `stun > 0` freezes in-flight
-momentum (the original only blocks new input, not existing momentum) — a
-core-control-flow change left for its own pass.
+target), `test_ai.cpp` ("bombs a stunned-but-alive enemy"). The remaining
+item — `player_turn`'s full early-return on `stun > 0` — is now RESOLVED in
+its own pass: see the "RESOLVED 2026-07-10: stunned-but-alive movement
+ported" box above (stun only skips the input decode and the bomb-action
+block; the stage-actor mover still runs, golden proven inert).
 
 ## Powerup pickup dispatcher — CONFIRMED (`sub_41E21E`)
 

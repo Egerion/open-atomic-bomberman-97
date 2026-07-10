@@ -38,12 +38,37 @@ void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs, Stag
                  MovementSystem& movement) {
     Player& p = s.players[i];
 
-    if (p.stun > 0) {
-        --p.stun;
-        p.prev_action1 = in.action1;
-        p.prev_action2 = in.action2;
-        return;
-    }
+    // Unit vectors in godir order (0=Up,1=Right,2=Down,3=Left). Hoisted to the
+    // top so BOTH the input decode and the kick probe below share them; the
+    // (g±1)&3 corner rotations depend on this exact ordering.
+    static constexpr int DX[4] = {0, 1, 0, -1};
+    static constexpr int DY[4] = {-1, 0, 1, 0};
+    static constexpr Direction kGodir[4] = {Direction::Up, Direction::Right, Direction::Down,
+                                            Direction::Left};
+
+    // Head-hit / bomb-pickup stun (Player::stun == the original's WORD +58, set
+    // to 16 by the head-hit handler sub_421F7E and to pickup_pause by a grab).
+    // The player updater sub_41F29B decrements it every tick (~22982) but the
+    // local gate it drives (v113, ~23028) blocks ONLY new-input acquisition — the
+    // sub_41E61E / AI-decide call that would set a new direction (+46) and the
+    // bomb-key bytes (+56/+57) — plus one cosmetic standing-anim pick (~23086).
+    // It does NOT gate the mover: a stunned-but-alive player leaves +46 at its
+    // per-tick -1 reset (22980), so it takes the IDLE movement branch (23413),
+    // and the per-pixel stepper still runs whenever a STAGE ACTOR drives it — a
+    // conveyor keeps carrying it (23417 sets +46 to the belt dir before calling
+    // sub_41EC84, whose body is itself gated on +46 != -1 at 22572), the belt-
+    // forced kick still probes, and a warphole/trampoline step-on still fires.
+    // Only issuing a NEW direction or bomb action is blocked; an off-belt stunned
+    // player simply stands (Bomberman has no free momentum to coast). The prior
+    // port did a FULL early-return here, freezing the player solid even on a
+    // conveyor — a real divergence (docs/re/facts.md "Head hit / Stun does NOT
+    // gate flame-death or pickup": movement continues during stun). So DECREMENT
+    // the countdown and fall through, but force the resolved input to neutral
+    // (want_godir = -1 below) and skip the bomb-action block — exactly matching a
+    // skipped sub_41E61E, which leaves +46 = -1 and the reset key bytes 0 so no
+    // edge-gated action can fire.
+    const bool stunned = p.stun > 0;
+    if (stunned) --p.stun;
 
     // A trampoline hop is a state-gated flight (sub_41F29B state 5 / sub_41DE63):
     // movement input and bomb actions are ignored until the hop finishes, and the
@@ -72,51 +97,53 @@ void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs, Stag
         return;
     }
 
-    const bool up = in.up, down = in.down, left = in.left, right = in.right;
-
-    // Opposite-key resolution, faithful to the original input decoder
-    // (sub_41E61E, LABEL_58): collect the four direction flags in GODIR order
-    // (0=Up,1=Right,2=Down,3=Left); if more than one is pressed and at least
-    // one leads to an open tile, drop the pressed dirs that are blocked; then
-    // the LAST surviving index wins. That last-index bias (Left beats Right,
-    // Down beats Up) plus the per-pixel mover makes a player held against a wall
-    // with two opposite keys vibrate in place — flip facing every tick — which
-    // is the original's beloved "crazy back-and-forth" (only vs a left wall for
-    // L+R or a bottom wall for U+D; the other side just slides off). No RNG, no
-    // new hashed field, but trajectories change → golden must be recaptured.
-    static constexpr int DX[4] = {0, 1, 0, -1};
-    static constexpr int DY[4] = {-1, 0, 1, 0};
-    const bool godir_pressed[4] = {up, right, down, left};
-    bool dir[4] = {up, right, down, left};
-    if (godir_pressed[0] + godir_pressed[1] + godir_pressed[2] + godir_pressed[3] > 1) {
-        const int ptx = p.tile_x(), pty = p.tile_y();
-        auto passable = [&](int g) {
-            return grid::tile_open(s, ptx + DX[g], pty + DY[g]) &&
-                   !grid::bomb_at(s, ptx + DX[g], pty + DY[g]);
-        };
-        int open = 0;
-        for (int g = 0; g < 4; ++g)
-            if (dir[g] && passable(g)) ++open;
-        if (open > 0)
-            for (int g = 0; g < 4; ++g)
-                if (dir[g] && !passable(g)) dir[g] = false;
-    }
+    // Input decode -> want_godir (0=Up,1=Right,2=Down,3=Left, -1 = none). A
+    // stunned player acquires NO new direction: the v113 gate skips sub_41E61E,
+    // so its +46 stays at the per-tick -1 reset. Force want_godir = -1 and skip
+    // the whole opposite-key / reversed-disease decode for it — the mover then
+    // takes the idle branch (stage actors still drive it), never a keyed one.
     int want_godir = -1;
-    for (int g = 0; g < 4; ++g)
-        if (dir[g]) want_godir = g;
+    if (!stunned) {
+        const bool up = in.up, down = in.down, left = in.left, right = in.right;
 
-    // Reversed-controls disease (sub_41F29B ~23049): applied to the RESOLVED
-    // godir — `(g + 2) & 3` — AFTER the opposite-key filter ran on the RAW
-    // pressed dirs, and BEFORE the ice buffer (the delayed samples store the
-    // reversed value). Humans only: the `+16 != 1` gate exempts computer
-    // players, whose chosen direction reaches the mover unflipped. The old
-    // port swapped the input flags pre-resolution, which fed the passability
-    // filter the flipped dirs — divergent under multi-key input.
-    if (want_godir >= 0 && p.sick(Disease::Reversed) && !p.ai)
-        want_godir = (want_godir + 2) & 3;
+        // Opposite-key resolution, faithful to the original input decoder
+        // (sub_41E61E, LABEL_58): collect the four direction flags in GODIR order
+        // (0=Up,1=Right,2=Down,3=Left); if more than one is pressed and at least
+        // one leads to an open tile, drop the pressed dirs that are blocked; then
+        // the LAST surviving index wins. That last-index bias (Left beats Right,
+        // Down beats Up) plus the per-pixel mover makes a player held against a wall
+        // with two opposite keys vibrate in place — flip facing every tick — which
+        // is the original's beloved "crazy back-and-forth" (only vs a left wall for
+        // L+R or a bottom wall for U+D; the other side just slides off). No RNG, no
+        // new hashed field, but trajectories change → golden must be recaptured.
+        const bool godir_pressed[4] = {up, right, down, left};
+        bool dir[4] = {up, right, down, left};
+        if (godir_pressed[0] + godir_pressed[1] + godir_pressed[2] + godir_pressed[3] > 1) {
+            const int ptx = p.tile_x(), pty = p.tile_y();
+            auto passable = [&](int g) {
+                return grid::tile_open(s, ptx + DX[g], pty + DY[g]) &&
+                       !grid::bomb_at(s, ptx + DX[g], pty + DY[g]);
+            };
+            int open = 0;
+            for (int g = 0; g < 4; ++g)
+                if (dir[g] && passable(g)) ++open;
+            if (open > 0)
+                for (int g = 0; g < 4; ++g)
+                    if (dir[g] && !passable(g)) dir[g] = false;
+        }
+        for (int g = 0; g < 4; ++g)
+            if (dir[g]) want_godir = g;
 
-    static constexpr Direction kGodir[4] = {Direction::Up, Direction::Right, Direction::Down,
-                                            Direction::Left};
+        // Reversed-controls disease (sub_41F29B ~23049): applied to the RESOLVED
+        // godir — `(g + 2) & 3` — AFTER the opposite-key filter ran on the RAW
+        // pressed dirs, and BEFORE the ice buffer (the delayed samples store the
+        // reversed value). Humans only: the `+16 != 1` gate exempts computer
+        // players, whose chosen direction reaches the mover unflipped. The old
+        // port swapped the input flags pre-resolution, which fed the passability
+        // filter the flipped dirs — divergent under multi-key input.
+        if (want_godir >= 0 && p.sick(Disease::Reversed) && !p.ai)
+            want_godir = (want_godir + 2) & 3;
+    }
 
     // Ice / input-lag (Hockey Rink, VALUELST ids 450-460; docs/re/facts.md
     // "Ice / input-lag", sub_41F29B ~23058-23078): replaces this tick's
@@ -171,54 +198,69 @@ void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs, Stag
     // "bomb key down this frame", +54 = "…last frame"; the drop block is edge-
     // gated on `+56 && !+54`; +37 = a carried (grabbed) bomb.
     //
+    // SKIPPED entirely for a stunned player: the v113 gate that skips sub_41E61E
+    // leaves the bomb-key bytes +56/+57 at their per-tick 0 reset, so every
+    // edge-gated action (manual drop / throw / grab / spooge / punch / trigger /
+    // kick-stop) is un-triggered — the same as the prior full early-return did,
+    // so this is inert on the golden and on the grab-pickup-pause tests (which
+    // pin the carried bomb as thrown only AFTER the stun; see
+    // test_diarrhea_throw.cpp). The original's disease auto-drop and carried-bomb
+    // throw, which ride the disease flags / a released key rather than a NEW key
+    // press, do keep firing during stun in sub_41F29B (LABEL_246 is reached with
+    // +56=0); reproducing that narrow edge is deliberately deferred — it never
+    // fires in any current scenario/test and would entangle with the
+    // pickup_pause carry semantics. facts.md "Head hit / Stun does NOT gate ...".
+    //
     // (1) Auto-drop diseases (diarrhea +135 / super +137): the original FORCES an
     //     edge every frame — `+56 = 1; +54 = 0; v112 = 1` — so the drop block
     //     below fires each tick. We reproduce that by overriding the effective
     //     key state under auto-drop. v112 also unconditionally releases a carried
     //     bomb (block 2) and suppresses the spooger (block 4).
-    const bool auto_drop = p.sick(Disease::Diarrhea) || p.sick(Disease::Super);
-    const bool a1_now = auto_drop ? true : in.action1;        // +56
-    const bool a1_last = auto_drop ? false : p.prev_action1;  // +54
-    const bool drop_edge = a1_now && !a1_last;                // the +56 && !+54 gate
+    if (!stunned) {
+        const bool auto_drop = p.sick(Disease::Diarrhea) || p.sick(Disease::Super);
+        const bool a1_now = auto_drop ? true : in.action1;        // +56
+        const bool a1_last = auto_drop ? false : p.prev_action1;  // +54
+        const bool drop_edge = a1_now && !a1_last;                // the +56 && !+54 gate
 
-    // (2) Throw block (`+37`): a carried bomb is thrown when auto-drop forces it
-    //     (v112) OR the key is released (`!+56`). NOT gated by constipation — a
-    //     constipated player can still throw what it holds. This is why diarrhea
-    //     + grab THROWS serially: v112 fires the throw every frame, then the drop
-    //     block (below) re-grabs the next bomb underfoot — the original's loop.
-    if (p.carrying) {
-        if (auto_drop || !a1_now) bombs.throw_carried(p, i);
-    }
-    // (3) Action key (action2): stop own sliding bombs (+89 kick), punch the
-    //     bomb ahead (+91), and/or detonate a trigger bomb (+95) — three
-    //     independent ifs in sub_41F29B's exact order, all edge-gated
-    //     (`+57 && !+55`). The KICK-flag handler (sub_4247C5) flags every one
-    //     of the player's sliding non-jelly bombs to halt at the next tile
-    //     centre. PUNCH additionally requires `!+56` (the bomb key not down)
-    //     so it never swings mid-drop / mid-auto-drop; TRIGGER has no such
-    //     gate. Grab/throw live on action1. This block runs BEFORE the drop
-    //     block (4), matching LABEL_246's order.
-    if (in.action2 && !p.prev_action2) {
-        if (p.kick) bombs.stop_own_sliding(i);
-        if (p.punch && !a1_now) bombs.try_punch(p, static_cast<std::uint8_t>(i));
-        if (p.trigger) bombs.detonate_triggered(i);
-    }
-    // (4) Drop block (`+56 && !+54 && !+134`): constipation (+134) blocks it. On
-    //     the edge, GRAB the OWN bomb underfoot (+92), else spray a SPOOGER
-    //     line (+93, suppressed while auto-dropping — `!v112`; also own-bomb
-    //     gated), else DROP. Both gates are sub_422E48 + `owner == self`
-    //     (motion 0 AND 1 qualify — a player can grab their own bomb mid-
-    //     slide; flying/carried are exempt via bomb_at). Grab/spooger are the
-    //     "double-tap": press 1 drops a bomb underfoot, press 2 grabs/sprays.
-    if (drop_edge && !p.sick(Disease::Constipation)) {
-        const Bomb* under = grid::bomb_at(s, p.tile_x(), p.tile_y());
-        const bool own = under && under->owner == static_cast<std::uint8_t>(i);
-        if (p.grab && own)
-            bombs.try_grab(p, i);
-        else if (p.spooge && !auto_drop && own)
-            bombs.spooge_ahead(p, static_cast<std::uint8_t>(i));
-        else
-            bombs.drop(p, static_cast<std::uint8_t>(i));
+        // (2) Throw block (`+37`): a carried bomb is thrown when auto-drop forces it
+        //     (v112) OR the key is released (`!+56`). NOT gated by constipation — a
+        //     constipated player can still throw what it holds. This is why diarrhea
+        //     + grab THROWS serially: v112 fires the throw every frame, then the drop
+        //     block (below) re-grabs the next bomb underfoot — the original's loop.
+        if (p.carrying) {
+            if (auto_drop || !a1_now) bombs.throw_carried(p, i);
+        }
+        // (3) Action key (action2): stop own sliding bombs (+89 kick), punch the
+        //     bomb ahead (+91), and/or detonate a trigger bomb (+95) — three
+        //     independent ifs in sub_41F29B's exact order, all edge-gated
+        //     (`+57 && !+55`). The KICK-flag handler (sub_4247C5) flags every one
+        //     of the player's sliding non-jelly bombs to halt at the next tile
+        //     centre. PUNCH additionally requires `!+56` (the bomb key not down)
+        //     so it never swings mid-drop / mid-auto-drop; TRIGGER has no such
+        //     gate. Grab/throw live on action1. This block runs BEFORE the drop
+        //     block (4), matching LABEL_246's order.
+        if (in.action2 && !p.prev_action2) {
+            if (p.kick) bombs.stop_own_sliding(i);
+            if (p.punch && !a1_now) bombs.try_punch(p, static_cast<std::uint8_t>(i));
+            if (p.trigger) bombs.detonate_triggered(i);
+        }
+        // (4) Drop block (`+56 && !+54 && !+134`): constipation (+134) blocks it. On
+        //     the edge, GRAB the OWN bomb underfoot (+92), else spray a SPOOGER
+        //     line (+93, suppressed while auto-dropping — `!v112`; also own-bomb
+        //     gated), else DROP. Both gates are sub_422E48 + `owner == self`
+        //     (motion 0 AND 1 qualify — a player can grab their own bomb mid-
+        //     slide; flying/carried are exempt via bomb_at). Grab/spooger are the
+        //     "double-tap": press 1 drops a bomb underfoot, press 2 grabs/sprays.
+        if (drop_edge && !p.sick(Disease::Constipation)) {
+            const Bomb* under = grid::bomb_at(s, p.tile_x(), p.tile_y());
+            const bool own = under && under->owner == static_cast<std::uint8_t>(i);
+            if (p.grab && own)
+                bombs.try_grab(p, i);
+            else if (p.spooge && !auto_drop && own)
+                bombs.spooge_ahead(p, static_cast<std::uint8_t>(i));
+            else
+                bombs.drop(p, static_cast<std::uint8_t>(i));
+        }
     }
     p.prev_action1 = in.action1;
     p.prev_action2 = in.action2;
@@ -328,8 +370,9 @@ void run_tick(State& s, const TickInputs& inputs) {
         // covers dying/dead, but stun is a separate countdown on an otherwise
         // `alive` player (RESOLVED, docs/re/ai.md §2/§7): a stunned AI must
         // draw NOTHING this tick, the same as the original skipping the call
-        // outright. player_turn already no-ops a stunned player's input
-        // (ticks the stun timer and returns), so this changes only the RNG
+        // outright. player_turn also no-ops a stunned player's INPUT (it forces
+        // want_godir = -1 and skips the bomb-action block) while STILL running
+        // the idle mover, so skipping ai.decide here changes only the RNG
         // stream, never gameplay -- but that stream is the whole contract.
         PlayerInput in = inputs.players[i];
         if (p.ai && p.stun == 0) ai.decide(i, in);
