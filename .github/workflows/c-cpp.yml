@@ -1,4 +1,4 @@
-name: C/C++ CI
+name: CI
 
 on:
   push:
@@ -8,16 +8,50 @@ on:
 
 jobs:
   build:
-
-    runs-on: ubuntu-latest
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux (GCC)
+            os: ubuntu-latest
+            preset: linux
+            ctest_dir: build/linux
+          - name: macOS (Clang)
+            os: macos-latest
+            preset: macos
+            ctest_dir: build/macos
+          - name: Windows (MSVC)
+            os: windows-latest
+            preset: windows-fetch
+            ctest_dir: build/windows-fetch
+            ctest_config: Release
 
     steps:
-    - uses: actions/checkout@v4
-    - name: configure
-      run: ./configure
-    - name: make
-      run: make
-    - name: make check
-      run: make check
-    - name: make distcheck
-      run: make distcheck
+      - uses: actions/checkout@v4
+
+      # SDL3 is built from source (BOMBER_FETCH_SDL3=ON). On Linux it needs the
+      # X11/Wayland/audio dev headers to enable its video/audio backends; the
+      # test suite itself is SDL-free and runs headless, so no display is used.
+      - name: Install SDL3 build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
+            libxfixes-dev libxss-dev libwayland-dev libxkbcommon-dev \
+            libegl1-mesa-dev libgl1-mesa-dev libasound2-dev libpulse-dev \
+            libudev-dev
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      # ctest suites are self-contained (synthetic fixtures, no original game
+      # assets). Windows is a multi-config generator, so it needs -C Release;
+      # the single-config Unix presets do not.
+      - name: Test
+        run: ctest --test-dir ${{ matrix.ctest_dir }} ${{ matrix.ctest_config && format('-C {0}', matrix.ctest_config) || '' }} --output-on-failure

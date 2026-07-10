@@ -2,6 +2,9 @@
 
 RE of the wall-closing ("enclosure" / HURRY) mechanic in BM95.EXE (Watcom,
 imagebase 0x400000). Distilled here per the RE workflow. Roadmap item #37.
+Re-audited 2026-07-10 (line-by-line arithmetic fidelity pass) — §2 and §4
+below correct the 2026-07-04 pass's trigger-boundary and spiral-cadence
+arithmetic; the verdict table in facts.md summarizes what changed.
 
 When the match clock runs low, solid wall tiles drop in a clockwise spiral from
 the top-left corner inward, crushing whatever they land on. This is the
@@ -9,9 +12,9 @@ pressure mechanic that ends drawn-out rounds.
 
 ## 1. The stepper — `sub_426818`
 
-`sub_426818` is called once per rendered frame from the in-game main loop. It
-owns the whole enclosure: arm/disarm, the preview animation, and the actual
-tile drops.
+`sub_426818` is called once per rendered frame from the in-game main loop
+(`sub_42A191`). It owns the whole enclosure: arm/disarm, the preview
+animation, and the actual tile drops.
 
 ### State (file-scope dwords)
 
@@ -24,19 +27,29 @@ tile drops.
 | dword_462240 | int  | current ring depth (`v14`)                               |
 | dword_46223C | DWORD| last-drop timestamp, ms (`timeGetTime()`)                |
 | dword_462244 | int  | `rand()%3` — which of 3 drop SOUNDS (presentation)       |
-| dword_464974 | int  | `getvalue(27)` = enclosement_depth, clamped to getvalue(28) |
+| dword_464974 | int  | `getvalue(27)` = enclosement_depth (loaded once at match init, `sub_41095A`, pseudo.c 14651) |
 | dword_4648AC / dword_4648B4 | int | board width 15 / height 11               |
 
-`dword_45BECC[4] = {0,1,0,-1}` (cos) and `dword_45BEDC[4] = {-1,0,1,0}` (sin),
-indexed by direction in **GODIR order** (0=Up,1=Right,2=Down,3=Left). So a step
-`(x += cos[dir], y += sin[dir])` walks one tile in that godir.
+`dword_45BECC[4] = {0,1,0,-1}` (cos) and `dword_45BEDC[4] = {-1,0,1,0}` (sin)
+— confirmed against the raw `.data` initializer dump, not just usage sites —
+indexed by direction in **GODIR order** (0=Up,1=Right,2=Down,3=Left). So a
+step `(x += cos[dir], y += sin[dir])` walks one tile in that godir.
 
-## 2. Trigger time — `getvalue(101) - 5` seconds remaining  [CONFIRMED 2026-07-04]
+`dword_45BE9C`'s raw `.data` initializer is **1**, not 0 (every other state
+dword here is `.bss`, i.e. implicitly 0). That is not a gameplay-visible
+quirk: it just means the very first frame of the very first match always
+takes the DISARM branch below (since the clock starts well outside the
+closing window), which is *also* the only place that seeds `dword_462238 = 1`
+(Right) and zeroes position/depth — i.e. the odd initializer is how the spiral
+gets its initial state without a dedicated "new match" init call. A real
+match clock only counts down, so disarm never fires again after that.
+
+## 2. Trigger time — TWO distinct, non-overlapping windows  [RE-CONFIRMED 2026-07-10]
 
 ```
 v1     = getvalue(101);        // hurry_seconds
 result = sub_410578();         // = SECONDS REMAINING (dword_4601A4)
-if ( result <= v1 - 5 ) {      // remaining <= hurry_seconds - 5
+if ( result <= v1 - 5 ) {      // remaining <= hurry_seconds - 5   (NON-STRICT)
     if ( !dword_45BE9C ) {     // ARM
         dword_462244 = rand() % 3;
         dword_45BE9C = 1;
@@ -50,18 +63,83 @@ if ( result <= v1 - 5 ) {      // remaining <= hurry_seconds - 5
 ```
 
 - `sub_410578()` returns `dword_4601A4`, set in `sub_4105D2` as
-  `(dword_4601AC - dword_4601B8) / 1000` = **whole seconds remaining** (total
-  match ms minus elapsed ms, over 1000, clamped ≥ 0). Confirmed also by
-  `sub_...` returning `dword_4601A4 <= 0` as the "time up?" predicate.
-- So the walls START closing when **remaining ≤ hurry_seconds − 5**, i.e.
-  **5 seconds AFTER** the "HURRY!" banner/sound (which shows during the window
-  `hurry_seconds − 5 < remaining < hurry_seconds`, a separate check in the HUD
-  routine at ~29533, `sub_427961(2700)` + the "hurry" ANI — presentation).
+  `(dword_4601AC - dword_4601B8) / 1000` = **whole seconds remaining, FLOORED**
+  (total match ms minus elapsed ms, over 1000, clamped ≥ 0, C integer
+  division truncates toward zero for non-negative operands = floor).
+- **The banner is a SEPARATE check, in the HUD routine (~29533,
+  `sub_42A191`), with the OPPOSITE strictness on both sides:**
+  ```
+  remaining = sub_410578();
+  hurry_s   = getvalue(101);
+  if ( remaining < hurry_s ) {              // STRICT '<'
+      hurry_s2   = getvalue(101);
+      remaining2 = sub_410578();            // unchanged within the same frame
+      if ( remaining2 > hurry_s2 - 5 ) {    // STRICT '>'
+          if ( !dword_464984 ) { dword_464984 = 1; sub_427961(2700); }  // "HURRY!" once
+          draw the blinking "Hurry" HUD text (every frame this branch is taken)
+      }
+  }
+  ```
+  (The pseudocode shows the comparisons' LEFT operands as bare, unassigned-
+  looking calls — `sub_410578();` / `sub_412135(101);` with no `v5 = `/`v7 = `
+  prefix. That is a Hex-Rays artifact of Watcom's REGISTER calling convention
+  (confirmed: `sub_412135`'s own signature is
+  `int __usercall sub_412135@<eax>(int a1@<eax>)` — argument AND return both
+  in EAX), not a discarded value: the compiler evaluates the first call,
+  parks its EAX result in EDX to survive the second call's own EAX-argument
+  handoff, and Hex-Rays doesn't reconstruct that as an explicit assignment.
+  The SAME pattern appears in §1's arm check above — `v1` there is
+  `getvalue(101)`, preserved the same way.)
+- Combined, the banner is active exactly while
+  **`hurry_seconds - 5 < remaining < hurry_seconds`** (open both ends) — i.e.
+  remaining ∈ {hurry_seconds−4, …, hurry_seconds−1}, a 4-whole-second window —
+  and the wall-arm (§ above) fires the instant that window closes
+  (`remaining <= hurry_seconds - 5`). **No gap, no overlap**: the banner turns
+  off on exactly the tick the walls arm.
 - The disarm branch resets the spiral to **(x=0, y=0, depth=0, dir=1=Right)**.
   Because a real match clock only counts down, disarm never fires mid-round;
-  the reset just seeds the spiral origin for the next arm.
+  it only matters as the de-facto "new match" init (§1).
 
-## 3. Cadence — 250 ms per wall tile = 5 ticks  [CONFIRMED 2026-07-04]
+### Our port: floor first, then compare — not "compare against ticks×20"
+
+Our sim only has whole ticks, not a continuous ms clock, so `remaining` has
+to be reconstructed from `s.ticks_left`. Since `kTicksPerSecond` ticks make
+one second and `ticks_left` is itself already clamped ≥ 0
+(`simulation.cpp`), **`s.ticks_left / kTicksPerSecond` (integer division)
+reproduces `sub_410578()`'s floor exactly** — there is no rounding
+ambiguity, because `ticks_left` advances in lockstep with the same 50 ms/tick
+clock the original's `dword_4601B8` elapsed-ms counter does.
+
+The EARLIER (2026-07-04) revision of this port instead compared raw
+`ticks_left` directly against `threshold * kTicksPerSecond`. That is **not**
+the same predicate:
+- `ticks_left <= H*20` is true for `ticks_left ∈ {..., H*20}`, which
+  corresponds to `remaining <= H` **only at the exact tick `ticks_left ==
+  H*20`** (`remaining == H`, floor-division remainder 0) — for the other 19
+  ticks of the `remaining == H` window it is *also* true, so as an
+  implementation of `remaining <= H` it's actually fine... but the banner
+  needs the STRICT `remaining < H`, and `ticks_left <= H*20` includes the
+  entire `remaining == H` window (all 20 ticks), firing the banner a full
+  second early on the boundary tick.
+- Symmetrically, `ticks_left <= H*20` as an implementation of the (non-strict)
+  wall-arm predicate only becomes true at the LAST tick of the `remaining ==
+  H` window (`ticks_left == H*20` exactly, remainder 0) — 19 ticks LATER than
+  the correct "first tick `remaining` reaches `H`" (`ticks_left == H*20+19`).
+
+Net effect of the old comparison: **the banner fired ~1 tick too early, and
+the wall-arm fired ~19 ticks too late.** Flooring `ticks_left/kTicksPerSecond`
+once and comparing the resulting whole-second value with the ORIGINAL's exact
+strictness (`<` for the banner, `<=` for the arm) fixes both with zero slop —
+see `EnclosureSystem::update()`.
+
+- **NO `ticks_left > 0` guard**: `sub_410578`'s remaining-seconds is CLAMPED
+  to ≥ 0 (never negative), so once the threshold predicate goes true it stays
+  true forever — the original keeps closing walls through and past TimeUp
+  (sudden death), it never freezes the spiral. Our `ticks_left` similarly
+  floors at 0, so `seconds_left` floors at 0 too and the predicate stays
+  monotonic — the direct equivalent.
+
+## 3. Cadence — 250 ms per EVENT = 5 ticks  [CONFIRMED 2026-07-04, refined 2026-07-10]
 
 The drop loop (`LABEL_26`, ~27225):
 
@@ -71,9 +149,9 @@ LABEL_26:
   if ( v22-- <= 0 )                                    return;  // cap 5 drops per frame
   dword_46223C += 250;                                          // advance drop clock 250ms
   sub_4278F2(dword_462244 + 140);          // play wall-drop sound (140 + rand%3)
-  sub_425E9B(dword_462230, dword_462234, 1);  // DROP the wall at (x,y)
+  sub_425E9B(dword_462230, dword_462234, 1);  // DROP the wall at (x,y), UNCONDITIONALLY
   ...clear player/flame/powerup/bomb on that tile...
-  ...advance the spiral to the next (x,y)...  (section 4)
+  ...advance the spiral to the next (x,y)...  (§4 — may or may not actually move)
   goto LABEL_26;                            // loop: catch up any further 250ms buckets
 ```
 
@@ -83,100 +161,300 @@ LABEL_26:
   = 50` ms/tick, so 250 ms = **exactly 5 ticks** at the locked 20 Hz rate.
 - `v22 = 5` caps drops at 5 per frame — a wall-clock catch-up for dropped
   frames. In deterministic lockstep every frame is 50 ms, so at most one 250 ms
-  bucket elapses per 5 ticks and the cap never engages: a clean **1 wall / 5
-  ticks**.
-- The first wall drops 250 ms (5 ticks) AFTER the arm frame: on the arm frame
-  `dword_46223C == now`, so `dword_46223C + 250 >= now` is true and the loop
-  returns without dropping.
+  bucket elapses per 5 ticks and the cap never engages: a clean **1 EVENT / 5
+  ticks**, uniformly (§4 explains why "event" and "newly-solidified tile" are
+  not the same count).
+- The first EVENT drops 250 ms (5 ticks) AFTER the arm frame: on the arm
+  frame `dword_46223C == now`, so `dword_46223C + 250 >= now` is true and the
+  loop returns without dropping.
 - `dword_462244 + 140` is a SOUND id (three drop-sound variants); `rand()%3`
   is drawn once at arm time, on the presentation stream — the sim draws NO RNG
-  for the enclosure.
+  for the enclosure. The sound plays on EVERY event, including the phantom
+  repeats in §4 (verified: `sound_director.cpp`'s `WallClosed` handler already
+  replays the latched roll unconditionally on every event it receives, so no
+  presentation-side change was needed for this).
 
-## 4. Spiral geometry — clockwise from (0,0), `2*depth` rings
+## 4. Spiral geometry — THE CRUX, reconstructed as a literal state machine
 
-Advance after each drop (`LABEL_47`, ~27267):
+**This is the part worth being exact about, and a from-scratch "ring
+perimeter formula" gets it subtly wrong.** The advance logic
+(`LABEL_47`/`LABEL_60`/`LABEL_61`, ~27267-27298), reached after EVERY drop
+(phantom or not):
 
 ```
-v3 = cos[dir] + x;  v4 = sin[dir] + y;                    // next tile ahead
+v3 = cos[dir] + x;  v4 = sin[dir] + y;                    // tile ahead in the current dir
 if ( width-depth > v3 && height-depth > v4 && v3 >= depth && v4 >= depth )
-    accept (x,y) = (v3,v4);                               // still inside the ring box
-else {
+{
+    (x, y) = (v3, v4);                                    // ACCEPT: still inside the ring box
+}
+else
+{
     dir = (dir + 1) & 3;                                  // turn clockwise
-    if ( dir == 1 ) {                                     // completed a full loop
-        if ( 2*getvalue(27) <= depth ) return;            // reached centre: STOP
-        ++depth; ++x; ++y;                                // step inward one ring
+    if ( dir == 1 )                                       // wrapped a full turn back to Right
+    {
+        if ( 2*getvalue(27) <= depth ) return;            // reached the target ring: STOP for good
+        ++depth; ++x; ++y;                                // step inward one ring (diagonal)
     }
-    // (x,y) unchanged this step; walk resumes next drop in the new dir
+    // else: (x, y) UNCHANGED — the NEXT LABEL_26 iteration re-drops this
+    // same tile (same sound, same crush/detonate checks) before trying the
+    // new direction.
 }
 ```
 
+Two consequences fall directly out of this that a "one event per unique
+tile" model misses:
+
+1. **Three of a ring's four corners cost an EXTRA 250 ms/5-tick event with NO
+   new tile.** Turning a corner (any turn that doesn't ALSO complete the
+   ring, i.e. the top-right, bottom-right, and bottom-left corners of a
+   clockwise-from-top-left ring) leaves `(x, y)` unchanged for this call. But
+   `LABEL_26`'s top ALWAYS drops+plays-sound+runs-crush-checks on whatever
+   `(x, y)` currently is, unconditionally, on every event — it does not know
+   or care whether the position actually moved. So the corner tile gets
+   dropped a SECOND time, 5 ticks later, before the walk continues in the new
+   direction. Cosmetically a no-op (the tile is already solid) — but it DOES
+   replay the wall-slam sound, and it DOES give a second chance to crush a
+   player or detonate a bomb that has since moved onto that exact tile.
+2. **Every ring's own start tile is naturally revisited a second time — NOT
+   via a phantom repeat, via an entirely ordinary ACCEPTED step.** The bounds
+   check only excludes tiles OUTSIDE the current ring box (`x/y` vs.
+   `depth`/`width-depth`/`height-depth`); it has no memory of which tiles in
+   that box have already been visited. Walking up the left edge, the ring's
+   own start corner `(depth, depth)` satisfies the bounds check exactly like
+   every other tile on that edge, so the up-walk runs all the way back to it
+   before finally failing (one step further up, `y < depth`) and wrapping the
+   direction back to 1 — AT WHICH POINT the ring-complete check fires and
+   (assuming more rings remain) the walk steps diagonally inward with no
+   phantom pause. So the fourth corner is "free" (no extra cadence slot) but
+   still costs a duplicate DROP of that tile.
+
+Net: **each ring costs 4 extra events beyond its unique-tile count** (3
+phantom corner repeats + 1 ordinary-but-duplicate start-tile revisit) — e.g.
+the outer ring of a 15×11 board has 48 unique tiles but **52 events**. A full,
+literal reconstruction of ring 0's exact 52-event sequence — including
+exactly where the three phantoms and the one ordinary duplicate land — is
+pinned in `tests/test_sim.cpp`'s `"the enclosure spiral's full ring-0 event
+order, phantoms and all"` test case.
+
 - Starts at **(0,0)** with **dir = 1 (Right)**, walks the top edge, turns
   clockwise (Right→Down→Left→Up), steps one ring inward each full loop.
-- Stops when `depth >= 2*getvalue(27)`, so **rings closed = 2 × enclosement_depth**
-  (id 27): depth 1 → 2 rings, depth 2 → 4, depth 3 → 6 (all).
 - `sub_425E9B(x,y,1)` sets the tile solid; the surrounding cleanup kills any
   player standing there, detonates/eats a bomb on it (per id 46), and clears
-  flame/powerups. (Our `drop_wall` mirrors this; the bomb branch honours
-  `wall_detonates` = getvalue(46).)
+  flame/powerups (§5). Solidifying an already-solid tile (the phantom/
+  duplicate case) is a harmless no-op.
 
-## 5. Our port (libs/sim EnclosureSystem)
+### Ring count — flagged DEVIATION-reported, NOT changed
 
-The two moments (§2) are kept SEPARATE, so the presentation (banner + voice)
-still fires at moment 1 while the tile drops start at moment 2:
+VALUELST 27's own AUTHORED comment (`DATA/RES/VALUELST.RES`, verbatim):
 
-- `enclose_order()` builds the clockwise-from-top-left ring path (matches §4).
-- `total(depth)` / `enclose_rings(depth) = 2*depth` (cap 6) matches `2*getvalue(27)`.
-- **Banner/sound (moment 1)**: `s.hurry` flips and the `Hurry` EVENT fires at
-  `ticks_left <= hurry_seconds * kTicksPerSecond` (unchanged from before — the
-  sound_director rides this event, so its timing is preserved). This models the
-  HUD `dword_464984` latch, not the enclosure arm.
-- **Wall drops (moment 2)**: gated on `ticks_left <= (hurry_seconds - 5) *
-  kTicksPerSecond` (was conflated with moment 1 — walls closed 5 s too early).
-  `enclose_interval` (0 until armed) doubles as the drop-armed flag.
-  `ticks_left/20` is our seconds-remaining; the −5/−0 are whole-second offsets.
-  (Floor-division makes the exact tick ±19 vs the original's per-frame ms
-  recompute; well within the original's own ±1 s wall-clock rounding.)
-- **Cadence**: `enclose_interval = 250 / (1000/kTicksPerSecond) = 5` ticks
-  (was a spread-to-fit `hurry_seconds*20 / (n+1)`, wrong). First wall at
-  wall-arm + 5 ticks; one wall every 5 ticks thereafter.
-- **RNG**: none — the sim enclosure draws no `State::rng` (the `rand()%3` in the
-  original is only the drop-sound pick, a presentation concern).
+```
+; default enclosement depth (how far the playfield will close in)
+; 0 is none, 1 is 2 rows, 2 is 4 rows, 3 is all the way
+27,1
+28,4        ; the possible different enclosement depths (0, 1, 2, 3 right now)
+```
 
-## 6. Determinism / golden impact
+i.e. **rings closed = 2 × depth setting** (0/2/4/"all"). This port's
+`EnclosureSystem::total`/`position` close exactly that many rings, matching
+this comment and the pre-existing golden-tested behaviour (`cells[2][2]`
+stays open at depth 1 in `tests/test_sim.cpp`).
 
-The banner and the walls are decoupled, so their hash contributions differ:
-- `s.hurry` (hashed) flips at moment 1 — SAME tick as the old code, so the
-  `hurry` bool contribution and the `Hurry`-event/sound timing are UNCHANGED.
-- `enclose_index` / `enclose_timer` (hashed) and the `cells` the walls solidify
-  now start at moment 2 with the 5-tick cadence — so ONLY the wall drops move
-  the hash, on scenarios that reach the wall phase within their pinned ticks:
+A LITERAL transcription of the stop check above (`if (2*getvalue(27) <=
+depth) return;`, evaluated once a ring's own traversal has fully wrapped back
+to dir 1) reads as "stop once the ring that JUST closed is ring number
+`2*depth`" — i.e. rings `0..2*depth` INCLUSIVE, **one ring more** than the
+comment says (re-implemented and cross-checked against a 15×11 board: depth 1
+→ 3 rings/120 unique tiles, depth 2 → 5 rings/144 unique tiles, under that
+literal reading). Depth 3 ("all the way") cannot discriminate between the two
+readings — a 15×11 board only has 6 valid ring depths (0..5) either way, so
+both readings close the whole board there.
 
-- **golden B** (game_seconds 150 → 3000 ticks, runs 3000): `hurry` still flips
-  ~tick 1800 (checkpoints 500/1000/1500 UNCHANGED), but walls now start ~tick
-  1900 at 5-tick cadence (was ~1800 at ~13) → **checkpoints 2000/2500/3000
-  MOVE**.
-- **golden C** ("fast hurry phase", game_seconds 70 → 1400 ticks, runs 1500):
-  `hurry` still flips ~tick 200, walls now start ~tick 300 at 5-tick cadence
-  (was ~200 at ~13) → the single **tick-1500 hash MOVES**.
-- **goldens A/D/E**: A has no clock (empty sim); D/E run 800/300 ticks and never
-  reach even moment 1 (~tick 1800). UNCHANGED, including their RNG-stream
-  assertions (the enclosure draws no RNG, so no rng CHECK moves anywhere).
+This is a genuine, unresolved conflict between two credible sources (a
+carefully re-verified direct disassembly reading vs. the developer's own
+authored comment + the pre-existing golden/test-pinned behaviour), and static
+analysis alone could not resolve which one is a decompiler/transcription
+artifact and which is the real shipped behaviour. Per the audit's own
+ground rules, this is reported rather than changed: the port keeps the
+comment-and-golden-corroborated **"2 × depth"** rule. If this is ever
+resolved (e.g. by running the real EXE with a custom scheme, `enclosement_
+depth=1`, on a board wide enough to make the two readings' 3rd/5th ring
+visibly distinguishable, and counting rings on screen), update
+`rings_for()`'s comment in `enclosure.cpp` and this section together.
 
-Recapture B (indices 3–5: ticks 2000/2500/3000) and C in the same commit, citing
-this file. No test_golden.cpp RNG assertion changes.
+## 5. Wall vs. contents — order, and what each check actually does
 
-## 7. Addresses (evidence)
+The per-tile cleanup, in the original's exact order (all confirmed, all
+already correctly ordered in this port; §"Wall vs. contents ordering" note
+below explains why the port's internal order differs textually but not
+observably):
+
+1. **Player** (`sub_421D3F` finder → `sub_41DE63` kill, up to 100 retries):
+   `sub_421D3F`'s own search predicate is `present && !dead && type-byte(+16)
+   != 4 && tile == (x,y)` — type 4 is "network-spectator", a category this
+   port has no equivalent slot for (N/A, never reachable). **`sub_41DE63`
+   itself — the SAME shared kill routine the ordinary flame-death and the
+   campaign rover/ghost landing-tile kill also funnel through
+   (`docs/re/campaign.md` clause 4) — additionally early-outs (returns 0, no
+   death, no RNG) while the victim's movement-state word (+78) is 5
+   (trampoline hop) or 6/7 (warp out/in).** A player mid-bounce or mid-warp
+   when the wall drops on their tile is untouched. No attributable killer
+   (crush, not a flame): `PlayerDied.data == -1`.
+2. **Powerup** (`sub_42542D` finder → `sub_4254F3`, up to 100 retries):
+   unconditional destruction, NO skull-relocation compensation here (that only
+   happens on the flame-walk's OWN powerup-burn call site, which additionally
+   checks `diseases_destroyable` and calls `sub_4255B2`; `sub_4254F3` itself
+   has no such logic — confirmed by reading its body, `*a1 = 0` and an
+   optional redraw hint, nothing else).
+3. **Grounded bomb** (`sub_422E48` finder, motion states 2/3 = flying/carried
+   excluded, up to 100 retries — so an airborne bomb sails over, and a
+   sliding-but-grounded bomb IS a valid target):
+   - **`wall_detonates` ON (id 46)**: `sub_423209(bomb, -1)` — this does
+     **NOT** explode synchronously. It only APPENDS to a 100-slot pending
+     queue (`dword_4621F8`/`4621FC`/`462200`). See §6.
+   - **`wall_detonates` OFF**: `sub_424841(bomb)` zeroes the bomb record in
+     place — no explosion, no effect, and (per the pre-existing "Options
+     toggles" facts.md entry, unaffected by this audit) the owner's bomb
+     count is freed the same way an explosion would.
+
+The original runs these in player → powerup → bomb order; this port's
+`drop_wall()` runs bomb → (solidify + clear flame/powerup state) → player,
+textually reordered. This is safe because each cleanup step touches
+disjoint state (`players[i].alive` vs. `floor/hidden` vs. `bombs[]`) with no
+observable cross-dependency between them at this call site — a carried
+bomb (which the player branch releases) is never independently found by the
+grounded-bomb scan (motion 3 = carried is excluded from `sub_422E48`
+either way), and a bomb sharing a tile with a floor powerup is not a
+reachable state under normal placement rules. See `drop_wall`'s comments for
+the full per-branch citation.
+
+## 6. Wall-triggered bomb detonation is deferred ONE TICK, not synchronous [CONFIRMED 2026-07-10]
+
+Traced `sub_423209`'s queue end-to-end:
+
+- `sub_423209(bomb_ptr, reason)` appends `bomb_ptr` to `dword_4621F8[]` and
+  `reason` to `dword_4621FC[]`, bumping the count `dword_462200` (cap 100).
+  Nothing else — no explosion, no fuse write, here.
+- The queue is drained inside `sub_42331C` (the bomb/fuse tick function),
+  gated `if (dword_462210 != dword_464994) { ...drain...; dword_462210 =
+  dword_464994; }` — i.e. **the drain runs at most ONCE per rendered frame**
+  (`dword_464994` is the frame counter, incremented once per frame in
+  `sub_42A191`). The drain force-sets each queued bomb's elapsed-fuse word
+  (+68) to its OWN threshold (+74) — `*(_WORD*)(bomb+68) =
+  *(_WORD*)(bomb+74)` — and stamps its "incoming direction" byte (+56) from
+  the queued reason. `sub_42331C`'s own per-bomb loop, LATER IN THE SAME
+  CALL, unconditionally checks `if (fuse(+68) >= threshold(+74)) { ...explode...
+  }` (this check is NOT gated by the dud/kind exclusion that guards the
+  fuse-INCREMENT a few lines above it) — so a freshly force-set bomb detonates
+  within that SAME `sub_42331C` call.
+- `sub_42A191`'s per-frame order calls `sub_42331C` **TWICE**: once via
+  `sub_4245B9` (mode 0), BEFORE `sub_426818` (enclosure); once via
+  `sub_42459A` (mode 1), AFTER `sub_426818`. The drain only fires on
+  whichever of the two runs FIRST each frame — `sub_4245B9`, since it
+  precedes `sub_426818` in the call order. So: a bomb queued by THIS frame's
+  wall drop sits undrained (the frame-stamp gate already fired earlier this
+  same frame) until the FOLLOWING frame's `sub_4245B9` call.
+
+**Net: a wall-detonated bomb's flame appears exactly ONE TICK (one frame)
+after the wall itself solidifies, not on the same tick.** Ported as: instead
+of exploding synchronously, `drop_wall()` sets `b.fuse = 1`, so the sim's own
+NEXT `tick_fuses()` pass (which runs before `enclosure.update()` in our own
+tick order — the same relative order as the original's `sub_4245B9`-before-
+`sub_426818`) detonates it on schedule. `tests/test_sim.cpp`'s "hurry walls…"
+test and `tests/test_stomped_diseases.cpp`'s "stomped_bombs_detonate ON" test
+both pin the one-tick gap directly (bomb still present immediately after the
+drop tick, gone one tick later).
+
+One known, narrow gap NOT closed by this fix: a bomb that is CURRENTLY
+fizzling as a dud (`Bomb::dud_left > 0`) has its fuse frozen by
+`BombSystem::tick_fuses`'s own dud branch (`continue`s past the fuse check
+entirely), so forcing `fuse = 1` on a dud-at-the-moment-of-crush bomb is
+silently absorbed — it keeps fizzling on its own schedule instead of being
+force-detonated. In the original, the drain's force-set bypasses the
+kind-based fuse-increment gate (the explode check itself isn't kind-gated),
+so a dud WOULD be forced to detonate. This needs a wall-crush ↔ dud
+interaction this narrow (both conditions simultaneously) to matter at all;
+flagged here, not fixed, given how deep into `tick_fuses`'s existing
+dud-state structure a faithful fix would have to reach for a corner this
+small.
+
+### A much bigger, EXPLICITLY OUT-OF-SCOPE discovery made while tracing this
+
+The SAME `sub_423209` queue-and-drain-next-frame mechanism is also used by
+ORDINARY bomb chain reactions: the flame-arm walk's grounded-bomb hit
+(`sub_42331C` ~25645, inside the just-exploded bomb's own arm-walk) queues
+the hit bomb via `sub_423209(hit_bomb, direction_reason)` — the SAME function,
+the SAME once-per-frame drain. If that reading is right, **ordinary chain
+reactions in the original take one extra frame PER LINK to cascade** (bomb A
+explodes frame N; a chained bomb B doesn't actually detonate until frame
+N+1), not the same-frame/same-tick cascade this port's
+`FlameSystem::spread_to` currently performs (`explode()` called synchronously,
+recursively, the instant the arm walk reaches a grounded bomb). This is
+**far** outside "enclosure" — it would be a fundamental, codebase-wide change
+to bomb-chain pacing with enormous golden impact across nearly every existing
+multi-bomb scenario, and deserves its own dedicated audit rather than a
+same-commit change riding in on this one. **Not touched here.** See the audit
+report for the full trace (`sub_42331C` pseudo.c ~25611-25652).
+
+## 7. RNG — none in the enclosure itself  [CONFIRMED, unchanged]
+
+The ONLY `rand()` call anywhere in `sub_426818` is `dword_462244 = rand() %
+3` at ARM time (§2/§3) — the drop-SOUND variant pick, drawn once per arm, on
+the presentation stream. The sim's `EnclosureSystem` draws ZERO
+`State::rng` — golden B/C's hash constants move (see `tests/test_golden.cpp`'s
+UPDATE note) purely from *when* and *where* walls solidify, never from any
+new/reordered RNG draw; every existing RNG-stream assertion in the golden
+suite (D's `kExpectedRng`, E's final `rng`/bounce count) is byte-identical
+before and after this audit's fixes.
+
+(A cosmetic, PRESENTATION-ONLY detail found but not ported: `sub_426818` also
+runs a per-frame "preview" pass — `10 * getvalue(910) + 100` down to
+`getvalue(910)` steps, `sub_424DFE(x, y, alpha)` — that walks the SAME
+advance logic as §4 on LOCAL copies of the position state, purely to draw a
+fading highlight over the next few tiles about to close. It mutates no
+gameplay state and draws no RNG; this port has no such preview overlay and
+none is added here.)
+
+## 8. Round-end interaction — no enclosure-specific stop condition  [CONFIRMED]
+
+`sub_426818`'s only top-level gate is `sub_421969() > 1` — a general
+"are we actively in a match" game-state check SHARED by the whole per-frame
+loop, not anything enclosure-specific. Tracing `sub_421969`'s backing store
+(`dword_4621D4`/`dword_4621DC`, `sub_421793`-adjacent init) turns up no write
+site that reacts to "one side is left" mid-round — that state is set once at
+round start and doesn't change until the screen itself transitions away from
+the match loop. So **the walls keep closing through the "round decided, but
+still lingering on the final frame" window**, exactly like every other
+system (movement, bombs, flames) — there is nothing for `EnclosureSystem`
+itself to special-case. This port's architecture already gets this right by
+construction: `libs/sim` has no concept of "screens" at all, and
+`GameApp::run_app`'s existing 3-second post-decision linger
+(`over_ticks`, `game_app.cpp` ~2892-2909, from an earlier audit) keeps
+calling `Simulation::tick()` — enclosure included — for that whole window
+before handing off to the Results screen.
+
+## 9. Addresses (evidence)
 
 | addr        | role                                                       |
 |-------------|------------------------------------------------------------|
 | sub_426818  | enclosure stepper: arm/disarm (§2), 250 ms cadence (§3), spiral (§4) |
 | sub_410578  | seconds-remaining accessor (`dword_4601A4`)                |
 | sub_4105D2  | clock update: `dword_4601A4 = (total_ms - elapsed_ms)/1000`|
+| sub_412135  | `getvalue(id)` — Watcom register convention, `@<eax>` both ways (confirms the edx-preserved-across-a-call reading in §2) |
 | sub_43ACF8  | `timeGetTime()` — the ms drop clock                        |
 | sub_425E9B  | set a tile solid (the wall drop)                           |
 | sub_405D0C  | clear warpholes(type≤1)+trampolines(type 3) from actor grid on arm |
-| VALUELST 27 | enclosement_depth (rings = 2×)                             |
-| VALUELST 101| hurry_seconds — banner at this; walls at this − 5          |
+| sub_421D3F  | player finder: present && !dead && type != 4 (network-spectator) && tile match |
+| sub_41DE63  | shared player-kill routine (crush/flame-death/rover-kill); early-out on type 4 or movement-state 5/6/7 |
+| sub_42542D / sub_4254F3 | powerup finder / unconditional destroy (no relocation) |
+| sub_422E48  | grounded-bomb finder: present && tile match && motion != 2/3 (flying/carried) |
+| sub_423209  | detonation QUEUE append (dword_4621F8/FC/462200), NOT a synchronous explode |
+| sub_424841  | zero a bomb record in place (the "eat", `wall_detonates` OFF) |
+| sub_42331C  | bomb/fuse tick: drains the queue (once/frame, frame-stamped) and runs the normal fuse check that detonates a freshly-drained bomb |
+| sub_4245B9 / sub_42459A | the frame's two `sub_42331C` calls (modes 0/1); mode 0 runs BEFORE sub_426818, mode 1 AFTER — only mode 0 ever drains |
+| sub_421969  | top-level "are we in a match" gate — no enclosure-specific round-end logic |
+| VALUELST 27 | enclosement_depth (rings = 2× per its own authored comment; §4's "Ring count" flags an unresolved literal-disassembly conflict) |
+| VALUELST 28 | the depth setting's own valid range (0..3) — "the possible different enclosement depths" |
+| VALUELST 101| hurry_seconds — banner strictly below this; walls arm at this − 5, non-strict |
 | VALUELST 30 | tick rate 20 ⇒ 50 ms/tick ⇒ 250 ms = 5 ticks              |
-| dword_45BECC/45BEDC | cos {0,1,0,-1} / sin {-1,0,1,0}, godir-indexed      |
+| dword_45BECC/45BEDC | cos {0,1,0,-1} / sin {-1,0,1,0}, godir-indexed, confirmed against the `.data` dump |
 | dword_462244 + 140 | wall-drop sound (3 variants, rand%3 at arm)         |

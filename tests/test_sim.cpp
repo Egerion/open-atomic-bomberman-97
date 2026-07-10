@@ -229,37 +229,44 @@ TEST_CASE("the match clock counts down to a TimeUp event") {
 }
 
 TEST_CASE("hurry walls spiral in, crush, and detonate bombs") {
-    // CONFIRMED enclosure timing (sub_426818, docs/re/enclosure.md): the "HURRY!"
-    // banner/sound fires at remaining <= hurry_seconds, but the WALLS start
-    // closing 5 s later (remaining <= hurry_seconds - 5) and drop ONE tile every
-    // 250 ms = 5 ticks at 20 Hz.
+    // CONFIRMED enclosure timing (sub_426818, docs/re/enclosure.md §2): the
+    // "HURRY!" banner/sound fires the first tick remaining seconds is
+    // STRICTLY LESS than hurry_seconds; the WALLS arm the first tick
+    // remaining seconds is <= hurry_seconds - 5 (non-strict), and drop one
+    // EVENT every 250 ms = 5 ticks at 20 Hz. With game_seconds=10 (ticks_left
+    // starts at 200) and hurry_seconds=8: remaining-seconds = ticks_left/20
+    // (floor), so "< 8" first holds at ticks_left==159 (tick 41) and "<= 3"
+    // first holds at ticks_left==79 (tick 121).
     MatchConfig cfg = test_config();
     cfg.tuning.game_seconds = 10;  // 200 ticks
-    cfg.tuning.hurry_seconds = 8;  // banner at remaining<=8s (tick 40); walls at 3s (tick 140)
+    cfg.tuning.hurry_seconds =
+        8;  // banner at tick 41 (remaining 7s); walls arm tick 121 (remaining 3s)
     cfg.tuning.enclosement_depth = 1;
     Simulation s(cfg);
-    run(s, 40);
-    CHECK(s.state().hurry);                // banner fired at moment 1 (tick 40)
-    CHECK(s.state().enclose_index == 0);   // ...but the walls have NOT begun
+    run(s, 41);
+    CHECK(s.state().hurry);               // banner fired at moment 1 (tick 41)
+    CHECK(s.state().enclose_index == 0);  // ...but the walls have NOT begun
     CHECK(s.state().cells[0][0] != Cell::Solid);
-    run(s, 99);                            // up to tick 139: still just the banner
+    run(s, 79);  // up to tick 120: still just the banner
     CHECK(s.state().enclose_index == 0);
-    run(s, 1);                             // tick 140: walls arm (remaining 3s)
-    CHECK(s.state().enclose_index == 0);   // arm frame drops nothing (gate shut)
+    run(s, 1);                            // tick 121: walls arm (remaining 3s)
+    CHECK(s.state().enclose_index == 0);  // arm frame drops nothing (gate shut)
     run(s, 4);
-    CHECK(s.state().enclose_index == 0);   // still nothing at arm+4
-    run(s, 1);                             // arm+5: first wall drops
+    CHECK(s.state().enclose_index == 0);  // still nothing at arm+4
+    run(s, 1);                            // arm+5 (tick 126): first wall drops
     CHECK(s.state().enclose_index == 1);
     CHECK(s.state().cells[0][0] == Cell::Solid);  // spiral starts top-left
     CHECK(!s.state().players[0].alive);           // player 0 spawned there: crushed
-    // Cadence: exactly one more wall every 5 ticks.
+    // Cadence: exactly one more EVENT every 5 ticks (see the full ring-0 pin
+    // below for where "event" and "new tile" start to diverge).
     run(s, 4);
     CHECK(s.state().enclose_index == 1);
     run(s, 1);
-    CHECK(s.state().enclose_index == 2);          // (1,0) closed at arm+10
+    CHECK(s.state().enclose_index == 2);  // (1,0) closed at arm+10 (tick 131)
     CHECK(s.state().cells[0][1] == Cell::Solid);
-    // A parked bomb in the wall's path must detonate, not linger. Tile (4,0) is
-    // the 5th outer-ring cell (index 4), so it closes at arm + 5*(4+1) = arm+25.
+    // A parked bomb in the wall's path must detonate, not linger. Tile (4,0)
+    // is event index 4 (no phantom repeats before it — those start at the
+    // ring's first corner, index 15), so it closes at arm + 5*(4+1) = tick 146.
     Bomb b;
     b.active = true;
     b.owner = 1;
@@ -269,32 +276,155 @@ TEST_CASE("hurry walls spiral in, crush, and detonate bombs") {
     b.flame = 1;
     s.state().bombs.push_back(b);
     s.state().players[1].bombs_placed = 1;
-    run(s, 20);                                   // reach and pass (4,0)'s drop
-    CHECK(s.state().bombs.empty());
+    run(s, 15);  // tick 146: (4,0) closes on the bomb
     CHECK(s.state().cells[0][4] == Cell::Solid);
-    // Depth 1 closes two rings and leaves the interior open. 88 cells * 5 ticks.
-    run(s, 88 * 5);
+    // sub_423209(bomb, -1) only QUEUES the detonation; sub_42331C's
+    // once-per-frame drain (which force-fires it) runs BEFORE sub_426818 each
+    // frame, so a bomb queued by THIS frame's wall drop isn't drained until
+    // the FOLLOWING frame — a confirmed one-tick defer, not instant. The
+    // bomb is still here immediately after the drop...
+    CHECK(!s.state().bombs.empty());
+    run(s, 1);                       // tick 147: forced fuse=1 expires
+    CHECK(s.state().bombs.empty());  // ...gone exactly one tick later
+    // Depth 1 closes rings 0 and 1 (VALUELST 27's authored comment, DATA/RES/
+    // VALUELST.RES: "1 is 2 rows") and leaves ring 2 open: (1,1) is ring 1's
+    // first tile (event index 52), (2,2) is ring 2 and never closes. Run out
+    // the rest of the sequence (96 events total for depth 1) and check both.
+    run(s, 601 - 147);  // tick 601 = arm+5 + 5*95: the last of 96 events has landed
     CHECK(s.state().cells[1][1] == Cell::Solid);
     CHECK(s.state().cells[2][2] == Cell::Blank);
     CHECK(s.state().enclose_index == enclose_total(1));
 }
 
+TEST_CASE("the enclosure spiral's full ring-0 event order, phantoms and all") {
+    // A COMPLETE pin of the crux: the exact tile sequence sub_426818's
+    // advance/accept-or-turn state machine produces for the outermost ring of
+    // a 15x11 board (docs/re/enclosure.md §4), reconstructed by literally
+    // re-running that state machine (not a hand-derived ring formula). Walks
+    // clockwise from (0,0): the top edge (0,0)..(14,0), a PHANTOM repeat of
+    // (14,0) (the turn Right->Down rejects without moving), the right edge
+    // (14,1)..(14,10), a phantom repeat of (14,10) (Down->Left), the bottom
+    // edge (13,10)..(0,10), a phantom repeat of (0,10) (Left->Up), then the
+    // left edge (0,9)..(0,0) — ending with an ORDINARY (non-phantom) second
+    // visit to (0,0) itself: the bounds check only excludes tiles outside the
+    // ring box, not tiles already visited, so the up-walk runs all the way
+    // back to its own start. 52 events, 48 unique tiles, exactly matching
+    // EnclosureSystem::total/position for depth 1's first ring (index 0..51;
+    // ring 1 starts at index 52).
+    static constexpr int kRing0[52][2] = {
+        {0, 0},   {1, 0},   {2, 0},   {3, 0},   {4, 0},  {5, 0},  {6, 0},  {7, 0},   {8, 0},
+        {9, 0},   {10, 0},  {11, 0},  {12, 0},  {13, 0}, {14, 0}, {14, 0}, {14, 1},  {14, 2},
+        {14, 3},  {14, 4},  {14, 5},  {14, 6},  {14, 7}, {14, 8}, {14, 9}, {14, 10}, {14, 10},
+        {13, 10}, {12, 10}, {11, 10}, {10, 10}, {9, 10}, {8, 10}, {7, 10}, {6, 10},  {5, 10},
+        {4, 10},  {3, 10},  {2, 10},  {1, 10},  {0, 10}, {0, 10}, {0, 9},  {0, 8},   {0, 7},
+        {0, 6},   {0, 5},   {0, 4},   {0, 3},   {0, 2},  {0, 1},  {0, 0},
+    };
+    CHECK(enclose_total(1) == 96);  // ring 0 (52) + ring 1 (44)
+    for (int i = 0; i < 52; ++i) {
+        int x = -1, y = -1;
+        REQUIRE(enclose_pos(i, 1, &x, &y));
+        CHECK(x == kRing0[i][0]);
+        CHECK(y == kRing0[i][1]);
+    }
+    // Ring 1 (13x9 box, one step inward) starts right where ring 0 ends.
+    int x = -1, y = -1;
+    REQUIRE(enclose_pos(52, 1, &x, &y));
+    CHECK(x == 1);
+    CHECK(y == 1);
+}
+
+TEST_CASE("a bouncing or warping player is immune to the closing wall") {
+    // sub_421D3F -> sub_41DE63: the shared kill routine used by the crush,
+    // flame-death, and rover-landing-kill paths all early-out (return 0, no
+    // death) while the victim's movement state is 5 (trampoline hop) or 6/7
+    // (warp out/in) — docs/re/campaign.md clause 4, stage-actors.md §592. The
+    // wall still solidifies the tile; only the player is spared. White-box:
+    // force the state directly (real trampoline/warphole setup is already
+    // covered by test_trampoline.cpp / test_stage_actors.cpp) right before
+    // the crush tick — bounce=15 decrements to 14 (c=16, past the len/2==15
+    // apex) and warp=12 decrements to 11 (nowhere near kWarpMid==9), so
+    // neither relocates the player off the tile this same tick.
+    MatchConfig cfg = test_config();
+    cfg.tuning.game_seconds = 10;
+    cfg.tuning.hurry_seconds = 8;
+    cfg.tuning.enclosement_depth = 1;
+
+    Simulation s(cfg);
+    run(s, 41 + 79 + 1 + 4);  // tick 125: one tick before (0,0) closes
+    s.state().players[0].bounce = 15;
+    run(s, 1);                                    // tick 126: (0,0) closes
+    CHECK(s.state().cells[0][0] == Cell::Solid);  // the wall still drops...
+    CHECK(s.state().players[0].alive);            // ...but the bouncing player survives
+
+    Simulation s2(cfg);
+    run(s2, 41 + 79 + 1 + 4);
+    s2.state().players[0].warp = 12;
+    run(s2, 1);
+    CHECK(s2.state().cells[0][0] == Cell::Solid);
+    CHECK(s2.state().players[0].alive);  // the warping player survives too
+}
+
+TEST_CASE("a ring corner replays the wall-slam event before the next new tile") {
+    // The "phantom" repeat (docs/re/enclosure.md §4): sub_426818 unconditionally
+    // re-drops sub_425E9B(x,y) — and replays the sound (sub_4278F2) — at
+    // whatever (x,y) currently is on EVERY 250 ms cadence slot, including a
+    // rejected turn that didn't move. The first phantom in the sequence is at
+    // event index 15, tile (14,0) (see the ring-0 pin above); event index 16
+    // is the first NEW tile past the corner, (14,1). `events` is cleared every
+    // tick (state.hpp), so each occurrence must be checked immediately after
+    // its own tick, not after a multi-tick jump.
+    MatchConfig cfg = test_config();
+    cfg.tuning.game_seconds = 10;
+    cfg.tuning.hurry_seconds = 8;
+    cfg.tuning.enclosement_depth = 1;
+    Simulation s(cfg);
+    run(s, 41 + 79 + 1 + 4 + 1);  // tick 126: event index 0, (0,0), drops
+    run(s, 14 * 5);               // tick 196: event index 14, (14,0), drops (a NEW tile)
+    CHECK(s.state().enclose_index == 15);
+    CHECK(s.state().cells[0][14] == Cell::Solid);
+    auto wall_closed_140_this_tick = [&] {
+        int n = 0;
+        for (const auto& e : s.state().events)
+            if (e.type == Event::Type::WallClosed && e.x == 14 && e.y == 0) ++n;
+        return n;
+    };
+    CHECK(wall_closed_140_this_tick() == 1);  // (14,0)'s first, ordinary WallClosed
+
+    run(s, 4);
+    CHECK(s.state().enclose_index == 15);  // no drop yet (mid-cadence)
+    run(s, 1);                             // tick 201: event index 15, the PHANTOM repeat
+    CHECK(s.state().enclose_index == 16);
+    CHECK(s.state().cells[0][14] == Cell::Solid);  // unchanged — already solid
+    CHECK(wall_closed_140_this_tick() == 1);       // (14,0)'s SECOND WallClosed, same tile
+
+    run(s, 4);
+    CHECK(s.state().enclose_index == 16);  // no drop yet
+    run(s, 1);                             // tick 206: event index 16, the first NEW tile
+    CHECK(s.state().enclose_index == 17);
+    CHECK(s.state().cells[1][14] == Cell::Solid);  // (14,1): past the corner at last
+    CHECK(wall_closed_140_this_tick() == 0);       // this tick's event is for (14,1), not (14,0)
+}
+
 TEST_CASE("enclosure interval is a fixed 5 ticks (250 ms at 20 Hz)") {
     // Pins the CONFIRMED cadence directly: independent of depth/ring count, the
     // per-wall interval is 250 ms / (1000/20) = 5 ticks (sub_426818 `+= 250`,
-    // NOT a spread-to-fit heuristic). docs/re/enclosure.md §3.
+    // NOT a spread-to-fit heuristic). docs/re/enclosure.md §3. With
+    // game_seconds=20 (ticks_left starts at 400) and hurry_seconds=20, remaining
+    // seconds = ticks_left/20 (floor); "<= 15" first holds at ticks_left==319
+    // (tick 81).
     MatchConfig cfg = test_config();
-    cfg.tuning.game_seconds = 20;   // 400 ticks
-    cfg.tuning.hurry_seconds = 20;  // banner at 20s (tick 0); walls at 15s -> tick 100
+    cfg.tuning.game_seconds = 20;  // 400 ticks
+    cfg.tuning.hurry_seconds =
+        20;  // banner at tick 1 (remaining 19s); walls arm tick 81 (remaining 15s)
     cfg.tuning.enclosement_depth = 3;  // all rings — proves interval != f(n)
     Simulation s(cfg);
-    run(s, 100);                    // reach the wall-start (remaining 15s)
-    REQUIRE(s.state().enclose_interval == 5);   // armed with the fixed interval
+    run(s, 81);                                // reach the wall-arm (remaining 15s)
+    REQUIRE(s.state().enclose_interval == 5);  // armed with the fixed interval
     // Walk the index forward and confirm it steps exactly once per 5 ticks.
     int last = s.state().enclose_index;
     for (int k = 0; k < 6; ++k) {
         run(s, 4);
-        CHECK(s.state().enclose_index == last);   // no drop in the first 4
+        CHECK(s.state().enclose_index == last);  // no drop in the first 4
         run(s, 1);
         CHECK(s.state().enclose_index == last + 1);  // one drop on the 5th
         ++last;
@@ -302,24 +432,26 @@ TEST_CASE("enclosure interval is a fixed 5 ticks (250 ms at 20 Hz)") {
 }
 
 TEST_CASE("the HURRY banner precedes the walls by 5 seconds (two distinct moments)") {
-    // The banner/sound (Hurry event) fires at remaining <= hurry_seconds; the
-    // walls do not start dropping until remaining <= hurry_seconds - 5.
-    // Confirmed: HUD block ~29533 (dword_464984) vs sub_426818 (dword_45BE9C).
+    // The banner/sound (Hurry event) fires the first tick remaining < hurry_
+    // seconds (strict); the walls do not arm until remaining <= hurry_seconds
+    // - 5 (non-strict), 5 whole seconds later. Confirmed: HUD block ~29533
+    // (dword_464984, strict `<`/`>` pair) vs sub_426818 (dword_45BE9C, `<=`).
     MatchConfig cfg = test_config();
-    cfg.tuning.game_seconds = 10;   // 200 ticks
-    cfg.tuning.hurry_seconds = 8;   // banner at remaining<=8s (tick 40); walls at 3s (tick 140)
+    cfg.tuning.game_seconds = 10;  // 200 ticks
+    cfg.tuning.hurry_seconds =
+        8;  // banner at tick 41 (remaining 7s); walls arm tick 121 (remaining 3s)
     cfg.tuning.enclosement_depth = 1;
     Simulation s(cfg);
-    run(s, 40);                     // remaining 8s: the banner window opens
-    CHECK(s.state().hurry);         // banner/sound event fired
+    run(s, 41);              // remaining 7s: the banner window opens
+    CHECK(s.state().hurry);  // banner/sound event fired
     bool hurry_evt = false;
     for (const auto& e : s.state().events)
         if (e.type == Event::Type::Hurry) hurry_evt = true;
-    CHECK(hurry_evt);               // the Hurry event fired on this exact tick
-    run(s, 60);                     // remaining 5s: still inside the banner window
-    CHECK(s.state().enclose_index == 0);          // ...but no wall has dropped
+    CHECK(hurry_evt);                     // the Hurry event fired on this exact tick
+    run(s, 79);                           // tick 120: still inside the banner window (remaining 4s)
+    CHECK(s.state().enclose_index == 0);  // ...but no wall has dropped
     CHECK(s.state().cells[0][0] != Cell::Solid);
-    run(s, 45);                     // past tick 145: walls have started
+    run(s, 6);  // tick 126: walls have started
     CHECK(s.state().enclose_index >= 1);
     CHECK(s.state().cells[0][0] == Cell::Solid);
 }
@@ -716,7 +848,8 @@ TEST_CASE("PlayerDied from an enclosure wall crush has no killer (data == -1)") 
     cfg.tuning.hurry_seconds = 8;
     cfg.tuning.enclosement_depth = 1;
     Simulation s(cfg);
-    run(s, 40 + 99 + 1 + 4 + 1);  // banner, walls arm, first wall drops (see enclosure test)
+    run(s, 41 + 79 + 1 + 4 +
+               1);  // banner, walls arm, first wall drops (see enclosure test) -> tick 126
     REQUIRE(!s.state().players[0].alive);
     bool found = false;
     for (const Event& e : s.state().events) {

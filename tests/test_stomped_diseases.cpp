@@ -34,9 +34,9 @@ int skulls_on_floor(const State& s) {
     return n;
 }
 
-// A config whose walls close almost immediately: game 10 s, banner at 8 s,
-// walls arming at 3 s remaining (tick 140), first drop at tick 145 (see
-// test_sim.cpp "hurry walls" for the pinned cadence).
+// A config whose walls close almost immediately: game 10 s, banner at 7 s
+// remaining (tick 41), walls arming at 3 s remaining (tick 121), first drop
+// at tick 126 (see test_sim.cpp "hurry walls" for the pinned cadence).
 MatchConfig closing_config() {
     MatchConfig cfg = open_config();
     cfg.spawns = {{7, 4}, {8, 4}};  // interior blanks, off the two closing rings
@@ -65,10 +65,17 @@ TEST_CASE("stomped_bombs_detonate ON: the closing wall detonates the bomb") {
     MatchConfig cfg = closing_config();
     cfg.tuning.wall_detonates = 1;  // the original default (getvalue(46) = 1)
     Simulation s(cfg);
-    run(s, 144);  // one tick before the first wall drops at (0,0)
+    run(s, 125);  // one tick before the first wall drops at (0,0), tick 126
     park_bomb(s.state(), 0, 0);
+    s.tick({});  // tick 126: wall drops on (0,0)
+    // sub_423209(bomb, -1) only QUEUES the detonation (sub_42331C's once-per-
+    // frame drain runs BEFORE sub_426818 each frame, so a bomb queued by
+    // THIS frame's wall drop isn't force-fired until the FOLLOWING frame —
+    // see docs/re/enclosure.md §3 and test_sim.cpp's "hurry walls" test). The
+    // bomb is still here immediately after the drop...
+    CHECK(!s.state().bombs.empty());
     bool exploded = false;
-    s.tick({});  // tick 145: wall drops on (0,0)
+    s.tick({});  // tick 127: the forced fuse expires, tick_fuses() detonates it
     for (const auto& e : s.state().events)
         if (e.type == Event::Type::Explosion && e.x == 0 && e.y == 0) exploded = true;
     CHECK(exploded);
@@ -82,10 +89,10 @@ TEST_CASE("stomped_bombs_detonate OFF: the closing wall silently eats the bomb")
     MatchConfig cfg = closing_config();
     cfg.tuning.wall_detonates = 0;
     Simulation s(cfg);
-    run(s, 144);
+    run(s, 125);
     park_bomb(s.state(), 0, 0);
     bool exploded = false;
-    s.tick({});
+    s.tick({});  // tick 126: sub_424841 zeroes the bomb directly, no queue, no defer
     for (const auto& e : s.state().events)
         if (e.type == Event::Type::Explosion) exploded = true;
     CHECK(!exploded);
@@ -101,7 +108,7 @@ TEST_CASE("a flying bomb sails over the dropping wall (sub_422E48 skips motion 2
     MatchConfig cfg = closing_config();
     cfg.tuning.wall_detonates = 1;
     Simulation s(cfg);
-    run(s, 144);
+    run(s, 125);
     // A bomb mid-flight whose interpolated position is over (0,0) this tick.
     Bomb b;
     b.active = true;

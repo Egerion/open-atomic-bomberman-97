@@ -183,6 +183,51 @@ MatchConfig pillars_config() {
 // byte-identical — the fix only bites once a disease is actually contagious,
 // aging past expiry, or adjacent to a stun in the 400-600 tick window — so
 // only kExpectedHash[2]/[3] (ticks 600/800) move below.
+//
+// NOTE (disease audit's point 2, above): the "stun==0" contagion/target gate
+// was subsequently CORRECTED — offset +8 is the DIED-THIS-ROUND flag (our
+// !alive), not the +58 head-stun countdown, so the original gates disease on
+// alive only. See the later "+8/+58 mislabel" correction; if that recapture
+// has landed, D's hashes here reflect the corrected (alive-only) behaviour.
+//
+// UPDATE 2026-07-10 (enclosure/HURRY arithmetic audit, docs/re/enclosure.md):
+// a DELIBERATE behaviour recapture in EnclosureSystem, all RNG-neutral (the
+// enclosure draws zero State::rng — every kExpectedRng/final-rng assertion in
+// this file is UNCHANGED, verified byte-for-byte before recapturing hashes):
+//   1. Trigger-boundary arithmetic: `warn`/`closing` used to compare raw
+//      ticks_left against threshold*kTicksPerSecond directly, which is NOT
+//      the same predicate as the original's whole-seconds comparison (it
+//      silently rounds the wrong way — see the audit report). Now floors
+//      ticks_left/kTicksPerSecond once and compares that against the
+//      threshold with the original's exact strictness (`<` for the banner,
+//      `<=` for the wall-arm). Net effect: the banner fires 1 tick later, the
+//      walls ARM 19 ticks EARLIER, than before this fix.
+//   2. Spiral cadence: EnclosureSystem::total/position now replay
+//      sub_426818's own advance/accept-or-turn state machine tile-for-tile
+//      (including its "phantom" same-tile repeats at 3 of a ring's 4 corners
+//      and the ordinary — non-phantom — second visit to each ring's own
+//      start tile) instead of a hand-derived ring-perimeter formula that
+//      emitted exactly one event per unique tile. Every ring now takes 4
+//      EXTRA 5-tick cadence slots (52 events for ring 0's 48 unique tiles,
+//      not 48) to close, so every wall from the first ring corner onward
+//      lands several ticks later than before this fix, compounding per ring.
+//   3. Wall-triggered bomb detonation now fires the tick AFTER the wall
+//      drops (forces the bomb's fuse to fire on the sim's own next
+//      tick_fuses() pass), not synchronously on the drop tick — mirroring
+//      sub_423209's queue-and-drain-next-frame behaviour (sub_42331C).
+//   4. A player mid-trampoline-bounce or mid-warp when a wall drops on their
+//      tile is no longer crushed (sub_41DE63's states-5/6/7 early-out) —
+//      unreached by every existing scenario (none combine bounce/warp state
+//      with the wall-drop phase), so this is a no-op here.
+// Reaches B (game_seconds defaults to 150 -> hurry/wall phase within the
+// 3000-tick run: checkpoints 500/1000/1500 stay BYTE-IDENTICAL — proved by
+// running both revisions — since the banner/arm/first-ring tiles all land
+// well after tick 1500; checkpoints 2000/2500/3000 move) and C (game_seconds
+// = 70, deliberately picked to reach the wall phase inside a short 1500-tick
+// run — the whole point of the "fast hurry phase" scenario, so its single
+// tick-1500 hash moves). Goldens A/D/E are unaffected: A has no clock
+// (dormant, ticks_left seeded huge); D/E run 800/300 ticks and never reach
+// even the banner (~tick 1800 for their game_seconds=150 default).
 
 TEST_CASE("golden A: empty state, 10000 ticks") {
     Simulation a;
@@ -217,12 +262,12 @@ TEST_CASE("golden B: 4-player brick match with all abilities") {
     CHECK(s.hash() == 0x57a58cd7591a0885ull);  // setup itself is pinned
 
     static constexpr std::uint64_t kExpected[6] = {
-        0x57c354d638c66743ull,  // tick 500
-        0xf78a6117e3a966c7ull,  // tick 1000
-        0xac762307668aeff3ull,  // tick 1500
-        0x8b7d40da72ac06b5ull,  // tick 2000
-        0x678b77f30499a1ebull,  // tick 2500
-        0xd26e903bfb21b042ull,  // tick 3000
+        0x57c354d638c66743ull,  // tick 500 -- unchanged (well before the wall phase)
+        0xf78a6117e3a966c7ull,  // tick 1000 -- unchanged
+        0xac762307668aeff3ull,  // tick 1500 -- unchanged
+        0x3c94ccfdda9bae99ull,  // tick 2000 -- recaptured (enclosure audit, see header note)
+        0x2f985da620256ef3ull,  // tick 2500 -- recaptured
+        0x27334d5da091e68aull,  // tick 3000 -- recaptured
     };
     for (std::uint64_t t = 0; t < 3000; ++t) {
         s.tick(pattern(t));
@@ -240,7 +285,7 @@ TEST_CASE("golden C: trigger bombs and a fast hurry phase") {
     cfg.born_with[static_cast<int>(PowerupType::Trigger)] = true;
     Simulation s(cfg);
     for (std::uint64_t t = 0; t < 1500; ++t) s.tick(pattern(t * 7 + 3));
-    CHECK(s.hash() == 0x183f800195a7b93dull);
+    CHECK(s.hash() == 0xb0fcede2e39f3f35ull);  // recaptured (enclosure audit, see header note)
 }
 
 TEST_CASE("golden D: the disease gauntlet") {
