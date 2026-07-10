@@ -710,7 +710,8 @@ TEST_CASE("Audit fix: a flame-vetoed directed step falls through to blast bricks
     br.path_target_x = 10;
     br.path_target_y = 5;
     br.path_target_cost = 0;
-    st.flame[5][7] = 999;  // (7,5): the shortest first step east, lit throughout
+    st.flame[5][7] = 250;  // (7,5): the shortest first step east; 250 ticks of
+                           // flame (fits uint8_t) stays lit the whole 100-tick loop
 
     bool dropped = false;
     for (int t = 0; t < 100 && !dropped; ++t) {
@@ -718,7 +719,9 @@ TEST_CASE("Audit fix: a flame-vetoed directed step falls through to blast bricks
         if (st.bombs.size() > 1) dropped = true;
         // Never actually standing on the lit tile -- the veto, not luck, kept
         // the AI off (7,5) every single tick.
-        REQUIRE_FALSE(tile_x(st.players[0]) == 7 && tile_y(st.players[0]) == 5);
+        // Extra parens: doctest can't decompose `&&` in an assertion
+        // ("Expression Too Complex") — wrap so it sees one bool.
+        REQUIRE_FALSE((tile_x(st.players[0]) == 7 && tile_y(st.players[0]) == 5));
     }
     CHECK(dropped);  // behaviour 3 got (and eventually won) its 1-in-5 roll on a
                       // vetoed tick -- impossible under the old unconditional `true`
