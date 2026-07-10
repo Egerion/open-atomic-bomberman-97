@@ -980,6 +980,122 @@ call site 22594 inside `sub_41EC84`; `sub_42331C` bomb-mover call sites to
 `sub_405654` at ~25365/25452/25529, no call to `sub_405A81` anywhere in the
 function; `exp_` import declaration pseudo.c 980.)
 
+## Enclosure/HURRY arithmetic audit 2026-07-10 — line-by-line pass (`sub_426818`)
+
+A full re-read of `sub_426818` (the enclosure stepper) and everything it
+calls — `sub_410578`/`sub_4105D2` (clock), `sub_412135` (getvalue,
+register-convention-confirmed), `sub_421D3F`/`sub_41DE63` (player crush),
+`sub_42542D`/`sub_4254F3` (powerup destroy), `sub_422E48`/`sub_423209`/
+`sub_424841`/`sub_42331C` (bomb detonate/eat) — plus the HUD "HURRY!" banner
+check in `sub_42A191` (~29531-29549), triggered by this repo's line-by-line
+fidelity audit workflow (same rigor as the Core-feel audit above). Full
+derivation, evidence, and the reconstructed spiral in `docs/re/enclosure.md`.
+Four deviations found and fixed (GOLDEN recaptured in the same commit,
+`tests/test_golden.cpp`'s 2026-07-10 enclosure-audit note has the
+per-scenario proofs — all RNG-neutral, every `kExpectedRng`/final-`rng`
+assertion in the golden suite is byte-identical before and after):
+
+1. **Trigger-boundary arithmetic (`sub_410578` vs. `sub_412135(101)`,
+   `sub_42A191` ~29531-29549).** The banner is STRICT (`remaining <
+   hurry_seconds`, confirmed via Watcom's register calling convention —
+   `sub_412135`'s own signature is `int __usercall sub_412135@<eax>(int
+   a1@<eax>)`, argument AND return both in EAX, which is what makes the
+   pseudocode's bare unassigned-looking `sub_410578();`/`sub_412135(101);`
+   calls actually feed the comparison via an EDX-preserved value rather than
+   being discarded); the wall-arm is NON-STRICT (`remaining <= hurry_seconds
+   - 5`). The prior port compared raw `ticks_left` directly against
+   `threshold * kTicksPerSecond`, which is not equivalent to flooring
+   `ticks_left/kTicksPerSecond` first and then comparing with the correct
+   strictness — it silently fired the banner ~1 tick early and the wall-arm
+   ~19 ticks late. `EnclosureSystem::update()` now floors once
+   (`seconds_left = ticks_left / kTicksPerSecond`) and compares that with
+   the original's exact operators.
+2. **Spiral cadence — THE CRUX (`sub_426818` LABEL_26/LABEL_47/LABEL_60/
+   LABEL_61, ~27225-27298).** The original does not emit one event per
+   unique tile: every 250 ms cadence slot unconditionally re-drops
+   `sub_425E9B(x,y)` (and replays the wall-slam sound) at whatever `(x,y)`
+   currently is, THEN computes the next position. A rejected turn that
+   doesn't move (three of a ring's four corners) means the NEXT slot
+   re-drops the SAME tile — a real extra 250 ms pause with no new tile, but
+   a genuine second crush/detonate chance on it. The fourth corner (where
+   the ring completes and the walk steps inward) is reached differently: the
+   bounds check has no memory of already-visited tiles, so the up-walk
+   naturally runs all the way back to the ring's own start tile as an
+   ordinary ACCEPTED step before failing and wrapping. Net: every ring costs
+   4 extra events beyond its unique-tile count (3 phantom corner repeats + 1
+   ordinary-but-duplicate start-tile revisit) — 52 events for the outer
+   ring's 48 unique tiles on a 15×11 board. `EnclosureSystem::total`/
+   `position` now replay `sub_426818`'s own advance/accept-or-turn state
+   machine tile-for-tile (a literal port, not a hand-derived ring-perimeter
+   formula) so both quirks — and the degenerate innermost rings, which are
+   only 1 tile wide/tall — fall out for free instead of needing hand
+   special-casing. Fully pinned: `tests/test_sim.cpp`'s "the enclosure
+   spiral's full ring-0 event order, phantoms and all" (all 52 events) and
+   "a ring corner replays the wall-slam event before the next new tile".
+3. **Wall-triggered bomb detonation is deferred one tick, not synchronous
+   (`sub_423209` queue → `sub_42331C` drain, traced end to end).**
+   `sub_423209(bomb, -1)` only appends to a 100-slot pending queue; the
+   queue drains inside `sub_42331C`, gated to run at most once per frame via
+   a frame-stamp (`dword_462210 != dword_464994`). `sub_42A191` calls
+   `sub_42331C` twice a frame (`sub_4245B9` mode 0 BEFORE `sub_426818`;
+   `sub_42459A` mode 1 AFTER) — only the mode-0 call, which runs first, ever
+   drains, so a bomb queued by THIS frame's wall drop isn't force-fired
+   until the FOLLOWING frame. `EnclosureSystem::drop_wall` now sets
+   `Bomb::fuse = 1` instead of exploding synchronously, so the sim's own
+   next `tick_fuses()` pass (which already runs before `enclosure.update()`
+   in our tick order) detonates it on schedule — reproducing the one-tick
+   gap without a new pending-queue concept. Known narrow gap NOT closed: a
+   bomb mid-dud-fizzle (`Bomb::dud_left > 0`) has its fuse check skipped
+   entirely by `tick_fuses`'s own dud branch, so a wall crushing a
+   currently-fizzling dud is silently absorbed (keeps fizzling) instead of
+   being force-detonated, unlike the original (whose drain-forced explode
+   check isn't kind-gated). Too narrow an intersection (wall-crush ∩
+   currently-a-dud) to chase further here.
+4. **Player crush now exempts bounce/warp states (`sub_421D3F` → `sub_41DE63`,
+   the SAME shared kill routine ordinary flame-death and the campaign
+   rover/ghost landing-tile kill funnel through — `docs/re/campaign.md`
+   clause 4).** `sub_41DE63` early-outs (returns 0, no death, no RNG) while
+   the victim's movement-state word (+78) is 5 (trampoline hop) or 6/7 (warp
+   out/in); player-type 4 (network-spectator) has no equivalent slot in this
+   port (N/A, unreachable). `EnclosureSystem::drop_wall`'s player-crush check
+   now also requires `p.bounce == 0 && p.warp == 0`. No existing scenario
+   combines a bounce/warp with the wall-drop phase, so this is a no-op on
+   every golden/regression scenario; test: "a bouncing or warping player is
+   immune to the closing wall".
+
+Confirmed unchanged (verified, not just assumed): the enclosure draws ZERO
+`State::rng` (the only `rand()` in `sub_426818` is the presentation-only
+drop-sound variant pick, once per arm); `sub_426818`'s only top-level gate
+(`sub_421969() > 1`) is a general match-active check with no enclosure-
+specific round-end special-casing, so the existing `GameApp` post-decision
+linger already gives the correct "walls keep closing for a few seconds after
+one side is left" behaviour; the depth/id-46/motion-exemption/order-of-checks
+details from the 2026-07-08 "Options toggles" entry below all re-verified
+identical.
+
+**Flagged DEVIATION-reported, NOT changed** (see `docs/re/enclosure.md` §4
+"Ring count" for the full writeup): a literal transcription of the ring-stop
+check (`if (2*getvalue(27) <= depth) return;`, evaluated once a ring
+completes) reads as closing rings `0..2*depth` INCLUSIVE — one ring more than
+VALUELST 27's own authored comment ("0 is none, 1 is 2 rows, 2 is 4 rows, 3
+is all the way") and the pre-existing golden/test-pinned behaviour both say.
+Re-verified via an independent re-implementation of that exact check (not
+just re-read); the conflict could not be resolved by static analysis alone
+(depth 3 "all the way" can't discriminate the two readings on a 15×11 board —
+both exhaust its 6 rings). Kept the comment-and-golden-corroborated "2 ×
+depth" rule; `rings_for()` in `enclosure.cpp` carries the same note.
+
+Also traced, and explicitly OUT OF SCOPE (not touched): the SAME
+`sub_423209` queue-and-drain-next-frame mechanism used by wall-triggered
+detonation (#3 above) is ALSO used by the flame-arm walk's ordinary
+grounded-bomb chain hit (`sub_42331C` ~25645). If that reading holds,
+ordinary bomb chain reactions in the original take one extra FRAME per link
+to cascade, not the same-tick synchronous/recursive chaining
+`FlameSystem::spread_to` currently performs. This is a fundamental,
+codebase-wide question about bomb-chain pacing with enormous potential
+golden impact — well beyond "enclosure" — and deserves its own dedicated
+audit; flagged for follow-up, not touched in this pass.
+
 ## Punch glove feedback — CONFIRMED (`sub_424A50` handler, `sub_41F29B` dispatch)
 
 Read 2026-07-04 ("devam" #23, control/audio fidelity). The punch glove is the
