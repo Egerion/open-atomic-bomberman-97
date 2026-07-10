@@ -551,6 +551,84 @@ goldflame, so **golden B must be recaptured**; A/C/D/E stay byte-identical (see
 "Final in-game 1:1 gaps" §4 for the per-scenario reasoning). The earlier
 "Golden verified UNCHANGED" claim held only while goldflame was excluded.
 
+### Stun does NOT gate flame-death or pickup — RESOLVED (offset+8 ≠ stun)
+
+Read 2026-07-10, resolving the disease audit's "adjacent-but-out-of-scope"
+note (below, under "Disease system fidelity audit"): does a stunned player
+become immune to flames and unable to pick up floor powerups for the 16-tick
+head-hit duration? **No — offset+8 (the DWORD the disease audit and `ai.cpp`
+both labelled "Player::stun") is a DIFFERENT field: the player's "already
+died this round" flag, not the stun countdown.**
+
+Evidence, cross-checked three ways:
+
+1. **`sub_421F7E`** (the head-hit handler) is declared `__usercall
+   sub_421F7E@<eax>(_WORD *a1@<eax>)` — an explicit WORD pointer. It writes
+   `a1[29] = 16` (byte offset **+58**, WORD-strided: 29×2), `a1[39] = 3`
+   (state +78), `a1[40] = 0` (+80). It never touches a DWORD at +8.
+2. **`sub_41DCB2`** (the death-application routine, called from the flame-kill
+   path `sub_41DE63`) guards with `if (!*(_WORD*)(result+102) &&
+   !*(_DWORD*)(result+8))` — "not currently spawn-invulnerable (+102) AND not
+   already dead (+8)" — then unconditionally sets `*(_DWORD*)(v5+8) = 1`
+   (pseudo.c ~21921/21956). +8 is written exactly once in the whole binary,
+   as a hardcoded boolean `1`, never a countdown value, and is cleared only
+   by the round-entry reset (`*((_DWORD*)v111+2) = 0` at ~22874) which is
+   gated on offset+0 (`!*(_DWORD*)v111`) — a flag death never resets, so +8
+   stays 1 for the rest of the round once set (Bomberman rounds have no
+   mid-round respawn). A duration flag with a single hardcoded `1` and no
+   in-round reset path cannot be a 16-tick stun counter.
+3. **`sub_41F29B`'s own body is internally inconsistent with "+8 = stun"**:
+   the giant `if (!*((_DWORD*)v111+2))` block (~22904, closes ~23456 — brace-
+   depth-traced, not eyeballed) CONTAINS the real stun countdown's decrement
+   (`if (v111[29] > 0) { ...; --v111[29] ... }`, WORD-strided offset **+58**,
+   ~22982-22990). A field cannot gate a block that only decrements *itself*
+   inside that same block — that is circular. +8 and +58 are necessarily two
+   different fields.
+
+What stun (+58) actually gates, read end to end: **only new-input
+acquisition.** The local `v113` (init `1` at ~22981, forced `0` while
++58>0 or while the player is in states 4/5/6/7) gates a single `if (v113 &&
+!dword_4621E0) { sub_41E61E(...) / AI decide }` at ~23028-23039 — i.e., a
+stunned player cannot change direction or start a new bomb action — plus one
+cosmetic standing-animation frame pick at ~23086. Movement-budget accrual and
+the `sub_41EC84` per-pixel-step call (~23422/23423 and ~23451/23452) are
+**inside** the +8 block but are **not** gated on `v113`/+58 at all, so a
+still-alive stunned player's PRE-EXISTING momentum keeps executing every tick
+of the stun (only issuing a *new* direction is blocked) — surprising, but
+consistent with "the player got bonked and can't react" rather than "the
+player is frozen solid." This movement-continues-during-stun behaviour is a
+separate, adjacent finding from the immunity question this entry resolves;
+our port's `player_turn` (simulation.cpp) currently does a full early return
+on `p.stun > 0` (skips movement entirely), which is a real divergence from
+the above — **flagged for separate follow-up, not changed here** (it is a
+core-control-flow change shared with trampoline/warp gating, not a flame-
+death/pickup question, and needs its own golden-impact assessment).
+
+The flame-death check (`sub_42708D`/`sub_41DE63`) and the floor-powerup
+dispatch (`sub_42542D`/`sub_41E21E`, ~22915-22926, and again unconditionally
+inside `sub_41EC84`'s loop at ~22710-22717) are gated ONLY on +8 (dead), which
+a merely-stunned-but-alive player never sets. **Conclusion: stun is not flame
+immunity and does not block pickup, in the original.** `field_vs_players`
+(simulation.cpp) already matches — it gates on `!p.alive` only and has never
+checked `p.stun` — so **no production code changed**. Pinned by
+`tests/test_sim.cpp` "a stunned-but-alive player still burns and still picks
+up floor powerups" (added 2026-07-10; confirmed failing if a `stun == 0`
+guard is (re-)added to `field_vs_players`, so it is real regression coverage,
+not a tautology).
+
+**Open concern, not resolved here:** `DiseaseSystem`'s `stun == 0` gates
+(added by the disease audit below, citing this same +8 field as
+"Player::stun") may rest on the same mislabelling and could be blocking
+disease aging/contagion for a merely-stunned-but-alive player when the
+original would not. `ai.cpp`'s `pick_live_enemy`/`behave_seek_enemy` target-
+liveness checks (`q.stun != 0`, comments "+8 (stunned)") are the same
+convention and share the same doubt — though skipping a stunned target has
+no obvious gameplay downside for AI the way skipping disease aging does.
+Reported to main; not changed in this pass (out of this task's scope — flame
+propagation and disease arithmetic are owned elsewhere — and diseases.cpp's
+golden-recaptured commit deserves its own re-verification pass rather than a
+drive-by edit here).
+
 ## Powerup pickup dispatcher — CONFIRMED (`sub_41E21E`)
 
 Read 2026-07-03. Flow: cure roll first (curable && 1-in-getvalue(125)), then a
@@ -1036,6 +1114,26 @@ existing port; no changes there):
    loop's per-player gate, the contagion source gate, the contagion target
    validity check, and `has_swap_target`/`give()`'s Swap target list.
 
+   **UPDATE 2026-07-10 (gate-fidelity audit, "Stun does NOT gate flame-death
+   or pickup" under "Head hit" above) — this point's field ID is now in
+   doubt.** A from-scratch, brace-traced re-read of `sub_41F29B` (not relying
+   on this entry's own citation) found `+8` to be the player's "already died
+   this round" flag, not the head-hit stun countdown (which is a separate
+   WORD at `+58`, confirmed against `sub_421F7E`'s explicit `_WORD *a1`
+   typing and never written by anything else). The `ai.cpp` convention this
+   point leans on ("`+8`, `Player::stun`") looks like the same mislabelling
+   propagated from an earlier AI RE pass, not independent confirmation — see
+   the cross-check in `sub_422718`, where the identical `v7[2]` exclusion
+   reads equally well as "skip dead targets" (AI has no obvious reason to
+   avoid attacking a defenseless *stunned* target, but obviously cannot
+   target a dead one). If this holds, the `stun == 0` guards added here are
+   an unintended NEW deviation (the original would keep aging/spreading
+   disease on a merely-stunned-but-alive player) rather than a fix. **Not
+   changed in this pass** — this entry's own golden recapture (below) is
+   real, tested history and deserves a deliberate re-verification, not a
+   drive-by edit from an audit scoped to a different mechanic. Flagged to
+   main.
+
 **Two related items re-confirmed, NOT changed** (both were already flagged
 "deliberately NOT changed, documented for honesty" by the Core-feel audit;
 this pass independently re-derived the same conclusions from the raw
@@ -1080,16 +1178,22 @@ yet, not a disease-arithmetic question.
 `disease_fresh` are all packed into one `mix()` call (`hash.cpp` ~127-132) —
 every field `DiseaseSystem` reads or writes is covered.
 
-**Adjacent-but-out-of-scope finding, not acted on:** `sub_41F29B`'s stun gate
-(~22904) also wraps the powerup-pickup dispatch call (`sub_41E21E`,
-~22921-22926) — i.e. the original appears to block ALL powerup pickup
-(disease or otherwise) while stunned, not just disease aging/contagion. Our
-`field_vs_players` (`simulation.cpp`) does not gate pickup on `stun` at all.
-This is a general pickup-gating question spanning every powerup kind, not a
-disease-specific one, and resolving it needs pinning the OTHER condition that
-nests inside the same block (`sub_41DE63`/`sub_42708D`/tile-actor checks,
-~22915-22917, not fully decoded here) — flagged for separate follow-up, not
-fixed in this pass.
+**Follow-up RESOLVED 2026-07-10 (see "Stun does NOT gate flame-death or
+pickup" under "Head hit" above) — the premise below was wrong.** The
+~22904 gate is real, but the DWORD it tests (offset+8) is not the stun
+countdown; it is the player's "already died this round" flag (set once, by
+`sub_41DCB2`, on flame/other death — never by the head-hit handler
+`sub_421F7E`, which writes a completely separate WORD at +58). The original
+does NOT block powerup pickup (disease or otherwise) while merely stunned —
+only while dead. `field_vs_players` not gating pickup on `stun` is therefore
+**already correct, not a gap**; nothing changed there. The other condition
+this note asked to have decoded (`sub_41DE63`/`sub_42708D`, ~22915-22917) IS
+now fully decoded in that entry: it is a flame-death check, ANDed with the
+same +8/"not dead" gate, run once per tick ahead of the pickup dispatch —
+unrelated to stun. **New open concern raised by that same pass:** this
+section's OWN `stun == 0` additions below (point 3) cite the identical +8
+field as "Player::stun" and may rest on the same mislabelling — flagged
+there, not re-litigated here.
 
 **GOLDEN IMPACT.** Zero RNG draws added or removed by any of the three fixes
 (state/ordering only). Full suite run before/after: golden A/B/C/E are
