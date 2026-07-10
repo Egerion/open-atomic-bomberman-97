@@ -1440,23 +1440,8 @@ before a player could possibly reach it (the tile is still fully blocking,
 per the cell-type finding above) — rather than popping in only once the
 brick is fully gone.
 
-**Open question, NOT resolved, NOT ported:** `sub_425107` has an earlier,
-gated branch (before the unconditional reveal above) that, for a hidden
-token whose kind is 5, 6, or 11, searches up to 200 random tiles for another
-hidden token of a DIFFERENT kind on a still-standing brick and swaps the two
-records (or, failing that, a second 200-try search for an empty brick tile
-to relocate this one onto, clearing the original slot). The gate itself is
-murky: `if (!sub_40C06A()) { sub_4105B0(); v2 = getvalue(102); if (v3 < v2)
-{...} }` where `v3` is a register Hex-Rays could not resolve to a concrete
-assignment (flagged "possibly undefined" in the decompile) — plausibly
-`sub_4105B0()`'s return value, but not confirmed, and so it is UNKNOWN
-whether this branch ever fires in practice, how often, or whether the two
-`rand()%W`/`rand()%H` search loops draw RNG on the live code path. This is
-a genuinely separate, narrow mechanic (relocating specific powerup KINDS
-among hidden bricks) orthogonal to this audit's reach/timing/order/
-destruction/overlap focus, and is NOT ported here — flagged for a dedicated
-follow-up pass (would need the actual disassembly around `sub_4105B0`'s
-call/return to pin `v3`, the same technique used to resolve `exp_` above).
+**`sub_425107`'s earlier gated branch (the "possibly undefined" `v3` register)
+is now RESOLVED — see "Overpowered-powerup relocation" below.**
 
 **The bug this corrects:** `FlameSystem::spread_to`'s brick branch used to
 flip `s.cells[ty][tx]` to `Cell::Blank` immediately (letting movement/bombs/
@@ -1505,6 +1490,210 @@ either.
 27365-27463 (brick-kind branch 27404-27424); `sub_426FCC` 27479-27504;
 arm-loop brick branch 25662-25678; VALUELST ids 10/20 both = 10 shipped,
 `docs/valuelst-map.md`.)
+
+## Overpowered-powerup relocation — CONFIRMED (`sub_425107`'s early gated branch, 2026-07-10 follow-up)
+
+Resolves the "Open question, NOT resolved, NOT ported" flag left by the
+"Brick crumble timing" entry above: `sub_425107` (the brick-ignite reveal
+helper) has an EARLIER branch, before its unconditional reveal tail
+(`LABEL_33`), that can relocate a hidden token instead of letting it show:
+
+```c
+if ( !sub_40C06A() )
+{
+  sub_4105B0();
+  v2 = sub_412135(102);      // getvalue(102)
+  if ( v3 < v2 )
+  {
+    v5 = v12[1];              // the token's KIND (not its state)
+    if ( v5 >= 5 && (v5 <= 6 || v5 == 11) )
+    {
+      /* pass 1: 200-try swap search */
+      /* pass 2: 200-try empty-brick move search */
+    }
+  }
+}
+LABEL_33: ...
+```
+
+**The "possibly undefined" `v3` — RESOLVED by direct disassembly, same
+technique as `exp_` above.** Hex-Rays could not prove where `v3` (read at
+the `if (v3 < v2)` comparison, pseudo.c line "4251A4: variable 'v3' is
+possibly undefined") got its value. Raw disassembly of `0x425184-0x4251A4`
+(capstone, `BM95.EXE` imagebase `0x400000`) settles it:
+
+```asm
+425184  call   0x40c06a          ; sub_40C06A() -> dword_460058 (network role)
+425189  test   eax, eax
+42518b  jne    42535e            ; nonzero (networked) -> skip straight to LABEL_33
+425191  call   0x4105b0          ; sub_4105B0() -> dword_4601BC
+425196  mov    edx, eax          ; <-- v3 = sub_4105B0()'s return value, explicitly
+425198  mov    eax, 0x66         ; eax = 102
+42519d  call   0x412135          ; getvalue(102)
+4251a2  cmp    edx, eax          ; v3 < v2 ?
+4251a4  jge    42535e            ; v3 >= v2 -> skip to LABEL_33 (no relocation)
+```
+
+`mov edx, eax` immediately after the `call 0x4105b0` is a plain, unambiguous
+register copy — `v3` IS `sub_4105B0()`'s return value, full stop. Hex-Rays'
+"possibly undefined" is a dataflow-tracking miss (likely because Hex-Rays
+doesn't know `sub_4105B0`'s true signature crosses the call boundary
+cleanly), not a sign of dead/garbage/uninitialized data — the exact same
+false-alarm shape as `exp_`.
+
+**What `sub_4105B0()`/`dword_4601BC` and `getvalue(102)` actually are.**
+`sub_4105B0` (pseudo.c 14448-14453) is a one-line accessor: `return
+dword_4601BC;`. That field is written by `sub_4105D2` (pseudo.c 14455-14552,
+the in-round MM:SS clock's own per-tick updater, called once per game tick
+from `sub_42A191` — `docs/valuelst-map.md` ids 110-112) as `dword_4601A8 -
+<remaining seconds>`, i.e. **elapsed seconds since the round timer started**
+(`dword_4601A8` is the round's total length in seconds; the subtrahend is
+`dword_4601B0` when hosting a network game, or a fresh wall-clock read via
+`sub_43ACF8()` otherwise — either way the complement of "seconds left", so
+their difference is monotonically-increasing elapsed time). `sub_40C06A()`
+(pseudo.c 11138-11142) returns `dword_460058`, the local/host/guest network
+role flag (0 = not networked, 1 = host, 2 = guest — set by `sub_40C035`,
+read the same way by `sub_4105D2`'s own host/guest split). `getvalue(102)`
+is the ordinary VALUELST lookup (`sub_412135` = `getvalue`,
+`docs/formats/valuelst.md`); the SHIPPED `DATA/RES/VALUELST.RES` line is:
+
+```
+; the period of time when "over-powerful" powers won't appear (will go elsewhere)
+102,40                                              ; PGT
+```
+
+This is the smoking gun that independently confirms every part of the
+disassembly reading: id 102 is a SECONDS value (40, i.e. 800 ticks at the
+20 Hz nominal rate), the direction is "won't appear" for the opening period
+(elapsed < threshold), not late-game as `docs/valuelst-map.md` previously
+guessed ("102 = late-game powerup gating, still unpinned" — backwards; now
+corrected), and the file's own author already calls kinds 5/6/11
+"over-powerful". So the REAL, fully-resolved condition is: **while
+`elapsed_seconds_since_round_start < getvalue(102)` (40s shipped) AND the
+game is not networked**, a hidden token of kind 5, 6, or 11 relocates
+instead of revealing when its brick ignites.
+
+**Which kinds, and why.** `off_45BE50` (pseudo.c 2261-2281, the powerup
+name table `sub_424F89`/`sub_425107` both index by kind) is `{0:"bomb",
+1:"flame", 2:"disease", 3:"kicker", 4:"skate", 5:"punch", 6:"grab",
+7:"spooge", 8:"goldflame", 9:"trigger", 10:"jelly", 11:"disease3",
+12:"random", ...}` — a 1:1, same-order match with `PowerupType`
+(`types.hpp`: `ExtraBomb, Flame, Disease, Kick, Skate, Punch, Grab, Spooger,
+Goldflame, Trigger, Jelly, SuperDisease, Random`). So kinds 5/6/11 are
+**Punch, Grab, and SuperDisease** — NOT the base Disease (kind 2, unaffected)
+— matching the VALUELST comment's "over-powerful" framing: Punch and Grab
+let a player punch/throw ANY bomb (including opponents'), and SuperDisease
+is a nastier disease variant; all three are plausible "don't let someone
+grab this in the opening seconds" candidates.
+
+**This is a DIFFERENT mechanism from `sub_4255B2`/`PowerupSystem::scatter`**
+(the "Options toggles" `diseases_destroyable` relocation). `sub_4255B2`
+scatters a NEW floor powerup onto a random EMPTY WALKABLE tile (cell type
+0/blank); it is never called from `sub_425107`, and `sub_425107`'s own
+search loops below operate on STILL-STANDING BRICK tiles (cell type 2) and
+directly swap/move the underlying hidden-token RECORDS — a structurally
+different operation with its own 200-try (not 100-inner/100-outer) budget
+shape. The two share only the surface-level "random-tile retry loop"
+pattern.
+
+**The two search passes** (pseudo.c 26304-26334), both drawing `x =
+rand()%W` then `y = rand()%H` — 2 draws EVERY iteration, even when the
+candidate is rejected (the draws sit before the guard/checks, so a miss
+still burns its budget; unlike `sub_4255B2`'s inner/outer split, there is no
+"free re-roll" case here):
+
+1. Up to 200 tries: accept the first still-standing-brick tile
+   (`sub_425FB9(x,y)==2`) holding ANY record at all (`sub_42542D(x,y)` —
+   hidden OR already-visible-but-still-crumbling; the state field isn't
+   checked) whose kind is NOT ALSO 5/6/11. On a hit, **swap the two full
+   152-byte records** (`qmemcpy`-based 3-way swap) — the whole struct,
+   including its state byte, not just the kind — and fall through to
+   `LABEL_33`, which now reveals-or-not based on whichever record ended up
+   at the original tile.
+2. Only if pass 1 exhausts all 200 tries: a second, independent 200-try
+   search for a tile that is a still-standing brick with NO record at all
+   (`sub_425FB9(x,y)==2 && !sub_42542D(x,y)`). On a hit, MOVE (not swap) the
+   record there and `return` immediately — bypassing `LABEL_33` entirely, so
+   this ignition reveals nothing.
+3. If both passes exhaust (only plausible on an almost-fully-cleared board):
+   fall through to `LABEL_33` with the record untouched — a plain, immediate
+   reveal of the "over-powerful" kind, same as if the gate had never fired.
+
+**Port:** `FlameSystem::relocate_overpowered_here` (`libs/sim/src/systems/
+flames.cpp`), called from `spread_to`'s brick branch right after arming
+`s.burning` and right before the existing hidden→floor reveal check — which
+needs no changes at all, since it already does the right thing purely by
+reading whatever `relocate_overpowered_here` leaves in `s.hidden[ty][tx]`
+(populated = reveal fires normally on the swapped-in kind; empty = no
+reveal, matching the original's early `return`). `Tuning::
+overpowered_relocate_seconds` (id 102, default 40) gates it, multiplied by
+`kTicksPerSecond` and compared against `State::tick` — the port's direct
+analogue of `dword_464994` (both start at 0 and increment exactly once per
+tick), used here as "ticks elapsed since round start" since a fresh
+`Simulation` always begins a round at tick 0; no separate "elapsed" field is
+needed.
+
+**Which network gate, and why it's dropped.** The original also requires
+`!sub_40C06A()` — a local, non-networked game (host=1/guest=2 both skip the
+whole branch). This port has **no netplay concept at all** (`docs/adr/
+0003-deterministic-sim-netplay-deferred.md`: "Netplay is explicitly out of
+scope for now... without writing any netcode" — confirmed by an exhaustive
+grep of `libs/`/`apps/` turning up zero transport/host/guest code; this is
+currently a local-only, hotseat/shared-keyboard build). Every match this
+port ever runs IS the original's "local" case, so `!sub_40C06A()` is
+always-true here and is simply omitted rather than ported as a
+permanently-true no-op field.
+
+**The full-record-swap subtlety.** Because the original swaps the WHOLE
+struct (state byte included), a candidate tile in pass 1 that is currently
+mid-crumble (`s.floor[y][x]` populated, `s.burning[y][x] > 0`, still
+`Cell::Brick`) is a legal swap target too, and the swap correctly trades
+which ARRAY (`hidden` vs `floor`) each tile's kind lives in, not just the
+kind value — modeled in the port as an explicit `cand_hidden` branch. The
+mirror-image case (the SOURCE tile itself already being in `floor` state
+when this code runs) is unreachable in practice: the only way a kind-5/6/11
+token ever becomes visible while the window is still open is failing BOTH
+400-draw passes on a nearly-brick-free board, at which point there are no
+further candidate tiles left for a LATER re-hit to matter; the port reads
+the source's kind from `s.hidden[ty][tx]` only, which is exactly what's
+populated on every reachable call.
+
+**Tests:** `tests/test_sim.cpp` — "a hidden Punch powerup relocates instead
+of revealing near match start" (pass 1, swap), "...reveals normally once the
+relocation window is disabled" (gate closed via `overpowered_relocate_
+seconds = 0`), "...with no swap partner moves to an empty brick unrevealed"
+(pass 2, move).
+
+**GOLDEN IMPACT: none, verified two ways.** First, the full suite (38
+suites including `golden`) passes byte-identical before and after this
+change. Second — since "the golden boards hide no powerups of those kinds"
+is NOT actually true (golden B's default `spawn_counts`, id-audit unchanged,
+places 2 Punch + 2 Grab + a probabilistic SuperDisease under random bricks
+on its dense near-full-brick board) — a throwaway instrumented run of golden
+B's exact scenario (traced every tile that started with a hidden Punch/Grab/
+SuperDisease token, then logged its `cells`/`hidden`/`floor`/`burning` state
+every 100 ticks across the full 3000-tick run) showed all 5 such tiles in
+that seed's placement (`(6,1)`/`(4,5)` Punch, `(3,6)`/`(10,10)` Grab,
+`(1,6)` SuperDisease) are NEVER reached by a flame-triggered brick
+ignition — 3 are crushed by the sudden-death closing wall around tick
+2997-2999 instead (`EnclosureSystem::drop_wall`'s unconditional destroy, a
+completely different code path that never calls `relocate_overpowered_
+here`), and 2 are never touched by anything in the 3000-tick window at all.
+So `relocate_overpowered_here` is provably called zero times across every
+golden scenario — not merely "the hash happens to match", but "the new code
+path never executes on any pinned board" — golden C/E's boards are
+`pillars_config()`-based (near-zero bricks) or zero out `spawn_counts`
+entirely, golden D zeroes `spawn_counts` and seeds its powerups directly
+onto `floor` (never `hidden`, so the brick-ignite path never touches them),
+and golden A has no board at all.
+
+(Provenance: `sub_425107` pseudo.c 26274-26343, disassembly `0x425107-
+0x425383`; `v3` resolution disassembly `0x425184-0x4251a4`; `sub_40C06A`
+pseudo.c 11138-11142; `sub_4105B0`/`sub_4105D2` 14448-14552; `sub_40C035`
+11123-11133; `off_45BE50` 2261-2281; `sub_4255B2` 26443-26483 (contrast,
+see "Options toggles"/"Scatter occupancy test" above); VALUELST.RES line
+"102,40" with its own "over-powerful powers... will go elsewhere" comment;
+`docs/adr/0003-deterministic-sim-netplay-deferred.md`.)
 
 ## Disease system fidelity audit 2026-07-10 — line-by-line re-read (`sub_41DFB6`, `sub_41E21E`, `sub_41F29B` ~22904-22975, `sub_41DF4C`)
 

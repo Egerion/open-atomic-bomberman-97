@@ -73,6 +73,18 @@ private:
     // skull-relocation compensation. Shared by the epicentre and the arm.
     void burn_powerup_here(int tx, int ty);
 
+    // A brick at (tx,ty) just ignited (or re-ignited) and (tx,ty) is still
+    // hiding a token: if that token is Punch/Grab/SuperDisease ("over-
+    // powerful" powers, VALUELST id 102's own comment) and the match is
+    // still within its opening overpowered_relocate_seconds, relocate the
+    // record elsewhere instead of letting it reveal here (sub_425107's
+    // early gated branch, pseudo.c 26295-26336). No-op otherwise. Mutates
+    // s.hidden/s.floor at (tx,ty) and (if relocated) at the target tile;
+    // the caller's own hidden->floor reveal check runs AFTER this and does
+    // the right thing either way — see docs/re/facts.md "Overpowered-
+    // powerup relocation".
+    void relocate_overpowered_here(int tx, int ty);
+
     State& s_;
     PowerupSystem& powerups_;
 };
