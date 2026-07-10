@@ -2964,7 +2964,19 @@ ice/input-lag)" note for the recapture and the byte-for-byte proof that every
 non-hash assertion (RNG streams, jelly bounce count) is unchanged. New
 suite: `tests/test_regen.cpp`.
 
-## Ice / input-lag — CONFIRMED (2026-07-09, `sub_41F29B` ~23058-23078)
+## Ice / input-lag — CONFIRMED (2026-07-09; RE-DERIVED, cold-start CORRECTED 2026-07-10, `sub_41F29B` ~23058-23078)
+
+> **2026-07-10 distrustful re-derivation** (prompted by a play-test claiming the
+> feel is wrong). The core reading below stands: the mechanic is **pure uniform
+> input lag** — `effective godir = the RESOLVED direction from ceil(delay/50)=5
+> ticks ago, neutral (-1) samples included`. Every alternative was checked
+> against the code and REJECTED: it is **not** skid/coast (releasing does not
+> "keep" the old dir while a fresh press takes effect early), **not** turn-only
+> inertia, **not** joystick smoothing. Two things the fast pass under-stated,
+> now nailed, plus one outright error corrected — see the "aliasing", "ruled
+> out", and "Cold-start" notes below. No arithmetic change to the port; it was
+> already byte-faithful. Frontend wiring (map-select → `level_index` → ice)
+> re-verified end-to-end: no off-by-one, ice fires on the real Hockey Rink.
 
 VALUELST ids 449-460 ("these are the 'ice delay' values (how much the
 controls are slowed by the presence of ice on each level). This is measured
@@ -2986,14 +2998,45 @@ if ( *((_BYTE *)v111 + 16) != 1 ) {          // NOT a computer player
     for (k = 0; k < 30; ++k) v93[2*k] += dword_464958;   // age every slot by the frame delta
     for (k = 29; k > 0; --k) { v93[2*k] = v93[2*k-2]; v93[2*k+1] = v93[2*k-1]; }  // shift down
     v93[0] = 0;                               // fresh slot: age 0
-    v93[1] = desired_godir_this_tick;         // -1 (none) or 0..3, from the input decode moments earlier
+    v93[1] = v111[23];                         // push the RESOLVED effective godir (see aliasing note): -1 (none) or 0..3
     for (k = 0; k < 30; ++k) {
-        v111[23] = v93[2*k+1];                // candidate effective godir
-        if ( v16 /* = getvalue(dword_46499C+450) */ <= v93[2*k] ) break;  // old enough?
+        v111[23] = v93[2*k+1];                // candidate effective godir = dir at slot k
+        if ( v16 /* = getvalue(dword_46499C+450) */ <= v93[2*k] ) break;  // break when delay <= age[k]
     }
     // v111[23] now holds the delayed direction the mover (sub_41EC84) reads.
 }
 ```
+
+**Aliasing the fast pass under-stated: the buffer stores the FULLY-RESOLVED
+`v111[23]`, not a separate raw-input field.** `v111` is declared `__int16 *`
+(pseudo.c line 22852), so `*((int *)v111 + 11) >> 16` (the value pushed at
+23070, and the `!= -1` test at 23040/23082) is the sign-extended `__int16` at
+byte offset 46 — i.e. **exactly `v111[23]`**, the resolved effective godir
+_after_ the opposite-key filter (`sub_41E61E` LABEL_58) and the reversed-
+controls flip (23049). So the delayed samples carry the reversed value (as the
+"Reversed-controls application point" note already asserted), and on a delay-0
+level the resolve's k=0 iteration writes `v111[23]` straight back — a genuine
+no-op that leaves the flip intact. The break variable `*v17` is `&v93[2*k]` =
+`age[k]` (Hex-Rays lost the induction pointer and flags it "possibly
+undefined" at 0x41FCDE, but the shift loop's explicit `v15 = &v93[2*k]` /
+`v15[1] = dir` pattern pins the even slot as the age, the odd as the dir).
+
+**Ruled out — why it is (a) uniform lag and not skid/coast/inertia.** The
+resolve loop UNCONDITIONALLY overwrites `v111[23] = dir[k]` and never returns
+the live input: at k=0 the age is 0, so `delay(250) <= 0` is false and the walk
+always continues to k=5. There is no "if current input is non-neutral, keep it"
+branch anywhere — a fresh press is delayed by the same 5 ticks as a release, so
+pressing a NEW direction does NOT take effect early (rejects skid/coast) and
+stopping is NOT instant (rejects turn-only inertia). When the delayed sample is
+`-1`, the mover's idle branch (23413) makes the player STAND STILL (or, if a
+conveyor is under it, ride the belt) — it does not coast the last direction.
+Note the mover `sub_41EC84` itself has NO ice/slide logic (same corner-slide
+stepper on every board), and `getvalue(450+level)` is read at exactly one site
+(23074): the input-lag buffer is the WHOLE ice mechanic — there is no per-tile
+"ice actor". (What DOES read as "slippery": on RELEASE the player keeps moving
+for 5 ticks before stopping — uniform lag's delayed-stop half is itself the
+coast/skid feel; the delayed-start half is the "unresponsive" half. Both are
+faithful.)
 
 `*((_BYTE*)v111+16) == 1` is the SAME player-type byte already pinned
 elsewhere in this file and in `simulation.cpp`'s own AI-dispatch comment
@@ -3034,20 +3077,35 @@ buffer, whenever the player is AI (`p.ai`) or the current level's delay is
 `<= 0` — so `ice_history` stays a fixed, unwritten field (all `-1`, see cold-
 start note below) on every level but Hockey Rink.
 
-**Cold-start default: `-1` (no direction), not the original's implicit
-zero-fill.** The original's `dword_4621C8` buffer is a process-lifetime
-global with no per-round reset — a fresh Hockey Rink round inherits whatever
-was last buffered from a PREVIOUS round/level in that session, not zeros
-(except on literally the first-ever use in a process). Our per-match `State`
-has no such cross-match history to inherit; `build_state` (`setup.cpp`)
-explicitly fills every player's `ice_history` with `-1` at match setup
-rather than leaving the struct's plain zero-init (which would read as a
-phantom "Up" sample — `0` is a valid godir, not a "no input yet" sentinel —
-for the first few ticks of a fresh match). This is a deliberate, documented
-divergence from the original's implementation ARTIFACT (an uninitialised/
-stale global), not from its RULE; the observable effect is confined to the
-first `ceil(delay_ms/50)` ticks of a match before any real input has
-propagated through the buffer.
+**Cold-start `-1` fill is FAITHFUL — the original DOES reset the buffer per
+round (2026-07-10 correction).** An earlier note here wrongly claimed
+`dword_4621C8` is a process-lifetime global with no per-round reset. It is
+reset: `sub_4214BC` (pseudo.c 23880-23890) walks all 10 players × 30 slots and
+writes `age = 0, dir = -1` into every one, and it runs from the per-round
+match-setup sequence (pseudo.c 14788 — right after the level index
+`dword_46499C` is resolved at 14751/14758 and alongside the stage/bomb/player
+init calls `sub_422D3B`/`sub_426CDB`/`sub_424F5E`/`sub_40151B`). So a fresh
+round starts with dir `-1` in every slot — exactly what `build_state`
+(`setup.cpp`) fills. Consequence, matching in both: for the first
+`ceil(delay/50)=5` ticks no slot has yet aged to 250 ms, so the resolve runs
+off the end and returns the reset `-1` — the player is frozen for 5 ticks, then
+the tick-1 input surfaces at tick 6 (pinned by `tests/test_ice.cpp` "delays a
+human player's first step by exactly 5 ticks"). `0` is a valid godir ("Up"),
+NOT a "no input" sentinel, which is why a plain zero-init would be a phantom
+"Up" drift — but the original avoids that too, via the `-1` reset, so our fill
+reproduces the original's own behaviour rather than diverging from it.
+
+**Frontend wiring re-verified (2026-07-10).** Map-select (`present_map_select`)
+cycles `selected_level_` over `-1`(RANDOM) then `0..getvalue(35)-1` (11 stages);
+`GameApp::start_match` sets `cfg.tuning.level_index = stage` where `stage =
+selected_level_` (or `match::pick_stage` for RANDOM, or the campaign stage) —
+the SAME index space as the original's `dword_46499C`. Both the row NAME
+(`getstring(150+n)` / `level_fallback(n)`) and the ice value (`ice_delay_ms[n]`
+= `getvalue(450+n)`) are indexed by that one `n`, so the board labelled "Hockey
+Rink" is index 2 and gets `ice_delay_ms[2]=250` with no off-by-one. Our
+`level_fallback` order matches VALUELST.RES's own 450-460 ice-block labels
+exactly (`0 new traditionalist … 2 hockey rink … 7 haunted house (= regen id
+347) … 10 inner city trash`).
 
 **GOLDEN: no impact, proved by running the full suite before/after.**
 `Tuning::level_index` defaults to 0, whose `ice_delay_ms[0] == 0`, so

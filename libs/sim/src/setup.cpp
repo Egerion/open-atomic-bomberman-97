@@ -42,14 +42,14 @@ State build_state(const MatchConfig& config) {
         p.ai = config.ai[i];      // computer-driven slot (ADR-0005); default false
         p.team = config.team[i];  // setup-screen +84 byte (docs/re/setup-screens.md); default 0
         // Ice/input-lag ring buffer (docs/re/facts.md "Ice / input-lag"):
-        // reset to "no direction" at match setup. The original's history
-        // buffer is a process-lifetime global with no per-round reset, so a
-        // fresh Hockey Rink round inherits whatever was last buffered; our
-        // per-match sim has no such history to inherit, and starting from a
-        // plain zero-initialised array would read as a phantom godir-0 (Up)
-        // sample for the first few ticks — an artifact of OUR value's
-        // encoding, not a faithful behaviour to reproduce. -1 (no direction)
-        // is the safe, non-surprising choice for a freshly built match.
+        // reset to "no direction" at match setup, FAITHFUL to the original's
+        // own per-round reset. sub_4214BC (pseudo.c ~23880-23890) fills every
+        // player's 30 slots with (age 0, dir -1) and runs from the per-round
+        // match-setup sequence (~14788, right after the level index
+        // dword_46499C is resolved) — the buffer is NOT a stale process-global
+        // (an earlier note wrongly claimed so). -1 is therefore the original's
+        // own fresh-buffer godir, not a plain zero-init (which would read as a
+        // phantom godir-0 "Up" for the first ceil(delay/50) ticks).
         p.ice_history.fill(-1);
         int tx = std::clamp(config.spawns[i].x, 0, kGridWidth - 1);
         int ty = std::clamp(config.spawns[i].y, 0, kGridHeight - 1);
