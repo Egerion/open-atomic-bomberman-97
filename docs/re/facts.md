@@ -1542,8 +1542,8 @@ cleanly), not a sign of dead/garbage/uninitialized data — the exact same
 false-alarm shape as `exp_`.
 
 **What `sub_4105B0()`/`dword_4601BC` and `getvalue(102)` actually are.**
-`sub_4105B0` (pseudo.c 26448-26453) is a one-line accessor: `return
-dword_4601BC;`. That field is written by `sub_4105D2` (pseudo.c 26456-26552,
+`sub_4105B0` (pseudo.c 14448-14453) is a one-line accessor: `return
+dword_4601BC;`. That field is written by `sub_4105D2` (pseudo.c 14455-14552,
 the in-round MM:SS clock's own per-tick updater, called once per game tick
 from `sub_42A191` — `docs/valuelst-map.md` ids 110-112) as `dword_4601A8 -
 <remaining seconds>`, i.e. **elapsed seconds since the round timer started**
@@ -1627,10 +1627,11 @@ reading whatever `relocate_overpowered_here` leaves in `s.hidden[ty][tx]`
 (populated = reveal fires normally on the swapped-in kind; empty = no
 reveal, matching the original's early `return`). `Tuning::
 overpowered_relocate_seconds` (id 102, default 40) gates it, multiplied by
-`kTicksPerSecond` and compared against `State::tick` — this port's direct
-analogue of `dword_464994`/elapsed time, since a fresh `Simulation` always
-starts a round at tick 0 (see the "Which network gate" note below; there is
-no separate "elapsed" field to introduce).
+`kTicksPerSecond` and compared against `State::tick` — the port's direct
+analogue of `dword_464994` (both start at 0 and increment exactly once per
+tick), used here as "ticks elapsed since round start" since a fresh
+`Simulation` always begins a round at tick 0; no separate "elapsed" field is
+needed.
 
 **Which network gate, and why it's dropped.** The original also requires
 `!sub_40C06A()` — a local, non-networked game (host=1/guest=2 both skip the
@@ -1688,8 +1689,8 @@ and golden A has no board at all.
 
 (Provenance: `sub_425107` pseudo.c 26274-26343, disassembly `0x425107-
 0x425383`; `v3` resolution disassembly `0x425184-0x4251a4`; `sub_40C06A`
-pseudo.c 11138-11142; `sub_4105B0`/`sub_4105D2` 26448-26552; `sub_40C035`
-11123-11132; `off_45BE50` 2261-2281; `sub_4255B2` 26443-26483 (contrast,
+pseudo.c 11138-11142; `sub_4105B0`/`sub_4105D2` 14448-14552; `sub_40C035`
+11123-11133; `off_45BE50` 2261-2281; `sub_4255B2` 26443-26483 (contrast,
 see "Options toggles"/"Scatter occupancy test" above); VALUELST.RES line
 "102,40" with its own "over-powerful powers... will go elsewhere" comment;
 `docs/adr/0003-deterministic-sim-netplay-deferred.md`.)
