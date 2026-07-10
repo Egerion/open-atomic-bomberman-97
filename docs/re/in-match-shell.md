@@ -62,6 +62,37 @@ is corrected: `sub_410B6E` runs once at round setup, not per frame]; per-
 player mover call site pseudo.c 23659 inside `sub_420F07` @ 0x420F07, itself
 called once per tick from `sub_42A191` at pseudo.c 29527.)
 
+**Port status: pipeline audited, one port-added latency source found and
+fixed (2026-07-10, prompted by a "Hockey Rink movement feels different"
+report after the ice mechanic itself was proven byte-faithful — `facts.md`
+"Ice / input-lag").** The original's bound here is `sub_42A191` firing once
+per displayed frame off the flip loop, reading live key state
+(`sub_41E61E`) inline in the SAME callback that consumes it — so a keypress
+waits at most one display frame plus up to one 50 ms tick. `GameApp::
+run_match` (`game_app.cpp`) mirrors this shape correctly: `SDL_PollEvent`
+drains the queue once per outer iteration, `collect_inputs()` calls
+`SDL_GetKeyboardState`/`SDL_GetGamepadButton` fresh and inline as each
+tick's argument (no intermediate buffering hop, no stale cache reused across
+a catch-up burst), and the fixed-timestep accumulator schedules ticks off
+the same timestamp the poll just observed. The one thing that DIDN'T match:
+`SDL_Delay(2)` — this loop's pre-vsync throttle, still present after
+`SDL_SetRenderVSync(1)` was added (`GameApp::init`'s own comment there) —
+ran unconditionally AFTER an already vsync-blocked `SDL_RenderPresent`,
+stacking a flat 2 ms of dead time onto every rendered frame for no
+presentational benefit, delaying this loop's next `SDL_PollEvent` (the only
+point a fresh keypress becomes visible to `collect_inputs()`). Fixed by
+skipping it whenever `SDL_GetRenderVSync` reports vsync is actually active,
+keeping it only as the fallback throttle on a driver where vsync is a
+no-op. Empirically measured (temporary instrumentation, `BOMBER_GAME_DIR`
+pointed at the real install, synthetic held keypresses via Win32
+`SendInput`, compared physical-keydown timestamp against the sim tick index
+that first reflects it pressed): mean keydown-to-tick latency dropped from
+~29 ms to ~23 ms across paired runs, with both before and after staying
+within the same one-frame-plus-one-tick ballpark the original's own bound
+implies (observed worst case ~56 ms either side, i.e. just over one 50 ms
+tick, not the 2-3 extra ticks a gross pipeline bug would add) — confirming
+the fix trims a real but modest per-frame excess rather than papering over
+a larger structural latency bug. No `libs/sim` change; golden untouched.
 ## The auxiliary key table — EXHAUSTIVE, CONFIRMED
 
 Reading the exact nested-if chain at pseudo.c 29709-29788 (not paraphrased —
