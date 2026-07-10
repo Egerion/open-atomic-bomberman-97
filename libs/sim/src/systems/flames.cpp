@@ -37,11 +37,13 @@ bool FlameSystem::ignite_epicentre(int tx, int ty, std::uint8_t owner) {
     s.flame[ty][tx] = static_cast<std::uint8_t>(
         std::clamp<std::int32_t>(s.tuning.flame_frames, 1, 255));
     s.flame_owner[ty][tx] = owner;
+    s.flame_kind[ty][tx] = FlameKind::Center;  // off_45BEA0[8], pseudo.c 25625
     burn_powerup_here(tx, ty);
     return true;
 }
 
-bool FlameSystem::spread_to(int tx, int ty, std::uint8_t owner, Direction from_dir) {
+bool FlameSystem::spread_to(int tx, int ty, std::uint8_t owner, Direction from_dir,
+                            bool is_last_of_reach) {
     // The extending arm (sub_42331C per-direction loop, pseudo.c 25637-25678).
     // Per tile step, in order: a GROUNDED bomb here stops the arm and QUEUES
     // it for a forced detonation next tick (sub_423209 @ 25645 — CONFIRMED a
@@ -114,6 +116,13 @@ bool FlameSystem::spread_to(int tx, int ty, std::uint8_t owner, Direction from_d
     s.flame[ty][tx] = static_cast<std::uint8_t>(
         std::clamp<std::int32_t>(s.tuning.flame_frames, 1, 255));
     s.flame_owner[ty][tx] = owner;
+    // kind = godir (a TIP) only at the arm's FULL configured reach, else
+    // godir+4 (a MID) — pseudo.c 25673-25677 `if (reach-1==m) v45=k; else
+    // v45=k+4;`, decided here (only on the "arm continues" path) exactly
+    // like the original. FlameKind's tip/mid pairs are declared in the same
+    // compass order as godir, so godir+4 lands on the matching mid piece.
+    s.flame_kind[ty][tx] = static_cast<FlameKind>(
+        grid::to_godir(from_dir) + (is_last_of_reach ? 0 : 4));
     return true;
 }
 
@@ -136,7 +145,9 @@ void FlameSystem::explode(std::size_t bomb_index, int skip_dir) {
         // gets its normal full-reach arm.
         if (skip_dir >= 0 && grid::to_godir(d) == skip_dir) continue;
         for (int i = 1; i <= reach; ++i) {
-            if (!spread_to(cx + grid::dir_dx(d) * i, cy + grid::dir_dy(d) * i, b.owner, d)) break;
+            if (!spread_to(cx + grid::dir_dx(d) * i, cy + grid::dir_dy(d) * i, b.owner, d,
+                           i == reach))
+                break;
         }
     }
 }

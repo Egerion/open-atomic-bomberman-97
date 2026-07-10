@@ -170,7 +170,10 @@ int cmd_ani(const fs::path& file, const fs::path* out_dir) {
     }
     for (const auto& s : a.sequences) {
         std::printf("  seq '%s' (%zu steps):", s.name.c_str(), s.steps.size());
-        for (const auto& st : s.steps) std::printf(" %d", st.frame);
+        // dx/dy = the per-STAT FRAM-leaf offset_x/offset_y (docs/formats/ani.md
+        // "Rendering a step"): NOT applied by the standard blit, but relevant for
+        // spot-checking the rare paths (e.g. sub_41DB41) that do use it.
+        for (const auto& st : s.steps) std::printf(" %d(%d,%d)", st.frame, st.dx, st.dy);
         std::printf("\n");
     }
     if (out_dir) {

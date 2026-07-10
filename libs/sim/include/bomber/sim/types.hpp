@@ -33,6 +33,19 @@ enum class PowerupType : std::uint8_t {
 
 enum class Direction : std::uint8_t { Up, Down, Left, Right };
 
+// A flame arm's drawn PIECE, mirroring the original's per-flame-cell "kind"
+// byte and its off_45BEA0 name table (`sub_42331C`'s arm-cast loop,
+// `sub_426D06`'s per-tick animator) — the integer values MIRROR that table so
+// they stay legible: 0-3 = tips in compass order, 4-7 = mids in the SAME
+// compass order, 8 = the epicentre. Decided once at ignition from the arm's
+// own cast direction and position-within-reach — see docs/re/facts.md "Flame
+// arm-shape selection". Meaningless where `State::flame` is 0.
+enum class FlameKind : std::uint8_t {
+    TipNorth, TipEast, TipSouth, TipWest,
+    MidNorth, MidEast, MidSouth, MidWest,
+    Center,
+};
+
 // The nine diseases (skull powerup), in the original's rand()%9 index order —
 // see docs/re/facts.md "Disease system". Swap has no persistent flag.
 enum class Disease : std::uint8_t {

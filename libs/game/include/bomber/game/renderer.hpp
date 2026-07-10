@@ -81,6 +81,7 @@ private:
     };
 
     void draw_actors(const sim::State& s);  // conveyor/trampoline floor tiles
+    void draw_bombs(const sim::State& s);
     void draw_powerups(const sim::State& s);
     void draw_world(const sim::State& s);
     void draw_hud(const sim::State& s);
@@ -90,9 +91,6 @@ private:
                      Uint8 b = 255);
     void draw_anim(const Anim& a, std::size_t step, float x, float y, Uint8 r = 255, Uint8 g = 255,
                    Uint8 b = 255);
-
-    // Maps a countdown timer onto a play-once sequence.
-    static std::size_t timed_step(const Anim& a, int remaining, int total);
 
     // Cosmetic render-side RNG for the disease colour strobe (never the sim's).
     // Returns 0..kLocalPlayers-1 — the original's `rand() % 10` frame pick
@@ -112,6 +110,11 @@ private:
     // True when all four orthogonal neighbours of (tx,ty) are impassable
     // (wall/brick/burning brick or a resting bomb); out-of-grid counts blocked.
     static bool boxed_in(const sim::State& s, int tx, int ty);
+
+    // The art piece for one flame cell's FlameKind (docs/re/facts.md "Flame
+    // arm-shape selection") — a plain 1:1 table matching the original's
+    // off_45BEA0 name order, not a live neighbour scan.
+    static const Anim& flame_piece(const FlameSet& fset, sim::FlameKind kind);
 
     // Cosmetic render-side LCG for the idle-fidget rolls (never the sim's).
     std::uint32_t panic_roll();

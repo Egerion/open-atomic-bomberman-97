@@ -141,15 +141,19 @@ Anim resolve_sequence(const AniTextures& ani, const std::string& name) {
         for (const auto& st : s.steps) {
             if (st.frame < 0) continue;
             const auto& f = ani.data().frames[static_cast<std::size_t>(st.frame)];
-            // Anchor by the FRAME hotspot only. The original's standard blit
+            // Anchor by the FRAME hotspot only — dx/dy are carried through but
+            // must NOT be applied by default. The original's standard blit
             // (sub_415920/sub_415A9F) does NOT apply the per-STAT offset
             // (FRAM leaf dx/dy) — those are large for tiles (brick dy=18) and
             // players (stand dy=19), so subtracting them here shoved every
             // sprite that far DOWN (bricks leaked below their cell, players
             // sank below their shadow). dy=0 sprites (bombs, shadow) were fine,
-            // which is why only some things looked "too low".
+            // which is why only some things looked "too low". The one
+            // confirmed exception (real flame arms) reads st.dx/st.dy itself
+            // at its own draw site (renderer.cpp draw_world) rather than
+            // having it folded in here.
             out.steps.push_back({ani.texture(static_cast<std::size_t>(st.frame)), f.image.width,
-                                 f.image.height, f.hotspot_x, f.hotspot_y});
+                                 f.image.height, f.hotspot_x, f.hotspot_y, st.dx, st.dy});
         }
         break;
     }

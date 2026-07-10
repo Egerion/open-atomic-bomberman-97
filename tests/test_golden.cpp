@@ -283,6 +283,41 @@ MatchConfig pillars_config() {
 // for the one-tick chain defer — their assertions already had enough slack
 // to pass either way, but their comments now say so honestly).
 
+// UPDATE 2026-07-10 (explosion-draw fidelity audit, docs/re/facts.md "Flame
+// arm-shape selection"): a HASH-LAYOUT-ONLY recapture — the ONLY change this
+// update covers is the new `State::flame_kind` field (which flame-arm PIECE
+// a lit cell draws: tip/mid/center, per direction). It is pure DERIVED data,
+// computed at ignition from the SAME `from_dir`/reach inputs
+// `FlameSystem::spread_to`/`ignite_epicentre` already consume — no new
+// branch that changes what ignites or when, no new RNG draw. It replaces the
+// presentation layer's previous live neighbour-scan (which had its own,
+// separate, undocumented bugs — see the facts.md entry) with a faithful,
+// cast-time-decided value the renderer now just looks up.
+//
+// Packed into the two previously-unused spare bytes of the per-tile hash
+// word `cells`/`hidden`/`floor`/`flame`/`burning`/`flame_owner` already
+// share (hash.cpp), NOT a new mix() call — so a scenario that never ignites
+// a single flame cell hashes BYTE-IDENTICAL, not just behaviourally
+// equivalent. Golden A (0 bombs, ever) is exactly that case: its hash below
+// is UNCHANGED (still 0xb9f782f923ce72c5) — the first golden-hash update in
+// this file's history that does NOT need to touch A. B/C/D/E all place and
+// explode bombs, so their per-checkpoint hashes downstream of the first
+// ignition move: B (bomb activity from tick 0) recaptures all 6 checkpoints;
+// C (single checkpoint, after its trigger bombs have fired) recaptures its
+// one hash; D and E's EARLY checkpoints (200/400 for D, 75/150 for E) are
+// BYTE-IDENTICAL — no bomb has exploded yet at those points — only their
+// LATER checkpoints (600/800 for D, 225/300 for E, after the first
+// explosion) move.
+//
+// RNG-neutrality proof (this run, before recapturing the hashes below):
+// golden A's pinned `rng` is unchanged; golden D's `kExpectedRng` passes at
+// all four checkpoints (untouched by this update); golden E's bounce count
+// (10) and final `rng` (0x405862fbu) both pass unchanged. Only hash checks
+// moved — 11 of this file's 24 assertions — confirming flame_kind changes
+// no gameplay, only what gets recorded about a tile that was already going
+// to ignite. This recapture is self-contained to flame_kind alone; if
+// another concurrent change also touches these constants, reconcile by
+// re-running both fixes together rather than merging hex values by hand.
 TEST_CASE("golden A: empty state, 10000 ticks") {
     Simulation a;
     a.state().rng = 42u;
@@ -316,12 +351,12 @@ TEST_CASE("golden B: 4-player brick match with all abilities") {
     CHECK(s.hash() == 0x66be0a37b86e9b94ull);  // setup itself is pinned
 
     static constexpr std::uint64_t kExpected[6] = {
-        0xf5760516441af07aull,  // tick 500
-        0x68e88bee67f5e216ull,  // tick 1000
-        0x4c6c3b3aaab9886aull,  // tick 1500
-        0x5783f12413562d08ull,  // tick 2000
-        0xe6a5e3c7e8b44c6eull,  // tick 2500
-        0x5f6b098bb75f6937ull,  // tick 3000
+        0xa7689a71c2a47821ull,  // tick 500
+        0x974b392fb71743edull,  // tick 1000
+        0xc882a48bc621c211ull,  // tick 1500
+        0xcf0d218b494ea77bull,  // tick 2000
+        0x521933dc8220fcd1ull,  // tick 2500
+        0xb3ddf2ce1d42bf28ull,  // tick 3000
     };
     for (std::uint64_t t = 0; t < 3000; ++t) {
         s.tick(pattern(t));
@@ -339,7 +374,7 @@ TEST_CASE("golden C: trigger bombs and a fast hurry phase") {
     cfg.born_with[static_cast<int>(PowerupType::Trigger)] = true;
     Simulation s(cfg);
     for (std::uint64_t t = 0; t < 1500; ++t) s.tick(pattern(t * 7 + 3));
-    CHECK(s.hash() == 0xca9c3e8898e50ba2ull);
+    CHECK(s.hash() == 0x8167ede7b6d4b723ull);
 }
 
 TEST_CASE("golden D: the disease gauntlet") {
@@ -378,11 +413,16 @@ TEST_CASE("golden D: the disease gauntlet") {
     // ordering + stun-frozen aging/contagion + the move_budget-swap removal.
     // Ticks 200/400 stay byte-identical to the "Flame-arm stops" constants
     // directly above (unchanged by this audit); kExpectedRng is unchanged.
+    //
+    // Ticks 600/800 recaptured a THIRD time 2026-07-10 (explosion-draw
+    // fidelity audit / `flame_kind`, see the file-level UPDATE note above):
+    // ticks 200/400 stay byte-identical (this scenario's first bomb hasn't
+    // exploded yet at either checkpoint); kExpectedRng is unchanged.
     static constexpr std::uint64_t kExpectedHash[4] = {
-        0xb0284a38351747a2ull,  // tick 200
-        0x3ce7c5c7298f1eb8ull,  // tick 400
-        0xfc7db2a7ff1f756bull,  // tick 600
-        0x2179320b1f74920cull,  // tick 800
+        0xb0284a38351747a2ull,  // tick 200 (unchanged: no flame yet)
+        0x3ce7c5c7298f1eb8ull,  // tick 400 (unchanged: no flame yet)
+        0x82793c7c2dfd7e70ull,  // tick 600
+        0x256b5c9f49422d07ull,  // tick 800
     };
     static constexpr std::uint32_t kExpectedRng[4] = {0xca47489cu, 0x49cffff6u, 0x2abb3268u,
                                                       0xd72904d8u};
@@ -443,10 +483,10 @@ TEST_CASE("golden E: jelly ping-pong and a veering punched flight") {
     };
 
     static constexpr std::uint64_t kExpected[4] = {
-        0x9d00c5fc62311dbdull,  // tick 75
-        0xd48a974feb70ee26ull,  // tick 150
-        0x6114b38de59b6f4cull,  // tick 225
-        0xefa299733c7748ecull,  // tick 300
+        0x9d00c5fc62311dbdull,  // tick 75  (unchanged: no bomb has exploded yet)
+        0xd48a974feb70ee26ull,  // tick 150 (unchanged: no bomb has exploded yet)
+        0x46e776f3df49b380ull,  // tick 225
+        0x678e7e32794490faull,  // tick 300
     };
     int bounces = 0;
     for (std::uint64_t t = 0; t < 300; ++t) {

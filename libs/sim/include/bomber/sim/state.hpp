@@ -72,6 +72,18 @@ struct State {
     std::array<std::array<std::uint8_t, kGridWidth>, kGridHeight> flame{};
     // Which player's bomb produced the flame (valid while flame > 0).
     std::array<std::array<std::uint8_t, kGridWidth>, kGridHeight> flame_owner{};
+    // Which flame-arm PIECE this cell shows (valid while flame > 0), decided
+    // ONCE at ignition (FlameKind — see its own doc comment in types.hpp for
+    // the full sub_42331C/off_45BEA0 citation). The epicentre is always
+    // Center; an extending arm's tile is a TIP of its own cast direction only
+    // if it is the LAST tile of the bomb's FULL configured reach, else a MID
+    // of that same direction — fixed at cast time from the arm's OWN
+    // geometry, not re-derived from which neighbours happen to be lit later
+    // (that was the presentation layer's previous approximation; see
+    // docs/re/facts.md "Flame arm-shape selection"). A brick-burn cell (kind
+    // 9 in the original) has no corresponding value here — that lifetime
+    // lives entirely in `burning`.
+    std::array<std::array<FlameKind, kGridWidth>, kGridHeight> flame_kind{};
     // Remaining ticks of a brick crumbling (blocks until it reaches 0).
     std::array<std::array<std::uint8_t, kGridWidth>, kGridHeight> burning{};
 

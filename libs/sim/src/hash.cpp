@@ -44,7 +44,19 @@ std::uint64_t state_hash(const State& s) {
                 (static_cast<std::uint64_t>(s.floor[y][x]) << 16) |
                 (static_cast<std::uint64_t>(s.flame[y][x]) << 24) |
                 (static_cast<std::uint64_t>(s.burning[y][x]) << 32) |
-                (static_cast<std::uint64_t>(s.flame_owner[y][x]) << 40));
+                (static_cast<std::uint64_t>(s.flame_owner[y][x]) << 40) |
+                // Flame arm-piece kind (docs/re/facts.md "Flame arm-shape
+                // selection", 2026-07-10 explosion-draw audit): a NEW hashed
+                // field, purely derived from existing bomb/direction/reach
+                // data at ignition (no RNG draw), fitting the two spare bytes
+                // this packed word already had (bits 48-63 were unused). 0
+                // (TipNorth) wherever flame[y][x]==0 (unread there) — a
+                // ONE-TIME hash-layout growth like the others in this file:
+                // every scenario with active bombs now mixes real, varying,
+                // but fully deterministic values here, not a gameplay change
+                // (CLAUDE.md determinism contract rule 5; tests/
+                // test_golden.cpp recaptured in the same commit).
+                (static_cast<std::uint64_t>(s.flame_kind[y][x]) << 48));
         }
     }
     // Stage-actor layout (docs/re/stage-actors.md): static per match but

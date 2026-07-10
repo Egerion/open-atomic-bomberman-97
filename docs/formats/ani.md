@@ -63,3 +63,15 @@ south dy=19), so applying them shoves sprites that many pixels DOWN (bricks leak
 below their cell, players sink below their shadow; dy=0 sprites like bombs/shadow
 stay correct). Confirmed 2026-07-04 against a live build. Parse `dx/dy` for
 inspection but render by the frame hotspot alone.
+
+**Confirmed exception: real flame arms.** `sub_41DB41`'s one confirmed caller
+is `sub_426D06` (the per-tick flame-cell animator), and only on its
+non-brick-burn branch (`off_45BEA0` kind 0-8, the `"flame <piece> green"`
+sequences) — it fetches `dx/dy` and adds `dx` to the base X anchor before the
+blit; the SAME function's brick-burn branch (kind 9, `"flame brick <n>"`)
+does not call it and uses the base anchor directly, per the general rule
+above. `libs/game/src/sprites.cpp`'s `resolve_sequence` now carries `dx/dy`
+through onto `Sprite` (still inert by default) specifically so
+`Renderer::draw_world`'s flame-arm draw can apply them; every other draw site
+must keep ignoring them. See `docs/re/facts.md` "Flame draw offset" (2026-07-10)
+for the full citation and the empirical `MFLAME.ANI`/`FLAME.ANI` dx/dy dumps.

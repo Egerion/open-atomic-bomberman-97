@@ -58,10 +58,16 @@ private:
     bool ignite_epicentre(int tx, int ty, std::uint8_t owner);
 
     // A flame ARM reaches (tx,ty), travelling in direction `from_dir`
-    // (sub_42331C per-direction loop). Returns true if the arm continues
-    // past this cell, false if it stops here (bomb chain-queued, powerup
-    // burned, solid wall, or brick ignited).
-    bool spread_to(int tx, int ty, std::uint8_t owner, Direction from_dir);
+    // (sub_42331C per-direction loop). `is_last_of_reach` is whether this is
+    // the LAST tile of the bomb's FULL configured reach (true only on the
+    // final loop iteration, regardless of whether the arm actually gets this
+    // far before something stops it) — it decides tip vs. mid if this tile
+    // ends up igniting as a plain flame cell (see FlameKind's doc comment).
+    // Returns true if the arm continues past this cell, false if it stops
+    // here (bomb chain-queued, powerup burned, solid wall, or brick
+    // ignited).
+    bool spread_to(int tx, int ty, std::uint8_t owner, Direction from_dir,
+                   bool is_last_of_reach);
 
     // Destroys any floor powerup at (tx,ty), with the diseases_destroyable
     // skull-relocation compensation. Shared by the epicentre and the arm.
