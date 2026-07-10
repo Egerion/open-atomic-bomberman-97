@@ -383,11 +383,19 @@ void Renderer::draw_world(const sim::State& s) {
             float sy = tile_screen_y(y) + sim::kTileH - 1.0f;
             if (s.cells[y][x] == sim::Cell::Solid)
                 draw_anim(q.solid, 0, sx, sy);
-            else if (s.cells[y][x] == sim::Cell::Brick)
-                draw_anim(q.brick, 0, sx, sy);
+            // A burning brick keeps its cell as Cell::Brick for the whole
+            // crumble (the flame-audit fix, docs/re/facts.md "Brick crumble
+            // timing" — the tile only opens once `burning` hits 0), so the
+            // burn animation MUST be tested BEFORE the static-brick draw:
+            // otherwise `cells==Brick` wins for every burning tick and the
+            // crumble frames never render (the brick just pops out). The
+            // original draws the crumble ("brick %s" burn frames) over the
+            // still-Brick cell, advancing 0->last as `burning` counts down.
             else if (s.burning[y][x] > 0)
                 draw_anim(q.burn, timed_step(q.burn, s.burning[y][x], s.tuning.brick_burn_frames),
                           sx, sy);
+            else if (s.cells[y][x] == sim::Cell::Brick)
+                draw_anim(q.brick, 0, sx, sy);
         }
     }
 
