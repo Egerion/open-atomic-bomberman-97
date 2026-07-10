@@ -110,3 +110,95 @@ TEST_CASE("the skull can roll swap, exchanging positions") {
     }
     CHECK(swap_seen);  // swap is reachable through the skull
 }
+
+TEST_CASE("swap exchanges position only, not move_budget") {
+    // sub_41DFB6's swap is a 2-field XOR trick on the integer-pixel position
+    // ONLY (+0x1c/+0x20 — our x/y). An earlier port also swapped move_budget,
+    // which has no counterpart in the original (facts.md "Disease system").
+    bool swap_seen = false;
+    for (std::uint32_t seed = 1; seed <= 300 && !swap_seen; ++seed) {
+        MatchConfig cfg = open_config();
+        cfg.seed = seed;
+        Simulation s(cfg);
+        s.state().players[0].move_budget = 111;
+        s.state().players[1].move_budget = 222;
+        int t0x = s.state().players[0].tile_x(), t0y = s.state().players[0].tile_y();
+        s.state().floor[t0y][t0x] = PowerupType::Disease;
+        run(s, 1);  // no input pressed: move_on_actor never touches move_budget
+        for (auto& e : s.state().events)
+            if (e.type == Event::Type::Infected && e.data == static_cast<int>(Disease::Swap))
+                swap_seen = true;
+        if (swap_seen) {
+            CHECK(s.state().players[0].move_budget == 111);
+            CHECK(s.state().players[1].move_budget == 222);
+        }
+    }
+    CHECK(swap_seen);
+}
+
+TEST_CASE("a stunned player's disease does not age") {
+    // sub_41F29B nests freshness--/age+=delta/cure entirely inside "not
+    // stunned" (`if (!+8)` ~22904) — a stunned player's disease timer is
+    // frozen, exactly like the rest of their per-tick update.
+    Simulation s(open_config());
+    infect(s.state().players[0], Disease::Slow, 10);
+    s.state().players[0].stun = 5;
+    run(s, 3);
+    CHECK(s.state().players[0].stun == 2);            // stun itself still ticks down
+    CHECK(s.state().players[0].disease_timer == 10);  // but the disease does not age
+    CHECK(s.state().players[0].sick(Disease::Slow));
+}
+
+TEST_CASE("a stunned player can neither spread nor catch a disease") {
+    // Both ends of sub_41F29B's contagion scan require "not stunned": the
+    // source gate (same `if (!+8)` nesting as the age test above) and the
+    // target validity check's own `!v103[2]`.
+    Simulation source_stunned(open_config());
+    infect(source_stunned.state().players[0], Disease::Fast, 300);
+    source_stunned.state().players[0].stun = 5;
+    source_stunned.state().players[1].x = source_stunned.state().players[0].x;
+    source_stunned.state().players[1].y = source_stunned.state().players[0].y;
+    run(source_stunned, 1);
+    CHECK(!source_stunned.state().players[1].sick(Disease::Fast));
+
+    Simulation target_stunned(open_config());
+    infect(target_stunned.state().players[0], Disease::Fast, 300);
+    target_stunned.state().players[1].stun = 5;
+    target_stunned.state().players[1].x = target_stunned.state().players[0].x;
+    target_stunned.state().players[1].y = target_stunned.state().players[0].y;
+    run(target_stunned, 1);
+    CHECK(!target_stunned.state().players[1].sick(Disease::Fast));
+}
+
+TEST_CASE("a freshly-contagious disease is not aged again the same tick it spreads") {
+    // Regression for the age-before-spread ordering fix: sub_41F29B ages and
+    // cure-checks a player BEFORE that player's own contagion scan runs, so
+    // a target infected this tick inherits the source's POST-age freshness —
+    // its own per-tick age/freshness turn already passed this tick and does
+    // not apply a second time on top of the freshly-copied value.
+    Simulation s(open_config());
+    infect(s.state().players[0], Disease::Fast, 300);
+    s.state().players[1].x = s.state().players[0].x;
+    s.state().players[1].y = s.state().players[0].y;
+    run(s, 1);
+    REQUIRE(s.state().players[1].sick(Disease::Fast));
+    CHECK(s.state().players[1].disease_fresh == s.state().tuning.disease_freshness);
+}
+
+TEST_CASE("multiply=off infects only the first target and clears the source") {
+    MatchConfig cfg = open_config();
+    cfg.spawns = {{0, 0}, {2, 0}, {4, 0}};
+    cfg.player_count = 3;
+    Simulation s(cfg);
+    s.state().tuning.diseases_multiply = false;
+    infect(s.state().players[0], Disease::Fast, 300);
+    // Bring players 1 and 2 both into contagion range of player 0.
+    s.state().players[1].x = s.state().players[0].x;
+    s.state().players[1].y = s.state().players[0].y;
+    s.state().players[2].x = s.state().players[0].x;
+    s.state().players[2].y = s.state().players[0].y;
+    run(s, 1);
+    CHECK(!s.state().players[0].sick(Disease::Fast));  // source lost it (multiply=0)
+    CHECK(s.state().players[1].sick(Disease::Fast));   // first in slot order caught it
+    CHECK(!s.state().players[2].sick(Disease::Fast));  // scan stopped after the first match
+}
