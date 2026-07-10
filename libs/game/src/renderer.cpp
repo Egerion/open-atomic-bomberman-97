@@ -517,15 +517,25 @@ void Renderer::draw_world(const sim::State& s) {
         // (sub_41F29B ~23252, traced 2026-07-09): after the shadow blit, the
         // per-player draw-colour byte (+0x3C) that normally selects the FRAME
         // within the current pose sequence (one frame per player colour, 0-9)
-        // is replaced by `rand() % 10` whenever the disease-age word's bit 3
-        // is set (`v111[60] & 8`, a WORD field distinct from +0x3C): the body
-        // is redrawn each tick in a RANDOM one of the ten real player colours,
-        // not an arbitrary tint. `body_colour` reproduces that by swapping in
-        // a presentation-RNG colour index for every pose branch below (walk/
-        // stand/cornerhead/kick/punch/carry/spin all key off it) on alternating
-        // sim ticks (the original redraws every tick; halving it here keeps the
-        // flash readable at render framerate, an existing deliberate deviation).
-        bool disease_flash = p.disease_timer > 0 && (s.tick & 1);
+        // is replaced by `rand() % 10` whenever the disease-timer word's bit 3
+        // is set (`v111[60] & 8`, the +120 countdown WORD, distinct from
+        // +0x3C): the body is redrawn in a RANDOM one of the ten real player
+        // colours, not an arbitrary tint. `body_colour` reproduces that by
+        // swapping in a presentation-RNG colour index for every pose branch
+        // below (walk/stand/cornerhead/kick/punch/carry/spin all key off it).
+        //
+        // The `& 8` gate is the load-bearing part: it PULSES the strobe
+        // 8-tick-on / 8-tick-off (0.4 s buzz, 0.4 s calm at 20 Hz) rather than
+        // running it uniformly. That clustered pulse is what makes the strobe
+        // read as a distinct "I am diseased" state — the SOLE ongoing cue for
+        // the no-bomb Constipation disease, whose placement block otherwise
+        // looks like "I can't place bombs for no reason." A prior port gated on
+        // `s.tick & 1` instead — a documented deviation that produced a ~10 Hz
+        // shimmer easily dismissed as a render artifact; restored here to the
+        // confirmed timer-bit mechanism so the pulse is legible. disease_timer
+        // is hashed sim state but this only READS it — presentation only, no
+        // golden impact (State::rng is untouched; flash colour uses flash_lcg_).
+        bool disease_flash = (p.disease_timer & 8) != 0;
         int body_colour = disease_flash ? disease_flash_colour() : pv;
         const Anim* a = moving_[i] ? &q.walk[body_colour][dir] : &q.stand[body_colour][dir];
         std::size_t ph = moving_[i] ? walk_phase_[i] : 0;

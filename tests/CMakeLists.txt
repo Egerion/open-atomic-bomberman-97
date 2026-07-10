@@ -81,6 +81,7 @@ target_link_libraries(bomber_rmp_tests PRIVATE bomber::assets doctest::doctest b
 add_test(NAME rmp COMMAND bomber_rmp_tests)
 
 bomber_add_test(bomber_diarrhea_tests diarrhea_throw test_diarrhea_throw.cpp)
+bomber_add_test(bomber_placement_diag_tests placement_diag test_placement_diag.cpp)
 bomber_add_test(bomber_goldman_award_tests goldman_award test_goldman_award.cpp)
 
 # Per-match brick fill lives in bomber::match (header-only); link the match lib.
