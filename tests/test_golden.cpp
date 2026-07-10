@@ -156,6 +156,33 @@ MatchConfig pillars_config() {
 // four checkpoints, and with the x20 temporarily reverted D's ticks 200-600
 // hashes reproduce the OLD constants exactly — isolating D's delta to the
 // dud_gate value plus one RNG-neutral reversal divergence in ticks 600-800.
+//
+// UPDATE 2026-07-10 (disease-system fidelity audit, docs/re/facts.md
+// "Disease system fidelity audit 2026-07-10"): a DELIBERATE behaviour
+// recapture, reaching D ONLY (the sole scenario with active diseases).
+//   1. DiseaseSystem::spread_and_age() now ages/expires each player BEFORE
+//      scanning them as a contagion source, not after (sub_41F29B: per
+//      player, freshness--, then age+=frameDelta/cure, THEN that SAME
+//      player's own contagion scan — all before the next player's slot). A
+//      disease that expires this tick no longer spreads on its last tick,
+//      and a surviving disease transmits its post-age value, not last
+//      tick's.
+//   2. Disease aging and contagion (both source and target eligibility) are
+//      now frozen for stunned players (`if (!+8)` wraps the whole block in
+//      the original), matching the "present && alive && stun==0" valid-
+//      other-player test used everywhere else in this codebase (ai.cpp
+//      etc.).
+//   3. DiseaseSystem::give()'s Swap no longer swaps move_budget —
+//      sub_41DFB6's XOR trick only ever swaps the two integer-pixel
+//      position fields (+0x1c/+0x20, our x/y).
+// None of the three add or remove an RNG draw: kExpectedRng below is
+// BYTE-IDENTICAL at all four checkpoints (verified before recapturing the
+// hashes) — pure state/ordering fixes, no new randomness. Golden A/B/C/E are
+// unaffected (full suite run before/after: every one of their assertions is
+// byte-identical). Golden D's OWN tick 200/400 checkpoints are ALSO
+// byte-identical — the fix only bites once a disease is actually contagious,
+// aging past expiry, or adjacent to a stun in the 400-600 tick window — so
+// only kExpectedHash[2]/[3] (ticks 600/800) move below.
 
 TEST_CASE("golden A: empty state, 10000 ticks") {
     Simulation a;
@@ -246,11 +273,17 @@ TEST_CASE("golden D: the disease gauntlet") {
     // RNG stream (kExpectedRng below) is completely unaffected at every
     // checkpoint: the fix adds no RNG draws, it only changes which tile the
     // arm's blank-tile ignite loop reaches next.
+    //
+    // Ticks 600/800 recaptured AGAIN 2026-07-10 (disease-system fidelity
+    // audit, see the file-level UPDATE note above): age-before-spread
+    // ordering + stun-frozen aging/contagion + the move_budget-swap removal.
+    // Ticks 200/400 stay byte-identical to the "Flame-arm stops" constants
+    // directly above (unchanged by this audit); kExpectedRng is unchanged.
     static constexpr std::uint64_t kExpectedHash[4] = {
         0x725cfee1548c97c7ull,  // tick 200
         0xdf043d8f1c91bfd1ull,  // tick 400
-        0x517dedf684531a90ull,  // tick 600
-        0x1c886f30d32bd6bdull,  // tick 800
+        0x76c4a6e9bff308b1ull,  // tick 600
+        0x1421cc71c2a8a55eull,  // tick 800
     };
     static constexpr std::uint32_t kExpectedRng[4] = {0xca47489cu, 0x49cffff6u, 0x2abb3268u,
                                                       0xd72904d8u};

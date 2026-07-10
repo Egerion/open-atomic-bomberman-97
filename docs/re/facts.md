@@ -980,6 +980,137 @@ call site 22594 inside `sub_41EC84`; `sub_42331C` bomb-mover call sites to
 `sub_405654` at ~25365/25452/25529, no call to `sub_405A81` anywhere in the
 function; `exp_` import declaration pseudo.c 980.)
 
+## Disease system fidelity audit 2026-07-10 — line-by-line re-read (`sub_41DFB6`, `sub_41E21E`, `sub_41F29B` ~22904-22975, `sub_41DF4C`)
+
+A full re-read of the disease code paths against `libs/sim/src/systems/
+diseases.cpp`, following up the just-merged Core-feel audit (which already
+fixed the reversed-disease application point and the Swap-locally-lost
+behaviour — not re-litigated here). **Roster reconfirmed: exactly 9 diseases**
+(`sub_41DFB6` line 22055 `rand_() % 9`), matching the existing table in
+"Disease system" above (slow/fast/constipation/diarrhea/short-flame/super/
+short-fuse/swap/reversed) — no 10th disease, no "tiny bombs"/"jelly-force"
+kind exists in the binary.
+
+Three real deviations found and fixed (per-disease arithmetic — molasses ÷3,
+hyper ×3/2, diarrhea/super auto-drop, constipation gate, short-flame=1,
+goldflame-overrides-short-flame, short-fuse ÷3, reversed `(g+2)&3` humans-only
+— were independently re-verified term-by-term against `sub_41EB13` (pseudo.c
+22480-22519), the movement disease-scaling site (23436-23440), and the
+drop-gate site (23279-23310) and found **byte-for-byte IDENTICAL** to the
+existing port; no changes there):
+
+1. **Swap swapped an extra field.** `sub_41DFB6`'s swap (pseudo.c 22072-22082)
+   is a 2-field XOR trick on the player's integer-pixel position ONLY
+   (`v5[7]`/`v5[8]` = offsets +28/+32 = the mover's `+0x1c`/`+0x20`, our x/y —
+   cross-checked against the "Player movement / collision stepper" entry
+   above, which independently pins +0x1c/+0x20 as "a plain integer pixel
+   count"). `DiseaseSystem::give()` additionally swapped `move_budget`, which
+   has no counterpart in the original — removed.
+2. **Contagion ran before aging, not after.** `sub_41F29B` processes each
+   player, in slot order, as: freshness-- (~22927-22928), then
+   age+=frameDelta/cure (~22929-22942, `sub_41DF4C` on overflow), THEN that
+   SAME player's own contagion scan (~22943-22974) — age-then-spread, per
+   player, all nested inside "not stunned" (see #3). `DiseaseSystem::
+   spread_and_age()` did the reverse: one global contagion pass over ALL
+   players (using each source's PRE-age timer), then one global age pass.
+   Reordered to age-then-contagion (two passes, age first). Effect: a disease
+   that would expire this tick no longer spreads on its last tick (the
+   original cures it, zeroing `+120`, before the contagion check runs), and a
+   surviving disease transmits its post-age value. **Deliberately NOT
+   replicated:** the original's single interleaved pass lets a source at a
+   LOWER slot index hand a target at a HIGHER index a disease that then gets
+   one bonus age-tick the same frame (the target's own turn, later in the
+   same sweep, still runs after receiving it) — an index-order-dependent,
+   sub-tick artifact of in-place mutation with no stable player-visible
+   effect beyond one tick's timing out of a 300-tick duration. Same
+   "documented, not replicated" treatment as the two items below.
+3. **Stun did not freeze disease aging/contagion.** The entire block above —
+   freshness decrement, age/cure, and the contagion scan (both as source AND
+   as target: `!v103[2]` in the scan's own validity check, pseudo.c 22951) —
+   sits inside `if (!*((_DWORD*)v111+2))` (~22904), i.e. **not stunned**
+   (`+8`, `Player::stun` — the same field/convention `ai.cpp` already uses as
+   `present && alive && stun==0`, e.g. `ai.cpp:896/907/973`). Our port never
+   checked `stun` for disease aging or contagion (either side), nor for the
+   Swap target scan (`sub_41DFB6`'s target-validity test is the identical
+   `v3 != v5 && *v3 && !v3[2]` triple). Added `stun == 0` to: the age/expire
+   loop's per-player gate, the contagion source gate, the contagion target
+   validity check, and `has_swap_target`/`give()`'s Swap target list.
+
+**Two related items re-confirmed, NOT changed** (both were already flagged
+"deliberately NOT changed, documented for honesty" by the Core-feel audit;
+this pass independently re-derived the same conclusions from the raw
+pseudocode and endorses them as-is):
+- **Swap target pick: one draw over the valid set vs. the original's
+  up-to-200 `rand()%10` rejection loop.** Rejection sampling over a uniform
+  distribution is uniform over the accepted subset, so the CHOSEN target's
+  distribution is provably identical; only the RNG draw COUNT differs (fixed
+  1 draw vs. a geometric count, and 0 vs. up to 200 wasted draws when no
+  valid target exists). Confirmed still true after this pass's fixes.
+- **Cure roll draws even for a healthy player** (`sub_41E21E` ~22159-22167:
+  the `rand() % cure_chance == 0` roll is gated only on `diseases_curable`,
+  not on the player currently being sick) **vs. our `maybe_cure_on_pickup`,
+  which short-circuits the draw when `disease_timer == 0`.** Curing an
+  already-healthy player is a no-op either way (`sub_41DF4C` just re-zeroes
+  already-zero fields) — outcome-identical, RNG-draw-count differs only on
+  the already-documented healthy-pickup path.
+
+**Inert detail, no action:** `sub_41F29B`'s contagion copies **14** bytes
+(`+132`..`+145`) per infection, not the 9 documented disease-flag bytes
+(`+132`..`+140`). `grep`ing pseudo.c for player-struct-relative accesses to
+`+141`..`+145` finds none anywhere in the binary (the few raw `+141..+145`
+hits are unrelated structs — linked-list node fields). Nothing ever writes or
+reads these 5 bytes outside this blanket copy and `sub_41DF4C`'s matching
+14-byte clear loop, so they are always zero and the extra copy is
+unobservable. Not ported; noted here for anyone re-deriving the struct layout
+who wonders why the copy width doesn't match the flag count.
+
+**`diseases_destroyable` (id 120) composition with contagion/pickup:
+re-verified correct, unchanged.** The skull-relocate path (`FlameSystem::
+burn_powerup_here`, `BombSystem::slide`'s squash) only ever touches the FLOOR
+token before pickup; `DiseaseSystem` only ever runs after a pickup already
+happened. The two never interact within the same code path, so there is no
+ordering question — `tests/test_stomped_diseases.cpp` already covers this
+end to end (ON/OFF, flame-burned and slide-squashed skulls). `diseases_
+will_recycle` (id 122) remains genuinely unconsumed (`docs/valuelst-map.md`
+already flags this); out of scope here — it governs what happens to a
+powerup that "leaves" play by a mechanism this codebase has not identified
+yet, not a disease-arithmetic question.
+
+**Hashed state: complete.** `disease` (9-bit mask), `disease_timer`, and
+`disease_fresh` are all packed into one `mix()` call (`hash.cpp` ~127-132) —
+every field `DiseaseSystem` reads or writes is covered.
+
+**Adjacent-but-out-of-scope finding, not acted on:** `sub_41F29B`'s stun gate
+(~22904) also wraps the powerup-pickup dispatch call (`sub_41E21E`,
+~22921-22926) — i.e. the original appears to block ALL powerup pickup
+(disease or otherwise) while stunned, not just disease aging/contagion. Our
+`field_vs_players` (`simulation.cpp`) does not gate pickup on `stun` at all.
+This is a general pickup-gating question spanning every powerup kind, not a
+disease-specific one, and resolving it needs pinning the OTHER condition that
+nests inside the same block (`sub_41DE63`/`sub_42708D`/tile-actor checks,
+~22915-22917, not fully decoded here) — flagged for separate follow-up, not
+fixed in this pass.
+
+**GOLDEN IMPACT.** Zero RNG draws added or removed by any of the three fixes
+(state/ordering only). Full suite run before/after: golden A/B/C/E are
+byte-identical (proved — only "golden D: the disease gauntlet" changed, and
+only at the tick 600/800 checkpoints; tick 200/400 and `kExpectedRng` at all
+four checkpoints are byte-identical). `tests/test_golden.cpp` recaptured;
+`tests/test_disease.cpp` gained 5 new cases (swap-vs-move_budget, stun-freezes
+-aging, stun-blocks-both-contagion-ends, freshly-infected-not-double-aged,
+multiply=off-stops-after-first) — the first four were confirmed to fail
+against the pre-fix code (reverted, rebuilt, observed the failures, then
+restored) before being accepted as real regression coverage.
+
+(Provenance: `sub_41DFB6` pseudo.c 22041-22098; `sub_41E21E` 22148-22280
+(cure roll ~22159-22167, skull dispatch case 2/0xB ~22183/22225-22227);
+`sub_41F29B` per-player block 22856-22975 (respawn/state gate 22856-22891,
+stun gate 22904, pickup dispatch 22921-22926, freshness/age/cure 22927-22942,
+contagion scan 22943-22974); `sub_41DF4C` 22023-22038; `sub_41EB13`
+22480-22519; movement disease-scaling 23415-23454; drop-gate/diarrhea
+23277-23310; reversed-disease site 23040-23057 (spot-checked, already fixed,
+matches); `ai.cpp` present/alive/stun convention cross-reference.)
+
 ## Punch glove feedback — CONFIRMED (`sub_424A50` handler, `sub_41F29B` dispatch)
 
 Read 2026-07-04 ("devam" #23, control/audio fidelity). The punch glove is the
