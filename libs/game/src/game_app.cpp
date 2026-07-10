@@ -2785,6 +2785,28 @@ AppInput GameApp::run_match() {
     std::uint64_t last = SDL_GetTicks();
     std::uint64_t acc = 0;
     int over_ticks = -1;
+    // Input-latency audit (docs/re/in-match-shell.md's per-frame tick driver,
+    // sub_42A191/sub_41E61E — the original reads live key state once per
+    // display frame off the DirectDraw flip loop, so a keypress waits at most
+    // one frame + one 50 ms tick before a tick consumes it). GameApp::init()
+    // already syncs this loop's own SDL_RenderPresent to the display refresh
+    // (SDL_SetRenderVSync, its own comment there explains why), matching that
+    // same "one step per displayed frame" cadence — but the pre-vsync
+    // uncapped-loop throttle below (SDL_Delay(2), every other present_*
+    // screen in this file still uses it as their ONLY throttle) was left in
+    // place here too, stacking a flat 2 ms of dead time onto every already
+    // vsync-paced frame. That dead time delays this loop's next
+    // SDL_PollEvent/SDL_PumpEvents call — the only point a fresh key press
+    // becomes visible to collect_inputs()'s SDL_GetKeyboardState() read —
+    // inflating the "one display frame" half of the original's own bound by
+    // ~2 ms per frame for no presentational benefit once vsync is doing the
+    // pacing. Skip it when vsync is actually active; keep it as the fallback
+    // throttle on a driver where SDL_SetRenderVSync is a no-op (init()'s own
+    // "best-effort" comment), so an unsupported driver doesn't free-run
+    // uncapped.
+    int vsync_mode = SDL_RENDERER_VSYNC_DISABLED;
+    SDL_GetRenderVSync(sdl_renderer_.get(), &vsync_mode);
+    const bool vsync_paces_loop = vsync_mode != SDL_RENDERER_VSYNC_DISABLED;
     while (true) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -2925,7 +2947,11 @@ AppInput GameApp::run_match() {
         // logically part of the same pass).
         draw_player_row(sim_.state());
         SDL_RenderPresent(sdl_renderer_.get());
-        SDL_Delay(2);
+        // See vsync_paces_loop's comment at the top of this function: vsync
+        // already throttles this loop to the display refresh, so this extra
+        // fixed delay only applies as a fallback throttle when vsync isn't
+        // actually pacing presentation.
+        if (!vsync_paces_loop) SDL_Delay(2);
     }
 }
 
