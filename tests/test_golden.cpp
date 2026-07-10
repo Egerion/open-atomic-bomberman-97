@@ -184,11 +184,22 @@ MatchConfig pillars_config() {
 // aging past expiry, or adjacent to a stun in the 400-600 tick window — so
 // only kExpectedHash[2]/[3] (ticks 600/800) move below.
 //
-// NOTE (disease audit's point 2, above): the "stun==0" contagion/target gate
-// was subsequently CORRECTED — offset +8 is the DIED-THIS-ROUND flag (our
-// !alive), not the +58 head-stun countdown, so the original gates disease on
-// alive only. See the later "+8/+58 mislabel" correction; if that recapture
-// has landed, D's hashes here reflect the corrected (alive-only) behaviour.
+// CORRECTION 2026-07-10 (offset +8/+58 mislabel, docs/re/facts.md "Stun does
+// NOT gate flame-death or pickup" + "Disease system fidelity audit" point 3
+// CORRECTED): the disease audit above got point 2 WRONG. The `if (!+8)` block
+// that wraps disease aging/contagion is the ALIVE gate (+8 = died-this-round
+// flag), NOT a "not stunned" gate — the +58 head-hit stun is a separate WORD,
+// decremented INSIDE that same block (~22982). The spurious `stun == 0` /
+// `stun > 0` guards point 2 added to DiseaseSystem (and the matching ones in
+// ai.cpp) have been REMOVED: a merely-stunned-but-alive player now ages,
+// spreads/catches, and is a valid swap target, exactly as the original. This
+// revert is INERT in golden — scenario D never produces a stunned player (no
+// punch/grab gloves, action keys forced off below → no flying bombs → no
+// head-hits → Player::stun stays 0 for the whole run), so the removed guards
+// were never exercised. D's hashes below (already recaptured for the flame
+// audit) and its kExpectedRng are UNCHANGED by this revert (verified
+// byte-identical before/after). Points 1 (age-then-spread) and 3 (no
+// move_budget swap) stand.
 //
 // UPDATE 2026-07-10 (enclosure/HURRY arithmetic audit, docs/re/enclosure.md):
 // a DELIBERATE behaviour recapture in EnclosureSystem, all RNG-neutral (the

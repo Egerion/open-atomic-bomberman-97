@@ -323,7 +323,7 @@ before dropping. Our port reproduces exactly the two conditions we model (the
 if sub_4245DA(actor.playerIndex) >= actor.maxBombs(+86): return 0  // no spare bomb slot -> pass (CONFIRMED, §9.3)
 if abs(tileX(+20)) + abs(tileY(+24)) >= 3:             // Manhattan gate over the STALE +20/+24 snapshot
     for i in 0..4:                                      // scan the 5-tile cross (X=dword_45BAB0[i], Y=dword_45BA9C[i])
-        who = player_at(pos + off[i])   (sub_421CB5)    // sub_421CB5 = live unstunned PLAYER at tile (self zeroed out)
+        who = player_at(pos + off[i])   (sub_421CB5)    // sub_421CB5 = live (active +0, NOT-DEAD +8) PLAYER at tile (self zeroed out)
         if who:
             if dword_464964 and me.team(+84)==cell.team(+84): return 0   // team mode only
             if !sub_423188(pos): return 0               // drop-tile clearance (NOT an escape search, §3.3)
@@ -331,9 +331,12 @@ if abs(tileX(+20)) + abs(tileY(+24)) >= 3:             // Manhattan gate over th
             player.bombkey_last(+54)=0; player.bombkey(+56)=1; return 1   // drop; DO NOT continue the loop
 return 0
 ```
-`sub_421CB5(x,y)` is **confirmed** to return the live, unstunned **player**
-(`dword_461BC4` stride-152 scan; `+0` active, `+8` not-stunned, matching tile via
-`sub_42665C/sub_4266A3`). The caller zeroes its own actor `+0` across the probe
+`sub_421CB5(x,y)` is **confirmed** to return the live **player** (`dword_461BC4`
+stride-152 scan; pseudo.c 24207 `*i && !i[2]` = `+0` active and `+8` NOT-DEAD —
+`i[2]` is offset +8, the died-this-round flag, NOT the +58 head-hit stun;
+CORRECTED 2026-07-10, an earlier pass mislabelled `+8` "not-stunned"), matching
+tile via `sub_42665C/sub_4266A3`. The caller zeroes its own actor `+0` across the
+probe
 (`v5=*a1; *a1=0; sub_421CB5(...); *a1=v5`) so **self is excluded** — our port
 skips the self slot instead. The loop does NOT continue after the first hit: the
 first enemy found (in cross order) either drops or `return 0`s the whole behaviour.
@@ -399,7 +402,7 @@ if !brain.has_target(+10): return 0
 brain.timer(+12) += frameDelta
 if brain.timer(+12) >= 10*msPerFrame and !(rand()%50): brain.has_target=0; return 0   // RNG: 1/50 give up on timeout
 p = brain.actor(+16)
-if !p or p.kind!=1 or p.stunned(+2): brain.has_target=0; return 0
+if !p or p.kind!=1 or p.dead(v4[2]=+8): brain.has_target=0; return 0   // v4[2] is +8 (died-this-round), NOT +58 stun
 sub_4092A1(pos, p.tile, maxdist=20, &firstdir, &nsteps, 0)   // DIRECTED BFS toward the foe
 if !nsteps and rand()%2: brain.has_target=0            // RNG: 50% give up if unreachable
 if !firstdir: brain.has_target=0; return 0
@@ -420,8 +423,10 @@ reaches 10 (short-circuit `&&`), and on a FAILED roll the target is KEPT (unlike
 powerup-seek §3.5, whose 10-tick timeout is unconditional). The unreachable
 give-up `if (!nsteps && rand()%2)` (line 10914) draws `%2` only when the BFS found
 no path. Target liveness reload: `!v4 || *v4 != 1 || v4[2]` = target gone / not
-the alive value (+0 != 1) / stunned (+8). Our port stores the target's **slot**
-(not a pointer) and reloads liveness as `present && alive && stun==0` each tick.
+the alive value (+0 != 1) / **DEAD** (`v4[2]` = +8, the died-this-round flag —
+NOT the +58 stun; CORRECTED 2026-07-10, was mislabelled "stunned"). Our port
+stores the target's **slot** (not a pointer) and reloads liveness as
+`present && alive` each tick (a stunned-but-alive foe stays a valid target).
 
 ### 3.7 — `sub_40A81F`: wander (priority 7, fallback)
 ```
@@ -574,8 +579,10 @@ Picks a **random** live opponent from the 10-player array `dword_461BC4` (stride
 nested passes, byte-exact:
 - **Pass 1** starts at `i = rand()%10` and scans 10 slots forward (wrapping).
   It SKIPS a slot when: it is self (`a1 == v7`), absent (`!+16`), **another
-  computer player (`+16 == 1`)**, inactive (`!+0`), or stunned (`+8`). The first
-  surviving slot is a live **human** opponent; in a no-team match it is returned
+  computer player (`+16 == 1`)**, inactive (`!+0`), or **DEAD** (`v7[2]` = +8,
+  the died-this-round flag — NOT the +58 stun; CORRECTED 2026-07-10, pseudo.c
+  24741). The first surviving slot is a live **human** opponent; in a no-team
+  match it is returned
   immediately, in team mode only if its team `+84` differs.
 - **Pass 2** runs only if pass 1 exhausts all 10 without a hit. It starts at a
   **SECOND `rand()%10`** and scans again, but drops the `+16 == 1` test — so it
@@ -852,8 +859,10 @@ offsets and control flow only).
 4. **[RESOLVED — byte-confirmed from BM95.EXE] `sub_40ABED` scan geometry
    (behavior 4, Stage 5 IMPLEMENTED).** i in 0..4: `v7 = posX +
    dword_45BAB0[i]`, `v8 = posY + dword_45BA9C[i]`, then `who = sub_421CB5(v7,v8)`
-   (a live, unstunned **player** at the tile — the `dword_461BC4` stride-152 scan,
-   `+0` active `+8` not-stunned; self excluded by the `*a1=0` probe trick).
+   (a live **player** at the tile — the `dword_461BC4` stride-152 scan,
+   `+0` active and `+8` NOT-DEAD (pseudo.c 24207 `*i && !i[2]`; +8 = died-this-
+   round, NOT the +58 stun — CORRECTED 2026-07-10); self excluded by the `*a1=0`
+   probe trick).
    Tables: `dword_45BA9C[5] = {0,-1,0,1,0}` (Y offsets) and `dword_45BAB0[] =
    {-1}` (ONE element). Reading `dword_45BAB0[0..4]` runs PAST it into the
    adjacent `.data` — an **out-of-bounds read**. **Reading the shipped BM95.EXE
@@ -899,7 +908,7 @@ cluster of `sub_XXXX` functions end to end and cross-checked them against
 | 2 | Danger grid, flee BFS, walk-the-path | `sub_424D37/DFE`, `sub_426D06`, `sub_42331C` (danger write), the closing-wall writer, `sub_40970B`, `sub_40A76E`, `sub_40B20F` | IDENTICAL, **doc-only fix** (§4 brick/powerup contradiction) + **DEVIATION-fixed** (walk-path veto return value, §3.2) |
 | 3 | Directed BFS, powerup scan, seek-powerup, readers | `sub_4092A1`, `sub_409C1F`, `sub_40BAF5`, `sub_40A59D`, `sub_425FB9`, `sub_422E48`, `sub_42708D`, `sub_42542D`, `sub_409083` | IDENTICAL + **DEVIATION-fixed** (boxed-in `iters`, §5.1) + documented structural caveat (BFS is a faithful shortest-path rewrite, not the original's beam-flood — §5.1) |
 | 4 | Bomb-drop behaviours | `sub_40AD8D`, `sub_40ABED`, `sub_40BD44`, `sub_4245DA`, `sub_423188`, `sub_405654` | IDENTICAL (blast-bricks, bomb-near-enemy, capacity gate, clearance predicate) + **DEVIATION-fixed** (grab-glove polarity + sliding-bomb exclusion, §3.0) + **doc-only fix** (+62 mislabelled "team", §1.1/§3.0) |
-| 5 | Enemy targeting | `sub_422718`, `sub_421CB5`, `sub_40B8C2`, `sub_40BE02` | IDENTICAL — no deviations found |
+| 5 | Enemy targeting | `sub_422718`, `sub_421CB5`, `sub_40B8C2`, `sub_40BE02` | ~~IDENTICAL — no deviations found~~ → **DEVIATION-fixed** in a 2026-07-10 follow-up (§12): the target-liveness `q.stun` reads in `behave_bomb_enemy`/`pick_live_enemy`/`behave_seek_enemy` mirrored `+8` (`v7[2]`/`!i[2]`) but this pass mislabelled +8 "stunned" — it is the DEAD flag. The extra `stun` check wrongly skipped stunned-but-alive foes; removed |
 | 6 | Team filter | `AISystem::same_team`, the enemy-scan/finder team gates | IDENTICAL — confirmed `slot != self` + nonzero-team-equality matches the `dword_464964`-gated `+84` compares; unaffected by this pass |
 
 **No unlisted `rand()` call site was found anywhere in the AI's reachable
@@ -971,3 +980,36 @@ observation. Verified anyway: the full suite (`ctest --test-dir build/headless
 included, with **zero constant recaptures needed** in `tests/test_golden.cpp`.
 New regression coverage for all five fixes lives in `tests/test_ai.cpp`
 ("2026-07-10" test cases).
+
+## 12. Follow-up correction — target-liveness `+8` is DEAD, not stunned (2026-07-10)
+
+A sixth deviation, missed by §11's pass (which signed off "Enemy targeting —
+IDENTICAL"): every enemy/target-liveness scan in `ai.cpp` read the target's
+`Player::stun` **in addition to** `Player::alive`, on the belief that the
+original's `+8` exclusion (`sub_421CB5` 24207 `!i[2]`; `sub_422718` 24741
+`v7[2]` / 24728 `!v8[2]`; behaviour 6 liveness `v4[2]`) meant "skip stunned".
+It does not — **`+8` is the player's "died this round" flag** (set by the
+death-applier `sub_41DCB2`, never by the head-hit handler `sub_421F7E`, which
+writes the stun countdown to a separate WORD at **`+58`**; full evidence in
+facts.md "Head hit / Stun does NOT gate flame-death or pickup"). So `+8` is
+exactly our `!alive`, and the extra `stun` test was a NEW deviation: the port
+wrongly skipped a merely-**stunned-but-alive** enemy that the original would
+still bomb / chase / pick as a target.
+
+Fixed by removing the `stun` conditions (leaving the `present && alive` that
+already mirrors `!+8`) in: `behave_bomb_enemy` (§3.4 cross scan),
+`pick_live_enemy` (§5.3, both passes), and `behave_seek_enemy` (§3.6 liveness
+reload). The §3.4/§3.6/§5.3/§9.4 prose above is corrected inline.
+
+**NOT touched — the OWN-turn stun gate is correct.** `simulation.cpp`'s AI
+dispatch gate (`if (p.ai && p.stun == 0) ai.decide(...)`, §7 / §11 fix #5) and
+`player_turn`'s stun handling model **`+58`** (the head-hit stun that blocks a
+player's own *new-input acquisition*), which IS real — left exactly as-is. Only
+the OTHER-player target-liveness reads, which mirror `+8`, were the mislabel.
+
+GOLDEN: none. `AISystem` runs only for `ai==true` players and no golden
+scenario has one, so all 37 tests stay green with zero recaptures. Regression
+coverage: `tests/test_ai.cpp` "Mislabel fix: an AI still bombs a stunned-but-
+alive enemy (+8 not +58)" (the AI drops a bomb on an enemy kept stunned every
+tick — impossible under the old `stun == 0` gate, which had no other drop path
+in that room).
