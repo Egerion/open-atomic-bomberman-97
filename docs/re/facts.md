@@ -394,9 +394,21 @@ for the player's own draw-colour in every pose branch (walk/stand/
 cornerhead/kick/punch/carry/spin all key off the same `body_colour`), so the
 flash genuinely shows the player briefly wearing one of the ten shipped
 player recolors, matching the original's actual mechanism instead of
-approximating it with a tint. Still an alternating-tick simplification
-(`s.tick & 1`) rather than reproducing the counter-bit cadence exactly — a
-presentation-only deviation, not a behaviour gap.
+approximating it with a tint. **Cadence corrected 2026-07-10** (bomb-placement
+investigation): the gate now reproduces the counter-bit pulse exactly —
+`(disease_timer & 8) != 0`, the confirmed `v111[60] & 8` — replacing the prior
+alternating-tick simplification (`s.tick & 1`). Our `disease_timer` counts down
+where `+120` counts up, but `& 8` yields the identical 8-tick-on / 8-tick-off
+pulse (~0.4 s buzz, 0.4 s calm at 20 Hz); only the phase differs (imperceptible
+in a strobe). The prior `s.tick & 1` produced a uniform ~10 Hz shimmer easily
+dismissed as a render artifact — the clustered pulse reads far better as a
+distinct "I am diseased" state. This matters because the strobe is the SOLE
+ongoing cue for the no-bomb **Constipation** disease (`+134`, the `sub_41F29B`
+LABEL_246 drop gate), whose faithful placement block is exactly the "sometimes I
+can't place bombs, for no reason" report — the sim gate is correct; the cue was
+the weak link. Presentation-only (reads hashed `disease_timer`, never
+`State::rng`); golden unaffected. NOTE: `renderer.cpp` is not built by the
+`headless` preset, so verify this one-line change with an SDL build.
 
 **Pickup dispatch** (`sub_41E21E`, powerup type at `+4`): every pickup first rolls
 a cure — if curable, `rand() % cure_chance == 0` clears all diseases (`sub_41DF4C`)
