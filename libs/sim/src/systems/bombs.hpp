@@ -51,9 +51,13 @@ public:
     // Throws the carried bomb three tiles ahead (same arc as a punch).
     void throw_carried(Player& p, int who);
 
-    // Detonates the player's oldest grounded trigger bomb — resting OR
-    // sliding; only carried/flying bombs are exempt (sub_424B41 excludes
-    // motion states 2 and 3 only). True if one went off.
+    // Queues the player's oldest grounded trigger bomb for forced detonation
+    // (resting OR sliding; only carried/flying bombs are exempt, sub_424B41
+    // excludes motion states 2 and 3 only) via the SAME pending-chain queue
+    // a flame-arm chain uses (sub_423209) — but this one still resolves
+    // THIS tick, since it is queued during the player pass, which precedes
+    // the once-per-tick drain (docs/re/facts.md "Chain-reaction timing").
+    // True if one was queued.
     bool detonate_triggered(int owner);
 
     // Tick step 2: airborne bombs fly (landing on a head stuns and scatters),
@@ -75,17 +79,22 @@ private:
     // Coordinates stay unwrapped during flight; landing wraps the field.
     void launch(Bomb& b, Direction d, int tiles, std::int32_t arc);
 
-    // Advances an airborne bomb; on arrival it settles on an open tile or
-    // makes another one-tile hop (wrapping around the field edges).
+    // Advances an airborne bomb; on arrival it settles on an open tile (never
+    // a wall/bomb/powerup/WARPHOLE — the exp_ term in that landing check is
+    // dead code, docs/re/facts.md "Chain-reaction timing") or makes another
+    // one-tile hop (wrapping around the field edges). Landing on flame
+    // queues the bomb for forced detonation next tick.
     void fly(Bomb& b);
 
-    // Advances a kicked bomb, stopping tile-aligned when blocked ahead. Takes
-    // the bomb's index so it can detonate the bomb (via FlameSystem) when it
-    // slides onto a flaming tile (sub_42331C flame check, sub_42708D). Also
-    // applies the stage-actor reactions at each tile centre: a DIRARROW re-steers
-    // the bomb (sub_42331C ~25532) and a WARPHOLE teleports it (stage-actors.md
-    // §6). `belt` is the per-tick move budget (belt speed for a conveyor-carried
-    // bomb, else kicked_bomb_speed).
+    // Advances a kicked bomb, stopping tile-aligned when blocked ahead.
+    // Entering a flaming tile queues the bomb for forced detonation next
+    // tick (sub_42331C flame check, sub_42708D) — jelly bounces off it like
+    // a wall, non-jelly stops there. Also applies the stage-actor reactions
+    // at each tile centre: a DIRARROW re-steers the bomb (sub_42331C
+    // ~25532); a WARPHOLE BLOCKS entry outright, exactly like a wall — a
+    // bomb never warps (docs/re/facts.md "Bomb/warphole reconciliation").
+    // `budget` is the per-tick move budget (belt speed for a conveyor-
+    // carried bomb, else kicked_bomb_speed).
     void slide(std::size_t index, std::int32_t budget);
 
     // A resting bomb sitting on a conveyor tile is pushed along the belt at the

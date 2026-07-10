@@ -28,14 +28,25 @@ TEST_CASE("bomb explodes at its fuse and burns the brick") {
     CHECK(s.state().bombs.empty());        // exploded exactly at fuse
     CHECK(s.state().flame[0][0] > 0);      // epicenter
     CHECK(s.state().flame[0][1] > 0);      // one to the right
-    CHECK(s.state().cells[0][2] == Cell::Blank);  // brick destroyed...
-    CHECK(s.state().burning[0][2] > 0);           // ...but still crumbling
+    // The brick stays BLOCKING (still Cell::Brick) for the whole crumble —
+    // sub_425EFC's cell-type write nets to a no-op at ignition; the cell
+    // only flips to Blank once `burning` finishes (docs/re/facts.md "Brick
+    // crumble timing"). It is destroyed in the sense that it is now
+    // crumbling (unrecoverable) and its hidden powerup, if any, has already
+    // revealed — but it does not open up to movement/flame-arms yet.
+    CHECK(s.state().cells[0][2] == Cell::Brick);
+    CHECK(s.state().burning[0][2] > 0);           // crumbling
     CHECK(s.state().flame[0][2] == 0);     // flame stops at the brick it burns
     CHECK(s.state().flame[1][1] == 0);     // solid pillar untouched
     CHECK(s.state().players[0].bombs_placed == 0);
     // Player 0 stood on the bomb: died in the blast.
     CHECK(!s.state().players[0].alive);
     CHECK(alive_count(s.state()) == 1);
+
+    // Once the crumble timer runs out, the tile finally opens up.
+    run(s, s.state().tuning.brick_burn_frames);
+    CHECK(s.state().cells[0][2] == Cell::Blank);
+    CHECK(s.state().burning[0][2] == 0);
 }
 
 TEST_CASE("flame reach stops at range and solids") {
@@ -69,6 +80,7 @@ TEST_CASE("flame arm stops at a bomb it chain-detonates, without igniting past i
     s.state().cells[0][1] = Cell::Blank;  // clear path for the arm to reach x=1
     Bomb victim;
     victim.active = true;
+    victim.id = 1;  // distinct id: two hand-built bombs coexist (place() isn't used)
     victim.owner = 1;
     victim.x = kTileWF + kTileWF / 2;  // tile (1,0)
     victim.y = kTileHF / 2;
@@ -79,6 +91,7 @@ TEST_CASE("flame arm stops at a bomb it chain-detonates, without igniting past i
 
     Bomb igniter;
     igniter.active = true;
+    igniter.id = 2;
     igniter.owner = 0;
     igniter.x = kTileWF / 2;  // tile (0,0)
     igniter.y = kTileHF / 2;
@@ -87,14 +100,74 @@ TEST_CASE("flame arm stops at a bomb it chain-detonates, without igniting past i
     s.state().bombs.push_back(igniter);
     ++s.state().players[0].bombs_placed;
 
+    // A chain reaction is NOT instantaneous (docs/re/facts.md "Chain-reaction
+    // timing", sub_423209's deferred queue): the igniter's fuse expires and
+    // its arm reaches the victim THIS tick, QUEUEING it; the victim's own
+    // explosion (its epicentre + owner transfer) happens the NEXT tick, when
+    // the queue drains.
     run(s, 1);  // igniter's fuse expires this tick
-    CHECK(s.state().bombs.empty());          // both chain-detonated
-    CHECK(s.state().flame[0][1] > 0);        // victim's tile burns (its OWN epicentre)
+    CHECK(s.state().bombs.size() == 1);      // igniter gone, victim still queued
+    CHECK(s.state().flame[0][1] == 0);       // victim hasn't gone off yet
     CHECK(s.state().flame[0][2] == 0);       // the igniter's arm did NOT continue past it
     int explosion_count = 0;
     for (const auto& e : s.state().events)
         if (e.type == Event::Type::Explosion) ++explosion_count;
-    CHECK(explosion_count == 2);  // igniter + chained victim
+    CHECK(explosion_count == 1);  // only the igniter, so far
+    CHECK(s.state().bombs[0].owner == 0);    // ownership already transferred to the igniter
+
+    run(s, 1);  // the queue drains: victim forcibly detonates
+    CHECK(s.state().bombs.empty());          // both chain-detonated
+    CHECK(s.state().flame[0][1] > 0);        // victim's tile burns (its OWN epicentre)
+    CHECK(s.state().flame_owner[0][1] == 0);  // credited to the igniter's owner, not victim's
+    explosion_count = 0;
+    for (const auto& e : s.state().events)
+        if (e.type == Event::Type::Explosion) ++explosion_count;
+    CHECK(explosion_count == 1);  // the (formerly) victim, alone, this tick
+}
+
+// A chain-triggered bomb's own explosion skips re-casting an arm back toward
+// the flame that hit it (bomb+56, pseudo.c 25621: `if (!field56 || k+1 !=
+// field56)`, pushed as `((k+2)&3)+1` — the OPPOSITE of the triggering arm's
+// direction). The other three directions still fire at full reach.
+TEST_CASE("a chain-detonated bomb skips re-blasting back toward its trigger") {
+    Simulation s(open_config());
+    // Row 0: no pillars there (the (odd,odd) pattern never hits an even row).
+    Bomb igniter;
+    igniter.active = true;
+    igniter.id = 1;
+    igniter.owner = 0;
+    igniter.x = 5 * kTileWF + kTileWF / 2;  // tile (5,0)
+    igniter.y = kTileHF / 2;
+    igniter.fuse = 1;
+    igniter.flame = 3;  // reaches (6,0),(7,0),(8,0) rightward -> hits the chained bomb
+    s.state().bombs.push_back(igniter);
+    ++s.state().players[0].bombs_placed;
+
+    Bomb chained;
+    chained.active = true;
+    chained.id = 2;
+    chained.owner = 1;
+    chained.x = 8 * kTileWF + kTileWF / 2;  // tile (8,0)
+    chained.y = kTileHF / 2;
+    chained.fuse = 30000;  // never fires on its own within this test
+    chained.flame = 10;    // generous reach in every OTHER direction
+    s.state().bombs.push_back(chained);
+    ++s.state().players[1].bombs_placed;
+
+    run(s, 1);  // igniter's fuse expires: its right-arm reaches (8,0), queues it
+    run(s, 1);  // the queue drains: the chained bomb detonates, skipping Left
+
+    CHECK(s.state().bombs.empty());
+    // Left (back toward the igniter) is skipped entirely: tiles the igniter's
+    // OWN (shorter, reach-3) left-arm could never have reached — (2,0)-4 away
+    // is its limit; (0,0)/(1,0) are strictly farther — stay completely dark.
+    CHECK(s.state().flame[0][0] == 0);
+    CHECK(s.state().flame[0][1] == 0);
+    // The other three directions still fire at the chained bomb's own full
+    // reach: Right past where the igniter's own (reach-3, stopped-at-8) arm
+    // ever got to, and Down (a fresh direction the igniter's arm never took).
+    for (int x = 9; x <= 14; ++x) CHECK(s.state().flame[0][x] > 0);
+    for (int y = 1; y <= 10; ++y) CHECK(s.state().flame[y][8] > 0);
 }
 
 TEST_CASE("burned brick reveals its powerup, players pick it up") {
@@ -103,8 +176,16 @@ TEST_CASE("burned brick reveals its powerup, players pick it up") {
     s.tick(press1(0));
     run(s, s.state().tuning.fuse_frames - 1);
     CHECK(s.state().burning[0][2] > 0);
+    // The powerup reveals RIGHT NOW, at ignition (sub_425107, called
+    // immediately after the brick starts crumbling) — well before the tile
+    // itself opens up (docs/re/facts.md "Brick crumble timing"). It is
+    // visible/fading-in but still not collectible: the tile is still Brick,
+    // still blocking, so a player cannot reach it yet.
+    CHECK(s.state().floor[0][2] == PowerupType::ExtraBomb);
+    CHECK(s.state().hidden[0][2] == PowerupType::None);
+    CHECK(s.state().cells[0][2] == Cell::Brick);
     run(s, s.state().tuning.brick_burn_frames);
-    CHECK(s.state().floor[0][2] == PowerupType::ExtraBomb);  // revealed
+    CHECK(s.state().floor[0][2] == PowerupType::ExtraBomb);  // still there, now collectible
 
     // Verify pickup by placing a powerup under player 1.
     int tx = s.state().players[1].tile_x(), ty = s.state().players[1].tile_y();
@@ -126,7 +207,7 @@ TEST_CASE("powerup accumulation respects the VALUELST limits") {
     CHECK(p.max_bombs == s.state().tuning.limits[0]);  // capped at 8
 }
 
-TEST_CASE("chained bombs explode in the same tick") {
+TEST_CASE("chained bombs explode within a tick of the trigger, not on bomb B's own fuse") {
     Simulation s(test_config());
     s.tick(press1(0));  // bomb A at (0,0), fuse 40
     // Walk down to (0,2): within bomb A's flame reach of 2.
@@ -135,7 +216,10 @@ TEST_CASE("chained bombs explode in the same tick") {
     for (int i = 0; i < 8; ++i) s.tick(down);
     CHECK(s.state().players[0].tile_y() == 2);
     s.tick(press1(0));  // bomb B at (0,2), ~10 ticks younger
-    // Bomb A explodes at its fuse; the chain must clear BOTH bombs instantly.
+    // Bomb A explodes at its fuse (~tick 40) and QUEUES bomb B, which
+    // forcibly detonates the NEXT tick (docs/re/facts.md "Chain-reaction
+    // timing", sub_423209's deferred queue — not the same tick as A). Both
+    // are gone well before bomb B's own ~50-tick fuse would have fired.
     while (!s.state().bombs.empty() && s.state().tick < 100) run(s, 1);
     CHECK(s.state().bombs.empty());
     CHECK(s.state().tick <= 42);  // bomb B's own fuse would have lasted longer

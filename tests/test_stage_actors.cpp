@@ -358,6 +358,69 @@ TEST_CASE("a bomb resting on a belt is blocked by a warphole ahead") {
     CHECK_FALSE(saw_warp(s));
 }
 
+// A flying bomb's landing check (sub_42331C ~25453: `!v62 || exp_ &&
+// v62[1] != 1`) treats a warphole the same way it treats a wall/bomb/
+// powerup: it cannot land there. `exp_` decompiles to a bare reference to
+// the statically-linked, NEVER-CALLED CRT exp() routine — confirmed dead
+// code by direct disassembly (the ONLY xref to it anywhere in the binary is
+// a `dr_O` load of its address, immediately tested and always non-zero) —
+// so the real condition is just "actor type != Warphole", the same rule
+// already ported for the sliding-bomb probe above. facts.md "Chain-reaction
+// timing" (exp_ resolution).
+TEST_CASE("a flying bomb cannot land on a warphole; it hops onward instead") {
+    Simulation s(open_config());
+    State& st = s.state();
+    st.actor_type[0][4] = ActorType::Warphole;
+    st.warp_dest_x[0][4] = 10;
+    st.warp_dest_y[0][4] = 0;
+
+    // Airborne, about to land on the warphole tile (4,0) THIS tick.
+    Bomb& b = add_bomb(st, 1, 0);
+    b.flying = true;
+    b.dir = Direction::Right;
+    b.from_x = centre_x(1);
+    b.from_y = centre_y(0);
+    b.to_x = centre_x(4);
+    b.to_y = centre_y(0);
+    b.fly_total = 4;
+    b.fly_ticks = 1;  // this tick's advance_bombs() call resolves the landing
+
+    s.tick(TickInputs{});
+    // Right after the bounce the bomb's logical position still reads tile 4
+    // (fly()'s arrival code moves it to the landing tile's centre before
+    // deciding whether to settle there — same as the original, pseudo.c
+    // 25457-25458), but it must still be airborne: it did NOT settle.
+    REQUIRE_FALSE(st.bombs.empty());
+    CHECK(st.bombs[0].flying);
+    bool warped = saw_warp(s);  // events are per-tick: accumulate across the run
+
+    // Run to a full stop: it must settle somewhere other than the warphole.
+    for (int i = 0; i < 40 && s.state().bombs[0].flying; ++i) {
+        run(s, 1);
+        if (saw_warp(s)) warped = true;
+    }
+    REQUIRE_FALSE(st.bombs.empty());
+    CHECK_FALSE(st.bombs[0].flying);
+    CHECK(st.bombs[0].tile_x() != 4);  // never actually settled on the warphole
+    CHECK_FALSE(warped);               // WarpUsed never fires for a bomb
+
+    // Contrast: the SAME setup over a plain open tile settles normally.
+    Simulation s2(open_config());
+    Bomb& b2 = add_bomb(s2.state(), 1, 0);
+    b2.flying = true;
+    b2.dir = Direction::Right;
+    b2.from_x = centre_x(1);
+    b2.from_y = centre_y(0);
+    b2.to_x = centre_x(4);
+    b2.to_y = centre_y(0);
+    b2.fly_total = 4;
+    b2.fly_ticks = 1;
+    s2.tick(TickInputs{});
+    REQUIRE_FALSE(s2.state().bombs.empty());
+    CHECK_FALSE(s2.state().bombs[0].flying);  // settles fine with no actor in the way
+    CHECK(s2.state().bombs[0].tile_x() == 4);
+}
+
 // ---- Core-feel audit 2026-07-10 (facts.md "Core-feel audit" §3) ------------
 
 TEST_CASE("no bomb can be dropped while standing on a warphole (sub_41F29B ~23354)") {

@@ -10,6 +10,12 @@ namespace bomber::sim {
 // One bomb. Plain aggregate — see the determinism note in player.hpp.
 struct Bomb {
     bool active = false;
+    // Stable identity assigned once at creation (State::next_bomb_id),
+    // never reused — lets the chain-detonation queue re-find this exact
+    // bomb one tick later even though `State::bombs` compacts dead entries
+    // every tick (a raw vector index would go stale). docs/re/facts.md
+    // "Chain-reaction timing".
+    std::uint32_t id = 0;
     std::uint8_t owner = 0;
     Fixed x = 0, y = 0;           // center, aligned to tile unless moving
     std::int32_t fuse = 0;        // ticks until detonation (<0: waits for trigger)

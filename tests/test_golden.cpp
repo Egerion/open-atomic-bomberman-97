@@ -229,6 +229,49 @@ MatchConfig pillars_config() {
 // (dormant, ticks_left seeded huge); D/E run 800/300 ticks and never reach
 // even the banner (~tick 1800 for their game_seconds=150 default).
 
+// UPDATE 2026-07-10 (flame-system fidelity audit, docs/re/facts.md "Chain-
+// reaction timing" / "Brick crumble timing" / exp_ resolution in "Bomb/
+// warphole reconciliation"): a DELIBERATE behaviour recapture. Three
+// findings, all reaching virtually every scenario that ever places a bomb:
+//   1. Chain reactions are NOT instantaneous (sub_423209's queue: a flame
+//      arm that reaches another bomb, a trigger-button press, a flying bomb
+//      landing on flame, and a sliding bomb entering flame all QUEUE their
+//      target instead of exploding it — it detonates at the START of the
+//      NEXT tick, one LINK of a chain per tick). Ownership transfers to the
+//      triggering bomb at queue time (flame/kill attribution follows the
+//      player who actually set it off), and an arm-chained bomb skips
+//      re-blasting back toward the flame that triggered it.
+//   2. A brick stays Brick (blocking) for its whole crumble — the tile only
+//      opens up once `burning` reaches 0 — but its hidden powerup reveals
+//      immediately at ignition, well before that. Previously the cell went
+//      Blank (and the powerup revealed) both at the wrong end.
+//   3. A flying (punched/thrown) bomb cannot land on a WARPHOLE tile either
+//      (hops onward like it does over a wall) — the `exp_` term in that
+//      landing check is confirmed dead code (disassembly-verified: a
+//      hardcoded non-null pointer tested for truthiness, never zero), so
+//      the real condition is the same "type 1 blocks" rule already ported
+//      for the sliding-bomb probe.
+// Hash-layout growth rides along: a per-bomb `id` word, a `next_bomb_id`
+// counter, and the (usually-empty) pending-chain queue.
+//
+// These changes reach every scenario with any bomb activity, so B, C, D, E
+// all recapture. Golden A (0 players, 0 bombs, 10000 ticks of nothing) is
+// the control: proved BYTE-IDENTICAL in behaviour — its hash still moves,
+// but only from the layout growth (next_bomb_id/pending_chain are always
+// mix(1)/mix(0) there), and its pinned `rng` value is UNCHANGED. For B-E,
+// every non-hash assertion in this file — golden D's kExpectedRng at all
+// four checkpoints, golden E's bounce count (10) and final rng — is
+// BYTE-IDENTICAL before and after this change (verified: only the 17 hash
+// checks moved, all 7 other assertions passed unchanged), proving the fix
+// adds no RNG draws anywhere: it only changes WHEN a chain-queued bomb
+// actually detonates and WHEN a brick tile opens up, never the random
+// stream. Focused, hand-verifiable coverage for the new mechanics lives in
+// tests/test_sim.cpp ("flame arm stops at a bomb it chain-detonates...",
+// "bomb explodes at its fuse and burns the brick") and
+// tests/test_kick_nuances.cpp / tests/test_trigger_allowance.cpp (updated
+// for the one-tick chain defer — their assertions already had enough slack
+// to pass either way, but their comments now say so honestly).
+
 TEST_CASE("golden A: empty state, 10000 ticks") {
     Simulation a;
     a.state().rng = 42u;
@@ -241,7 +284,7 @@ TEST_CASE("golden A: empty state, 10000 ticks") {
     // matching that documented intent.
     a.state().ticks_left = 9999 * kTicksPerSecond;
     for (std::uint64_t t = 0; t < 10000; ++t) a.tick(pattern(t));
-    CHECK(a.hash() == 0x5189198a15a7c8e4ull);
+    CHECK(a.hash() == 0xb9f782f923ce72c5ull);
     CHECK(a.state().rng == 0x0000002au);
 }
 
@@ -259,15 +302,15 @@ TEST_CASE("golden B: 4-player brick match with all abilities") {
     cfg.born_with[static_cast<int>(PowerupType::Spooger)] = true;
     cfg.born_with[static_cast<int>(PowerupType::Jelly)] = true;
     Simulation s(cfg);
-    CHECK(s.hash() == 0x57a58cd7591a0885ull);  // setup itself is pinned
+    CHECK(s.hash() == 0x66be0a37b86e9b94ull);  // setup itself is pinned
 
     static constexpr std::uint64_t kExpected[6] = {
-        0x57c354d638c66743ull,  // tick 500 -- unchanged (well before the wall phase)
-        0xf78a6117e3a966c7ull,  // tick 1000 -- unchanged
-        0xac762307668aeff3ull,  // tick 1500 -- unchanged
-        0x3c94ccfdda9bae99ull,  // tick 2000 -- recaptured (enclosure audit, see header note)
-        0x2f985da620256ef3ull,  // tick 2500 -- recaptured
-        0x27334d5da091e68aull,  // tick 3000 -- recaptured
+        0xf5760516441af07aull,  // tick 500
+        0x68e88bee67f5e216ull,  // tick 1000
+        0x4c6c3b3aaab9886aull,  // tick 1500
+        0x5783f12413562d08ull,  // tick 2000
+        0xe6a5e3c7e8b44c6eull,  // tick 2500
+        0x5f6b098bb75f6937ull,  // tick 3000
     };
     for (std::uint64_t t = 0; t < 3000; ++t) {
         s.tick(pattern(t));
@@ -285,7 +328,7 @@ TEST_CASE("golden C: trigger bombs and a fast hurry phase") {
     cfg.born_with[static_cast<int>(PowerupType::Trigger)] = true;
     Simulation s(cfg);
     for (std::uint64_t t = 0; t < 1500; ++t) s.tick(pattern(t * 7 + 3));
-    CHECK(s.hash() == 0xb0fcede2e39f3f35ull);  // recaptured (enclosure audit, see header note)
+    CHECK(s.hash() == 0xca9c3e8898e50ba2ull);
 }
 
 TEST_CASE("golden D: the disease gauntlet") {
@@ -325,10 +368,10 @@ TEST_CASE("golden D: the disease gauntlet") {
     // Ticks 200/400 stay byte-identical to the "Flame-arm stops" constants
     // directly above (unchanged by this audit); kExpectedRng is unchanged.
     static constexpr std::uint64_t kExpectedHash[4] = {
-        0x725cfee1548c97c7ull,  // tick 200
-        0xdf043d8f1c91bfd1ull,  // tick 400
-        0x76c4a6e9bff308b1ull,  // tick 600
-        0x1421cc71c2a8a55eull,  // tick 800
+        0xb0284a38351747a2ull,  // tick 200
+        0x3ce7c5c7298f1eb8ull,  // tick 400
+        0xfc7db2a7ff1f756bull,  // tick 600
+        0x2179320b1f74920cull,  // tick 800
     };
     static constexpr std::uint32_t kExpectedRng[4] = {0xca47489cu, 0x49cffff6u, 0x2abb3268u,
                                                       0xd72904d8u};
@@ -389,10 +432,10 @@ TEST_CASE("golden E: jelly ping-pong and a veering punched flight") {
     };
 
     static constexpr std::uint64_t kExpected[4] = {
-        0x2127eecc535b0d1dull,  // tick 75
-        0x2b023abf13ff90baull,  // tick 150
-        0x47ed56eafc466f39ull,  // tick 225
-        0xd897750a91e2131bull,  // tick 300
+        0x9d00c5fc62311dbdull,  // tick 75
+        0xd48a974feb70ee26ull,  // tick 150
+        0x6114b38de59b6f4cull,  // tick 225
+        0xefa299733c7748ecull,  // tick 300
     };
     int bounces = 0;
     for (std::uint64_t t = 0; t < 300; ++t) {
