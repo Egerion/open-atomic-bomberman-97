@@ -805,3 +805,40 @@ TEST_CASE("Audit fix: a stunned AI draws no RNG this tick") {
     active.tick(idle());
     CHECK(active.state().rng != rng1);
 }
+
+TEST_CASE("Mislabel fix: an AI still bombs a stunned-but-alive enemy (+8 not +58)") {
+    // CORRECTED 2026-07-10 (docs/re/ai.md §5.3/§3.4; facts.md "Stun does NOT
+    // gate flame-death or pickup"): sub_421CB5 (behaviour 4's cross scan)
+    // accepts a target on `*i && !i[2]` (active +0 && not-dead +8, pseudo.c
+    // 24207) — it does NOT check the +58 stun. An earlier mislabel added a
+    // `q.stun == 0` guard to behave_bomb_enemy that wrongly skipped a merely-
+    // stunned-but-alive enemy. Same room/seed as the un-stunned "drops a bomb
+    // at it" case above, but the enemy is kept stunned EVERY tick: under the
+    // old (buggy) gate the scan would skip it forever and — with no adjacent
+    // brick for behaviour 3 — no bomb could ever drop. With the gate removed
+    // the AI still bombs the stunned foe.
+    Simulation s = open_arena(/*tx=*/6, /*ty=*/6, /*ai=*/true);
+    State& st = s.state();
+    st.rng = 0x24681357u;
+    for (int y = 4; y <= 8; ++y)
+        for (int x = 4; x <= 8; ++x)
+            if (y == 4 || y == 8 || x == 4 || x == 8) st.cells[y][x] = Cell::Solid;
+    add_player(st, /*slot=*/1, /*tx=*/6, /*ty=*/5, /*ai=*/false);  // idle HUMAN enemy
+
+    bool dropped = false;
+    bool alive_when_targeted = false;
+    for (int t = 0; t < 200 && !dropped; ++t) {
+        st.players[1].stun = 100;  // keep the enemy stunned the whole test
+        s.tick(idle());
+        if (!st.bombs.empty()) {
+            dropped = true;
+            // The bomb was just placed (not yet detonated), so the target it was
+            // dropped at is still stunned-but-ALIVE — the exact state the old gate
+            // wrongly treated as un-targetable. (It dies moments later, unable to
+            // flee while stunned — which is the whole point of bombing it.)
+            alive_when_targeted = st.players[1].alive;
+        }
+    }
+    CHECK(dropped);             // behaviour 4 bombed the stunned-but-alive enemy
+    CHECK(alive_when_targeted);  // the target was merely stunned, not dead, when chosen
+}

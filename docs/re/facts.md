@@ -616,18 +616,27 @@ up floor powerups" (added 2026-07-10; confirmed failing if a `stun == 0`
 guard is (re-)added to `field_vs_players`, so it is real regression coverage,
 not a tautology).
 
-**Open concern, not resolved here:** `DiseaseSystem`'s `stun == 0` gates
-(added by the disease audit below, citing this same +8 field as
-"Player::stun") may rest on the same mislabelling and could be blocking
-disease aging/contagion for a merely-stunned-but-alive player when the
-original would not. `ai.cpp`'s `pick_live_enemy`/`behave_seek_enemy` target-
-liveness checks (`q.stun != 0`, comments "+8 (stunned)") are the same
-convention and share the same doubt — though skipping a stunned target has
-no obvious gameplay downside for AI the way skipping disease aging does.
-Reported to main; not changed in this pass (out of this task's scope — flame
-propagation and disease arithmetic are owned elsewhere — and diseases.cpp's
-golden-recaptured commit deserves its own re-verification pass rather than a
-drive-by edit here).
+**Fallout CORRECTED 2026-07-10 (same day, follow-up commit):** the concern
+raised here was confirmed and fixed. `DiseaseSystem`'s `stun == 0` /
+`stun > 0` gates (added by the disease audit below, "point 3", citing this
+same +8 field as "Player::stun") DID rest on this mislabelling — every one
+mirrors an original gate that reads `!player[2]` (offset +8 = **dead**), not
++58. They have been **removed**: a merely-stunned-but-alive player now ages,
+spreads/catches disease, and is a valid Swap target, matching the binary
+(`sub_41DFB6` 22073 `!v3[2]`; `sub_41F29B` age/contagion block 22904 `if
+(!+8)` with the +58 stun decremented *inside* it at 22982). `ai.cpp`'s
+`pick_live_enemy`/`behave_bomb_enemy`/`behave_seek_enemy` target-liveness
+checks (`q.stun` reads mirroring `sub_421CB5` 24207 `!i[2]` / `sub_422718`
+24741 `v7[2]`) were the same mislabel and are likewise switched to `!alive`
+(dead) only. GOLDEN: inert in scenario D (no head-hits there → no stun ever),
+so all golden constants stayed byte-identical, kExpectedRng included — no RNG
+draw added or removed. The AI-dispatch stun gate (`simulation.cpp`, §7 of
+ai.md) is UNTOUCHED — that one correctly models +58 (stun blocks *new input
+acquisition*). Tests: `test_disease.cpp` (stunned-but-alive ages/spreads/swap-
+target), `test_ai.cpp` ("bombs a stunned-but-alive enemy"). Still open,
+separate: `player_turn`'s full early-return on `stun > 0` freezes in-flight
+momentum (the original only blocks new input, not existing momentum) — a
+core-control-flow change left for its own pass.
 
 ## Powerup pickup dispatcher — CONFIRMED (`sub_41E21E`)
 
@@ -1114,25 +1123,36 @@ existing port; no changes there):
    loop's per-player gate, the contagion source gate, the contagion target
    validity check, and `has_swap_target`/`give()`'s Swap target list.
 
-   **UPDATE 2026-07-10 (gate-fidelity audit, "Stun does NOT gate flame-death
-   or pickup" under "Head hit" above) — this point's field ID is now in
-   doubt.** A from-scratch, brace-traced re-read of `sub_41F29B` (not relying
-   on this entry's own citation) found `+8` to be the player's "already died
-   this round" flag, not the head-hit stun countdown (which is a separate
-   WORD at `+58`, confirmed against `sub_421F7E`'s explicit `_WORD *a1`
-   typing and never written by anything else). The `ai.cpp` convention this
-   point leans on ("`+8`, `Player::stun`") looks like the same mislabelling
-   propagated from an earlier AI RE pass, not independent confirmation — see
-   the cross-check in `sub_422718`, where the identical `v7[2]` exclusion
-   reads equally well as "skip dead targets" (AI has no obvious reason to
-   avoid attacking a defenseless *stunned* target, but obviously cannot
-   target a dead one). If this holds, the `stun == 0` guards added here are
-   an unintended NEW deviation (the original would keep aging/spreading
-   disease on a merely-stunned-but-alive player) rather than a fix. **Not
-   changed in this pass** — this entry's own golden recapture (below) is
-   real, tested history and deserves a deliberate re-verification, not a
-   drive-by edit from an audit scoped to a different mechanic. Flagged to
-   main.
+   **CORRECTED 2026-07-10 (same-day follow-up commit; gate-fidelity audit,
+   "Stun does NOT gate flame-death or pickup" under "Head hit" above) — point
+   3 was WRONG and is REVERTED.** A from-scratch, brace-traced re-read of
+   `sub_41F29B` (not relying on this entry's own citation) found `+8` to be
+   the player's "already died this round" flag, NOT the head-hit stun
+   countdown (which is a separate WORD at `+58`, confirmed against
+   `sub_421F7E`'s explicit `_WORD *a1` typing and never written by anything
+   else). The `+8` gate that wraps the whole aging/contagion block (~22904
+   `if (!*((_DWORD*)v111+2))`) is therefore the **ALIVE** gate, and the +58
+   stun is decremented *inside* it (~22982) — a field cannot gate a block that
+   only decrements itself. The `!v103[2]` (contagion target, 22951) and
+   `sub_41DFB6`'s `!v3[2]` (Swap target, 22073) are the same +8/not-dead test.
+   The `ai.cpp` convention this point leaned on ("`+8`, `Player::stun`") was
+   the same mislabel propagated from an earlier AI RE pass (`sub_422718` 24741
+   `v7[2]`, `sub_421CB5` 24207 `!i[2]` — both "skip DEAD", not "skip stunned":
+   the AI has no reason to spare a defenseless stunned foe but obviously cannot
+   target a dead one). **All `stun == 0` / `stun > 0` guards added by this
+   point have been REMOVED** from `DiseaseSystem` (age/expire loop, both
+   contagion gates, `has_swap_target`/`give()`'s Swap list) and the mirroring
+   ones from `ai.cpp` (`behave_bomb_enemy`, `pick_live_enemy` ×2,
+   `behave_seek_enemy`) — leaving the `present && alive` checks, which
+   faithfully mirror `!player[2]`. GOLDEN: inert in scenario D (no head-hits
+   there → no player is ever stunned), so every golden constant AND
+   `kExpectedRng` stayed byte-identical (no RNG draw added/removed — verified;
+   `tests/test_golden.cpp`'s own CORRECTION note documents this). Points 1
+   (no move_budget swap) and 2 (age-then-spread) of this audit STAND
+   unchanged. The two `test_disease.cpp` cases this entry originally added to
+   pin "stun freezes aging/contagion" were themselves the mislabel and are
+   rewritten to pin the opposite (stunned-but-alive DOES age/spread), plus a
+   new stunned-but-alive Swap-target case.
 
 **Two related items re-confirmed, NOT changed** (both were already flagged
 "deliberately NOT changed, documented for honesty" by the Core-feel audit;
@@ -1190,21 +1210,28 @@ only while dead. `field_vs_players` not gating pickup on `stun` is therefore
 this note asked to have decoded (`sub_41DE63`/`sub_42708D`, ~22915-22917) IS
 now fully decoded in that entry: it is a flame-death check, ANDed with the
 same +8/"not dead" gate, run once per tick ahead of the pickup dispatch —
-unrelated to stun. **New open concern raised by that same pass:** this
-section's OWN `stun == 0` additions below (point 3) cite the identical +8
-field as "Player::stun" and may rest on the same mislabelling — flagged
-there, not re-litigated here.
+unrelated to stun. **Concern raised by that same pass, now CORRECTED (same-
+day follow-up commit):** this section's OWN `stun == 0` additions (point 3)
+cited the identical +8 field as "Player::stun" and DID rest on the same
+mislabel — all of them (plus the mirroring `ai.cpp` target-liveness checks)
+have since been removed and the two "stun freezes aging/contagion"
+regression tests rewritten to pin the opposite. See point 3's own CORRECTED
+box above and the "Head hit / Stun does NOT gate flame-death or pickup" entry.
 
-**GOLDEN IMPACT.** Zero RNG draws added or removed by any of the three fixes
-(state/ordering only). Full suite run before/after: golden A/B/C/E are
-byte-identical (proved — only "golden D: the disease gauntlet" changed, and
-only at the tick 600/800 checkpoints; tick 200/400 and `kExpectedRng` at all
-four checkpoints are byte-identical). `tests/test_golden.cpp` recaptured;
-`tests/test_disease.cpp` gained 5 new cases (swap-vs-move_budget, stun-freezes
--aging, stun-blocks-both-contagion-ends, freshly-infected-not-double-aged,
-multiply=off-stops-after-first) — the first four were confirmed to fail
-against the pre-fix code (reverted, rebuilt, observed the failures, then
-restored) before being accepted as real regression coverage.
+**GOLDEN IMPACT (this audit's commit).** Zero RNG draws added or removed by
+any of the three fixes (state/ordering only). Full suite run before/after:
+golden A/B/C/E are byte-identical (proved — only "golden D: the disease
+gauntlet" changed, and only at the tick 600/800 checkpoints; tick 200/400 and
+`kExpectedRng` at all four checkpoints are byte-identical). `tests/test_golden.cpp`
+recaptured; `tests/test_disease.cpp` gained 5 new cases (swap-vs-move_budget,
+stun-freezes-aging, stun-blocks-both-contagion-ends, freshly-infected-not-
+double-aged, multiply=off-stops-after-first) — the first four were confirmed
+to fail against the pre-fix code before being accepted as real coverage.
+**Superseded by the +8/+58 correction (follow-up commit, point 3 CORRECTED
+box):** the `stun-freezes-aging` and `stun-blocks-both-contagion-ends` cases
+were the mislabel and are rewritten to pin stunned-but-alive DOES age/spread
+(+ a new stunned-but-alive Swap-target case); the D 600/800 hashes captured
+here are unchanged by that revert (it is inert in D — no head-hits, no stun).
 
 (Provenance: `sub_41DFB6` pseudo.c 22041-22098; `sub_41E21E` 22148-22280
 (cure roll ~22159-22167, skull dispatch case 2/0xB ~22183/22225-22227);

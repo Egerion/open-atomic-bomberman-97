@@ -183,6 +183,22 @@ MatchConfig pillars_config() {
 // byte-identical — the fix only bites once a disease is actually contagious,
 // aging past expiry, or adjacent to a stun in the 400-600 tick window — so
 // only kExpectedHash[2]/[3] (ticks 600/800) move below.
+//
+// CORRECTION 2026-07-10 (offset +8/+58 mislabel, docs/re/facts.md "Stun does
+// NOT gate flame-death or pickup" + "Disease system fidelity audit" point 3
+// CORRECTED): the audit above got point 2 WRONG. The `if (!+8)` block that
+// wraps disease aging/contagion is the ALIVE gate (+8 = died-this-round flag),
+// NOT a "not stunned" gate — the +58 head-hit stun is a separate WORD,
+// decremented INSIDE that same block (~22982). The spurious `stun == 0` /
+// `stun > 0` guards point 2 added to DiseaseSystem (and the matching ones in
+// ai.cpp) have been REMOVED: a merely-stunned-but-alive player now ages,
+// spreads/catches, and is a valid swap target, exactly as the original.
+// This revert is INERT in golden — scenario D never produces a stunned player
+// (no punch/grab gloves, action keys forced off below → no flying bombs → no
+// head-hits → Player::stun stays 0 for the whole run), so the removed guards
+// were never exercised. Every constant below (hashes AND kExpectedRng at all
+// four checkpoints) is UNCHANGED and verified byte-identical before/after —
+// NO recapture. Points 1 (age-then-spread) and 3 (no move_budget swap) stand.
 
 TEST_CASE("golden A: empty state, 10000 ticks") {
     Simulation a;

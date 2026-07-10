@@ -136,38 +136,77 @@ TEST_CASE("swap exchanges position only, not move_budget") {
     CHECK(swap_seen);
 }
 
-TEST_CASE("a stunned player's disease does not age") {
-    // sub_41F29B nests freshness--/age+=delta/cure entirely inside "not
-    // stunned" (`if (!+8)` ~22904) — a stunned player's disease timer is
-    // frozen, exactly like the rest of their per-tick update.
+TEST_CASE("a stunned-but-alive player still ages its disease") {
+    // CORRECTED 2026-07-10 (facts.md "Stun does NOT gate flame-death or
+    // pickup"): sub_41F29B's freshness--/age/cure block is nested inside the
+    // ALIVE gate `if (!+8)` (~22904) — +8 is the died-this-round flag, NOT the
+    // +58 head-hit stun countdown (which is decremented INSIDE that same block
+    // at ~22982; a field cannot gate a block that only decrements itself). So a
+    // merely-stunned-but-alive player ages its disease normally — only a DEAD
+    // (!alive) player freezes. Pins against the earlier mislabel that added a
+    // spurious `stun > 0` skip here.
     Simulation s(open_config());
     infect(s.state().players[0], Disease::Slow, 10);
     s.state().players[0].stun = 5;
     run(s, 3);
-    CHECK(s.state().players[0].stun == 2);            // stun itself still ticks down
-    CHECK(s.state().players[0].disease_timer == 10);  // but the disease does not age
+    CHECK(s.state().players[0].stun == 2);           // stun itself still ticks down
+    CHECK(s.state().players[0].disease_timer == 7);  // and the disease ages right alongside it
     CHECK(s.state().players[0].sick(Disease::Slow));
 }
 
-TEST_CASE("a stunned player can neither spread nor catch a disease") {
-    // Both ends of sub_41F29B's contagion scan require "not stunned": the
-    // source gate (same `if (!+8)` nesting as the age test above) and the
-    // target validity check's own `!v103[2]`.
+TEST_CASE("a stunned-but-alive player still spreads and catches a disease") {
+    // CORRECTED 2026-07-10 (facts.md "Stun does NOT gate flame-death or
+    // pickup"): both ends of sub_41F29B's contagion scan gate on ALIVE, not
+    // stun. The source sits inside the same `if (!+8)` block as the ager; the
+    // target validity check is `!v103[2]` (+8/not-dead, pseudo.c 22951), NOT
+    // the +58 stun. So a stunned-but-alive player both spreads and catches.
+    // Pins against the earlier mislabel's spurious `stun > 0` skips.
     Simulation source_stunned(open_config());
     infect(source_stunned.state().players[0], Disease::Fast, 300);
-    source_stunned.state().players[0].stun = 5;
+    source_stunned.state().players[0].stun = 5;  // stunned SOURCE
     source_stunned.state().players[1].x = source_stunned.state().players[0].x;
     source_stunned.state().players[1].y = source_stunned.state().players[0].y;
     run(source_stunned, 1);
-    CHECK(!source_stunned.state().players[1].sick(Disease::Fast));
+    CHECK(source_stunned.state().players[1].sick(Disease::Fast));  // still spread to the healthy one
 
     Simulation target_stunned(open_config());
     infect(target_stunned.state().players[0], Disease::Fast, 300);
-    target_stunned.state().players[1].stun = 5;
+    target_stunned.state().players[1].stun = 5;  // stunned TARGET
     target_stunned.state().players[1].x = target_stunned.state().players[0].x;
     target_stunned.state().players[1].y = target_stunned.state().players[0].y;
     run(target_stunned, 1);
-    CHECK(!target_stunned.state().players[1].sick(Disease::Fast));
+    CHECK(target_stunned.state().players[1].sick(Disease::Fast));  // still caught it
+}
+
+TEST_CASE("a stunned-but-alive player is still a valid swap target") {
+    // sub_41DFB6's Swap target scan (pseudo.c 22073) validates a candidate with
+    // `v3 != v5 && +16 && (…||*v3) && !v3[2]` — `!v3[2]` is +8/not-dead, NOT the
+    // +58 stun. open_config has exactly two players, so player 0's ONLY possible
+    // swap target is the (stunned) player 1: when the skull rolls Swap the two
+    // must exchange positions. Under the earlier mislabel (`stun == 0` in
+    // has_swap_target/give) a stunned player 1 was an invalid target, so the
+    // Swap was silently LOST and this could never be observed.
+    bool swap_seen = false;
+    for (std::uint32_t seed = 1; seed <= 300 && !swap_seen; ++seed) {
+        MatchConfig cfg = open_config();
+        cfg.seed = seed;
+        Simulation s(cfg);
+        s.state().players[1].stun = 8;  // the only other player is stunned...
+        int t0x = s.state().players[0].tile_x(), t0y = s.state().players[0].tile_y();
+        int t1x = s.state().players[1].tile_x(), t1y = s.state().players[1].tile_y();
+        s.state().floor[t0y][t0x] = PowerupType::Disease;  // p0 stands on a skull
+        run(s, 1);
+        for (auto& e : s.state().events)
+            if (e.type == Event::Type::Infected && e.data == static_cast<int>(Disease::Swap))
+                swap_seen = true;
+        if (swap_seen) {
+            CHECK(s.state().players[0].tile_x() == t1x);  // ...and the swap still exchanges
+            CHECK(s.state().players[0].tile_y() == t1y);  //    positions with it
+            CHECK(s.state().players[1].tile_x() == t0x);
+            CHECK(s.state().players[1].tile_y() == t0y);
+        }
+    }
+    CHECK(swap_seen);  // a stunned-but-alive player is a reachable swap target
 }
 
 TEST_CASE("a freshly-contagious disease is not aged again the same tick it spreads") {

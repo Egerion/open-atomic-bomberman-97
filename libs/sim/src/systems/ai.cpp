@@ -835,9 +835,10 @@ bool AISystem::behave_punch(int i, PlayerInput& out) {
 //      not track that snapshot field; the faithful determinable analog is the
 //      AI's current tile, which EQUALS the spawn snapshot at match start and
 //      gives the same near-always-true result (docs/re/ai.md §3.4 [VERIFY]);
-//   3. scan the 5-tile plus/cross (kEnemyScanX/Y, the OOB tables) for a live,
-//      unstunned ENEMY player (sub_421CB5), self excluded (the original zeroes
-//      its own actor +0 across the probe; we skip the self slot);
+//   3. scan the 5-tile plus/cross (kEnemyScanX/Y, the OOB tables) for a live
+//      (active +0, not-dead +8) ENEMY player (sub_421CB5 `*i && !i[2]`, pseudo.c
+//      24207 — `!i[2]` is +8/died-this-round, NOT the +58 stun), self excluded
+//      (the original zeroes its own actor +0 across the probe; we skip the self);
 //   4. per hit: in team mode skip a teammate (dword_464964 gate; same_team()
 //      below — see docs/re/ai.md §3.4/§5.3, "our semantics" note at same_team's
 //      definition for what counts as a team on an all-zero roster); the
@@ -870,9 +871,11 @@ bool AISystem::behave_bomb_enemy(int i, PlayerInput& out) {
         for (int j = 0; j < kMaxPlayers; ++j) {
             const Player& q = s_.players[j];
             if (j == i) continue;  // self excluded (the original's +0-zeroing trick)
-            if (q.present && q.alive && q.stun == 0 && q.tile_x() == tx && q.tile_y() == ty) {
+            // sub_421CB5 checks +0 (active) && !+8 (not dead); our present && alive.
+            // NO +58/stun check — a stunned-but-alive enemy is still bombable.
+            if (q.present && q.alive && q.tile_x() == tx && q.tile_y() == ty) {
                 who = j;
-                break;  // sub_421CB5 returns the first live, unstunned player at the tile
+                break;  // sub_421CB5 returns the first live (active, not-dead) player here
             }
         }
         if (who < 0) continue;
@@ -912,8 +915,9 @@ bool AISystem::same_team(int a, int b) const {
 // nearest). Two passes, byte-exact:
 //   pass 1: start = rand()%10, scan 10 slots forward (wrapping); accept the
 //           first that is NOT self, present (+16 != 0), NOT another AI/computer
-//           (+16 != 1), active (+0), not stunned (+8), and (team mode) not a
-//           teammate. This pass draws ONE rand()%10 for its start index.
+//           (+16 != 1), active (+0), NOT DEAD (+8, `v7[2]` in pseudo.c 24741 —
+//           NOT the +58 stun), and (team mode) not a teammate. This pass draws
+//           ONE rand()%10 for its start index.
 //   pass 2 (only if pass 1 finds nothing): start = a SECOND rand()%10; the same
 //           scan but RELAXED to include other AI players (drops the +16 != 1
 //           test). Returns the first live, non-teammate opponent, else -1.
@@ -932,10 +936,10 @@ int AISystem::pick_live_enemy(int self) {
         const int j = (start1 + n) % kMaxPlayers;
         if (j == self) continue;  // a1 == v7 (self)
         const Player& q = s_.players[j];
-        if (!q.present) continue;               // !+16 (absent)
-        if (q.ai) continue;                     // +16 == 1 (another computer player)
-        if (!q.alive || q.stun != 0) continue;  // !+0 (inactive) || +8 (stunned)
-        if (same_team(self, j)) continue;       // team mode: skip a teammate
+        if (!q.present) continue;          // !+16 (absent)
+        if (q.ai) continue;                // +16 == 1 (another computer player)
+        if (!q.alive) continue;            // !+0 (inactive) / v7[2] (+8 dead) — NOT +58 stun
+        if (same_team(self, j)) continue;  // team mode: skip a teammate
         return j;  // the first live, non-teammate human opponent (slot != self)
     }
     // Pass 2: fall back to ANY live opponent (incl. other AI) — the relaxed scan.
@@ -944,10 +948,10 @@ int AISystem::pick_live_enemy(int self) {
         const int j = (start2 + n) % kMaxPlayers;
         if (j == self) continue;  // a1 == v8 (self)
         const Player& q = s_.players[j];
-        if (!q.present) continue;               // !+16 (absent)
-        if (!q.alive || q.stun != 0) continue;  // !+0 (inactive) || +8 (stunned)
-        if (same_team(self, j)) continue;       // team mode: skip a teammate
-        return j;                               // any live, non-teammate opponent
+        if (!q.present) continue;          // !+16 (absent)
+        if (!q.alive) continue;            // !+0 (inactive) / v8[2] (+8 dead) — NOT +58 stun
+        if (same_team(self, j)) continue;  // team mode: skip a teammate
+        return j;                          // any live, non-teammate opponent
     }
     return -1;  // no live opponent
 }
@@ -961,8 +965,9 @@ int AISystem::pick_live_enemy(int self) {
 //   - timeout: tick the timer; once it reaches 10, give up on a 1/50 roll (UNLIKE
 //     powerup-seek, whose timeout is unconditional — this one keeps the target if
 //     the roll fails and the timer keeps growing);
-//   - liveness: drop the target if its slot is now gone / dead / stunned
-//     (original: *v4 != 1 || v4[2]);
+//   - liveness: drop the target if its slot is now gone / inactive / dead
+//     (original: `!v4 || *v4 != 1 || v4[2]` — v4[2] is +8/died-this-round =
+//     our !alive, NOT the +58 stun, so a stunned-but-alive foe is still chased);
 //   - path: directed BFS toward the target's tile (maxdist 20); if unreachable
 //     (0 iters) give up 50% of the time BEFORE the firstdir check; then step one
 //     tile if the next tile is safe (sub_40A59D), else hold.
@@ -1000,8 +1005,10 @@ bool AISystem::behave_seek_enemy(int i, PlayerInput& out) {
     }
 
     // Liveness: the original reloads the actor pointer and drops the target if it
-    // is null / not the alive value / stunned (`!v4 || *v4 != 1 || v4[2]`). Our
-    // slot image: give up if the slot is no longer a live, unstunned player.
+    // is null / not the alive value / DEAD (`!v4 || *v4 != 1 || v4[2]` — v4[2] is
+    // +8/died-this-round = our !alive, NOT the +58 stun; a stunned-but-alive foe
+    // is still pursued). Our slot image: give up if the slot is no longer a live
+    // player.
     // bugprone-signed-char-misuse (NOLINT below) — target_slot (std::int8_t)
     // is a genuine signed small int; the negative-slot check right below
     // relies on its sign, so casting through unsigned char first would break it.
@@ -1011,7 +1018,7 @@ bool AISystem::behave_seek_enemy(int i, PlayerInput& out) {
         return false;
     }
     const Player& target = s_.players[ts];
-    if (!target.present || !target.alive || target.stun != 0) {
+    if (!target.present || !target.alive) {
         br.enemy_seek.active = false;
         return false;
     }
