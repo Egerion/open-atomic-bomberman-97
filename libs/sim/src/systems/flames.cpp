@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "bomber/sim/rng.hpp"
 #include "grid.hpp"
 #include "systems/powerups.hpp"
 
@@ -101,6 +102,11 @@ bool FlameSystem::spread_to(int tx, int ty, std::uint8_t owner, Direction from_d
         // docs/re/facts.md "Brick crumble timing".
         s.burning[ty][tx] = static_cast<std::uint8_t>(
             std::clamp<std::int32_t>(s.tuning.brick_burn_frames, 1, 255));
+        // Punch/Grab/SuperDisease may relocate instead of revealing here —
+        // see relocate_overpowered_here. Runs BEFORE the reveal check below,
+        // exactly where sub_425107 sits relative to LABEL_33 in the original
+        // (both are part of the SAME ignition call, relocate-then-reveal).
+        relocate_overpowered_here(tx, ty);
         if (s.hidden[ty][tx] != PowerupType::None) {
             s.floor[ty][tx] = s.hidden[ty][tx];
             s.hidden[ty][tx] = PowerupType::None;
@@ -124,6 +130,75 @@ bool FlameSystem::spread_to(int tx, int ty, std::uint8_t owner, Direction from_d
     s.flame_kind[ty][tx] = static_cast<FlameKind>(
         grid::to_godir(from_dir) + (is_last_of_reach ? 0 : 4));
     return true;
+}
+
+// sub_425107's early gated branch (pseudo.c 26295-26336), disassembly-pinned
+// 2026-07-10 (docs/re/facts.md "Overpowered-powerup relocation"): a hidden
+// token whose kind is Punch/Grab/SuperDisease (off_45BE50 indices 5/6/11 —
+// the shipped VALUELST.RES's own id-102 comment calls these "over-powerful"
+// powers) doesn't reveal the first time its brick burns, for the opening
+// `overpowered_relocate_seconds` of the match — it swaps with a DIFFERENT
+// kind's record elsewhere on a still-standing brick, or (failing that) moves
+// to an empty brick with no reveal at all. No network-role gate: the
+// original also requires a non-networked game (!sub_40C06A()), but this
+// port has no netplay concept yet (ADR-0003 defers it) — every match here
+// IS the original's "local" case, so that half of the binary's gate is
+// always-true and simply omitted.
+void FlameSystem::relocate_overpowered_here(int tx, int ty) {
+    State& s = s_;
+    const PowerupType kind = s.hidden[ty][tx];
+    if (kind != PowerupType::Punch && kind != PowerupType::Grab &&
+        kind != PowerupType::SuperDisease)
+        return;
+    const auto deadline = static_cast<std::uint64_t>(s.tuning.overpowered_relocate_seconds) *
+                          kTicksPerSecond;
+    if (s.tick >= deadline) return;
+
+    // Pass 1 (pseudo.c 26304-26322): up to 200 tries, ALWAYS drawing x then y
+    // even when the candidate is rejected (the rand_() calls sit before the
+    // guard/checks in the original, so a miss still burns its 2 draws).
+    // Accepts the first still-standing brick holding ANY other kind's record
+    // (hidden OR already-visible-but-still-crumbling — sub_42542D tests the
+    // record's presence regardless of state, and the original's swap is a
+    // raw struct copy that moves the state byte along with the kind) and
+    // swaps the two records whole.
+    for (int i = 0; i < 200; ++i) {
+        const int rx = static_cast<int>(random_below(s, kGridWidth));
+        const int ry = static_cast<int>(random_below(s, kGridHeight));
+        if (s.cells[ry][rx] != Cell::Brick) continue;
+        const bool cand_hidden = s.hidden[ry][rx] != PowerupType::None;
+        const PowerupType cand_kind = cand_hidden ? s.hidden[ry][rx] : s.floor[ry][rx];
+        if (cand_kind == PowerupType::None) continue;
+        if (cand_kind == PowerupType::Punch || cand_kind == PowerupType::Grab ||
+            cand_kind == PowerupType::SuperDisease)
+            continue;
+        if (cand_hidden) {
+            s.hidden[ry][rx] = PowerupType::None;
+            s.hidden[ty][tx] = cand_kind;  // this tile stays "hidden"
+        } else {
+            s.floor[ry][rx] = PowerupType::None;
+            s.hidden[ty][tx] = PowerupType::None;
+            s.floor[ty][tx] = cand_kind;  // this tile becomes "floor" (already visible)
+        }
+        s.hidden[ry][rx] = kind;  // candidate tile becomes "hidden" (the source's own state)
+        return;
+    }
+    // Pass 2 (pseudo.c 26323-26334): only reached if pass 1 exhausted all 200
+    // tries. A second, independent 200-try search for a completely EMPTY
+    // brick (no record at all) — a plain MOVE, not a swap: this tile ends up
+    // with nothing, so the caller's reveal check below fires on NOTHING
+    // (matching the original's early `return` before its own LABEL_33).
+    for (int i = 0; i < 200; ++i) {
+        const int rx = static_cast<int>(random_below(s, kGridWidth));
+        const int ry = static_cast<int>(random_below(s, kGridHeight));
+        if (s.cells[ry][rx] != Cell::Brick) continue;
+        if (s.hidden[ry][rx] != PowerupType::None || s.floor[ry][rx] != PowerupType::None) continue;
+        s.hidden[ry][rx] = kind;
+        s.hidden[ty][tx] = PowerupType::None;
+        return;
+    }
+    // Both searches exhausted (only plausible on an almost fully-cleared
+    // board): leave the record untouched — the caller reveals it as-is.
 }
 
 void FlameSystem::explode(std::size_t bomb_index, int skip_dir) {

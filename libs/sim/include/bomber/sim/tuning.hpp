@@ -26,6 +26,13 @@ struct Tuning {
     std::int32_t game_seconds = 150;         // id 100
     std::int32_t taunt_chance = 5;           // id 95, 1-in-N post-death taunt
     std::int32_t hurry_seconds = 60;         // id 101, walls start closing in
+    // Window (seconds, from match start) during which a brick-hidden Punch/
+    // Grab/SuperDisease token doesn't reveal when its brick first burns —
+    // VALUELST.RES's OWN comment for id 102: "the period of time when
+    // 'over-powerful' powers won't appear (will go elsewhere)". Consumed by
+    // FlameSystem::relocate_overpowered_here. docs/re/facts.md "Overpowered-
+    // powerup relocation".
+    std::int32_t overpowered_relocate_seconds = 40;  // id 102
     std::int32_t enclosement_depth = 1;      // id 27: 0 none, 1 = 2 rings, 2 = 4, 3 = all
     // id 46 ("when a wall segment closes in on a bomb, does it set the bomb
     // off? 0 - destroy, 1 - detonate ... this is a default; otherwise the
@@ -210,6 +217,7 @@ struct Tuning {
             case 100: game_seconds = v; return true;
             case 95: taunt_chance = v; return true;
             case 101: hurry_seconds = v; return true;
+            case 102: overpowered_relocate_seconds = v; return true;
             case 27: enclosement_depth = v; return true;
             case 46: wall_detonates = v; return true;
             case 660: punch_arc_first = v; return true;

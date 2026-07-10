@@ -196,6 +196,103 @@ TEST_CASE("burned brick reveals its powerup, players pick it up") {
     CHECK(s.state().floor[ty][tx] == PowerupType::None);
 }
 
+// docs/re/facts.md "Overpowered-powerup relocation" (sub_425107's early
+// gated branch): Punch/Grab/SuperDisease hidden under a brick don't reveal
+// the first time flame reaches them, during the match's opening
+// overpowered_relocate_seconds (default 40s = 800 ticks) — the record
+// relocates elsewhere instead.
+TEST_CASE("a hidden Punch powerup relocates instead of revealing near match start") {
+    MatchConfig cfg = open_config();
+    // Fill every non-solid tile with a brick so the 200-try random search is
+    // virtually certain to find a swap partner on the first pass.
+    for (int y = 0; y < kGridHeight; ++y)
+        for (int x = 0; x < kGridWidth; ++x)
+            if (cfg.cells[y][x] == Cell::Blank) cfg.cells[y][x] = Cell::Brick;
+    Simulation s(cfg);
+    // Player 0's spawn tile and its orthogonal neighbours were cleared back
+    // to Blank by setup, so (0,2) survives as the nearest still-Brick tile
+    // on the ray a bomb dropped at (0,0) reaches. Every OTHER brick hides an
+    // (ordinary-kind) ExtraBomb token; only (0,2) hides the "over-powerful"
+    // one under test.
+    for (int y = 0; y < kGridHeight; ++y)
+        for (int x = 0; x < kGridWidth; ++x)
+            if (s.state().cells[y][x] == Cell::Brick) s.state().hidden[y][x] = PowerupType::ExtraBomb;
+    s.state().hidden[0][2] = PowerupType::Punch;
+
+    s.tick(press1(0));
+    run(s, s.state().tuning.fuse_frames - 1);
+
+    CHECK(s.state().burning[0][2] > 0);  // ignites/crumbles exactly as normal
+    // NOT Punch: pass 1 is virtually guaranteed to find one of the ~100+
+    // ExtraBomb candidates and swap it in here instead.
+    CHECK(s.state().floor[0][2] == PowerupType::ExtraBomb);
+    CHECK(s.state().hidden[0][2] == PowerupType::None);
+
+    // The Punch token itself is not lost — it moved to whichever brick the
+    // swap picked.
+    int punch_tiles = 0, px = -1, py = -1;
+    for (int y = 0; y < kGridHeight; ++y)
+        for (int x = 0; x < kGridWidth; ++x)
+            if (s.state().hidden[y][x] == PowerupType::Punch) {
+                ++punch_tiles;
+                px = x;
+                py = y;
+            }
+    CHECK(punch_tiles == 1);
+    CHECK((px != 2 || py != 0));  // relocated to a DIFFERENT tile than (0,2)
+}
+
+TEST_CASE("a hidden Punch powerup reveals normally once the relocation window is disabled") {
+    MatchConfig cfg = open_config();
+    for (int y = 0; y < kGridHeight; ++y)
+        for (int x = 0; x < kGridWidth; ++x)
+            if (cfg.cells[y][x] == Cell::Blank) cfg.cells[y][x] = Cell::Brick;
+    cfg.tuning.overpowered_relocate_seconds = 0;  // gate closed from tick 0
+    Simulation s(cfg);
+    for (int y = 0; y < kGridHeight; ++y)
+        for (int x = 0; x < kGridWidth; ++x)
+            if (s.state().cells[y][x] == Cell::Brick) s.state().hidden[y][x] = PowerupType::ExtraBomb;
+    s.state().hidden[0][2] = PowerupType::Punch;
+
+    s.tick(press1(0));
+    run(s, s.state().tuning.fuse_frames - 1);
+
+    CHECK(s.state().burning[0][2] > 0);
+    CHECK(s.state().floor[0][2] == PowerupType::Punch);  // reveals in place, no relocation
+    CHECK(s.state().hidden[0][2] == PowerupType::None);
+}
+
+TEST_CASE("a hidden Punch powerup with no swap partner moves to an empty brick unrevealed") {
+    MatchConfig cfg = open_config();
+    for (int y = 0; y < kGridHeight; ++y)
+        for (int x = 0; x < kGridWidth; ++x)
+            if (cfg.cells[y][x] == Cell::Blank) cfg.cells[y][x] = Cell::Brick;
+    Simulation s(cfg);
+    // Nothing else on the board hides (or shows) a token, so pass 1 (needs
+    // ANOTHER record to swap with) is guaranteed to exhaust; pass 2 (needs
+    // only an EMPTY brick) has ~100+ candidates and is virtually certain to
+    // succeed.
+    s.state().hidden[0][2] = PowerupType::Punch;
+
+    s.tick(press1(0));
+    run(s, s.state().tuning.fuse_frames - 1);
+
+    CHECK(s.state().burning[0][2] > 0);                  // still ignites/crumbles as normal
+    CHECK(s.state().floor[0][2] == PowerupType::None);   // no reveal at all this ignition
+    CHECK(s.state().hidden[0][2] == PowerupType::None);  // and gone from the original tile
+
+    int punch_tiles = 0, px = -1, py = -1;
+    for (int y = 0; y < kGridHeight; ++y)
+        for (int x = 0; x < kGridWidth; ++x)
+            if (s.state().hidden[y][x] == PowerupType::Punch) {
+                ++punch_tiles;
+                px = x;
+                py = y;
+            }
+    CHECK(punch_tiles == 1);  // not lost -- moved
+    CHECK((px != 2 || py != 0));
+}
+
 TEST_CASE("powerup accumulation respects the VALUELST limits") {
     Simulation s(test_config());
     Player& p = s.state().players[1];
