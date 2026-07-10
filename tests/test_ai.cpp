@@ -678,3 +678,127 @@ TEST_CASE("Stage 5: deterministic replay with two fully-live AIs fighting") {
     CHECK(a.hash() == b.hash());
     CHECK(a.state().rng == b.state().rng);
 }
+
+// ---------------------------------------------------------------------------
+// 2026-07-10 differential fidelity audit (docs/re/ai.md §11): a line-by-line
+// re-derivation of every behaviour against a fresh pseudo.c read found and
+// fixed five real deviations. None touch golden -- AISystem only ever runs
+// for ai==true players, and no golden scenario sets one (ADR-0005 §7) -- but
+// each is a genuine RNG order/count or decision-polarity break for real AI
+// play. These cases pin the corrected behaviour directly.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Audit fix: a flame-vetoed directed step falls through to blast bricks, not stalls") {
+    // sub_40B20F's danger branch returns `godir != -1` after the flame veto
+    // (pseudo.c 10841-10842: `sub_40A76E(v4); return *(int*)(v4+44)>>16 != -1;`),
+    // so a vetoed step PASSES DOWN to behaviours 3-7 (and their draws) instead
+    // of stalling. Latch a directed path target whose shortest first step is
+    // permanently on fire -- the directed BFS never sees flame (it is not in
+    // the obstacle grid, docs/re/ai.md §5.1/§9) -- next to a brick behaviour 3
+    // can blast instead. Under the old hard-coded `return true` this AI would
+    // stall on that tile forever and never even roll behaviour 3's chance.
+    Simulation s = open_arena(/*tx=*/6, /*ty=*/5, /*ai=*/true);
+    State& st = s.state();
+    st.rng = 0x7EAF10C0u;
+    st.cells[5][5] = Cell::Brick;  // brick west of the AI
+    // A foreign long-fuse bomb up column 6 keeps danger_at(6,5) != 0 for the
+    // whole test via its blast ray, WITHOUT sitting on the AI's own tile --
+    // leaving that tile clear for behaviour 3's own drop (sub_423188).
+    put_bomb(st, /*tx=*/6, /*ty=*/2, /*flame=*/5, /*fuse=*/1000000, /*owner=*/3);
+    Brain& br = st.brains[0];
+    br.has_path_target = true;
+    br.path_target_x = 10;
+    br.path_target_y = 5;
+    br.path_target_cost = 0;
+    st.flame[5][7] = 999;  // (7,5): the shortest first step east, lit throughout
+
+    bool dropped = false;
+    for (int t = 0; t < 100 && !dropped; ++t) {
+        s.tick(idle());
+        if (st.bombs.size() > 1) dropped = true;
+        // Never actually standing on the lit tile -- the veto, not luck, kept
+        // the AI off (7,5) every single tick.
+        REQUIRE_FALSE(tile_x(st.players[0]) == 7 && tile_y(st.players[0]) == 5);
+    }
+    CHECK(dropped);  // behaviour 3 got (and eventually won) its 1-in-5 roll on a
+                      // vetoed tick -- impossible under the old unconditional `true`
+}
+
+TEST_CASE("Audit fix: grab-glove polarity is rand()%2 truthy, not ==0") {
+    // sub_40BD44 grabs on `&& rand()%2` used directly as the branch condition
+    // (pseudo.c 11025) -- truthy (!= 0), not the inverted `== 0` an earlier
+    // port bug used (ai.md's own pseudocode transcription always had this
+    // right; only the C++ and this file's prose commentary had drifted).
+    // Seed 0x1 makes Draw A (the dispatcher's leading scratch draw) land on
+    // 0x42021, and the very next draw -- behaviour 0's own rand()%2, the
+    // first (and here only, since it short-circuits the chain) behaviour
+    // draw -- lands on an ODD value: grabs under the correct polarity, would
+    // NOT grab under the inverted one. Discriminates the two on a single tick
+    // (a loose "eventually grabs" check cannot: both polarities are a fair
+    // coin over many tries, so either would eventually pass it).
+    Simulation s = open_arena(/*tx=*/6, /*ty=*/5, /*ai=*/true);
+    State& st = s.state();
+    st.rng = 0x1u;
+    st.players[0].grab = true;
+    put_bomb(st, /*tx=*/6, /*ty=*/5, /*flame=*/1, /*fuse=*/1000000, /*owner=*/0);  // own, resting
+
+    s.tick(idle());
+    CHECK(st.players[0].carrying);
+}
+
+TEST_CASE("Audit fix: a grab-AI still rolls to grab its own SLIDING bomb") {
+    // sub_422E48 (the underfoot probe) matches a bomb in EITHER motion state 0
+    // (resting) OR 1 (sliding) -- not resting-only. An earlier port bug added a
+    // spurious `!under->moving` guard here, silently skipping the WHOLE
+    // rand()%2 draw (a real draw-COUNT desync, not just a decision flip)
+    // whenever the AI's own bomb happened to be sliding underneath it --
+    // try_grab already supports mid-slide pickup (bombs.cpp). Same seed and
+    // draw position as the polarity test above (the draw sequence up to
+    // behaviour 0's check does not depend on `moving`), but the underfoot
+    // bomb is marked sliding instead of resting.
+    Simulation s = open_arena(/*tx=*/6, /*ty=*/5, /*ai=*/true);
+    State& st = s.state();
+    st.rng = 0x1u;
+    st.players[0].grab = true;
+    Bomb b;
+    b.active = true;
+    b.owner = 0;
+    b.x = cx(6);
+    b.y = cy(5);
+    b.flame = 1;
+    b.fuse = 1000000;
+    b.moving = true;  // sliding, not resting -- sub_422E48 still matches it
+    st.bombs.push_back(b);
+
+    s.tick(idle());
+    CHECK(st.players[0].carrying);
+}
+
+TEST_CASE("Audit fix: a stunned AI draws no RNG this tick") {
+    // sub_41F29B gates the WHOLE AI dispatch -- draws A/B included -- behind
+    // `v113 && !dword_4621E0` (line 23028), and v113 is false while
+    // `actor+58 > 0` (a stun/pickup-pause countdown). An earlier port bug
+    // called AISystem::decide() for any present&&alive&&ai player regardless
+    // of Player::stun, drawing spurious RNG on a tick the original skips
+    // outright (docs/re/ai.md §7 RESOLVED). player_turn already no-ops a
+    // stunned player's OWN turn (ticks the countdown and returns before
+    // reading input), so this was invisible to gameplay but not to the RNG
+    // stream -- and that stream is the whole determinism contract.
+    Simulation stunned = open_arena(/*tx=*/5, /*ty=*/5, /*ai=*/true);
+    stunned.state().players[0].stun = 3;  // mid pickup-pause
+    const std::uint32_t rng0 = stunned.state().rng;
+
+    stunned.tick(idle());  // a static, bomb/disease/hurry-free board: nothing
+                            // else this tick touches rng (see the "golden
+                            // inert" case above for the same baseline).
+    CHECK(stunned.state().rng == rng0);          // zero draws while stunned
+    CHECK(stunned.state().players[0].stun == 2);  // the countdown still ticks
+
+    // Control: the SAME board with no stun DOES draw (draws A/B fire every
+    // tick for a present+alive+ai player) -- proving the comparison above is
+    // meaningful, not a coincidence of an otherwise-silent board.
+    Simulation active = open_arena(5, 5, /*ai=*/true);
+    const std::uint32_t rng1 = active.state().rng;
+    active.tick(idle());
+    CHECK(active.state().rng != rng1);
+}

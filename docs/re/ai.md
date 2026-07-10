@@ -8,18 +8,23 @@ pseudocode are flagged **[VERIFY]** and repeated in the closing checklist.
 
 Companion design doc: `docs/adr/0005-ai-architecture.md`.
 
-**IMPLEMENTATION STATUS: COMPLETE (2026-07-05); TEAM WIRING LANDED (2026-07-08).**
-All 8 behaviours are ported and live in `libs/sim/src/systems/ai.{hpp,cpp}`
-(Stages 2-5). The `sub_40ABED` OOB X-table (§3.4/§9.4) and the enemy-finder's
-two `rand()%10` passes (§5.3) were pinned from the shipped binary. TEAM mode
-originally reduced to `slot != self` because there was no `Player::team` field;
-that follow-up has since landed — `Player::team` (hashed, copied verbatim from
-`MatchConfig::team[]` at setup, itself fed by the setup screen's 'T' toggle,
-docs/re/setup-screens.md) now gates the enemy scans (`AISystem::same_team`,
-§3.4/§5.3) and round-end ("one team left", our semantics — see the round-end
-note below). This grew the hash layout by one word per player, so
-`tests/test_golden.cpp` needed a one-time constant recapture (see that file's
-own note); the untamed (all-zero-team) RNG stream and gameplay are unchanged.
+**IMPLEMENTATION STATUS: COMPLETE (2026-07-05); TEAM WIRING LANDED (2026-07-08);
+DIFFERENTIAL FIDELITY AUDIT 2026-07-10 (see §11).** All 8 behaviours are ported
+and live in `libs/sim/src/systems/ai.{hpp,cpp}` (Stages 2-5). The `sub_40ABED`
+OOB X-table (§3.4/§9.4) and the enemy-finder's two `rand()%10` passes (§5.3)
+were pinned from the shipped binary. TEAM mode originally reduced to `slot !=
+self` because there was no `Player::team` field; that follow-up has since
+landed — `Player::team` (hashed, copied verbatim from `MatchConfig::team[]` at
+setup, itself fed by the setup screen's 'T' toggle, docs/re/setup-screens.md)
+now gates the enemy scans (`AISystem::same_team`, §3.4/§5.3) and round-end
+("one team left", our semantics — see the round-end note below). This grew
+the hash layout by one word per player, so `tests/test_golden.cpp` needed a
+one-time constant recapture (see that file's own note); the untamed
+(all-zero-team) RNG stream and gameplay are unchanged. A 2026-07-10 pass
+independently re-verified every behaviour's arithmetic and RNG draw order
+against pseudo.c line-by-line and found (and fixed) five real deviations —
+none touching golden (no AI players there) — see §11 for the full verdict
+table and evidence.
 
 ## 0. One-paragraph shape
 
@@ -150,7 +155,7 @@ if player[+148] (carrying a grabbed bomb):        // already holding one
     player.bombkey(+56)=0; player.bombkey_last(+54)=0; return 1    // just HOLD it, act
 else:
     v3 = bomb_at(pos)                             // sub_422E48 at the brain's tile
-    if v3 and *(v3+62)==*(player+62) and rand()%2:  // RNG: 50%  (own/teammate bomb underfoot)
+    if v3 and *(v3+62)==*(player+62) and rand()%2:  // RNG: 50%  (own bomb underfoot; +62 is owner, not team)
         player.bombkey(+56)=1; player.bombkey_last(+54)=0; return 1  // grab it (edge)
     return 0
 ```
@@ -175,12 +180,22 @@ the identical `!+56` gate — so the carried bomb is lobbed on the next tick jus
 in the original. (`try_grab` also imposes a `pickup_pause` stun, so there is a
 one-tick settle between grab and lob, matching the original's pickup pause.)
 
-**Team note:** `+62` is the bomb/actor team word; the equality `bomb.team ==
-player.team` in a no-team match reduces to "the bomb is mine" (`bomb.owner ==
-self`), the same reduction the mover's grab block already uses (`under->owner ==
-i`, simulation.cpp). Our port matches that: grab only own bombs. **Draw:** the
-`rand()%2` (row b0, §8) fires ONLY when grab is held, not carrying, and a matching
-bomb is underfoot — otherwise behaviour 0 draws nothing.
+**CORRECTED 2026-07-10 (owner, not team):** `+62` on BOTH operands
+(`*(bomb+62) == *(actor+62)`, line 11025) is the **owner/self index** — the
+same HIWORD(+60) id `sub_4245DA` counts (§9.3) — not a team byte; it is not
+gated on the team-mode global `dword_464964` the way behaviour 4's genuine
+`+84` team compare is (§3.4/§5.3). So this is unconditionally "the bomb is
+mine" (`bomb.owner == self`) in every match, team or not — the same reduction
+the mover's own grab block uses (`under->owner == i`, simulation.cpp) and our
+port's `own` check reproduces exactly, with no `same_team()` call. (An earlier
+draft of this note mislabeled +62 as a team word and, worse, the port's
+`random_below(s_, 2)` polarity was inverted from the actual `&& rand()%2`
+truthy-to-grab condition below — both wording and code are now RESOLVED; see
+the boxed pseudocode's `rand()%2` line, unchanged and correct.) **Draw:** the
+`rand()%2` (row b0, §8) fires ONLY when grab is held, not carrying, and a
+matching bomb is underfoot (resting OR sliding — `sub_422E48` excludes only
+flying/carried, so a sliding own bomb is grabbable too, corrected 2026-07-10)
+— otherwise behaviour 0 draws nothing.
 
 ### 3.1 — `sub_40BE02`: punch a bomb ahead (priority 1) — CONFIRMED (Stage 5)
 ```
@@ -238,6 +253,23 @@ Key facts:
   flame, it cancels the step (godir ← -1) and clears state.
 - The remote-detonation whim (trigger held, `rand()%10==0`) lives here, only when
   the AI feels safe.
+- **CORRECTED 2026-07-10 (differential audit).** The pseudocode's final line of
+  the danger branch — `return player.vel_perp(+44)>>16 != -1` — was always
+  correctly transcribed here, but our C++ port had drifted from its own doc:
+  `behave_walk_path` hard-coded `return true` after `flame_veto()` in BOTH the
+  directed and flee sub-branches, instead of returning whether the veto left a
+  real step (`g != -1`). Byte-exact re-read of pseudo.c 10841-10842
+  (`sub_40A76E(v4); return *(int*)(v4+44)>>16 != -1;`) confirms the doc: when
+  the veto cancels the chosen step, behaviour 2 must **return 0 (pass down)**,
+  giving behaviours 3-7 a turn — and their draws — on that tick, not stall
+  silently. This is RNG-order-critical (the realized draw list depends on
+  which behaviour fires, §8) and was fixed in `ai.cpp` (`return g != -1;` in
+  both branches). The "can't improve, stand still" branch a few lines above
+  (`brain.target(+4/+6)=pos; ...; return 1`) is unaffected — the original
+  returns 1 unconditionally there and never calls the veto (there is no godir
+  to veto: the step is already -1), matching the port's plain `return true`.
+  No golden impact (golden has no AI players); a new `tests/test_ai.cpp` case
+  covers the fall-through.
 
 ### 3.3 — `sub_40AD8D`: blast bricks (priority 3)
 Byte-exact (0x40AD8D, verified 2026-07-05):
@@ -419,15 +451,34 @@ The AI's entire sense of safety is one integer grid.
 - **Writer** `sub_424DFE(x,y,v)` (0x424DFE): `grid[...] = max(grid[...], v)`
   (keeps the strongest threat).
 - **Cleared** each frame and repopulated from live hazards. The three sources:
-  1. **Active flame** — the flame-grid updater (`sub_426d06`, "flame %s green")
-     writes **1000** at every lit cell (line 27418) → flame tiles are maximally
-     dangerous.
+  1. **Active flame** — the flame-grid updater (`sub_426D06`, "flame %s green")
+     writes **1000** at a lit cell (line 27418) → flame tiles are maximally
+     dangerous. **Precision, 2026-07-10:** there are two write sites — the
+     per-tick `sub_426D06` (27418) writes 1000 only in its `else` branch (flame
+     type `+4 != 9`), and the spawn-time `sub_426FCC` (27492) writes 1000 for
+     every newly-created flame including on the brick-dissolve tick. A type-9
+     flame (a brick actively dissolving) skips the per-tick 1000-write and
+     instead runs the dissolve countdown — but that tile is still a solid brick
+     (`sub_425FB9 == 2`) until it clears, i.e. still an obstacle the AI's BFS
+     never enters or scores, so the distinction is invisible to every AI
+     decision. Our port's blanket `flame[y][x] > 0 → 1000` is behaviourally
+     equivalent; no code change.
   2. **Live bombs (predicted blast)** — the bomb updater (`sub_42331C`, starts
      0x42331C, the "regular/trigger/jelly" bomb machine; danger write at line
      25685) writes `v = (bomb[+66]>>16) + 100` at the bomb tile, then propagates
      that same `v` outward along all 4 rays up to the bomb's flame length,
-     stopping at a wall/bomb, extending one tile past a brick (line 25692-25705).
-     So the AI "sees" where a bomb is about to reach and how soon.
+     **stopping AT a wall or brick (`sub_425FB9` nonzero — nothing is written on
+     that tile) or AT another bomb (`sub_422E48`), and extending one tile PAST a
+     floor powerup (`sub_42542D`: mark it, then stop)** (line 25689-25704).
+     **CORRECTED 2026-07-10** (differential audit against pseudo.c, byte-exact
+     re-read of the loop): an earlier draft of this bullet had the "one tile
+     past" exception on the wrong tile kind (it said "past a brick", which
+     directly contradicted §9.2 below and was never true — `sub_425FB9` returns
+     nonzero for BOTH a solid wall (1) and a brick (2), and the loop's `if
+     (sub_425FB9(...)) break;` fires before any write, so a brick tile never
+     gets a danger value). §9.2's account was always the correct one; our port
+     (`ensure_grids()`, ai.cpp) already implements it exactly and needed no
+     change. So the AI "sees" where a bomb is about to reach and how soon.
      **RESOLVED (§9.2):** bomb field `+66` is the **elapsed** fuse phase (16.16)
      — it counts UP, and the detonation test fires once `(+66>>16) >
      getvalue*msPerFrame` (end-of-life), so a bomb nearer detonation has a
@@ -466,6 +517,48 @@ each tick from `State` (§ADR).
   (`firstdir`, 1..4 → godir 0..3 after `-1`), `iters` = rings expanded,
   `maxfront` = peak frontier size. `firstdir==0` ⇒ no path within `maxdepth`.
 
+**CORRECTED 2026-07-10 — boxed-in start reported the wrong `iters`.** The
+original is a `do…while`: it always completes at least one pass and
+increments its ring counter `v32` before testing the loop condition
+(9705-9821), so a start tile with **zero** open neighbours (the seed loop
+allocates no nodes) still exits with **`iters = 1`**, never 0. Our port's
+`directed_bfs`/`powerup_scan_bfs` never entered their `while` loop in that
+case, leaving `out_iters` at its initial 0. This is RNG-order-critical:
+behaviours 5/6 gate their unreachable-target `rand()%2` give-up on `iters ==
+0` (§3.5/§3.6, §8 rows b5d/b6d), so the port drew a spurious extra `%2` in the
+boxed-in state that the original never draws. Fixed in `ai.cpp` (both
+pathfinders): `if (out_iters == 0) out_iters = 1;` immediately before the
+final `return -1;` — a no-op whenever any neighbour was ever seeded, since the
+ring-drain already bumps `iters` to ≥ 1 before that point. Reachable in real
+play (rare): a boxed-and-*dangerous* start makes behaviour 2 pass down through
+3/4 to 5/6, which then invoke the directed BFS while boxed in. No golden
+impact (golden has no AI players). For `powerup_scan_bfs` specifically the
+same correction is currently **unobservable** — behaviour 5 only reads its
+scan's `iters` via `range+1 >= iters`, gated on a FOUND cell, and a boxed-in
+scan finds none — but it is applied for structural parity with `sub_4092A1`'s
+identical do-while shape.
+
+**Structural note (not a determinism bug):** the original is not a plain FIFO
+BFS — it is a beam-flood where each node first walks straight along its own
+`camedir` (reusing its array slot in place) and spawns two perpendicular
+children per step in a `v35`-flipped order, deferring same-pass children by
+one "age" bit (9761-9812). Our port is a clean 4-neighbour ring BFS with the
+same one-tie-break-per-call contract. When a **unique** shortest path exists,
+both return the identical first step; when several equal-length paths
+exist, the two algorithms' tie-breaking can steer them to *different* (but
+equally shortest) first steps. Draw count/order is unaffected (still exactly
+one tie-break per call) — this is a walking-choice fidelity gap in rare tie
+positions, not an RNG-order/determinism break, and is left as a known,
+accepted simplification (porting the exact beam-flood would be a much larger,
+higher-risk rewrite for a cosmetic difference).
+
+**Overflow note:** past the fixed 100-node frontier the original calls a
+`__noreturn` fatal handler (`sub_4091C9` failing → `sub_4128C9`, 15987); the
+port silently caps further pushes (`if (open_n < 100)`). Unreachable on any of
+our boards (15×11, depth ≤ 20 keeps the frontier well under 100), so this is
+inert in practice — noted for completeness, not fixed (a silent cap is
+strictly safer than a crash and the game never ships a board that hits it).
+
 ### 5.2 Flee BFS — `sub_40970B` (0x40970B)
 `sub_40970B(sx, sy, &firstdir, maxdepth, &iters, &maxfront, &bestx, &besty)`.
 Same wavefront machinery and same ±1 tie-break RNG (`v40 = 2*(rand()%2)-1`), but
@@ -501,7 +594,19 @@ back to AI in pass 2".
 Given the just-chosen godir at actor `+46`, if the tile one step ahead is on fire
 (`sub_42708D`), it zeroes the AI state (+52), sets +58 = -1, and **sets the godir
 to -1** — cancelling the step so the AI never voluntarily walks into flame even
-when its path/flee said to. Called at the end of §3.2's danger branch.
+when its path/flee said to. Called at the end of §3.2's danger branch; its
+return value is discarded by the caller (`sub_40A76E(v4);`, statement, no use of
+the result) — only the +52/+58/godir side effects matter, and it is §3.2's
+*next* statement (the `vel_perp>>16 != -1` return, corrected above) that reads
+the godir it may have just cancelled.
+
+**CONFIRMED 2026-07-10: `+58` is write-only, our port's omission is correct.**
+A full-file scan for reads of brain offset +58 across the dispatcher and all
+eight behaviours finds exactly one hit — the write in `sub_40A76E` itself
+(line 10478). Nothing downstream (no behaviour, no the dispatcher, no mover)
+ever reads it, so it is dead state in the original; our `Brain` struct
+correctly has no field for it (ADR-0005 §3), a harmless simplification, not a
+gap.
 
 ### 5.5 Powerup scan — `sub_409C1F` (0x409C1F)
 `sub_409C1F(sx, sy, ?, maxdepth, &iters, ?, &firstdir/&cell)`. Same BFS as
@@ -586,6 +691,26 @@ So:
     punch/trigger, same edge rule.
 - `sub_40179F` just clears a scratch global (`dword_4646C0 = 0`) before the run.
 
+**RESOLVED 2026-07-10 — `v113` is richer than "present && alive", and our
+caller was missing one piece of it.** `v113` (set true at 22981, the top of
+this per-player pass) is cleared to false for: a stun/pickup-pause countdown
+(`actor+58 > 0`, i.e. `Player::stun`), and player-type modes 4/5/6/7
+(entering/dying/dead, 23015-23026); `dword_4621E0 > 0` is a separate global
+freeze. So the original skips the **entire** dispatch — draws A/B included —
+for a stunned, entering, dying, or globally-frozen player, not just an absent
+or dead one. Our `simulation.cpp` tick loop already excludes dying/dead via
+its own `present && alive` guard, and has no wall-clock/menu concept to freeze
+against (`dword_4621E0` has no equivalent in a headless, externally-ticked
+sim — pausing is simply "the caller stops calling `tick()`"), but it was
+missing the **stun** exclusion: a stunned-but-still-`alive` AI player (e.g.
+mid `pickup_pause` after a grab) would still get `AISystem::decide()` called,
+drawing draws A/B (and possibly a behaviour's draws) on a tick the original
+draws nothing. `player_turn` already no-ops a stunned player's turn (ticks the
+countdown and returns before reading any input), so this was invisible to
+gameplay but not to the RNG stream — fixed by gating the call on `p.stun == 0`
+(`simulation.cpp`, the step-1 player loop). No golden impact (golden has no AI
+players); a new `tests/test_ai.cpp` case pins a stunned AI drawing zero RNG.
+
 **Consequence for the port (the linchpin):** the computer player is a
 `PlayerInput` producer. If our `AISystem` writes the same `up/down/left/right/
 action1/action2` a human would, and we feed it through the identical `TickInputs`
@@ -614,7 +739,7 @@ decision):
 | b3 | `sub_40AD8D` 10607 | `rand()%max(1,getvalue(915))` | blast-bricks drop? (~1/5) |
 | b4 | `sub_40ABED` 10556 | `rand()%5` | bomb-near-enemy drop? |
 | b5a| `sub_40BAF5` 10949 | `rand()%50` | acquire a powerup target? |
-| b5b| `sub_409C1F` 10?? (entry) | `2*(rand()%2)-1` | powerup-scan BFS tie-break (when acquiring) |
+| b5b| `sub_409C1F` 10128 (entry) | `2*(rand()%2)-1` | powerup-scan BFS tie-break (when acquiring) |
 | b5c| `sub_4092A1` 9705 | `2*(rand()%2)-1` | path-to-powerup BFS tie-break |
 | b5d| `sub_40BAF5` 10986 | `rand()%2` | give up unreachable powerup? |
 | b6a| `sub_40B8C2` 10881 | `rand()%50` | acquire an enemy target? |
@@ -758,3 +883,91 @@ offsets and control flow only).
 Also updated inline from this pass: §1.1 (+2 = has-target flag, +4/+6 =
 target tile X/Y, +8 = captured cost), §4.2 (+66 = elapsed phase), §3.4 (the
 offset-table geometry + Manhattan gate), and §6 (905 confirmed unused).
+
+## 11. Differential fidelity audit — 2026-07-10 (RNG-order verification against pseudo.c)
+
+A line-by-line re-derivation of every behaviour's arithmetic and RNG draw
+order/count, independent of this document's own prior claims, against a fresh
+read of `pseudo.c` (the same standard as the movement core-feel audit,
+facts.md "Core-feel audit 2026-07-10"). Five research passes each traced a
+cluster of `sub_XXXX` functions end to end and cross-checked them against
+`ai.cpp`/`ai.hpp` and this file. Verdict table:
+
+| # | Area | Functions | Verdict |
+|--:|------|-----------|---------|
+| 1 | Dispatcher & personality | `sub_40A1C6`, `sub_40A140`, `off_45BA78`, `sub_41F29B`/`sub_420F07` | IDENTICAL (dispatcher, chain loop, table order, personality init, outer loop) + **DEVIATION-fixed** (caller-side stun gate, §7) |
+| 2 | Danger grid, flee BFS, walk-the-path | `sub_424D37/DFE`, `sub_426D06`, `sub_42331C` (danger write), the closing-wall writer, `sub_40970B`, `sub_40A76E`, `sub_40B20F` | IDENTICAL, **doc-only fix** (§4 brick/powerup contradiction) + **DEVIATION-fixed** (walk-path veto return value, §3.2) |
+| 3 | Directed BFS, powerup scan, seek-powerup, readers | `sub_4092A1`, `sub_409C1F`, `sub_40BAF5`, `sub_40A59D`, `sub_425FB9`, `sub_422E48`, `sub_42708D`, `sub_42542D`, `sub_409083` | IDENTICAL + **DEVIATION-fixed** (boxed-in `iters`, §5.1) + documented structural caveat (BFS is a faithful shortest-path rewrite, not the original's beam-flood — §5.1) |
+| 4 | Bomb-drop behaviours | `sub_40AD8D`, `sub_40ABED`, `sub_40BD44`, `sub_4245DA`, `sub_423188`, `sub_405654` | IDENTICAL (blast-bricks, bomb-near-enemy, capacity gate, clearance predicate) + **DEVIATION-fixed** (grab-glove polarity + sliding-bomb exclusion, §3.0) + **doc-only fix** (+62 mislabelled "team", §1.1/§3.0) |
+| 5 | Enemy targeting | `sub_422718`, `sub_421CB5`, `sub_40B8C2`, `sub_40BE02` | IDENTICAL — no deviations found |
+| 6 | Team filter | `AISystem::same_team`, the enemy-scan/finder team gates | IDENTICAL — confirmed `slot != self` + nonzero-team-equality matches the `dword_464964`-gated `+84` compares; unaffected by this pass |
+
+**No unlisted `rand()` call site was found anywhere in the AI's reachable
+functions** — every draw in `sub_40A1C6` and all eight behaviours maps 1:1 to
+a row in §8's table (one precision fix: b5b is `sub_409C1F` line 10128, not
+"10??").
+
+### The five code deviations (all fixed in `ai.cpp`/`simulation.cpp`, none touching golden)
+
+1. **Walk-path veto fall-through (`behave_walk_path`, §3.2).** The original
+   returns `vel_perp(+44)>>16 != -1` after calling the flame veto — i.e. it
+   PASSES DOWN to behaviours 3-7 (with their draws) when the veto cancels the
+   chosen step. The port hard-coded `return true` in both the directed and
+   flee sub-branches, always stalling instead. This is the highest-value find
+   of the pass: a real RNG-order/count divergence for any AI-bearing replay
+   where a flee/directed first step lands on fresh flame (constructible: the
+   directed BFS's obstacle grid does not include flame, §5.1/§9, so a chase
+   can route straight through a burning tile). Fixed: `return g != -1;`.
+2. **Grab-glove inverted polarity (`behave_grab_drop`, §3.0).** `sub_40BD44`
+   grabs when `rand()%2` is **truthy** (`&& rand()%2`, pseudo.c 11025); the
+   port checked `random_below(s_,2) == 0` — the opposite branch of the same
+   coin flip. Draw count was unaffected (still exactly one draw when eligible)
+   but the DECISION was inverted on every seed, diverging state, hash, and
+   every downstream draw the moment an eligible AI actually stands on its own
+   bomb. ai.md's own pseudocode block (§3.0) already had the polarity right;
+   only the port's code and this file's prose commentary had drifted. Fixed:
+   `random_below(s_, 2) != 0`.
+3. **Grab-glove sliding-bomb exclusion (`behave_grab_drop`, §3.0) — a real
+   draw-COUNT desync.** `sub_422E48` matches a RESTING **or SLIDING** bomb
+   (motion `!= flying(2) && != carried(3)`); the port additionally required
+   `!under->moving`, silently narrowing the underfoot test and skipping the
+   whole `rand()%2` draw whenever the AI's own bomb happened to be sliding —
+   a case the shared mover's `try_grab` already supports mid-slide
+   (`bombs.cpp`: "motion states 0 AND 1 both qualify"). Fixed: dropped the
+   `!under->moving` condition (folded into the same edit as #2).
+4. **Boxed-in `iters` off-by-one (`directed_bfs`/`powerup_scan_bfs`, §5.1).**
+   The original's `do…while` always completes one ring before testing its
+   exit condition, so a start tile with zero open neighbours still reports
+   `iters = 1`; the port's `while`-style loop never entered the ring-count
+   path in that case and left `iters = 0`. Behaviours 5/6 gate their
+   unreachable-target `rand()%2` give-up on `iters == 0`, so the port drew a
+   spurious extra roll in the boxed-in state. Fixed:
+   `if (out_iters == 0) out_iters = 1;` before each function's final
+   `return -1;`. Rare in real play (needs a boxed-AND-dangerous start) and
+   currently unobservable for `powerup_scan_bfs` specifically (applied for
+   structural parity regardless).
+5. **AI dispatch missing the stun gate (`simulation.cpp`, §7).** The
+   original's per-player eligibility flag `v113` excludes a stunned actor
+   (`+58 > 0`) from the ENTIRE AI dispatch, draws A/B included. The port
+   called `AISystem::decide()` for any `present && alive && ai` player
+   regardless of `Player::stun`, drawing spurious RNG on a tick the original
+   skips outright (gameplay-invisible, since `player_turn` already no-ops a
+   stunned player's turn, but not RNG-invisible). Fixed:
+   `if (p.ai && p.stun == 0) ai.decide(i, in);`. The other two components of
+   `v113` (entering/dying player-type modes, and the global freeze
+   `dword_4621E0`) have no equivalent gap: dying/dead is already excluded by
+   the loop's own `present && alive` guard, and a headless, externally-ticked
+   sim has no menu/pause state to freeze against (pausing is simply "the
+   caller stops calling `tick()`").
+
+### Why none of this touches golden
+
+Every fix above is reachable only through `AISystem`, which runs only for
+`players[i].ai == true` (ADR-0005 §7). `tests/test_golden.cpp` sets no `ai`
+player in any scenario, so `AISystem::decide()` is never called there — the
+five fixes are proven inert on golden by construction, not just by
+observation. Verified anyway: the full suite (`ctest --test-dir build/headless
+-C Debug`) passed 37/37 both before and after these changes, `golden` and `ai`
+included, with **zero constant recaptures needed** in `tests/test_golden.cpp`.
+New regression coverage for all five fixes lives in `tests/test_ai.cpp`
+("2026-07-10" test cases).

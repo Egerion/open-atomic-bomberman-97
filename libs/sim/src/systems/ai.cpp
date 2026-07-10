@@ -364,6 +364,17 @@ int AISystem::directed_bfs(int sx, int sy, int tx, int ty, int max_depth, int& o
             if (open_n < 100) open[open_n++] = {nx, ny, cur.first};
         }
     }
+    // Boxed in at the start (zero open neighbours were ever seeded, so the
+    // while loop above never ran and out_iters is still its initial 0): the
+    // original's do..while ALWAYS completes one pass before testing its loop
+    // condition, so v32 (iters) becomes 1 even when nothing was found
+    // (pseudo.c 9705-9821) -- it is never left at 0 once the function is
+    // actually invoked. Behaviours 5/6 gate their unreachable-target give-up
+    // draw on `iters == 0`, so leaving this at 0 draws a spurious extra
+    // rand()%2 in the boxed-in case (RESOLVED, docs/re/ai.md §5.1/§9). This is
+    // a no-op whenever any neighbour WAS seeded: the ring-drain above already
+    // bumps out_iters to >= 1 before the max-depth or exhaustion exit.
+    if (out_iters == 0) out_iters = 1;
     return -1;  // unreachable within max_depth
 }
 
@@ -444,6 +455,13 @@ int AISystem::powerup_scan_bfs(int sx, int sy, int max_depth, int& out_iters, in
             if (open_n < 100) open[open_n++] = {nx, ny, cur.first};
         }
     }
+    // Same boxed-in iters=0-vs-1 correction as directed_bfs above (RESOLVED,
+    // docs/re/ai.md §5.1/§9) -- kept for structural parity with sub_4092A1's
+    // do..while, though currently unobservable here: behaviour 5 only reads
+    // this iters value via `range+1 >= iters` gated on a FOUND cell, and a
+    // boxed-in scan finds none, so the comparison (and this boundary) is
+    // never reached from sub_40BAF5's acquire step.
+    if (out_iters == 0) out_iters = 1;
     return -1;
 }
 
@@ -489,13 +507,23 @@ bool AISystem::behave_grab_drop(int i, PlayerInput& out) {
         return true;  // act, short-circuit the chain
     }
 
-    // Own resting bomb underfoot? bomb_at at the AI's tile, owner == self,
-    // grounded (not moving/flying — bomb_at already excludes airborne bombs).
+    // Own bomb underfoot? bomb_at at the AI's tile, owner == self. sub_422E48
+    // (pseudo.c 25031-25051) matches a RESTING **or SLIDING** bomb (motion !=
+    // flying(2) && != carried(3)) — grid::bomb_at already excludes flying/
+    // carried, and the original does NOT additionally require the bomb to be
+    // at rest (RESOLVED: an earlier `!under->moving` guard here was a real
+    // deviation — it silently dropped the whole draw for a sliding own bomb,
+    // where the original still rolls; try_grab already supports mid-slide
+    // pickup, bombs.cpp "motion states 0 AND 1 both qualify").
     const Bomb* under = grid::bomb_at(s_, p.tile_x(), p.tile_y());
-    const bool own =
-        under != nullptr && !under->moving && under->owner == static_cast<std::uint8_t>(i);
-    if (own && random_below(s_, 2) == 0) {  // rand()%2 == 0 -> grab it (the 1/2 whim)
-        press_bomb(out);                    // fresh bomb-key edge -> try_grab in player_turn
+    const bool own = under != nullptr && under->owner == static_cast<std::uint8_t>(i);
+    // rand()%2 TRUTHY (== 1) -> grab it: pseudo.c 11025 is
+    // `v3 && *(v3+62)==*(a1+62) && rand()%2` used directly as the branch
+    // condition, not `!(rand()%2)` (RESOLVED: an earlier `== 0` here was an
+    // inverted-polarity deviation from both the binary and ai.md §3.0's own
+    // transcription, which already read it correctly as "and rand()%2").
+    if (own && random_below(s_, 2) != 0) {
+        press_bomb(out);  // fresh bomb-key edge -> try_grab in player_turn
         return true;
     }
     return false;  // pass down to behaviour 1/2/...
@@ -540,7 +568,14 @@ bool AISystem::behave_walk_path(int i, PlayerInput& out) {
             }
             const int g = flame_veto(i, px, py, first);  // sub_40A76E veto
             write_move(out, g);
-            return true;  // acted (original returns vel_perp>>16 != -1)
+            // The original's return here is `vel_perp(+44)>>16 != -1`, i.e. the
+            // godir word the veto may have just set to -1 (pseudo.c 10841-10842:
+            // `sub_40A76E(v4); return *(int*)(v4+44)>>16 != -1;`) -- NOT an
+            // unconditional 1. A flame-vetoed step makes behaviour 2 PASS DOWN
+            // (return 0), giving 3-7 a turn (and their draws) this tick, rather
+            // than stalling. RNG-order-critical: fixing a fall-through this
+            // hard-coded `true` used to swallow (docs/re/ai.md §3.2 RESOLVED).
+            return g != -1;
         }
 
         // (b) Flee: no directed goal, run to the lowest-danger reachable tile.
@@ -576,7 +611,13 @@ bool AISystem::behave_walk_path(int i, PlayerInput& out) {
         br.path_target_cost = danger_at(bx, by);
         const int g = flame_veto(i, px, py, first);
         write_move(out, g);
-        return true;  // acted (the original returns vel_perp>>16 != -1; we always act here)
+        // Same `vel_perp(+44)>>16 != -1` return as the directed branch above
+        // (pseudo.c 10841-10842): a flame-vetoed flee step passes down instead
+        // of stalling, letting 3-7 take this tick's turn (docs/re/ai.md §3.2
+        // RESOLVED). The "can't improve" branch above (line ~569) is unaffected
+        // -- the original returns 1 unconditionally there and never calls the
+        // veto (it has no godir to veto: the step is already -1).
+        return g != -1;
     }
 
     // Danger-clear (safe). The original: if trigger held (and no punch) roll

@@ -319,8 +319,19 @@ void run_tick(State& s, const TickInputs& inputs) {
         // and replays pass their externally-supplied input through unchanged.
         // No new tick STEP: this is a refinement of step 1 only, so no golden
         // step-order dependency shifts (steps 2..7 below are untouched).
+        //
+        // The original gates the WHOLE dispatch (including draws A/B) on
+        // `v113 && !dword_4621E0` (sub_41F29B ~23028), where v113 is cleared
+        // for a stunned actor (`+58 > 0`, the pickup-pause countdown) as well
+        // as the entering/dying/dead modes -- present/alive above already
+        // covers dying/dead, but stun is a separate countdown on an otherwise
+        // `alive` player (RESOLVED, docs/re/ai.md §2/§7): a stunned AI must
+        // draw NOTHING this tick, the same as the original skipping the call
+        // outright. player_turn already no-ops a stunned player's input
+        // (ticks the stun timer and returns), so this changes only the RNG
+        // stream, never gameplay -- but that stream is the whole contract.
         PlayerInput in = inputs.players[i];
-        if (p.ai) ai.decide(i, in);
+        if (p.ai && p.stun == 0) ai.decide(i, in);
         player_turn(s, i, in, bombs, stage, movement);
     }
 
