@@ -460,6 +460,55 @@ TEST_CASE("a bomb landing on a head stuns and scatters powerups") {
     CHECK(v.y == by);
 }
 
+// docs/re/facts.md "Head hit" (gate-fidelity follow-up, 2026-07-10): the
+// disease audit flagged sub_41F29B's `if (!*((_DWORD*)v111+2))` gate
+// (~22904, mirrored locally in sub_41EC84 ~22699) as "adjacent, not acted
+// on" because it also wraps the flame-death check and the floor-powerup
+// pickup dispatch. Full brace-traced re-read: that DWORD at offset+8 is NOT
+// the stun countdown -- it is the player's "already died this round" flag,
+// set only by sub_41DCB2 (~21956, `*(_DWORD*)(v5+8) = 1`, itself guarded on
+// "not already dead") and cleared only by the round-entry reset (~22874),
+// which never re-fires after a death (no mid-round respawn). The REAL
+// head-hit stun counter is a SEPARATE WORD field at offset+58 (sub_421F7E's
+// `a1[29] = 16`, confirmed by its explicit `_WORD *a1` parameter typing) --
+// it is read at pseudo.c ~22982/~23086 and gates only ONE thing: new-input
+// acquisition (the `v113` local at ~23028, which skips sub_41E61E/AI so the
+// player can't change direction or fire a new action) plus a cosmetic
+// standing-animation frame pick. A merely-stunned-but-ALIVE player leaves
+// offset+8 at 0, so sub_42708D/sub_41DE63 (flame death) and sub_42542D/
+// sub_41E21E (pickup) both still run every tick regardless of stun --
+// stun is not flame immunity and does not block pickup. `field_vs_players`
+// (simulation.cpp) already matches this: it gates on `!p.alive` only, never
+// `p.stun`. No production code changed; this pins the (deliberately)
+// stun-independent behaviour so a future patch doesn't "fix" it backwards.
+TEST_CASE("a stunned-but-alive player still burns and still picks up floor powerups") {
+    Simulation s(open_config());
+
+    // (a) Flame death is not blocked by stun.
+    {
+        Player& p = s.state().players[0];
+        p.stun = 5;  // stand-in for an ongoing head-hit/grab-pause stun
+        int tx = p.tile_x(), ty = p.tile_y();
+        s.state().flame[ty][tx] = 200;  // active flame underfoot this tick
+        run(s, 1);
+        CHECK(p.stun > 0);  // still stunned...
+        CHECK(!p.alive);    // ...but the flame killed it anyway: not immune
+    }
+
+    // (b) Floor-powerup pickup is not blocked by stun.
+    {
+        Player& p = s.state().players[1];
+        p.stun = 5;
+        int before = p.flame;
+        int tx = p.tile_x(), ty = p.tile_y();
+        s.state().floor[ty][tx] = PowerupType::Flame;
+        run(s, 1);
+        CHECK(p.stun > 0);              // still stunned...
+        CHECK(p.flame == before + 1);   // ...but picked the token up anyway
+        CHECK(s.state().floor[ty][tx] == PowerupType::None);
+    }
+}
+
 TEST_CASE("a head hit can drop goldflame (kind 8)") {
     // sub_421F7E rolls rand()%15 over ALL kinds and accepts any whose per-kind
     // count exceeds getvalue(50+kind). Goldflame (kind 8, start-with id 58 = 0)
