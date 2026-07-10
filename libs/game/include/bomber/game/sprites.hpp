@@ -28,6 +28,13 @@ inline constexpr int kLocalPlayers = 10;
 struct Sprite {
     SDL_Texture* tex = nullptr;
     int w = 0, h = 0, hx = 0, hy = 0;
+    // The per-STAT FRAM-leaf offset_x/offset_y (assets::ani::SeqStep::dx/dy).
+    // NOT applied by the general draw path (docs/formats/ani.md "Rendering a
+    // step" — render by the frame hotspot alone); carried here only for the
+    // ONE confirmed exception (real flame arms, sub_426D06's sub_41DB41 call,
+    // docs/re/facts.md "Flame draw offset"), which reads it explicitly at its
+    // own draw site. Every other caller must keep ignoring these fields.
+    int dx = 0, dy = 0;
 };
 
 // A resolved animation: one Sprite per sequence step.

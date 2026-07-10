@@ -53,15 +53,6 @@ void Renderer::draw_anim(const Anim& a, std::size_t step, float x, float y, Uint
     draw_sprite(a.steps[anim_step_index(step, a.steps.size())], x, y, r, g, b);
 }
 
-std::size_t Renderer::timed_step(const Anim& a, int remaining, int total) {
-    if (a.steps.empty() || total <= 0) return 0;
-    int elapsed = total - remaining;
-    if (elapsed < 0) elapsed = 0;
-    std::size_t idx =
-        static_cast<std::size_t>(elapsed) * a.steps.size() / static_cast<std::size_t>(total);
-    return idx < a.steps.size() ? idx : a.steps.size() - 1;
-}
-
 int Renderer::disease_flash_colour() {
     flash_lcg_ = flash_lcg_ * 1664525u + 1013904223u;
     // rand() % 10 in the original (sub_41F29B ~23252) — one of the ten real
@@ -160,6 +151,24 @@ bool Renderer::boxed_in(const sim::State& s, int tx, int ty) {
         if (!blocked) return false;  // an open neighbour => not boxed in
     }
     return true;
+}
+
+const Anim& Renderer::flame_piece(const FlameSet& fset, sim::FlameKind kind) {
+    // 1:1 with FlameKind's own off_45BEA0-mirroring order (types.hpp) — the
+    // sim decides the piece once at ignition (FlameSystem::spread_to), so
+    // this is a plain lookup, not a live neighbour scan.
+    switch (kind) {
+        case sim::FlameKind::TipNorth: return fset.tip_n;
+        case sim::FlameKind::TipEast: return fset.tip_e;
+        case sim::FlameKind::TipSouth: return fset.tip_s;
+        case sim::FlameKind::TipWest: return fset.tip_w;
+        case sim::FlameKind::MidNorth: return fset.mid_v[0];  // "flame midnorth green"
+        case sim::FlameKind::MidEast: return fset.mid_h[1];   // "flame mideast green"
+        case sim::FlameKind::MidSouth: return fset.mid_v[1];  // "flame midsouth green"
+        case sim::FlameKind::MidWest: return fset.mid_h[0];   // "flame midwest green"
+        case sim::FlameKind::Center: return fset.center;
+    }
+    return fset.center;
 }
 
 void Renderer::reset_match(bool untimed) {
@@ -348,6 +357,19 @@ void Renderer::draw_powerups(const sim::State& s) {
     for (int y = 0; y < sim::kGridHeight; ++y) {
         for (int x = 0; x < sim::kGridWidth; ++x) {
             if (s.floor[y][x] == sim::PowerupType::None) continue;
+            // A brick's hidden token flips to "visible" in sim state the
+            // instant the brick ignites (docs/re/facts.md "Brick crumble
+            // timing" — sub_425107's unconditional reveal), but the ORIGINAL's
+            // floor-powerup drawer (sub_424F89, pseudo.c ~26247-26261) has its
+            // own separate gate, `*(_DWORD*)v9==2 && !sub_425FB9(j,i)`: it only
+            // actually blits the token sprite once the CELL reads blank
+            // (sub_425FB9==0). While the brick is still crumbling (cells[y][x]
+            // still Brick — it only flips at burning==0) the token is eligible
+            // but not drawn, so it stays hidden under the crumble animation
+            // and only pops into view once the tile actually opens. Without
+            // this gate the token appeared immediately at ignition, visible
+            // through/under the still-standing brick's crumble frames.
+            if (s.cells[y][x] != sim::Cell::Blank) continue;
             int kind = static_cast<int>(s.floor[y][x]);
             // The original draws floor powerups with the ANIMATED "power <name>"
             // sequence (POWERS.ANI) at (tile-centre-x, tile-bottom-y) minus the
@@ -372,67 +394,21 @@ void Renderer::draw_powerups(const sim::State& s) {
     }
 }
 
-void Renderer::draw_world(const sim::State& s) {
+void Renderer::draw_bombs(const sim::State& s) {
     const SequenceSet& q = *seqs_;
     std::size_t pulse = static_cast<std::size_t>(s.tick);
-
-    // Static cells (anchored at bottom-center via their hotspots).
-    for (int y = 0; y < sim::kGridHeight; ++y) {
-        for (int x = 0; x < sim::kGridWidth; ++x) {
-            float sx = tile_screen_x(x) + sim::kTileW / 2.0f;
-            float sy = tile_screen_y(y) + sim::kTileH - 1.0f;
-            if (s.cells[y][x] == sim::Cell::Solid)
-                draw_anim(q.solid, 0, sx, sy);
-            // A burning brick keeps its cell as Cell::Brick for the whole
-            // crumble (the flame-audit fix, docs/re/facts.md "Brick crumble
-            // timing" — the tile only opens once `burning` hits 0), so the
-            // burn animation MUST be tested BEFORE the static-brick draw:
-            // otherwise `cells==Brick` wins for every burning tick and the
-            // crumble frames never render (the brick just pops out). The
-            // original draws the crumble ("brick %s" burn frames) over the
-            // still-Brick cell, advancing 0->last as `burning` counts down.
-            else if (s.burning[y][x] > 0)
-                draw_anim(q.burn, timed_step(q.burn, s.burning[y][x], s.tuning.brick_burn_frames),
-                          sx, sy);
-            else if (s.cells[y][x] == sim::Cell::Brick)
-                draw_anim(q.brick, 0, sx, sy);
-        }
-    }
-
-    // Flames (cosmetic arm selection from neighbouring flame cells).
-    for (int y = 0; y < sim::kGridHeight; ++y) {
-        for (int x = 0; x < sim::kGridWidth; ++x) {
-            if (s.flame[y][x] == 0) continue;
-            auto lit = [&s](int tx, int ty) {
-                return tx >= 0 && tx < sim::kGridWidth && ty >= 0 && ty < sim::kGridHeight &&
-                       s.flame[ty][tx] > 0;
-            };
-            bool l = lit(x - 1, y), r = lit(x + 1, y), u = lit(x, y - 1), d = lit(x, y + 1);
-            int owner = s.flame_owner[y][x];
-            const FlameSet& fset = q.flames[render_colour(s, owner)];
-            const Anim* a = &fset.center;
-            if ((l || r) && !u && !d) {
-                if (l && r)
-                    a = &fset.mid_h[(x + y) & 1];
-                else if (l)
-                    a = &fset.tip_e;
-                else
-                    a = &fset.tip_w;
-            } else if ((u || d) && !l && !r) {
-                if (u && d)
-                    a = &fset.mid_v[(x + y) & 1];
-                else if (u)
-                    a = &fset.tip_s;
-                else
-                    a = &fset.tip_n;
-            }
-            float sx = tile_screen_x(x) + sim::kTileW / 2.0f;
-            float sy = tile_screen_y(y) + sim::kTileH - 1.0f;
-            draw_anim(*a, timed_step(*a, s.flame[y][x], s.tuning.flame_frames), sx, sy);
-        }
-    }
-
     // Bombs (pulse at tick rate, owner-colored; airborne ones arc and wrap).
+    // Drawn as their OWN pass, before powerups/flame/burn/players — matching
+    // the original's per-frame order (`sub_42A191`, pseudo.c ~29488-29556):
+    // the bomb updater `sub_4245B9`->`sub_42331C` (which draws inline as it
+    // ticks) runs before the powerup drawer `sub_424F89` and the flame/burn
+    // animator `sub_426D06`, both of which in turn run before the player
+    // drawer `sub_420F07`. A bomb sitting on a powerup tile or in a
+    // just-ignited flame tile (the one-tick window before a chain-reaction
+    // detonates it, docs/re/facts.md "Chain-reaction timing") must be drawn
+    // UNDER those, not over them; our previous single `draw_world` pass drew
+    // bombs after cells/flames (and after `draw_powerups`), compositing the
+    // opposite way. See docs/re/facts.md "Draw order".
     for (const auto& b : s.bombs) {
         if (!b.active) continue;
         float bx = b.x / static_cast<float>(sim::kScale);
@@ -466,6 +442,80 @@ void Renderer::draw_world(const sim::State& s) {
         else if (b.jelly && !b.trigger && !q.bomb_jelly[bo].steps.empty())
             ba = &q.bomb_jelly[bo];
         draw_anim(*ba, pulse, sx, sy);
+    }
+}
+
+void Renderer::draw_world(const sim::State& s) {
+    const SequenceSet& q = *seqs_;
+    std::size_t pulse = static_cast<std::size_t>(s.tick);
+
+    // Static cells (anchored at bottom-center via their hotspots).
+    for (int y = 0; y < sim::kGridHeight; ++y) {
+        for (int x = 0; x < sim::kGridWidth; ++x) {
+            float sx = tile_screen_x(x) + sim::kTileW / 2.0f;
+            float sy = tile_screen_y(y) + sim::kTileH - 1.0f;
+            if (s.cells[y][x] == sim::Cell::Solid)
+                draw_anim(q.solid, 0, sx, sy);
+            // A burning brick keeps its cell as Cell::Brick for the whole
+            // crumble (the flame-audit fix, docs/re/facts.md "Brick crumble
+            // timing" — the tile only opens once `burning` hits 0), so the
+            // burn animation MUST be tested BEFORE the static-brick draw:
+            // otherwise `cells==Brick` wins for every burning tick and the
+            // crumble frames never render (the brick just pops out). The
+            // original draws the crumble ("brick %s" burn frames) over the
+            // still-Brick cell, advancing 0->last as `burning` counts down.
+            else if (s.burning[y][x] > 0)
+                // Frame pacing: sub_426D06's per-cell counter (+48) is a
+                // monotonic tick counter reset to 0 at ignition (sub_426FCC's
+                // `*(_WORD*)(v8+48)=0`) and advanced by exactly 1 per tick
+                // (dword_464958==dword_46494C at the locked 20 Hz rate, so the
+                // +50 pacing accumulator fires every call) — NOT rescaled to
+                // fit brick_burn_frames; sub_41DAA7 just wraps it `%
+                // statecnt` like every other ANI playback. elapsed =
+                // brick_burn_frames - remaining reproduces that counter
+                // exactly (both start at 0, +1/tick). See docs/re/facts.md
+                // "Flame/burn frame pacing".
+                draw_anim(q.burn,
+                          static_cast<std::size_t>(s.tuning.brick_burn_frames - s.burning[y][x]),
+                          sx, sy);
+            else if (s.cells[y][x] == sim::Cell::Brick)
+                draw_anim(q.brick, 0, sx, sy);
+        }
+    }
+
+    // Flames. Arm-piece (center/mid/tip) selection reads the sim's
+    // `flame_kind` — decided once at ignition from the casting arm's own
+    // direction and position-within-reach, exactly mirroring sub_42331C's
+    // arm loop (pseudo.c ~25625/25673-25677); see FlameKind's doc comment
+    // and docs/re/facts.md "Flame arm-shape selection". A previous live scan
+    // of neighbouring flame cells (checkerboarding the mid-piece choice, and
+    // mis-tipping arms cut short by an obstacle) has been removed.
+    for (int y = 0; y < sim::kGridHeight; ++y) {
+        for (int x = 0; x < sim::kGridWidth; ++x) {
+            if (s.flame[y][x] == 0) continue;
+            int owner = s.flame_owner[y][x];
+            const FlameSet& fset = q.flames[render_colour(s, owner)];
+            const Anim* a = &flame_piece(fset, s.flame_kind[y][x]);
+            if (a->steps.empty()) continue;
+            // Frame pacing: same free-running, ignition-zeroed per-cell
+            // counter as the brick-burn draw above (sub_426D06 drives both
+            // kinds off one +48 field) — see that draw's comment and
+            // docs/re/facts.md "Flame/burn frame pacing".
+            std::size_t idx = anim_step_index(
+                static_cast<std::size_t>(s.tuning.flame_frames - s.flame[y][x]), a->steps.size());
+            const Sprite& sp = a->steps[idx];
+            float sx = tile_screen_x(x) + sim::kTileW / 2.0f;
+            float sy = tile_screen_y(y) + sim::kTileH - 1.0f;
+            // sub_426D06's real-flame branch (kind != 9, off_45BEA0 index
+            // 0-8) is the ONE draw site that calls the offset getter
+            // sub_41DB41 and folds the per-STAT dx/dy into the blit position
+            // (`v12 + sub_426524(j)` etc.) — every other sequence in the
+            // game, INCLUDING this same function's brick-burn kind-9 branch,
+            // ignores dx/dy per the general rule (docs/formats/ani.md
+            // "Rendering a step"). Apply it here, and only here. See
+            // docs/re/facts.md "Flame draw offset".
+            draw_sprite(sp, sx + static_cast<float>(sp.dx), sy + static_cast<float>(sp.dy));
+        }
     }
 
     sample_movement(s);
@@ -750,6 +800,10 @@ void Renderer::draw_frame(const sim::State& s) {
     SDL_RenderClear(ren_);
     SDL_RenderTexture(ren_, assets_->field(), nullptr, nullptr);
     draw_actors(s);  // conveyor/trampoline floor tiles, under powerups + entities
+    // Order matches sub_42A191's per-frame call sequence (docs/re/facts.md
+    // "Draw order"): actors, then bombs, then powerups, then flame/burn
+    // (inside draw_world), then players (also draw_world) last.
+    draw_bombs(s);
     draw_powerups(s);
     draw_world(s);
     draw_hud(s);

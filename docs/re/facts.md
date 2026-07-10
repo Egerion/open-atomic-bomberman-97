@@ -3221,6 +3221,378 @@ ported). All presentation-layer; sim/golden untouched. (Provenance: shipped
 `MASTER.ALI` text; `abtool ani` dumps of all 95 `DATA/ANI` files;
 pseudo.c cites in sequence-map.md.)
 
+## Explosion/tile-crumble draw fidelity audit (2026-07-10, `sub_426D06`/`sub_42A191`/`sub_41DB41`/`sub_42331C`)
+
+User report after the flame-system sim audit landed: the tile-explosion visual
+sequence "doesn't look right" vs the original when a bomb destroys bricks
+(plus a follow-up report of the flame effect visibly drifting off-tile). The
+SIM side (deferred chain reactions, brick stays `Cell::Brick` through the
+crumble, powerup reveal timing) was already deep-audited in the two entries
+above and is NOT re-litigated here — this pass started scoped to `libs/game`'s
+draw pacing/sequencing/order, six sub-questions, each independently verified
+against pseudo.c and (where cited) empirical `abtool ani` dumps of the shipped
+install. One finding (§3) turned out to need a small, deliberately-scoped
+`libs/sim` change (a new hashed field) to fix faithfully rather than with a
+presentation-only approximation — done on `main`'s explicit decision, with
+full golden-discipline recapture; see that section for the boundary and the
+proof.
+
+### 1. Brick-tileset "stage" argument — CONFIRMED fixed per level, does not advance with burn age
+
+`sub_426D06`'s brick-burn branch (kind == 9, pseudo.c 27404-27415) composes the
+sequence name via `sub_4518D0((int)v14, aFlameSU, (char)off_45BEA0[9])`, where
+`aFlameSU` = `"flame %s %u"` (pseudo.c 1569) and `off_45BEA0[9]` = `"brick"`
+(pseudo.c 2284-2296, the same 10-entry piece-name table `sub_426D06` also uses
+for kind 0-8's `"flame %s green"`/`off_45BEA0[k]` = tipnorth/tipeast/tipsouth/
+tipwest/midnorth/mideast/midsouth/midwest/center).
+
+Decisive evidence is empirical, not the (partly corrupted — see the caveat
+below) pseudocode: `abtool ani` dumps of the shipped `XBRICK0/1/5/10.ANI`
+(extended in this pass to also print each step's per-STAT `dx/dy`, see §4)
+each contain **exactly one** sequence, named `"flame brick <n>"` where `<n>`
+is that FILE's own level index, with 9-10 frames baked into that one sequence:
+
+```
+XBRICK0.ANI:  seq 'flame brick 0'  (9 steps)
+XBRICK1.ANI:  seq 'flame brick 1'  (9 steps)
+XBRICK5.ANI:  seq 'flame brick 5'  (9 steps)
+XBRICK10.ANI: seq 'flame brick 10' (10 steps)
+```
+
+This is structurally identical to the already-confirmed `"tile %u solid"`/
+`"tile %u brick"` per-level tileset lookup (`sub_425D22`, `dword_46499C`,
+`docs/re/sequence-map.md` row 58): `<stage>` is the FIXED per-level tileset
+index, resolved once, exactly matching `SequenceSet::resolve_stage`'s existing
+`"flame brick " + n` (`libs/game/src/sequences.cpp`). It does **not** advance
+with burn/flame age — `sub_426D06`'s kind-9 branch never reads the elapsed-
+ticks field (`v16+66/68`) when composing the name; that field is only read
+afterward to decide when the crumble EXPIRES (`docs/re/facts.md` "Brick
+crumble timing"), not to pick a different sequence mid-burn. The 9-10-frame
+crumble ANIMATION plays out entirely within that ONE sequence, via the frame
+COUNTER (see §2), not by swapping sequences.
+
+**Caveat (does not change the verdict):** the exact register/stack mechanics
+of the `%u` substitution at this one call site are not cleanly recoverable
+from the decompile. `sub_4518D0` is a `__cdecl` vararg-forwarding helper
+(`v5[0] = (int)&a3`, pseudo.c 56872-56883) whose OWN reconstructed 3-parameter
+prototype undercounts what this call site actually pushes (a local, `v20 =
+dword_4648A0/2`, is assigned immediately before EVERY `sub_4518D0` call in
+this function — including the kind-0-8 branch's single-`%s`
+`"flame %s green"`, where it's set to a dead-looking `0` — and never
+referenced again in the visible pseudocode, the classic signature of a hidden
+4th stack argument Hex-Rays' 3-param signature dropped from view). Hex-Rays
+itself flags the immediately-following code as corrupted (`// 426EB9:
+variable 'v2' is possibly undefined`, similarly `v6`/`v7`/`v10`/`v11`) — a
+cascading stack-tracking failure typical of an arity-mismatched `__cdecl`
+call. `dword_4648A0` is independently confirmed elsewhere in this same
+function's file to be a FIXED tile-geometry constant (`sub_42647A`:
+`dword_4648A0 = 36`, one of the field-geometry globals set once at match
+setup — CONFIRMED, this is tile height in px, paired with `dword_4648A8` in
+`sub_42655F`'s row->Y formula), not a level or burn-progress variable — so
+even under the "hidden 4th arg" reading, whatever literal `%u` decodes to
+doesn't matter for THIS question: it is provably level/age-independent within
+one call, and the file-content check above is the authoritative, decisive
+evidence regardless of how that one register is actually populated. Not worth
+chasing further given the acknowledged decompiler corruption in this exact
+spot.
+
+**Verdict: no fix.** `SequenceSet::resolve_stage`'s architecture (one sequence
+resolved once per level) is structurally correct.
+
+### 2. Flame/burn frame pacing — CONFIRMED bug, FIXED
+
+`sub_426D06` drives the DISPLAYED FRAME of both real flame (kind 0-8) and
+brick-burn (kind 9) off one per-flame-cell field, `+48` (a `WORD`), via the
+same accessor as every other animated entity in the game,
+`sub_41DAA7(seq, counter) = counter % statecnt` (already CONFIRMED general
+convention, `docs/re/facts.md` "ANI per-step timing", `anim_pace.hpp`).
+
+`+48` is explicitly zeroed at ignition (`sub_426FCC`, the ignite call:
+`*(_WORD*)(v8+48) = 0`, pseudo.c 27496 — on EVERY ignite, fresh or a
+re-trigger mid-crumble, matching the already-confirmed "the crumble timer
+resets" behaviour) and is advanced by a small pacing loop at the bottom of
+`sub_426D06` (pseudo.c 27456-27457):
+
+```c
+for ( *(_WORD*)(v16+50) += dword_464958; *(__int16*)(v16+50) > 0; *(_WORD*)(v16+50) -= dword_46494C )
+    ++*(_WORD*)(v16+48);
+```
+
+`docs/re/facts.md`'s own "Ice / input-lag" entry already established
+`dword_464958 == dword_46494C == 1000/getvalue(30) == 50` ms/tick at the
+locked 20 Hz rate — so this loop's body runs **exactly once per call**: the
+frame counter `+48` increments by exactly 1 every tick, for as long as the
+cell stays active. It is free-running, decoupled from BOTH the sequence's own
+step count AND the cell's total lifetime (`brick_burn_frames`/`flame_frames`)
+— `sub_41DAA7` just wraps it `% statecnt`, cycling the art as many times as
+the tick count divides into it (e.g. MFLAME's 5-step cycles loop TWICE over a
+10-tick flame life).
+
+Our port's `Renderer::timed_step()` did something structurally different: a
+linear one-shot rescale, `idx = (total-remaining) * steps.size() / total`,
+stretching the WHOLE sequence to play exactly once end-to-end over the cell's
+total lifetime. For a 5-step flame cycle over 10 ticks this halved the true
+frame rate and never looped (vs. the original cycling twice); for a 9-10-step
+brick crumble over a 10-tick burn the step/tick counts are close enough that
+the divergence is smaller but still not the same formula (and not something
+to assume stays benign if `brick_burn_frames`/art frame counts ever change).
+
+**Fixed:** both call sites (brick-burn draw, flame-arm draw, in
+`Renderer::draw_world`) now feed `elapsed = total - remaining` directly into
+the existing `anim_step_index()`/`draw_anim` `% statecnt` wraparound — no
+rescale — reproducing the `+48` counter exactly (both start at 0 on
+ignition/re-ignition, both add 1/tick). `Renderer::timed_step()` is removed
+(dead code, no remaining callers) from `renderer.cpp`/`renderer.hpp`.
+
+Presentation-only: `s.flame`/`s.burning` countdown semantics (and everything
+that gates on them) are untouched — only how the renderer maps a remaining-
+ticks value to a displayed frame index changed.
+
+### 3. Flame arm-shape (tip/mid/center) selection — CONFIRMED divergence, FIXED (sim-side, `main`'s decision)
+
+`sub_42331C`'s per-explosion arm-cast loop (pseudo.c ~25619-25678) decides
+each flame CELL's "kind" (the same `off_45BEA0` index `sub_426D06` later
+reads) **once, at ignition**, purely from cast-time geometry:
+
+- the epicentre tile always gets kind 8 ("center") — pseudo.c 25625.
+- each of the 4 arms (`k` = 0..3, one direction) steps outward tile by tile
+  (`m` = 0..reach-1):
+  - hits a bomb or a player: chain-queue/reveal, arm STOPS (`break`) —
+    pseudo.c 25642-25664.
+  - hits a solid wall (cell type 1): arm stops, nothing ignited — pseudo.c
+    25663-25664.
+  - hits a brick (cell type 2): kind 9 ("brick"), arm stops — pseudo.c 25667.
+  - open floor: `if (m == reach-1) kind = k /* a TIP piece */; else kind = k+4
+    /* a MID piece */` — pseudo.c 25673-25677 — i.e. the LAST tile of the
+    arm's own FULL CONFIGURED reach gets a tip (tipnorth/east/south/west),
+    every earlier tile of that SAME arm gets that SAME direction's mid piece
+    (midnorth/east/south/west) — never the other axis's symmetric twin.
+
+This is a static, per-arm, per-direction decision fixed at cast time. It does
+**not** consult what's currently lit in a neighbouring tile, and each arm
+owns its own tiles' mid piece unambiguously (every tile of the west-cast arm
+is `"midwest"`, never `"mideast"` — no symmetric choice to make).
+
+Our renderer (`Renderer::draw_world`'s flame-piece selection) instead does a
+LIVE, per-frame scan of `s.flame[][]` on the four orthogonal neighbours, and
+breaks the tie between the same-axis symmetric pair (`mid_h[0]`=midwest vs.
+`mid_h[1]`=mideast, `mid_v[0]`=midnorth vs. `mid_v[1]`=midsouth) with
+`(x + y) & 1` — an arbitrary checkerboard parity with no relationship to
+which side of the epicentre a tile is actually on. Two concrete, unfixed
+consequences:
+
+1. Every mid tile's west/east (or north/south) sprite choice is effectively
+   checkerboarded instead of a clean "west half of the epicentre draws
+   midwest, east half draws mideast" split the original produces.
+2. An arm cut short early by a brick/solid/bomb/player renders its last live
+   tile as a MID piece in the original (the tip designation only applies at
+   the arm's FULL, uninterrupted configured reach) but our live-neighbour
+   scan renders it as a TIP (nothing lit past it) — backwards whenever an arm
+   doesn't reach its full length, which is common (any bomb near a wall or
+   another bomb).
+
+**Fixed (sim-side, per `main`'s explicit decision — this crosses out of the
+original `libs/game`-only scope, so it was escalated rather than done
+unilaterally; see the session report).** A faithful port needs the CAST
+DIRECTION and tip/mid-ness recorded per flame cell at ignition — a new piece
+of per-cell data alongside the already-hashed `flame_owner`. Added
+`FlameKind` (`libs/sim/include/bomber/sim/types.hpp`), an enum whose integer
+values mirror `off_45BEA0`'s order 1:1 (0-3 tips, 4-7 mids, both in compass
+order, 8 = center), and a new hashed `State::flame_kind` grid
+(`state.hpp`, next to `flame_owner`). `FlameSystem::ignite_epicentre` sets it
+to `Center`; `FlameSystem::spread_to` gained an `is_last_of_reach` parameter
+(computed by its one caller, `explode`'s arm loop, as `i == reach` — the
+SAME "last tile of the FULL configured reach" test as pseudo.c's `m ==
+reach-1`, just 1-indexed instead of 0-indexed) and sets
+`godir(from_dir) + (is_last_of_reach ? 0 : 4)` on the "arm continues" path
+only — mirroring pseudo.c 25673-25677 exactly, including the cut-short-arm
+behaviour (a tile that stops the arm early, or the tile right before an
+obstacle, gets whatever the loop naturally assigns it — a MID, since
+`is_last_of_reach` is false there — never retroactively upgraded to a TIP).
+`Renderer::flame_piece` (`libs/game/src/renderer.cpp`) replaces the live
+neighbour-scan with a plain switch from `FlameKind` to the matching
+`FlameSet` member — no more `(x + y) & 1` checkerboard.
+
+**Golden impact: hash-layout growth, not a behaviour change.** `flame_kind`
+is pure derived data — computed from the already-existing `from_dir`/`reach`
+inputs at ignition, no new RNG draw, no new branch that changes what ignites
+or when. It's folded into the SAME packed per-tile hash word `cells`/
+`hidden`/`floor`/`flame`/`burning`/`flame_owner` already share (bits 48-55,
+previously unused padding in that word — `hash.cpp`), so this is a one-time
+constant-shift for every scenario with an explosion, exactly like the
+`next_bomb_id`/`Bomb::id`/`regen_timer` precedents above. Recaptured
+`tests/test_golden.cpp`'s hash constants for the affected scenarios in the
+same commit; every non-hash assertion (RNG streams, bounce counts) is
+unchanged — see that file's own updated comment for the specific proof run.
+
+### 4. Flame draw offset (position drift) — CONFIRMED bug, FIXED
+
+`docs/formats/ani.md`'s general rule (confirmed 2026-07-04): the per-STAT
+FRAM-leaf `offset_x/offset_y` (`assets::ani::SeqStep::dx/dy`) is parsed but
+**not** applied by the standard blit (`sub_415920`/`sub_415A9F` take only the
+frame index) — "the offset getter `sub_41DB41` is a separate, rarely-used
+path."
+
+`sub_426D06` is that rare path's (only confirmed) caller, and only on its
+REAL-FLAME branch (kind != 9, pseudo.c 27438-27445):
+
+```c
+if ( v21 )   // v21 is set iff kind != 9, i.e. a real flame-arm piece
+{
+    sub_41DB41(v17, *(unsigned __int16*)(v16+48), &v13, &v12);  // fetch offset_x/offset_y
+    ...
+    sub_42655F(i);
+    v5 = sub_426524(j);              // base tile-column X anchor
+    sub_415A9F(v12 + v5, v6, v7, v4); // dx ADDED to the base X before the blit
+}
+else  // kind == 9 (brick-burn): no sub_41DB41 call, base anchor used directly
+{
+    ...
+    v9 = sub_426524(j);
+    sub_415A9F(v9, v10, v11, v8);
+}
+```
+
+(`sub_41DB41(seq, frame, &out_dy, &out_dx)`, pseudo.c 21840-21866, reads the
+resolved frame record's offset+4/offset+8 pair — i.e. the file's
+`offset_x`/`offset_y` — matching `SeqStep::dx/dy`.) So: **real flame arms are
+the one exception that folds the per-STAT `dx/dy` into the blit position;
+brick-burn (and every other sequence in the game) ignores it, per the general
+rule.**
+
+Empirically confirmed non-trivial: `abtool ani` (extended this pass to print
+each step's `dx/dy` — `apps/abtool/commands.cpp`) on the shipped
+`MFLAME.ANI` shows every one of its 9 flame-piece sequences carries non-zero
+per-step offsets, e.g.:
+
+```
+seq 'flame center green'   (5 steps): 0(3,16) 1(2,16) 2(2,16) 3(2,16) 4(2,16)
+seq 'flame tipnorth green' (5 steps): 5(-1,16) 6(-1,16) 7(-1,16) 8(-1,16) 9(-1,16)
+```
+
+(format: `frame(dx,dy)`) — `dy` sits around 8-16 px on every sequence, against
+a 40px-tall tile: not a dormant field, the shipped art actively relies on it.
+The dead-art `FLAME.ANI` (pre-2026-07-09-audit source file) carries dx/dy of
+similar magnitude (`"flame center green"` dy=17) — so this is **not a
+regression introduced by the FLAME.ANI->MFLAME.ANI sequence-source fix**;
+it's a pre-existing gap in how flame specifically is drawn that the file
+swap didn't touch either way. `XBRICK*.ANI`'s `"flame brick <n>"` steps also
+carry non-zero dx/dy (e.g. XBRICK10: `dx=3,dy=-1` on every step) — correctly
+never applied, per the kind==9 branch's confirmed no-`sub_41DB41`-call.
+
+**Sign convention:** confirmed unambiguous on X (`v12 + sub_426524(j)`, clean,
+uncorrupted code — a direct addition to the base anchor, before whatever
+hotspot subtraction the underlying blit primitive applies, mirroring
+`docs/formats/ani.md`'s "blit at `pos - hotspot`" for every sequence). The Y
+computation (`v6`) sits in the same corrupted stack region as §1's caveat
+(Hex-Rays: `variable 'v6' is possibly undefined`) and isn't independently
+recoverable from this decompile; the Y sign is inferred by symmetry with the
+clean X case (both offsets applied via addition, in the same statement
+shape, to the same kind of base anchor) rather than confirmed byte-for-byte.
+
+**Fixed:** `Sprite` (`libs/game/include/bomber/game/sprites.hpp`) gained
+`dx`/`dy` fields, populated by `resolve_sequence` from the already-parsed
+`SeqStep::dx/dy` (`libs/game/src/sprites.cpp`) — carried for EVERY sequence
+but left inert by default, preserving the general "ignore it" rule for
+everything else. `Renderer::draw_world`'s flame-arm draw is the one call site
+that now reads `sp.dx`/`sp.dy` and adds them to the tile anchor before
+calling `draw_sprite`; every other draw site — including this same loop's
+brick-burn draw — is untouched.
+
+### 5. Draw order/composition — CONFIRMED bugs, FIXED
+
+The original's per-frame update+draw entry point, `sub_42A191` (pseudo.c
+29488-29556), issues (relevant subset, in order): actors (`sub_4056CA`),
+**bombs** (`sub_4245B9` -> `sub_42331C`, which ticks AND draws each bomb
+inline as part of its per-tick update), **powerups** (`sub_424F89`), ...,
+**flame/brick-burn** (`sub_426D06`), ..., **players** (`sub_420F07`).
+
+Our renderer's previous order was actors, powerups, then — all inside one
+`draw_world` — cells/burn, flames, **bombs**, players: bombs drawn AFTER
+powerups and AFTER flame/burn, backwards on both counts relative to the
+original. This only produces a visible difference where a bomb spatially
+shares a tile with a powerup or an active flame cell in the same frame:
+
+- a bomb dropped on a floor-powerup tile: original draws the powerup ON TOP
+  of the bomb; ours drew the bomb on top, hiding the powerup.
+- the one-tick window where a bomb sits in an already-flaming tile before a
+  deferred chain reaction detonates it (`docs/re/facts.md` "Chain-reaction
+  timing" — one link per tick): original draws the flame over the bomb; ours
+  drew the bomb poking out over the flame.
+
+**Fixed:** the bomb-drawing loop is extracted out of `draw_world` into its own
+`Renderer::draw_bombs`, called from `draw_frame` between `draw_actors` and
+`draw_powerups` (actors -> bombs -> powerups -> flame/burn -> players).
+`draw_world` keeps cells/burn, flames, players, rovers, deaths, and the
+gold-twinkle overlay — the original doesn't re-order any of those relative to
+each other, and rovers/deaths/twinkle have no original per-frame-list
+equivalent to cite, so they stay at the end as before.
+
+Separately (same investigation): the original's floor-powerup drawer
+`sub_424F89` (pseudo.c ~26218-26266) gates its actual sprite blit on
+`*(_DWORD*)v9 == 2 && !sub_425FB9(j,i)` — i.e. the token's "visible" STATE
+flip happens at ignition (already confirmed, "Brick crumble timing" above,
+`sub_425107`), but the SPRITE is only actually drawn once the CELL reads
+blank (`sub_425FB9(j,i) == 0`). Our `draw_powerups` had no such gate — it drew
+any `s.floor[y][x] != PowerupType::None` unconditionally, so a token under a
+still-crumbling brick would render (through/over whatever the crumble
+animation draws on top of it, depending on art opacity) for the entire
+`brick_burn_frames` window instead of staying invisible until the tile
+actually opens.
+
+**Fixed:** `Renderer::draw_powerups` now skips any tile where
+`s.cells[y][x] != sim::Cell::Blank`, matching `!sub_425FB9(j,i)`.
+
+All of §5 presentation-only: `libs/sim`/golden untouched (`s.floor`/`s.hidden`
+state-flip timing is unchanged; only when/what the renderer draws changed).
+
+### 6. Brick crumble duration (`brick_burn_frames`, VALUELST id 20) — RE-CONFIRMED, no change
+
+Re-verified per this audit's suspect list (is the crumble-duration TUNING
+value actually RE'd, or a leftover guess?): `Tuning::brick_burn_frames`
+(`libs/sim/include/bomber/sim/tuning.hpp`) is already `10`, matching the
+already-CONFIRMED shipped value from the "Brick crumble timing" entry above
+(`getvalue(20)` = 10, the same shipped constant as `flame_frames`/id 10) and
+`docs/valuelst-map.md`'s existing `"20 | brick disintegration animation,
+frames | 10"` row. It is correctly RE'd already — no change made.
+
+### Verification
+
+§2/§4/§5/§6 and §1 (no code change) are render/asset-layer only —
+`libs/sim`/`libs/match` untouched by them. §3 (arm-shape) is the one
+deliberate `libs/sim` change in this pass, scoped exactly as described
+there: one new hashed field, zero new RNG draws, zero changed branches in
+anything that decides WHAT ignites or WHEN — only what gets recorded about a
+tile that was already going to ignite. `apps/abtool/commands.cpp`'s `ani`
+dump gained a `dx/dy` column (diagnostic only, prints our own already-parsed
+struct fields — no exe-derived material). Full `headless` suite green
+(37/37) both before and after the `libs/game`-only fixes; re-verified green
+again (with recaptured golden constants) after §3; `windows-fetch`
+(`libs/game`/`bomber_game`, the actual changed presentation code) built
+clean.
+
+Ported: `libs/game/src/renderer.cpp` (`draw_bombs` split out of `draw_world`,
+flame/burn pacing, flame `dx/dy`, powerup cell gate, `timed_step` removed,
+`flame_piece` replaces the live neighbour scan), `libs/game/include/bomber/
+game/renderer.hpp` (`draw_bombs`/`flame_piece` declared, `timed_step`
+removed), `libs/game/include/bomber/game/sprites.hpp` (`Sprite::dx/dy`),
+`libs/game/src/sprites.cpp` (`resolve_sequence` populates them),
+`apps/abtool/commands.cpp` (`ani` dump prints `dx/dy`); `libs/sim/include/
+bomber/sim/types.hpp` (`FlameKind`), `libs/sim/include/bomber/sim/state.hpp`
+(`State::flame_kind`), `libs/sim/src/systems/flames.{hpp,cpp}`
+(`ignite_epicentre`/`spread_to` set it), `libs/sim/src/hash.cpp` (mixed in);
+`tests/test_golden.cpp` (recaptured hash constants).
+
+(Provenance: `sub_426D06` pseudo.c 27366-27463; `sub_426FCC` 27478-27504;
+`sub_42331C` arm-cast loop pseudo.c ~25619-25678; `sub_41DB41` 21840-21866;
+`sub_415A9F`/`sub_415920`/`sub_415B22` 18007-18119 [deferred draw-queue
+primitives]; `sub_4518D0` 56871-56884; `sub_42647A` field-geometry init
+27008-27029; `sub_42655F`/`sub_426524` 27030-27041/27038-27044; `sub_42A191`
+29488-29557 [per-frame entry point]; `sub_4245B9` 25787-25792; `sub_424F89`
+26218-26267; `off_45BEA0` piece-name table 2284-2296; `aFlameSU`/
+`aFlameSGreen` 1569-1570; `abtool ani` dumps of shipped `MFLAME.ANI`,
+`FLAME.ANI`, `XBRICK0/1/5/10.ANI`, 2026-07-10.)
+
 ## Still guessed — not yet extracted from the binary
 
 | Constant | Current value | Status |
