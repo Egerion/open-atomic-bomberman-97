@@ -6,14 +6,14 @@
 
 namespace bomber::game {
 
-SDL_Texture* make_texture(SDL_Renderer* ren, const assets::Image& img) {
+SDL_Texture* make_texture(SDL_Renderer* ren, const assets::Image& img, SDL_ScaleMode scale_mode) {
     SDL_Surface* surf =
         SDL_CreateSurfaceFrom(img.width, img.height, SDL_PIXELFORMAT_RGBA32,
                               const_cast<std::uint8_t*>(img.rgba.data()), img.width * 4);
     if (!surf) return nullptr;
     SDL_Texture* tex = SDL_CreateTextureFromSurface(ren, surf);
     SDL_DestroySurface(surf);
-    if (tex) SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_NEAREST);
+    if (tex) SDL_SetTextureScaleMode(tex, scale_mode);
     return tex;
 }
 

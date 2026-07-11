@@ -145,7 +145,15 @@ public:
     // sequences ship under this file's name instead (CONFIRMED against the
     // install 2026-07-09, docs/re/facts.md "ANI sequence-name audit").
     const AniTextures& aliens1() const { return aliens1_; }
-    SDL_Texture* field() const { return field_.get(); }
+    // Runtime HD presentation toggle. It never changes simulation state or
+    // original assets: DATA_HD/RES files are optional visual overrides, and
+    // every missing override falls back to the matching DATA/RES resource.
+    void set_hd_enabled(bool enabled) { hd_enabled_ = enabled; }
+    bool hd_enabled() const { return hd_enabled_; }
+
+    SDL_Texture* field() const {
+        return hd_enabled_ && field_hd_ ? field_hd_.get() : field_.get();
+    }
 
     // One built-in level's SAMPLE-BLOCK preview art (docs/re/setup-screens.md
     // "The sample block preview", sub_406AA3): the level's own "tile <n>
@@ -304,6 +312,7 @@ private:
     Sprite powerups_[sim::kPowerupKinds]{};
     std::vector<sdl::TexturePtr> powerup_textures_;  // owners for powerups_
     sdl::TexturePtr field_;
+    sdl::TexturePtr field_hd_;  // optional DATA_HD/RES/FIELD<n>.PCX override
 
     // stage_preview() cache: keyed by stage index, populated lazily. Separate
     // AniTextures/texture owners from the live match slots above (tiles_/
@@ -339,6 +348,12 @@ private:
     // lazily. Owners live in front_textures_ to keep the Sprites' tex valid.
     mutable std::map<std::string, Sprite> front_pcx_;
     mutable std::vector<sdl::TexturePtr> front_textures_;
+    // HD front-end textures retain the classic Sprite geometry. This keeps all
+    // original UI coordinates intact while their backing texture is higher
+    // resolution. They are only selected while hd_enabled_ is true.
+    mutable std::map<std::string, Sprite> front_pcx_hd_;
+    mutable std::vector<sdl::TexturePtr> front_textures_hd_;
+    bool hd_enabled_ = false;
 };
 
 }  // namespace bomber::game

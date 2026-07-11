@@ -3470,6 +3470,10 @@ int GameApp::run_app() {
 bool GameApp::handle_global_event(const SDL_Event& ev) {
     if (ev.type != SDL_EVENT_KEY_DOWN || ev.key.repeat)
         return true;  // keep; ignore key-repeat spam
+    if (ev.key.key == SDLK_TAB) {
+        toggle_hd_artwork();
+        return false;  // presentation shortcut; never leak Tab into a screen
+    }
     bool alt_enter = ev.key.key == SDLK_RETURN && (ev.key.mod & SDL_KMOD_ALT) != 0;
     bool f11 = ev.key.key == SDLK_F11;
     if (!alt_enter && !f11) return true;  // not ours: keep the event for the caller's own loop
@@ -3489,6 +3493,13 @@ void GameApp::toggle_fullscreen() {
     // at any output size, task item 2).
     SDL_SetWindowFullscreen(window_.get(), fullscreen_);
     options_dirty_ = true;  // persist the choice (task item 4), flush_options() below is the writer
+}
+
+void GameApp::toggle_hd_artwork() {
+    assets_.set_hd_enabled(!assets_.hd_enabled());
+    SDL_SetWindowTitle(window_.get(), assets_.hd_enabled() ? "Open Bomberman [HD]"
+                                                           : "Open Bomberman [Classic]");
+    std::fprintf(stderr, "artwork mode: %s\n", assets_.hd_enabled() ? "HD" : "classic");
 }
 
 void GameApp::flush_options() {

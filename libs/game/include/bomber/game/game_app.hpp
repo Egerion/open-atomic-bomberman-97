@@ -99,6 +99,9 @@ private:
     // Flips fullscreen_, applies it to the live window, and marks the choice
     // for persistence (options_dirty_ — flush_options() is the sole writer).
     void toggle_fullscreen();
+    // Presentation-only global shortcut: Tab selects optional DATA_HD artwork
+    // without changing the fixed gameplay coordinate system or simulation.
+    void toggle_hd_artwork();
     // Write-on-exit (task requirement 3 / §2): serializes every in-memory
     // option this session has touched back to options.ini, ONLY if something
     // actually changed since load (options_dirty_) and a game_dir is known.

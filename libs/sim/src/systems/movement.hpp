@@ -18,6 +18,16 @@ public:
     // .cpp; ctx carries the caller's state. See docs/re/stage-actors.md §5.
     using StepOnFn = void (*)(void* ctx, Player& p, int tx, int ty);
 
+    // Per-pixel field callback: invoked after EVERY committed pixel step (the
+    // post-commit slot of sub_41EC84's loop body, pseudo.c 22699-22717), where
+    // the original checks flame death and powerup pickup at the tile of the
+    // player's current pixel position. Returns true if the player DIED — the
+    // mover then abandons the remaining budget and returns, exactly like the
+    // original's mid-loop `return 1` (a killed player never finishes the walk
+    // and never reaches the same turn's bomb actions). See docs/re/facts.md
+    // "Per-tick call order — END-TO-END" finding 1.
+    using PixelFn = bool (*)(void* ctx, Player& p);
+
     // Moves one player for one tick in direction d (also sets facing).
     // Positions are integer field pixels; the speed budget is added per tick
     // and spent 100 units per one-pixel step, remainder carried over.
@@ -41,8 +51,12 @@ public:
     // HAS a movement input (its case (b)); when the conveyor FORCES movement with
     // no input (case (a)) the budget is exactly getvalue(190+idx), no speed term
     // at all. Defaults to true for every ordinary (player-initiated) move.
+    // `on_pixel(pixel_ctx, p)` fires after every committed pixel step (flame
+    // death + pickup live there — sub_41EC84 22699-22717); a true return kills
+    // the walk (death mid-move). Pass nullptr to skip.
     void move(Player& p, Direction d, std::int32_t extra_budget, StepOnFn on_center, void* ctx,
-              bool use_player_speed = true);
+              bool use_player_speed = true, PixelFn on_pixel = nullptr,
+              void* pixel_ctx = nullptr);
 
     // Ice / input-lag (VALUELST ids 450-460, Hockey Rink; docs/re/facts.md
     // "Ice / input-lag", sub_41F29B ~23058-23078). Pushes this tick's desired

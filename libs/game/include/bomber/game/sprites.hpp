@@ -42,8 +42,11 @@ struct Anim {
     std::vector<Sprite> steps;
 };
 
-// Uploads an RGBA8 image as a nearest-neighbour SDL texture (nullptr on error).
-SDL_Texture* make_texture(SDL_Renderer* ren, const assets::Image& img);
+// Uploads an RGBA8 image with the requested sampling mode (nullptr on error).
+// Classic assets retain crisp nearest-neighbour sampling; high-resolution
+// override art uses linear sampling for a modern presentation.
+SDL_Texture* make_texture(SDL_Renderer* ren, const assets::Image& img,
+                          SDL_ScaleMode scale_mode = SDL_SCALEMODE_NEAREST);
 
 // Retargets the green armour of the pre-rendered player sprites, a faithful
 // port of the engine's remap-table builder sub_414A65 (0x414A65): a

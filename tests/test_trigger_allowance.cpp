@@ -75,8 +75,8 @@ TEST_CASE("exhausted trigger allowance downgrades to a normal timed bomb") {
     s.tick(press1(0));
     REQUIRE(s.state().bombs.size() == 1);
     CHECK(!s.state().bombs[0].trigger);          // downgraded
-    // Placement and fuse ticking both run within the SAME tick (simulation.cpp
-    // step 1 then step 3), so a bomb placed this tick has already had its fuse
+    // Placement and fuse ticking both run within the SAME tick (simulation.cpp:
+    // the player pass, then tick_fuses), so a bomb placed this tick has already had its fuse
     // decremented once by the time we observe it here — same convention as
     // test_sim.cpp's "bomb explodes at its fuse" (run(..., fuse_frames - 1)).
     CHECK(s.state().bombs[0].fuse == s.state().tuning.fuse_frames - 1);

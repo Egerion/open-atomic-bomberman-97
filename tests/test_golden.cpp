@@ -379,25 +379,30 @@ MatchConfig pillars_config() {
 // in place (all 24 assertions): no golden ever chains across owners. Pinned
 // by tests/test_chain_slot.cpp.
 //
-// UPDATE 2026-07-11 (player state machine +78 audit, docs/re/facts.md "Player
-// state machine (+78) — COMPLETE"): B/C/D/E hash constants recaptured for a
-// HASH-LAYOUT-ONLY change (CLAUDE.md determinism contract rule 5): the
-// stun/pickup-pause conflation split adds Player::pickup_pause, mixed as its
-// own word in state_hash — 0 outside a grab's 2-tick pause, but the extra
-// mix() call shifts every digest that hashes at least one present player.
-// ISOLATION PROOF, from the recapture run itself: every NON-HASH assertion
-// passed UNCHANGED — golden A (present-player-free, so its digest has no new
-// word) both hash AND rng, all four of D's kExpectedRng checkpoints, E's
-// bounce count 10 and final rng 0xc6a9f3b2 — i.e. zero RNG draws added/
-// removed/reordered and zero behaviour drift; only the digest layout moved.
-// The audit's five behaviour fixes (bounce/warp carried-bomb release, head-
-// hit cancelling bounce/warp/pause, flame/rover kill 5/6/7 exemption,
-// landing head-hit on warphole tiles, AI silence in states 5/6/7) are all
-// PROVEN INERT here: no golden board has a trampoline, warphole, or rover,
-// none sets Player::ai, and no golden grab ever coincides with a head hit
-// (B's kExpectedRng-equivalent — its six hash checkpoints — would have moved
-// under any RNG change, and A pins the stream directly). Pinned by
-// tests/test_state_machine.cpp.
+// UPDATE 2026-07-11 (end-to-end tick-order audit, docs/re/facts.md "Per-tick
+// call order — END-TO-END"): a DELIBERATE behaviour recapture. Four ordering
+// fixes: (1) flame-death + pickup now ALSO run per pixel step inside the
+// mover (the original's sub_41EC84 post-commit tail, pseudo.c 22699-22717) —
+// a mid-walk kill aborts the walk and skips that turn's bomb actions, a
+// mid-walk pickup applies before them; (2) clock/regen/enclosure moved
+// BEFORE the head checks (field_vs_players), matching sub_42A191's
+// clock→bombs→age→enclosure→players frame order under the rotation; (3)
+// rovers moved to directly after the player pass (sub_4016DA at 29528);
+// (4) flame death and the rover landing kill now honour the sub_41DE63
+// bounce/warp immunity (states 5/6/7), like drop_wall already did.
+// Reach, proven by running BOTH revisions through a per-tick hash/rng/event
+// dump of every scenario's exact script: A, B, C, E pass BYTE-IDENTICAL (all
+// their hashes, E's bounce count and final rng, unchanged — none of them
+// ever hits a same-tick move-vs-field coincidence). D diverges at exactly
+// tick 405, where player 1 catches SWAP from a Disease token picked up
+// MID-WALK: both revisions emit the same Infected event and draw the same
+// single RNG value there (the whole kExpectedRng series below is
+// byte-identical, as are the 200/400 hashes), but the new order applies the
+// swap inside the pixel loop, so the walk's remaining budget continues from
+// the swapped position (the original's in-loop sub_41E21E) instead of the
+// swap landing after a completed walk — a pure, RNG-neutral position delta
+// that moves only the 600/800 hashes. Pinned by tests/test_tick_order.cpp's
+// six same-tick coincidence cases.
 TEST_CASE("golden A: empty state, 10000 ticks") {
     Simulation a;
     a.state().rng = 42u;
@@ -498,11 +503,22 @@ TEST_CASE("golden D: the disease gauntlet") {
     // fidelity audit / `flame_kind`, see the file-level UPDATE note above):
     // ticks 200/400 stay byte-identical (this scenario's first bomb hasn't
     // exploded yet at either checkpoint); kExpectedRng is unchanged.
+    // Ticks 600/800 recaptured a FOURTH time 2026-07-11 (tick-order audit,
+    // see the file-level UPDATE note above): the mid-walk Swap at tick 405
+    // now relocates the player inside the pixel loop. Ticks 200/400 and the
+    // whole kExpectedRng series are byte-identical to before the fix.
+        // COMBINED-RECAPTURE NOTE (merge of the state-machine and tick-order
+    // audits, 2026-07-11): D's four hashes below were re-recaptured from the
+    // MERGED state — the state-machine branch's pickup_pause hash-layout
+    // growth and the tick-order branch's per-pixel field resolution compose,
+    // so neither branch's own constants were valid alone. Safety net held:
+    // kExpectedRng at all four checkpoints and every other scenario's
+    // assertions passed UNCHANGED on the combined build before this patch.
     static constexpr std::uint64_t kExpectedHash[4] = {
-        0xdfe12bf44ada5282ull,  // tick 200
-        0xc546352e50b39c58ull,  // tick 400
-        0x883083c480ac8d61ull,  // tick 600
-        0x21f167d0a0ca802eull,  // tick 800
+        0xdfe12bf44ada5282ull,  // tick 200 (unchanged: before the first death)
+        0xc546352e50b39c58ull,  // tick 400 (unchanged: before the mid-walk Swap)
+        0xe38e3eca2c8dc925ull,  // tick 600
+        0x6e91ff82b7085e02ull,  // tick 800
     };
     static constexpr std::uint32_t kExpectedRng[4] = {0xca47489cu, 0x49cffff6u, 0xdd6d0230u,
                                                       0xa9af166bu};

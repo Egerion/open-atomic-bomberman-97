@@ -349,6 +349,20 @@ bool AssetStore::load_stage(int stage) {
         field_.reset(
             make_texture(ren_, assets::pcx::load(game_dir_ / "DATA" / "RES" /
                                                  ("FIELD" + std::to_string(stage) + ".PCX"))));
+        // DATA_HD is deliberately optional. The game keeps the exact original
+        // field when a modern replacement has not been authored yet, allowing
+        // Tab to switch instantly without changing any gameplay data.
+        field_hd_.reset();
+        const fs::path hd_field = game_dir_ / "DATA_HD" / "RES" /
+                                  ("FIELD" + std::to_string(stage) + ".PCX");
+        if (fs::exists(hd_field)) {
+            try {
+                field_hd_.reset(make_texture(ren_, assets::pcx::load(hd_field),
+                                             SDL_SCALEMODE_LINEAR));
+            } catch (const std::exception& e) {
+                std::fprintf(stderr, "HD stage %d field load failed: %s\n", stage, e.what());
+            }
+        }
         tiles_.load(ren_, game_dir_ / "DATA" / "ANI" / ("TILES" + std::to_string(stage) + ".ANI"));
         xbrick_.load(ren_,
                      game_dir_ / "DATA" / "ANI" / ("XBRICK" + std::to_string(stage) + ".ANI"));
@@ -395,19 +409,44 @@ const std::vector<Anim>& AssetStore::deaths_for(int player) const {
 }
 
 const Sprite& AssetStore::frontend_pcx(const std::string& name) const {
-    if (auto it = front_pcx_.find(name); it != front_pcx_.end()) return it->second;
-    // Cache an entry for every request (even failures) so a missing file logs
-    // once and thereafter returns the same empty Sprite the Screen skips.
-    Sprite sp{};
-    try {
-        auto img = assets::pcx::load(game_dir_ / "DATA" / "RES" / (name + ".PCX"));
-        sdl::TexturePtr tex{make_texture(ren_, img)};
-        sp = {tex.get(), img.width, img.height, 0, 0};
-        front_textures_.push_back(std::move(tex));
-    } catch (const std::exception& e) {
-        std::fprintf(stderr, "front-end PCX '%s' load failed: %s\n", name.c_str(), e.what());
+    auto classic = front_pcx_.find(name);
+    if (classic == front_pcx_.end()) {
+        // Cache an entry for every request (even failures) so a missing file logs
+        // once and thereafter returns the same empty Sprite the Screen skips.
+        Sprite sp{};
+        try {
+            auto img = assets::pcx::load(game_dir_ / "DATA" / "RES" / (name + ".PCX"));
+            sdl::TexturePtr tex{make_texture(ren_, img)};
+            sp = {tex.get(), img.width, img.height, 0, 0};
+            front_textures_.push_back(std::move(tex));
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "front-end PCX '%s' load failed: %s\n", name.c_str(), e.what());
+        }
+        classic = front_pcx_.emplace(name, sp).first;
     }
-    return front_pcx_.emplace(name, sp).first->second;
+    if (!hd_enabled_) return classic->second;
+
+    if (auto it = front_pcx_hd_.find(name); it != front_pcx_hd_.end()) return it->second;
+
+    // The HD replacement deliberately keeps the original Sprite's w/h values:
+    // screen layout, bitmap-text inline art, and hit-free UI geometry all stay
+    // in their faithful 640x480 coordinate space while SDL samples the modern
+    // texture at the output resolution.
+    Sprite hd = classic->second;
+    const fs::path hd_path = game_dir_ / "DATA_HD" / "RES" / (name + ".PCX");
+    if (fs::exists(hd_path)) {
+        try {
+            auto img = assets::pcx::load(hd_path);
+            sdl::TexturePtr tex{make_texture(ren_, img, SDL_SCALEMODE_LINEAR)};
+            if (tex) {
+                hd.tex = tex.get();
+                front_textures_hd_.push_back(std::move(tex));
+            }
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "HD front-end PCX '%s' load failed: %s\n", name.c_str(), e.what());
+        }
+    }
+    return front_pcx_hd_.emplace(name, hd).first->second;
 }
 
 }  // namespace bomber::game
