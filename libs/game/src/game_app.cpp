@@ -1,6 +1,7 @@
 #include "bomber/game/game_app.hpp"
 
 #include <algorithm>  // std::max_element
+#include <array>      // run_match's per-player tap latch
 #include <cctype>     // std::isalnum (present_editor's filename sanitizer)
 #include <chrono>     // random_boot_seed
 #include <cstdio>
@@ -2807,6 +2808,13 @@ AppInput GameApp::run_match() {
     int vsync_mode = SDL_RENDERER_VSYNC_DISABLED;
     SDL_GetRenderVSync(sdl_renderer_.get(), &vsync_mode);
     const bool vsync_paces_loop = vsync_mode != SDL_RENDERER_VSYNC_DISABLED;
+    // Per-player "action key seen down at a frame sample since the last
+    // consumed tick" — the frame-cadence tap capture; see the sampling
+    // comment inside the loop. Only action1/action2 are ever set.
+    struct TapLatch {
+        bool action1 = false, action2 = false;
+    };
+    std::array<TapLatch, sim::kMaxPlayers> tap_latch{};
     while (true) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -2878,12 +2886,51 @@ AppInput GameApp::run_match() {
                 gamepads_.refresh();
         }
 
+        // Frame-cadence action-key capture (docs/re/in-match-shell.md "Input
+        // acquisition"). The ORIGINAL samples its live key-state array
+        // byte_4A2BA0 (maintained by sub_433E14 from DirectInput BUFFERED
+        // records — sub_43B5EC/sub_43B700/sub_4449B0's GetDeviceData drain)
+        // once per DISPLAYED FRAME: sub_41F29B shuffles the key bytes
+        // (+54=+56, then +56=0; pseudo.c 22976-22979) and re-reads them via
+        // sub_41E61E (23037) in the same per-frame callback, so its
+        // edge-gated bomb drop can only miss a tap shorter than ONE display
+        // frame (~14-16 ms). Feeding the sim a state sample taken only once
+        // per 50 ms tick widened that loss window ~3x — a normal human tap
+        // (~30-40 ms) could fall entirely between two tick samples and the
+        // bomb press silently vanished. Restore the original's cadence:
+        // sample the mapped inputs here, once per rendered frame (this loop
+        // is the port's equivalent of the flip-loop callback), and latch
+        // action-key downs until the next tick consumes them. Directions are
+        // deliberately NOT latched: they are level-driven (the original
+        // integrates held time in ms, so a sub-tick tap moved a few px at
+        // most — stretching it to a full 50 ms tick budget would overshoot
+        // the original far more than dropping it does), while action1/2 are
+        // EDGE-consumed — capture-or-lose — which is exactly what the frame
+        // sampling exists to capture.
+        const sim::TickInputs frame_in = collect_inputs();
+        for (int i = 0; i < sim::kMaxPlayers; ++i) {
+            tap_latch[i].action1 = tap_latch[i].action1 || frame_in.players[i].action1;
+            tap_latch[i].action2 = tap_latch[i].action2 || frame_in.players[i].action2;
+        }
+
         std::uint64_t now = SDL_GetTicks();
         acc += now - last;
         last = now;
         while (acc >= tick_ms) {
             acc -= tick_ms;
-            sim_.tick(collect_inputs());
+            // Consume the frame-sampled latch on the FIRST tick of a catch-up
+            // burst only (a later tick in the same burst re-reads the live
+            // state, matching the original's one-edge-check-per-update under
+            // a slow frame — its clamped ms delta produces exactly one
+            // sub_41E61E read per displayed frame too).
+            sim::TickInputs in = frame_in;
+            for (int i = 0; i < sim::kMaxPlayers; ++i) {
+                in.players[i].action1 = in.players[i].action1 || tap_latch[i].action1;
+                in.players[i].action2 = in.players[i].action2 || tap_latch[i].action2;
+                tap_latch[i].action1 = false;
+                tap_latch[i].action2 = false;
+            }
+            sim_.tick(in);
             sounds_.on_tick(sim_.state());
             renderer_->on_events(sim_.state());  // NOLINT(bugprone-unchecked-optional-access)
             // §1's kill tally (sub_421B0F): a GameApp-side pass over this
