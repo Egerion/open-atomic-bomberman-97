@@ -94,6 +94,37 @@ tick, not the 2-3 extra ticks a gross pipeline bug would add) — confirming
 the fix trims a real but modest per-frame excess rather than papering over
 a larger structural latency bug. No `libs/sim` change; golden untouched.
 
+**Frame-pacing follow-up (2026-07-11, prompted by an "in-game is now
+slightly stuttery" report after the above): "vsync-or-nothing" was not
+enough — replaced by an explicit refresh-boundary pacer.** The 2026-07-10
+fix assumed `SDL_RenderPresent` blocks on vblank whenever
+`SDL_GetRenderVSync` reports vsync on. On Windows windowed mode it does
+not, reliably: DWM gives the swapchain a multi-frame flip queue, so
+presents return instantly in bursts (measured 4-12 ms frame deltas) until
+the queue fills, then stall (20-25 ms). The sim's accumulator crossings
+land on that jerky CPU-side train, and ticks get assigned to rendered
+frames in 2/4-frame beats instead of the steady 3-frames-per-tick that a
+20 Hz sim on a 60 Hz display needs. Measured (temporary env-gated
+instrumentation, `SDL_GetTicksNS` delta per `SDL_RenderPresent` + sim
+ticks per frame, ~900-frame live runs against the real install,
+interleaved trials): with the delay skipped, 0.7-41% of tick-to-tick gaps
+were a frame off (run-to-run spread tracks DWM/occlusion state); the old
+unconditional `SDL_Delay(2)` partially damped queue-stuffing (0-20% off)
+— which is why the skip read as a NEW stutter — but neither is correct.
+`run_match` now sleeps to the next display-refresh boundary after each
+present (`SDL_DelayNS`, target advanced by the display mode's
+`refresh_rate_numerator/denominator` period, re-phased whenever present
+itself blocks past the target, 60 Hz fallback when the mode is unknown),
+and the tick accumulator runs on `SDL_GetTicksNS` (the old millisecond
+`SDL_GetTicks` quantization was a second, smaller beat source). Post-fix
+measurement: every tick gap exactly 3 frames (299/299), tick cadence
+50.00 ms mean / 0.49 ms stdev, frame delta 16.67 ms mean / 0.45 ms stdev.
+The 2026-07-10 latency win is preserved: one `SDL_PollEvent` +
+`collect_inputs()` sample per displayed frame, no fixed extra delay on
+the input path — the pacer's sleep is a no-op whenever present genuinely
+blocks, and otherwise supplies exactly the block vsync failed to provide.
+Presentation-only; no `libs/sim` change; golden untouched.
+
 ## Input acquisition — the GAMEPLAY key reader, CONFIRMED (2026-07-11)
 
 Prompted by the "bomb placement sometimes just vanishes" report (the sim's
