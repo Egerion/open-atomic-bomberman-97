@@ -10,6 +10,6 @@
 # label                 tick  sha256
 walking                 10    84c6b50c165c6df434513bc3a26e399a9e8ff7bb6097fd450ae4918a92739463
 bomb_pulse               40    10a3deef75a7a7cd36bf7dd2bdb5ca6bc4977e73874df647797803a0ccd8c213
-explosion_mid_flame     65    ce6d0bf5eeb183ec5da92ce3e9060b9915f9c0b69bc214e228aaedba11d4a95a
-brick_crumble           68    16b331df10294ff3e91f602725c5403f639bd7f6dc97a8b3a1944f3926fcc07f
+explosion_mid_flame     65    d6df497d055c80b85fee6fee619dab848d6b011b82a8e3df39946687b77e189f
+brick_crumble           68    8d4aba3274ee22fccc73b39a3e34d3221815af9aa607e922f31d4d8fa9117d1a
 powerup_revealed        76    aaab7d642fc0ece2f7418acfbadd6fc0bc5f2ff4aac71827a509c14508aeb17a
