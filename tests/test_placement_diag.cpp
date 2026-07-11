@@ -252,3 +252,296 @@ TEST_CASE("E: healthy player on an open tile is never spuriously refused") {
     CHECK(spurious == 0);
     CHECK(successes == 12);
 }
+
+// ============================================================================
+// REGRESSION HUNT for the user report "bomb placement sometimes just vanishes"
+// (intermittent; suspected NEW since the recent sim merges). Everything above
+// pins the individual gates; the cases below HAMMER the placement path across
+// seeds, positions, and press timings to catch a non-obvious intermittent
+// vanish deterministically. If the sim never fails here, the regression is
+// presentation-side (draw order), not a lost drop in the sim.
+// ============================================================================
+
+namespace {
+
+// Test-side xorshift (NOT the sim RNG — never touch State::rng from a test).
+struct Rng32 {
+    std::uint32_t v;
+    explicit Rng32(std::uint32_t seed) : v(seed ? seed : 0x9e3779b9u) {}
+    std::uint32_t next() {
+        v ^= v << 13;
+        v ^= v >> 17;
+        v ^= v << 5;
+        return v;
+    }
+    int below(int n) { return static_cast<int>(next() % static_cast<std::uint32_t>(n)); }
+};
+
+// An open (non-solid) tile in open_config's (odd,odd)-pillar arena.
+bool arena_open_tile(int tx, int ty) {
+    return tx >= 0 && tx < kGridWidth && ty >= 0 && ty < kGridHeight && !(tx % 2 == 1 && ty % 2 == 1);
+}
+
+}  // namespace
+
+// --- G: exhaustive placement fuzzer, pure gate ---------------------------
+// The decisive vanish hunt. Every tick: wipe the player back to a clean,
+// healthy, stationary actor (so ONLY the core placement gate is under test),
+// teleport it to a random open tile, and drive a random action1 level. Predict
+// placement from the SAME gate the sim applies (rising edge + open + no-bomb +
+// under-limit) and assert the sim agrees BYTE-for-byte, every tick, across many
+// seeds. A single intermittent "legal press produced no bomb" would trip here.
+TEST_CASE("G: placement never vanishes under a randomized press/position fuzz") {
+    long long checked = 0, vanished = 0, phantom = 0;
+    for (std::uint32_t seed = 1; seed <= 40; ++seed) {
+        Simulation s(open_config());
+        State& st = s.state();
+        st.players[1].present = false;
+        st.players[1].alive = false;
+        Player& p = st.players[0];
+        Rng32 rng(seed * 2654435761u + 1u);
+        bool prev_press = false;
+
+        for (int t = 0; t < 400; ++t) {
+            // Scrub every modifier so this isolates the raw drop gate: healthy,
+            // upright, no grab/spooge/trigger double-tap, generous slot budget.
+            p.present = true;
+            p.alive = true;
+            p.stun = 0;
+            p.bounce = 0;
+            p.warp = 0;
+            p.carrying = false;
+            p.grab = p.spooge = p.trigger = p.kick = p.punch = false;
+            p.goldflame = false;
+            p.jelly = false;
+            for (auto& d : p.disease) d = false;
+            p.disease_timer = 0;
+            p.max_bombs = 99;
+            p.flame = 1;
+
+            int tx, ty;
+            do {
+                tx = rng.below(kGridWidth);
+                ty = rng.below(kGridHeight);
+            } while (!arena_open_tile(tx, ty));
+            put(p, tx, ty);
+
+            const bool press = rng.below(3) != 0;  // ~2/3 held
+            const bool rising = press && !prev_press;
+            const bool should_place = rising && !tile_blocked(st, tx, ty) &&
+                                      !tile_has_bomb(st, tx, ty) && p.bombs_placed < p.max_bombs;
+
+            TickInputs in;
+            in.players[0].action1 = press;
+            s.tick(in);
+            prev_press = press;
+
+            const bool got = placed_this_tick(s, 0);
+            ++checked;
+            if (should_place && !got) {
+                ++vanished;
+                if (vanished <= 5)
+                    std::printf("[G] VANISH seed=%u t=%d tile=(%d,%d) placed=%d limit=%d\n", seed, t,
+                                tx, ty, p.bombs_placed, p.max_bombs);
+            } else if (!should_place && got) {
+                ++phantom;
+                if (phantom <= 5)
+                    std::printf("[G] PHANTOM seed=%u t=%d tile=(%d,%d)\n", seed, t, tx, ty);
+            }
+        }
+    }
+    std::printf("[G] checked=%lld vanished=%lld phantom=%lld\n", checked, vanished, phantom);
+    CHECK(vanished == 0);
+    CHECK(phantom == 0);
+}
+
+// --- H: walking fuzzer — drops adjacent to own bombs, at tile boundaries --
+// The player actually WALKS (random directions) and presses action1 with random
+// timing, never teleporting — so it drifts across tile centres and lays bombs
+// right next to bombs it just placed. We assert the strong invariant only on
+// ticks where the player stayed within one tile (post-move tile == pre-move
+// tile), where the pre-tick gate cleanly predicts the outcome; movement ticks
+// still run, building the adjacency/boundary states the assertion ticks probe.
+TEST_CASE("H: placement never vanishes while walking among its own bombs") {
+    long long checked = 0, vanished = 0;
+    for (std::uint32_t seed = 1; seed <= 30; ++seed) {
+        Simulation s(open_config());
+        State& st = s.state();
+        st.players[1].present = false;
+        st.players[1].alive = false;
+        Player& p = st.players[0];
+        p.max_bombs = 8;
+        p.flame = 1;
+        p.grab = p.spooge = p.trigger = false;
+        Rng32 rng(seed * 40503u + 7u);
+        bool prev_press = false;
+
+        for (int t = 0; t < 500; ++t) {
+            // Keep the actor alive across its own blasts so the run doesn't stall
+            // on death (we are fuzzing placement, not survival).
+            if (!p.alive) {
+                p.alive = true;
+                p.bombs_placed = 0;
+                put(p, 0, 0);
+            }
+            const int tx0 = p.tile_x(), ty0 = p.tile_y();
+            const bool blocked_before = tile_blocked(st, tx0, ty0);
+            const bool bomb_before = tile_has_bomb(st, tx0, ty0);
+            const bool under_limit = p.bombs_placed < p.max_bombs;
+            const bool healthy = p.stun == 0 && p.bounce == 0 && p.warp == 0 && !p.carrying;
+
+            const bool press = rng.below(3) != 0;
+            const int mv = rng.below(6);  // 0..3 = walk a dir, 4/5 = stand still
+            TickInputs in;
+            in.players[0].action1 = press;
+            if (mv == 0) in.players[0].up = true;
+            else if (mv == 1) in.players[0].right = true;
+            else if (mv == 2) in.players[0].down = true;
+            else if (mv == 3) in.players[0].left = true;
+
+            const bool rising = press && !prev_press;
+            s.tick(in);
+            prev_press = press;
+
+            const int tx1 = p.tile_x(), ty1 = p.tile_y();
+            const bool stayed = (tx1 == tx0 && ty1 == ty0);
+            const bool got = placed_this_tick(s, 0);
+
+            // Only assert on ticks where the tile did not change: then the
+            // pre-tick gate is exactly the tile the drop targets.
+            if (stayed && healthy) {
+                const bool should = rising && !blocked_before && !bomb_before && under_limit;
+                ++checked;
+                if (should && !got) {
+                    ++vanished;
+                    if (vanished <= 5)
+                        std::printf("[H] VANISH seed=%u t=%d tile=(%d,%d) placed=%d\n", seed, t, tx0,
+                                    ty0, p.bombs_placed);
+                }
+            }
+        }
+    }
+    std::printf("[H] checked=%lld vanished=%lld\n", checked, vanished);
+    CHECK(vanished == 0);
+}
+
+// --- I: press held THROUGH a stun and into recovery ----------------------
+// Suspect #1's specific window. A player holds action1 across a head-stun and
+// keeps holding as it expires. This pins the current port's edge semantics at
+// stun recovery deterministically (documents whatever the sim does — see the
+// investigation notes for how it compares to the original's per-tick key-byte
+// reset).
+TEST_CASE("I: action1 behaviour across a stun boundary is deterministic") {
+    Simulation s(open_config());
+    State& st = s.state();
+    st.players[1].present = false;
+    st.players[1].alive = false;
+    Player& p = st.players[0];
+    p.max_bombs = 5;
+    p.flame = 1;
+    p.stun = 4;
+
+    long long first_after_stun = -1;
+    int stun_seen = 0;
+    for (int t = 0; t < 12; ++t) {
+        const bool was_stunned = p.stun > 0;
+        put(p, 6, 6);            // hold a clean tile the whole time
+        s.tick(press1(0));       // action1 HELD every tick, never released
+        if (was_stunned) ++stun_seen;
+        if (!was_stunned && placed_this_tick(s, 0) && first_after_stun < 0)
+            first_after_stun = t;
+    }
+    std::printf("[I] stun_seen=%d first_place_after_stun_tick=%lld (held, never released)\n",
+                stun_seen, first_after_stun);
+    // With action1 HELD across the whole window, our edge-gated drop never sees
+    // a rising edge (prev_action1 latches true during stun), so no drop fires —
+    // recovery requires a release+re-press. Pin that as the CURRENT behaviour.
+    CHECK(first_after_stun == -1);
+}
+
+// --- J: release+re-press right after a stun DOES place -------------------
+// The recovery path that MUST work: once stun clears, a fresh press (after a
+// release) always drops. Guards against a stun leaving a latched state that
+// eats the first real post-stun press.
+TEST_CASE("J: a fresh press after stun recovery always places") {
+    for (int stun0 = 1; stun0 <= 6; ++stun0) {
+        Simulation s(open_config());
+        State& st = s.state();
+        st.players[1].present = false;
+        st.players[1].alive = false;
+        Player& p = st.players[0];
+        p.max_bombs = 5;
+        p.flame = 1;
+        p.stun = stun0;
+
+        // Idle (released) until stun clears, then one clean release+press.
+        for (int t = 0; t < stun0 + 1; ++t) {
+            put(p, 6, 6);
+            s.tick(TickInputs{});
+        }
+        CHECK(p.stun == 0);
+        put(p, 6, 6);
+        s.tick(press1(0));
+        const bool placed = placed_this_tick(s, 0);
+        std::printf("[J] stun0=%d post-stun fresh press placed=%d\n", stun0, placed ? 1 : 0);
+        CHECK(placed);
+    }
+}
+
+// --- K: press DURING a chain explosion frees-and-refills correctly -------
+// Own bomb A chains own bomb B (deferred one tick). Across the whole explosion
+// window the player, parked on a safe tile, releases+presses every other tick.
+// Assert: whenever the pre-tick gate says a slot is free and the tile is clear,
+// the press places — the slot-refill timing (suspect #3) never eats a drop.
+TEST_CASE("K: pressing through a chain explosion never eats a legal drop") {
+    Simulation s(open_config());
+    State& st = s.state();
+    st.players[1].present = false;
+    st.players[1].alive = false;
+    Player& p = st.players[0];
+    p.max_bombs = 2;
+    p.flame = 3;  // A at (0,0) reaches (2,0)
+
+    put(p, 0, 0);
+    s.tick(press1(0));  // A at (0,0)
+    REQUIRE(p.bombs_placed == 1);
+    Bomb b;
+    b.active = true;
+    b.id = st.next_bomb_id++;
+    b.owner = 0;
+    b.x = 2 * kTileWF + kTileWF / 2;
+    b.y = 0 * kTileHF + kTileHF / 2;
+    b.fuse_init = 999;
+    b.fuse = 999;
+    b.flame = 1;
+    st.bombs.push_back(b);
+    ++p.bombs_placed;  // B, chained only
+    REQUIRE(p.bombs_placed == 2);
+
+    // Park the owner on a safe far tile and drum action1 (release/press) while A
+    // burns and chains B. The safe tile (6,8) is clear of both blasts.
+    long long checked = 0, vanished = 0;
+    bool prev_press = false;
+    for (int t = 0; t < 60; ++t) {
+        put(p, 6, 8);
+        const int tx = p.tile_x(), ty = p.tile_y();
+        const bool press = (t % 2 == 0);  // toggle: guarantees rising edges
+        const bool rising = press && !prev_press;
+        const bool should = rising && !tile_blocked(st, tx, ty) && !tile_has_bomb(st, tx, ty) &&
+                            p.bombs_placed < p.max_bombs && p.stun == 0;
+        TickInputs in;
+        in.players[0].action1 = press;
+        s.tick(in);
+        prev_press = press;
+        // Immediately step off any bomb we just laid so the next slot check is clean.
+        put(p, 6, 8);
+        const bool got = placed_this_tick(s, 0);
+        ++checked;
+        if (should && !got) {
+            ++vanished;
+            std::printf("[K] VANISH t=%d placed=%d bombs=%d\n", t, got, p.bombs_placed);
+        }
+    }
+    std::printf("[K] checked=%lld vanished=%lld\n", checked, vanished);
+    CHECK(vanished == 0);
+}
