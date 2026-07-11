@@ -47,9 +47,18 @@ public:
     struct Options {
         std::filesystem::path game_dir;  // empty: auto-detect (bomber::assets)
         std::filesystem::path scheme;    // empty: DATA/SCHEMES/BASIC.SCH
-        bool demo = false;               // headless scripted run + screenshot
-        int demo_ticks = 0;
-        std::filesystem::path demo_out;
+        bool demo = false;               // headless scripted run + screenshot(s)
+        int demo_ticks = 0;               // single-shot legacy mode: run this many ticks
+        std::filesystem::path demo_out;   // single-shot legacy mode: BMP output path
+        // Visual golden harness (tests/visual/, --demo-shots): (label, tick)
+        // pairs captured within ONE scripted run, each saved as
+        // "<label>.bmp" under demo_shot_dir. Non-empty overrides the legacy
+        // single-shot fields above — the run advances to the highest
+        // requested tick, saving a frame every time a requested tick is
+        // reached. See tests/visual/README.md for the recapture procedure
+        // and the determinism guarantees this depends on.
+        std::vector<std::pair<std::string, int>> demo_shots;
+        std::filesystem::path demo_shot_dir;
         // Dev fast-path: skip the front-end and boot straight into a match
         // (also via env BOMBER_BOOT_MATCH). The spine still exists; this just
         // starts the app in the Match state for quick iteration.
@@ -98,6 +107,11 @@ private:
     void flush_options();
     void start_match(std::uint32_t seed);
     int run_demo();
+    // Reads back the current backbuffer and writes it as a BMP. Shared by
+    // run_demo()'s legacy single-shot path and its --demo-shots multi-shot
+    // path. Returns false (and leaves stderr diagnostics to the caller) on
+    // an SDL failure.
+    bool save_screenshot(const std::filesystem::path& out) const;
 
     // The front-end screen/state-machine shell (docs/adr/0004): drives
     // Boot -> Logo -> Title -> Menu -> Match -> Results -> Menu around the

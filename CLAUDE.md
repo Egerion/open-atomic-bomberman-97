@@ -102,6 +102,8 @@ Presets: `windows-msvc` (vcpkg), `windows-fetch` (SDL3 via FetchContent),
 a real install: `abtool survey <game_dir>` and `bomber_viewer <game_dir>
 --selftest`. The game auto-detects the install via `BOMBER_GAME_DIR`,
 `gamedir.txt`, or the standard paths (`libs/assets/src/install.cpp`).
+Renderer output is pinned the same way `test_golden.cpp` pins the sim —
+`tests/visual/` (`ctest -R visual_golden`, SKIPs without an install).
 
 A `lefthook` pre-push hook (`lefthook.yml`, `scripts/test.sh`,
 `scripts/lint.sh`) runs the `headless` build+ctest and a repo-wide

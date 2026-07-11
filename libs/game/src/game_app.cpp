@@ -169,6 +169,20 @@ bool GameApp::init() {
     attract_lcg_ = random_boot_seed();
     goldman_lcg_ = random_boot_seed();
     next_seed_ = random_boot_seed();
+    // --demo / --demo-shots (tests/visual/, the screenshot regression
+    // harness): pin every presentation-side LCG to a fixed literal so two
+    // runs of the SAME scripted match are byte-identical. run()'s demo path
+    // (start_match(0xB0BB1E5)) doesn't currently read any of these four —
+    // it never visits the menu/attract/Goldman-wheel/campaign-roster code
+    // that touches them — but overwriting the entropy-seeded values here
+    // removes that as an assumption the harness has to keep re-verifying if
+    // the demo script grows to cover more of the front end later. Renderer's
+    // own cosmetic LCGs (panic_lcg_/flash_lcg_/gold_lcg_) are already fixed
+    // literals by default (renderer.hpp) and are never reseeded, so they
+    // need no override here.
+    if (opts_.demo) {
+        setup_lcg_ = attract_lcg_ = goldman_lcg_ = next_seed_ = 0xD3701234u;
+    }
 
     fs::path game = !opts_.game_dir.empty() ? opts_.game_dir : assets::default_game_dir();
     if (game.empty() || !fs::is_directory(game / "DATA")) {
@@ -746,23 +760,114 @@ void GameApp::start_match(std::uint32_t seed) {
     sounds_.reset();
 }
 
+bool GameApp::save_screenshot(const fs::path& out) const {
+    SDL_Surface* shot = SDL_RenderReadPixels(sdl_renderer_.get(), nullptr);
+    if (!shot) return false;
+    bool ok = SDL_SaveBMP(shot, out.string().c_str());
+    SDL_DestroySurface(shot);
+    return ok;
+}
+
+namespace {
+// Names Event::Type for BOMBER_DEMO_TRACE below — kept local to this TU, only
+// used to help a human pick --demo-shots tick numbers (tests/visual/
+// README.md "Deriving new shot ticks"), never for gameplay logic.
+const char* event_type_name(sim::Event::Type t) {
+    switch (t) {
+        case sim::Event::Type::BombPlaced: return "BombPlaced";
+        case sim::Event::Type::BombKicked: return "BombKicked";
+        case sim::Event::Type::Explosion: return "Explosion";
+        case sim::Event::Type::BrickDestroyed: return "BrickDestroyed";
+        case sim::Event::Type::PowerupRevealed: return "PowerupRevealed";
+        case sim::Event::Type::PowerupPicked: return "PowerupPicked";
+        case sim::Event::Type::PowerupBurned: return "PowerupBurned";
+        case sim::Event::Type::PlayerDied: return "PlayerDied";
+        case sim::Event::Type::TimeUp: return "TimeUp";
+        case sim::Event::Type::Hurry: return "Hurry";
+        case sim::Event::Type::WallClosed: return "WallClosed";
+        case sim::Event::Type::BombPunched: return "BombPunched";
+        case sim::Event::Type::BombBounced: return "BombBounced";
+        case sim::Event::Type::BombGrabbed: return "BombGrabbed";
+        case sim::Event::Type::BombThrown: return "BombThrown";
+        case sim::Event::Type::HeadHit: return "HeadHit";
+        case sim::Event::Type::Infected: return "Infected";
+        case sim::Event::Type::BombStopped: return "BombStopped";
+        case sim::Event::Type::JellyBounced: return "JellyBounced";
+        case sim::Event::Type::TrampolineBounce: return "TrampolineBounce";
+        case sim::Event::Type::WarpUsed: return "WarpUsed";
+        case sim::Event::Type::RoverSpawned: return "RoverSpawned";
+        case sim::Event::Type::RoverDied: return "RoverDied";
+        case sim::Event::Type::RoverKilledPlayer: return "RoverKilledPlayer";
+        case sim::Event::Type::TileRegrew: return "TileRegrew";
+        case sim::Event::Type::DropRefused: return "DropRefused";
+    }
+    return "?";
+}
+}  // namespace
+
 int GameApp::run_demo() {
+    // Diagnostic only (tests/visual/README.md "Deriving new shot ticks"):
+    // dump every sim event with its tick, so a human can pick --demo-shots
+    // tick numbers (bomb placed -> pulsing; +fuse -> explosion; brick/
+    // powerup events -> crumble/reveal) from a real run against the
+    // installed assets instead of guessing tuning arithmetic by hand. Never
+    // touches rendering or output; opt-in so normal --demo runs stay quiet.
+    const bool trace = std::getenv("BOMBER_DEMO_TRACE") != nullptr;
+    if (trace)
+        std::fprintf(stderr, "tuning: fuse=%d flame=%d brick_burn=%d\n",
+                    sim_.state().tuning.fuse_frames, sim_.state().tuning.flame_frames,
+                    sim_.state().tuning.brick_burn_frames);
+
+    // Visual golden harness (tests/visual/, --demo-shots): capture a NAMED
+    // frame at each requested tick within one scripted run, instead of the
+    // legacy single BMP at the end. Both modes tick the SAME deterministic
+    // script (demo_inputs, input.cpp) — --demo-shots just adds save points
+    // along the way, so the legacy final-frame screenshot at a given tick
+    // count is byte-identical to what --demo alone would have produced.
+    if (!opts_.demo_shots.empty()) {
+        int max_tick = 0;
+        for (const auto& [label, tick] : opts_.demo_shots) max_tick = std::max(max_tick, tick);
+        int rc = 0;
+        for (int t = 0; t < max_tick; ++t) {
+            sim_.tick(demo_inputs(t));
+            if (trace)
+                for (const auto& e : sim_.state().events)
+                    std::fprintf(stderr, "  t=%d %s player=%d (%d,%d) data=%d\n", t + 1,
+                                event_type_name(e.type), e.player, e.x, e.y, e.data);
+            sounds_.on_tick(sim_.state());
+            renderer_->on_events(sim_.state());   // NOLINT(bugprone-unchecked-optional-access)
+            renderer_->draw_frame(sim_.state());  // NOLINT(bugprone-unchecked-optional-access) —
+                                                  // keeps walk-anim sampling in sync
+            int reached = t + 1;
+            for (const auto& [label, tick] : opts_.demo_shots) {
+                if (tick != reached) continue;
+                fs::path out = opts_.demo_shot_dir / (label + ".bmp");
+                bool ok = save_screenshot(out);
+                if (!ok) rc = 1;
+                std::printf("demo-shots: tick %d (%s) alive %d -> %s%s\n", reached, label.c_str(),
+                            sim::alive_count(sim_.state()), out.string().c_str(),
+                            ok ? "" : " (FAILED)");
+            }
+        }
+        return rc;
+    }
+
     for (int t = 0; t < opts_.demo_ticks; ++t) {
         sim_.tick(demo_inputs(t));
+        if (trace)
+            for (const auto& e : sim_.state().events)
+                std::fprintf(stderr, "  t=%d %s player=%d (%d,%d) data=%d\n", t + 1,
+                            event_type_name(e.type), e.player, e.x, e.y, e.data);
         sounds_.on_tick(sim_.state());
         renderer_->on_events(sim_.state());   // NOLINT(bugprone-unchecked-optional-access)
         renderer_->draw_frame(sim_.state());  // NOLINT(bugprone-unchecked-optional-access) — keeps
                                               // walk-anim sampling in sync
     }
-    SDL_Surface* shot = SDL_RenderReadPixels(sdl_renderer_.get(), nullptr);
-    int rc = 1;
-    if (shot) {
-        rc = SDL_SaveBMP(shot, opts_.demo_out.string().c_str()) ? 0 : 1;
-        SDL_DestroySurface(shot);
+    bool ok = save_screenshot(opts_.demo_out);
+    if (ok)
         std::printf("demo: %d ticks, alive %d, screenshot %s\n", opts_.demo_ticks,
                     sim::alive_count(sim_.state()), opts_.demo_out.string().c_str());
-    }
-    return rc;
+    return ok ? 0 : 1;
 }
 
 AppInput GameApp::present_screen(const ScreenDef& def) {
@@ -3375,6 +3480,10 @@ int GameApp::run() {
     if (const char* env = std::getenv("BOMBER_BOOT_MATCH"); env && *env) opts_.boot_match = true;
     if (!init()) return opts_.game_dir.empty() ? 2 : 1;
     if (opts_.demo) {
+        if (!opts_.demo_shot_dir.empty()) {
+            std::error_code ec;
+            fs::create_directories(opts_.demo_shot_dir, ec);  // ignore: SDL_SaveBMP reports failure
+        }
         start_match(0xB0BB1E5);
         int rc = run_demo();
         flush_options();
