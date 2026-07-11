@@ -508,13 +508,27 @@ void Renderer::draw_world(const sim::State& s) {
             float sy = tile_screen_y(y) + sim::kTileH - 1.0f;
             // sub_426D06's real-flame branch (kind != 9, off_45BEA0 index
             // 0-8) is the ONE draw site that calls the offset getter
-            // sub_41DB41 and folds the per-STAT dx/dy into the blit position
-            // (`v12 + sub_426524(j)` etc.) — every other sequence in the
-            // game, INCLUDING this same function's brick-burn kind-9 branch,
-            // ignores dx/dy per the general rule (docs/formats/ani.md
-            // "Rendering a step"). Apply it here, and only here. See
-            // docs/re/facts.md "Flame draw offset".
-            draw_sprite(sp, sx + static_cast<float>(sp.dx), sy + static_cast<float>(sp.dy));
+            // sub_41DB41 and folds the per-STAT dx/dy into the blit position —
+            // every other sequence in the game, INCLUDING this same function's
+            // brick-burn kind-9 branch, ignores dx/dy per the general rule
+            // (docs/formats/ani.md "Rendering a step"). Apply it here, and only
+            // here. See docs/re/facts.md "Flame draw offset".
+            //
+            // Coordinate math resolved by disassembly (BM95.EXE 0x426ee7-
+            // 0x426f46; the whole Y block was lost as Hex-Rays' "v6 possibly
+            // undefined"). Before the blit's own hotspot subtraction the branch
+            // computes:
+            //   X = sub_426524(j) + dx            (= X_base + dx)
+            //   Y = sub_42655F(i) - tileH/2 + dy  (= Y_base - tileH/2 + dy)
+            // i.e. dx/dy are ADDED (the Y sign was never negative — the earlier
+            // "symmetry inference" caveat had the sign right but MISSED this
+            // `- tileH/2` anchor shift). `sub_42655F` returns tile-BOTTOM
+            // (Y_base == our sy); `- tileH/2` (dword_4648A0/2, the same Y stride
+            // our kTileH is) re-anchors flames to tile CENTRE before the per-
+            // STAT dy nudge, while bricks (kind 9) keep the raw tile-bottom
+            // anchor. Omitting it drew flames ~kTileH/2 px too low.
+            draw_sprite(sp, sx + static_cast<float>(sp.dx),
+                        sy + static_cast<float>(sp.dy - sim::kTileH / 2));
         }
     }
 
