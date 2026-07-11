@@ -151,6 +151,16 @@ std::uint64_t state_hash(const State& s) {
         // tests/test_golden.cpp recaptured in the same commit). 0 whenever no
         // grab has happened this tick's-worth of history.
         mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.pickup_pause)));
+        // Action-key edge latches (Player::prev_action1/2): gameplay state —
+        // the LABEL_246 drop/punch edges (`+56 && !+54` / `+57 && !+55`) read
+        // them, so two sims agreeing on everything else but these disagree on
+        // the NEXT tick's placement. Was a determinism-contract rule-4 gap
+        // (flagged by the LABEL_246 all-states restructure, which made the
+        // latches effective-key based and thus more load-bearing). Packed in
+        // one word — ONE-TIME hash-layout growth (rule 5; test_golden.cpp
+        // recaptured in the same commit with the RNG-stream proof).
+        mix(static_cast<std::uint64_t>(p.prev_action1 ? 1u : 0u) |
+            (static_cast<std::uint64_t>(p.prev_action2 ? 1u : 0u) << 1));
         std::uint32_t dbits = 0;
         for (int k = 0; k < kDiseaseKinds; ++k)
             if (p.disease[k]) dbits |= (1u << k);

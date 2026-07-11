@@ -403,6 +403,18 @@ MatchConfig pillars_config() {
 // swap landing after a completed walk — a pure, RNG-neutral position delta
 // that moves only the 600/800 hashes. Pinned by tests/test_tick_order.cpp's
 // six same-tick coincidence cases.
+// UPDATE 2026-07-11 (prev_action1/2 hashing, determinism-contract rule-4
+// gap closed): Player::prev_action1/2 are gameplay state (the LABEL_246
+// drop/punch edges read them) but were never mixed into state_hash() — a
+// pre-existing gap the LABEL_246 all-states restructure made load-bearing.
+// hash.cpp now mixes one packed word per present player (after
+// pickup_pause). ONE-TIME hash-layout growth (rule 5): golden A (0 players)
+// is byte-identical; every player-bearing scenario's hashes recaptured (16
+// constants: B setup+6, C 1, D 4, E 4+rng-adjacent). RNG-stream safety net
+// passed UNCHANGED before the recapture: D's kExpectedRng at all four
+// checkpoints, E's bounce count and final rng, A's final rng — proving the
+// hashing change alters no behaviour, only the digest layout.
+//
 TEST_CASE("golden A: empty state, 10000 ticks") {
     Simulation a;
     a.state().rng = 42u;
@@ -433,15 +445,15 @@ TEST_CASE("golden B: 4-player brick match with all abilities") {
     cfg.born_with[static_cast<int>(PowerupType::Spooger)] = true;
     cfg.born_with[static_cast<int>(PowerupType::Jelly)] = true;
     Simulation s(cfg);
-    CHECK(s.hash() == 0xfd4ff2be02f28574ull);  // setup itself is pinned
+    CHECK(s.hash() == 0x1ca11f61db23bad4ull);  // setup itself is pinned
 
     static constexpr std::uint64_t kExpected[6] = {
-        0xfc1c21452de71766ull,  // tick 500
-        0x3378fe8882daaa3eull,  // tick 1000
-        0x986f9873e8874376ull,  // tick 1500
-        0x95eadedc2565aabbull,  // tick 2000
-        0xeb9b24c5c6b3d836ull,  // tick 2500
-        0x64026a1f646ff34bull,  // tick 3000
+        0x73947992b2628e0aull,  // tick 500
+        0xa92343a4954b70a2ull,  // tick 1000
+        0x31625e53d2ca989aull,  // tick 1500
+        0x41be7765360f0257ull,  // tick 2000
+        0x0e83107e26e3505aull,  // tick 2500
+        0x098ce3f6fbe23ae7ull,  // tick 3000
     };
     for (std::uint64_t t = 0; t < 3000; ++t) {
         s.tick(pattern(t));
@@ -459,7 +471,7 @@ TEST_CASE("golden C: trigger bombs and a fast hurry phase") {
     cfg.born_with[static_cast<int>(PowerupType::Trigger)] = true;
     Simulation s(cfg);
     for (std::uint64_t t = 0; t < 1500; ++t) s.tick(pattern(t * 7 + 3));
-    CHECK(s.hash() == 0xc8a6dc5c472d67b0ull);
+    CHECK(s.hash() == 0x7a9a37f54d0dc3f8ull);
 }
 
 TEST_CASE("golden D: the disease gauntlet") {
@@ -515,10 +527,10 @@ TEST_CASE("golden D: the disease gauntlet") {
     // kExpectedRng at all four checkpoints and every other scenario's
     // assertions passed UNCHANGED on the combined build before this patch.
     static constexpr std::uint64_t kExpectedHash[4] = {
-        0xdfe12bf44ada5282ull,  // tick 200 (unchanged: before the first death)
-        0xc546352e50b39c58ull,  // tick 400 (unchanged: before the mid-walk Swap)
-        0xe38e3eca2c8dc925ull,  // tick 600
-        0x6e91ff82b7085e02ull,  // tick 800
+        0x4e8f8519c4db004full,  // tick 200 (unchanged: before the first death)
+        0x73dee1d4b60592a9ull,  // tick 400 (unchanged: before the mid-walk Swap)
+        0xb19ad59d432af1c0ull,  // tick 600
+        0x34d636aff2093242ull,  // tick 800
     };
     static constexpr std::uint32_t kExpectedRng[4] = {0xca47489cu, 0x49cffff6u, 0xdd6d0230u,
                                                       0xa9af166bu};
@@ -579,10 +591,10 @@ TEST_CASE("golden E: jelly ping-pong and a veering punched flight") {
     };
 
     static constexpr std::uint64_t kExpected[4] = {
-        0x721380a75cc6233dull,  // tick 75
-        0x021ce91faa4bd6a6ull,  // tick 150
-        0xe92dfed4f52f5a00ull,  // tick 225
-        0x97b1bd43bb00e3e7ull,  // tick 300
+        0x95f978ee7999403dull,  // tick 75
+        0x9a72cdfc773b72a6ull,  // tick 150
+        0x4dc568dbc7487300ull,  // tick 225
+        0xd6f529147ed20c67ull,  // tick 300
     };
     int bounces = 0;
     for (std::uint64_t t = 0; t < 300; ++t) {
