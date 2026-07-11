@@ -1,8 +1,12 @@
 // Tick orchestration. The step ORDER below is part of the determinism
-// contract (and mirrors the original main loop, sub_42A191): players act,
-// queued chain-detonations resolve, bombs move, fuses burn, the field ages,
-// players collide with the field, diseases spread, then the clock and the
-// closing walls.
+// contract. It is the original main loop (sub_42A191) ROTATED to start at the
+// player pass — the original's frame starts at the clock/bomb pass instead,
+// but the two cuts produce the same infinite event stream (docs/re/facts.md
+// "Per-tick call order — END-TO-END"): players act (dying or picking up per
+// pixel step, exactly like the original's mover tail), rovers move, the clock
+// ticks, queued chain-detonations resolve, bombs move, fuses burn, the field
+// ages, the walls close, players collide with the field (the original's
+// next-turn head checks), diseases spread.
 
 #include "bomber/sim/simulation.hpp"
 
@@ -31,11 +35,105 @@ State build_state(const MatchConfig& config);  // setup.cpp
 
 namespace {
 
+// Flame-death + pickup resolution at one player's CURRENT tile. The original
+// runs this exact pair in TWO places (docs/re/facts.md "Per-tick call order —
+// END-TO-END"): after every committed pixel step inside the mover
+// (sub_41EC84, pseudo.c 22699-22717) and at the head of each player's next
+// turn (sub_41F29B 22915-22926) — flame FIRST, pickup second, both times.
+// Returns true if the player died.
+bool resolve_player_field(State& s, int i, PowerupSystem& powerups, DiseaseSystem& diseases) {
+    Player& p = s.players[i];
+    if (!p.present || !p.alive) return false;
+    const int tx = p.tile_x(), ty = p.tile_y();
+    if (s.flame[ty][tx] > 0) {
+        // The kill goes through the shared funnel sub_41DE63, which early-outs
+        // while the victim is mid-trampoline-hop or mid-warp (movement states
+        // 5/6/7) — the same immunity already ported for the wall crush
+        // (EnclosureSystem::drop_wall) and the rover landing kill. An immune
+        // player falls through to the pickup below, exactly like the
+        // original's `!sub_41DE63(...)` continuation (pseudo.c 22915-22917).
+        if (p.bounce == 0 && p.warp == 0) {
+            p.alive = false;
+            if (p.carrying) {
+                // The carried bomb dies with the carrier; free the owner's slot.
+                p.carrying = false;
+                if (s.players[p.carried_owner].bombs_placed > 0)
+                    --s.players[p.carried_owner].bombs_placed;
+            }
+            // Death powerup scatter (sub_41DBFE via the shared death funnel
+            // sub_41DE63): the player's surplus over its start-with loadout
+            // rains back onto random floor tiles. Draws State::rng in kind
+            // order (docs/re/facts.md "Death powerup scatter") — GOLDEN.
+            powerups.death_scatter(p);
+            // Killer attribution (docs/re/results-and-options.md §1): the
+            // flame that killed this player was stamped with its owner in
+            // FlameSystem::spread_to (s.flame_owner), still valid here since
+            // this runs the same tick the flame is present. Self-kill (owner
+            // == victim) is left explicit in the event, not collapsed to -1 —
+            // event.hpp's convention distinguishes "no killer" from "self".
+            s.events.push_back({Event::Type::PlayerDied, static_cast<std::int8_t>(i),
+                                static_cast<std::int8_t>(tx), static_cast<std::int8_t>(ty),
+                                static_cast<std::int8_t>(s.flame_owner[ty][tx])});
+            return true;
+        }
+    }
+    PowerupType t = s.floor[ty][tx];
+    if (t != PowerupType::None) {
+        diseases.maybe_cure_on_pickup(p);
+        if (t == PowerupType::Random) {
+            // Random (sub_41E21E case 0xC): reroll uniformly over the 12
+            // real kinds — Random itself is excluded by the modulus — and
+            // retry (max 200) while the roll is scheme-forbidden; then
+            // dispatch as the rolled kind (a skull is a legal outcome).
+            // One RNG draw per attempt; the count is part of the contract.
+            PowerupType rolled = PowerupType::None;
+            for (int tries = 0; tries < 200; ++tries) {
+                auto k = static_cast<PowerupType>(random_below(s, 12));
+                if (!s.forbidden[static_cast<int>(k)]) {
+                    rolled = k;
+                    break;
+                }
+            }
+            t = rolled;  // None only if every kind is forbidden
+        }
+        if (t == PowerupType::None) {
+            // fully-forbidden Random: the token is consumed with no effect
+        } else if (t == PowerupType::Disease) {
+            diseases.assign_random(i, 1);
+        } else if (t == PowerupType::SuperDisease) {
+            diseases.assign_random(i, 3);
+        } else {
+            powerups.apply(p, t);
+            s.events.push_back({Event::Type::PowerupPicked, static_cast<std::int8_t>(i),
+                                static_cast<std::int8_t>(tx), static_cast<std::int8_t>(ty),
+                                static_cast<std::int8_t>(t)});
+        }
+        s.floor[ty][tx] = PowerupType::None;
+    }
+    return false;
+}
+
+// MovementSystem::PixelFn adapter: the per-pixel field check during a walk.
+// A Disease pickup can be Swap, which relocates the player mid-move — the
+// remaining budget then continues from the new position, exactly like the
+// original's in-loop sub_41E21E.
+struct FieldCtx {
+    State* s;
+    int index;
+    PowerupSystem* powerups;
+    DiseaseSystem* diseases;
+};
+bool on_move_pixel(void* ctx, Player& /*p*/) {
+    auto* c = static_cast<FieldCtx*>(ctx);
+    return resolve_player_field(*c->s, c->index, *c->powerups, *c->diseases);
+}
+
 // Step 1: one player's turn — stun, movement (with the reversed-controls
-// disease), bomb dropping (edge-gated, spooger, auto-drop diseases), and the
-// action2 priority chain: throw > grab > trigger-detonate > punch.
+// disease and the per-pixel flame-death/pickup checks), bomb dropping
+// (edge-gated, spooger, auto-drop diseases), and the action2 priority chain:
+// throw > grab > trigger-detonate > punch.
 void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs, StageActorSystem& stage,
-                 MovementSystem& movement) {
+                 MovementSystem& movement, PowerupSystem& powerups, DiseaseSystem& diseases) {
     Player& p = s.players[i];
 
     // Unit vectors in godir order (0=Up,1=Right,2=Down,3=Left). Hoisted to the
@@ -158,8 +256,23 @@ void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs, Stag
     // slows a walking player and pushes a standing one along its direction
     // (StageActorSystem::move_on_actor, port of sub_41F29B's actor branches).
     // The belt-only push (no input) is handled inside move_on_actor.
+    //
+    // The per-pixel field callback is the port of sub_41EC84's post-commit
+    // tail (pseudo.c 22699-22717): flame death then pickup at every pixel
+    // step. A mid-move kill abandons the rest of the budget AND the rest of
+    // this turn (the original returns straight into the death branch,
+    // skipping the kick probe, the step-on latches and LABEL_246's bomb
+    // actions). A mid-move pickup is usable the SAME tick — it lands before
+    // the bomb-action block below. docs/re/facts.md "Per-tick call order —
+    // END-TO-END" finding 1.
     {
-        stage.move_on_actor(p, eff_godir, moving);
+        FieldCtx fctx{&s, i, &powerups, &diseases};
+        stage.move_on_actor(p, eff_godir, moving, &on_move_pixel, &fctx);
+        if (!p.alive) {
+            p.prev_action1 = in.action1;
+            p.prev_action2 = in.action2;
+            return;
+        }
         // Kick probe (sub_41EC84 `!v35` branch): the kick fires whenever the
         // player sits EXACTLY on the tile centre along the travel axis with a
         // bomb directly ahead — evaluated inside the pixel loop, so a player
@@ -266,71 +379,12 @@ void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs, Stag
     p.prev_action2 = in.action2;
 }
 
-// Step 5: flames kill players; floor powerups get picked up (with the
-// pre-pickup cure roll and the skull dispatch).
+// The head checks: flames kill players; floor powerups get picked up (with
+// the pre-pickup cure roll and the skull dispatch). This is the original's
+// NEXT-turn head pair (sub_41F29B 22915-22926) at our rotation's cut point —
+// it runs for every player (moved or not), in slot order, after the walls.
 void field_vs_players(State& s, PowerupSystem& powerups, DiseaseSystem& diseases) {
-    for (int i = 0; i < kMaxPlayers; ++i) {
-        Player& p = s.players[i];
-        if (!p.present || !p.alive) continue;
-        int tx = p.tile_x(), ty = p.tile_y();
-        if (s.flame[ty][tx] > 0) {
-            p.alive = false;
-            if (p.carrying) {
-                // The carried bomb dies with the carrier; free the owner's slot.
-                p.carrying = false;
-                if (s.players[p.carried_owner].bombs_placed > 0)
-                    --s.players[p.carried_owner].bombs_placed;
-            }
-            // Death powerup scatter (sub_41DBFE via the shared death funnel
-            // sub_41DE63): the player's surplus over its start-with loadout
-            // rains back onto random floor tiles. Draws State::rng in kind
-            // order (docs/re/facts.md "Death powerup scatter") — GOLDEN.
-            powerups.death_scatter(p);
-            // Killer attribution (docs/re/results-and-options.md §1): the
-            // flame that killed this player was stamped with its owner in
-            // FlameSystem::spread_to (s.flame_owner), still valid here since
-            // this runs the same tick the flame is present. Self-kill (owner
-            // == victim) is left explicit in the event, not collapsed to -1 —
-            // event.hpp's convention distinguishes "no killer" from "self".
-            s.events.push_back({Event::Type::PlayerDied, static_cast<std::int8_t>(i),
-                                static_cast<std::int8_t>(tx), static_cast<std::int8_t>(ty),
-                                static_cast<std::int8_t>(s.flame_owner[ty][tx])});
-            continue;
-        }
-        PowerupType t = s.floor[ty][tx];
-        if (t != PowerupType::None) {
-            diseases.maybe_cure_on_pickup(p);
-            if (t == PowerupType::Random) {
-                // Random (sub_41E21E case 0xC): reroll uniformly over the 12
-                // real kinds — Random itself is excluded by the modulus — and
-                // retry (max 200) while the roll is scheme-forbidden; then
-                // dispatch as the rolled kind (a skull is a legal outcome).
-                // One RNG draw per attempt; the count is part of the contract.
-                PowerupType rolled = PowerupType::None;
-                for (int tries = 0; tries < 200; ++tries) {
-                    auto k = static_cast<PowerupType>(random_below(s, 12));
-                    if (!s.forbidden[static_cast<int>(k)]) {
-                        rolled = k;
-                        break;
-                    }
-                }
-                t = rolled;  // None only if every kind is forbidden
-            }
-            if (t == PowerupType::None) {
-                // fully-forbidden Random: the token is consumed with no effect
-            } else if (t == PowerupType::Disease) {
-                diseases.assign_random(i, 1);
-            } else if (t == PowerupType::SuperDisease) {
-                diseases.assign_random(i, 3);
-            } else {
-                powerups.apply(p, t);
-                s.events.push_back({Event::Type::PowerupPicked, static_cast<std::int8_t>(i),
-                                    static_cast<std::int8_t>(tx), static_cast<std::int8_t>(ty),
-                                    static_cast<std::int8_t>(t)});
-            }
-            s.floor[ty][tx] = PowerupType::None;
-        }
-    }
+    for (int i = 0; i < kMaxPlayers; ++i) resolve_player_field(s, i, powerups, diseases);
 }
 
 void run_tick(State& s, const TickInputs& inputs) {
@@ -366,7 +420,7 @@ void run_tick(State& s, const TickInputs& inputs) {
         // as the original interleaves the brain and the mover per player. Humans
         // and replays pass their externally-supplied input through unchanged.
         // No new tick STEP: this is a refinement of step 1 only, so no golden
-        // step-order dependency shifts (steps 2..7 below are untouched).
+        // step-order dependency shifts (the steps below are untouched).
         //
         // The original gates the WHOLE dispatch (including draws A/B) on
         // `v113 && !dword_4621E0` (sub_41F29B ~23028), where v113 is cleared
@@ -381,67 +435,84 @@ void run_tick(State& s, const TickInputs& inputs) {
         // stream, never gameplay -- but that stream is the whole contract.
         PlayerInput in = inputs.players[i];
         if (p.ai && p.stun == 0) ai.decide(i, in);
-        player_turn(s, i, in, bombs, stage, movement);
+        player_turn(s, i, in, bombs, stage, movement, powerups, diseases);
     }
 
-    // 1b. Drain the chain-detonation queue (docs/re/facts.md "Chain-reaction
+    // 2. Campaign rover/ghost hazards: drive the mover 1 tick (spawn/wander/
+    // flame-death/landing-tile kill) and the "all hazards dead" grace timer
+    // (docs/re/campaign.md "Round pacing", sub_4016DA). The original calls
+    // sub_401F76 from the campaign callback IMMEDIATELY AFTER the player pass
+    // (sub_42A191 29527 -> 29528-29529), BEFORE the next frame's bomb pass —
+    // so a rover never reacts to flames lit later in the same gap
+    // (docs/re/facts.md "Per-tick call order — END-TO-END" finding 3). No-op
+    // (zero RNG draws, zero cost) when s.rovers is empty — see
+    // RoverSystem::tick.
+    rovers.tick();
+
+    // 3. Match clock. The original updates it at the top of the frame
+    // (sub_4105D2, sub_42A191 29518) — after the rovers, before the bomb
+    // pass, in rotation terms — and the enclosure below reads the value
+    // updated this same gap.
+    if (s.ticks_left > 0 && --s.ticks_left == 0)
+        s.events.push_back({Event::Type::TimeUp, -1, -1, -1, 0});
+
+    // 4. Drain the chain-detonation queue (docs/re/facts.md "Chain-reaction
     // timing", sub_423209/dword_462200): a flame arm that reached another
     // bomb, a trigger-button press, a flying bomb landing on flame, or a
     // sliding bomb entering flame all QUEUE their target instead of
     // exploding it synchronously. The original drains this queue once, at
-    // the very top of its per-tick bomb pass (`sub_42331C`'s
-    // `dword_462210 != dword_464994` guard), which always runs AFTER that
-    // SAME tick's player pass — so a trigger-button press (queued during
-    // step 1, above) is caught by THIS drain, resolving the same tick,
-    // while a flame-arm/slide/landing hit (queued during bombs.advance_bombs
-    // / tick_fuses, below — i.e. during the original's per-bomb-slot loop,
-    // which runs AFTER its own drain already fired this tick) is only
-    // caught by the NEXT tick's drain — one chain LINK per tick, not the
-    // whole chain at once. Placed here, right after step 1, as the exact
-    // equivalent slot in our step-decomposed tick.
+    // the very top of its per-frame bomb pass (`sub_42331C`'s
+    // `dword_462210 != dword_464994` guard) — the first bomb phase after
+    // the player pass in the rotated stream — so a trigger-button press
+    // (queued during step 1, above) is caught by THIS drain with no player
+    // move in between, while a flame-arm/slide/landing hit (queued during
+    // bombs.advance_bombs / tick_fuses, below — i.e. during the original's
+    // per-bomb-slot loop, which runs AFTER its own drain already fired) is
+    // only caught by the NEXT tick's drain — one chain LINK per tick, not
+    // the whole chain at once.
     flames.drain_chain_queue();
 
-    // 2. Kicked bombs slide; airborne bombs fly.
+    // 5. Kicked bombs slide; airborne bombs fly.
     bombs.advance_bombs();
 
-    // 3. Fuses (paused while a bomb is airborne).
+    // 6. Fuses (paused while a bomb is airborne).
     bombs.tick_fuses();
 
-    // 4. Flames fade, bricks finish crumbling (revealing powerups).
+    // NOTE (documented deviation, facts.md "Per-tick call order" accepted
+    // deviations): the original interleaves steps 5/6 PER BOMB SLOT — slot
+    // k's slide runs after slot j<k's explosion within the same frame. Our
+    // phase split makes same-tick bomb-vs-bomb coincidences uniformly
+    // "movement first"; matching the original exactly would require the
+    // 100-slot first-fit allocator.
+
+    // 7. Flames fade, bricks finish crumbling (revealing powerups). The
+    // original ages the grid right after its bomb pass (sub_426D06,
+    // sub_42A191 29525) — a flame lit this tick ages once this tick.
     flames.age_flames_and_bricks();
 
-    // 5. Flames kill players; floor powerups get picked up.
-    field_vs_players(s, powerups, diseases);
-
-    // 5b. Campaign rover/ghost hazards: drive the mover 1 tick (spawn/wander/
-    // flame-death/landing-tile kill) and the "all hazards dead" grace timer
-    // (docs/re/campaign.md "Round pacing", sub_4016DA). The original calls
-    // sub_401F76 from a SEPARATE per-frame campaign callback (sub_4016DA, via
-    // sub_42A191), not from inside the player loop sub_41F29B — there is no
-    // RE'd ordering constraint pinning it relative to our step numbering, so
-    // it is placed here, immediately after players react to this tick's
-    // flame grid (step 5): both consumers (players in field_vs_players and
-    // rovers/ghosts here) read the SAME s.flame grid armed this tick before
-    // it fades in the NEXT tick's step 4, so reading it back-to-back keeps
-    // both reactions faithful to "this tick's fire". No-op (zero RNG draws,
-    // zero cost) when s.rovers is empty — see RoverSystem::tick.
-    rovers.tick();
-
-    // 5c. Diseases: spread on contact, age the freshness gate, and expire.
-    diseases.spread_and_age();
-
-    // 6. Match clock, and walls closing in during the hurry phase. Tile
-    // regeneration runs immediately before the enclosure stepper, mirroring
-    // the original: sub_426704 (regen) is called from WITHIN sub_426818 (the
-    // enclosure stepper), right before its own arm/disarm/drop logic
-    // (docs/re/facts.md "Per-level tile regeneration"). A no-op on every
-    // level but Haunted House.
-    if (s.ticks_left > 0 && --s.ticks_left == 0)
-        s.events.push_back({Event::Type::TimeUp, -1, -1, -1, 0});
+    // 8. Walls closing in during the hurry phase, AFTER the flame aging and
+    // BEFORE the head checks (sub_426818 at 29526: after sub_426D06, before
+    // sub_420F07) — a wall crush beats a same-tick flame kill (no killer
+    // credit) and destroys an un-picked-up token under the dropping wall.
+    // Tile regeneration runs immediately before the wall stepper, mirroring
+    // the original: sub_426704 (regen) is called from WITHIN sub_426818,
+    // right before its own arm/disarm/drop logic (docs/re/facts.md
+    // "Per-level tile regeneration"). A no-op on every level but Haunted
+    // House.
     tile_regen.update();
     enclosure.update();
 
-    // 7. Compact dead bombs (stable order — deterministic).
+    // 9. The head checks: flames kill players, floor powerups get picked up —
+    // the original's NEXT player pass's turn-head pair (sub_41F29B
+    // 22915-22926) at this rotation's cut point.
+    field_vs_players(s, powerups, diseases);
+
+    // 10. Diseases: spread on contact, age the freshness gate, and expire.
+    // The original runs these right after the head checks inside each
+    // player's turn (sub_41F29B 22927-22975).
+    diseases.spread_and_age();
+
+    // 11. Compact dead bombs (stable order — deterministic).
     s.bombs.erase(
         std::remove_if(s.bombs.begin(), s.bombs.end(), [](const Bomb& b) { return !b.active; }),
         s.bombs.end());

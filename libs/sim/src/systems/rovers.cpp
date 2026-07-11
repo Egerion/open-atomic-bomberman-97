@@ -192,6 +192,12 @@ bool RoverSystem::step(Rover& r, int rover_index) {
             if (!victim.present || !victim.alive) continue;
             if (victim.tile_x() != ntx || victim.tile_y() != nty) continue;
             if (victim.ai) continue;  // COMPUTER slots pass through unharmed
+            // The kill routes through the shared funnel sub_41DE63, which
+            // early-outs for movement states 5/6/7 — a mid-trampoline-hop or
+            // mid-warp player is immune, the same guard EnclosureSystem::
+            // drop_wall and the flame head check apply (docs/re/facts.md
+            // "Per-tick call order — END-TO-END" finding 4).
+            if (victim.bounce > 0 || victim.warp > 0) continue;
             victim.alive = false;
             if (victim.carrying) {
                 victim.carrying = false;

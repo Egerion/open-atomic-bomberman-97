@@ -1334,17 +1334,22 @@ pseudo.c reads:
    sliding, non-jelly halts, exactly like hitting a wall.
 
 **Same tick or next tick depends on WHEN the push happens relative to the
-drain**, not on which of the four sites pushed it. The original's overall
-per-frame order is: the whole player-input pass (`sub_41F29B` × 10, which is
-where the trigger-button call site #3 lives) runs first, THEN `sub_42331C`
-(bomb updater, containing the drain) runs once. So:
-- **Trigger-button (#3)** is pushed during the PRECEDING player pass and
-  caught by THIS SAME tick's drain — a manual detonation is effectively
-  instant, just routed through the queue instead of a direct call.
+drain**, not on which of the four sites pushed it. [CORRECTED 2026-07-11,
+"Per-tick call order — END-TO-END" below: within one frame the BOMB pass runs
+FIRST (`sub_4245B9` at `sub_42A191` 29522) and the player pass AFTER
+(`sub_420F07` at 29527) — the earlier phrasing here had it backwards. The
+conclusions are unchanged, because the drain that catches a player-pass push
+is the top of the NEXT frame's bomb pass, which is still the very next
+bomb-phase after the press in the flattened event stream:]
+- **Trigger-button (#3)** is pushed during frame N's player pass and caught
+  by frame N+1's drain — the first bomb phase after the press, with no player
+  move in between. A manual detonation is effectively instant, just routed
+  through the queue instead of a direct call.
 - **Arm-hit (#1), landing-on-flame (#2), and slide-into-flame (#4)** are all
   pushed from INSIDE `sub_42331C`'s own per-slot loop — i.e. AFTER that
-  tick's drain already ran — so they wait for the NEXT tick's drain. A chain
-  reaction resolves **one link per tick**, not the whole chain at once.
+  frame's drain already ran — so they wait for the NEXT frame's drain, with
+  one full player pass in between. A chain reaction resolves **one link per
+  tick**, not the whole chain at once.
 
 **Owner attribution transfers on chain** (site #1's `v48[+62] = v75[+62]`,
 executed unconditionally before the queue push): the chained bomb's owner
@@ -1532,6 +1537,261 @@ there.
 loop gate ~23336 in `sub_41F29B`; slot clear `*(_DWORD*)v75 = 0` ~25616 and
 owner transfer 25644 in `sub_42331C`; head-hit flight fall-through
 25445-25448; shipped `VALUELST.RES` ids 670/671 verified from the install.)
+
+## Per-tick call order — END-TO-END (`sub_42A191`, 2026-07-11)
+
+The definitive reconstruction of the original's complete per-frame call
+sequence, read top to bottom from the per-frame tick callback `sub_42A191`
+(pseudo.c 29488-29557; registered via `sub_43A6FC` at 29701) and every
+gameplay callee, and diffed against `Simulation::tick`. Motivated by the
+observation that every recent in-game deviation was an INTERACTION bug, not a
+per-system arithmetic error — this pins the interaction ORDER itself.
+
+### The frame sequence (every callee, in order, with line citations)
+
+1. 29506-29510 — frame delta `dword_464958` = elapsed ms, clamped to
+   `getvalue(31)`. At the locked 20 Hz rate it equals `dword_46494C`
+   (= 1000/getvalue(30) = 50 ms) every frame.
+2. 29516 `sub_40E765` — network receive pump (12922-13008; remote-input
+   dispatch through `funcs_40E9D7`). No local-game state.
+3. 29517 `++dword_464994` — the FRAME STAMP. Everything "once per frame" in
+   the engine gates on it: the chain-queue drain (25331), the Goldman
+   sparkle ager (23611), the tile-regen re-arm window (27966-27971), the
+   hurry-text flash (29546). At locked 20 Hz, per-FRAME == per-TICK; there is
+   no frame-gated gameplay logic that our tick-only sim needs to subdivide.
+4. 29518 `sub_4105D2` — MATCH CLOCK update (14456-14530: elapsed
+   `dword_4601B8 += delta` when running; remaining-seconds recompute;
+   `dword_4601A8 == 1001` sudden-death ids 110-112 block).
+5. 29519 `sub_415CA4` (18132-18139, backdrop restore memcpy), 29520
+   `sub_42641F` (26988-26991 → `sub_415DD9`, clip-rect reset) — draw only.
+6. 29521 `sub_4056CA` — stage-actor SPRITES (7193-7324: dirarrow/warphole/
+   conveyor/trampoline anim + blit). Draw only, EXCEPT a one-shot per-level
+   init on each warphole's first frame (7247-7269: `+146` latch — blanks the
+   warphole tile and one RANDOM in-bounds neighbour, `rand_() % 4` re-rolled
+   until in-grid; setup-time board mutation, not per-tick logic).
+7. 29522 `sub_4245B9` → `sub_42331C(0)` — the BOMB PASS (grounded+flying,
+   i.e. every record whose carrier ptr +148 is 0 — gate at 25352):
+   a. 25331-25346 — chain-queue DRAIN, once per frame (`dword_462210 !=
+      dword_464994`): each queued bomb gets `+68 = +74` (fuse forced
+      elapsed) and its skip-direction byte `+56`; the queue is emptied.
+      Drains ALL entries, but only STAMPS — the explosions happen as each
+      bomb's own slot is reached below.
+   b. 25350-25742 — the 100-slot loop, PER SLOT, in slot order: anim
+      counter (25356); motion switch on `+46` when the record is a bomb
+      (`+16 == 9`, 25358): case 0 resting/conveyor start (25362+), case 1
+      slide (25517-25583: per-pixel — dirarrow re-steer 25525-25537,
+      slide-into-flame queue 25545-25554, kick-stop consume 25557,
+      cell-entry probe `sub_4230A5` 25555), case 2 fly (jelly veer, landing
+      verdict 25443, head-hit 25445-25448, land-on-flame queue 25459-25465),
+      case 3 carried (25480-25512, position sync — only reached in the
+      mode-1 pass); THEN dud transition (25588-25600, getvalue(323)); THEN
+      the fuse TICK (25605-25612, gated: not fizzling, not flying, not
+      carried, not trigger-kind); THEN the fuse CHECK `+68 >= +74` →
+      EXPLOSION (25613-25681: slot clear 25615, sound 200, epicentre ignite
+      + powerup burn 25623-25636, the 4-direction arm walk 25637-25678 with
+      chain-queue/owner-transfer 25641-25651, powerup-stop 25653-25661,
+      solid-stop 25662-25664, brick ignite + reveal 25665-25672, blank
+      ignite 25673-25677); THEN the AI danger-grid stamp (25683-25705,
+      `sub_424DFE` with live remaining-fuse) and the draw (25734).
+      NOTE: motion and fuse/explosion are INTERLEAVED PER SLOT — slot 3's
+      slide happens after slot 1's explosion within the same frame.
+8. 29523 `sub_424F89` — powerup token DRAW (26218-26267; blank-cell gate).
+9. 29524 `sub_41B961` (20793 → 20775-20789, sprite-list update) — draw.
+10. 29525 `sub_426D06` — FLAME/BRICK-BURN AGING + draw (27366-27463): flame
+    cells age and expire; a brick-burn reaching its end flips the cell open.
+    A flame lit by THIS frame's bomb pass ages once the same frame.
+11. 29526 `sub_426818` — ENCLOSURE (27140-27298): match-active gate, arm on
+    `remaining <= getvalue(101) - 5`, TILE REGEN `sub_426704` inside
+    (before the wall stepper), then the 250 ms-cadence wall drops
+    (crush/stomp — see the enclosure audit entry).
+12. 29527 `sub_420F07` — the PLAYER PASS (23628-23724): slots 0..9
+    ascending, `sub_41F29B` per player, each player's FULL turn completing
+    before the next slot (in-place cross-player effects are slot-ordered).
+    Within ONE player's turn (sub_41F29B):
+    a. 22857-22891 — absent-slot skip; respawn/re-entry bookkeeping.
+    b. 22909-22914 — entering-countdown (word +102) decrement.
+    c. 22915-22917 — FLAME DEATH at the CURRENT (pre-move) tile:
+       `sub_42708D` + the shared kill funnel `sub_41DE63` (which early-outs
+       for bounce/warp states 5/6/7). A kill diverts the rest of the turn
+       to the death-anim branch (23457+).
+    d. 22919-22926 — PICKUP at the CURRENT tile (`sub_42542D` state 2 →
+       `sub_41E21E` dispatch + `sub_4254F3` record clear). NOT gated on
+       bounce/warp — a mid-hop player still hoovers the token under it.
+    e. 22927-22928 — disease freshness (+128) decrement.
+    f. 22929-22942 — disease age += delta; expiry → `sub_41DF4C` cure.
+    g. 22943-22975 — CONTAGION scan (in-place, all 10 slots, both lower and
+       higher indices; `dword_464A78` multiply semantics).
+    h. 22976-22979 — key-byte shuffle (+54=+56, +55=+57; +56=+57=0).
+    i. 22981-22990 — STUN (+58) decrement; clears the input gate v113 only.
+    j. 22991-23014 — fully-enclosed check → cosmetic "cornerhead" anim pick
+       (`rand_() % getvalue(330) + 20` — a shared-stream draw our sim
+       deliberately does not mirror, determinism rule 6).
+    k. 23015-23027 — state gates: 5/6/7 (bounce/warp) clear v113; state 4
+       (pickup pose) FORCES the bomb key held (+56=1) for getvalue(665) ms
+       — this, not the +58 stun, is what keeps a just-grabbed bomb carried.
+    l. 23028-23039 — INPUT acquisition (gated `v113 && !dword_4621E0`):
+       AI `sub_40A1C6` or human `sub_41E61E`.
+    m. 23040-23057 — godir clamp; REVERSED-disease flip (+140, humans).
+    n. 23058-23078 — ICE input-lag buffer (humans).
+    o. 23413-23454 — MOVEMENT dispatch: idle-on-conveyor (belt budget,
+       23415-23428) or walking (speed calc 23432-23451); both call the
+       per-pixel mover `sub_41EC84` (22525-22722). INSIDE the pixel loop,
+       per pixel step: warphole/trampoline step-on (22583-22609, pre-
+       commit), kick probe (22610-22628), corner/glide resolution, pixel
+       commit (22695-22698), then POST-COMMIT FLAME DEATH (22699-22708 —
+       `sub_42708D` + `sub_41DE63`; a kill returns 1 immediately,
+       abandoning the remaining budget) and PICKUP (22710-22717 —
+       `sub_42542D` state 2 → `sub_41E21E`). So a walking player dies or
+       picks up mid-move, per pixel, BEFORE the same tick's bomb actions —
+       and a fast player can consume several tokens in one tick.
+    p. 23081-23276 (LABEL_155) — anim/draw; state 5 trampoline apex
+       relocation (rand draws), state 6/7 warp midpoint relocation.
+    q. 23277-23380 (LABEL_246) — BOMB ACTIONS, in order: auto-drop force
+       (v112, +135/+137) → carried THROW (+37; fires on v112 OR key-up) →
+       action2 edge (+57 && !+55): kick-stop +89, punch +91 (needs !+56),
+       trigger-detonate +95 → drop block (+56 edge, !+134): grab (own bomb
+       underfoot) / spooger (own, !v112) / plain drop (capacity =
+       `sub_4245DA` live scan; warphole refuse; dud gate).
+       A player killed mid-move at (o) NEVER reaches this block.
+    r. DEATH branch 23457-23496 — die-anim advance; at anim end (LABEL_26)
+       `sub_41DBFE` scatter + slot clear + `sub_424C47` trigger downgrade.
+13. 29528-29529 — campaign only (`dword_46489C`): `sub_4016DA` (4613-4651)
+    — the ROVER/GHOST MOVER `sub_401F76` FIRST (4619), then round-end
+    timers (clock ≤ 1, hazard-clear grace `dword_4646C0`).
+14. 29530 `sub_42459A` → `sub_42331C(1)` — the CARRIED-bomb pass (records
+    with +148 != 0): case 3 position sync to the (post-move) carrier, draw.
+    The fuse-tick gate excludes motion 3, so no fuse burns here.
+15. 29531-29549 — HURRY banner check (`sub_410578` vs `getvalue(101)`,
+    latch `dword_464984`, sound 2700, flash on `dword_464994 & 4`).
+16. 29550-29555 — `sub_429F1A` (easter-egg overlay), `sub_415ED1`
+    (draw-queue flush), `sub_40E765` again, `sub_41B961`, `sub_415C1F`,
+    `sub_40EA1E` (network send flush). No gameplay.
+
+Round-END evaluation (`sub_421969`/`sub_4219B0`, draw banner, winner) lives
+in the OUTER loop `sub_42A3F6` (29790-29830, LABEL_54), not in the per-frame
+callback — our GameApp layer equivalent, not a sim tick step.
+
+### The rotation: our tick vs the original's frame
+
+`Simulation::tick` starts at the player pass; the original's frame starts at
+the clock/bomb pass. The two are the SAME infinite event stream cut at
+different points — what matters is the relative order of gameplay phases
+between two consecutive player passes (one "gap"). Original gap order,
+players → players (from the sequence above):
+
+```
+players_N → rovers_N → carried-sync_N → (hurry) ‖frame boundary‖ clock →
+bomb pass (drain → per-slot move+fuse+explode) → flame/brick age →
+regen → enclosure walls → players_{N+1} head (flame death → pickup →
+disease fresh/age/expire → contagion) → players_{N+1} input+move+actions
+```
+
+Fuse alignment across the cut: our port decrements a new bomb's fuse the
+same tick it is dropped (players step 1 → fuses step later the same tick);
+the original's first decrement is the NEXT frame's bomb pass. Both place the
+40th decrement — the explosion — in the SAME gap (after the 39th post-drop
+player move, before the 40th), so fuse timing is rotation-identical, as the
+golden suite has always pinned.
+
+### Diff vs `Simulation::tick` — findings
+
+DIVERGENT (fixed 2026-07-11, golden recaptured, this entry):
+
+1. **Flame-death/pickup ran only as a post-batch pass, never inside the
+   mover.** The original checks BOTH per pixel step inside `sub_41EC84`
+   (22699-22717) AND at the next turn's head (22915-22926). Our sim only
+   had the head-equivalent (`field_vs_players`, after the bomb phase).
+   Player-visible consequences of the missing in-move check, all fixed by
+   running the same flame-then-pickup pair per pixel inside
+   `MovementSystem::move`:
+   - a player stepping onto a visible token picked it up only AFTER the
+     same tick's explosions — so a flame arm igniting that tile the same
+     tick BURNED the token first and STOPPED there (arm-stop rule),
+     leaving the player alive and empty-handed; the original picks up at
+     the step, the arm then finds no token, passes through, ignites the
+     tile and kills — opposite outcomes on both counts;
+   - a picked-up ability was not usable until the next tick (the original
+     picks up mid-move, BEFORE the same turn's LABEL_246 bomb actions);
+   - a player walking into a flame on its LAST tick of life survived (the
+     head check runs after the aging pass; the in-move check sees the
+     pre-aging value);
+   - a player killed mid-move still executed its bomb actions that tick
+     (the original's mid-move kill returns straight into the death branch,
+     skipping LABEL_246).
+2. **Enclosure/regen/clock ran AFTER the head checks** (our old step 6 vs
+   step 5). The original runs clock → … → regen → walls BEFORE the player
+   pass (29518/29526 before 29527), i.e. before the head-equivalent
+   checks in the gap. Same-gap coincidences diverged: a wall dropping on a
+   player standing on flame credited the flame owner (ours) instead of
+   crushing with no credit (original); a wall dropping on a token tile
+   under a player let the pickup win (ours) instead of the wall destroying
+   the token (original). Fixed: clock/regen/enclosure moved before
+   `field_vs_players`.
+3. **Rovers ran after the bomb phase** (our old step 5b). The original
+   moves them immediately AFTER the player pass (29528), BEFORE the next
+   frame's bomb pass — so a rover never walks into a flame lit later in
+   the same gap. Fixed: `rovers.tick()` moved to directly after the player
+   loop.
+4. **Flame death ignored the bounce/warp immunity.** The head check goes
+   through `sub_41DE63` (22917), which early-outs for states 5/6/7 — the
+   SAME guard already ported for the wall crush (enclosure audit #4). Our
+   `field_vs_players` killed a mid-hop/mid-warp player standing over
+   flame; so did the rover landing kill (also `sub_41DE63`, campaign.md
+   clause 4). Both now exempt `bounce/warp`, matching `drop_wall`.
+
+ORDER-EQUIVALENT (verified, no change):
+
+- Trigger-press/chain/wall-stomp queue timing (drain slot in the rotation —
+  see the corrected "Chain-reaction timing" note above).
+- Stun, key shuffle, input, reversed-disease, ice, movement dispatch,
+  LABEL_246 sub-block order inside the player turn (all previously audited;
+  re-verified against the full read).
+- Diseases: head pickup before disease aging before contagion; our step
+  order preserves the per-player age-then-spread relation (the single-sweep
+  cross-player quirk stays a documented deviation, see the disease audit).
+- Flame aging in the same gap as the batch, after it (29525 after 29522).
+- AI decide slot (interleaved per player, ADR-0005) and the danger-grid
+  snapshot (original stamps it in the bomb pass; both sides of the rotation
+  read the same post-batch state).
+- Bomb-capacity reads (`sub_4245DA` live scan): the chain owner transfer
+  happens in the bomb phase in both (between two player passes), so the
+  drop gate reads the same value (see "Bomb capacity" entry).
+
+ACCEPTED DEVIATIONS (documented, deliberately not replicated):
+
+- **Within-batch slot interleave.** The original interleaves motion and
+  fuse/explosion PER SLOT (finding 7b above): whether a sliding bomb sees a
+  same-frame explosion's flames depends on the two bombs' relative slot
+  indices — and slots are allocated first-fit with reuse, so the order is
+  not even creation order. Our phase split (all moves, then all fuses)
+  makes the same-frame case uniformly "slider first"; the flame-slide
+  interaction then lands one tick later than an original whose exploder
+  happened to sit on a lower slot. Matching this exactly would require
+  porting the 100-slot allocator; the divergence is confined to sub-tick
+  bomb-vs-bomb coincidences within one gap. Same spirit as the contagion
+  single-sweep note.
+- **Bomb actions during bounce/warp.** The original's state-5 anim block
+  jumps to LABEL_246 (23198) and states 6/7 fall through to it, so a
+  bouncing/warping player still auto-drops (diarrhea/super force v112) and
+  still auto-throws a carried bomb (key bytes zeroed → `!+56`). Our
+  player_turn early-returns for both states, skipping the action block —
+  narrow (disease auto-drop or a carried bomb + trampoline/warp), deferred
+  with this citation; the analogous stun-throw edge is already documented
+  as deferred in player_turn's comment.
+- **Cornerhead anim pick** (22991-23014): cosmetic shared-stream `rand_()`
+  draw for a fully-enclosed player's taunt animation — presentation-side
+  by determinism rule 6; our sim draws nothing.
+- **Carried-bomb pass** (`sub_42459A`): our carried bomb is fields on the
+  carrier (no separate entity to position-sync); the mode-1 pass has no
+  other gameplay effect (fuse gate excludes motion 3).
+
+(Provenance: `sub_42A191` 29488-29557; `sub_420F07` 23628-23724;
+`sub_41F29B` 22740-23497; `sub_41EC84` 22525-22722; `sub_42331C`
+25330-25743; `sub_4245B9` 25788-25792; `sub_42459A` 25782-25786;
+`sub_4016DA` 4613-4651; `sub_4056CA` 7193-7324; `sub_4105D2` 14456-14530;
+`sub_415CA4` 18132-18139; `sub_42641F` 26988-26991; `sub_41B961`
+20775-20796; `sub_429F1A` 29344-29374; outer loop `sub_42A3F6`
+29610-29830.)
 
 ## Brick crumble timing — CONFIRMED (`sub_425EFC`/`sub_425107`/`sub_426D06`, 2026-07-10 flame-system audit)
 

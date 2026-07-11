@@ -69,7 +69,13 @@ public:
     // when moving with it / a penalty against it; if the player has NO input the
     // belt FORCES its direction and pushes. It never overrides an active input.
     // (Dirarrows do not affect players — see the class comment.)
-    bool move_on_actor(Player& p, int want_godir, bool moving);
+    //
+    // on_pixel/pixel_ctx are handed straight to MovementSystem::move — the
+    // per-pixel flame-death/pickup slot (sub_41EC84 22699-22717), which the
+    // original runs for BOTH the input-driven and the belt-forced walk (the
+    // mover is the same call either way).
+    bool move_on_actor(Player& p, int want_godir, bool moving,
+                       MovementSystem::PixelFn on_pixel = nullptr, void* pixel_ctx = nullptr);
 
     // After the player has moved, if it is centred on a trampoline tile and not
     // already bouncing (nor still latched from a prior bounce on this same

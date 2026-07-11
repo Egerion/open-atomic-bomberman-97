@@ -388,7 +388,16 @@ TEST_CASE("H: placement never vanishes while walking among its own bombs") {
             const bool blocked_before = tile_blocked(st, tx0, ty0);
             const bool bomb_before = tile_has_bomb(st, tx0, ty0);
             const bool under_limit = p.bombs_placed < p.max_bombs;
-            const bool healthy = p.stun == 0 && p.bounce == 0 && p.warp == 0 && !p.carrying;
+            // "Not standing in flame" joined the gate 2026-07-11 (tick-order
+            // audit, facts.md "Per-tick call order — END-TO-END" finding 1):
+            // the fuzzer's artificial revive can resurrect the player INTO a
+            // still-burning tile, and under the corrected order a moving
+            // player dies at the first pixel step — before the drop block —
+            // exactly like the original's turn-head flame check. That death
+            // legitimately swallows the placement, so such ticks are no
+            // longer "should place" ticks.
+            const bool healthy = p.stun == 0 && p.bounce == 0 && p.warp == 0 && !p.carrying &&
+                                 st.flame[ty0][tx0] == 0;
 
             const bool press = rng.below(3) != 0;
             const int mv = rng.below(6);  // 0..3 = walk a dir, 4/5 = stand still

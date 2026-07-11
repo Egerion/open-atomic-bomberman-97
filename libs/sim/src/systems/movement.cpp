@@ -22,7 +22,7 @@ namespace bomber::sim {
 // warp/trampoline "stuck": a walking player's budget steps OVER the exact
 // centre pixel, so a post-walk-only test almost never fired. See §5.
 void MovementSystem::move(Player& p, Direction d, std::int32_t extra_budget, StepOnFn on_center,
-                          void* ctx, bool use_player_speed) {
+                          void* ctx, bool use_player_speed, PixelFn on_pixel, void* pixel_ctx) {
     State& s = s_;
     p.facing = d;
 
@@ -128,6 +128,13 @@ void MovementSystem::move(Player& p, Direction d, std::int32_t extra_budget, Ste
             if ((dxg != 0 && at_x_centre) || (dyg != 0 && at_y_centre))
                 on_center(ctx, p, nx / kTileW, ny / kTileH);
         }
+
+        // sub_41EC84's post-commit tail (pseudo.c 22699-22717): flame death,
+        // then pickup, at the tile of the CURRENT pixel position — every
+        // iteration, even a blocked one (mdx/mdy zero re-checks the same tile,
+        // a harmless no-op). A kill aborts the walk: the original returns 1
+        // mid-loop and the rest of the budget dies with the player.
+        if (on_pixel && on_pixel(pixel_ctx, p)) return;
     }
 }
 

@@ -378,6 +378,31 @@ MatchConfig pillars_config() {
 // downstream checkpoints. All five scenarios pass BYTE-IDENTICAL with the fix
 // in place (all 24 assertions): no golden ever chains across owners. Pinned
 // by tests/test_chain_slot.cpp.
+//
+// UPDATE 2026-07-11 (end-to-end tick-order audit, docs/re/facts.md "Per-tick
+// call order — END-TO-END"): a DELIBERATE behaviour recapture. Four ordering
+// fixes: (1) flame-death + pickup now ALSO run per pixel step inside the
+// mover (the original's sub_41EC84 post-commit tail, pseudo.c 22699-22717) —
+// a mid-walk kill aborts the walk and skips that turn's bomb actions, a
+// mid-walk pickup applies before them; (2) clock/regen/enclosure moved
+// BEFORE the head checks (field_vs_players), matching sub_42A191's
+// clock→bombs→age→enclosure→players frame order under the rotation; (3)
+// rovers moved to directly after the player pass (sub_4016DA at 29528);
+// (4) flame death and the rover landing kill now honour the sub_41DE63
+// bounce/warp immunity (states 5/6/7), like drop_wall already did.
+// Reach, proven by running BOTH revisions through a per-tick hash/rng/event
+// dump of every scenario's exact script: A, B, C, E pass BYTE-IDENTICAL (all
+// their hashes, E's bounce count and final rng, unchanged — none of them
+// ever hits a same-tick move-vs-field coincidence). D diverges at exactly
+// tick 405, where player 1 catches SWAP from a Disease token picked up
+// MID-WALK: both revisions emit the same Infected event and draw the same
+// single RNG value there (the whole kExpectedRng series below is
+// byte-identical, as are the 200/400 hashes), but the new order applies the
+// swap inside the pixel loop, so the walk's remaining budget continues from
+// the swapped position (the original's in-loop sub_41E21E) instead of the
+// swap landing after a completed walk — a pure, RNG-neutral position delta
+// that moves only the 600/800 hashes. Pinned by tests/test_tick_order.cpp's
+// six same-tick coincidence cases.
 TEST_CASE("golden A: empty state, 10000 ticks") {
     Simulation a;
     a.state().rng = 42u;
@@ -478,11 +503,15 @@ TEST_CASE("golden D: the disease gauntlet") {
     // fidelity audit / `flame_kind`, see the file-level UPDATE note above):
     // ticks 200/400 stay byte-identical (this scenario's first bomb hasn't
     // exploded yet at either checkpoint); kExpectedRng is unchanged.
+    // Ticks 600/800 recaptured a FOURTH time 2026-07-11 (tick-order audit,
+    // see the file-level UPDATE note above): the mid-walk Swap at tick 405
+    // now relocates the player inside the pixel loop. Ticks 200/400 and the
+    // whole kExpectedRng series are byte-identical to before the fix.
     static constexpr std::uint64_t kExpectedHash[4] = {
         0xb0284a38351747a2ull,  // tick 200 (unchanged: before the first death)
-        0x3ce7c5c7298f1eb8ull,  // tick 400 (unchanged: before the first death)
-        0x5c307422fa29e961ull,  // tick 600
-        0x461fa6be7d9078ceull,  // tick 800
+        0x3ce7c5c7298f1eb8ull,  // tick 400 (unchanged: before the mid-walk Swap)
+        0x13a4a11ef6dbc685ull,  // tick 600
+        0x462b4d19a6d0be82ull,  // tick 800
     };
     static constexpr std::uint32_t kExpectedRng[4] = {0xca47489cu, 0x49cffff6u, 0xdd6d0230u,
                                                       0xa9af166bu};
