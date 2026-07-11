@@ -2887,32 +2887,45 @@ void GameApp::draw_player_row(const sim::State& s) {
 
 AppInput GameApp::run_match() {
     start_match(next_seed_++);
-    const std::uint64_t tick_ms = 1000 / sim::kTicksPerSecond;
-    std::uint64_t last = SDL_GetTicks();
+    const std::uint64_t tick_ns = 1'000'000'000ull / sim::kTicksPerSecond;
+    std::uint64_t last = SDL_GetTicksNS();
     std::uint64_t acc = 0;
     int over_ticks = -1;
-    // Input-latency audit (docs/re/in-match-shell.md's per-frame tick driver,
-    // sub_42A191/sub_41E61E — the original reads live key state once per
-    // display frame off the DirectDraw flip loop, so a keypress waits at most
-    // one frame + one 50 ms tick before a tick consumes it). GameApp::init()
-    // already syncs this loop's own SDL_RenderPresent to the display refresh
-    // (SDL_SetRenderVSync, its own comment there explains why), matching that
-    // same "one step per displayed frame" cadence — but the pre-vsync
-    // uncapped-loop throttle below (SDL_Delay(2), every other present_*
-    // screen in this file still uses it as their ONLY throttle) was left in
-    // place here too, stacking a flat 2 ms of dead time onto every already
-    // vsync-paced frame. That dead time delays this loop's next
-    // SDL_PollEvent/SDL_PumpEvents call — the only point a fresh key press
-    // becomes visible to collect_inputs()'s SDL_GetKeyboardState() read —
-    // inflating the "one display frame" half of the original's own bound by
-    // ~2 ms per frame for no presentational benefit once vsync is doing the
-    // pacing. Skip it when vsync is actually active; keep it as the fallback
-    // throttle on a driver where SDL_SetRenderVSync is a no-op (init()'s own
-    // "best-effort" comment), so an unsupported driver doesn't free-run
-    // uncapped.
-    int vsync_mode = SDL_RENDERER_VSYNC_DISABLED;
-    SDL_GetRenderVSync(sdl_renderer_.get(), &vsync_mode);
-    const bool vsync_paces_loop = vsync_mode != SDL_RENDERER_VSYNC_DISABLED;
+    // Frame pacing (docs/re/in-match-shell.md's per-frame tick driver,
+    // sub_42A191/sub_41E61E: the original is a DirectDraw flip loop — one
+    // input read + at most one tick per DISPLAYED frame, the flip block IS
+    // the throttle). GameApp::init() requests vsync (SDL_SetRenderVSync, its
+    // comment explains why), but on Windows windowed mode SDL_RenderPresent
+    // does NOT reliably block: DWM gives the swapchain a multi-frame flip
+    // queue, so presents return instantly in bursts (measured 4-12 ms frame
+    // deltas) until the queue fills, then stall (20-25 ms). The sim
+    // accumulator crossings then land on that jerky CPU-side train and ticks
+    // get assigned to frames in 2/4-frame beats instead of the steady
+    // 3-frames-per-tick a 20 Hz sim on a 60 Hz display needs — measured with
+    // the same live-run rig as the 2026-07-10 input-latency audit: 4-41% of
+    // tick-to-tick gaps were a frame off (visible micro-stutter), whether or
+    // not the old blind SDL_Delay(2) throttle ran after present. The fix is
+    // explicit pacing: sleep until the next display-refresh boundary after
+    // each present (SDL_DelayNS, target advanced by the measured refresh
+    // period). When present genuinely blocks on vblank the target is already
+    // reached and the sleep is a no-op (the resync branch keeps the target
+    // phase-locked to the real vblank train); when it doesn't block, the
+    // sleep supplies exactly the cadence vsync failed to. Input latency is
+    // unchanged versus a truly-blocking vsync — one SDL_PollEvent + one
+    // collect_inputs() sample per displayed frame either way, the original's
+    // own acquisition bound — and no fixed extra delay sits on that path.
+    // Refresh-rate mismatch (59.94 Hz panel reported as 60, VRR) only drifts
+    // the target phase; the resync branch absorbs it. Unknown refresh falls
+    // back to 60 Hz, which still bounds the loop (no uncapped free-run on
+    // drivers where SDL_SetRenderVSync is a no-op, e.g. dummy video).
+    std::uint64_t period_ns = 1'000'000'000ull / 60;
+    if (const SDL_DisplayMode* mode =
+            SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window_.get()));
+        mode && mode->refresh_rate_numerator > 0 && mode->refresh_rate_denominator > 0) {
+        period_ns = 1'000'000'000ull * mode->refresh_rate_denominator /
+                    static_cast<std::uint64_t>(mode->refresh_rate_numerator);
+    }
+    std::uint64_t pace_target_ns = SDL_GetTicksNS() + period_ns;
     // Per-player "action key seen down at a frame sample since the last
     // consumed tick" — the frame-cadence tap capture; see the sampling
     // comment inside the loop. Only action1/action2 are ever set.
@@ -2979,7 +2992,7 @@ AppInput GameApp::run_match() {
                 // lump, §1's "Pause negative finding" point 2) — a
                 // DELIBERATE deviation, per this task's brief, so closing
                 // the browser does not fire a tick burst or eat round time.
-                last = SDL_GetTicks();
+                last = SDL_GetTicksNS();
                 acc = 0;
                 continue;
             }
@@ -3018,11 +3031,11 @@ AppInput GameApp::run_match() {
             tap_latch[i].action2 = tap_latch[i].action2 || frame_in.players[i].action2;
         }
 
-        std::uint64_t now = SDL_GetTicks();
+        std::uint64_t now = SDL_GetTicksNS();
         acc += now - last;
         last = now;
-        while (acc >= tick_ms) {
-            acc -= tick_ms;
+        while (acc >= tick_ns) {
+            acc -= tick_ns;
             // Consume the frame-sampled latch on the FIRST tick of a catch-up
             // burst only (a later tick in the same burst re-reads the live
             // state, matching the original's one-edge-check-per-update under
@@ -3099,11 +3112,17 @@ AppInput GameApp::run_match() {
         // logically part of the same pass).
         draw_player_row(sim_.state());
         SDL_RenderPresent(sdl_renderer_.get());
-        // See vsync_paces_loop's comment at the top of this function: vsync
-        // already throttles this loop to the display refresh, so this extra
-        // fixed delay only applies as a fallback throttle when vsync isn't
-        // actually pacing presentation.
-        if (!vsync_paces_loop) SDL_Delay(2);
+        // Refresh-boundary pacer — see the pacing comment at the top of this
+        // function. No-op when present already blocked past the target;
+        // supplies the missing block (and re-phases the target) when it
+        // didn't.
+        std::uint64_t after_present_ns = SDL_GetTicksNS();
+        if (after_present_ns < pace_target_ns) {
+            SDL_DelayNS(pace_target_ns - after_present_ns);
+            pace_target_ns += period_ns;
+        } else {
+            pace_target_ns = after_present_ns + period_ns;
+        }
     }
 }
 
