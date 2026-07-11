@@ -220,6 +220,24 @@ void PowerupSystem::head_hit(int victim, int tx, int ty) {
     State& s = s_;
     Player& p = s.players[victim];
     p.stun = s.tuning.head_stun_frames;  // plain overwrite, as the original
+    // sub_421F7E also writes `a1[39] = 3; a1[40] = 0` — an UNCONDITIONAL
+    // overwrite of the player-state word +78 — and its caller's victim probe
+    // (sub_421CB5, pseudo.c 24207) accepts any active-and-not-dead player with
+    // NO +78 guard. The original therefore cannot hold state 4 (pickup-pause),
+    // 5 (trampoline hop) or 6/7 (warp out/in) past a head hit: the ONE state
+    // word is clobbered to 3, cancelling the pause/flight in place (a warp hit
+    // during warp-out never relocates; during warp-in it stays at the exit,
+    // since the position writes only happen inside the state-6/7 branches the
+    // player no longer takes). Our port keeps these as separate fields, so
+    // mirror the overwrite explicitly — without this, "bouncing/warping while
+    // head-stunned" is a flag combination the original cannot express
+    // (facts.md "Player state machine (+78) — COMPLETE"). The latches
+    // (tramp_latch/warp_latch) are deliberately left set: the original only
+    // re-triggers an actor via the stepper's centring check, which needs a
+    // fresh walk onto the tile — our latch models exactly that.
+    p.pickup_pause = 0;
+    p.bounce = 0;
+    p.warp = 0;
 
     auto surplus = [&](int kind) -> bool {
         return kind < kPowerupKinds && held_count(p, kind) > s.tuning.start_with[kind];

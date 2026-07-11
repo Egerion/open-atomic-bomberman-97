@@ -57,7 +57,33 @@ struct Player {
     // once exhausted further placements fall back to normal timed bombs until
     // the next Trigger pickup refills the budget.
     std::int32_t trigger_placed = 0;
-    std::int32_t stun = 0;  // ticks of enforced pause (bomb pickup, head hits)
+    // Head-hit stun (player WORD +58, sub_421F7E: `a1[29] = 16` unconditional
+    // overwrite, `a1[39] = 3` the cosmetic "stunned" pose, `a1[40] = 0`). Gates
+    // ONLY new-input acquisition (the mover keeps running; see simulation.cpp
+    // player_turn). CONFIRMED a SEPARATE counter from the grab's pickup-pause
+    // below (see `pickup_pause` doc comment) — the two write different fields
+    // in sub_41F29B and neither resets the other, so a head-hit landing mid-
+    // pickup-pause (or a fresh grab immediately after a stun ends) ticks both
+    // down independently. Previously this one field did double duty for both
+    // mechanisms (a real conflation bug: a grab used to clobber an in-progress
+    // head-stun countdown down to `pickup_pause`, and vice versa) — split
+    // 2026-07-11, see facts.md "Player state machine (+78) — COMPLETE".
+    std::int32_t stun = 0;
+    // Grab/pickup-pause (player state +78==4, "carrying" — NOT the +58 word
+    // above). CONFIRMED distinct mechanism (`sub_41F29B` ~23017-23025): while
+    // state==4, each tick compares the state's own elapsed-frame counter
+    // (+80, `v111[40]`, shared with the kick/punch/warp anim timers) against
+    // `getvalue(665)` (our `pickup_pause`, id 665, docs/valuelst-map.md); while
+    // the counter is still within that window it clears v113 (blocking new
+    // input, same as a head-stun) AND FORCES the bomb-key-down byte (+56 = 1)
+    // so LABEL_246's throw check (`!+56`) does not fire while the forced hold
+    // is active. `sub_424AF4` (the grab-attach primitive called from the drop
+    // block right before state is set to 4) never touches +58 — confirmed by
+    // reading its body (pseudo.c ~26018-26025): it only links the bomb/player
+    // pointers, sets the bomb's own motion word to 3 (carried), and plays the
+    // grab SFX. So a grab-triggered pause and a head-hit stun are always two
+    // independent counters in the original.
+    std::int32_t pickup_pause = 0;
     // Trampoline hop (player state +78==5, sub_41F29B state 5 / sub_41DE63): a
     // step onto a trampoline launches a FLIGHT lasting tuning
     // .trampoline_bounce_frames ticks (VALUELST id 680 = 30). During the flight

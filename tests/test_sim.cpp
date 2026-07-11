@@ -704,7 +704,8 @@ TEST_CASE("grab picks the bomb up, throw launches it, fuse resumes") {
     CHECK(s.state().bombs.empty());
     CHECK(p.carrying);
     CHECK(p.bombs_placed == 1);  // slot stays reserved while held
-    CHECK(p.stun == s.state().tuning.pickup_pause);
+    CHECK(p.pickup_pause == s.state().tuning.pickup_pause);
+    CHECK(p.stun == 0);  // independent counter (facts.md "Player state machine (+78)")
     // Pickup pause: movement does nothing while stunned. HOLD the bomb key the
     // whole time so the bomb stays carried (releasing it would throw).
     Fixed before = p.y;

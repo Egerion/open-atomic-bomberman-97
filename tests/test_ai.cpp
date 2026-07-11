@@ -788,7 +788,9 @@ TEST_CASE("Audit fix: a stunned AI draws no RNG this tick") {
     // reading input), so this was invisible to gameplay but not to the RNG
     // stream -- and that stream is the whole determinism contract.
     Simulation stunned = open_arena(/*tx=*/5, /*ty=*/5, /*ai=*/true);
-    stunned.state().players[0].stun = 3;  // mid pickup-pause
+    stunned.state().players[0].stun = 3;  // head-hit stun (see the sibling
+                                           // pickup_pause test below for the
+                                           // independent grab counter)
     const std::uint32_t rng0 = stunned.state().rng;
 
     stunned.tick(idle());  // a static, bomb/disease/hurry-free board: nothing
@@ -804,6 +806,23 @@ TEST_CASE("Audit fix: a stunned AI draws no RNG this tick") {
     const std::uint32_t rng1 = active.state().rng;
     active.tick(idle());
     CHECK(active.state().rng != rng1);
+}
+
+TEST_CASE("Audit fix: an AI mid pickup-pause also draws no RNG this tick") {
+    // Player::pickup_pause (player state +78==4) is a SEPARATE counter from
+    // Player::stun (+58) -- see facts.md "Player state machine (+78) —
+    // COMPLETE" and the Player::pickup_pause doc comment. Both independently
+    // clear v113 in the original (sub_41F29B ~23017-23027), so an AI mid
+    // pickup-pause must draw nothing this tick exactly like a head-hit stun,
+    // even with Player::stun == 0.
+    Simulation stunned = open_arena(/*tx=*/5, /*ty=*/5, /*ai=*/true);
+    stunned.state().players[0].pickup_pause = 2;
+    CHECK(stunned.state().players[0].stun == 0);  // independent of head-hit stun
+    const std::uint32_t rng0 = stunned.state().rng;
+
+    stunned.tick(idle());
+    CHECK(stunned.state().rng == rng0);  // zero draws while mid pickup-pause
+    CHECK(stunned.state().players[0].pickup_pause == 1);  // the countdown still ticks
 }
 
 TEST_CASE("Mislabel fix: an AI still bombs a stunned-but-alive enemy (+8 not +58)") {

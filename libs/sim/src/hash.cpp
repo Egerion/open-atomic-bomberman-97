@@ -143,6 +143,14 @@ std::uint64_t state_hash(const State& s) {
                 (static_cast<std::uint64_t>(p.carried_trigger) << 57));
         mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.stun)) |
             (static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.move_budget)) << 32));
+        // Grab pickup-pause (Player::pickup_pause, player state +78==4):
+        // CONFIRMED a separate counter from p.stun above (facts.md "Player
+        // state machine (+78) — COMPLETE") — split into its own field
+        // 2026-07-11, so it needs its own hash contribution. Own word — a
+        // ONE-TIME hash-layout growth (CLAUDE.md determinism contract rule 5;
+        // tests/test_golden.cpp recaptured in the same commit). 0 whenever no
+        // grab has happened this tick's-worth of history.
+        mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.pickup_pause)));
         std::uint32_t dbits = 0;
         for (int k = 0; k < kDiseaseKinds; ++k)
             if (p.disease[k]) dbits |= (1u << k);
