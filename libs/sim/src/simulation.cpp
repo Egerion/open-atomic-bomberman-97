@@ -46,29 +46,34 @@ void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs, Stag
     static constexpr Direction kGodir[4] = {Direction::Up, Direction::Right, Direction::Down,
                                             Direction::Left};
 
-    // Head-hit / bomb-pickup stun (Player::stun == the original's WORD +58, set
-    // to 16 by the head-hit handler sub_421F7E and to pickup_pause by a grab).
-    // The player updater sub_41F29B decrements it every tick (~22982) but the
-    // local gate it drives (v113, ~23028) blocks ONLY new-input acquisition — the
-    // sub_41E61E / AI-decide call that would set a new direction (+46) and the
-    // bomb-key bytes (+56/+57) — plus one cosmetic standing-anim pick (~23086).
-    // It does NOT gate the mover: a stunned-but-alive player leaves +46 at its
-    // per-tick -1 reset (22980), so it takes the IDLE movement branch (23413),
-    // and the per-pixel stepper still runs whenever a STAGE ACTOR drives it — a
-    // conveyor keeps carrying it (23417 sets +46 to the belt dir before calling
-    // sub_41EC84, whose body is itself gated on +46 != -1 at 22572), the belt-
-    // forced kick still probes, and a warphole/trampoline step-on still fires.
-    // Only issuing a NEW direction or bomb action is blocked; an off-belt stunned
-    // player simply stands (Bomberman has no free momentum to coast). The prior
-    // port did a FULL early-return here, freezing the player solid even on a
-    // conveyor — a real divergence (docs/re/facts.md "Head hit / Stun does NOT
-    // gate flame-death or pickup": movement continues during stun). So DECREMENT
-    // the countdown and fall through, but force the resolved input to neutral
-    // (want_godir = -1 below) and skip the bomb-action block — exactly matching a
-    // skipped sub_41E61E, which leaves +46 = -1 and the reset key bytes 0 so no
-    // edge-gated action can fire.
-    const bool stunned = p.stun > 0;
-    if (stunned) --p.stun;
+    // Head-hit stun (Player::stun == the original's WORD +58, sub_421F7E) and
+    // grab pickup-pause (Player::pickup_pause == the original's state +78==4
+    // window, gated by getvalue(665)/our tuning.pickup_pause) are TWO
+    // independent counters in the original — see the doc comments on both
+    // fields and facts.md "Player state machine (+78) — COMPLETE". They used
+    // to share one field (`stun`), which meant a grab clobbered an
+    // in-progress head-stun countdown (or vice versa); split 2026-07-11.
+    // Either counter clears v113 in the original (sub_41F29B ~22981-23027),
+    // blocking ONLY new-input acquisition — the sub_41E61E / AI-decide call
+    // that would set a new direction (+46) and the bomb-key bytes (+56/+57) —
+    // plus one cosmetic standing-anim pick (~23086). Neither gates the mover:
+    // a blocked-but-alive player leaves +46 at its per-tick -1 reset (22980),
+    // so it takes the IDLE movement branch (23413), and the per-pixel stepper
+    // still runs whenever a STAGE ACTOR drives it — a conveyor keeps carrying
+    // it (23417 sets +46 to the belt dir before calling sub_41EC84, whose body
+    // is itself gated on +46 != -1 at 22572), the belt-forced kick still
+    // probes, and a warphole/trampoline step-on still fires. Only issuing a
+    // NEW direction or bomb action is blocked; an off-belt player simply
+    // stands (Bomberman has no free momentum to coast). Both counters
+    // decrement independently and unconditionally every alive tick (22982-90
+    // for +58; the state-4 anim-frame counter for pickup-pause) — DECREMENT
+    // both and fall through, but force the resolved input to neutral
+    // (want_godir = -1 below) and skip the bomb-action block if EITHER is
+    // active — exactly matching a skipped sub_41E61E, which leaves +46 = -1
+    // and the reset key bytes 0 so no edge-gated action can fire.
+    const bool stunned = p.stun > 0 || p.pickup_pause > 0;
+    if (p.stun > 0) --p.stun;
+    if (p.pickup_pause > 0) --p.pickup_pause;
 
     // A trampoline hop is a state-gated flight (sub_41F29B state 5 / sub_41DE63):
     // movement input and bomb actions are ignored until the hop finishes, and the
@@ -76,7 +81,22 @@ void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs, Stag
     // the player to a random nearby open tile (the "fly + random land" — it is NOT
     // an in-place bounce; see docs/re/stage-actors.md §4). The apex relocation draws
     // RNG, so it runs here inside the state gate, before any other per-tick draw.
+    //
+    // CONFIRMED (pseudo.c ~23198/23248, the v86==5 branch's `goto LABEL_246` and
+    // the fall-through from states 6/7 into the same label): the original's
+    // LABEL_246 — which includes the carried-bomb throw-release check (`if (+37)
+    // { if (v112 || !+56) throw }`) — is NOT skipped during a bounce or warp; it
+    // runs every tick regardless of +78. Because input is fully blocked the whole
+    // time (+56 stays 0, never re-set), `!+56` is true from the very first tick,
+    // so a player who enters a bounce/warp WHILE CARRYING has the bomb thrown at
+    // their current tile almost immediately, not held through the whole flight.
+    // Our port takes an early return here (skipping the rest of player_turn, incl.
+    // the throw block in the bomb-key section below) for the whole bounce/warp
+    // duration, so release any carried bomb up front to match — the "warp/bounce
+    // while carrying" illegal-in-our-port-only combination the state-machine audit
+    // flagged (facts.md "Player state machine (+78) — COMPLETE").
     if (stage.bouncing(p)) {
+        if (p.carrying) bombs.throw_carried(p, i);
         stage.tick_bounce(p, i);
         p.prev_action1 = in.action1;
         p.prev_action2 = in.action2;
@@ -89,8 +109,10 @@ void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs, Stag
     // it down (which performs the midpoint relocation) and skip the turn. This is
     // the fix for the "stuck on entering a warp" report: the prior instantaneous
     // teleport skipped these phases; now the player warps and, once warp==0, moves
-    // again. See docs/re/stage-actors.md §5.
+    // again. See docs/re/stage-actors.md §5. Carried-bomb release: see the bounce
+    // branch above (same LABEL_246 fall-through argument applies to states 6/7).
     if (stage.warping(p)) {
+        if (p.carrying) bombs.throw_carried(p, i);
         stage.tick_warp(p);
         p.prev_action1 = in.action1;
         p.prev_action2 = in.action2;
@@ -198,18 +220,24 @@ void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs, Stag
     // "bomb key down this frame", +54 = "…last frame"; the drop block is edge-
     // gated on `+56 && !+54`; +37 = a carried (grabbed) bomb.
     //
-    // SKIPPED entirely for a stunned player: the v113 gate that skips sub_41E61E
-    // leaves the bomb-key bytes +56/+57 at their per-tick 0 reset, so every
-    // edge-gated action (manual drop / throw / grab / spooge / punch / trigger /
-    // kick-stop) is un-triggered — the same as the prior full early-return did,
-    // so this is inert on the golden and on the grab-pickup-pause tests (which
-    // pin the carried bomb as thrown only AFTER the stun; see
-    // test_diarrhea_throw.cpp). The original's disease auto-drop and carried-bomb
-    // throw, which ride the disease flags / a released key rather than a NEW key
-    // press, do keep firing during stun in sub_41F29B (LABEL_246 is reached with
-    // +56=0); reproducing that narrow edge is deliberately deferred — it never
-    // fires in any current scenario/test and would entangle with the
-    // pickup_pause carry semantics. facts.md "Head hit / Stun does NOT gate ...".
+    // SKIPPED entirely while `stunned` (EITHER p.stun>0 head-hit OR
+    // p.pickup_pause>0 grab-pause — see the field split above): the v113 gate
+    // that skips sub_41E61E leaves the bomb-key bytes +56/+57 at their per-tick
+    // 0 reset, so every edge-gated action (manual drop / throw / grab / spooge /
+    // punch / trigger / kick-stop) is un-triggered — the same as the prior full
+    // early-return did, so this is inert on the golden and on the grab-pickup-
+    // pause tests (which pin the carried bomb as thrown only AFTER the pause;
+    // see test_diarrhea_throw.cpp). The original's disease auto-drop and
+    // carried-bomb throw, which ride the disease flags / a released key rather
+    // than a NEW key press, do keep firing during a head-hit stun in sub_41F29B
+    // (LABEL_246 is reached with +56=0, states 1/2/3/4/20-39 all fall through to
+    // it); reproducing that narrow edge for the STANDING (non-bounce/warp) case
+    // is deliberately deferred — it never fires in any current scenario/test.
+    // The bounce/warp case of the SAME LABEL_246-always-runs fact IS fixed (see
+    // the `if (p.carrying) bombs.throw_carried(...)` calls above the early
+    // returns) because it was a clean, narrowly-scoped state-transition guard;
+    // this standing-stun case is a broader reordering of the whole block and
+    // stays out of scope here. facts.md "Player state machine (+78) — COMPLETE".
     //
     // (1) Auto-drop diseases (diarrhea +135 / super +137): the original FORCES an
     //     edge every frame — `+56 = 1; +54 = 0; v112 = 1` — so the drop block
@@ -273,7 +301,18 @@ void field_vs_players(State& s, PowerupSystem& powerups, DiseaseSystem& diseases
         Player& p = s.players[i];
         if (!p.present || !p.alive) continue;
         int tx = p.tile_x(), ty = p.tile_y();
-        if (s.flame[ty][tx] > 0) {
+        // Flame kill exempts a bouncing/warping player: every kill funnels
+        // through sub_41DE63, which early-outs (returns 0 — no death, no RNG)
+        // while the victim's state word +78 is 5 (trampoline hop) or 6/7
+        // (warp out/in) — pseudo.c 21999-22006, the SAME exemption the
+        // enclosure crush (enclosure.cpp) already ports. The flame check
+        // itself still runs every tick in the original (sub_41F29B
+        // ~22915-22917, not +78-gated), so the gate belongs HERE on the kill,
+        // not on the scan. Powerup PICKUP below is NOT exempted: the pickup
+        // dispatch (sub_42542D/sub_41E21E, ~22919-22926) has no +78 gate — a
+        // mid-warp/mid-bounce player still collects what's under them.
+        // facts.md "Player state machine (+78) — COMPLETE".
+        if (s.flame[ty][tx] > 0 && p.bounce == 0 && p.warp == 0) {
             p.alive = false;
             if (p.carrying) {
                 // The carried bomb dies with the carrier; free the owner's slot.
@@ -369,18 +408,24 @@ void run_tick(State& s, const TickInputs& inputs) {
         // step-order dependency shifts (steps 2..7 below are untouched).
         //
         // The original gates the WHOLE dispatch (including draws A/B) on
-        // `v113 && !dword_4621E0` (sub_41F29B ~23028), where v113 is cleared
-        // for a stunned actor (`+58 > 0`, the pickup-pause countdown) as well
-        // as the entering/dying/dead modes -- present/alive above already
-        // covers dying/dead, but stun is a separate countdown on an otherwise
-        // `alive` player (RESOLVED, docs/re/ai.md §2/§7): a stunned AI must
-        // draw NOTHING this tick, the same as the original skipping the call
-        // outright. player_turn also no-ops a stunned player's INPUT (it forces
-        // want_godir = -1 and skips the bomb-action block) while STILL running
-        // the idle mover, so skipping ai.decide here changes only the RNG
-        // stream, never gameplay -- but that stream is the whole contract.
+        // `v113 && !dword_4621E0` (sub_41F29B ~23028), where v113 is cleared by
+        // a head-hit stun (`+58 > 0`, ~22982), a grab's pickup-pause (state
+        // +78==4 within its getvalue(665) window, ~23017-23025; see
+        // Player::pickup_pause), OR the flight states 5/6/7 (`if (v111[39] ==
+        // 6 || == 7 || == 5) v113 = 0`, ~23015-23016) — as well as the
+        // entering/dying/dead modes -- present/alive above already covers
+        // dying/dead. An AI blocked by ANY of these must draw NOTHING this
+        // tick, the same as the original skipping the call outright (RESOLVED,
+        // docs/re/ai.md §2/§7; extended to pickup_pause + bounce/warp
+        // 2026-07-11 with the state-machine audit — facts.md "Player state
+        // machine (+78) — COMPLETE"). player_turn also no-ops a blocked
+        // player's INPUT (it forces want_godir = -1 and skips the bomb-action
+        // block; bounce/warp early-return outright) while STILL running the
+        // idle mover, so skipping ai.decide here changes only the RNG stream,
+        // never gameplay -- but that stream is the whole contract.
         PlayerInput in = inputs.players[i];
-        if (p.ai && p.stun == 0) ai.decide(i, in);
+        if (p.ai && p.stun == 0 && p.pickup_pause == 0 && p.bounce == 0 && p.warp == 0)
+            ai.decide(i, in);
         player_turn(s, i, in, bombs, stage, movement);
     }
 

@@ -192,6 +192,11 @@ bool RoverSystem::step(Rover& r, int rover_index) {
             if (!victim.present || !victim.alive) continue;
             if (victim.tile_x() != ntx || victim.tile_y() != nty) continue;
             if (victim.ai) continue;  // COMPUTER slots pass through unharmed
+            // sub_41DE63 (this kill's funnel) early-outs while the victim's
+            // state word +78 is 5 (trampoline hop) or 6/7 (warp out/in) —
+            // pseudo.c 21999-22006 — same exemption as the enclosure crush
+            // and the flame kill. facts.md "Player state machine (+78)".
+            if (victim.bounce > 0 || victim.warp > 0) continue;
             victim.alive = false;
             if (victim.carrying) {
                 victim.carrying = false;

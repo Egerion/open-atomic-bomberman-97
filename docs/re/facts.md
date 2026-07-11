@@ -708,6 +708,160 @@ its own pass: see the "RESOLVED 2026-07-10: stunned-but-alive movement
 ported" box above (stun only skips the input decode and the bomb-action
 block; the stage-actor mover still runs, golden proven inert).
 
+## Player state machine (+78) — COMPLETE (2026-07-11 full-enumeration audit)
+
+The original models each player's action/movement mode with ONE state word at
+player byte offset **+78** (`v111[39]` in `sub_41F29B`, which types the player
+as `__int16*`; the frame counter of the current state is the word at **+80**
+(`v111[40]`) and its ms accumulator the word at **+82** (`v111[41]`), advanced
+by the shared `for (v111[41] += frameDelta; v111[41] > 0; v111[41] -= msPerTick)
+++v111[40]` idiom in every animated state). Because there is only ONE word,
+illegal state COMBINATIONS are structurally unrepresentable in the original —
+the motivation for this audit of our multi-flag port. Enumeration method:
+every access to byte offset +78 in the full decompile (`+ 78)` textual scan:
+sub_41DE63 21999/22003 reads, sub_41EC84 22592/22604/22620-22622 writes,
+sub_42331C 25485-25487 carried-bomb read), every `v111[39]` site inside
+`sub_41F29B` (22985-23054, 23110-23319, 23396-23407), and `a1[39]` in
+`sub_421F7E` (24348). No other writer exists in the decompile; values 8-19
+and >39 are asserted invalid at 23230-23235 ("invalid special").
+
+| +78 | meaning | entry (cite) | exit (cite) |
+|---|---|---|---|
+| 0 | normal stand/walk | round start; every exit below | — |
+| 1 | kick anim | mover kicks a bomb ahead: `sub_41EC84` 22617-22624 (`if (+78 != 1) { +78=1; +80=0; }`, after `sub_424708` dispatch) | anim complete → 0 (23120-23129); or direction change (`v111[22] != v111[23]`) → 0 (23051-23055) |
+| 2 | punch anim | action2 edge + punch glove: `sub_41F29B` 23302-23305 (`sub_424A50` returns 1 unconditionally → `+78=2; +80=0`) | anim complete → 0 (23132-23145); or direction change → 0 (23051-23055) |
+| 3 | head-hit stun pose | `sub_421F7E` 24347-24349: `a1[29]=16; a1[39]=3; a1[40]=0` — UNCONDITIONAL overwrite, see "clobber" note below | +58 countdown reaches 0 → 0 (22982-22990: `if (!--v111[29] && v111[39]==3) { +78=0; +80=0; }`) |
+| 4 | pickup (grab) anim + pause | drop-block grab of own bomb underfoot: 23310-23320 (`sub_424AF4(bomb, player)` links +148 both ways, sets the BOMB's motion word to 3, clears the player's +57; then `+78=4; +80=0`) | "pickup" anim complete → 0 (23396-23407). NOTE: state 4 is only the pickup ANIMATION — carrying itself continues in state 0 (+37/+148 carried-bomb pointer; the walk anim switches to `walkbomb`/`standbomb` via +37 at 23088/23099) |
+| 5 | trampoline hop | mover step-on centring (`v35 == -1`) over an actor with `type == 3`: `sub_41EC84` 22601-22606 (`bounce-flag on the actor; +78=5; +80=0; sound 350`) | +80 counter reaches getvalue(680)=30 → 0 (23158-23165); apex teleport at counter == 680/2 (23169-23187, the rand%5-twice ×100-try loop) |
+| 6 | warp-out | mover step-on centring over actor `type == 1`: `sub_41EC84` 22590-22599 (`+78=6; +80=0`; dest stored to +20/+24 via `sub_405A81`; sound 1330) | +80 counter > 8 → 7 (23200-23213), position ← stored dest (+28/+32 = +20/+24 at 23211-23212) |
+| 7 | warp-in | from state 6 only (23209) | +80 counter > 8 → 0 (23215-23226) |
+| 20-39 | cornerhead idle-fidget | fully enclosed (all 4 neighbours blocked, `v99 == 4`) and state 0: 23006-23013 `+78 = rand % max(1, getvalue(330)) + 20` | anim complete → 0 (23236-23246); or no longer fully enclosed → 0 (23001-23004) |
+| 8-19, >39 | INVALID | never written | asserted at 23230-23235 |
+
+What each state ALLOWS (all cites `sub_41F29B` unless noted):
+
+- **New-input acquisition** (`v113` local, init 1 at 22981; the single gate
+  `if (v113 && !paused) { sub_41E61E / AI sub_40A1C6 }` at 23028-23039): forced
+  0 by +58>0 (22982-22984, INDEPENDENT of +78), states **5/6/7** (23015-23016,
+  redundantly 5 again at 23026-23027), and state **4 while its +80 counter is
+  still <= getvalue(665)** (23017-23025 — which ALSO forces the bomb-key byte
+  `+56 = 1`, so LABEL_246's release-throw `!+56` cannot fire during the pause
+  and the drop block sees no fresh edge). States 1/2/3/20-39 do NOT clear v113
+  themselves — you can steer during a kick/punch anim (steering cancels it),
+  and state 3 is input-blocked only via its paired +58 counter.
+- **Movement**: the mover (`sub_41EC84` via the keyed branch 23430-23453 or the
+  idle-conveyor branch 23413-23429) is NOT +78-gated; it is driven by +46
+  (want-godir), which stays -1 whenever v113 was 0. So states 5/6/7 don't move
+  (input blocked, and their tiles are trampolines/warpholes, not conveyors),
+  but a state-3/4-blocked player on a CONVEYOR is still carried (the belt
+  forces +46).
+- **Bomb actions** (LABEL_246, 23277-23380): reached EVERY alive tick — state
+  5 jumps there explicitly (`goto LABEL_246` at 23198) and 6/7/20-39 fall
+  through LABEL_239 into it. The auto-drop disease forcing (+135/+137 → +56=1,
+  23279-23284) and the carried-bomb release check (`if (+37) { if (v112 ||
+  !+56) throw }`, 23285-23297) therefore run in ALL states. Consequence: a
+  player entering 5/6/7 while carrying has +56 = 0 from the first blocked tick
+  (input skipped → key bytes stay at their per-tick reset, 22976-22979), so
+  the carried bomb is THROWN at their current position on the first tick of
+  the flight — carrying-through-a-warp is impossible. The edge-gated blocks
+  (action2 23298-23309, drop 23310-23380) never fire while input is blocked
+  because +56/+57 stay 0 (exception: the state-4 pause's forced +56=1 sustains
+  "held", which is not an edge).
+- **Death** (`sub_41DE63`, the single kill funnel for flame 22917 + in-mover
+  crush 22706 + enclosure crush + rover landing): early-outs, returning 0
+  with NO death and NO RNG draw, for `+78 == 5` and `+78 == 6 || 7`
+  (21999-22006). States 3 and 4 do NOT protect. (+102 spawn-invuln and +8
+  already-dead are checked deeper, in `sub_41DCB2` 21921.)
+- **Head hit** (`sub_421F7E` via the flying-bomb landing, `sub_42331C`
+  25443-25449): the victim probe `sub_421CB5` (24197-24212) accepts `*i &&
+  !i[2]` — active and not-dead, NO +78 guard — and the landing's victim scan
+  runs BEFORE the warphole probe (25445 vs 25452), inside the
+  wall/bomb/powerup-clear verdict. So a bomb CAN land on a bouncing/warping
+  player, and `a1[39] = 3` then CLOBBERS states 4/5/6/7: the pause/flight is
+  cancelled in place. A warp cancelled during warp-out never relocates (the
+  +28/+32 ← +20/+24 write only happens inside the state-6 branch); cancelled
+  during warp-in it stays at the exit. There is no re-trigger on the actor
+  tile without a fresh centring walk (the trigger lives in the mover's pixel
+  loop).
+- **Pickup / flame-check / disease contagion**: all inside the `!+8` alive
+  block but NOT +78-gated (pickup 22919-22926, flame 22915-22917 — the kill
+  is stopped by sub_41DE63's own 5/6/7 exemption, not by skipping the check —
+  contagion/aging ~22928-22975). A mid-flight player still collects powerups
+  under them and still spreads/catches disease.
+- **Carried-bomb anim** (`sub_42331C` case 3, 25480-25497): the carried bomb
+  reads the CARRIER's +78 (`== 4`) and +80 to place itself along the pickup
+  arc (getvalue(500+2k)); in any other state it rides at the carry offset.
+
+**Head-hit stun (+58) vs pickup-pause (state 4) are INDEPENDENT counters.**
+`sub_421F7E` writes +58 (a1[29]) and the state word; the grab path
+(`sub_424AF4` 26018-26025) writes NEITHER — it only links +148 both ways, sets
+the bomb's motion word 3, clears +57, plays sound 170; the pause comes from
+state 4's own +80-vs-getvalue(665) window. A head hit DURING the pause
+clobbers state 4 → 3 (pause cancelled) and starts the 16-tick +58 countdown.
+
+### Port parity (fixes landed 2026-07-11, this audit)
+
+Our port's mapping: state 0 = default; 1/2/20-39 = presentation-only anim
+states (no sim field — they gate nothing but their own sprite pick, and the
+kick/punch events already drive the poses); 3 = `stun > 0` (+58 is `stun`);
+4's pause = `pickup_pause` (NEW field — was conflated into `stun`);
+5 = `bounce > 0`; 6/7 = `warp > kWarpMid` / `warp <= kWarpMid`; carrying =
+`carrying` (a flag, matching the original's +37/+148 pointer which is likewise
+state-independent). Divergences found and fixed (each at the transition point,
+citing the machine):
+
+1. **`stun`/`pickup_pause` conflation** — one field served both the +58
+   head-hit countdown and the state-4 grab pause. Split (player.hpp,
+   bombs.cpp try_grab, simulation.cpp player_turn + AI gate, hash.cpp new
+   mix word). Behaviourally the conflation was masked (a grab needs an input
+   edge, which +58 blocks; a head hit overwrote the pause exactly like the
+   state clobber), but the fields' independence is load-bearing for fixes
+   2-3.
+2. **Illegal combo `carrying && (bounce || warp)`** — our early-returns for
+   bounce/warp skipped the throw block for the whole flight, holding the bomb
+   through a warp. Original: LABEL_246 runs in states 5/6/7 with +56=0 →
+   thrown on the FIRST flight tick. Fixed: `player_turn` releases the carried
+   bomb (throw_carried) on entering the bounce/warp branch.
+3. **Illegal combo `(bounce || warp) && stun`** — our head_hit left an
+   in-flight bounce/warp running under the new stun. Original: `a1[39]=3`
+   clobbers 5/6/7. Fixed: `PowerupSystem::head_hit` zeroes `bounce`, `warp`,
+   `pickup_pause` (latches left set — re-trigger needs a fresh centring walk).
+4. **Flame kill missing the 5/6/7 exemption** — `field_vs_players` killed a
+   bouncing/warping player standing in flame; `sub_41DE63` early-outs (the
+   enclosure crush already ported this same exemption). Fixed (bounce/warp
+   gate on the kill only; pickup below it intentionally NOT gated). Same fix
+   in the rover landing kill (rovers.cpp), which funnels through sub_41DE63.
+5. **Flying-bomb landing skipped the victim scan on warphole tiles** — we
+   folded the warphole into the same "blocked" verdict as walls, but the
+   original checks the victim FIRST (25445) and only then the warphole
+   (25452): a player stranded on a warphole IS head-hittable. Fixed in
+   `BombSystem::fly` (warphole now only blocks settling).
+6. **AI drew RNG while bouncing/warping** — v113 is 0 in states 5/6/7, so the
+   original never reaches the AI dispatch; our `ai.decide` gate only checked
+   stun. Fixed (gate extended to pickup_pause/bounce/warp).
+
+NOT changed (deliberate, re-affirmed): the standing head-stun's LABEL_246
+auto-drop/throw-while-stunned edge stays deferred (facts.md "Stun does NOT
+gate flame-death or pickup" port note) — fixing it needs the +54/+56
+effective-key history model, a broader restructure than a transition guard;
+states 1/2/20-39 stay presentation-side (nothing in the sim reads them; the
+direction-change cancel and enclosure-entry rolls affect only sprite choice).
+The cornerhead entry roll (23008-23012) draws `rand()` in the ORIGINAL sim
+loop, but per determinism rule 6 it is cosmetic (sprite pick only, no
+gameplay effect) and stays out of `State::rng` — same collapse as the
+death-variant roll ("Death powerup scatter" entry).
+
+GOLDEN: fixes 2-6 are inert on every golden scenario (no trampolines/
+warpholes/rovers/AI there; scenario B's grabs never coincide with a head hit —
+verified by the unchanged kExpectedRng/bounce-count assertions). Fix 1 adds a
+`mix(pickup_pause)` word to `state_hash` — a hash-LAYOUT-only change under
+determinism rule 5 (the mixed value is 0 everywhere a grab isn't in its
+2-tick pause), so all five golden hash constants were recaptured in this
+commit; every `kExpectedRng` checkpoint, bounce count, and final-rng value is
+byte-identical, proving the recapture is layout-only, zero behaviour drift.
+Tests: `tests/test_state_machine.cpp` (new suite pinning the table's
+transitions and each forbidden combination).
+
 ## Death powerup scatter — CONFIRMED (`sub_41DBFE`, via the death funnel `sub_41DE63`)
 
 Traced 2026-07-11 (user report: "collected powerups scatter onto the board when

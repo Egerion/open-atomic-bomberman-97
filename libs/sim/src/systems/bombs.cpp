@@ -152,7 +152,14 @@ bool BombSystem::try_grab(Player& p, int who) {
     p.carried_jelly = b->jelly;
     p.carried_trigger = b->trigger;
     b->active = false;  // the slot stays reserved (bombs_placed unchanged)
-    p.stun = s_.tuning.pickup_pause;
+    // pickup_pause (player state +78==4), NOT p.stun (+58, head-hit only) — the
+    // two are confirmed-independent counters in the original; see the
+    // Player::pickup_pause doc comment and facts.md "Player state machine
+    // (+78) — COMPLETE". Overwriting p.stun here used to clobber an
+    // in-progress head-hit stun countdown, which cannot happen: a grab needs a
+    // fresh input edge (+56), which the head-stun's v113 gate already blocks,
+    // so this path is never reached while p.stun > 0.
+    p.pickup_pause = s_.tuning.pickup_pause;
     s_.events.push_back({Event::Type::BombGrabbed, static_cast<std::int8_t>(who),
                          static_cast<std::int8_t>(p.tile_x()),
                          static_cast<std::int8_t>(p.tile_y()), 0});
@@ -295,12 +302,19 @@ void BombSystem::fly(Bomb& b) {
     //
     // The player check (sub_421CB5, head-hit) is nested INSIDE that clear
     // verdict in the original — it never runs when the tile is otherwise
-    // occupied. A player can't normally coexist with an unclaimed powerup on
-    // the same tile (walking onto one picks it up same-tick), so this nesting
-    // is mostly unobservable, but it IS the literal control flow: preserved
-    // here rather than checking the player unconditionally.
+    // occupied — but it runs BEFORE the warphole probe (pseudo.c 25443-25449:
+    // the victim scan is the first statement inside the wall/bomb/powerup
+    // verdict; sub_405654's actor lookup only happens in the victim-less else
+    // at 25452). So a player standing on a WARPHOLE tile IS head-hit by a
+    // landing bomb; only a victim-less warphole tile makes the bomb hop
+    // onward without settling. (Reachable: a head hit CANCELS a warp —
+    // sub_421F7E's +78=3 overwrite — so a warping player hit during warp-out
+    // is stranded on the entry warphole. Our previous port folded the
+    // warphole into the same `clear` verdict as walls, which skipped the
+    // victim scan on warphole tiles entirely — corrected 2026-07-11, facts.md
+    // "Player state machine (+78) — COMPLETE".)
     //
-    // A WARPHOLE actor also blocks landing (pseudo.c ~25453: `!v62 ||
+    // A WARPHOLE actor blocks SETTLING (pseudo.c ~25453: `!v62 ||
     // exp_ && v62[1] != 1`). `exp_` decompiles to a bare reference to the
     // statically-linked, NEVER-CALLED CRT `exp()` routine (0x4443CC) — the
     // ONLY xref to it in the whole binary is a `dr_O` (offset/immediate)
@@ -313,8 +327,9 @@ void BombSystem::fly(Bomb& b) {
     // docs/re/facts.md "Bomb/warphole reconciliation"). Resolved 2026-07-10,
     // see facts.md "Chain-reaction timing" sibling entry / exp_ resolution.
     bool clear = grid::tile_open(s, tx, ty) && grid::bomb_at(s, tx, ty) == nullptr &&
-                 (!grid::in_grid(tx, ty) || s.floor[ty][tx] == PowerupType::None) &&
-                 (!grid::in_grid(tx, ty) || s.actor_type[ty][tx] != ActorType::Warphole);
+                 (!grid::in_grid(tx, ty) || s.floor[ty][tx] == PowerupType::None);
+    const bool on_warphole =
+        grid::in_grid(tx, ty) && s.actor_type[ty][tx] == ActorType::Warphole;
 
     int victim = -1;
     if (clear) {
@@ -328,9 +343,10 @@ void BombSystem::fly(Bomb& b) {
         if (victim >= 0) powerups_.head_hit(victim, tx, ty);
     }
 
-    // Blocked landing tile (or a player head-hit, which never settles the
-    // bomb) ⇒ hop onward (the sound already fired above); otherwise settle.
-    if (!clear || victim >= 0) {
+    // Blocked landing tile, a player head-hit (which never settles the bomb),
+    // or a victim-less warphole ⇒ hop onward (the sound already fired above);
+    // otherwise settle.
+    if (!clear || victim >= 0 || on_warphole) {
         launch(b, b.dir, 1, s.tuning.punch_arc_hop);
         return;
     }

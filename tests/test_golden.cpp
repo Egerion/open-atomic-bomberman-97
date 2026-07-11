@@ -378,6 +378,26 @@ MatchConfig pillars_config() {
 // downstream checkpoints. All five scenarios pass BYTE-IDENTICAL with the fix
 // in place (all 24 assertions): no golden ever chains across owners. Pinned
 // by tests/test_chain_slot.cpp.
+//
+// UPDATE 2026-07-11 (player state machine +78 audit, docs/re/facts.md "Player
+// state machine (+78) — COMPLETE"): B/C/D/E hash constants recaptured for a
+// HASH-LAYOUT-ONLY change (CLAUDE.md determinism contract rule 5): the
+// stun/pickup-pause conflation split adds Player::pickup_pause, mixed as its
+// own word in state_hash — 0 outside a grab's 2-tick pause, but the extra
+// mix() call shifts every digest that hashes at least one present player.
+// ISOLATION PROOF, from the recapture run itself: every NON-HASH assertion
+// passed UNCHANGED — golden A (present-player-free, so its digest has no new
+// word) both hash AND rng, all four of D's kExpectedRng checkpoints, E's
+// bounce count 10 and final rng 0xc6a9f3b2 — i.e. zero RNG draws added/
+// removed/reordered and zero behaviour drift; only the digest layout moved.
+// The audit's five behaviour fixes (bounce/warp carried-bomb release, head-
+// hit cancelling bounce/warp/pause, flame/rover kill 5/6/7 exemption,
+// landing head-hit on warphole tiles, AI silence in states 5/6/7) are all
+// PROVEN INERT here: no golden board has a trampoline, warphole, or rover,
+// none sets Player::ai, and no golden grab ever coincides with a head hit
+// (B's kExpectedRng-equivalent — its six hash checkpoints — would have moved
+// under any RNG change, and A pins the stream directly). Pinned by
+// tests/test_state_machine.cpp.
 TEST_CASE("golden A: empty state, 10000 ticks") {
     Simulation a;
     a.state().rng = 42u;
@@ -408,15 +428,15 @@ TEST_CASE("golden B: 4-player brick match with all abilities") {
     cfg.born_with[static_cast<int>(PowerupType::Spooger)] = true;
     cfg.born_with[static_cast<int>(PowerupType::Jelly)] = true;
     Simulation s(cfg);
-    CHECK(s.hash() == 0x66be0a37b86e9b94ull);  // setup itself is pinned
+    CHECK(s.hash() == 0xfd4ff2be02f28574ull);  // setup itself is pinned
 
     static constexpr std::uint64_t kExpected[6] = {
-        0x105f4d7a3bf6ed26ull,  // tick 500
-        0x03732ecd4c85b2feull,  // tick 1000
-        0x919458232e2014b6ull,  // tick 1500
-        0xd48820b65fdca5fbull,  // tick 2000
-        0xc0ccfa2533a4ea76ull,  // tick 2500
-        0x388c59156818b30bull,  // tick 3000
+        0xfc1c21452de71766ull,  // tick 500
+        0x3378fe8882daaa3eull,  // tick 1000
+        0x986f9873e8874376ull,  // tick 1500
+        0x95eadedc2565aabbull,  // tick 2000
+        0xeb9b24c5c6b3d836ull,  // tick 2500
+        0x64026a1f646ff34bull,  // tick 3000
     };
     for (std::uint64_t t = 0; t < 3000; ++t) {
         s.tick(pattern(t));
@@ -434,7 +454,7 @@ TEST_CASE("golden C: trigger bombs and a fast hurry phase") {
     cfg.born_with[static_cast<int>(PowerupType::Trigger)] = true;
     Simulation s(cfg);
     for (std::uint64_t t = 0; t < 1500; ++t) s.tick(pattern(t * 7 + 3));
-    CHECK(s.hash() == 0x06581d909d647db0ull);
+    CHECK(s.hash() == 0xc8a6dc5c472d67b0ull);
 }
 
 TEST_CASE("golden D: the disease gauntlet") {
@@ -479,10 +499,10 @@ TEST_CASE("golden D: the disease gauntlet") {
     // ticks 200/400 stay byte-identical (this scenario's first bomb hasn't
     // exploded yet at either checkpoint); kExpectedRng is unchanged.
     static constexpr std::uint64_t kExpectedHash[4] = {
-        0xb0284a38351747a2ull,  // tick 200 (unchanged: before the first death)
-        0x3ce7c5c7298f1eb8ull,  // tick 400 (unchanged: before the first death)
-        0x5c307422fa29e961ull,  // tick 600
-        0x461fa6be7d9078ceull,  // tick 800
+        0xdfe12bf44ada5282ull,  // tick 200
+        0xc546352e50b39c58ull,  // tick 400
+        0x883083c480ac8d61ull,  // tick 600
+        0x21f167d0a0ca802eull,  // tick 800
     };
     static constexpr std::uint32_t kExpectedRng[4] = {0xca47489cu, 0x49cffff6u, 0xdd6d0230u,
                                                       0xa9af166bu};
@@ -543,10 +563,10 @@ TEST_CASE("golden E: jelly ping-pong and a veering punched flight") {
     };
 
     static constexpr std::uint64_t kExpected[4] = {
-        0x9d00c5fc62311dbdull,  // tick 75  (unchanged: before the first death)
-        0xd48a974feb70ee26ull,  // tick 150 (unchanged: before the first death)
-        0x46e776f3df49b380ull,  // tick 225 (unchanged: first death is tick 231)
-        0xd9aff8e9a93ca5e7ull,  // tick 300
+        0x721380a75cc6233dull,  // tick 75
+        0x021ce91faa4bd6a6ull,  // tick 150
+        0xe92dfed4f52f5a00ull,  // tick 225
+        0x97b1bd43bb00e3e7ull,  // tick 300
     };
     int bounces = 0;
     for (std::uint64_t t = 0; t < 300; ++t) {
