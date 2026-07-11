@@ -563,6 +563,14 @@ goldflame, so **golden B must be recaptured**; A/C/D/E stay byte-identical (see
 "Final in-game 1:1 gaps" §4 for the per-scenario reasoning). The earlier
 "Golden verified UNCHANGED" claim held only while goldflame was excluded.
 
+**NOT conflated with DEATH (verified 2026-07-11).** `sub_421F7E` is ONLY the
+bomb-on-head handler — it stuns and drops a rand-LIMITED count of rand%15-rolled
+kinds. It is a distinct code path from a player's DEATH, which drops the
+player's WHOLE surplus via a different function (`sub_41DBFE`) at the end of the
+death animation — see "Death powerup scatter" below. The head-hit facts above
+describe `sub_421F7E`'s own machinery and do not touch death; the two only share
+the tile-placement primitive `sub_4255B2`.
+
 ### Stun does NOT gate flame-death or pickup — RESOLVED (offset+8 ≠ stun)
 
 Read 2026-07-10, resolving the disease audit's "adjacent-but-out-of-scope"
@@ -699,6 +707,91 @@ item — `player_turn`'s full early-return on `stun > 0` — is now RESOLVED in
 its own pass: see the "RESOLVED 2026-07-10: stunned-but-alive movement
 ported" box above (stun only skips the input decode and the bomb-action
 block; the stage-actor mover still runs, golden proven inert).
+
+## Death powerup scatter — CONFIRMED (`sub_41DBFE`, via the death funnel `sub_41DE63`)
+
+Traced 2026-07-11 (user report: "collected powerups scatter onto the board when
+a player dies — our port didn't do this"). This was a genuinely UNPORTED
+mechanic, distinct from the head hit.
+
+**The death funnel does NOT scatter.** Every kill (flame `sub_41DE63` @ 22917,
+wall crush @ 22706, rover landing @ 27241) routes through **`sub_41DE63`** (the
+kill dispatcher), which: early-outs for a network-remote player (`+16 == 4`) or
+a bounce/warp-immune player (`+78 == 5/6/7`); picks a death-animation VARIANT
+`*(+4) = rand()%max(1,getvalue(105)) + 1`; then calls **`sub_41DCB2`** (the
+death applier) which sets the "already died this round" flag `*(+8) = 1`, clears
+the head-hit stun word `*(+48) = 0`, updates kill tallies/score, and destroys
+the carried bomb (`+148`). Neither function scatters powerups. The variant roll
+is the ONLY rand draw at the death tick and it is a **cosmetic death-sprite
+pick** — under CLAUDE.md determinism rule 6 it stays presentation-side, NOT in
+`State::rng` (our sim never draws it; it collapses the death animation).
+
+**The scatter is `sub_41DBFE`, fired at death-ANIMATION-END.** In the player
+updater `sub_41F29B` the dying player plays its `"die green %d"` sequence; when
+the anim counter reaches its statecnt (LABEL_26, pseudo.c ~23474-23478) the game
+calls `sub_41DBFE(player)`, then clears `+0` (active) and `+8`, and downgrades
+the player's live trigger bombs (`sub_424C47`). `sub_41DBFE` (pseudo.c
+~21870-21908):
+
+```
+if (player[+16] != 4)                       // not a network-remote player
+  for (kind = 0; kind < 15; ++kind) {
+    baseline = getvalue(50+kind);           // start-with count for this kind
+    if (sub_425C10(kind))                    // flag kind: 5,6,7,9,10
+      if (player[86+kind] > baseline) { sub_4255B2(kind); player[86+kind] = baseline; }
+    else                                     // counted kind
+      while (player[86+kind] > baseline) { sub_4255B2(kind); --player[86+kind]; }
+  }
+```
+
+- **What drops:** EVERY kind's surplus over the VALUELST start-with baseline
+  getvalue(50+kind). NO count roll and NO kind roll — the token multiset is
+  fully determined by the victim's inventory. Flag kinds (`sub_425C10` = kinds
+  **5/6/7/9/10** = punch/grab/spooger/trigger/jelly) scatter ONE token and
+  reset to baseline; counted kinds scatter one per surplus unit, decrementing
+  to baseline. (Kick=3 and Goldflame=8 are NOT flag kinds here, so they take
+  the counted branch — but with a 0/1 count that is identical to "scatter one,
+  clear". Every real kind's count is 0/1 or a small int, so a single
+  `have - baseline` surplus loop reproduces both branches exactly.)
+- **This is the OPPOSITE of the head hit.** Head hit (`sub_421F7E`) = a
+  rand-LIMITED count (getvalue(670)+rand%getvalue(671)) of RANDOMLY-ROLLED
+  kinds (rand%15, 200 tries). Death = the WHOLE surplus, deterministic order.
+- **RNG:** the only `State::rng` draws are `sub_4255B2`'s per-token tile
+  selection (`x=rand()%W`, `y=rand()%H`, inner budget 100 solid/brick re-rolls,
+  outer budget 100 occupancy attempts; a grounded bomb / ANY powerup record / a
+  live player burns an attempt, flame does NOT block, token LOST if all fail —
+  the SAME primitive and predicate as the head-hit and eviction scatters).
+  Iterated in **kind order 0..14** — that sequence is the determinism contract.
+  `sub_4255B2` is a no-op for kind 13 (clog) and draws nothing there.
+- **Occupancy note:** the scatter runs AFTER `+8` (dead) is set, so
+  `sub_421CB5`/our `grid::player_at` (which excludes dead players) lets a token
+  land on the victim's OWN tile.
+
+**Ported** as `PowerupSystem::death_scatter(Player&)` (powerups.cpp), called
+from all three death sites (`field_vs_players` flame kill in simulation.cpp,
+`EnclosureSystem` wall crush, `RoverSystem` landing kill). `held_count`/
+`reset_to_baseline` are shared with `head_hit`'s surplus test.
+
+**TIMING — deliberate, documented divergence.** The original defers the scatter
+to the death animation's final frame (tens of ticks after death; the DIE*.ANI
+length is asset data the SDL-free sim must not know). Our port scatters on the
+DEATH TICK — the same animation-delay collapse this sim applies everywhere else
+(a dead player is immediately inert). The scatter CONTENTS (kinds/counts/tiles)
+and RNG arithmetic are identical; only the tick the tokens appear differs. No
+tunable/constant is guessed.
+
+**GOLDEN (recaptured 2026-07-11, same commit).** New draws land ONLY on a death
+tick, so every scenario that produces a death shifts: B (first death tick 39,
+all 6 checkpoints), C (tick 10, its one hash), D (the disease gauntlet's
+auto-drop diseases make the key-silent players lay bombs; first flame death tick
+487, so 200/400 stay byte-identical and only 600/800 move), E (tick 231, only
+tick 300 + final rng). Golden A (no deaths) is UNCHANGED. Isolation proven by
+running this revision against `main`'s sim with identical instrumentation: the
+first-death TICK and the full hash+rng at the END of the tick BEFORE each first
+death are byte-identical across both builds, confining every divergence to the
+death tick's scatter draws. Tests: `tests/test_sim.cpp` ("a dying player
+scatters its whole surplus…", "…at its start-with baseline scatters nothing",
+"death scatter places the surplus token on the sole legal tile").
 
 ## Powerup pickup dispatcher — CONFIRMED (`sub_41E21E`)
 

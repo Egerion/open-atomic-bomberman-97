@@ -861,6 +861,114 @@ TEST_CASE("a head hit can drop goldflame (kind 8)") {
     CHECK(gold_on_floor);  // scattered as a Goldflame token
 }
 
+// Death powerup scatter (sub_41DBFE, docs/re/facts.md "Death powerup scatter"):
+// a dying player rains its WHOLE surplus (every kind above the VALUELST
+// start-with baseline) back onto the board — no kind roll, no count roll, so
+// the token multiset is fully determined by the victim's inventory.
+TEST_CASE("a dying player scatters its whole surplus over the start-with baseline") {
+    MatchConfig cfg = open_config();  // all-blank 15x11, players at (0,0)/(14,10)
+    for (auto& c : cfg.tuning.spawn_counts) c = 0;  // no auto floor spawns
+    Simulation s(cfg);
+    const Tuning& tn = s.state().tuning;
+    Player& v = s.state().players[1];  // the victim, far from player 0
+    // A known surplus above each kind's baseline (counted kinds get several,
+    // flag kinds one). start_with defaults: bombs 1, flame 2, skate 0.
+    v.max_bombs = tn.start_with[0] + 2;  // 2 surplus ExtraBomb tokens
+    v.flame = tn.start_with[1] + 3;      // 3 surplus Flame tokens
+    v.skates = tn.start_with[4] + 4;     // 4 surplus Skate tokens
+    v.kick = true;                       // 1 Kick
+    v.punch = true;                      // 1 Punch
+    v.grab = true;                       // 1 Grab
+    v.goldflame = true;                  // 1 Goldflame
+    v.jelly = true;                      // 1 Jelly
+
+    int vx = v.tile_x(), vy = v.tile_y();
+    s.state().flame[vy][vx] = 200;  // active flame underfoot -> flame death
+    run(s, 1);
+    CHECK(!v.alive);
+
+    // The victim's counts are wound back to their baselines (sub_41DBFE's
+    // write-back), so a hashed dead player carries no phantom surplus.
+    CHECK(v.max_bombs == tn.start_with[0]);
+    CHECK(v.flame == tn.start_with[1]);
+    CHECK(v.skates == tn.start_with[4]);
+    CHECK(!v.kick);
+    CHECK(!v.punch);
+    CHECK(!v.grab);
+    CHECK(!v.goldflame);
+    CHECK(!v.jelly);
+
+    // The board carries EXACTLY the surplus multiset, by kind. (165 blank tiles
+    // vs 14 tokens: scatter's 100-attempt re-roll always finds a free tile, so
+    // none are lost.)
+    int cnt[static_cast<int>(PowerupType::Random) + 1] = {0};
+    int total = 0;
+    for (int y = 0; y < kGridHeight; ++y)
+        for (int x = 0; x < kGridWidth; ++x)
+            if (s.state().floor[y][x] != PowerupType::None) {
+                ++cnt[static_cast<int>(s.state().floor[y][x])];
+                ++total;
+            }
+    CHECK(cnt[static_cast<int>(PowerupType::ExtraBomb)] == 2);
+    CHECK(cnt[static_cast<int>(PowerupType::Flame)] == 3);
+    CHECK(cnt[static_cast<int>(PowerupType::Skate)] == 4);
+    CHECK(cnt[static_cast<int>(PowerupType::Kick)] == 1);
+    CHECK(cnt[static_cast<int>(PowerupType::Punch)] == 1);
+    CHECK(cnt[static_cast<int>(PowerupType::Grab)] == 1);
+    CHECK(cnt[static_cast<int>(PowerupType::Goldflame)] == 1);
+    CHECK(cnt[static_cast<int>(PowerupType::Jelly)] == 1);
+    CHECK(total == 14);  // 2+3+4 counted + 5 flag kinds = 14, nothing else
+}
+
+TEST_CASE("a dying player at its start-with baseline scatters nothing") {
+    // No surplus -> sub_41DBFE's per-kind `have > baseline` never fires.
+    Simulation s(open_config());
+    Player& v = s.state().players[1];  // fresh: bombs 1, flame 2, no gloves
+    int vx = v.tile_x(), vy = v.tile_y();
+    s.state().flame[vy][vx] = 200;
+    run(s, 1);
+    CHECK(!v.alive);
+    int total = 0;
+    for (int y = 0; y < kGridHeight; ++y)
+        for (int x = 0; x < kGridWidth; ++x)
+            if (s.state().floor[y][x] != PowerupType::None) ++total;
+    CHECK(total == 0);
+}
+
+// The tile selection is the SAME sub_4255B2 draw the head hit uses, in kind
+// order. On a board that is Solid everywhere except the victim's tile and a
+// single legal candidate, the scattered token must land on that candidate —
+// pinning the death path's tile choice deterministically. Because a DEAD
+// victim's own tile is itself a legal landing spot (grid::player_at gates on
+// `alive`, and the original sets +8=dead before the anim-end scatter), we
+// occupy (5,5) with a pre-placed floor token so the candidate (3,3) is the
+// sole free tile. The victim dies to the flame (checked before pickup in
+// field_vs_players) so it never collects that blocker.
+TEST_CASE("death scatter places the surplus token on the sole legal tile") {
+    MatchConfig cfg;
+    for (int y = 0; y < kGridHeight; ++y)
+        for (int x = 0; x < kGridWidth; ++x) cfg.cells[y][x] = Cell::Solid;
+    cfg.cells[5][5] = Cell::Blank;  // victim's tile
+    cfg.cells[3][3] = Cell::Blank;  // the ONLY other legal candidate tile
+    cfg.spawns = {{5, 5}};
+    cfg.player_count = 1;
+    cfg.seed = 1;
+    for (auto& c : cfg.tuning.spawn_counts) c = 0;
+    Simulation s(cfg);
+    Player& v = s.state().players[0];
+    REQUIRE(v.tile_x() == 5);
+    REQUIRE(v.tile_y() == 5);
+    v.kick = true;                                // exactly one surplus token (kind 3)
+    s.state().floor[5][5] = PowerupType::Skate;   // blocker: keeps (5,5) occupied
+    s.state().flame[5][5] = 200;
+    run(s, 1);
+    CHECK(!v.alive);
+    // (5,5) is occupied by the blocker, so the Kick token can only reach (3,3).
+    CHECK(s.state().floor[3][3] == PowerupType::Kick);
+    CHECK(s.state().floor[5][5] == PowerupType::Skate);  // blocker untouched (victim died first)
+    CHECK(!v.kick);
+}
+
 // docs/re/facts.md "Scatter occupancy test" (sub_4255B2, pinned from
 // pseudo.c 26458-26479): the re-roll predicate rejects a bomb, ANY powerup
 // record, or a live PLAYER on the candidate tile — but NOT flame. A scattered

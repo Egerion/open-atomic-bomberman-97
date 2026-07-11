@@ -25,11 +25,29 @@ public:
     // powers_lost_min + rand % powers_lost_rand kind-rolled drops.
     void head_hit(int victim, int tx, int ty);
 
+    // A player dies (sub_41DBFE): scatter EVERY accumulated powerup above the
+    // VALUELST start-with baseline back onto random floor tiles. No kind roll,
+    // no count roll — the only RNG is the per-token tile selection, in kind
+    // order. Called from every death site (flame, wall crush, rover). See the
+    // .cpp for the deliberate death-tick vs death-anim-end timing note.
+    void death_scatter(Player& p);
+
 private:
     // Mutual-exclusion eviction (sub_41E16A): scatters the evicted token back
     // onto the floor and, for Trigger, downgrades the player's live trigger
     // bombs (sub_424C47). Only ever called with the five flag kinds.
     void evict(Player& p, PowerupType t);
+
+    // Current accumulated count of a powerup kind (player bytes +86..+96 in the
+    // original): a small integer for bombs/flame/skate, 0/1 for the flag kinds,
+    // 0 for kinds with no per-kind count (disease/superdisease/random). Shared
+    // by head_hit's surplus test and death_scatter's surplus loop.
+    int held_count(const Player& p, int kind) const;
+
+    // Reset a kind's accumulated count to its start-with baseline (mirrors
+    // sub_41DBFE's write-back: it touches ONLY the count byte, not the derived
+    // speed stat — a dead player's speed is never read again).
+    void reset_to_baseline(Player& p, int kind, int baseline);
 
     State& s_;
 };

@@ -334,6 +334,37 @@ MatchConfig pillars_config() {
 // to ignite. This recapture is self-contained to flame_kind alone; if
 // another concurrent change also touches these constants, reconcile by
 // re-running both fixes together rather than merging hex values by hand.
+//
+// UPDATE 2026-07-11 (death powerup scatter, docs/re/facts.md "Death powerup
+// scatter"): a DELIBERATE behaviour recapture. A dying player now scatters
+// EVERY powerup it accumulated above its VALUELST start-with baseline back
+// onto random floor tiles (sub_41DBFE, reached from the shared death funnel
+// sub_41DE63 -> the death-animation-end scatter) — a genuinely unported
+// mechanic. The scatter draws State::rng ONLY for sub_4255B2's per-token tile
+// selection, in kind order (no kind roll, no count roll — that is what
+// distinguishes it from the head hit). New draws land ONLY on a death tick, so
+// the reach is every scenario that produces a death:
+//   - B (4-player brick brawl): first death at tick 39, so all six 500-tick
+//     checkpoints move.
+//   - C (trigger duel): first death at tick 10, its single tick-1500 hash
+//     moves.
+//   - D (disease gauntlet): the auto-drop diseases (diarrhea/ebola) make the
+//     otherwise-key-silent players lay bombs; the first flame death is tick
+//     487, so checkpoints 200/400 stay BYTE-IDENTICAL (hash AND kExpectedRng)
+//     and only 600/800 move.
+//   - E (jelly choreography): first death at tick 231, so 75/150/225 stay
+//     BYTE-IDENTICAL and only tick 300 + the final rng move.
+// ISOLATION PROOF (run this revision against the sim reverted to main, both
+// with the same instrumentation): the first-death TICK is identical on both
+// (39/10/487/231 — the deaths themselves are unchanged, only the scatter is
+// added), AND the full state hash + rng captured at the END of the tick BEFORE
+// each first death are byte-identical across the two builds (B end-of-38 hash
+// 0x89459d..., C end-of-9, D end-of-486, E end-of-230). Every divergence is
+// therefore confined to the death tick's new scatter draws. Golden A is
+// unaffected (no players, no deaths — its hash and rng are UNCHANGED). This
+// recapture is self-contained to the death scatter; if a concurrent change
+// also touches these constants, reconcile by re-running both together rather
+// than merging hex by hand.
 TEST_CASE("golden A: empty state, 10000 ticks") {
     Simulation a;
     a.state().rng = 42u;
@@ -367,12 +398,12 @@ TEST_CASE("golden B: 4-player brick match with all abilities") {
     CHECK(s.hash() == 0x66be0a37b86e9b94ull);  // setup itself is pinned
 
     static constexpr std::uint64_t kExpected[6] = {
-        0xa7689a71c2a47821ull,  // tick 500
-        0x974b392fb71743edull,  // tick 1000
-        0xc882a48bc621c211ull,  // tick 1500
-        0xcf0d218b494ea77bull,  // tick 2000
-        0x521933dc8220fcd1ull,  // tick 2500
-        0xb3ddf2ce1d42bf28ull,  // tick 3000
+        0x105f4d7a3bf6ed26ull,  // tick 500
+        0x03732ecd4c85b2feull,  // tick 1000
+        0x919458232e2014b6ull,  // tick 1500
+        0xd48820b65fdca5fbull,  // tick 2000
+        0xc0ccfa2533a4ea76ull,  // tick 2500
+        0x388c59156818b30bull,  // tick 3000
     };
     for (std::uint64_t t = 0; t < 3000; ++t) {
         s.tick(pattern(t));
@@ -390,7 +421,7 @@ TEST_CASE("golden C: trigger bombs and a fast hurry phase") {
     cfg.born_with[static_cast<int>(PowerupType::Trigger)] = true;
     Simulation s(cfg);
     for (std::uint64_t t = 0; t < 1500; ++t) s.tick(pattern(t * 7 + 3));
-    CHECK(s.hash() == 0x8167ede7b6d4b723ull);
+    CHECK(s.hash() == 0x06581d909d647db0ull);
 }
 
 TEST_CASE("golden D: the disease gauntlet") {
@@ -435,13 +466,13 @@ TEST_CASE("golden D: the disease gauntlet") {
     // ticks 200/400 stay byte-identical (this scenario's first bomb hasn't
     // exploded yet at either checkpoint); kExpectedRng is unchanged.
     static constexpr std::uint64_t kExpectedHash[4] = {
-        0xb0284a38351747a2ull,  // tick 200 (unchanged: no flame yet)
-        0x3ce7c5c7298f1eb8ull,  // tick 400 (unchanged: no flame yet)
-        0x82793c7c2dfd7e70ull,  // tick 600
-        0x256b5c9f49422d07ull,  // tick 800
+        0xb0284a38351747a2ull,  // tick 200 (unchanged: before the first death)
+        0x3ce7c5c7298f1eb8ull,  // tick 400 (unchanged: before the first death)
+        0x5c307422fa29e961ull,  // tick 600
+        0x461fa6be7d9078ceull,  // tick 800
     };
-    static constexpr std::uint32_t kExpectedRng[4] = {0xca47489cu, 0x49cffff6u, 0x2abb3268u,
-                                                      0xd72904d8u};
+    static constexpr std::uint32_t kExpectedRng[4] = {0xca47489cu, 0x49cffff6u, 0xdd6d0230u,
+                                                      0xa9af166bu};
     for (std::uint64_t t = 0; t < 800; ++t) {
         TickInputs in = pattern(t);
         for (int p = 0; p < kMaxPlayers; ++p) {
@@ -499,10 +530,10 @@ TEST_CASE("golden E: jelly ping-pong and a veering punched flight") {
     };
 
     static constexpr std::uint64_t kExpected[4] = {
-        0x9d00c5fc62311dbdull,  // tick 75  (unchanged: no bomb has exploded yet)
-        0xd48a974feb70ee26ull,  // tick 150 (unchanged: no bomb has exploded yet)
-        0x46e776f3df49b380ull,  // tick 225
-        0x678e7e32794490faull,  // tick 300
+        0x9d00c5fc62311dbdull,  // tick 75  (unchanged: before the first death)
+        0xd48a974feb70ee26ull,  // tick 150 (unchanged: before the first death)
+        0x46e776f3df49b380ull,  // tick 225 (unchanged: first death is tick 231)
+        0xd9aff8e9a93ca5e7ull,  // tick 300
     };
     int bounces = 0;
     for (std::uint64_t t = 0; t < 300; ++t) {
@@ -516,5 +547,5 @@ TEST_CASE("golden E: jelly ping-pong and a veering punched flight") {
     // facing player (sub_42464B) instead of waiting for the body-block reverse,
     // so the ping-pong starts sooner and completes more legs in 300 ticks.
     CHECK(bounces == 10);                 // the ping-pong really happened
-    CHECK(s.state().rng == 0x405862fbu);  // the veer roll really consumed RNG
+    CHECK(s.state().rng == 0xc6a9f3b2u);  // the veer roll really consumed RNG
 }
