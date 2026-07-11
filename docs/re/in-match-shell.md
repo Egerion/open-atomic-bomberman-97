@@ -93,6 +93,59 @@ implies (observed worst case ~56 ms either side, i.e. just over one 50 ms
 tick, not the 2-3 extra ticks a gross pipeline bug would add) — confirming
 the fix trims a real but modest per-frame excess rather than papering over
 a larger structural latency bug. No `libs/sim` change; golden untouched.
+
+## Input acquisition — the GAMEPLAY key reader, CONFIRMED (2026-07-11)
+
+Prompted by the "bomb placement sometimes just vanishes" report (the sim's
+placement gate was separately proven faithful by a 30k-trial fuzz —
+`tests/test_placement_diag.cpp` G/H/I/J/K): is losing a short tap AUTHENTIC
+to the original, or a port infidelity? Traced the whole keyboard path:
+
+- **The gameplay reader `sub_41E61E` @ 0x41E61E reads a LIVE STATE ARRAY,
+  not the event queue.** Its keyboard case (`+16 == 2`, pseudo.c
+  22326-22356) tests `byte_4A2BA0[<configured scancode>]` directly for all
+  six keys (4 directions → the local godir flags, bomb/action →
+  `+56`/`+57`). `byte_4A2BA0` (0x4A2BA0) is the engine's per-scancode
+  down-state table.
+- **The array's only writer is `sub_433E14` @ 0x433E14** (pseudo.c
+  36389-36394): make sets `byte_4A2BA0[scan] = 1`, break sets `0`, a make
+  while already down sets `2` (auto-repeat marker) — and it separately
+  appends a 24-byte event record to the queue at `dword_45C528`. That queue
+  feeds ONLY the auxiliary reader (`sub_43A508` →
+  `sub_43A56C`/`sub_43A624`/`sub_43DF28`, the aux-key table above);
+  gameplay never pops it.
+- **The feed is DirectInput BUFFERED data, drained by the per-frame pump.**
+  `sub_43B5EC` @ 0x43B5EC (called from `sub_43A508`, i.e. once per
+  displayed frame) loops `sub_4449B0` @ 0x4449B0 — vtbl offset +40 =
+  `IDirectInputDevice::GetDeviceData`, 32-record batches into 0x4A3EA0 —
+  through `sub_43B700` @ 0x43B700 (scancode translate + extended-prefix +
+  the software auto-repeat synthesizer at `dword_4A2DB0` timestamps) into
+  `sub_433E14`, then runs the `PeekMessageA` pump.
+- **Consumption cadence = one edge check per displayed frame.**
+  `sub_41F29B` shuffles the key bytes (`+54=+56`, `+55=+57`, then
+  `+56=+57=0`; pseudo.c 22976-22979) and re-reads them via `sub_41E61E`
+  (23037) once per `sub_42A191` frame callback; the drop block is edge-gated
+  on `+56 && !+54` at that same cadence.
+
+**Verdict: tap loss exists in the original but its window is ONE DISPLAYED
+FRAME (~14-16 ms at 60-70 fps), not one 50 ms tick.** A press and release
+whose DirectInput records are both drained by the same per-frame pump (tap
+entirely inside one frame) leaves the array at 0 by read time — lost, same
+as any state-poll model. But any tap spanning a frame boundary is seen down
+by that frame's read and fires the edge. The port sampled
+`SDL_GetKeyboardState` only once per 50 ms tick, widening the original's
+loss window ~3x — a normal ~30-40 ms tap could vanish entirely, which is
+exactly the reported symptom. **Fixed (presentation-side, golden frozen):**
+`GameApp::run_match` now samples `collect_inputs()` once per rendered frame
+(this loop is the port's flip-loop callback equivalent) and latches
+action1/action2 downs until the next tick consumes them (`tap_latch`),
+restoring the original's frame-cadence capture. Directions are deliberately
+NOT latched: they are level-driven (the original integrates held time in
+ms, so a sub-tick direction tap moved a few px at most — stretching it to a
+full 50 ms budget would overshoot the original more than dropping it does),
+while the action keys are edge-consumed, capture-or-lose. The sim's
+`TickInputs` contract is unchanged — only how the shell fills it.
+
 ## The auxiliary key table — EXHAUSTIVE, CONFIRMED
 
 Reading the exact nested-if chain at pseudo.c 29709-29788 (not paraphrased —
