@@ -173,6 +173,92 @@ void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs, Stag
     if (p.stun > 0) --p.stun;
     if (p.pickup_pause > 0) --p.pickup_pause;
 
+    // The four LABEL_246 blocks (sub_41F29B 23277-23380), in the original's
+    // exact order: auto-drop force (diarrhea +135 / super +137) -> carried-
+    // bomb throw (+37) -> action2 edge (kick-stop +89 / punch +91 / trigger
+    // +95) -> drop edge (grab +92 / spooge +93 / plain drop), gated !+134.
+    // CONFIRMED (facts.md "Player state machine (+78) — COMPLETE" and
+    // "Diarrhea/super auto-drop x grab-glove"): LABEL_246 runs on EVERY alive
+    // tick regardless of the +78 state — state 5 (bounce) reaches it via an
+    // explicit `goto LABEL_246` (23198), states 6/7 (warp out/in) and 20-39
+    // fall through LABEL_239 into it, and nothing in the v113 gate (the ONE
+    // thing a head-hit stun / grab pause / bounce / warp actually blocks)
+    // touches LABEL_246 itself — v113 only guards the EARLIER new-input
+    // acquisition call that would set the raw key bytes +56/+57 from the
+    // controller. `blocked` mirrors that: while blocked, this tick's
+    // effective key bytes start at their per-tick reset of 0 (22976-22979,
+    // which the original runs unconditionally every alive tick, so a fresh
+    // edge NEVER materialises while acquisition is skipped) UNLESS the
+    // auto-drop disease force overrides +56=1 below (that override lives
+    // INSIDE LABEL_246 itself, so it fires regardless of `blocked`). This is
+    // why a carried bomb is released on the very first blocked tick (`!+56`
+    // reads true immediately — the release-throw the user can trigger by
+    // walking into a head-stun while carrying) and why the diarrhea/super
+    // auto-drop keeps cycling grab/throw/drop straight through a stun or a
+    // bounce/warp flight, while a genuine NEW manual action (kick-stop/punch/
+    // trigger/drop) cannot fire — its edge needs +56 or +57 actually freshly
+    // DOWN, which requires the input acquisition that `blocked` skips.
+    // pickup_pause (+78==4's own window) is deliberately NOT modelled here:
+    // the original forces +56=1 SUSTAINED (not a fresh edge) for that specific
+    // state instead of leaving it at 0 (23017-23025) — a materially different
+    // "held" rule from the zero-default `blocked` models below. Every call
+    // site therefore still fully SKIPS `bomb_actions` while p.pickup_pause >
+    // 0 (matching the pre-existing full-skip for that case exactly — see the
+    // pickup-pause doc comment on Player::pickup_pause) and only routes
+    // through `bomb_actions` for p.stun > 0 / bounce / warp, which this pass
+    // DOES fix.
+    //
+    // p.prev_action1/2 (the original's +54/+55) are updated HERE, to the
+    // EFFECTIVE key values just used (post auto-drop-force, post blocked-
+    // zeroing) — not the raw controller input — mirroring the original's
+    // literal `+54 = +56` copy at the top of the NEXT tick. This also fixes a
+    // latent divergence: the previous port latched the RAW `in.action1/2`
+    // unconditionally, which only matched the original whenever auto-drop
+    // was inactive (auto-drop's own in-block override made the raw-vs-
+    // effective distinction inert while the disease stayed active; it can
+    // diverge on the tick a disease is cured with an un-pressed button, which
+    // no scenario/test currently exercises — see facts.md).
+    auto bomb_actions = [&](bool blocked) {
+        const bool auto_drop = p.sick(Disease::Diarrhea) || p.sick(Disease::Super);
+        const bool a1_now = auto_drop ? true : (blocked ? false : in.action1);   // +56
+        const bool a1_last = auto_drop ? false : p.prev_action1;                 // +54
+        const bool a2_now = blocked ? false : in.action2;                        // +57
+        const bool a2_last = p.prev_action2;                                     // +55
+        const bool drop_edge = a1_now && !a1_last;
+
+        // (2) Throw block (`+37`): a carried bomb is thrown when auto-drop forces
+        //     it (v112) OR the key is released (`!+56`) — not gated by
+        //     constipation. While blocked (and not auto-dropping) `a1_now` is
+        //     always false, so this fires on the FIRST blocked tick.
+        if (p.carrying) {
+            if (auto_drop || !a1_now) bombs.throw_carried(p, i);
+        }
+        // (3) Action2 (`+57 && !+55`): stop own sliding bombs, punch, trigger-
+        //     detonate. `a2_now` is forced false while blocked, so this never
+        //     fires without a fresh real key press.
+        if (a2_now && !a2_last) {
+            if (p.kick) bombs.stop_own_sliding(i);
+            if (p.punch && !a1_now) bombs.try_punch(p, static_cast<std::uint8_t>(i));
+            if (p.trigger) bombs.detonate_triggered(i);
+        }
+        // (4) Drop block (`+56 && !+54 && !+134`): grab own bomb underfoot, else
+        //     spooger line (suppressed under auto-drop), else plain drop. Only
+        //     THIS block is gated by constipation. While blocked, only the
+        //     auto-drop-forced edge can reach it.
+        if (drop_edge && !p.sick(Disease::Constipation)) {
+            const Bomb* under = grid::bomb_at(s, p.tile_x(), p.tile_y());
+            const bool own = under && under->owner == static_cast<std::uint8_t>(i);
+            if (p.grab && own)
+                bombs.try_grab(p, i);
+            else if (p.spooge && !auto_drop && own)
+                bombs.spooge_ahead(p, static_cast<std::uint8_t>(i));
+            else
+                bombs.drop(p, static_cast<std::uint8_t>(i));
+        }
+        p.prev_action1 = a1_now;
+        p.prev_action2 = a2_now;
+    };
+
     // A trampoline hop is a state-gated flight (sub_41F29B state 5 / sub_41DE63):
     // movement input and bomb actions are ignored until the hop finishes, and the
     // player cannot be pushed. tick_bounce ticks it down AND, at the apex, teleports
@@ -182,22 +268,33 @@ void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs, Stag
     //
     // CONFIRMED (pseudo.c ~23198/23248, the v86==5 branch's `goto LABEL_246` and
     // the fall-through from states 6/7 into the same label): the original's
-    // LABEL_246 — which includes the carried-bomb throw-release check (`if (+37)
-    // { if (v112 || !+56) throw }`) — is NOT skipped during a bounce or warp; it
-    // runs every tick regardless of +78. Because input is fully blocked the whole
-    // time (+56 stays 0, never re-set), `!+56` is true from the very first tick,
-    // so a player who enters a bounce/warp WHILE CARRYING has the bomb thrown at
-    // their current tile almost immediately, not held through the whole flight.
-    // Our port takes an early return here (skipping the rest of player_turn, incl.
-    // the throw block in the bomb-key section below) for the whole bounce/warp
-    // duration, so release any carried bomb up front to match — the "warp/bounce
-    // while carrying" illegal-in-our-port-only combination the state-machine audit
-    // flagged (facts.md "Player state machine (+78) — COMPLETE").
+    // LABEL_246 — all four blocks, not just the carried-bomb throw-release check
+    // — is NOT skipped during a bounce or warp; it runs every tick regardless of
+    // +78. Because input is fully blocked the whole time (+56 stays 0, never
+    // re-set, unless auto-drop forces it), `!+56` is true from the very first
+    // tick, so a player who enters a bounce/warp WHILE CARRYING has the bomb
+    // thrown at their current tile almost immediately, not held through the
+    // whole flight — and a diarrhea/super auto-drop keeps grabbing/throwing/
+    // dropping straight through the flight too. Movement/input are still fully
+    // skipped for the whole bounce/warp duration (the "warp/bounce while
+    // carrying" illegal-in-our-port-only combination the state-machine audit
+    // flagged, facts.md "Player state machine (+78) — COMPLETE") — only the
+    // bomb-action block runs, via the shared `bomb_actions` above. If the flight
+    // was entered mid pickup-pause (a conveyor-carried grab pushed onto a
+    // trampoline/warphole — vanishingly rare, no current scenario reaches it),
+    // `bomb_actions` stays fully skipped per its pickup_pause carve-out above;
+    // preserve the pre-existing narrow release-on-entry fix (main's illegal-
+    // combo guard) for exactly that case so a carried bomb still doesn't ride
+    // through the flight untouched.
     if (stage.bouncing(p)) {
-        if (p.carrying) bombs.throw_carried(p, i);
+        if (p.pickup_pause > 0) {
+            if (p.carrying) bombs.throw_carried(p, i);
+            p.prev_action1 = in.action1;
+            p.prev_action2 = in.action2;
+        } else {
+            bomb_actions(/*blocked=*/true);
+        }
         stage.tick_bounce(p, i);
-        p.prev_action1 = in.action1;
-        p.prev_action2 = in.action2;
         return;
     }
 
@@ -207,13 +304,18 @@ void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs, Stag
     // it down (which performs the midpoint relocation) and skip the turn. This is
     // the fix for the "stuck on entering a warp" report: the prior instantaneous
     // teleport skipped these phases; now the player warps and, once warp==0, moves
-    // again. See docs/re/stage-actors.md §5. Carried-bomb release: see the bounce
-    // branch above (same LABEL_246 fall-through argument applies to states 6/7).
+    // again. See docs/re/stage-actors.md §5. Bomb actions: see the bounce branch
+    // above (same LABEL_246 fall-through argument, incl. the pickup-pause carve-
+    // out, applies to states 6/7).
     if (stage.warping(p)) {
-        if (p.carrying) bombs.throw_carried(p, i);
+        if (p.pickup_pause > 0) {
+            if (p.carrying) bombs.throw_carried(p, i);
+            p.prev_action1 = in.action1;
+            p.prev_action2 = in.action2;
+        } else {
+            bomb_actions(/*blocked=*/true);
+        }
         stage.tick_warp(p);
-        p.prev_action1 = in.action1;
-        p.prev_action2 = in.action2;
         return;
     }
 
@@ -328,83 +430,23 @@ void player_turn(State& s, int i, const PlayerInput& in, BombSystem& bombs, Stag
     stage.trampoline_after_move(p, i);
     stage.warphole_after_move(p, i);
 
-    // The bomb key (action1) drives THREE independent blocks, in the original's
-    // exact order (sub_41F29B LABEL_246). We mirror the byte semantics: +56 =
-    // "bomb key down this frame", +54 = "…last frame"; the drop block is edge-
-    // gated on `+56 && !+54`; +37 = a carried (grabbed) bomb.
-    //
-    // SKIPPED entirely while `stunned` (EITHER p.stun>0 head-hit OR
-    // p.pickup_pause>0 grab-pause — see the field split above): the v113 gate
-    // that skips sub_41E61E leaves the bomb-key bytes +56/+57 at their per-tick
-    // 0 reset, so every edge-gated action (manual drop / throw / grab / spooge /
-    // punch / trigger / kick-stop) is un-triggered — the same as the prior full
-    // early-return did, so this is inert on the golden and on the grab-pickup-
-    // pause tests (which pin the carried bomb as thrown only AFTER the pause;
-    // see test_diarrhea_throw.cpp). The original's disease auto-drop and
-    // carried-bomb throw, which ride the disease flags / a released key rather
-    // than a NEW key press, do keep firing during a head-hit stun in sub_41F29B
-    // (LABEL_246 is reached with +56=0, states 1/2/3/4/20-39 all fall through to
-    // it); reproducing that narrow edge for the STANDING (non-bounce/warp) case
-    // is deliberately deferred — it never fires in any current scenario/test.
-    // The bounce/warp case of the SAME LABEL_246-always-runs fact IS fixed (see
-    // the `if (p.carrying) bombs.throw_carried(...)` calls above the early
-    // returns) because it was a clean, narrowly-scoped state-transition guard;
-    // this standing-stun case is a broader reordering of the whole block and
-    // stays out of scope here. facts.md "Player state machine (+78) — COMPLETE".
-    //
-    // (1) Auto-drop diseases (diarrhea +135 / super +137): the original FORCES an
-    //     edge every frame — `+56 = 1; +54 = 0; v112 = 1` — so the drop block
-    //     below fires each tick. We reproduce that by overriding the effective
-    //     key state under auto-drop. v112 also unconditionally releases a carried
-    //     bomb (block 2) and suppresses the spooger (block 4).
-    if (!stunned) {
-        const bool auto_drop = p.sick(Disease::Diarrhea) || p.sick(Disease::Super);
-        const bool a1_now = auto_drop ? true : in.action1;        // +56
-        const bool a1_last = auto_drop ? false : p.prev_action1;  // +54
-        const bool drop_edge = a1_now && !a1_last;                // the +56 && !+54 gate
-
-        // (2) Throw block (`+37`): a carried bomb is thrown when auto-drop forces it
-        //     (v112) OR the key is released (`!+56`). NOT gated by constipation — a
-        //     constipated player can still throw what it holds. This is why diarrhea
-        //     + grab THROWS serially: v112 fires the throw every frame, then the drop
-        //     block (below) re-grabs the next bomb underfoot — the original's loop.
-        if (p.carrying) {
-            if (auto_drop || !a1_now) bombs.throw_carried(p, i);
-        }
-        // (3) Action key (action2): stop own sliding bombs (+89 kick), punch the
-        //     bomb ahead (+91), and/or detonate a trigger bomb (+95) — three
-        //     independent ifs in sub_41F29B's exact order, all edge-gated
-        //     (`+57 && !+55`). The KICK-flag handler (sub_4247C5) flags every one
-        //     of the player's sliding non-jelly bombs to halt at the next tile
-        //     centre. PUNCH additionally requires `!+56` (the bomb key not down)
-        //     so it never swings mid-drop / mid-auto-drop; TRIGGER has no such
-        //     gate. Grab/throw live on action1. This block runs BEFORE the drop
-        //     block (4), matching LABEL_246's order.
-        if (in.action2 && !p.prev_action2) {
-            if (p.kick) bombs.stop_own_sliding(i);
-            if (p.punch && !a1_now) bombs.try_punch(p, static_cast<std::uint8_t>(i));
-            if (p.trigger) bombs.detonate_triggered(i);
-        }
-        // (4) Drop block (`+56 && !+54 && !+134`): constipation (+134) blocks it. On
-        //     the edge, GRAB the OWN bomb underfoot (+92), else spray a SPOOGER
-        //     line (+93, suppressed while auto-dropping — `!v112`; also own-bomb
-        //     gated), else DROP. Both gates are sub_422E48 + `owner == self`
-        //     (motion 0 AND 1 qualify — a player can grab their own bomb mid-
-        //     slide; flying/carried are exempt via bomb_at). Grab/spooger are the
-        //     "double-tap": press 1 drops a bomb underfoot, press 2 grabs/sprays.
-        if (drop_edge && !p.sick(Disease::Constipation)) {
-            const Bomb* under = grid::bomb_at(s, p.tile_x(), p.tile_y());
-            const bool own = under && under->owner == static_cast<std::uint8_t>(i);
-            if (p.grab && own)
-                bombs.try_grab(p, i);
-            else if (p.spooge && !auto_drop && own)
-                bombs.spooge_ahead(p, static_cast<std::uint8_t>(i));
-            else
-                bombs.drop(p, static_cast<std::uint8_t>(i));
-        }
+    // The bomb key (action1) and action key (action2) drive the four LABEL_246
+    // blocks (auto-drop force, throw, action2, drop) — see the shared
+    // `bomb_actions` lambda defined above (with its full citation) for the exact
+    // semantics. A head-hit stun (p.stun>0) maps to `blocked=true`: new-input
+    // acquisition never ran this tick, so the key bytes are at their per-tick 0
+    // reset (unless auto-drop overrides them), exactly matching the original's
+    // LABEL_246 reached from ANY player state. p.pickup_pause>0 instead fully
+    // skips `bomb_actions` (its own, different, forced-HELD rule — see the
+    // carve-out comment above); the two never coincide entering this tail
+    // (a fresh grab needs an input edge, which stun already blocks, and
+    // PowerupSystem::head_hit clears pickup_pause the instant it sets stun).
+    if (p.pickup_pause > 0) {
+        p.prev_action1 = in.action1;
+        p.prev_action2 = in.action2;
+    } else {
+        bomb_actions(/*blocked=*/p.stun > 0);
     }
-    p.prev_action1 = in.action1;
-    p.prev_action2 = in.action2;
 }
 
 // The head checks: flames kill players; floor powerups get picked up (with
