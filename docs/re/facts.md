@@ -1461,6 +1461,78 @@ upper-half value we did not chase further — looks like a rendering/tint
 detail, not re-examined here); `EnclosureSystem::drop_wall`'s parallel,
 untouched `sub_423209(bomb,-1)` call at pseudo.c 27262.)
 
+## Bomb capacity is a derived live-bomb count — CONFIRMED (`sub_4245DA`, 2026-07-11)
+
+Read 2026-07-11, root-causing a live-play report ("I had 4 extra bombs and
+suddenly dropped to a single bomb", while alive; a later, more precise repro
+from the same user: it happened right as a diarrhea bout ended). The original
+keeps **no per-player bomb counter**:
+
+- **`sub_4245DA(player_idx)`** (pseudo.c 25795-25812) scans all 100 bomb
+  slots and counts the ACTIVE ones whose owner word — bomb offset **+62**,
+  read as `(int)v4[15] >> 16` — equals the player. That count is the
+  player's current "bombs out".
+- **Both placement gates recompute it live** (`sub_41F29B`): the plain drop
+  branch `v67 = sub_4245DA(idx); if (player[+86] > v67)` (~23345), and the
+  spooger loop, which re-calls it EVERY laid bomb
+  (`player[+86] <= sub_4245DA(idx)` in the loop condition, ~23336).
+- **The explosion frees no counter** — `sub_42331C`'s detonation block just
+  clears the slot (`*(_DWORD*)v75 = 0`, ~25616); the derived count drops by
+  itself.
+- **Consequence for chains:** the chain ownership transfer
+  (`v48[+62] = v75[+62]`, pseudo.c 25644 — see "Chain-reaction timing")
+  rewrites the very word `sub_4245DA` matches on. So chaining someone else's
+  bomb MOVES THE PLACEMENT SLOT along with kill credit: the victim's
+  capacity frees IMMEDIATELY at transfer time (one tick before the chained
+  bomb even explodes), and the chained bomb counts against the CHAINER's
+  capacity until it goes off.
+
+**The bug this corrects (port-only, not in the original):** our
+`Player::bombs_placed` is a running counter (`++` at placement, `--` at
+explosion), and `FlameSystem::explode` decremented `bombs[i].owner` — which,
+after a chain transfer, is the CHAINER. Every cross-owner chained bomb
+therefore leaked one placement slot from the victim FOREVER (and decremented
+the chainer's counter, clamped at 0). Worst case is exactly the reported
+flow: diarrhea/super auto-drop poops the whole `max_bombs` capacity onto the
+field as one adjacent cluster; one enemy blast chains the first bomb, and
+each transferred link (now enemy-owned) chains the next — the victim's
+counter sticks at ~max_bombs for the rest of the match, reading as "my
+bombs got reset when the disease ended" even though `max_bombs` was never
+touched. Refuted along the way, by direct audit: the head hit cannot drop
+more than getvalue(670)+rand%getvalue(671) = 1..3 kinds per hit (shipped
+VALUELST: `670,1`/`671,3`); one flight cannot multi-hit without physically
+re-crossing the victim (pseudo.c 25445-25448 has no per-flight latch — the
+bomb just advances and keeps flying, same as our re-hop); the disease
+expiry/cure path (`sub_41DF4C` semantics / our `DiseaseSystem::clear`) only
+zeroes the disease fields — short-flame/short-fuse are computed at DROP time
+from the live flags, nothing is "restored"; and `reset_to_baseline` has
+exactly one caller (`death_scatter`), gated on death at all three sites.
+
+**Ported** in `FlameSystem::spread_to`'s bomb-hit branch: the slot moves with
+the owner word (`--old.bombs_placed` (clamped, defensive) /
+`++new.bombs_placed`, only when the owners differ — the original's
+unconditional word write is a no-op for a self-chain). `bombs_placed` remains
+a stored, hashed counter; with the transfer ported it tracks `sub_4245DA`'s
+derived value exactly at every tick boundary. Tests:
+`tests/test_chain_slot.cpp` (transfer timing — freed at transfer, charged to
+the chainer until explosion; the 4-bomb 5→1 collapse repro; the full
+diarrhea-cluster → enemy chain → recovery flow; a self-chain control) and
+`tests/test_head_hit_bounds.cpp` (the refuted-hypothesis bounds, pinned).
+
+**GOLDEN IMPACT: none — proven, zero recapture.** The fix's ONLY behavioural
+delta is inside `if (hit->owner != owner)`; `bombs_placed` is hashed, and a
+transfer permanently changes the victim's counter (and placement behaviour)
+from that tick on — so if any golden scenario ever chained across owners,
+its downstream checkpoint hashes would move. All five golden scenarios pass
+BYTE-IDENTICAL with the fix in place (full suite run, all 24 assertions):
+no golden ever performs a cross-owner chain, and the new branch is inert
+there.
+
+(Provenance: `sub_4245DA` pseudo.c 25795-25812; drop gate ~23345 and spooge
+loop gate ~23336 in `sub_41F29B`; slot clear `*(_DWORD*)v75 = 0` ~25616 and
+owner transfer 25644 in `sub_42331C`; head-hit flight fall-through
+25445-25448; shipped `VALUELST.RES` ids 670/671 verified from the install.)
+
 ## Brick crumble timing — CONFIRMED (`sub_425EFC`/`sub_425107`/`sub_426D06`, 2026-07-10 flame-system audit)
 
 A brick hit by flame does NOT open up immediately — it stays fully solid

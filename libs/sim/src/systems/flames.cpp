@@ -72,6 +72,24 @@ bool FlameSystem::spread_to(int tx, int ty, std::uint8_t owner, Direction from_d
         // tick (queue_chain), skipping a re-blast back toward this arm's
         // direction (bomb+56 = opposite(from_dir), pseudo.c
         // `((k+2)&3)+1`).
+        //
+        // The PLACEMENT SLOT moves with the owner word: the original keeps
+        // no per-player bomb counter — capacity is a live scan (sub_4245DA
+        // counts the active slots whose owner word +62 == player) against
+        // max_bombs in the drop/spooge gates (sub_41F29B), and +62 is
+        // exactly the word this transfer rewrites. So the victim's capacity
+        // frees IMMEDIATELY at transfer time and the chained bomb counts
+        // against the CHAINER until it explodes next tick. `bombs_placed`
+        // is that scan's running equivalent; without this move the victim's
+        // counter leaked one slot per cross-owner chained bomb, permanently
+        // — the reported "5 max bombs, suddenly one placeable" collapse
+        // (worst after diarrhea poops the whole capacity into one chainable
+        // cluster). docs/re/facts.md "Bomb capacity is a derived live-bomb
+        // count".
+        if (hit->owner != owner) {
+            if (s.players[hit->owner].bombs_placed > 0) --s.players[hit->owner].bombs_placed;
+            ++s.players[owner].bombs_placed;
+        }
         hit->owner = owner;
         const int skip = (grid::to_godir(from_dir) + 2) & 3;
         queue_chain(hit->id, skip);
