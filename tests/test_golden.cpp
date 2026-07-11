@@ -365,6 +365,19 @@ MatchConfig pillars_config() {
 // recapture is self-contained to the death scatter; if a concurrent change
 // also touches these constants, reconcile by re-running both together rather
 // than merging hex by hand.
+//
+// UPDATE 2026-07-11 (chain slot transfer, docs/re/facts.md "Bomb capacity is
+// a derived live-bomb count"): the chain ownership transfer in
+// FlameSystem::spread_to now moves the PLACEMENT SLOT with the owner word
+// (sub_4245DA derives capacity from the same +62 word the transfer rewrites)
+// — fixing the permanent bombs_placed leak behind the live-play "5 max bombs,
+// suddenly one placeable" collapse. PROVEN INERT here, zero recapture: the
+// fix's only delta is inside `if (hit->owner != owner)`, bombs_placed is
+// hashed, and a cross-owner transfer permanently changes the victim's counter
+// — so any golden that ever chained across owners would have moved its
+// downstream checkpoints. All five scenarios pass BYTE-IDENTICAL with the fix
+// in place (all 24 assertions): no golden ever chains across owners. Pinned
+// by tests/test_chain_slot.cpp.
 TEST_CASE("golden A: empty state, 10000 ticks") {
     Simulation a;
     a.state().rng = 42u;
