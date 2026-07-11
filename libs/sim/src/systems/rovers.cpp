@@ -9,6 +9,7 @@
 
 #include "bomber/sim/rng.hpp"
 #include "grid.hpp"
+#include "systems/powerups.hpp"
 
 namespace bomber::sim {
 
@@ -197,6 +198,11 @@ bool RoverSystem::step(Rover& r, int rover_index) {
                 if (s.players[victim.carried_owner].bombs_placed > 0)
                     --s.players[victim.carried_owner].bombs_placed;
             }
+            // Rover/ghost landing kill routes through the same shared death
+            // funnel (sub_41DE63 -> anim -> sub_41DBFE), so the victim scatters
+            // its powerups too (docs/re/facts.md "Death powerup scatter").
+            // Campaign-only path — inert in every non-campaign golden scenario.
+            PowerupSystem{s}.death_scatter(victim);
             s.events.push_back({Event::Type::RoverKilledPlayer, static_cast<std::int8_t>(i),
                                 static_cast<std::int8_t>(ntx), static_cast<std::int8_t>(nty),
                                 static_cast<std::int8_t>(rover_index)});

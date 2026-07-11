@@ -281,6 +281,11 @@ void field_vs_players(State& s, PowerupSystem& powerups, DiseaseSystem& diseases
                 if (s.players[p.carried_owner].bombs_placed > 0)
                     --s.players[p.carried_owner].bombs_placed;
             }
+            // Death powerup scatter (sub_41DBFE via the shared death funnel
+            // sub_41DE63): the player's surplus over its start-with loadout
+            // rains back onto random floor tiles. Draws State::rng in kind
+            // order (docs/re/facts.md "Death powerup scatter") — GOLDEN.
+            powerups.death_scatter(p);
             // Killer attribution (docs/re/results-and-options.md §1): the
             // flame that killed this player was stamped with its owner in
             // FlameSystem::spread_to (s.flame_owner), still valid here since

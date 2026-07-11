@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "systems/flames.hpp"
+#include "systems/powerups.hpp"
 
 namespace bomber::sim {
 namespace {
@@ -185,6 +186,13 @@ void EnclosureSystem::drop_wall(int wx, int wy) {
                 if (s.players[p.carried_owner].bombs_placed > 0)
                     --s.players[p.carried_owner].bombs_placed;
             }
+            // A wall-crushed player scatters its powerups too: the crush routes
+            // through the SAME shared kill funnel (sub_41DE63 -> anim -> the
+            // sub_41DBFE scatter) as a flame death (docs/re/facts.md "Death
+            // powerup scatter"). Inert in every golden scenario (none reach the
+            // wall-close phase), but faithful. PowerupSystem is a thin State&
+            // wrapper — construct one locally.
+            PowerupSystem{s}.death_scatter(p);
             // No attributable killer for a wall crush (event.hpp's PlayerDied
             // convention: data == -1 means "no killer", distinct from a
             // self-kill where data == the victim's own index).

@@ -166,6 +166,51 @@ void PowerupSystem::scatter(PowerupType t) {
     }
 }
 
+// Current accumulated count of a powerup kind (the original's per-kind player
+// bytes +86..+96). The `+86+kind` layout maps kind -> byte directly (kind 0
+// bombs=+86, 1 flame=+87, 3 kick=+89, 4 skate=+90, 5 punch=+91, 6 grab=+92,
+// 7 spooge=+93, 8 goldflame=+94, 9 trigger=+95, 10 jelly=+96); kinds with no
+// per-kind count (2 disease, 11 superdisease, 12 random, plus the pad slots
+// the original loops over) report 0, so they never register surplus.
+int PowerupSystem::held_count(const Player& p, int kind) const {
+    switch (static_cast<PowerupType>(kind)) {
+        case PowerupType::ExtraBomb: return p.max_bombs;
+        case PowerupType::Flame: return p.flame;
+        case PowerupType::Kick: return p.kick ? 1 : 0;
+        case PowerupType::Skate: return p.skates;
+        case PowerupType::Punch: return p.punch ? 1 : 0;
+        case PowerupType::Grab: return p.grab ? 1 : 0;
+        case PowerupType::Spooger: return p.spooge ? 1 : 0;
+        // Goldflame (kind 8, byte +94) IS a droppable kind: id 58 (goldflame
+        // start-with) = 0, so a set flag counts as surplus over the baseline.
+        case PowerupType::Goldflame: return p.goldflame ? 1 : 0;
+        case PowerupType::Trigger: return p.trigger ? 1 : 0;
+        case PowerupType::Jelly: return p.jelly ? 1 : 0;
+        default: return 0;  // disease/superdisease/random & pad kinds: no count
+    }
+}
+
+// Write a kind's accumulated count back to its start-with baseline. Mirrors
+// sub_41DBFE / sub_41E16A, which write ONLY the count byte: the derived speed
+// stat (+70/+74) is left untouched, so a scattered skate does NOT recompute
+// `speed` here — the field is only ever reset on a dead player (death_scatter)
+// whose speed is never read again, keeping the byte-level write faithful.
+void PowerupSystem::reset_to_baseline(Player& p, int kind, int baseline) {
+    switch (static_cast<PowerupType>(kind)) {
+        case PowerupType::ExtraBomb: p.max_bombs = baseline; break;
+        case PowerupType::Flame: p.flame = baseline; break;
+        case PowerupType::Skate: p.skates = baseline; break;
+        case PowerupType::Kick: p.kick = false; break;
+        case PowerupType::Punch: p.punch = false; break;
+        case PowerupType::Grab: p.grab = false; break;
+        case PowerupType::Spooger: p.spooge = false; break;
+        case PowerupType::Goldflame: p.goldflame = false; break;
+        case PowerupType::Trigger: p.trigger = false; break;
+        case PowerupType::Jelly: p.jelly = false; break;
+        default: break;  // no count field to reset
+    }
+}
+
 // A bomb bonks a player on the head (sub_421F7E): a hardcoded 16-tick stun
 // (the +58 countdown), then powers_lost_min + rand % powers_lost_rand
 // upgrades are picked by ROLLING A KIND (rand % 15, up to 200 tries) that
@@ -177,30 +222,7 @@ void PowerupSystem::head_hit(int victim, int tx, int ty) {
     p.stun = s.tuning.head_stun_frames;  // plain overwrite, as the original
 
     auto surplus = [&](int kind) -> bool {
-        int have = 0;
-        switch (static_cast<PowerupType>(kind)) {
-            case PowerupType::ExtraBomb: have = p.max_bombs; break;
-            case PowerupType::Flame: have = p.flame; break;
-            case PowerupType::Kick: have = p.kick ? 1 : 0; break;
-            case PowerupType::Skate: have = p.skates; break;
-            case PowerupType::Punch: have = p.punch ? 1 : 0; break;
-            case PowerupType::Grab: have = p.grab ? 1 : 0; break;
-            case PowerupType::Spooger: have = p.spooge ? 1 : 0; break;
-            // Goldflame (kind 8, byte +94) IS a droppable head-hit kind in the
-            // original: sub_421F7E rolls `rand()%15` uniformly over ALL kinds and
-            // accepts any whose per-kind count `player[+86+kind]` exceeds the
-            // VALUELST start-with baseline getvalue(50+kind). id 58 (goldflame
-            // start-with) = 0, so a set goldflame flag counts as surplus and the
-            // token scatters like the others (remove() clears +94, scatter()
-            // drops a Goldflame token). Confirmed against sub_421F7E; enabling it
-            // shifts the head-hit kind-roll acceptance (hence the per-hit RNG
-            // draw count) → GOLDEN.
-            case PowerupType::Goldflame: have = p.goldflame ? 1 : 0; break;
-            case PowerupType::Trigger: have = p.trigger ? 1 : 0; break;
-            case PowerupType::Jelly: have = p.jelly ? 1 : 0; break;
-            default: return false;  // disease/random & pad kinds: no count
-        }
-        return kind < kPowerupKinds && have > s.tuning.start_with[kind];
+        return kind < kPowerupKinds && held_count(p, kind) > s.tuning.start_with[kind];
     };
 
     int n = s.tuning.powers_lost_min +
@@ -219,6 +241,45 @@ void PowerupSystem::head_hit(int victim, int tx, int ty) {
     }
     s.events.push_back({Event::Type::HeadHit, static_cast<std::int8_t>(victim),
                         static_cast<std::int8_t>(tx), static_cast<std::int8_t>(ty), 0});
+}
+
+// A player dies (sub_41DBFE, invoked from sub_41F29B LABEL_26 when the death
+// animation completes). Scatters EVERY powerup the player accumulated ABOVE
+// its VALUELST start-with baseline back onto random floor tiles: iterate kinds
+// 0..14 in index order and, for each, drop the surplus.
+//
+// This is NOT the head hit. The head hit drops a rand-limited COUNT
+// (getvalue(670)+rand%getvalue(671)) of RANDOMLY ROLLED kinds (rand%15); death
+// drops the player's WHOLE surplus with NO kind roll and NO count roll. The
+// only RNG draws are sub_4255B2's per-token tile selection (via scatter()), in
+// kind order — THAT sequence is the determinism contract. The original splits
+// flag kinds (sub_425C10: 5/6/7/9/10 -> scatter one, reset) from counted kinds
+// (scatter one per surplus, decrement); since every real flag kind's count is
+// 0/1, a single `surplus = have - baseline` loop reproduces BOTH branches'
+// draw order and board result exactly.
+//
+// The death-animation VARIANT roll (sub_41DE63 `rand%getvalue(105)+1`, which
+// DIE*.ANI plays) is a cosmetic death-sprite pick and stays presentation-side
+// per CLAUDE.md determinism rule 6 — it is NOT drawn on State::rng, so this
+// sim's stream carries only the scatter draws.
+//
+// TIMING — a deliberate, documented divergence: the original defers this
+// scatter to the death animation's final frame (tens of ticks later; the
+// DIE*.ANI length is asset data the SDL-free sim must not know). We scatter on
+// the death TICK, the same animation-delay collapse this sim applies
+// everywhere else (a dead player is immediately inert). The scatter CONTENTS
+// (kinds/counts/tiles) and the RNG arithmetic are identical; only the tick the
+// tokens appear differs. The dead player is already `alive = false` at every
+// call site, so — matching the original, where +8 (dead) is set before the
+// anim-end scatter — sub_4255B2's live-player occupancy check (grid::player_at,
+// which gates on `alive`) lets a token land on the victim's own tile.
+void PowerupSystem::death_scatter(Player& p) {
+    for (int kind = 0; kind < kPowerupKinds; ++kind) {
+        const int baseline = s_.tuning.start_with[kind];
+        const auto t = static_cast<PowerupType>(kind);
+        for (int have = held_count(p, kind); have > baseline; --have) scatter(t);
+        reset_to_baseline(p, kind, baseline);
+    }
 }
 
 }  // namespace bomber::sim
