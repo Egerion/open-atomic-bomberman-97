@@ -3669,24 +3669,85 @@ swap didn't touch either way. `XBRICK*.ANI`'s `"flame brick <n>"` steps also
 carry non-zero dx/dy (e.g. XBRICK10: `dx=3,dy=-1` on every step) — correctly
 never applied, per the kind==9 branch's confirmed no-`sub_41DB41`-call.
 
-**Sign convention:** confirmed unambiguous on X (`v12 + sub_426524(j)`, clean,
-uncorrupted code — a direct addition to the base anchor, before whatever
-hotspot subtraction the underlying blit primitive applies, mirroring
-`docs/formats/ani.md`'s "blit at `pos - hotspot`" for every sequence). The Y
-computation (`v6`) sits in the same corrupted stack region as §1's caveat
-(Hex-Rays: `variable 'v6' is possibly undefined`) and isn't independently
-recoverable from this decompile; the Y sign is inferred by symmetry with the
-clean X case (both offsets applied via addition, in the same statement
-shape, to the same kind of base anchor) rather than confirmed byte-for-byte.
+**Blit math — RESOLVED by direct disassembly (2026-07-11).** The Y term
+(`v6`) sits in the same corrupted stack region as §1's caveat (Hex-Rays:
+`426F46: variable 'v6'/'v7' possibly undefined`), so the whole Y computation
+was invisible to the decompile. Raw disassembly of the real-flame branch
+(`BM95.EXE` 0x426ee7-0x426f46, imagebase 0x400000) recovers it byte-for-byte:
 
-**Fixed:** `Sprite` (`libs/game/include/bomber/game/sprites.hpp`) gained
-`dx`/`dy` fields, populated by `resolve_sequence` from the already-parsed
-`SeqStep::dx/dy` (`libs/game/src/sprites.cpp`) — carried for EVERY sequence
-but left inert by default, preserving the general "ignore it" rule for
-everything else. `Renderer::draw_world`'s flame-arm draw is the one call site
-that now reads `sp.dx`/`sp.dy` and adds them to the tile anchor before
-calling `draw_sprite`; every other draw site — including this same loop's
-brick-burn draw — is untouched.
+```
+426ee7  lea  ecx, [ebp-0x84]      ; a3 = &v13
+426eed  lea  ebx, [ebp-0x88]      ; a4 = &v12
+426ef8  mov  dx, [eax+0x30]       ; frame = *(u16*)(cell+48)
+426eff  call sub_41DB41          ; v12(=[ebp-88h]) := rec+4 = dx ; v13(=[ebp-84h]) := rec+8 = dy
+426f0c  mov  ebx, [ebp-0x10]      ; a4 = frame handle (v18)
+426f0f  mov  eax, [ebp-0xc]       ; i  (row)
+426f12  call sub_42655F          ; eax = Y_base = tile_top + tileH-1
+426f17  mov  esi, [ebp-0x84]      ; esi = dy
+426f1d  add  esi, eax             ; esi = dy + Y_base
+426f1f  mov  eax, [0x4648a0]      ; tileH  (== our kTileH)
+426f2a  sar/sub/sar              ; eax = tileH/2   (signed /2 idiom)
+426f31  sub  esi, eax             ; esi = dy + Y_base - tileH/2
+426f33  mov  edx, esi
+426f35  add  edx, [ebp-8]         ; edx (a2=Y) += v20 ; v20==0 on this branch (426e35)
+426f38  mov  eax, [ebp-0x1c]      ; j  (col)
+426f3b  call sub_426524          ; eax = X_base = tile_left + tileW/2
+426f40  add  eax, [ebp-0x88]      ; eax (a1=X) = X_base + dx
+426f46  call sub_415A9F          ; blit(X, Y, palette, frame)
+```
+
+So, before the blit's own hotspot subtraction (dx/dy applied **BEFORE**
+hotspot — they are added to the coordinate *passed* to `sub_415A9F`, whose
+frame later renders at `pos - hotspot`, exactly like our `draw_sprite`):
+
+```
+X_blit = sub_426524(j) + dx            = X_base + dx
+Y_blit = sub_42655F(i) - tileH/2 + dy  = Y_base - tileH/2 + dy
+```
+
+Two corrections to the earlier symmetry inference: (a) the Y **sign was
+right** — dy is *added*, same as dx (`add esi, eax`); but (b) the inference
+**missed the `- tileH/2` anchor shift** entirely, because that block was the
+corrupted region. `sub_42655F` returns tile-BOTTOM (`tileH*i + tileH-1 +
+originY`, == our `sy`); real flames subtract half the Y tile stride
+(`dword_4648A0/2`, the same global our `kTileH` mirrors) to re-anchor to tile
+CENTRE, *then* add the per-STAT dy. Brick-burn (kind 9, 0x426f4d) uses
+`Y = sub_42655F(i)` raw — no `-tileH/2`, no dx/dy — matching its no-`sub_41DB41`
+path. (Aside: kind-9 setup computes `v20 = tileH/2` at 0x426dac but never uses
+it in its own blit — a dead assignment; the live `-tileH/2` is the explicit
+`sub esi,eax` on the flame branch.) `sub_41DB41` writes rec+4 to its `ebx`
+out-param and rec+8 to its `ecx` out-param; the call passes `&v12`(ebx)→dx,
+`&v13`(ecx)→dy, and X consumes v12, Y consumes v13 — so **rec+4 = dx (X),
+rec+8 = dy (Y)**, matching `SeqStep::dx/dy`.
+
+**Arithmetic sanity check** (MFLAME.ANI, `abtool ani`; tile top-left at
+`(Ox,Oy)`, `kTileW=40`, `kTileH=36`, so `kTileH/2 = 18`):
+
+*Center piece* — frame 0 `C_F_1.LBM` `41x37 hot(20,36)`, seq
+`flame center green` step 0 `dx=3, dy=16`. Our anchors: `sx=Ox+20`,
+`sy=Oy+35`.
+- X = sx+dx = Ox+23 → rect.x = X-hx = Ox+3 → spans `Ox+3 .. Ox+44` (w=41)
+- Y = sy + (dy - 18) = Oy+33 → rect.y = Y-hy = Oy-3 → spans `Oy-3 .. Oy+34` (h=37)
+- sprite centre ≈ `(Ox+23.5, Oy+15.5)` vs tile centre `(Ox+20, Oy+18)` — a
+  deliberate ~3px right / ~2px up bias (flames lean up), landing squarely on
+  the 40x36 tile.
+
+Contrast the three states for the *horizontal-arm* case, frame 20
+`R_F_1.LBM` `34x22 hot(17,21)`, seq `flame tipeast green` step 0 `dy=8`
+(rect.y = `sy + dy - 18 - hy`):
+- **pre-dx/dy port** (no offset): `Oy+35-21 = Oy+14`, centre `Oy+25` → **7px
+  below** tile centre (the original drift complaint).
+- **first dx/dy fix** (dy, no `-tileH/2`): `Oy+35+8-21 = Oy+22`, centre
+  `Oy+33` → **15px below** (the user-reported worsened downward shift).
+- **this fix** (`dy - tileH/2`): `Oy+35+8-18-21 = Oy+4`, centre `Oy+15` →
+  ~3px above centre, correctly on-tile.
+
+**Fixed:** `Renderer::draw_world`'s flame-arm draw (the one call site reading
+`sp.dx`/`sp.dy`; `libs/game/src/renderer.cpp`) now passes
+`draw_sprite(sp, sx + sp.dx, sy + sp.dy - sim::kTileH/2)`. The `Sprite` dx/dy
+fields (`sprites.hpp`, populated by `resolve_sequence` from `SeqStep::dx/dy`)
+are unchanged and stay inert for every other sequence — including this same
+loop's brick-burn draw — preserving the general "ignore it" rule.
 
 ### 5. Draw order/composition — CONFIRMED bugs, FIXED
 

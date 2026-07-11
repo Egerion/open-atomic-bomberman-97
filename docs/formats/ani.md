@@ -67,11 +67,21 @@ inspection but render by the frame hotspot alone.
 **Confirmed exception: real flame arms.** `sub_41DB41`'s one confirmed caller
 is `sub_426D06` (the per-tick flame-cell animator), and only on its
 non-brick-burn branch (`off_45BEA0` kind 0-8, the `"flame <piece> green"`
-sequences) — it fetches `dx/dy` and adds `dx` to the base X anchor before the
-blit; the SAME function's brick-burn branch (kind 9, `"flame brick <n>"`)
-does not call it and uses the base anchor directly, per the general rule
-above. `libs/game/src/sprites.cpp`'s `resolve_sequence` now carries `dx/dy`
-through onto `Sprite` (still inert by default) specifically so
-`Renderer::draw_world`'s flame-arm draw can apply them; every other draw site
-must keep ignoring them. See `docs/re/facts.md` "Flame draw offset" (2026-07-10)
-for the full citation and the empirical `MFLAME.ANI`/`FLAME.ANI` dx/dy dumps.
+sequences). Resolved by disassembly (0x426ee7-0x426f46), the full anchor it
+passes to the blit — *before* the frame's own `pos - hotspot` subtraction — is:
+
+```
+X = X_base + dx                (X_base = tile_left + tileW/2, i.e. tile centre)
+Y = Y_base - tileH/2 + dy       (Y_base = tile_top + tileH-1, i.e. tile bottom)
+```
+
+Both `dx` and `dy` are ADDED (rec+4→X, rec+8→Y); the flame-only `- tileH/2`
+re-anchors the piece from tile-bottom to tile-centre before the offset. The
+SAME function's brick-burn branch (kind 9, `"flame brick <n>"`) does not call
+`sub_41DB41`, applies no `dx/dy`, and no `-tileH/2` — it blits at the raw
+`Y_base` base anchor, per the general rule above. `libs/game/src/sprites.cpp`'s
+`resolve_sequence` carries `dx/dy` through onto `Sprite` (still inert by
+default) specifically so `Renderer::draw_world`'s flame-arm draw can apply the
+formula above; every other draw site must keep ignoring them. See
+`docs/re/facts.md` "Flame draw offset" (2026-07-11) for the byte-level citation
+and the arithmetic sanity check.
