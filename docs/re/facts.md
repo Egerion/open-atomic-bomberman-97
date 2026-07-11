@@ -653,12 +653,14 @@ skipped (want_godir forced -1, mirroring the skipped sub_41E61E) and the
 bomb-action block is skipped (mirroring the +56/+57 key bytes staying at
 their per-tick 0 reset), but `move_on_actor`/kick-probe/step-on triggers all
 still run, so a belt keeps carrying a stunned player into whatever it leads
-to. Deliberately deferred narrow edge: the original still reaches LABEL_246
-while stunned, so disease AUTO-drop (the +135/+137 forced edge) and the
-release-throw of a carried bomb keep firing during a stun there; our port
-skips those two while stunned (no current scenario/test reaches either —
-head-stun with diarrhea, or a head-stun landing mid-carry — and the grab's
-own pickup_pause stun relies on the skip; revisit if a real repro appears).
+to. **RESOLVED 2026-07-11 (follow-up commit):** the original still reaches
+LABEL_246 while stunned, so disease AUTO-drop (the +135/+137 forced edge) and
+the release-throw of a carried bomb keep firing during a stun there; this was
+deferred (our port used to skip both while stunned) and is now ported — see
+"LABEL_246 runs in every alive state (standing-stun restructure)" below. The
+grab's own pickup_pause window is a SEPARATE, still-deferred case (the
+original forces the key HELD there, not zero — a different rule the
+restructure below deliberately does not touch; see that entry).
 GOLDEN: proven inert — no golden board has any stage actor, so the newly
 executing path moves nothing; the action-block skip is behaviourally
 identical to the old early-return (same prev_action1/2 updates); no RNG
@@ -840,10 +842,9 @@ citing the machine):
    original never reaches the AI dispatch; our `ai.decide` gate only checked
    stun. Fixed (gate extended to pickup_pause/bounce/warp).
 
-NOT changed (deliberate, re-affirmed): the standing head-stun's LABEL_246
-auto-drop/throw-while-stunned edge stays deferred (facts.md "Stun does NOT
-gate flame-death or pickup" port note) — fixing it needs the +54/+56
-effective-key history model, a broader restructure than a transition guard;
+**RESOLVED 2026-07-11 (follow-up commit):** the standing head-stun's LABEL_246
+auto-drop/throw-while-stunned edge, deferred here, is now ported — see
+"LABEL_246 runs in every alive state (standing-stun restructure)" below.
 states 1/2/20-39 stay presentation-side (nothing in the sim reads them; the
 direction-change cancel and enclosure-entry rolls affect only sprite choice).
 The cornerhead entry roll (23008-23012) draws `rand()` in the ORIGINAL sim
@@ -861,6 +862,139 @@ commit; every `kExpectedRng` checkpoint, bounce count, and final-rng value is
 byte-identical, proving the recapture is layout-only, zero behaviour drift.
 Tests: `tests/test_state_machine.cpp` (new suite pinning the table's
 transitions and each forbidden combination).
+
+## LABEL_246 runs in every alive state (standing-stun restructure) — RESOLVED (`sub_41F29B`, 2026-07-11 follow-up)
+
+Follow-up to the two audits above (both deferred this same item, each citing
+the other). Full re-read of `sub_41F29B` (function body 22740-23497,
+`__int16*`-typed so every `v111[N]` offset is `N*2` bytes) to pin exactly
+which sub-actions LABEL_246 (23277-23380) contains and their `+54..+57`
+conditions, cross-checked against the earlier "Player state machine (+78)"
+and "Diarrhea/super auto-drop × grab-glove" entries (which already document
+most of this — this entry supplies the missing piece: that LABEL_246's reach
+is unconditional on +78, including the plain head-stun state 3).
+
+**Reachability (why LABEL_246 runs in ALL states):** the giant `if
+(!*((_DWORD*)v111+2))` alive-block (22904-23456) contains the walk/anim
+display code gated on `+16==4` (23079-23408) and, INSIDE that, the state
+dispatch on `v86 = v111[39]` (+78): states 0-3 take the punch/kick/idle
+branch (23112-23151); state 5 explicitly `goto LABEL_246` (23198, after
+positioning a mid-air bomb sprite); states 6/7/>7 fall through their own
+branches into `LABEL_239` (23248) which unconditionally continues into
+`LABEL_246` at 23277 (no `goto`, straight fall-through, confirmed by reading
+the raw line sequence 23248-23277 with no intervening `return`/`goto`).
+State 3 (head-stun) and state 4 (pickup-pause) are NOT special-cased in this
+dispatch at all — they take the same `v86<4` branch as state 0 (since 3,4 <
+4), which itself falls through to `LABEL_239`/`LABEL_246` after the anim-pick
+`switch` (23112-23151 has no early return either). **So LABEL_246 is reached
+on every alive tick regardless of +78**, confirming facts.md's own summary
+line ("Bomb actions... reached EVERY alive tick") — this entry's contribution
+is tracing the CONTROL FLOW proof end to end and porting the standing-stun
+case, which both prior audits explicitly left out of scope.
+
+**Effective key-byte model (`+54/+55` = last tick, `+56/+57` = this tick):**
+the shuffle `+54=+56; +55=+57; +56=0; +57=0` (22976-22979) runs UNCONDITIONALLY
+at the top of every alive tick, before the `v113` (new-input-acquisition)
+gate is even computed. `v113` (init 1 at 22981) is cleared by: +58>0 (head
+stun, 22982-22984), state 4's own pause window (23017-23025 — which ALSO
+FORCES `+56=1`, uniquely among the blocked states), and states 5/6/7
+(23015-23016/23026-23027). Only when `v113` stays 1 does the real controller
+read (`sub_40179F`/AI `sub_40A1C6`, 23030-23038) run and set `+56/+57` from
+the actual input. So going into LABEL_246, `+56/+57` are 0 for EVERY blocked
+state except state 4 (pickup-pause), which is uniquely forced to 1 (held, not
+an edge) — the standing head-stun (+58>0) and bounce/warp (5/6/7) all leave
+the keys at their bare 0 reset, identically.
+
+**LABEL_246 truth table** (23277-23380, in order; `v112` is the auto-drop
+flag computed at 23278-23284):
+
+| # | block | condition | action | cites |
+|---|---|---|---|---|
+| 1 | auto-drop force | `+135 (diarrhea) \|\| +137 (super)` | `+56=1; +54=0; v112=1` — unconditional override, runs regardless of +78 or `blocked` | 23279-23284 |
+| 2 | carried throw | `+37 (carrying)` and (`v112` or `!+56`) | launch via `sub_424987`, fuse reset (`+68=0`), `+37=0`; NOT gated by constipation | 23285-23297 |
+| 3a | action2: kick-stop | `+57 && !+55`, then `+89` | flag every own sliding non-jelly bomb to halt at next centre | 23298-23301 |
+| 3b | action2: punch | `+57 && !+55 && !+56`, then `+91` | `sub_424A50`; `+78=2` | 23302-23306 |
+| 3c | action2: trigger | `+57 && !+55`, then `+95` | `sub_424B41` detonates the oldest own trigger bomb | 23307-23309 |
+| 4a | drop: grab | `+56 && !+54 && !+134`, then `+92` and own-bomb-underfoot | `sub_424AF4`; `+78=4` (pickup-pause) | 23310-23321 |
+| 4b | drop: spooge | same edge, `!v112`, `+93` and own-bomb-underfoot | lay a line of bombs, one tile/tick | 23322-23342 |
+| 4c | drop: plain | same edge, else | `sub_41EB13` new bomb, RNG dud roll | 23343-23379 |
+
+Blocks 3/4 share one edge gate each (`+57&&!+55` / `+56&&!+54`); with `+56/+57`
+pinned at 0 while blocked (state 4 excepted), NEITHER edge can ever fire
+without a real controller read — matching the already-documented consequence
+("edge-gated blocks never fire while input is blocked"). Block 1's override
+is the one exception: it re-arms `+56/+54` EVERY tick regardless of `blocked`,
+so blocks 2 and 4 (but not 3, which only reads `+57/+55`, untouched by block 1)
+keep firing under auto-drop through a stun, a bounce, or a warp.
+
+**Port** (`player_turn`, simulation.cpp): the four blocks, previously computed
+inline only in the `!stunned` path (2026-07-04 commit, "Diarrhea/super
+auto-drop × grab-glove"), are now a single `bomb_actions(bool blocked)` local
+lambda called from THREE sites — the bounce branch, the warp branch, and the
+tail of the normal path — replacing: (a) the bounce/warp branches' narrow
+`if (p.carrying) bombs.throw_carried(...)` patch (now redundant: the same
+release falls out naturally from block 2 with `blocked=true`, `a1_now=false`),
+and (b) the tail's `if (!stunned) { ...four blocks... }` skip for a plain
+head-stun (`p.stun>0`, no bounce/warp/pickup-pause). `blocked` maps `+56/+57`'s
+this-tick default to 0 (mirroring the reset that never gets overwritten by a
+real read) unless block 1's auto-drop override fires inside the lambda
+regardless. `p.prev_action1/2` (`+54/+55`) are now latched to the EFFECTIVE
+`a1_now/a2_now` used this tick (post-override, post-blocking) rather than the
+raw `in.action1/2` the prior port latched — a related correctness fix: the
+original's `+54=+56` copy at the top of the NEXT tick reflects whatever `+56`
+was left at (which can be the auto-drop-forced 1 even if the real button was
+never pressed), and the raw-input latch only coincided with this whenever
+auto-drop's own in-block override was inert anyway.
+
+**pickup_pause (state 4) is explicitly NOT covered by this restructure** — the
+original forces `+56=1` SUSTAINED (not a fresh edge) for the whole pause
+window, a materially different rule from every other blocked state's 0
+default; modelling it needs a third `blocked`-like mode this entry does not
+add. `bomb_actions` is therefore still fully SKIPPED whenever
+`p.pickup_pause>0` at all three call sites (the pre-existing behaviour,
+unchanged), with the pre-existing narrow bounce/warp-entry release preserved
+verbatim for the (vanishingly rare, conveyor-into-actor-tile) case where a
+pickup-pause window is still open when a bounce/warp starts. `p.stun>0` and
+`p.pickup_pause>0` never coincide entering `player_turn` in practice: a fresh
+grab needs an input edge, which a stun already blocks, and
+`PowerupSystem::head_hit` (port-parity fix 3, above) clears `pickup_pause` the
+instant it sets `stun`.
+
+**GOLDEN: proven inert, zero recapture.** The full suite (`ctest --test-dir
+build/headless -C Debug`, all 42 registered suites incl. `test_golden`) is
+byte-identical before and after this restructure — every hash constant,
+`kExpectedRng` checkpoint, and bounce/warp count in `tests/test_golden.cpp`
+is UNCHANGED, so no scenario needed recapture. This matches the prior audits'
+own prediction ("it never fires in any current scenario/test"): none of the
+golden boards A-E combine a head-hit stun with either a carried bomb or an
+active diarrhea/super infection, so the newly-reachable code paths (blocks
+1/2/4 executing under `blocked=true` for a plain stun) are never entered on
+any golden tick — confirmed empirically, not just by inspection, by running
+the identical scenario set through both the pre- and post-restructure binary.
+RNG draw count/order is therefore unaffected on every existing scenario;
+the auto-drop's dud-roll (block 4c) and the grab/spooge primitives draw
+exactly where they always did, just now ALSO reachable from a stunned/
+bouncing/warping tick, which no current scenario reaches.
+
+Tests: `tests/test_state_machine.cpp` — "a standing head-hit stun releases a
+carried bomb (release-throw while stunned)", "diarrhea auto-drop still fires
+every tick during a standing head-hit stun", "diarrhea + grab keeps cycling
+grab/throw/drop through a whole trampoline flight" (the last one exercising
+blocks 1/2/4 repeatedly across an entire bounce, not just the single release
+at entry the earlier port-parity fix already covered).
+
+**Known follow-up, NOT fixed here (flagged, out of scope):** `Player::prev_
+action1`/`prev_action2` (the hashed-looking `+54/+55` mirror, doc-commented
+"part of state!" in player.hpp) are NOT actually mixed into `state_hash()`
+(`hash.cpp` has no `prev_action` reference) — a pre-existing determinism-
+contract gap (CLAUDE.md rule 4) predating this restructure, which only makes
+the field's correctness MORE load-bearing (it now also gates behaviour across
+stun/bounce/warp boundaries, not just plain edge detection). Not fixed in
+this commit: hashing it is a "one-time hash-layout growth" everywhere else in
+this file, but `prev_action1/2` flip on nearly every human/AI tick with any
+button held, so adding it would recapture essentially every golden hash from
+the first button press onward — far outside this restructure's isolation
+proof. Tracked as a separate follow-up.
 
 ## Death powerup scatter — CONFIRMED (`sub_41DBFE`, via the death funnel `sub_41DE63`)
 

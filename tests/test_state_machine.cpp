@@ -273,6 +273,83 @@ TEST_CASE("a bomb landing on an empty warphole tile hops onward without settling
     CHECK(st.bombs[0].flying);  // hopped onward, did not settle on the warphole
 }
 
+// ---- LABEL_246 runs in EVERY alive state, incl. a standing head-stun -------
+// (2026-07-11 follow-up: the state-machine and tick-order audits both
+// deferred this. The bounce/warp cases above were already fixed by an
+// unconditional release-on-entry; this section pins the STANDING stun case
+// (+58 > 0, no bounce/warp) that previously fully skipped the bomb-action
+// block, plus that the disease auto-drop keeps firing through a stun/bounce/
+// warp exactly like the bounce/warp release above. facts.md "Player state
+// machine (+78) — COMPLETE" NOT-changed note; simulation.cpp `bomb_actions`.)
+
+TEST_CASE("a standing head-hit stun releases a carried bomb (release-throw while stunned)") {
+    // Unlike bounce/warp (which release via the SAME LABEL_246 fall-through),
+    // a plain head-stun previously left player_turn's whole bomb-action block
+    // skipped, holding a carried bomb frozen through the stun. The original
+    // reaches LABEL_246 every alive tick regardless of +78 == 3, and with
+    // input blocked (+56 stuck at 0) the throw's `!+56` check fires on the
+    // very first stunned tick.
+    Simulation s(open_config());
+    State& st = s.state();
+    Player& p = st.players[0];
+    p.grab = true;
+    s.tick(press1(0));     // drop own bomb underfoot
+    s.tick(TickInputs{});  // release for a fresh edge
+    s.tick(press1(0));     // grab it
+    REQUIRE(p.carrying);
+    run(s, s.state().tuning.pickup_pause + 1, press1(0));  // clear the pause, still holding
+    REQUIRE(p.carrying);
+    REQUIRE(p.pickup_pause == 0);
+
+    p.stun = 5;  // white-box: a standing head-hit stun (sub_421F7E), no bounce/warp
+    s.tick(TickInputs{});  // no input this tick: blocked key defaults to 0 -> !+56 throws
+    CHECK(!p.carrying);
+    REQUIRE(!st.bombs.empty());
+    bool any_flying = false;
+    for (const auto& b : st.bombs)
+        if (b.active && b.flying) any_flying = true;
+    CHECK(any_flying);
+}
+
+TEST_CASE("diarrhea auto-drop still fires every tick during a standing head-hit stun") {
+    // The auto-drop force (+135/+137 -> +56=1;+54=0) lives INSIDE LABEL_246,
+    // unconditional on the v113/`blocked` gate that only affects the RAW key
+    // read — so it keeps firing even while a stun blocks every other action.
+    Simulation s(open_config());
+    State& st = s.state();
+    Player& p = st.players[0];
+    p.max_bombs = 5;
+    infect(p, Disease::Diarrhea);
+
+    p.stun = 8;  // white-box: standing stun, no bounce/warp/pickup-pause
+    s.tick(TickInputs{});
+    CHECK(p.bombs_placed >= 1);  // auto-dropped despite being fully input-blocked
+    CHECK(p.stun == 7);          // the stun countdown itself is untouched
+}
+
+TEST_CASE("diarrhea + grab keeps cycling grab/throw/drop through a whole trampoline flight") {
+    // Not just the single release-on-entry: LABEL_246's auto-drop force and
+    // drop block both keep running every tick of the bounce, so a diseased
+    // carrier throws repeatedly mid-flight, the same "serial throw" loop
+    // test_diarrhea_throw.cpp pins on the ground.
+    Simulation s(open_config());
+    State& st = s.state();
+    st.players[1].alive = false;  // solo: keep the arena to ourselves
+    Player& p = st.players[0];
+    p.grab = true;
+    p.max_bombs = 5;
+    infect(p, Disease::Diarrhea);
+
+    p.bounce = st.tuning.trampoline_bounce_frames;  // white-box: mid-flight, away from the apex
+    int throws = 0;
+    for (int t = 0; t < static_cast<int>(st.tuning.trampoline_bounce_frames) && p.bounce > 0; ++t) {
+        s.tick(TickInputs{});
+        for (const auto& e : s.state().events)
+            if (e.type == Event::Type::BombThrown) ++throws;
+    }
+    CHECK(throws >= 2);  // released more than once across the flight, not just at entry
+}
+
 // ---- AI silence in blocked states (v113 == 0) -------------------------------
 
 TEST_CASE("an AI mid-bounce or mid-warp draws no RNG this tick") {
