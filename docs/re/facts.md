@@ -4773,6 +4773,57 @@ the native Win11 run (rather than the designed 250 ms) is ever wanted,
 measure that run's real frame rate first and clamp the delay to the 30-frame
 span at that rate.
 
+## In-match colour quantization (shared COLOR.PAL palette) — CONFIRMED + PORTED (2026-07-13)
+
+User report: the in-game map "looks a bit darker / different", and specifically
+**Classic Green Acres** (FIELD1) has a BLUE play area in the port but reads
+GREENER/more muted in the original. Root-caused to the original's paletted
+display pipeline and ported.
+
+**Mechanism (workflow RE, verify-confirmed).** The whole in-match screen runs
+on ONE 8-bit hardware palette = COLOR.PAL's 256 master colours. Every decoded
+asset pixel is SNAPPED to that palette at load: the type-4 (RGB555) cel
+decoder `sub_41C837` line 21309 does `*dst = byte_495390[rgb555]` (an RGB555 →
+master-index reverse LUT), and the 8-bit path `sub_41BBBD` (20805-20841)
+rebuilds the same per-source-palette LUT from `byte_495390` and rewrites every
+pixel to a master index. The palette uploads 6-bit and DirectDraw scales it
+`4 * value` (`sub_443608` ~48226-48251), so the brightest displayable channel
+is `63*4 = 252`, never 255. `byte_495390` = **COLOR.PAL** (install root, 33536
+bytes = **768 master RGB** + **32768 RGB555→index LUT**; frontend-flow.md's
+"byte_495390 decoded for real").
+
+**Why it's mostly invisible but visible on FIELD1.** The shipped field/tile
+art is AUTHORED in the master palette, so the snap is an exact IDENTITY for
+FIELD0/2..10 and to within ~2-3% for the tile/brick cels (measured). The lone
+exception is FIELD1's floor, a vivid **blue/green dither NOT in the master
+palette**: raw `(23,27,139)`+`(19,143,19)` snap to `(20,40,108)`+`(4,132,0)`.
+The port's straight per-asset decode (pcx raw palette; ani.cpp `expand5`,
+which reaches 255) showed the raw vivid dither — the reported difference.
+
+**Empirical proof (the arbiter, method.md-style pixel measurement, not
+theory).** A live capture of the running original was compared to the raw
+assets: FIELD4 border + interior floor matched raw FIELD4.PCX at **scale 1.0,
+err 0** (identity — it IS a master-palette field); FIELD1 floor rendered the
+`(20,40,108)`/`(4,132,0)` dither while raw FIELD1.PCX is
+`(23,27,139)`/`(19,143,19)`. The ported quantizer reproduces BOTH exactly:
+`snap(23,27,139)=(20,40,108)` (master idx 57), `snap(19,143,19)=(4,132,0)`
+(idx 128), `snap(126,126,126)=(108,116,128)` (border brick, original shows
+(109,116,126)). Master palette = COLOR.PAL[0..767] × 4 with entry 0 forced to
+black (a white sentinel in the file); LUT at offset 768; index =
+`(r>>3)<<10 | (g>>3)<<5 | (b>>3)`.
+
+**Port.** `libs/assets/colorpal.{hpp,cpp}` (`Palette::load` + `snap`/`remap`,
+SDL-free, COLOR.PAL is shipped data), loaded once by `AssetStore::load` from
+the install root and applied in `load_stage` to the CLASSIC field PCX and the
+tile/brick ANIs (`AniTextures::load`'s new snap param) — NEVER the DATA_HD
+truecolour overrides or the front-end screens (the original loads those
+through the non-snapping `sub_41BDA4`/`sub_41522D` path). A missing COLOR.PAL
+leaves the quantizer inert (raw decode, the pre-fix look). Tests:
+`tests/test_colorpal.cpp` (synthetic-file mechanics); visual goldens
+recaptured (FIELD10 tiles shift ~2-3%). NOT yet snapped: the character/bomb/
+powerup/flame sprites (also type-4; a subtle ~2-3% follow-up — the field is
+the visible win).
+
 ## Still guessed — not yet extracted from the binary
 
 | Constant | Current value | Status |

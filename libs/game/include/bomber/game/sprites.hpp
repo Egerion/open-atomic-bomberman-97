@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "bomber/assets/ani.hpp"
+#include "bomber/assets/colorpal.hpp"
 #include "bomber/assets/image.hpp"
 
 // Render-side sprite primitives shared by the game and the asset viewer.
@@ -86,7 +87,11 @@ public:
     ~AniTextures() { reset(); }
 
     // Parses the ANI and uploads every frame. Throws on malformed files.
-    void load(SDL_Renderer* ren, const std::filesystem::path& path);
+    // When `snap` is non-null and ok(), every frame is run through the
+    // in-match master-palette quantization (colorpal.hpp) before upload —
+    // used for the classic map art (tiles/bricks), NOT front-end or HD sets.
+    void load(SDL_Renderer* ren, const std::filesystem::path& path,
+              const assets::colorpal::Palette* snap = nullptr);
 
     // A copy with the fallback truecolour player-armour recolor (sub_414A65
     // approximation) applied to every frame. Used only when a colour has no

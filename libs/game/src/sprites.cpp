@@ -82,12 +82,20 @@ assets::Image recolor_image_rmp(assets::Image img, const std::array<std::uint8_t
     return img;
 }
 
-void AniTextures::load(SDL_Renderer* ren, const std::filesystem::path& path) {
+void AniTextures::load(SDL_Renderer* ren, const std::filesystem::path& path,
+                       const assets::colorpal::Palette* snap) {
     reset();
     data_ = assets::ani::load(path);
     textures_.assign(data_.frames.size(), nullptr);
-    for (std::size_t i = 0; i < data_.frames.size(); ++i)
-        if (!data_.frames[i].image.empty()) textures_[i] = make_texture(ren, data_.frames[i].image);
+    for (std::size_t i = 0; i < data_.frames.size(); ++i) {
+        if (data_.frames[i].image.empty()) continue;
+        // In-match master-palette snap for classic map art (colorpal.hpp):
+        // the original quantizes every decoded cel to the shared 256-colour
+        // hardware palette; our raw RGB555 expand5 otherwise renders a few %
+        // brighter/more-saturated than the original.
+        if (snap) snap->remap(data_.frames[i].image);
+        textures_[i] = make_texture(ren, data_.frames[i].image);
+    }
 }
 
 AniTextures AniTextures::recolored(SDL_Renderer* ren, const std::int32_t rgb[3]) const {

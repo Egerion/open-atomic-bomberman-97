@@ -84,6 +84,12 @@ add_executable(bomber_rmp_tests test_rmp.cpp)
 target_link_libraries(bomber_rmp_tests PRIVATE bomber::assets doctest::doctest bomber::warnings)
 add_test(NAME rmp COMMAND bomber_rmp_tests)
 
+# COLOR.PAL in-match palette snap (bomber::assets, SDL-free). Synthetic file,
+# no install dependency — pins the RGB555->LUT->master*4 mechanics + entry-0.
+add_executable(bomber_colorpal_tests test_colorpal.cpp)
+target_link_libraries(bomber_colorpal_tests PRIVATE bomber::assets doctest::doctest bomber::warnings)
+add_test(NAME colorpal COMMAND bomber_colorpal_tests)
+
 bomber_add_test(bomber_diarrhea_tests diarrhea_throw test_diarrhea_throw.cpp)
 bomber_add_test(bomber_placement_diag_tests placement_diag test_placement_diag.cpp)
 bomber_add_test(bomber_goldman_award_tests goldman_award test_goldman_award.cpp)

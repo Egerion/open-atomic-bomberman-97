@@ -11,6 +11,7 @@
 #include <array>
 
 #include "bomber/assets/bmfont.hpp"
+#include "bomber/assets/colorpal.hpp"
 #include "bomber/assets/messages.hpp"
 #include "bomber/assets/rmp.hpp"
 #include "bomber/game/sdl.hpp"
@@ -271,6 +272,13 @@ private:
 
     SDL_Renderer* ren_ = nullptr;
     std::filesystem::path game_dir_;
+
+    // The in-match shared-palette snap (colorpal.hpp), loaded once from the
+    // install root. Inert (ok()==false) when COLOR.PAL is absent, so the game
+    // degrades to the raw per-asset decode. Applied to the CLASSIC field PCX
+    // and tile/brick ANIs in load_stage — reproduces the original's colour
+    // quantization (docs/re/facts.md "In-match colour quantization").
+    assets::colorpal::Palette colorpal_;
 
     AniTextures tiles_, xbrick_, bombs_, duds_, flame_, stand_, walk_, shadow_, kfont_, hurry_;
     AniTextures kick_;      // action-pose master (KICK.ANI)

@@ -8,14 +8,13 @@
 # VALUELST.RES/level rotation. Recapture procedure: see README.md.
 #
 # label                 tick  sha256
-# Recaptured 2026-07-12 twice in one pass: (1) the walk pose/leg cycle keys
-# off the sim's PlayerWalking event (dispatched godir + budget-px phase
-# advance) instead of the position delta - facts.md "Walk pose keys off the
-# DISPATCHED godir"; (2) the canonical frame cadence - facts.md "Canonical
-# frame cadence" - shifts every scripted trajectory (923 -> 921/100 px per
-# tick walk accrual), so all five frames moved again.
-walking                 10    d8381416a949b1d1d7a095400b0ea6e9b267cfca7c595a71e69fbfa87b86e801
-bomb_pulse               40    6c0414d82d56872695adee2b7b2d4d909a36445234d7587e863e31907150afbb
-explosion_mid_flame     65    37bc612b143030bdc1617682d63a918bb45e4aae4dff066d40bd6d6d2c23acf4
-brick_crumble           68    c717518a227f405653be1bdfd7ad7a8dcd4fa404bf841063d6a381a3dabbdc34
-powerup_revealed        76    4c0c63438792d38858ec4de6e15fbfd0aee681cf403ff7e1c2a8ab3baafa29fc
+# Recaptured 2026-07-13: the in-match master-palette colour snap (COLOR.PAL,
+# colorpal.hpp / facts.md "In-match colour quantization") now applies to the
+# classic field + tile/brick art, so the demo's FIELD10 tiles shift ~2-3% to
+# their master-palette colours. The FIELD10 field itself is identity (authored
+# in the palette); the visible win is FIELD1's dither, not in this demo level.
+walking                 10    a2c6ab596afa1a226fdf35846812ff9448dc169caf3cea0123fecd42f4e37d21
+bomb_pulse               40    db91369fe11ea8185c11e2e9164d0c108392ebec56327da2a1fad8bbd109705b
+explosion_mid_flame     65    3ab138acd9be7b1c4a1a77a34e8c8a19c3cc6b9ef21b45a307fb7200dc2c90cc
+brick_crumble           68    fa889e275ca070e71606ff95fdb655269d0dc94048a5b60f845e45cc9936a077
+powerup_revealed        76    28dd81d51742a2abf8b85d7a94a5c1797d0c4c36ed06103e7b54a6a48d92b6d9

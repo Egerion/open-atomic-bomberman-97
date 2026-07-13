@@ -41,6 +41,15 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
     ren_ = ren;
     auto ani_dir = game_dir / "DATA" / "ANI";
     auto res_dir = game_dir / "DATA" / "RES";
+    // The in-match master-palette snap (colorpal.hpp): COLOR.PAL lives in the
+    // install ROOT. Optional — a missing/short file leaves colorpal_ inert and
+    // the game renders the raw per-asset decode (the pre-2026-07-13 look).
+    try {
+        colorpal_ = assets::colorpal::Palette::load(game_dir / "COLOR.PAL");
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "COLOR.PAL unavailable (%s); classic colour snap disabled\n",
+                     e.what());
+    }
     try {
         kfont_.load(ren, ani_dir / "KFONT.ANI");
         hurry_.load(ren, ani_dir / "HURRY.ANI");
@@ -340,9 +349,18 @@ void AssetStore::set_color_fallbacks(const std::int32_t colors[][3], int n) {
 
 bool AssetStore::load_stage(int stage) {
     try {
-        field_.reset(
-            make_texture(ren_, assets::pcx::load(game_dir_ / "DATA" / "RES" /
-                                                 ("FIELD" + std::to_string(stage) + ".PCX"))));
+        // Classic field: decode the 8-bit PCX, then run the in-match
+        // master-palette snap (colorpal.hpp) before upload. Identity for
+        // FIELD0/2..10 (authored in the palette); the visible fix is FIELD1's
+        // blue/green dither, which the original snaps to the muted
+        // (20,40,108)/(4,132,0) pair (pixel-exact vs a live capture). The HD
+        // override below is truecolour and is NEVER snapped.
+        {
+            assets::Image field_img = assets::pcx::load(
+                game_dir_ / "DATA" / "RES" / ("FIELD" + std::to_string(stage) + ".PCX"));
+            colorpal_.remap(field_img);
+            field_.reset(make_texture(ren_, field_img));
+        }
         // DATA_HD is deliberately optional. The game keeps the exact original
         // field when a modern replacement has not been authored yet, allowing
         // Tab to switch instantly without changing any gameplay data.
@@ -357,9 +375,14 @@ bool AssetStore::load_stage(int stage) {
                 std::fprintf(stderr, "HD stage %d field load failed: %s\n", stage, e.what());
             }
         }
-        tiles_.load(ren_, game_dir_ / "DATA" / "ANI" / ("TILES" + std::to_string(stage) + ".ANI"));
+        // Tiles + crumbling bricks: type-4 RGB555 cels, snapped to the master
+        // palette like the field (a subtle ~2-3% shift — the art is mostly
+        // authored in-palette, but the original snaps it and so do we).
+        tiles_.load(ren_, game_dir_ / "DATA" / "ANI" / ("TILES" + std::to_string(stage) + ".ANI"),
+                    &colorpal_);
         xbrick_.load(ren_,
-                     game_dir_ / "DATA" / "ANI" / ("XBRICK" + std::to_string(stage) + ".ANI"));
+                     game_dir_ / "DATA" / "ANI" / ("XBRICK" + std::to_string(stage) + ".ANI"),
+                     &colorpal_);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "stage %d load failed: %s\n", stage, e.what());
         return false;
