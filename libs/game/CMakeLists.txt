@@ -10,6 +10,7 @@ add_library(bomber_game_core STATIC
   src/audio_engine.cpp
   src/sound_director.cpp
   src/input.cpp
+  src/dos_scancode.cpp
   src/gamepad.cpp
   src/screen.cpp
   src/bmscreen.cpp
@@ -20,7 +21,6 @@ add_library(bomber_game_core STATIC
   src/editor_grid.cpp
   src/editor_screen.cpp
   src/campaign_screen.cpp
-  src/transition.cpp
   src/game_app.cpp
 )
 add_library(bomber::game ALIAS bomber_game_core)

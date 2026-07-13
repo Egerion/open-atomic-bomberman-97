@@ -119,7 +119,8 @@ void StageActorSystem::on_step_center(void* ctx, Player& p, int tx, int ty) {
 }
 
 bool StageActorSystem::move_on_actor(Player& p, int want_godir, bool moving,
-                                     MovementSystem::PixelFn on_pixel, void* pixel_ctx) {
+                                     std::int32_t delta_ms, MovementSystem::PixelFn on_pixel,
+                                     void* pixel_ctx) {
     const Fixed bx = p.x, by = p.y;
     const int tx = p.tile_x(), ty = p.tile_y();
     const ActorType act = actor_at(s_, tx, ty);
@@ -150,7 +151,7 @@ bool StageActorSystem::move_on_actor(Player& p, int want_godir, bool moving,
             // perpendicular: no change
         }
         movement_.move(p, grid::from_godir(want_godir), extra, &on_step_center, &sctx,
-                       /*use_player_speed=*/true, on_pixel, pixel_ctx);
+                       /*use_player_speed=*/true, on_pixel, pixel_ctx, delta_ms);
     } else if (conveyor) {
         // Case (a) — no input. The belt FORCES its direction and pushes. If the
         // step is fully blocked (wall ahead) the original reverts godir to -1
@@ -162,7 +163,7 @@ bool StageActorSystem::move_on_actor(Player& p, int want_godir, bool moving,
         const Fixed fx = p.x, fy = p.y;
         const Direction saved_facing = p.facing;
         movement_.move(p, grid::from_godir(belt_dir), belt, &on_step_center, &sctx,
-                       /*use_player_speed=*/false, on_pixel, pixel_ctx);
+                       /*use_player_speed=*/false, on_pixel, pixel_ctx, delta_ms);
         if (p.x == fx && p.y == fy)
             p.facing = saved_facing;  // blocked: revert the forced facing
     }

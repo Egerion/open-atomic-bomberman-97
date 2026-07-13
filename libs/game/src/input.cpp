@@ -7,25 +7,30 @@ namespace bomber::game {
 KeySet default_key_set(int set) {
     KeySet ks{};
     if ((set & 1) == 0) {
-        // Set 0: arrows + Right Ctrl/Space (bomb), Right Shift (action2). A
-        // single PlayerInput has one action1 bool, so the mapper ORs both
-        // scancodes at read() time (kept as a special case there) — the
-        // KeySet itself can only name one scancode per action, so this slot
-        // holds the primary (RCtrl) and read() keeps the Space fallback.
+        // Set 0 (sub_40614A @0x40614A, dword_4645BC[0..5] = 200/205/208/203/
+        // 57/28): arrows + Space (action1) + Enter (action2). The DOS codes
+        // are the E0-extended arrow set (0x80|code) + the base set; here as
+        // the same physical keys in SDL_Scancode space (dos_scancode.cpp is
+        // the ini-boundary translator).
         ks.scancode[static_cast<int>(KeyAction::Up)] = SDL_SCANCODE_UP;
         ks.scancode[static_cast<int>(KeyAction::Right)] = SDL_SCANCODE_RIGHT;
         ks.scancode[static_cast<int>(KeyAction::Down)] = SDL_SCANCODE_DOWN;
         ks.scancode[static_cast<int>(KeyAction::Left)] = SDL_SCANCODE_LEFT;
-        ks.scancode[static_cast<int>(KeyAction::Action1)] = SDL_SCANCODE_RCTRL;
-        ks.scancode[static_cast<int>(KeyAction::Action2)] = SDL_SCANCODE_RSHIFT;
+        ks.scancode[static_cast<int>(KeyAction::Action1)] = SDL_SCANCODE_SPACE;
+        ks.scancode[static_cast<int>(KeyAction::Action2)] = SDL_SCANCODE_RETURN;
     } else {
-        // Set 1: WASD + Left Ctrl (bomb), Left Shift (action2).
-        ks.scancode[static_cast<int>(KeyAction::Up)] = SDL_SCANCODE_W;
-        ks.scancode[static_cast<int>(KeyAction::Right)] = SDL_SCANCODE_D;
-        ks.scancode[static_cast<int>(KeyAction::Down)] = SDL_SCANCODE_S;
-        ks.scancode[static_cast<int>(KeyAction::Left)] = SDL_SCANCODE_A;
-        ks.scancode[static_cast<int>(KeyAction::Action1)] = SDL_SCANCODE_LCTRL;
-        ks.scancode[static_cast<int>(KeyAction::Action2)] = SDL_SCANCODE_LSHIFT;
+        // Set 1 (sub_40614A, dword_4645BC[10..15] = 19/34/33/32/31/30): the
+        // R/G/F/D diamond (up/right/down/left) + S (action1) + A (action2).
+        // The original swaps A for Q (16) when the BIOS keyboard-nationality
+        // global dword_4A2CA4 == 1 (an AZERTY accommodation with no SDL
+        // analogue — SDL scancodes are positional already, so plain A is the
+        // faithful pick here).
+        ks.scancode[static_cast<int>(KeyAction::Up)] = SDL_SCANCODE_R;
+        ks.scancode[static_cast<int>(KeyAction::Right)] = SDL_SCANCODE_G;
+        ks.scancode[static_cast<int>(KeyAction::Down)] = SDL_SCANCODE_F;
+        ks.scancode[static_cast<int>(KeyAction::Left)] = SDL_SCANCODE_D;
+        ks.scancode[static_cast<int>(KeyAction::Action1)] = SDL_SCANCODE_S;
+        ks.scancode[static_cast<int>(KeyAction::Action2)] = SDL_SCANCODE_A;
     }
     return ks;
 }
@@ -47,12 +52,11 @@ sim::TickInputs KeyboardMapper::read() const {
         p.action1 = keys[ks.scancode[static_cast<int>(KeyAction::Action1)]];
         p.action2 = keys[ks.scancode[static_cast<int>(KeyAction::Action2)]];
     }
-    // Preserve the port's pre-existing Space-as-bomb fallback for set 0 (the
-    // original binding table before this remap UI existed accepted either
-    // Right Ctrl or Space) — additive, so rebinding Action1 away from RCtrl
-    // does not remove the Space fallback; only rebinding to a DIFFERENT key
-    // changes what Space stacks with, exactly like the pre-existing behaviour.
-    in.players[0].action1 = in.players[0].action1 || keys[SDL_SCANCODE_SPACE];
+    // (The port's old Space-as-bomb OR fallback for set 0 is gone: the
+    // original's own default already binds Space as set 0's action1
+    // (sub_40614A above), and its input decode reads ONLY the bound
+    // scancode per action — the extra OR was an invented shim from before
+    // the remap UI existed.)
     return in;
 }
 

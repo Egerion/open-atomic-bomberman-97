@@ -38,14 +38,19 @@ namespace bomber::game {
 
 // The *.SCH file picker — sub_407582 @0x407582 (§5, PINNED from the body):
 // globs "*.SCH" (sub_41404B, the same findfirst/qsort helper as the help
-// browser), reads each file's embedded -N scheme name (sub_404BE9) and lists
-// "<filename> <scheme name>" rows through the generic list dialog
-// (sub_41485A -> sub_42DBCC) at (100, 100) with header getstring(721), the
-// general white ink, and up to 13 visible rows (the dialog shrinks to 12..9
-// rows if the window can't fit; more entries scroll). Selecting a row strips
-// the name suffix at the first space and stores the filename as the live
-// schemefilename (byte_4648C4); an empty glob shows the getstring(720)/95
-// error dialog instead.
+// browser), reads each file's embedded -N scheme name (sub_404BE9;
+// getstring(727) "No Scheme Name" when absent) and lists rows formatted
+// through aSS = "%s: %s" — "<FILENAME.SCH>: <scheme name>" — in the generic
+// list dialog (sub_41485A -> sub_42DBCC) at (100, 100) with header
+// getstring(721), the general white ink, and up to 13 visible rows (the
+// dialog shrinks to 12..9 rows if the window can't fit; more entries
+// scroll). Selecting a row cuts the line at its FIRST '.' (dropping both
+// the extension and the ": name" suffix in one strchr) and stores that,
+// uppercased (sub_412A3B strupr), as the live schemefilename (byte_4648C4);
+// an empty glob shows the getstring(95)/getstring(720) sub_414340 error in
+// byte_49A390's dark red instead. This ONE routine serves both the editor's
+// "edit an existing scheme" path AND the Options screen's row 8 (pseudo.c
+// 5501 and 9445, the same sub_407582).
 class SchemeFilePicker {
 public:
     SchemeFilePicker(const AssetStore& assets, const FontTextures& font)

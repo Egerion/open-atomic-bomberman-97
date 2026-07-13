@@ -324,7 +324,7 @@ TEST_CASE("diarrhea auto-drop still fires every tick during a standing head-hit 
     p.stun = 8;  // white-box: standing stun, no bounce/warp/pickup-pause
     s.tick(TickInputs{});
     CHECK(p.bombs_placed >= 1);  // auto-dropped despite being fully input-blocked
-    CHECK(p.stun == 7);          // the stun countdown itself is untouched
+    CHECK(p.stun == 5);          // the countdown burned its kSubFrames frames as usual
 }
 
 TEST_CASE("diarrhea + grab keeps cycling grab/throw/drop through a whole trampoline flight") {

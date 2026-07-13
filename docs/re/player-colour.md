@@ -128,9 +128,12 @@ return palette_LUT[ b5 | (g5 << 5) | (r5 << 10) ];   // 15-bit RGB555 -> index
 ```
 
 i.e. quantise each channel to 5 bits and look the RGB555 up in the palette. The
-background `sub_416867(i)` is the outline colour (`palette[0]` in normal play;
-the team colour in team mode). So the slot colour is the **`.RMP` tail**, not the
-raw VALUELST percent.
+background `sub_416867(i)` is the outline colour — CORRECTED 2026-07-12 (its
+body read exact): **black for every slot, EXCEPT slot index 1 (the BLACK
+player), which gets a WHITE outline** so its dark row stays legible
+(pseudo.c 18496-18503; in team mode it returns black unconditionally). The
+earlier "team colour in team mode" reading was wrong. So the slot colour is
+the **`.RMP` tail**, not the raw VALUELST percent.
 
 **`sub_41672F` itself branches on Team Play** (CONFIRMED, pseudo.c 18463-18493):
 `if (dword_464964) return sub_4141F8(sub_4223E7(a1)); else { ...the .RMP-tail

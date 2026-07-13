@@ -148,9 +148,14 @@ TEST_CASE("a stunned-but-alive player still ages its disease") {
     Simulation s(open_config());
     infect(s.state().players[0], Disease::Slow, 10);
     s.state().players[0].stun = 5;
-    run(s, 3);
-    CHECK(s.state().players[0].stun == 2);           // stun itself still ticks down
-    CHECK(s.state().players[0].disease_timer == 7);  // and the disease ages right alongside it
+    run(s, 1);
+    // Stun burns once per canonical FRAME (kSubFrames per tick — facts.md
+    // "Canonical frame cadence"); the disease timer ages per tick.
+    CHECK(s.state().players[0].stun == 2);           // 5 - kSubFrames
+    CHECK(s.state().players[0].disease_timer == 9);  // and the disease ages right alongside it
+    run(s, 2);
+    CHECK(s.state().players[0].stun == 0);
+    CHECK(s.state().players[0].disease_timer == 7);
     CHECK(s.state().players[0].sick(Disease::Slow));
 }
 

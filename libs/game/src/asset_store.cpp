@@ -108,16 +108,10 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
             std::fprintf(stderr, "TRIGANIM.ANI load failed: %s\n", e.what());
         }
 
-        // Front-end screen-transition wipe (HEADWIPE.ANI, single "HEAD"
-        // sequence). Presentation-only and optional: a missing/broken file must
-        // NOT abort the load — the Transition primitive falls back to a fade.
-        // (docs/re/frontend-flow.md.)
-        try {
-            auto p = ani_dir / "HEADWIPE.ANI";
-            if (fs::exists(p)) headwipe_.load(ren, p);
-        } catch (const std::exception& e) {
-            std::fprintf(stderr, "HEADWIPE.ANI load failed: %s\n", e.what());
-        }
+        // HEADWIPE.ANI is deliberately NOT loaded: it is absent from
+        // MASTER.ALI, so the original engine never loads it — dead art, like
+        // FLAME.ANI/TRIGBOMB.ANI (docs/re/frontend-flow.md "HEADWIPE.ANI is
+        // dead art"). The menu→setup screen change is a CUT in the original.
 
         // MISC.ANI: teamring0/teamring1 (the scheme editor's start markers,
         // sub_4028D2 aTeamringU), plus cursor1/goldman/ring/safe/scan —

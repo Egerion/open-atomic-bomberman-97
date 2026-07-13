@@ -28,7 +28,7 @@ namespace bomber::game {
 // One ANI overlay drawn on top of the background: the ANI to resolve a sequence
 // from, the sequence name, and where its hotspot-anchored frames land.
 struct ScreenOverlay {
-    const AniTextures* ani = nullptr;  // e.g. &assets.headwipe() or a menu ANI
+    const AniTextures* ani = nullptr;  // the ANI holding the overlay sequence
     std::string sequence;              // sequence name within that ANI
     int x = 0, y = 0;                  // top-left blit origin (screen space)
 };

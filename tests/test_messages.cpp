@@ -26,6 +26,23 @@ TEST_CASE("messages: id,text with comments, commas, and % specifiers") {
     CHECK(m.strings.size() == 3);
 }
 
+TEST_CASE("messages: one surrounding pair of double-quotes is stripped") {
+    // The real MESSAGES.TXT quotes SOME payloads and not others; getstring
+    // strips exactly one surrounding pair (so `"%u %s to win match"` renders
+    // unquoted) but leaves interior quotes and unquoted text alone.
+    auto m = parse_messages(
+        "50,\"Available players:\"\n"
+        "211,\"%u %s to win match\"\n"
+        "10,Are you sure you want to exit?\n"      // unquoted stays as-is
+        "77,\"leading only\n"                       // lone quote: not a pair
+        "78,say \"hi\" there\n");                   // interior quotes kept
+    CHECK(m.get_or(50) == "Available players:");
+    CHECK(m.get_or(211) == "%u %s to win match");
+    CHECK(m.get_or(10) == "Are you sure you want to exit?");
+    CHECK(m.get_or(77) == "\"leading only");
+    CHECK(m.get_or(78) == "say \"hi\" there");
+}
+
 TEST_CASE("messages: blank/comment lines skipped, malformed lines warned") {
     auto m = parse_messages(";c\n\nnocomma line\n5,ok\n");
     CHECK(m.strings.size() == 1);

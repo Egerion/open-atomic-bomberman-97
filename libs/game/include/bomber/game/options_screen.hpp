@@ -8,6 +8,7 @@
 #include "bomber/game/asset_store.hpp"
 #include "bomber/game/audio_engine.hpp"
 #include "bomber/game/bmscreen.hpp"
+#include "bomber/game/cursor_indicator.hpp"
 
 // The interactive Options screen — sub_4080DC @0x4080DC (docs/re/results-and-
 // options.md §3, CONFIRMED: a 19-row settings list; the doc corrects
@@ -59,8 +60,8 @@
 //    shipped binary (a genuine off-by-one in the original, not an RE
 //    ambiguity: the switch still has a live `case 18` — dead code because
 //    the cursor variable can never hold 18 when the switch runs). Faithfully
-//    reproduced: `kCursorRowCount` gates navigation to rows 0..17; row 18 is
-//    drawn every frame but never receives the cursor and never dispatches.
+//    reproduced: `kCursorRowCount` gates navigation to rows 0..17, which is
+//    ALSO the full drawn set (18 rows — see the kCursorRowCount note below).
 //  - `sub_427961(20)` (nav blip) is the ONLY sound sub_4080DC ever plays,
 //    unconditionally for any real keypress (`if (v165 != -1 && v165 != -2)
 //    sub_427961(20);`, pseudo.c 9298-9299) — there is no separate "accept"
@@ -92,14 +93,21 @@
 //                                      also clears the pending Goldman winner
 //   7  Enclosement Depth             — LIVE cycle, persisted
 //                                      (enclosement_depth=)
-//   8  Scheme File                   — SHOWN, non-interactive: displays the
-//                                      currently-loaded scheme's filename
-//                                      (schemefilename=, round-tripped) but
-//                                      stepping through the on-disk `.SCH`
-//                                      list has no browsing UI in this port.
-//   9  Play Time                     — LIVE cycle (our own reasonable
-//                                      60/120/180/300/600/unlimited set — no
-//                                      exact original stepper list RE'd),
+//   8  Scheme File                   — LIVE (CORRECTED 2026-07-13, full
+//                                      dispatch re-read): BOTH switch bodies
+//                                      route this row to sub_407582 — the
+//                                      *.SCH file-picker LIST DIALOG — via
+//                                      `goto LABEL_46` (pseudo.c 9342-9343
+//                                      forward, 9443-9445 Left), so Left/
+//                                      Right/Enter/Space all OPEN THE PICKER
+//                                      (the §3 table's old "sub_4076FE(±1)
+//                                      stepper" claim was wrong — that is
+//                                      the PLAY TIME stepper). Sets
+//                                      open_scheme_picker() for the caller,
+//                                      the same modal-push contract as row
+//                                      15's open_keyremap().
+//   9  Play Time                     — LIVE cycle; the CONFIRMED sub_4076FE
+//                                      fixed chain (kPlayTimeChoices below),
 //                                      persisted (playtime=)
 //   10 Assign Keyboard Player        — LIVE toggle, persisted
 //                                      (assign_keyboards=); no distinct sim
@@ -151,7 +159,7 @@ enum class OptionRow : std::uint8_t {
     WinByKills,        // row 5
     GoldBomberman,     // row 6
     EnclosementDepth,  // row 7
-    SchemeFile,        // row 8  — display-only
+    SchemeFile,        // row 8  — opens the *.SCH picker (sub_407582)
     PlayTime,          // row 9
     AssignKeyboard,    // row 10
     DiseasesDestroy,   // row 11
@@ -160,15 +168,18 @@ enum class OptionRow : std::uint8_t {
     Modem,             // row 14 — display-only
     KeyRemap,          // row 15 — opens the key-remap sub-screen
     NetProtocol,       // row 16 — display-only
-    SmallMemory,       // row 17
-    AdjustAudio,       // row 18 — CONFIRMED unreachable, see file doc
+    SmallMemory,  // row 17
     kCount,
 };
 
-// CONFIRMED literal (pseudo.c 9086, `v168 = 18;`): Up/Down navigation wraps
-// over rows [0, kCursorRowCount), NOT [0, kCount) — row 18 is drawn but can
-// never receive the cursor. Do not "fix" this to kCount; it is a faithful
-// reproduction of the shipped binary's own off-by-one, not an RE ambiguity.
+// CONFIRMED literal (pseudo.c 9086, `v168 = 18;`): the screen has exactly 18
+// rows, cursor and draw alike. CORRECTED 2026-07-12 by the chrome audit: the
+// earlier "row 18 (Adjust Audio) is drawn but unreachable" reading was wrong
+// — the draw loop contains exactly 18 sub_41696C row calls (getstring 250 @
+// 9098 .. 267 @ 9281) and getstring(268) "Adjust Audio" is never fetched
+// anywhere in the binary; only the DEAD dispatch case 18 (sub_407542's
+// "Audio Adjustment screen will be here..." stub) exists. The 19th drawn row
+// was the port's invention and has been removed.
 inline constexpr int kCursorRowCount = 18;
 
 // Snapshot of every editable/displayable setting, passed in on enter() and
@@ -186,9 +197,12 @@ struct OptionsSnapshot {
     bool win_by_kills = false;
     bool goldman = false;
     int enclosement_depth = 1;  // 0..3
-    // Row 8, display-only (see file doc) — the currently-loaded scheme's
-    // filename, round-tripped through options.ini's `schemefilename=` even
-    // though this port has no in-screen `.SCH` browser to change it.
+    // Row 8 — the live scheme filename (schemefilename=, byte_4648C4).
+    // Shown VERBATIM (the original's row draw formats the buffer as-is);
+    // the picker (sub_407582) stores it truncated at the first '.' and
+    // uppercased (strchr + sub_412A3B strupr), so a picked value reads
+    // "BASIC" while a hand-edited options.ini value shows however the file
+    // spells it.
     std::string scheme_filename;
     int playtime_seconds = 150;        // one of kPlayTimeChoices, or 1001 = unlimited
     bool assign_keyboards = false;     // row 10, getvalue-less default per §3 (no seed cited)
@@ -196,12 +210,26 @@ struct OptionsSnapshot {
     bool lost_net_revert_ai = false;   // row 12
     bool disable_game_music = false;
     bool small_memory = false;  // row 17 backing value; LABEL is inverted, see file doc
+    // Row 2, display-only: the net node name (sub_40FE34's runtime buffer
+    // unk_460140 — bss, EMPTY by default, and NOT one of options.ini's 22
+    // keys; the original edits it via a text prompt, getstring(290)).
+    // Rendered through getstring(252) "Node Name: '%s'".
+    std::string node_name;
+    // Row 14, display-only: the four modem fields (getstring(264) "Modem:
+    // P:%u  I:%u  B:%u  #:%s"; sources dword_464970/4648B8/46482C + the dial
+    // string — options.ini modemport=/modemirq=/modembaud=/modemdial=, all
+    // parsed by assets::Options). Defaults = the shipped install's values.
+    int modemport = 2;
+    int modemirq = 3;
+    int modembaud = 19200;
+    std::string modemdial = "555-1212";
 };
 
-// The Play Time cycle's choices (§3 row 9: `sub_4076FE`, no exact value list
-// pinned — this is our own reasonable stepper set). 1001 is the CONFIRMED
-// "unlimited" sentinel (Options::playtime's clamp note, §3).
-inline constexpr int kPlayTimeChoices[] = {60, 120, 180, 300, 600, 1001};
+// The Play Time cycle's CONFIRMED fixed chain (sub_4076FE, pseudo.c
+// 8489-8562): 60-90-120-150-180-240-300-600-1001, wrapping; 1001 is the
+// "Infinite" sentinel (rendered via getstring(280)). Replaces the port's
+// earlier guessed stepper set.
+inline constexpr int kPlayTimeChoices[] = {60, 90, 120, 150, 180, 240, 300, 600, 1001};
 inline constexpr int kPlayTimeChoiceCount =
     static_cast<int>(sizeof(kPlayTimeChoices) / sizeof(kPlayTimeChoices[0]));
 
@@ -209,6 +237,7 @@ class OptionsScreen {
 public:
     OptionsScreen(const AssetStore& assets, const FontTextures& font)
         : assets_(&assets), font_(&font) {}
+    // (cursor_indicator.hpp supplies the shared blink primitive below.)
 
     // (Re)enter the screen with the current settings (loaded from options.ini /
     // Tuning defaults by the caller) and a backdrop name already picked by the
@@ -226,11 +255,17 @@ public:
     // KeyboardMapper's live bindings directly via the caller).
     void on_key(SDL_Keycode key, AudioEngine& audio);
 
-    // Advances the "cursor1" selection-sprite's self-paced animation by one
-    // drawn frame (CONFIRMED sub_413BD6 has its own frame timer, distinct
-    // from any gameplay tick — call once per drawn frame, matching
-    // goldman_screen.hpp's/screen.hpp's own frame_ pacer convention).
-    void tick() { ++cursor_frame_; }
+    // Advances the "cursor1" selection sprite by one drawn frame. Faithful
+    // sub_413BD6 pacing (cursor_indicator.hpp): the sprite IDLES on step 0
+    // and blinks through the sequence — one step per rendered frame — every
+    // getvalue(690) + rand()%getvalue(691) seconds; the caller passes those
+    // two VALUELST columns (row 690 = {2,2}) and the wall clock in seconds.
+    // The old continuous cursor_frame_/6 spin was a documented placeholder.
+    void tick(std::uint64_t now_s, int blink_base_s, int blink_spread_s) {
+        blink_now_s_ = now_s;
+        blink_base_s_ = blink_base_s;
+        blink_spread_s_ = blink_spread_s;
+    }
 
     void draw(SDL_Renderer* ren) const;
 
@@ -255,6 +290,18 @@ public:
     // must clear it is not needed — enter() resets it, and it is only ever
     // read once per press in the app's own loop (see game_app.cpp).
     bool open_keyremap() const { return open_keyremap_; }
+    // Same contract for row 8 "Scheme File": Left/Right/Enter/Space all open
+    // the *.SCH picker (sub_407582 via LABEL_46 in BOTH dispatch switches);
+    // the caller pushes the picker modally and, on a selection, calls
+    // set_scheme_filename() with the stored name.
+    bool open_scheme_picker() const { return open_scheme_picker_; }
+    // The picker's write-back (sub_407582's strcpy into byte_4648C4 +
+    // sub_412A3B strupr happen in the caller): updates the snapshot row and
+    // marks the screen changed so the caller persists it on exit.
+    void set_scheme_filename(std::string name) {
+        snap_.scheme_filename = std::move(name);
+        changed_ = true;
+    }
 
     const OptionsSnapshot& snapshot() const { return snap_; }
 
@@ -272,11 +319,18 @@ private:
     std::string backdrop_;  // "GLUE<n>", supplied by the caller's pick_glue()
 
     int row_ = 0;  // OptionRow, as an int for the wrap arithmetic — always in [0, kCursorRowCount)
-    std::uint64_t cursor_frame_ = 0;
+    // Blink state + this frame's inputs for it (see tick()); mutable because
+    // draw() is const and the step advance happens at draw time, once per
+    // rendered frame, exactly where sub_413BD6 sits in the original's loop.
+    mutable CursorIndicator cursor_blink_;
+    std::uint64_t blink_now_s_ = 0;
+    int blink_base_s_ = 2;
+    int blink_spread_s_ = 2;
     OptionsSnapshot snap_;
     bool changed_ = false;
     bool done_ = false;
     bool open_keyremap_ = false;
+    bool open_scheme_picker_ = false;
     bool goldman_touched_ = false;  // see gold_forfeiting_row_touched()
     bool team_play_touched_ = false;
 };

@@ -50,6 +50,17 @@ struct Event {
         // react to the change without diffing the grid every frame; it does
         // not imply a distinct visual.
         TileRegrew,
+        // The walking dispatch ran for this player this tick: a direction
+        // reached the mover (input/AI/ice-buffer, sub_41F29B's keyed branch
+        // 23430-23453), whether or not any pixel actually moved — the budget
+        // loop burns 100/iteration even fully wall-blocked (sub_41EC84), and
+        // the original's walk-vs-stand pose keys off that same godir (+46),
+        // NOT off displacement. So a player pushing a wall pedals in place,
+        // while an idle player carried by a conveyor does NOT (the belt push
+        // is the IDLE branch, +46 == -1 → stand pose sliding along). data =
+        // this tick's disease-scaled walk budget in whole px (the leg-cycle
+        // advance), clamped to 1..127. Presentation-only, like every event.
+        PlayerWalking,
         // A bomb drop was refused because the player stands on a WARPHOLE
         // (sub_41F29B drop block: actor type 1 short-circuits the placement
         // and plays SOUNDLST 40/41 "enrt" instead — never during auto-drop,

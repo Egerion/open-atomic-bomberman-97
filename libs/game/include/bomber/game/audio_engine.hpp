@@ -26,6 +26,13 @@ public:
     // Starts (or switches) looping background music by SOUNDLST id.
     void start_music(int id);
 
+    // Stops the looping music outright — the port of sub_427342's "free the
+    // music handle". Used by the round init when "Disable music during
+    // gameplay" is set: the original SILENCES the round (the setup-screens
+    // track must not bleed into it), it does not merely skip starting the
+    // stage track (docs/re/in-match-shell.md §2 round init).
+    void stop_music();
+
     // True when SOUNDLST names this id (regardless of whether its .RSS file
     // actually loads) — lets a caller pick a documented fallback id (e.g. the
     // in-round per-level stage track 1100+level falling back to 1120,

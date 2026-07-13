@@ -74,7 +74,9 @@ public:
     // per-pixel flame-death/pickup slot (sub_41EC84 22699-22717), which the
     // original runs for BOTH the input-driven and the belt-forced walk (the
     // mover is the same call either way).
-    bool move_on_actor(Player& p, int want_godir, bool moving,
+    // delta_ms is the sub-frame quantum (constants.hpp kSubFrameMs) forwarded
+    // to MovementSystem::move's per-frame budget accrual.
+    bool move_on_actor(Player& p, int want_godir, bool moving, std::int32_t delta_ms = kMsPerTick,
                        MovementSystem::PixelFn on_pixel = nullptr, void* pixel_ctx = nullptr);
 
     // After the player has moved, if it is centred on a trampoline tile and not

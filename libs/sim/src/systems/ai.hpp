@@ -49,13 +49,18 @@ class AISystem {
 public:
     explicit AISystem(State& s) : s_(s) {}
 
-    // Runs at the TOP of the player loop, before player_turn, gated by the
-    // caller on players[i].ai. Fills `out` from State + brains[i], mutating
-    // brains[i]. Mirrors sub_40A1C6: the leading scratch draw A, the fired
-    // behaviour's draws, the trailing scratch draw B (A/B are heap-debug residue
-    // kept for exact RNG parity — docs/re/ai.md §2/§8). The per-tick danger and
-    // obstacle grids are (re)built lazily on the first decide() of the tick.
-    void decide(int i, PlayerInput& out);
+    // Runs once per canonical SUB-FRAME from player_turn's movement loop
+    // (docs/re/facts.md "Canonical frame cadence" — the original invokes
+    // sub_40A1C6 once per DISPLAYED frame, so the whims, RNG draws and
+    // pursuit timers all run at frame rate; `delta_ms` is that frame's
+    // integer-ms delta, constants.hpp kSubFrameMs). Fills `out` from State +
+    // brains[i], mutating brains[i]. Mirrors sub_40A1C6: the leading scratch
+    // draw A, the fired behaviour's draws, the trailing scratch draw B (A/B
+    // are heap-debug residue kept for exact RNG parity — docs/re/ai.md
+    // §2/§8). The danger and obstacle grids are (re)built lazily on the first
+    // decide() of the TICK — the original rebuilds them per frame, but bombs/
+    // flames are static between our sub-frames, so one build is identical.
+    void decide(int i, PlayerInput& out, std::int32_t delta_ms);
 
 private:
     // Integer scratch grids, rebuilt once per tick and shared by every AI player
@@ -206,6 +211,10 @@ private:
     static void press_action(PlayerInput& out);
 
     State& s_;
+    // The current decide()'s frame delta (ms) — pursuit timers (+12/+28)
+    // accrue it, mirroring the original's `+= dword_464958` per frame. Set at
+    // decide() entry; NOT hashed (per-call scratch, like the grids).
+    std::int32_t delta_ms_ = kMsPerTick;
     Grid danger_{};
     Grid obstacle_{};
     std::uint64_t grids_tick_ = static_cast<std::uint64_t>(-1);  // "not built yet"

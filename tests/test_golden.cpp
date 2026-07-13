@@ -447,13 +447,20 @@ TEST_CASE("golden B: 4-player brick match with all abilities") {
     Simulation s(cfg);
     CHECK(s.hash() == 0x1ca11f61db23bad4ull);  // setup itself is pinned
 
+    // Recaptured 2026-07-12 (canonical frame cadence, facts.md "Canonical
+    // frame cadence"): the walk budget accrues per 60 fps frame with the
+    // original's truncation (923 -> 921/100 px per tick) and the head-stun
+    // burns per frame, so every input-driven trajectory shifts. Golden A
+    // (same commit) stayed BYTE-IDENTICAL — the no-input path is untouched —
+    // and E's bounce-count + veer-RNG assertions passed unchanged, pinning
+    // that the choreography itself still plays out.
     static constexpr std::uint64_t kExpected[6] = {
-        0x73947992b2628e0aull,  // tick 500
-        0xa92343a4954b70a2ull,  // tick 1000
-        0x31625e53d2ca989aull,  // tick 1500
-        0x41be7765360f0257ull,  // tick 2000
-        0x0e83107e26e3505aull,  // tick 2500
-        0x098ce3f6fbe23ae7ull,  // tick 3000
+        0xc2da828b2f6dbcacull,  // tick 500
+        0xdc139384d37e5924ull,  // tick 1000
+        0x743ba65caad04e9cull,  // tick 1500
+        0x85273bc791b87409ull,  // tick 2000
+        0x55883df24a5c5ddcull,  // tick 2500
+        0x285c4b776a21ab79ull,  // tick 3000
     };
     for (std::uint64_t t = 0; t < 3000; ++t) {
         s.tick(pattern(t));
@@ -471,7 +478,8 @@ TEST_CASE("golden C: trigger bombs and a fast hurry phase") {
     cfg.born_with[static_cast<int>(PowerupType::Trigger)] = true;
     Simulation s(cfg);
     for (std::uint64_t t = 0; t < 1500; ++t) s.tick(pattern(t * 7 + 3));
-    CHECK(s.hash() == 0x7a9a37f54d0dc3f8ull);
+    // Recaptured 2026-07-12 (canonical frame cadence — see golden B's note).
+    CHECK(s.hash() == 0xbff1bb0e07f7934eull);
 }
 
 TEST_CASE("golden D: the disease gauntlet") {
@@ -526,14 +534,23 @@ TEST_CASE("golden D: the disease gauntlet") {
     // so neither branch's own constants were valid alone. Safety net held:
     // kExpectedRng at all four checkpoints and every other scenario's
     // assertions passed UNCHANGED on the combined build before this patch.
+    // FULL recapture 2026-07-12 (canonical frame cadence — see golden B's
+    // note): unlike the earlier audits this one legitimately moves the RNG
+    // stream too — the gauntlet's walkers reach the disease/skate tiles on
+    // different ticks (921/100 px walk accrual, molasses/hyper factors now
+    // applied to per-frame accruals), so the pickup-driven draws shift in
+    // time. Telling detail: the new tick-200 rng equals the OLD tick-400
+    // value — the same draw sequence, reached sooner — and the stream then
+    // goes quiet (the gauntlet resolves earlier), which is the expected shape
+    // of a cadence change, not draw-order corruption.
     static constexpr std::uint64_t kExpectedHash[4] = {
-        0x4e8f8519c4db004full,  // tick 200 (unchanged: before the first death)
-        0x73dee1d4b60592a9ull,  // tick 400 (unchanged: before the mid-walk Swap)
-        0xb19ad59d432af1c0ull,  // tick 600
-        0x34d636aff2093242ull,  // tick 800
+        0x2d424b9f81566c0full,  // tick 200
+        0x9f0cd6cc39309794ull,  // tick 400
+        0xd1e5d420e7e429e0ull,  // tick 600
+        0x6afba77fa4f1e920ull,  // tick 800
     };
-    static constexpr std::uint32_t kExpectedRng[4] = {0xca47489cu, 0x49cffff6u, 0xdd6d0230u,
-                                                      0xa9af166bu};
+    static constexpr std::uint32_t kExpectedRng[4] = {0x49cffff6u, 0xf1401d55u, 0xf1401d55u,
+                                                      0xf1401d55u};
     for (std::uint64_t t = 0; t < 800; ++t) {
         TickInputs in = pattern(t);
         for (int p = 0; p < kMaxPlayers; ++p) {
@@ -590,11 +607,15 @@ TEST_CASE("golden E: jelly ping-pong and a veering punched flight") {
         return in;
     };
 
+    // Recaptured 2026-07-12 (canonical frame cadence — see golden B's note).
+    // The bounce-count and veer-RNG assertions below passed UNCHANGED through
+    // the recapture: the script's held-key choreography still lands every
+    // kick/punch, only the pixel timeline shifted.
     static constexpr std::uint64_t kExpected[4] = {
-        0x95f978ee7999403dull,  // tick 75
-        0x9a72cdfc773b72a6ull,  // tick 150
-        0x4dc568dbc7487300ull,  // tick 225
-        0xd6f529147ed20c67ull,  // tick 300
+        0xcc4eca1d3b90667bull,  // tick 75
+        0xd34fbade88af1284ull,  // tick 150
+        0x2deb150e7dea6c8aull,  // tick 225
+        0xd10d9025d8c02765ull,  // tick 300
     };
     int bounces = 0;
     for (std::uint64_t t = 0; t < 300; ++t) {

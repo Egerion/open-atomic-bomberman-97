@@ -100,7 +100,10 @@ struct Tuning {
     std::int32_t powers_lost_min = 1;    // id 670: min powers dropped on a head hit
     std::int32_t powers_lost_rand = 3;   // id 671: modulus of the extra random drops
     std::int32_t head_stun_frames = 16;  // CONFIRMED hardcoded 16 (sub_421F7E sets the
-                                         // +58 countdown; not a VALUELST id)
+                                         // +58 countdown; not a VALUELST id). DISPLAYED
+                                         // frames, burned kSubFrames per tick (~0.27 s
+                                         // at the canonical 60 fps) — facts.md
+                                         // "Canonical frame cadence"
     std::int32_t punch_arc_first = 65;   // id 660: three-tile punch arc height, px
     std::int32_t punch_arc_hop = 20;     // id 661: subsequent one-tile hops
     // "Fire In The Hole" taunt (docs/re/id-audit.md item 1, sub_41F29B pseudo.c

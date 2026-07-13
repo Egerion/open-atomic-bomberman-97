@@ -22,7 +22,8 @@ namespace bomber::sim {
 // warp/trampoline "stuck": a walking player's budget steps OVER the exact
 // centre pixel, so a post-walk-only test almost never fired. See §5.
 void MovementSystem::move(Player& p, Direction d, std::int32_t extra_budget, StepOnFn on_center,
-                          void* ctx, bool use_player_speed, PixelFn on_pixel, void* pixel_ctx) {
+                          void* ctx, bool use_player_speed, PixelFn on_pixel, void* pixel_ctx,
+                          std::int32_t delta_ms) {
     State& s = s_;
     p.facing = d;
 
@@ -47,22 +48,26 @@ void MovementSystem::move(Player& p, Direction d, std::int32_t extra_budget, Ste
     const int g = godir(d);
     const int dxg = DX[g], dyg = DY[g];
 
-    // Disease speed factors, applied in the original's order (sub_41F29B):
-    // molasses divides by 3 first, then hyper/super multiplies by 3/2.
+    // Per-frame budget accrual (sub_41F29B): `speed × frameDelta / 50`, then
+    // the disease factors — molasses divides by 3 first, then hyper/super
+    // multiplies by 3/2 (order pinned; whether the original scales before or
+    // after the delta division is flagged [VERIFY] in facts.md "Canonical
+    // frame cadence" — identical at delta 50, ±1 unit at sub-frame deltas).
     // Only folded in when the player actually supplied the move (case (b) in
     // sub_41F29B); a conveyor forcing an idle player (case (a)) contributes
     // ONLY its own term — see the use_player_speed doc comment in the header.
     std::int32_t eff = 0;
     if (use_player_speed) {
-        eff = p.speed;
+        eff = frame_budget(p.speed, delta_ms);
         if (p.sick(Disease::Slow)) eff /= 3;
         if (p.sick(Disease::Fast) || p.sick(Disease::Super)) eff = 3 * eff / 2;
     }
 
     // The conveyor budget (extra_budget) is added AFTER the disease factors,
     // exactly as sub_41F29B adds its getvalue(190+idx) term after molasses/
-    // hyper scaling — the belt is not slowed by disease. See stage-actors.md.
-    p.move_budget += eff + extra_budget;
+    // hyper scaling — the belt is not slowed by disease, but it IS delta-
+    // scaled like every per-frame accrual. See stage-actors.md.
+    p.move_budget += eff + frame_budget(extra_budget, delta_ms);
     while (p.move_budget > 0) {
         p.move_budget -= 100;
 
@@ -150,20 +155,22 @@ int MovementSystem::ice_delay(Player& p, int want_godir) const {
 
     // Age + shift + insert (sub_41F29B ~23060-23077): the original ages every
     // slot by the frame delta (dword_464958), shifts the buffer down one, and
-    // inserts the fresh sample at slot 0. At our fixed 20 Hz tick rate "age by
-    // one tick" and "shift" collapse to a plain FIFO push — slot k's age
-    // after this push is exactly k ticks (k * kMsPerTick ms).
+    // inserts the fresh sample at slot 0 — once per DISPLAYED frame. This is
+    // called once per canonical sub-frame (player_turn's kSubFrames loop), so
+    // it stays a plain FIFO push: slot k's age after this push is k sub-
+    // frames ≈ k * 50/3 ms, and the 30-slot buffer spans ~500 ms — exactly
+    // the original's own capacity at 60 fps.
     for (int k = Player::kIceHistoryLen - 1; k > 0; --k) p.ice_history[k] = p.ice_history[k - 1];
     p.ice_history[0] = static_cast<std::int8_t>(want_godir);
 
     // Resolve (sub_41F29B ~23071-23077): walk from the freshest sample toward
     // the oldest, using the first whose age has reached delay_ms — i.e. the
-    // smallest k with k*kMsPerTick >= delay_ms (ceil(delay_ms/kMsPerTick)),
-    // clamped to the buffer's own capacity (the original's behaviour when a
-    // delay exceeds its 30-slot history: the loop runs out and the LAST
-    // (oldest) sample it read stays in effect).
-    constexpr int kMsPerTick = 1000 / kTicksPerSecond;
-    int k = (delay_ms + kMsPerTick - 1) / kMsPerTick;
+    // smallest k with k*(50/3) >= delay_ms (the original's measured ages
+    // jitter ±1 ms around the same 60 fps train), clamped to the buffer's own
+    // capacity (the original's behaviour when a delay exceeds its 30-slot
+    // history: the loop runs out and the LAST (oldest) sample it read stays
+    // in effect).
+    int k = (delay_ms * kSubFrames + kMsPerTick - 1) / kMsPerTick;
     if (k >= Player::kIceHistoryLen) k = Player::kIceHistoryLen - 1;
     return p.ice_history[k];
 }

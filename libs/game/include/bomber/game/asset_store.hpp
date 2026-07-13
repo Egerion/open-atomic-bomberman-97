@@ -176,11 +176,6 @@ public:
     // "HSLOGO", "MAINMENU", "DRAW", "BONUS", "CREDBAR", etc. Cached by name.
     const Sprite& frontend_pcx(const std::string& name) const;
 
-    // HEADWIPE.ANI — the screen-to-screen wipe overlay (single "HEAD" sequence,
-    // stepped counter % statecnt like every ANI, sub_41DAA7). Empty when the
-    // file is missing, in which case the Transition falls back to a fade.
-    const AniTextures& headwipe() const { return headwipe_; }
-
     // The Goldman wheel's "ring" pointer sequence (docs/re/goldman-roulette.md
     // §3/§7, aRing) — RESOLVED: MISC.ANI owns it (its sequence table is
     // cursor1/goldman/ring/safe/scan/teamring0/teamring1, checked against the
@@ -321,7 +316,6 @@ private:
     mutable std::map<int, AniTextures> stage_preview_tiles_;
     mutable std::map<int, sdl::TexturePtr> stage_preview_field_;
 
-    AniTextures headwipe_;  // screen-transition wipe (HEADWIPE.ANI), shared
     AniTextures ring_;      // Goldman wheel pointer ("ring" seq), shared — see ring() doc comment
     AniTextures misc_;      // MISC.ANI (teamring0/1, cursor1, safe, scan) — editor markers
     AniTextures edit_;      // EDIT.ANI ("tile -1 blank/brick/solid") — editor schematic tiles

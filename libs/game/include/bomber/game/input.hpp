@@ -18,15 +18,15 @@
 // preset never adds it at all). input.cpp (which DOES link SDL3 via
 // bomber::game) does the SDL_GetKeyboardState/SDL_Scancode work.
 //
-// Defaults mirror the port's pre-existing hardcoded pairing (arrows+RCtrl/
-// Space/RShift for set 0, WASD+LCtrl/LShift for set 1) — NOT the original
-// binary's own default scancodes (200/205/208/203/57/46 and 17/32/31/30/2/3,
-// §2's "Restore defaults" row), since those are raw DOS scancodes in a
-// different numbering space than SDL_Scancode and this port has shipped with
-// the arrows/WASD pairing since before this remap UI existed. A player who
-// wants the ORIGINAL's defaults can already reach them by rebinding through
-// the in-game UI once; default_key_set() below is this port's OWN default,
-// not a decompile citation.
+// Defaults ARE the original's own (sub_40614A @0x40614A, CONFIRMED from the
+// body 2026-07-13 — this CORRECTS §2's earlier "200/205/208/203/57/46 and
+// 17/32/31/30/2/3" misread): set 0 = arrows + Space (action1) + Enter
+// (action2) (DOS 200/205/208/203/57/28), set 1 = the R/G/F/D diamond + S +
+// A (DOS 19/34/33/32/31/30; A becomes Q (16) only under the BIOS AZERTY
+// nationality global dword_4A2CA4 == 1, which has no SDL analogue). The
+// KeySet holds SDL_Scancode values; dos_scancode.hpp translates at the
+// options.ini `keydef=` boundary so a shared install's file stays
+// interchangeable with BM95.EXE.
 
 namespace bomber::game {
 

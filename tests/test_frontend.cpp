@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "bomber/game/app_flow.hpp"
+#include "bomber/game/dos_scancode.hpp"
 #include "bomber/game/hud_format.hpp"
 #include "bomber/game/input.hpp"
 #include "bomber/game/results.hpp"
@@ -690,4 +691,36 @@ TEST_CASE("attract selection save/restore roundtrips every touched field") {
     CHECK(team == std::array<int, kMaxPlayers>{0, 1, 1, 0, 0, 0, 0, 0, 0, 0});
     CHECK(level == 4);
     CHECK(team_play == true);
+}
+
+// The DOS scancode display rule (docs/re/results-and-options.md §2,
+// sub_407B9D pseudo.c 8743-8744 + the off_45B914 table read straight from
+// BM95.EXE's data): name = kDosKeyNames[code & 0x7F], and NO name at all
+// (nullptr) once the masked code falls outside the 0x59-entry table. The
+// extended arrows alias their numpad names through the mask.
+TEST_CASE("dos_scancode_name follows the original's &0x7F / <0x59 rule") {
+    using bomber::game::dos_scancode_name;
+    using bomber::game::kDosKeyNameCount;
+
+    // sub_40614A's default set 0: arrows (E0-extended, 0x80|code) + Space +
+    // Enter — displayed with the numpad-aliased names.
+    CHECK(std::string(dos_scancode_name(200)) == "(8)Up");
+    CHECK(std::string(dos_scancode_name(205)) == "(6)Right");
+    CHECK(std::string(dos_scancode_name(208)) == "(2)Down");
+    CHECK(std::string(dos_scancode_name(203)) == "(4)Left");
+    CHECK(std::string(dos_scancode_name(57)) == "Space");
+    CHECK(std::string(dos_scancode_name(28)) == "Enter");
+    // Default set 1: R/G/F/D + S + A.
+    CHECK(std::string(dos_scancode_name(19)) == "R");
+    CHECK(std::string(dos_scancode_name(34)) == "G");
+    CHECK(std::string(dos_scancode_name(33)) == "F");
+    CHECK(std::string(dos_scancode_name(32)) == "D");
+    CHECK(std::string(dos_scancode_name(31)) == "S");
+    CHECK(std::string(dos_scancode_name(30)) == "A");
+    // Unbound (0) still has a table entry — the empty string, drawn as
+    // "Key: ''" — while a masked code past the table draws nothing.
+    CHECK(std::string(dos_scancode_name(0)).empty());
+    CHECK(dos_scancode_name(kDosKeyNameCount) == nullptr);      // 0x59: first gap
+    CHECK(dos_scancode_name(0x80 | 0x59) == nullptr);           // extended fold of the gap
+    CHECK(std::string(dos_scancode_name(0x80 | 28)) == "Enter");  // KP Enter aliases Enter
 }

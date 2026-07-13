@@ -1,9 +1,11 @@
 #include "bomber/game/options_screen.hpp"
 
 #include <cstdio>
+#include <initializer_list>
 #include <string>
 
 #include "bomber/game/anim_pace.hpp"
+#include "bomber/game/hud_format.hpp"
 
 namespace bomber::game {
 
@@ -25,49 +27,51 @@ constexpr int kCursorX = kListX - 20;
 // only the separate cursor1 sprite (drawn in draw() below) marks selection.
 constexpr Uint8 kInkR = 255, kInkG = 255, kInkB = 255;
 
-const char* conveyor_label(int idx) {
-    switch (idx) {
-        case 0: return "LOW";
-        case 1: return "MEDIUM";
-        case 2: return "HIGH";
-        default: return "?";
-    }
-}
-
-const char* enclosement_label(int idx) {
-    // §3 row 7: msg 315-318, "None/A Little/A Lot/All the way".
-    switch (idx) {
-        case 0: return "NONE";
-        case 1: return "A LITTLE";
-        case 2: return "A LOT";
-        case 3: return "ALL THE WAY";
-        default: return "?";
-    }
-}
-
-std::string playtime_label(int seconds) {
-    if (seconds == 1001) return "UNLIMITED";
-    return std::to_string(seconds) + "s";
-}
-
 int playtime_index(int seconds) {
     for (int i = 0; i < kPlayTimeChoiceCount; ++i)
         if (kPlayTimeChoices[i] == seconds) return i;
     return 0;
 }
 
-const char* yes_no(bool v) {
-    return v ? "YES" : "NO";
-}  // getstring(<global>+25): 25=" No ", 26=" Yes "
+// Crash-proof single-%s splice (the same rule as game_app.cpp's fmt_s: the
+// format string is the user's own MESSAGES.TXT, so an unexpected specifier
+// stays literal rather than risking a wrong-type sprintf).
+std::string fmt_s(const std::string& f, const std::string& v) {
+    auto p = f.find('%');
+    if (p == std::string::npos) return f;
+    std::size_t q = p + 1;
+    while (q < f.size() && f[q] != 'u' && f[q] != 'd' && f[q] != 'i' && f[q] != 's' && f[q] != '%')
+        ++q;
+    if (q < f.size() && f[q] == 's') return f.substr(0, p) + v + f.substr(q + 1);
+    return f;
+}
+
+// Sequential splice for the four-field modem row (getstring(264) "Modem:
+// P:%u  I:%u  B:%u  #:%s"): each %u/%d/%i/%s in order takes the next
+// argument; %% and anything unmatched stays literal.
+std::string fmt_seq(std::string f, std::initializer_list<std::string> args) {
+    std::size_t pos = 0;
+    for (const auto& a : args) {
+        auto p = f.find('%', pos);
+        while (p != std::string::npos && p + 1 < f.size() && f[p + 1] == '%')
+            p = f.find('%', p + 2);
+        if (p == std::string::npos || p + 1 >= f.size()) break;
+        const char c = f[p + 1];
+        if (c != 'u' && c != 'd' && c != 'i' && c != 's') break;
+        f = f.substr(0, p) + a + f.substr(p + 2);
+        pos = p + a.size();
+    }
+    return f;
+}
 
 }  // namespace
 
 void OptionsScreen::enter(const OptionsSnapshot& current, std::string backdrop) {
     row_ = 0;
-    cursor_frame_ = 0;
     done_ = false;
     changed_ = false;
     open_keyremap_ = false;
+    open_scheme_picker_ = false;
     goldman_touched_ = false;
     team_play_touched_ = false;
     snap_ = current;
@@ -116,17 +120,22 @@ void OptionsScreen::activate_row(int dir) {
             changed_ = true;
             break;
         case OptionRow::NodeName:
-        case OptionRow::SchemeFile:
         case OptionRow::Modem:
         case OptionRow::NetProtocol:
-        case OptionRow::AdjustAudio:
             // Display-only rows (options_screen.hpp's file doc) — the
             // original's handlers here (sub_4074DC text-entry prompt,
-            // sub_407582 `.SCH` file browser, sub_40798B/sub_407F4F nested
-            // net sub-screens, sub_407542 volume dialog) are real UI this
+            // sub_40798B/sub_407F4F nested net sub-screens) are real UI this
             // port does not implement; every direction (Left/Right/Enter/
             // Space all reach this same case in the original) stays a no-op
             // here rather than inventing one.
+            break;
+        case OptionRow::SchemeFile:
+            // CONFIRMED (pseudo.c 9342-9343 `goto LABEL_46` in the forward
+            // switch, 9443-9445 in the Left switch): BOTH directions open
+            // sub_407582 — the *.SCH file-picker list dialog. (The §3
+            // table's earlier "sub_4076FE(±1) stepper" label for this row
+            // described the PLAY TIME stepper, not this handler.)
+            open_scheme_picker_ = true;
             break;
         case OptionRow::ConveyorSpeed: {
             int v = snap_.conveyor_speed_index + dir;
@@ -166,7 +175,20 @@ void OptionsScreen::activate_row(int dir) {
             break;
         }
         case OptionRow::PlayTime: {
-            int idx = playtime_index(snap_.playtime_seconds) + dir;
+            // sub_4076FE's off-list fallback (pseudo.c 8557-8558): a
+            // playtime outside the fixed chain (e.g. a hand-edited
+            // options.ini value the reader's [60,600] clamp let through)
+            // snaps to getvalue(100) — 150 in the shipped VALUELST —
+            // instead of stepping. (Live ValueList plumbing into this
+            // screen is deferred like the footer anchor; the shipped
+            // literal stands in.)
+            const int cur = playtime_index(snap_.playtime_seconds);
+            if (kPlayTimeChoices[cur] != snap_.playtime_seconds) {
+                snap_.playtime_seconds = 150;
+                changed_ = true;
+                break;
+            }
+            int idx = cur + dir;
             if (idx < 0) idx = kPlayTimeChoiceCount - 1;
             if (idx >= kPlayTimeChoiceCount) idx = 0;
             snap_.playtime_seconds = kPlayTimeChoices[idx];
@@ -206,6 +228,7 @@ void OptionsScreen::activate_row(int dir) {
 
 void OptionsScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
     open_keyremap_ = false;
+    open_scheme_picker_ = false;
     // CONFIRMED (pseudo.c 9298-9299): sub_4080DC plays SFX 20 (nav blip) for
     // ANY real keypress, unconditionally — there is no distinct "accept"
     // sound anywhere in this function. One call here covers every branch
@@ -268,52 +291,111 @@ void OptionsScreen::draw(SDL_Renderer* ren) const {
     // options_screen.hpp's file doc); the previous "OPTIONS" header at a
     // guessed (55,20) had no RE citation and has been removed.
 
-    // All 19 rows, in the ORIGINAL's exact order (§3) — including the 8 the
-    // port previously hid. Rows the port can't act on (Node Name/Scheme
-    // File/Modem/Net Protocol/Adjust Audio) are still drawn, matching the
-    // original showing them unconditionally in the same general ink.
+    // All 18 rows, in the ORIGINAL's exact order, with label AND value text
+    // from MESSAGES.TXT exactly as sub_4080DC composes them (chrome audit
+    // 2026-07-12, pseudo.c 9098-9281; fallbacks below are the shipped file's
+    // own mixed-case strings): labels getstring(250..267); Yes/No via
+    // getstring(26/25) WITH their leading/trailing padding spaces; conveyor
+    // getstring(295+idx); enclosement getstring(315+idx) (note "All the
+    // way!"); play time via getstring(280) "Infinite" or getstring(281)
+    // "%u:%02u" M:SS; node name = the runtime buffer (EMPTY by default —
+    // sub_40FE34's bss unk_460140, not an options.ini key) quoted by
+    // getstring(252); the four-field modem line getstring(264) from the
+    // options.ini modem keys; rows 265/266 carry NO value suffix. The old
+    // hardcoded ALL-CAPS strings (and their "(N/A)"/"..." suffixes, and a
+    // 19th "ADJUST AUDIO" row) were the port's invention — the reported
+    // case/contrast mismatch against the real screen.
+    auto msg = [&](int id, const char* fb) {
+        return assets_ ? assets_->getstring(id, fb) : std::string(fb);
+    };
+    auto yn = [&](bool b) { return msg(b ? 26 : 25, b ? " Yes " : " No "); };
+    static constexpr const char* kConveyorFb[3] = {"Low", "Medium", "High"};
+    static constexpr const char* kEncloseFb[4] = {"None", "A Little", "A Lot", "All the way!"};
+    const int conv = snap_.conveyor_speed_index;
+    const int depth = snap_.enclosement_depth;
+    // Row 8 shows byte_4648C4 VERBATIM (sub_4080DC's draw sprintf's the
+    // buffer as-is; it is the PICKER that stores it extension-stripped +
+    // uppercased). The port's old display-time extension strip was invented.
+    const std::string& scheme = snap_.scheme_filename;
+    const std::string playtime =
+        snap_.playtime_seconds == 1001
+            ? msg(280, "Infinite")
+            : format_clock(msg(281, "%u:%02u"), snap_.playtime_seconds);
     std::string rows[static_cast<int>(OptionRow::kCount)] = {
-        std::string("TEAM PLAY: ") + yes_no(snap_.team_play),
-        std::string("RANDOM START: ") + yes_no(snap_.random_start),
-        std::string("NODE NAME: ") + "(N/A)",
-        std::string("CONVEYOR SPEED: ") + conveyor_label(snap_.conveyor_speed_index),
-        std::string("STOMPED BOMBS DETONATE: ") + yes_no(snap_.stomped_bombs_detonate),
-        std::string("WIN MATCHES BY KILL TOTAL: ") + yes_no(snap_.win_by_kills),
-        std::string("GOLD BOMBERMAN: ") + yes_no(snap_.goldman),
-        std::string("ENCLOSEMENT DEPTH: ") + enclosement_label(snap_.enclosement_depth),
-        std::string("SCHEME FILE: ") +
-            (snap_.scheme_filename.empty() ? std::string("(N/A)") : snap_.scheme_filename),
-        std::string("PLAY TIME: ") + playtime_label(snap_.playtime_seconds),
-        std::string("ASSIGN KEYBOARD PLAYER: ") + yes_no(snap_.assign_keyboards),
-        std::string("DISEASES CAN BE DESTROYED: ") + yes_no(snap_.diseases_destroyable),
-        std::string("LOST NET PLAYERS REVERT TO AI: ") + yes_no(snap_.lost_net_revert_ai),
-        std::string("DISABLE MUSIC DURING GAMEPLAY: ") + yes_no(snap_.disable_game_music),
-        std::string("MODEM: P/I/B/#: ") + "(N/A)",
-        std::string("DEFINE KEYBOARD LAYOUTS..."),
-        std::string("SET DEFAULT NETWORK PROTOCOL: ") + "(N/A)",
+        fmt_s(msg(250, "Team Play: %s"), yn(snap_.team_play)),
+        fmt_s(msg(251, "Random Start: %s"), yn(snap_.random_start)),
+        fmt_s(msg(252, "Node Name: '%s'"), snap_.node_name),
+        fmt_s(msg(253, "Conveyor Speed: %s"), msg(295 + conv, kConveyorFb[conv])),
+        fmt_s(msg(254, "Stomped Bombs Detonate: %s"), yn(snap_.stomped_bombs_detonate)),
+        fmt_s(msg(255, "Win Matches By Kill Total: %s"), yn(snap_.win_by_kills)),
+        fmt_s(msg(256, "Gold Bomberman: %s"), yn(snap_.goldman)),
+        fmt_s(msg(257, "Enclosement Depth: %s"), msg(315 + depth, kEncloseFb[depth])),
+        fmt_s(msg(258, "Scheme File: %s"), scheme),
+        fmt_s(msg(259, "Play Time: %s"), playtime),
+        fmt_s(msg(260, "Assign Keyboard Player: %s"), yn(snap_.assign_keyboards)),
+        fmt_s(msg(261, "Diseases Can Be Destroyed: %s"), yn(snap_.diseases_destroyable)),
+        fmt_s(msg(262, "Lost net players revert to AIs: %s"), yn(snap_.lost_net_revert_ai)),
+        fmt_s(msg(263, "Disable music during gameplay: %s"), yn(snap_.disable_game_music)),
+        fmt_seq(msg(264, "Modem:  P:%u  I:%u  B:%u  #:%s"),
+                {std::to_string(snap_.modemport), std::to_string(snap_.modemirq),
+                 std::to_string(snap_.modembaud), snap_.modemdial}),
+        msg(265, "Define keyboard layouts"),
+        msg(266, "Set Default Network Protocol"),
         // CONFIRMED (pseudo.c 9280, `getstring((dword_464824==0)+25)`): the
         // label is the INVERSE of the backing value — small_memory==false
-        // (Enhanced Memory Model in effect) shows YES.
-        std::string("USE ENHANCED MEMORY MODEL: ") + yes_no(!snap_.small_memory),
-        std::string("ADJUST AUDIO: ") + "(N/A)",
+        // (Enhanced Memory Model in effect) shows Yes.
+        fmt_s(msg(267, "Use Enhanced Memory Model: %s"), yn(!snap_.small_memory)),
     };
 
     for (int i = 0; i < static_cast<int>(OptionRow::kCount); ++i) {
         float y = static_cast<float>(kListY0 + i * kListYStep);
-        font_->draw(ren, rows[i], static_cast<float>(kListX), y, kInkR, kInkG, kInkB);
+        // Every frontend string goes through the 4-pass-outline primitive
+        // (sub_41696C; FontTextures::draw_outlined's doc) — white ink over a
+        // 1-px black outline, clipped to VALUELST 745's column-3 width (500).
+        // The un-outlined draw this replaced was the port's contrast problem
+        // over light GLUE backdrops.
+        font_->draw_outlined(ren, rows[i], static_cast<float>(kListX), y, kInkR, kInkG, kInkB, 0,
+                             0, 0, 500.0f);
+    }
+
+    // Footer (sub_413FB9 -> getstring(330), drawn on this screen too —
+    // sub_4080DC calls it right after the cursor blit at pseudo.c 9295):
+    // centred via sub_4172BA's x = cx - (w+2)/2 at the VALUELST 790 anchor
+    // (320, 440), cyan byte_497F8F (96,252,252) over black. The anchor uses
+    // the shipped row's literal values; the setup screen reads them live —
+    // plumbing the ValueList into OptionsScreen is deferred to the
+    // MESSAGES-label pass.
+    if (assets_) {
+        const std::string help = assets_->getstring(330, "Press F1 for help");
+        const float help_w = static_cast<float>(font_->measure(help));
+        font_->draw_outlined(ren, help, 320.0f - (help_w + 2.0f) / 2.0f, 440.0f, 96, 252, 252, 0,
+                             0, 0);
     }
 
     // The selection cursor — CONFIRMED sub_413BD6: the "cursor1" MISC.ANI
-    // sprite at (x-20, row_y), NOT a text recolour (see options_screen.hpp's
-    // file doc). row_ is always in [0, kCursorRowCount), so it never lands
-    // on the permanently-unreachable row 18.
+    // sprite at (x-20, row_y + 16), NOT a text recolour (see
+    // options_screen.hpp's file doc). row_ is always in [0, kCursorRowCount),
+    // so it never lands on the permanently-unreachable row 18. Pacing: idle
+    // on step 0, timed blink one step per rendered frame
+    // (cursor_indicator.hpp — the old continuous /6 spin was a placeholder).
+    //
+    // The +16 y nudge is pinned EMPIRICALLY from a 1:1 native capture of the
+    // level screen (2026-07-12; VALUELST 736 = 170, measured sprite rows
+    // 155..186 → anchor = row_y + 16, one FONT6 cell below the row's y): the
+    // hotspot-anchored dude's feet stand just under the row text's baseline,
+    // its head reaching ~18 px above. The decompile loses this +16 term to
+    // register mangling at every sub_413BD6 call site, so the capture is the
+    // authority; anchoring at row_y drew the dude a full cell too high (the
+    // user-reported misalignment).
     if (assets_) {
         Anim cur = resolve_sequence(assets_->misc(), "cursor1");
         if (!cur.steps.empty()) {
-            const std::size_t step = anim_step_index(cursor_frame_ / 6, cur.steps.size());
+            const std::size_t step = anim_step_index(
+                cursor_blink_.step(blink_now_s_, cur.steps.size(), blink_base_s_, blink_spread_s_),
+                cur.steps.size());
             const Sprite& sp = cur.steps[step];
             if (sp.tex) {
-                float cy = static_cast<float>(kListY0 + row_ * kListYStep);
+                float cy = static_cast<float>(kListY0 + row_ * kListYStep + 16);
                 SDL_FRect d{static_cast<float>(kCursorX - sp.hx), cy - static_cast<float>(sp.hy),
                             static_cast<float>(sp.w), static_cast<float>(sp.h)};
                 SDL_RenderTexture(ren, sp.tex, nullptr, &d);

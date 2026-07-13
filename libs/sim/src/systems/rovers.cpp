@@ -94,14 +94,19 @@ void RoverSystem::spawn(RoverKind kind, int count, std::int32_t speed) {
 
 bool RoverSystem::step(Rover& r, int rover_index) {
     State& s = s_;
-    // sub_401B5C: budget += speed * frameDelta/frameRef + 100. At our locked
-    // 20 Hz frameDelta/frameRef == 1 (docs/re/facts.md "Player movement"), so
-    // this is speed + 100 1/100-px units per tick -- NOTE the extra flat
-    // +100 the rover/ghost budget gets that the player's own speed term does
-    // NOT (sub_41F29B never adds a flat +100 to a player's budget): this is
-    // a genuine, confirmed asymmetry, not a port bug -- rovers/ghosts always
-    // advance at least one pixel per tick even at speed 0.
-    r.move_budget += r.speed + 100;
+    // sub_401B5C: budget += speed * frameDelta/frameRef + 100, once per
+    // DISPLAYED frame (docs/re/facts.md "Canonical frame cadence"). At the
+    // canonical 60 fps that is THREE accruals per 50 ms tick — and the flat
+    // +100/frame term (which the player's own budget never gets, a genuine
+    // confirmed asymmetry: a rover/ghost always advances at least one pixel
+    // per frame even at speed 0) triples to +300/tick, which is why the
+    // original's rovers visibly outpace a same-speed walker. Folding the
+    // three frames into one accrual is EXACT here, not an approximation: the
+    // field is static during the rover pass and the per-pixel turn logic
+    // (with its RNG draws at tile centres) is a pure function of the pixels
+    // crossed, so three small budget instalments and one summed instalment
+    // walk the identical pixel sequence.
+    for (int f = 0; f < kSubFrames; ++f) r.move_budget += frame_budget(r.speed, kSubFrameMs[f]) + 100;
 
     while (r.move_budget > 0) {
         r.move_budget -= 100;

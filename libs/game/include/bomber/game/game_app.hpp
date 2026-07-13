@@ -17,6 +17,7 @@
 #include "bomber/game/bmscreen.hpp"
 #include "bomber/game/campaign_screen.hpp"
 #include "bomber/game/editor_screen.hpp"
+#include "bomber/game/cursor_indicator.hpp"
 #include "bomber/game/gamepad.hpp"
 #include "bomber/game/goldman_screen.hpp"
 #include "bomber/game/input.hpp"
@@ -28,7 +29,6 @@
 #include "bomber/game/sdl.hpp"
 #include "bomber/game/sequences.hpp"
 #include "bomber/game/sound_director.hpp"
-#include "bomber/game/transition.hpp"
 #include "bomber/sim/simulation.hpp"
 
 // The playable front-end: owns the SDL window, the asset store, the
@@ -159,6 +159,17 @@ private:
     // ticked while this runs (the caller does not call sim_.tick from
     // inside), matching the sub_42A16F(1)/(0) freeze.
     AppInput present_help_browser_modal();
+    // The hidden Alt+D "Internal debugging information" window (sub_413D45 @
+    // pseudo.c 16752-16832, reached from sub_42B9CE's raw-code 288 dispatch
+    // at 30819-30822): a modal WINZ-9-patch window, 450 px wide x 300 tall at
+    // y = 100, header getstring(400), stat lines getstring(405/410/411/415/
+    // 420), footer getstring(401) "Press [Enter] or [Esc] to continue" —
+    // dismissed by Enter or Escape only. The stats it reports (heap/audio
+    // memory, net id, retransmit rate, audio cache hits) have no meaningful
+    // equivalents in this port, so the labels render with honest zero/(N/A)
+    // values; the WINDOW and its keys are the faithful part. frontend-flow.md's
+    // old "a toggle" note for key 288 was wrong — it is this blocking dialog.
+    AppInput present_debug_info_modal();
     // The interactive Options screen (Team Play / Conveyor Speed): random
     // GLUE<n> backdrop, FONT6 text, Up/Down select a row, Left/Right change
     // its value, Enter/Esc leave (docs/re/frontend-flow.md "Interactive
@@ -172,14 +183,33 @@ private:
     // window close.
     AppInput present_options_screen();
     // The key-remap sub-screen (docs/re/results-and-options.md §2,
-    // sub_407B9D): a 2x6 scancode-capture grid, reached from the Options
-    // screen's "Define keyboard layouts" row. Draws over whatever the caller
-    // already painted (present_options_screen's own backdrop, per §2's "no
-    // new backdrop call" note) rather than owning one itself. Edits a working
-    // copy; on Esc/Enter-to-leave the caller applies it to the live
-    // KeyboardMapper AND marks options_dirty_ (write-on-exit, requirement 3)
-    // — never writes options.ini directly here.
-    void present_keyremap_screen();
+    // sub_407B9D): the MOUSE-DRIVEN 2x6 button grid, reached from the
+    // Options screen's "Define keyboard layouts" row. `backdrop` is the
+    // Options screen's own GLUE pick — sub_407B9D starts every frame with
+    // sub_415CA4's saved-backdrop restore (the GLUE image, not the Options
+    // rows), so this screen re-blits that same picture. Brackets itself in
+    // the widget library's cursor show/hide (sub_431178/sub_431360 —
+    // SDL_HideCursor + the 8x8 widget-lib arrow KeyRemapScreen draws). Edits
+    // a working copy; on Enter/Space/Esc-to-leave the caller applies it to
+    // the live KeyboardMapper AND marks options_dirty_ (write-on-exit,
+    // requirement 3) — never writes options.ini directly here.
+    void present_keyremap_screen(const std::string& backdrop);
+    // Options row 8 "Scheme File" (docs/re/results-and-options.md §3,
+    // CORRECTED 2026-07-13): sub_407582's *.SCH file-picker dialog, run
+    // modally over the Options screen's GLUE backdrop. A selection stores
+    // the filename truncated at its FIRST '.' and uppercased (sub_407582's
+    // strchr cut + sub_412A3B strupr) into the snapshot via
+    // opt.set_scheme_filename() AND reloads the live scheme_ so the next
+    // match plays it (the original re-parses byte_4648C4 at Play-flow
+    // entry, sub_410F81 -> sub_4046CC -> sub_403EEE). An empty glob shows
+    // the sub_414340 error pair getstring(95)/"NOTE!" over getstring(720)
+    // in byte_49A390's dark red (LUT 0x5000 -> (164,0,0)) instead.
+    void present_scheme_picker(OptionsScreen& opt, const std::string& backdrop);
+    // Case-insensitive DATA/SCHEMES/<name>.SCH resolve (name given with or
+    // without an extension) + assets::sch::load into scheme_. Returns false
+    // (scheme_ untouched) when the name doesn't resolve or the file is
+    // corrupt.
+    bool reload_scheme_from_name(const std::string& name);
     // The hidden scheme editor (docs/re/results-and-options.md §5,
     // sub_403184/sub_4028D2/sub_402595): reached ONLY via present_menu()'s
     // raw Ctrl+E x6 trigger (sub_42B9CE's `++counter > 5` on key code 5) —
@@ -626,7 +656,11 @@ private:
 
     // Front-end presentation (constructed after assets_ is loaded in init()).
     std::optional<Screen> screen_;
-    std::optional<Transition> transition_;
+    // The bomber-dude row cursor's blink state (sub_413BD6's global
+    // dword_460559/46055D pair — one instance here stands in for the
+    // original's single global; the options screen keeps its own, which only
+    // de-phases the blink between screens).
+    CursorIndicator cursor_blink_;
     FontTextures front_font_;  // FONT6.FON glyph textures for the .BM screens
     // Per-match seed, advanced each round (`start_match(next_seed_++)`) and
     // fed to `match::build_match_config`'s per-candidate brick fill/spawn

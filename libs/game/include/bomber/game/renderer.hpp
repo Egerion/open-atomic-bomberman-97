@@ -39,7 +39,19 @@ public:
     }
 
     // Clears, then draws background, powerups, world, and HUD.
-    void draw_frame(const sim::State& s);
+    //
+    // `alpha` is the inter-tick interpolation fraction (ADR-0003's "rendering
+    // interpolates"): the ORIGINAL runs its whole gameplay driver once per
+    // DISPLAYED frame with an ms frame delta (sub_42A191; movement budget =
+    // baseSpeed × frameDelta / 50, docs/re/facts.md "Speed = a spent budget"),
+    // so at 60-70 fps positions advance a few px every ~16 ms. Our sim is a
+    // fixed 20 Hz step (determinism contract), so to reproduce that fluidity
+    // the renderer blends the moving entities (players, bombs, rovers)
+    // between the previous and current tick by `alpha` = the match loop's
+    // accumulator fraction in [0,1). Purely cosmetic — the sim state is never
+    // touched. The default 1.0 draws raw current-tick positions (demo
+    // screenshots, frozen end-of-round frames, visual goldens).
+    void draw_frame(const sim::State& s, float alpha = 1.0f);
 
     // Tells the renderer which player is the pending Goldman-wheel winner,
     // for the twinkle overlay (docs/re/goldman-roulette.md §6). `who` is -1
@@ -86,6 +98,21 @@ private:
     void draw_world(const sim::State& s);
     void draw_hud(const sim::State& s);
     void sample_movement(const sim::State& s);
+
+    // Rolls the inter-tick snapshots forward when a new sim tick is observed
+    // (previous ← last seen, last seen ← current). Keyed on s.tick like
+    // sample_movement, so extra draw calls within one tick are no-ops.
+    void capture_interp(const sim::State& s);
+
+    // On-screen FIELD-pixel position for a moving entity: lerps prev→curr by
+    // interp_alpha_ unless the snapshot is unusable (`prev_ok` false) or the
+    // entity jumped further than any legit per-tick travel (warp/trampoline/
+    // flight wrap) — then it snaps to the current position on BOTH axes.
+    struct Posf {
+        float x = 0, y = 0;
+    };
+    Posf interp_pos(sim::Fixed prev_x, sim::Fixed prev_y, sim::Fixed x, sim::Fixed y,
+                    bool prev_ok) const;
 
     void draw_sprite(const Sprite& sp, float x, float y, Uint8 r = 255, Uint8 g = 255,
                      Uint8 b = 255);
@@ -160,6 +187,22 @@ private:
     // draw_world). Cosmetic-only — never touches the sim.
     std::array<int, sim::kMaxPlayers> carry_ticks_{};
     std::array<bool, sim::kMaxPlayers> carrying_prev_{};
+
+    // Inter-tick interpolation snapshots (see draw_frame's doc comment).
+    // `seen_*` mirrors the entity positions of the latest tick drawn;
+    // `prev_*` the tick before it. Bombs/rovers are matched by slot index —
+    // a slot reused by a NEW entity between two ticks lerps from stale data
+    // at worst one frame, and only if the jump is under the snap threshold.
+    struct EntSnap {
+        bool active = false;
+        sim::Fixed x = 0, y = 0;
+    };
+    std::uint64_t interp_tick_ = ~0ull;  // tick the seen_* arrays hold
+    bool interp_valid_ = false;          // prev_* holds a real earlier tick
+    float interp_alpha_ = 1.0f;          // this frame's fraction (set by draw_frame)
+    std::array<sim::Fixed, sim::kMaxPlayers> prev_px_{}, prev_py_{}, seen_px_{}, seen_py_{};
+    std::vector<EntSnap> prev_bombs_, seen_bombs_;
+    std::vector<EntSnap> prev_rovers_, seen_rovers_;
 
     std::vector<DeathFx> deaths_;
     std::uint64_t hurry_until_ = 0;  // HURRY! banner flashes until this tick

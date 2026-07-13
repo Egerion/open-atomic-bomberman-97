@@ -126,8 +126,8 @@ void SchemeFilePicker::draw(SDL_Renderer* ren) const {
     if (!font_ || !font_->loaded()) return;
     // The generic list dialog (sub_42DBCC) is invoked at (100, 100) with
     // header getstring(721) in the general white ink (byte_49D38F|0x10000).
-    const std::string header =
-        assets_ ? assets_->getstring(721, "Available schemes:") : std::string("Available schemes:");
+    const std::string header = assets_ ? assets_->getstring(721, "Available Scheme Files:")
+                                       : std::string("Available Scheme Files:");
     font_->draw(ren, header, 100.0f, 100.0f, kInkR, kInkG, kInkB);
     if (entries_.empty()) {
         // sub_407582's empty-glob path: the getstring(720)/getstring(95)
@@ -138,18 +138,22 @@ void SchemeFilePicker::draw(SDL_Renderer* ren) const {
                     kHintG, kHintB);
         return;
     }
-    // Up to kVisibleRows (13) "<filename> <scheme name>" rows in the scroll
-    // window — sub_407582 formats each row "%s %s" from the glob name and
-    // the file's own -N line.
+    // Up to kVisibleRows (13) rows in the scroll window — sub_407582
+    // formats each row through `aSS` = "%s: %s" (pseudo.c 8447): the glob
+    // filename (extension included), a colon, then the file's own -N scheme
+    // name (getstring(727) "No Scheme Name" when the file has none — the
+    // sub_404BE9 default seeded before the parse).
     int count = static_cast<int>(entries_.size());
     int last = std::min(count, top_ + kVisibleRows);
     for (int i = top_; i < last; ++i) {
         bool sel = (i == row_);
         Uint8 r = sel ? kSelR : kInkR, g = sel ? kSelG : kInkG, b = sel ? kSelB : kInkB;
-        std::string line =
-            (sel ? "> " : "  ") + entries_[static_cast<std::size_t>(i)].filename().string();
         const std::string& nm = names_[static_cast<std::size_t>(i)];
-        if (!nm.empty()) line += " " + nm;
+        const std::string fallback =
+            assets_ ? assets_->getstring(727, "No Scheme Name") : std::string("No Scheme Name");
+        std::string line = (sel ? "> " : "  ") +
+                           entries_[static_cast<std::size_t>(i)].filename().string() + ": " +
+                           (nm.empty() ? fallback : nm);
         font_->draw(ren, line, 100.0f, 124.0f + static_cast<float>(i - top_) * 20.0f, r, g, b);
     }
     font_->draw(ren, "UP/DOWN SELECT   ENTER OPEN   ESC CANCEL", 100.0f,

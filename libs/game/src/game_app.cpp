@@ -15,6 +15,7 @@
 #include "bomber/game/anim_pace.hpp"
 #include "bomber/game/bmscreen.hpp"
 #include "bomber/game/dialog_chrome.hpp"
+#include "bomber/game/dos_scancode.hpp"
 #include "bomber/game/sprites.hpp"
 #include "bomber/match/match_factory.hpp"
 
@@ -228,7 +229,14 @@ bool GameApp::init() {
         options_.win_by_kills = loaded_opts.win_by_kills.value_or(false);
         options_.goldman = loaded_opts.goldman.value_or(false);
         options_.enclosement_depth = loaded_opts.enclosement_depth.value_or(1);
-        options_.playtime_seconds = loaded_opts.playtime.value_or(150);
+        // Demo/screenshot mode PINS playtime to the golden's 150 s (2:30),
+        // independent of the install's options.ini: the visual-golden harness
+        // hashes the presented frame, whose clock HUD would otherwise change
+        // whenever a real session (original or port) rewrites playtime= — a
+        // 180 s value silently re-hashed every pinned shot (caught
+        // 2026-07-12). Same reproducibility contract as the seed/LCG pins
+        // above. Interactive runs read the file as normal.
+        options_.playtime_seconds = opts_.demo ? 150 : loaded_opts.playtime.value_or(150);
         options_.diseases_destroyable =
             loaded_opts.diseases_destroyable.value_or(values_.at_or(120, 1) != 0);
         options_.disable_game_music = loaded_opts.disable_game_music.value_or(false);
@@ -239,22 +247,44 @@ bool GameApp::init() {
         options_.assign_keyboards = loaded_opts.assign_keyboards.value_or(false);
         options_.lost_net_revert_ai = loaded_opts.lost_net_revert_ai.value_or(false);
         options_.small_memory = loaded_opts.smallmemory.value_or(false);
-        // Row 8 (display-only, options_screen.hpp's file doc): show whatever
-        // scheme actually got loaded above, falling back to the on-disk key
-        // if load() somehow ran against a different path than options.ini
-        // recorded (it never does today, but this keeps the two in sync).
+        // Row 14's four modem fields (display-only; getstring(264) — chrome
+        // audit 2026-07-12): straight from options.ini's modem keys, defaults
+        // = the shipped install's values. node_name stays "" (sub_40FE34's
+        // runtime buffer is bss-empty and NOT an options.ini key).
+        options_.modemport = loaded_opts.modemport.value_or(2);
+        options_.modemirq = loaded_opts.modemirq.value_or(3);
+        options_.modembaud = loaded_opts.modembaud.value_or(19200);
+        options_.modemdial = loaded_opts.modemdial.value_or("555-1212");
+        // Row 8: schemefilename= now actually DRIVES the loaded scheme (the
+        // original re-parses byte_4648C4 at every Play-flow entry —
+        // sub_410F81 -> sub_4046CC -> sub_403EEE — so the key was never
+        // display-only). An explicit --scheme argument still wins, and the
+        // demo/visual-golden harness stays pinned to BASIC.SCH for the same
+        // reproducibility reason the playtime pin above cites. BASIC.SCH is
+        // only the fallback when the key is absent or doesn't resolve.
         options_.scheme_filename =
             loaded_opts.schemefilename.value_or(scheme_path.filename().string());
+        if (!opts_.demo && opts_.scheme.empty() && loaded_opts.schemefilename &&
+            !loaded_opts.schemefilename->empty()) {
+            if (!reload_scheme_from_name(*loaded_opts.schemefilename))
+                std::fprintf(stderr, "schemefilename '%s' not found; keeping %s\n",
+                             loaded_opts.schemefilename->c_str(),
+                             scheme_path.filename().string().c_str());
+        }
         // "keydef=" -> KeyboardMapper's two live key-sets (docs/re/results-and-
-        // options.md §2). A KeyDef triple with scancode == -1 (never written)
-        // keeps that action's compiled-in default (input.hpp's
-        // default_key_set) rather than binding to scancode 0.
+        // options.md §2). The file holds the ORIGINAL's DOS/AT set-1
+        // scancodes (interchangeable with BM95.EXE against a shared
+        // install); translate into SDL_Scancode space for the live mapper
+        // (dos_scancode.hpp). A KeyDef triple with scancode == -1 (never
+        // written) keeps that action's compiled-in default (input.hpp's
+        // default_key_set); DOS 0 / an unmappable code binds
+        // SDL_SCANCODE_UNKNOWN (0) = effectively unbound, like the original.
         if (loaded_opts.keydef) {
             for (int set = 0; set < assets::KeyDef::kSets; ++set) {
                 KeySet ks = keyboard_.key_set(set);
                 for (int action = 0; action < kKeyActionCount; ++action) {
                     int sc = loaded_opts.keydef->scancode[set][action];
-                    if (sc >= 0) ks.scancode[action] = sc;
+                    if (sc >= 0) ks.scancode[action] = sdl_scancode_from_dos(sc);
                 }
                 keyboard_.set_key_set(set, ks);
             }
@@ -287,8 +317,12 @@ bool GameApp::init() {
     // or fullscreen path exists in the binary at all). SDL_WINDOW_RESIZABLE
     // makes the OS maximize button/drag-resize work; the sim's logical
     // resolution stays exactly 640x480 (kScreenW/kScreenH, untouched) via
-    // SDL_LOGICAL_PRESENTATION_LETTERBOX below, which scales+letterboxes to
-    // whatever window/monitor size the player picks without stretching. Any
+    // SDL_LOGICAL_PRESENTATION_STRETCH below, which scales the whole 640x480
+    // frame to FILL whatever window/monitor size the player picks — matching
+    // how the original presents on the reference Win11 machine (its
+    // maximized/fullscreen surface fills the panel edge to edge, aspect not
+    // preserved; user-verified side by side 2026-07-12). The earlier
+    // LETTERBOX mode kept 4:3 with black bars — the reported mismatch. Any
     // fullscreen toggle (Alt+Enter/F11, sdl_event_filter below) just resizes
     // the OS window/output — it never touches kScreenW/kScreenH or the sim.
     SDL_Window* win = nullptr;
@@ -300,8 +334,20 @@ bool GameApp::init() {
     }
     window_.reset(win);
     sdl_renderer_.reset(ren);
-    SDL_SetRenderLogicalPresentation(ren, kScreenW, kScreenH, SDL_LOGICAL_PRESENTATION_LETTERBOX);
-    if (fullscreen_) SDL_SetWindowFullscreen(win, true);  // restore last session's choice
+    // Demo/screenshot mode pins its OWN presentation: the visual-golden
+    // harness hashes the presented backbuffer, so its pixels must not depend
+    // on either the user's saved fullscreen state (a 3840x2160 fullscreen
+    // demo run silently re-hashed every pinned shot — caught 2026-07-12) or
+    // the interactive STRETCH mode's scaler (whose output differs from
+    // LETTERBOX's even at an exact 2x 4:3 window). Interactive runs get
+    // STRETCH — matching how the original fills the panel edge to edge on
+    // the reference machine — and demo runs keep the LETTERBOX scaler every
+    // existing pin was captured under.
+    const bool demo_mode = opts_.demo_ticks > 0 || !opts_.demo_shots.empty();
+    SDL_SetRenderLogicalPresentation(ren, kScreenW, kScreenH,
+                                     demo_mode ? SDL_LOGICAL_PRESENTATION_LETTERBOX
+                                               : SDL_LOGICAL_PRESENTATION_STRETCH);
+    if (fullscreen_ && !demo_mode) SDL_SetWindowFullscreen(win, true);
     // Global Alt+Enter/F11 fullscreen toggle (task item 1): an SDL_EventFilter
     // runs synchronously inside SDL_PumpEvents (before the event ever reaches
     // any of this file's many per-screen SDL_PollEvent loops), so it works
@@ -386,7 +432,6 @@ bool GameApp::init() {
 
     renderer_.emplace(ren, assets_, seqs_, values_);
     screen_.emplace(assets_, audio_);
-    transition_.emplace(assets_);
     // front_font_ (FONT6.FON glyph textures for the dialog chrome and the .BM
     // help/credits screens) was already built above, before the boot LOADING
     // dialogs — matching sub_41095A's real init order. assets_.load() reloads
@@ -500,6 +545,15 @@ std::string fmt_s(const std::string& f, const std::string& v) {
         ++q;
     if (q < f.size() && f[q] == 's') return f.substr(0, p) + v + f.substr(q + 1);
     return f;
+}
+
+// Both-args splice for the two-specifier setup-screen rows — MESSAGES.TXT 51
+// "Player %u: %s" and 41 "Joy %u - %s", which the original sprintf's in ONE
+// call (sub_410F81 15169-15195 / 15240-15243). The leading numeric goes first,
+// then the %s; a modified MESSAGES.TXT that reorders them degrades gracefully
+// (the un-matched specifier stays literal, same crash-proof rule as above).
+std::string fmt_us(const std::string& f, int v, const std::string& s) {
+    return fmt_s(fmt_u(f, v), s);
 }
 
 ScreenDef draw_screen() {
@@ -737,9 +791,11 @@ void GameApp::start_match(std::uint32_t seed) {
     if (assets_.load_stage(stage)) {
         seqs_.resolve_stage(assets_, stage);
         // Disable music during gameplay (options.ini "disable_game_music=" /
-        // Options row 13, §3): a REAL consumer — simply don't start the
-        // in-match track. Menu/results music is untouched (the option is
-        // specifically "during gameplay").
+        // Options row 13, §3): the original's round init (sub_410B6E
+        // LABEL_48) FREES the music outright (sub_427342) when the option is
+        // set — the round is SILENT, the setup-screens track (1020) does not
+        // bleed into it. Menu/results music is untouched (the option is
+        // specifically "during gameplay"; round end starts 1130 regardless).
         //
         // Per-level stage track (docs/re/in-match-shell.md §2, sub_4293E5):
         // SOUNDLST 1100+level, falling back to 1120 ("generic") when the level
@@ -749,6 +805,8 @@ void GameApp::start_match(std::uint32_t seed) {
             int stage_music = 1100 + stage;
             if (!audio_.has_track(stage_music)) stage_music = kStageMusicFallback;  // 1120
             audio_.start_music(stage_music);
+        } else {
+            audio_.stop_music();  // sub_427342: silent round, not "keep 1020 playing"
         }
     }
     // Untimed round HUD (docs/re/in-match-shell.md §3): the 1001 sentinel is a
@@ -909,9 +967,8 @@ AppInput GameApp::present_screen(const ScreenDef& def) {
     // No transition out: sub_42A088 CUTS between screens — it sets the palette
     // (sub_41522D, instant; the >>2 is the 8->6-bit VGA palette conversion, NOT
     // a fade loop), blits (sub_429FF1), and flips (sub_41043C). There is no wipe
-    // on a waited screen (logos, title, results, .BM), so the next screen simply
-    // replaces this one. (The menu->match select wipe in present_menu is a
-    // separate, intentional use and is left alone.)
+    // anywhere in the front end (docs/re/frontend-flow.md "HEADWIPE.ANI is
+    // dead art"), so the next screen simply replaces this one.
     return result;
 }
 
@@ -1022,6 +1079,56 @@ AppInput GameApp::present_help_browser_modal() {
     return AppInput::Advance;
 }
 
+AppInput GameApp::present_debug_info_modal() {
+    // sub_413D45 (declaration doc): the hidden Alt+D "Internal debugging
+    // information" window — a 450x300 WINZ-9-patch panel at y=100, centred on
+    // x, over the frozen menu backdrop; Enter/Escape dismiss it, nothing else
+    // does. The original's stat values (heap/audio memory, net id, retransmit
+    // rate, audio cache hits) have no port equivalents — labels are the real
+    // getstring rows, values honest placeholders.
+    while (true) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
+            if (ev.type != SDL_EVENT_KEY_DOWN) continue;
+            if (!ev.key.repeat) audio_.play(20);  // any-real-key blip
+            if (ev.key.key == SDLK_RETURN || ev.key.key == SDLK_KP_ENTER ||
+                ev.key.key == SDLK_ESCAPE)
+                return AppInput::Advance;
+        }
+        audio_.update_music();
+        SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
+        SDL_RenderClear(sdl_renderer_.get());
+        const Sprite& bg = assets_.frontend_pcx("MAINMENU");
+        if (bg.tex) {
+            SDL_FRect d{0, 0, static_cast<float>(bg.w), static_cast<float>(bg.h)};
+            SDL_RenderTexture(sdl_renderer_.get(), bg.tex, nullptr, &d);
+        }
+        const DialogRect win{(kScreenW - 450.0f) / 2.0f, 100.0f, 450.0f, 300.0f};
+        draw_dialog_chrome(sdl_renderer_.get(), win, &assets_.frontend_pcx("WINZ"));
+        const float lh = static_cast<float>(front_font_.line_height());
+        float ty = win.y + 16.0f;
+        auto line = [&](const std::string& s) {
+            draw_dialog_text(sdl_renderer_.get(), front_font_, s, win.x + 24.0f, ty, 255, 255,
+                             255);
+            ty += lh + 6.0f;
+        };
+        line(assets_.getstring(400, "Internal debugging information"));
+        ty += lh;
+        line(fmt_u(assets_.getstring(405, "Total memory usage: %u"), 0));
+        line(fmt_u(assets_.getstring(410, "Audio memory usage: %u"), 0));
+        line(fmt_u(assets_.getstring(411, "Audio cache hits: %u"), 0));
+        line(fmt_u(assets_.getstring(415, "Network id: %u"), 0));
+        line(fmt_u(assets_.getstring(420, "Retransmit rate: %u"), 0));
+        ty = win.y + win.h - 16.0f - lh;
+        draw_dialog_text(sdl_renderer_.get(), front_font_,
+                         assets_.getstring(401, "Press [Enter] or [Esc] to continue"),
+                         win.x + 24.0f, ty, 255, 255, 255);
+        SDL_RenderPresent(sdl_renderer_.get());
+        SDL_Delay(2);
+    }
+}
+
 AppInput GameApp::present_options_screen() {
     // The interactive Options screen (options_screen.hpp/.cpp): the full
     // §3 19-item list's LIVE subset, over a random GLUE<n> backdrop like
@@ -1038,7 +1145,11 @@ AppInput GameApp::present_options_screen() {
     // citation; it plays on under whatever the menu already started (1010,
     // kMenuMusicId).
     OptionsScreen opt(assets_, front_font_);
-    opt.enter(options_, pick_glue());
+    // The GLUE pick doubles as the backdrop the two modal sub-screens
+    // restore each frame (sub_415CA4's saved-backdrop memcpy holds this
+    // same picture) — keep the name for them.
+    const std::string glue = pick_glue();
+    opt.enter(options_, glue);
     AppInput result = AppInput::Advance;
     while (!opt.done()) {
         SDL_Event ev;
@@ -1066,10 +1177,18 @@ AppInput GameApp::present_options_screen() {
             // above, then resume the Options screen with its in-progress
             // edits untouched (present_keyremap_screen owns its own loop and
             // applies its own result to keyboard_/options_dirty_ directly).
-            if (opt.open_keyremap()) present_keyremap_screen();
+            if (opt.open_keyremap()) present_keyremap_screen(glue);
+            // "Scheme File" (row 8, §3 CORRECTED 2026-07-13): push
+            // sub_407582's *.SCH picker the same modal way; a selection
+            // updates the snapshot row AND the live scheme_.
+            if (opt.open_scheme_picker()) present_scheme_picker(opt, glue);
         }
         audio_.update_music();
-        opt.tick();  // advances the cursor1 selection sprite's own frame timer
+        // cursor1 blink inputs: wall clock (seconds, like the original's
+        // time_()) + VALUELST 690's {base, spread} columns — see
+        // cursor_indicator.hpp for the sub_413BD6 pacing model.
+        opt.tick(SDL_GetTicks() / 1000ull, static_cast<int>(values_.column_or(690, 0, 2)),
+                 static_cast<int>(values_.column_or(690, 1, 2)));
         SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
         SDL_RenderClear(sdl_renderer_.get());
         opt.draw(sdl_renderer_.get());
@@ -1099,49 +1218,182 @@ AppInput GameApp::present_options_screen() {
     return result;
 }
 
-void GameApp::present_keyremap_screen() {
-    // The key-remap UI (docs/re/results-and-options.md §2, sub_407B9D): a
-    // 2x6 scancode-capture grid drawn OVER whatever the caller already
-    // painted this frame (present_options_screen's Options backdrop — §2
-    // "no new backdrop call"). Draws its own frame here rather than sharing
-    // the caller's SDL_RenderPresent, since it needs its own event pump to
-    // capture raw scancodes without those keys also driving the Options
-    // cursor underneath.
+void GameApp::present_keyremap_screen(const std::string& backdrop) {
+    // The key-remap UI (docs/re/results-and-options.md §2, sub_407B9D),
+    // 1:1 rebuild 2026-07-13: MOUSE-DRIVEN widget grid (keyremap_screen.hpp's
+    // file doc has the full pin list). Runs its own event pump so raw
+    // scancode captures and clicks never leak into the Options cursor
+    // underneath; each frame re-blits the Options screen's GLUE backdrop
+    // (sub_415CA4's saved-backdrop restore — the picture, not the rows).
     KeyRemapScreen remap(assets_, front_font_);
     std::array<KeySet, kKeyboardSets> current{keyboard_.key_set(0), keyboard_.key_set(1)};
-    remap.enter(current);
+    remap.enter(current, backdrop);
+    // sub_431178/sub_431360 bracket: the system cursor yields to the widget
+    // library's own 8x8 arrow (drawn by remap.draw()) for this screen only.
+    SDL_HideCursor();
     while (!remap.done()) {
+        remap.tick(SDL_GetTicks());
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_EVENT_QUIT) {
-                remap.on_key(SDLK_ESCAPE, SDL_SCANCODE_ESCAPE, audio_);
+                // Window close mid-screen: discard this visit's edits (the
+                // app-level Quit is re-raised by the Options pump).
+                SDL_ShowCursor();
                 return;
             }
-            if (ev.type != SDL_EVENT_KEY_DOWN) continue;
-            remap.on_key(ev.key.key, ev.key.scancode, audio_);
+            if (ev.type == SDL_EVENT_KEY_DOWN) {
+                // F1 (0x13B) -> the generic *.BM help browser (sub_41431C),
+                // same dispatch as the Options screen's own F1 — but NOT
+                // while capturing (F1 must be bindable) or under the NOTE
+                // modal (whose own key loop just blips on it).
+                if (ev.key.key == SDLK_F1 && !remap.capturing() && !remap.showing_note()) {
+                    if (present_help_browser() == AppInput::Quit) {
+                        SDL_ShowCursor();
+                        return;
+                    }
+                    continue;
+                }
+                remap.on_key(ev.key.key, ev.key.scancode, audio_);
+                continue;
+            }
+            // Mouse, converted into the 640x480 logical space (same
+            // SDL_RenderCoordinatesFromWindow pattern as the editor canvas).
+            if (ev.type == SDL_EVENT_MOUSE_MOTION) {
+                float lx = 0, ly = 0;
+                SDL_RenderCoordinatesFromWindow(sdl_renderer_.get(), ev.motion.x, ev.motion.y,
+                                                &lx, &ly);
+                remap.on_mouse_move(lx, ly);
+            } else if (ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
+                       ev.button.button == SDL_BUTTON_LEFT) {
+                float lx = 0, ly = 0;
+                SDL_RenderCoordinatesFromWindow(sdl_renderer_.get(), ev.button.x, ev.button.y,
+                                                &lx, &ly);
+                remap.on_mouse_down(lx, ly);
+            } else if (ev.type == SDL_EVENT_MOUSE_BUTTON_UP &&
+                       ev.button.button == SDL_BUTTON_LEFT) {
+                float lx = 0, ly = 0;
+                SDL_RenderCoordinatesFromWindow(sdl_renderer_.get(), ev.button.x, ev.button.y,
+                                                &lx, &ly);
+                remap.on_mouse_up(lx, ly, audio_);
+            }
         }
+        // sub_407AD9's raw keyboard-state poll — binds a key already held
+        // when the 500 ms arm delay elapses (the event path alone misses it).
+        if (remap.capturing()) remap.poll_capture();
         audio_.update_music();
         SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
-        SDL_RenderClear(sdl_renderer_.get());
-        // §2: "no new backdrop call — sub_407B9D draws directly over the
-        // Options screen's own frame". This screen has its own event pump
-        // (to capture raw scancodes without leaking into the Options cursor
-        // underneath), so there is no single shared frame to draw "over" —
-        // a plain dark panel is the simplest faithful stand-in, since
-        // sub_407B9D's own drawing (the grid + header) is self-contained and
-        // legible against any backdrop.
-        SDL_SetRenderDrawColor(sdl_renderer_.get(), 20, 20, 30, 255);
         SDL_RenderClear(sdl_renderer_.get());
         remap.draw(sdl_renderer_.get());
         SDL_RenderPresent(sdl_renderer_.get());
         SDL_Delay(2);
     }
+    SDL_ShowCursor();
     // Apply live (KeyboardMapper reads collect_inputs() every match tick) and
     // mark dirty for the write-on-exit flush — never write options.ini here.
     const auto& edited = remap.edited();
     keyboard_.set_key_set(0, edited[0]);
     keyboard_.set_key_set(1, edited[1]);
     options_dirty_ = true;
+}
+
+void GameApp::present_scheme_picker(OptionsScreen& opt, const std::string& backdrop) {
+    // sub_407582 (§3 row 8) — the SAME routine the editor's "edit an
+    // existing scheme" path calls (pseudo.c 5501), so this reuses the SAME
+    // SchemeFilePicker component: "*.SCH" glob over DATA/SCHEMES, rows
+    // "%s: %s" (filename + the file's -N name, aSS), header getstring(721).
+    SchemeFilePicker picker(assets_, front_font_);
+    picker.enter(opts_.game_dir / "DATA" / "SCHEMES", backdrop);
+    if (picker.empty()) {
+        // Empty glob (pseudo.c 8467-8473): sub_414340 with getstring(95)
+        // "NOTE!" on top, getstring(720) "No Scheme files found!" below, in
+        // byte_49A390's ink — LUT offset 0x5000 -> idx 248 -> (164,0,0),
+        // the SAME dark red as the quit-confirm prompt (docs/re/
+        // frontend-flow.md "COLOR.PAL" table). sub_414340's own key loop:
+        // nav blip on any key, close on Enter/Space/Esc.
+        const std::string top = assets_.getstring(95, "NOTE!");
+        const std::string bottom = assets_.getstring(720, "No Scheme files found!");
+        const std::string ok = assets_.getstring(27, " Ok ");
+        while (true) {
+            SDL_Event ev;
+            while (SDL_PollEvent(&ev)) {
+                if (ev.type == SDL_EVENT_QUIT) return;
+                if (ev.type != SDL_EVENT_KEY_DOWN) continue;
+                audio_.play(20);
+                if (ev.key.key == SDLK_RETURN || ev.key.key == SDLK_KP_ENTER ||
+                    ev.key.key == SDLK_SPACE || ev.key.key == SDLK_ESCAPE)
+                    return;
+            }
+            audio_.update_music();
+            SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
+            SDL_RenderClear(sdl_renderer_.get());
+            const Sprite& bg = assets_.frontend_pcx(backdrop);
+            if (bg.tex) {
+                SDL_FRect d{0, 0, static_cast<float>(bg.w), static_cast<float>(bg.h)};
+                SDL_RenderTexture(sdl_renderer_.get(), bg.tex, nullptr, &d);
+            }
+            draw_acknowledge_dialog(sdl_renderer_.get(), front_font_,
+                                    &assets_.frontend_pcx("WINZ"), top, bottom, ok, 164, 0, 0);
+            SDL_RenderPresent(sdl_renderer_.get());
+            SDL_Delay(2);
+        }
+    }
+    while (!picker.done()) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_EVENT_QUIT) return;
+            if (ev.type != SDL_EVENT_KEY_DOWN) continue;
+            picker.on_key(ev.key.key, audio_);
+        }
+        audio_.update_music();
+        SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
+        SDL_RenderClear(sdl_renderer_.get());
+        picker.draw(sdl_renderer_.get());
+        SDL_RenderPresent(sdl_renderer_.get());
+        SDL_Delay(2);
+    }
+    if (picker.cancelled()) return;
+    // sub_407582's selection write-back (pseudo.c 8457-8463): the display
+    // line is cut at its FIRST '.' (strchr, which also drops the ": <name>"
+    // suffix in one stroke), copied into byte_4648C4, then uppercased
+    // (sub_412A3B = strupr).
+    std::string name = picker.selected().filename().string();
+    if (auto dot = name.find('.'); dot != std::string::npos) name.erase(dot);
+    for (auto& c : name) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    opt.set_scheme_filename(name);
+    // The original re-parses byte_4648C4 at the next Play-flow entry
+    // (sub_410F81 -> sub_4046CC -> sub_403EEE); reloading immediately keeps
+    // scheme_ and the displayed row in lockstep with no hidden latency.
+    reload_scheme_from_name(name);
+}
+
+bool GameApp::reload_scheme_from_name(const std::string& name) {
+    // Accept the name with or without an extension ("BASIC" from the picker
+    // / a hand-edited "BASIC.SCH" from options.ini alike).
+    std::string want = name;
+    if (auto dot = want.find('.'); dot != std::string::npos) want.erase(dot);
+    for (auto& c : want) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    if (want.empty()) return false;
+    std::filesystem::path schemes_dir = opts_.game_dir / "DATA" / "SCHEMES";
+    std::error_code ec;
+    std::filesystem::path found;
+    for (const auto& entry : std::filesystem::directory_iterator(schemes_dir, ec)) {
+        if (!entry.is_regular_file()) continue;
+        std::string stem = entry.path().stem().string();
+        std::string ext = entry.path().extension().string();
+        for (auto& c : stem) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        for (auto& c : ext) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        if (ext == ".SCH" && stem == want) {
+            found = entry.path();
+            break;
+        }
+    }
+    if (found.empty()) return false;
+    try {
+        scheme_ = assets::sch::load(found);
+    } catch (const std::exception&) {
+        return false;
+    }
+    return true;
 }
 
 void GameApp::present_editor() {
@@ -1413,32 +1665,10 @@ bool GameApp::load_campaign_stage(int index) {
     const assets::res::CampaignStage& stage = campaign_stages_[static_cast<std::size_t>(index)];
 
     // Resolve the stage's "scheme to use" name to a DATA/SCHEMES/<name>.SCH
-    // path, case-insensitively (DOS filenames are case-insensitive; every
-    // other picker in this codebase does a case-insensitive extension/name
-    // match for the same reason — editor_screen.cpp's SchemeFilePicker).
-    std::filesystem::path schemes_dir = opts_.game_dir / "DATA" / "SCHEMES";
-    std::error_code ec;
-    std::filesystem::path found;
-    for (const auto& entry : std::filesystem::directory_iterator(schemes_dir, ec)) {
-        if (!entry.is_regular_file()) continue;
-        std::string stem = entry.path().stem().string();
-        std::string ext = entry.path().extension().string();
-        for (auto& c : stem) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-        for (auto& c : ext) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-        std::string want = stage.scheme;
-        for (auto& c : want) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-        if (ext == ".SCH" && stem == want) {
-            found = entry.path();
-            break;
-        }
-    }
-    if (found.empty()) return false;
-
-    try {
-        scheme_ = assets::sch::load(found);
-    } catch (const std::exception&) {
-        return false;
-    }
+    // path, case-insensitively (DOS filenames are case-insensitive), and
+    // load it — the same reload_scheme_from_name the Options scheme picker
+    // and init()'s schemefilename= resolution use.
+    if (!reload_scheme_from_name(stage.scheme)) return false;
 
     // AI roster auto-fill — CORRECTED 2026-07-09 (docs/re/campaign.md
     // "Rover/ghost/AI roster — CORRECTED"). sub_40151B (the real per-stage
@@ -1803,28 +2033,63 @@ AppInput GameApp::present_menu() {
             if (ev.type == SDL_EVENT_KEY_DOWN || ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
                 ev.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN)
                 menu_idle_since_ms_ = SDL_GetTicks();
+            // Pad navigation (sub_4102B7 @ 14286-14333): whenever the key
+            // queue is empty the original's getkey polls every joystick and
+            // SYNTHESIZES key codes from it — axis-threshold crossings become
+            // up (328)/down (336) and any button rising edge becomes Enter
+            // (13) — so the whole menu (and the quit confirm on top of it,
+            // which reads the same getkey) is pad-navigable. SDL gives us
+            // dpad/button edges directly; re-inject them as the synthetic
+            // keys so every key path above/below (blips, dialog, rows) is
+            // shared rather than duplicated.
+            if (ev.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+                SDL_Event synth{};
+                synth.type = SDL_EVENT_KEY_DOWN;
+                switch (ev.gbutton.button) {
+                    case SDL_GAMEPAD_BUTTON_DPAD_UP: synth.key.key = SDLK_UP; break;
+                    case SDL_GAMEPAD_BUTTON_DPAD_DOWN: synth.key.key = SDLK_DOWN; break;
+                    case SDL_GAMEPAD_BUTTON_SOUTH:
+                    case SDL_GAMEPAD_BUTTON_EAST:
+                    case SDL_GAMEPAD_BUTTON_WEST:
+                    case SDL_GAMEPAD_BUTTON_NORTH:
+                    case SDL_GAMEPAD_BUTTON_START: synth.key.key = SDLK_RETURN; break;
+                    default: synth.key.key = SDLK_UNKNOWN; break;
+                }
+                if (synth.key.key != SDLK_UNKNOWN) SDL_PushEvent(&synth);
+            }
             if (ev.type != SDL_EVENT_KEY_DOWN) continue;
 
             if (quit_confirm) {
                 // sub_41456C's key loop: any real key blips (20); Yes accepts
-                // (Y/Enter/Space), No cancels (N/Escape) — every other key is
-                // ignored and the dialog stays up.
+                // (Y/y/Enter/Space), No cancels (N/n/Q/q/Escape — the Q pair
+                // is 17253-17267, missing from frontend-flow.md's old list) —
+                // every other key is ignored and the dialog stays up. The
+                // dialog itself resolves SILENTLY (no accept sting on either
+                // answer — the old play(10)s here were invented).
                 audio_.play(20);
                 switch (ev.key.key) {
                     case SDLK_Y:
                     case SDLK_RETURN:
                     case SDLK_KP_ENTER:
                     case SDLK_SPACE:
-                        audio_.play(10);  // accept sting, sub_41456C returning 1
+                        // sub_412987 on Yes: FREE the music (sub_427342) first,
+                        // THEN the 2600 exit sting — MENU.RSS must not keep
+                        // looping under it — then Sleep(0xFA0) so the sting is
+                        // audible rather than cut off by window teardown.
+                        audio_.stop_music();
                         audio_.play_random_in_range(kQuitStingLo, kQuitStingHi);  // 2600 group
-                        // sub_412987 Sleep(0xFA0)s before sub_4128C9(0) exits, so the
-                        // exit sting is audible rather than cut off by window teardown.
                         SDL_Delay(4000);
                         return AppInput::Quit;
                     case SDLK_N:
+                    case SDLK_Q:  // 0x51 'Q' / 0x71 'q' cancel too (17253-17267)
                     case SDLK_ESCAPE:
-                        audio_.play(10);  // sub_41456C returning 0 is also a real dismiss
                         quit_confirm = false;
+                        // The cancel path exits through sub_42B9CE's OUTER
+                        // loop: cursor home to row 0 (case 6 -> v10 = 0,
+                        // 30920-30922) and MENU.RSS reloaded from sample 0
+                        // (the outer loop re-arms v14 -> sub_42741E(0x3F2)).
+                        menu_index_ = 0;
+                        audio_.start_music(kMenuMusicId);
                         break;
                     default: break;
                 }
@@ -1842,14 +2107,64 @@ AppInput GameApp::present_menu() {
             // below, and does not fall through to it on a match.
             bool is_ctrl_e = (ev.key.key == SDLK_E) && (ev.key.mod & SDL_KMOD_CTRL) != 0;
             if (is_ctrl_e) {
+                audio_.play(20);  // the any-real-key blip fires for each press (30787-30790)
                 if (++editor_trigger_count_ > 5) {
                     editor_trigger_count_ = 0;
                     audio_.play(10);  // accept sting (SFX 10), §5
                     present_editor();
+                    // Return through the outer loop re-arms v14 -> MENU.RSS
+                    // reloads from sample 0 (goto LABEL_2 at 30882).
+                    audio_.start_music(kMenuMusicId);
                 }
                 continue;  // Ctrl+E itself never falls into the row switch
             }
             editor_trigger_count_ = 0;  // any other key resets the counter
+
+            // Menu hotkeys (sub_42B9CE's raw-code dispatch; every one rides
+            // the any-key blip 20 first): Ctrl+Q (raw 17) behaves exactly
+            // like Escape (30861-30867); Alt+O (280) jumps to and selects
+            // Options (30806-30812); F1 (315) selects row 5 = the help
+            // browser (30826-30832); Alt+A (286) starts an attract demo
+            // match directly (30813 -> the 30888-30894 attract path —
+            // frontend-flow.md's old "run the current selection" label for
+            // 286 was wrong); Alt+D (288) pops the hidden debug-info window
+            // (sub_413D45, 30819-30822).
+            const bool menu_alt = (ev.key.mod & SDL_KMOD_ALT) != 0;
+            if (ev.key.key == SDLK_Q && (ev.key.mod & SDL_KMOD_CTRL) != 0) {
+                audio_.play(20);
+                audio_.play(10);
+                menu_index_ = 6;
+                quit_confirm = true;
+                continue;
+            }
+            if (menu_alt && ev.key.key == SDLK_O) {
+                audio_.play(20);
+                audio_.play(10);
+                // case 3's fall-through resets the cursor to row 0 for the
+                // NEXT menu visit (30910-30912).
+                AppInput opt_sel = kMenuItems[3].action;
+                menu_index_ = 0;
+                return opt_sel;
+            }
+            if (ev.key.key == SDLK_F1) {
+                audio_.play(20);
+                audio_.play(10);
+                menu_index_ = 5;
+                if (present_help_browser() == AppInput::Quit) return AppInput::Quit;
+                audio_.start_music(kMenuMusicId);  // outer-loop v14 re-arm
+                continue;
+            }
+            if (menu_alt && ev.key.key == SDLK_A) {
+                audio_.play(20);
+                menu_index_ = 0;  // the attract path's own v10 = 0 (30894)
+                roll_attract_match();
+                return AppInput::StartMatch;
+            }
+            if (menu_alt && ev.key.key == SDLK_D) {
+                audio_.play(20);
+                if (present_debug_info_modal() == AppInput::Quit) return AppInput::Quit;
+                continue;
+            }
 
             switch (ev.key.key) {
                 case SDLK_UP:
@@ -1880,22 +2195,28 @@ AppInput GameApp::present_menu() {
                 case SDLK_RETURN:
                 case SDLK_KP_ENTER:
                 case SDLK_SPACE: {
-                    // sub_42B9CE plays the accept sting (SFX 10, sub_427961(10))
-                    // for BOTH Enter (13) and Space (32) on EVERY row — there is
-                    // no "inert row" concept in the original; each row 0..6 is a
-                    // live dispatch. So the accept sound fires first, always.
+                    // sub_42B9CE plays the any-key blip 20 FIRST (30787-30790,
+                    // for every real key including Enter/Space), then the
+                    // accept sting (SFX 10, sub_427961(10)) for BOTH Enter
+                    // (13) and Space (32) on EVERY row — there is no "inert
+                    // row" concept in the original; each row 0..6 is a live
+                    // dispatch.
+                    audio_.play(20);  // any-real-key blip
                     audio_.play(10);  // accept sting (SOUNDLST 10, menuexit)
                     // Row 5 = the generic help-file browser (sub_41431C, §4 —
                     // CORRECTED from the old "Roulette" label, see kMenuItems'
                     // comment above). sub_42B9CE's row switch calls it DIRECTLY
-                    // (case 5: sub_41431C(); break;) with NO sub_4121FF() wipe
-                    // first, unlike rows 0-2 — so unlike Credits/Options (which
-                    // this port already routes through the AppState wipe), this
-                    // row is handled here inline, staying on the menu loop, and
+                    // (case 5: sub_41431C(); break;), staying inside the menu
+                    // loop, unlike rows 0-4/6 which return through the AppState
+                    // flow — so this row is handled here inline and
                     // never touches AppInput/next() (task brief: prefer not to
                     // add new AppInputs for this leaf).
                     if (menu_index_ == 5) {
                         if (present_help_browser() == AppInput::Quit) return AppInput::Quit;
+                        // The inline return path falls through sub_42B9CE's
+                        // outer loop -> v14 re-arm -> MENU.RSS reloads from
+                        // sample 0.
+                        audio_.start_music(kMenuMusicId);
                         break;
                     }
                     // A row we have not built yet (Editor) still plays the
@@ -1905,6 +2226,11 @@ AppInput GameApp::present_menu() {
                     // destination is a deferred effort.)
                     if (!kMenuItems[menu_index_].live) break;
                     AppInput sel = kMenuItems[menu_index_].action;
+                    // Row 3 (Options) is one of the rows whose fall-through
+                    // resets the cursor to row 0 for the next menu visit
+                    // (case 3 -> v10 = 0, 30910-30912); Play/Credits/Help/
+                    // editor keep the row (verified faithful list).
+                    if (menu_index_ == 3) menu_index_ = 0;
                     // Quit selected from the menu (Enter/Space on row 6): the SAME
                     // sub_412987 dispatch Escape reaches, so it pops the SAME confirm
                     // dialog rather than quitting outright.
@@ -1912,32 +2238,25 @@ AppInput GameApp::present_menu() {
                         quit_confirm = true;
                         break;
                     }
-                    // Otherwise wipe out, then hand the selection to the flow.
-                    transition_->start(SDL_GetTicks());
-                    while (transition_->active()) {
-                        SDL_Event tev;
-                        while (SDL_PollEvent(&tev))
-                            if (tev.type == SDL_EVENT_QUIT) return AppInput::Quit;
-                        std::uint64_t now = SDL_GetTicks();
-                        transition_->update(now);
-                        SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
-                        SDL_RenderClear(sdl_renderer_.get());
-                        // keep the menu underneath the wipe
-                        {
-                            const Sprite& bg = assets_.frontend_pcx("MAINMENU");
-                            if (bg.tex) {
-                                SDL_FRect d{0, 0, static_cast<float>(bg.w),
-                                            static_cast<float>(bg.h)};
-                                SDL_RenderTexture(sdl_renderer_.get(), bg.tex, nullptr, &d);
-                            }
-                        }
-                        transition_->draw(sdl_renderer_.get(), now);
-                        SDL_RenderPresent(sdl_renderer_.get());
-                        SDL_Delay(2);
-                    }
+                    // Hand the selection to the flow by a CUT — no wipe. The
+                    // original's menu dispatch (sub_42B9CE) calls the selected
+                    // handler directly; the next screen's own first frame
+                    // replaces the menu. A HEADWIPE.ANI wipe used to play here
+                    // (~3.5 s: 211 frames, one per vsynced frame — the "long
+                    // pause into the player-setup screen" report), but that
+                    // file is dead art the original never even loads: it is
+                    // absent from MASTER.ALI, and the decompile contains no
+                    // headwipe string or transition call site anywhere. See
+                    // docs/re/frontend-flow.md "HEADWIPE.ANI is dead art".
                     return sel;
                 }
-                default: break;
+                default:
+                    // The any-real-key blip fires for EVERY key sub_42B9CE
+                    // reads, mapped or not (30787-30790) — an unbound letter
+                    // still clicks. Gate on the press edge so SDL's key
+                    // repeats don't buzz.
+                    if (!ev.key.repeat) audio_.play(20);
+                    break;
             }
         }
 
@@ -1954,6 +2273,7 @@ AppInput GameApp::present_menu() {
         // up so a demo match cannot yank the confirm away mid-decision.
         if (attract_enabled && !quit_confirm &&
             SDL_GetTicks() - menu_idle_since_ms_ >= static_cast<std::uint64_t>(idle_s) * 1000) {
+            menu_index_ = 0;  // the attract path homes the cursor (v10 = 0, 30894)
             roll_attract_match();
             return AppInput::StartMatch;
         }
@@ -1967,6 +2287,12 @@ AppInput GameApp::present_menu() {
             SDL_FRect d{0, 0, static_cast<float>(bg.w), static_cast<float>(bg.h)};
             SDL_RenderTexture(sdl_renderer_.get(), bg.tex, nullptr, &d);
         }
+        // "V1.0" version string, every menu frame (pseudo.c 30779:
+        // sub_41696C(root, aV10, x=0, W=50, y=0, byte_49A624, black)) — the
+        // ink is the general grey (168,168,164), the literal is hardcoded in
+        // the binary (aV10, pseudo.c 1622), not a MESSAGES.TXT entry.
+        front_font_.draw_outlined(sdl_renderer_.get(), "V1.0", 0, 0, 168, 168, 164, 0, 0, 0,
+                                  50.0f);
         // Animated "bomb trigger green" cursor at the CONFIRMED anchor
         // (sub_42B9CE: x=getvalue(700), y=getvalue(701)+getvalue(702)*row; frame
         // = counter % statecnt). Anchor read live from VALUELST row 700's
@@ -1977,7 +2303,10 @@ AppInput GameApp::present_menu() {
         // docs/re/facts.md "ANI sequence-name audit"); if it is absent we
         // draw a pulsing highlight bar instead so the selection stays visible.
         {
-            ++frame;
+            // The confirm dialog is modal in the original (sub_41456C blocks
+            // sub_42B9CE's own loop), so the menu frame under it is FROZEN —
+            // hold the cursor's animation phase while it is up.
+            if (!quit_confirm) ++frame;
             int cx = static_cast<int>(values_.column_or(700, 0, kMenuCursorXFallback));
             int cy0 = static_cast<int>(values_.column_or(700, 1, kMenuCursorYFallback));
             int cstep = static_cast<int>(values_.column_or(700, 2, kMenuCursorStepFallback));
@@ -2325,11 +2654,11 @@ AppInput GameApp::present_goldman_wheel() {
             if (ev.type != SDL_EVENT_KEY_DOWN) continue;
             const SDL_Keycode k = ev.key.key;
             if (k == SDLK_F1) {
-                // doc §5: F1 opens the help browser (local host); our port has
-                // no separate ROULETTE.BM help text, so this reaches the same
-                // OPTIONS.BM viewer the rest of the front end falls back to
-                // rather than doing nothing on the key.
-                AppInput help = present_bm_screen("OPTIONS");
+                // doc §5: F1 opens the SAME generic *.BM help browser
+                // (sub_41431C) every other F1 site opens — the old fixed
+                // OPTIONS.BM cut here was a stale stand-in (chrome audit
+                // 2026-07-12, fix list item 9).
+                AppInput help = present_help_browser();
                 if (help == AppInput::Quit) return AppInput::Quit;
                 continue;
             }
@@ -2411,8 +2740,147 @@ AppInput GameApp::present_setup() {
     const float jlx = static_cast<float>(values_.column_or(720, 0, 320));
     const float jly = static_cast<float>(values_.column_or(720, 1, 170));
     const float jlys = static_cast<float>(values_.column_or(720, 2, 24));
+    // Column 3 of each layout row is the CLIP WIDTH handed to the text
+    // primitive (sub_41696C's max-width arg; setup-screens.md's earlier
+    // "colour" label for this column was wrong — colour never comes from
+    // VALUELST on this screen): header 200, slot rows 150, joystick heading
+    // 170, joystick rows 320.
+    const float hw = static_cast<float>(values_.column_or(705, 3, 200));
+    const float lw = static_cast<float>(values_.column_or(710, 3, 150));
+    const float jhw = static_cast<float>(values_.column_or(715, 3, 170));
+    const float jlw = static_cast<float>(values_.column_or(720, 3, 320));
+    // Footer anchor (VALUELST 790 — the file's own note: "goes on a lot of
+    // different screens"): getstring(330) "Press F1 for help", centred on x
+    // via sub_4172BA's `x = cx - (w+2)/2`, cyan ink byte_497F8F (96,252,252).
+    const float fcx = static_cast<float>(values_.column_or(790, 0, 320));
+    const float ffy = static_cast<float>(values_.column_or(790, 1, 440));
+    const float ffw = static_cast<float>(values_.column_or(790, 3, 300));
+    // Bomber-dude cursor blink base + random spread, seconds (VALUELST 690 =
+    // {2,2}; getvalue(691) is column 1 of the same row).
+    const int blink_base = static_cast<int>(values_.column_or(690, 0, 2));
+    const int blink_spread = static_cast<int>(values_.column_or(690, 1, 2));
 
     int cursor = 0;
+
+    // One frame of the screen (sub_410F81's per-frame body, pseudo.c
+    // 15146-15267): backdrop, header, slot rows, joystick pane, footer — all
+    // text through the 4-pass-outline primitive (sub_41696C) — and the
+    // bomber-dude cursor LAST (the original queues sprites and flushes them
+    // after the text, so the cursor lands on top). A lambda so the F1 help
+    // browser below composites over the identical frame.
+    auto draw_frame = [&]() {
+        SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
+        SDL_RenderClear(sdl_renderer_.get());
+        const Sprite& bg = assets_.frontend_pcx(glue);
+        if (bg.tex) {
+            SDL_FRect dst{0.0f, 0.0f, static_cast<float>(bg.w), static_cast<float>(bg.h)};
+            SDL_RenderTexture(sdl_renderer_.get(), bg.tex, nullptr, &dst);
+        }
+        // Header (msg 50): white ink / black outline (byte_49D38F over
+        // byte_495390[0], pseudo.c 15154-15160).
+        front_font_.draw_outlined(sdl_renderer_.get(), assets_.getstring(50, "Available players:"),
+                                  hx, hy, 255, 255, 255, 0, 0, 0, hw);
+        for (int i = 0; i < 10; ++i) {
+            const int t = setup_type_[i];
+            std::string type;
+            switch (t) {
+                case 1: type = assets_.getstring(221, "COMPUTER"); break;
+                case 2: type = fmt_u(assets_.getstring(222, "KEYBOARD %u"), setup_sub_[i]); break;
+                case 3: type = fmt_u(assets_.getstring(223, "JOYSTICK %u"), setup_sub_[i]); break;
+                case 4: type = assets_.getstring(224, "OTHER"); break;
+                default: type = assets_.getstring(220, "OFF"); break;
+            }
+            // One combined "Player %u: %s" splice (msg 51) — the original
+            // sprintf's the slot number and the type text in ONE call
+            // (pseudo.c 15169-15195); the old two-piece concat left a literal
+            // "%s" on screen with the install's real MESSAGES.TXT.
+            const std::string line = fmt_us(assets_.getstring(51, "Player %u: %s"), i + 1, type);
+            // Ink = the slot's authentic colour via sub_41672F(i) (the .RMP
+            // tail quantised min(c/3,31) -> RGB555 -> LUT), which
+            // AssetStore::slot_color reproduces. CONFIRMED never the team
+            // red/white override: sub_410F81 saves+zeroes dword_464964 around
+            // this lookup (pseudo.c 15191-15204) — only the separate TEAM
+            // marker below is team-inked. And the ink is NEVER state-dimmed
+            // or selection-boosted (no OFF/COM dimming exists; the old
+            // selected-row +70 nudge was invented — the cursor sprite alone
+            // marks the selection).
+            std::uint8_t sc[3];
+            assets_.slot_color(i, sc);
+            // Outline: black for every slot EXCEPT index 1 — the BLACK
+            // player's row gets a WHITE outline (sub_416867, pseudo.c
+            // 18496-18503) so it stays legible over a dark glue backdrop.
+            const Uint8 oc = i == 1 ? 255 : 0;
+            float lx_end = front_font_.draw_outlined(sdl_renderer_.get(), line, lx,
+                                                     ly + lys * static_cast<float>(i), sc[0],
+                                                     sc[1], sc[2], oc, oc, oc, lw);
+            if (team_play_) {
+                // Team marker: getstring(230), drawn for EVERY slot whenever
+                // Team Play is on (gated on the GLOBAL dword_464964, pseudo.c
+                // ~15212 — NOT on this slot's own team byte). CONFIRMED
+                // unformatted (no sprintf before the two sub_4124A4(230)
+                // reads at ~15221/15223) — the COLOUR alone tells the teams
+                // apart, via sub_4141F8(team): team byte != 0 -> byte_49D0DA
+                // red (252,80,80), else byte_49D38F white — the same split as
+                // the in-match sprite override (docs/re/player-colour.md).
+                std::string marker = "  " + assets_.getstring(230, "TEAM");
+                const bool team1 = setup_team_[i] != 0;  // sub_4141F8's `a1 ?` branch
+                front_font_.draw_outlined(
+                    sdl_renderer_.get(), marker, lx_end, ly + lys * static_cast<float>(i),
+                    static_cast<Uint8>(team1 ? 252 : 255), static_cast<Uint8>(team1 ? 80 : 255),
+                    static_cast<Uint8>(team1 ? 80 : 255), 0, 0, 0);
+            }
+        }
+        // Joystick pane (getvalue 715/720): heading msg 40, then one line per
+        // detected stick (msg 41 "Joy %u - %s", the stick's own name in the
+        // %s — sub_429A61(i)) or, if none, the single msg-42 line. ALL of it
+        // plain white ink / black outline (pseudo.c 15227-15263) — the old
+        // grey (200,200,200)/(150,150,150) tints were invented.
+        front_font_.draw_outlined(sdl_renderer_.get(), assets_.getstring(40, "JOYSTICKS"), jhx,
+                                  jhy, 255, 255, 255, 0, 0, 0, jhw);
+        const int joy_count = gamepads_.count();
+        if (joy_count == 0) {
+            front_font_.draw_outlined(sdl_renderer_.get(), assets_.getstring(42, "none"), jlx, jly,
+                                      255, 255, 255, 0, 0, 0, jlw);
+        } else {
+            for (int j = 0; j < joy_count; ++j) {
+                const std::string jline =
+                    fmt_us(assets_.getstring(41, "Joy %u - %s"), j, gamepads_.name(j));
+                front_font_.draw_outlined(sdl_renderer_.get(), jline, jlx,
+                                          jly + jlys * static_cast<float>(j), 255, 255, 255, 0, 0,
+                                          0, jlw);
+            }
+        }
+        // Footer (sub_413FB9 -> getstring(330), local play only): centred,
+        // cyan/black. Replaces the invented key-legend line.
+        const std::string help = assets_.getstring(330, "Press F1 for help");
+        const float help_w = static_cast<float>(front_font_.measure(help));
+        front_font_.draw_outlined(sdl_renderer_.get(), help, fcx - (help_w + 2.0f) / 2.0f, ffy, 96,
+                                  252, 252, 0, 0, 0, ffw);
+        // The bomber-dude row cursor (sub_413BD6, called at pseudo.c
+        // 15205-15211): MISC.ANI "cursor1", hotspot-anchored at
+        // (getvalue(710) - 15, row_y + 16) — this screen alone uses -15; the
+        // options/level screens use -20. The +16 y nudge is pinned
+        // EMPIRICALLY from a 1:1 native capture of the level screen
+        // (2026-07-12; VALUELST 736 = 170, measured sprite rows 155..186 →
+        // anchor = row_y + 16): the dude's feet stand just under the row
+        // text's baseline. The decompile loses the +16 to register mangling
+        // at every call site, so the capture is the authority. Idle step 0 +
+        // timed blink: cursor_indicator.hpp.
+        Anim cur = resolve_sequence(assets_.misc(), "cursor1");
+        if (!cur.steps.empty()) {
+            const std::size_t st = cursor_blink_.step(SDL_GetTicks() / 1000ull, cur.steps.size(),
+                                                      blink_base, blink_spread);
+            const Sprite& sp = cur.steps[anim_step_index(st, cur.steps.size())];
+            if (sp.tex) {
+                SDL_FRect d{lx - 15.0f - static_cast<float>(sp.hx),
+                            ly + lys * static_cast<float>(cursor) + 16.0f -
+                                static_cast<float>(sp.hy),
+                            static_cast<float>(sp.w), static_cast<float>(sp.h)};
+                SDL_RenderTexture(sdl_renderer_.get(), sp.tex, nullptr, &d);
+            }
+        }
+    };
+
     bool waiting = true;
     while (waiting) {
         SDL_Event ev;
@@ -2499,108 +2967,30 @@ AppInput GameApp::present_setup() {
                 setup_sub_[cursor] = 0;
             } else if (k == SDLK_T) {  // 'T' team toggle (+84)
                 setup_team_[cursor] = setup_team_[cursor] ? 0 : 1;
+            } else if (k == SDLK_F1) {
+                // sub_410F81 15432-15436: key 0x13B (F1) dispatches the SAME
+                // generic *.BM help browser as menu row 5 / the options
+                // screen / the in-round key (one routine, sub_41431C),
+                // composited over this screen like every sub_41431C site.
+                HelpBrowser browser(assets_, front_font_);
+                browser.enter(values_.at_or(15, 1) != 0);
+                while (!browser.done()) {
+                    SDL_Event hev;
+                    while (SDL_PollEvent(&hev)) {
+                        if (hev.type == SDL_EVENT_QUIT) return AppInput::Quit;
+                        if (hev.type == SDL_EVENT_KEY_DOWN) browser.on_key(hev.key.key, audio_);
+                    }
+                    if (browser.viewing() && browser.viewer().done()) browser.close_viewer();
+                    audio_.update_music();
+                    draw_frame();
+                    browser.draw(sdl_renderer_.get());
+                    SDL_RenderPresent(sdl_renderer_.get());
+                    SDL_Delay(2);
+                }
             }
         }
         audio_.update_music();
-        SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
-        SDL_RenderClear(sdl_renderer_.get());
-        const Sprite& bg = assets_.frontend_pcx(glue);
-        if (bg.tex) {
-            SDL_FRect dst{0.0f, 0.0f, static_cast<float>(bg.w), static_cast<float>(bg.h)};
-            SDL_RenderTexture(sdl_renderer_.get(), bg.tex, nullptr, &dst);
-        }
-        front_font_.draw(sdl_renderer_.get(), assets_.getstring(50, "PLAYER SETUP"), hx, hy, 255,
-                         255, 255);
-        for (int i = 0; i < 10; ++i) {
-            const std::string label = fmt_u(assets_.getstring(51, "Player %u - "), i + 1);
-            const int t = setup_type_[i];
-            std::string type;
-            switch (t) {
-                case 1: type = assets_.getstring(221, "COMPUTER"); break;
-                case 2: type = fmt_u(assets_.getstring(222, "KEYBOARD %u"), setup_sub_[i]); break;
-                case 3: type = fmt_u(assets_.getstring(223, "JOYSTICK %u"), setup_sub_[i]); break;
-                case 4: type = assets_.getstring(224, "OTHER"); break;
-                default: type = assets_.getstring(220, "OFF"); break;
-            }
-            std::string line = label + type;
-            // Tint the label with the slot's authentic on-screen colour: the
-            // original inks each slot line via sub_41672F(i), which quantises the
-            // slot's stored RGB (the .RMP tail) to 5 bits/channel and looks it up
-            // in the palette. AssetStore::slot_color reproduces that (truecolour
-            // expand5 of the quantised channels) from the loaded .RMP tail, so a
-            // slot reads as its real in-game colour. The selected row is nudged
-            // brighter so the cursor is legible over any colour (ours; the
-            // original moves a separate cursor glyph, sub_413BD6).
-            //
-            // CONFIRMED this label ink is NEVER the team red/white override: the
-            // caller (sub_410F81, pseudo.c ~15191-15204) saves dword_464964,
-            // ZEROES it, calls sub_41672F(i)/sub_416867(i) for THIS text, then
-            // restores it — deliberately forcing sub_41672F's non-team branch
-            // (the slot's own .RMP tail) even in Team Play. Only the SEPARATE
-            // team-marker glyph appended after it (getstring(230), pseudo.c
-            // ~15212-15224) is inked via sub_4141F8(team) (red/white) — see
-            // below. (Team Play's red/white override IS real for the in-match
-            // sprites — Renderer::render_colour, docs/re/player-colour.md "Team
-            // Play colour override" — just not for this particular label ink.)
-            std::uint8_t sc[3];
-            assets_.slot_color(i, sc);
-            const bool sel = i == cursor;
-            auto boost = [sel](std::uint8_t v) {
-                int x = v + (sel ? 70 : 0);
-                return static_cast<Uint8>(x > 255 ? 255 : x);
-            };
-            float lx_end =
-                front_font_.draw(sdl_renderer_.get(), line, lx, ly + lys * static_cast<float>(i),
-                                 boost(sc[0]), boost(sc[1]), boost(sc[2]));
-            if (team_play_) {
-                // Team marker: getstring(230), drawn for EVERY slot whenever Team
-                // Play is on (gated on the GLOBAL dword_464964, pseudo.c ~15212 —
-                // NOT on this slot's own team byte, unlike our old placeholder).
-                // CONFIRMED unformatted: the original never sprintf's it (no
-                // sub_4518D0 call before the two back-to-back sub_4124A4(230)
-                // reads at pseudo.c ~15221/15223 — the second is the raw string
-                // pointer passed straight to the draw), so it carries no "%u" —
-                // the COLOUR alone tells the two teams apart, via sub_4141F8(v96)
-                // (v96 = sub_4223E7(i), this slot's own team byte): team byte != 0
-                // -> byte_49D0DA red (252,80,80), else byte_49D38F white
-                // (255,255,255) — the same red/white split as the in-match sprite
-                // override (Renderer::render_colour, docs/re/player-colour.md
-                // "Team Play colour override"). Drawn as its own run continuing
-                // the same line (the original positions it via its own
-                // getvalue(710/711/712) x/y, not literally appended text, but the
-                // visual result — a coloured marker trailing the slot line — is
-                // the same).
-                std::string marker = "  " + assets_.getstring(230, "TEAM");
-                const bool team1 = setup_team_[i] != 0;  // sub_4141F8's `a1 ?` branch
-                const std::uint8_t mc[3] = {static_cast<std::uint8_t>(team1 ? 252 : 255),
-                                            static_cast<std::uint8_t>(team1 ? 80 : 255),
-                                            static_cast<std::uint8_t>(team1 ? 80 : 255)};
-                front_font_.draw(sdl_renderer_.get(), marker, lx_end,
-                                 ly + lys * static_cast<float>(i), boost(mc[0]), boost(mc[1]),
-                                 boost(mc[2]));
-            }
-        }
-        // Joystick pane (getvalue 715/720): heading msg 40, then one line per
-        // detected stick (msg 41 + index, from GamepadMapper::name) or, if none
-        // are connected, the single "none" line (msg 42) — sub_429628(i)'s
-        // present/absent branch collapsed to "any present at all" since we
-        // enumerate rather than poll per-index.
-        front_font_.draw(sdl_renderer_.get(), assets_.getstring(40, "JOYSTICKS"), jhx, jhy, 255,
-                         255, 255);
-        const int joy_count = gamepads_.count();
-        if (joy_count == 0) {
-            front_font_.draw(sdl_renderer_.get(), assets_.getstring(42, "none"), jlx, jly, 150, 150,
-                             150);
-        } else {
-            for (int j = 0; j < joy_count; ++j) {
-                std::string jline =
-                    fmt_u(assets_.getstring(41, "JOYSTICK %u"), j) + " " + gamepads_.name(j);
-                front_font_.draw(sdl_renderer_.get(), jline, jlx,
-                                 jly + jlys * static_cast<float>(j), 200, 200, 200);
-            }
-        }
-        front_font_.draw(sdl_renderer_.get(), "UP/DN PICK  RIGHT CYCLE  0 OFF  T TEAM  ENTER NEXT",
-                         lx, ly + lys * 11.0f, 150, 150, 150);
+        draw_frame();
         SDL_RenderPresent(sdl_renderer_.get());
         SDL_Delay(2);
     }
@@ -2651,6 +3041,17 @@ AppInput GameApp::present_map_select() {
     const int pysize = static_cast<int>(values_.column_or(730, 3, 5));
 
     int row = 0;  // 0 = level, 1 = wins (v34 = 2 rows in sub_406DDE)
+    // WORKING COPIES (sub_406DDE 8092-8093: dword_45E0B8/45E0B4 seeded from
+    // the committed globals on entry): edits touch only these; Enter/Space
+    // commits them (LABEL_101, 8261-8271) and Escape DISCARDS them — the old
+    // in-place member edits leaked cancelled changes into the next visit.
+    int level = selected_level_;
+    int wins = win_target_;
+    // Enter/Space debounce (8100/8220-8228): accept is IGNORED until 1 s
+    // (sub_4148AC() = 1 locally) after entry or the last value change — the
+    // original's guard against a held Enter from the previous screen
+    // committing instantly.
+    std::uint64_t accept_after_ms = SDL_GetTicks() + 1000;
     // The sample-block pattern (which cells are blank/solid/brick, and which
     // level's tile art each drawn cell uses) is re-rolled only on screen
     // entry and on a LEVEL row change (sub_406AA3's v35 re-arm), NEVER every
@@ -2665,56 +3066,21 @@ AppInput GameApp::present_map_select() {
                                           std::vector<int>(static_cast<std::size_t>(pxsize), -1));
     int field_stage = -1;  // the field-swatch stage picked alongside tile_of
 
-    bool waiting = true;
-    while (waiting) {
-        SDL_Event ev;
-        while (SDL_PollEvent(&ev)) {
-            if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
-            if (ev.type != SDL_EVENT_KEY_DOWN) continue;
-            const SDL_Keycode k = ev.key.key;
-            if (k == SDLK_ESCAPE) {
-                // sub_406DDE's own Esc handler (pseudo.c 8186-8191) is called
-                // straight from sub_410F81's TAIL (pseudo.c 15516, gated
-                // `if (!dword_464A68)`) with NO loop back to the player
-                // screen afterwards — so this aborts the WHOLE Play flow to
-                // the menu, exactly like the Goldman wheel's own Esc (doc §5),
-                // NOT "back one screen" to present_setup. It also forfeits any
-                // pending gold player (`dword_46492C = -1`, doc §2's "Cleared
-                // to -1 by" list) — a fact the prior pass of this screen and
-                // of goldman-roulette.md §2 missed entirely (only sub_4034BC's
-                // and sub_410F81's OWN Esc handlers were pinned there).
-                audio_.play(20);
-                gold_player_ = -1;
-                return AppInput::Back;
-            }
-            if (k == SDLK_RETURN || k == SDLK_KP_ENTER) {  // commit + start (LABEL_101)
-                audio_.play(10);
-                waiting = false;
-                break;
-            }
-            audio_.play(20);
-            if (k == SDLK_UP || k == SDLK_DOWN)
-                row = (row + 1) % 2;                // 2 rows: either arrow toggles
-            else if (row == 0 && k == SDLK_LEFT) {  // --level, wrap below -1
-                if (--selected_level_ < -1) selected_level_ = level_count - 1;
-            } else if (row == 0 && k == SDLK_RIGHT) {  // ++level, wrap above count-1 to -1
-                if (++selected_level_ >= level_count) selected_level_ = -1;
-            } else if (row == 1 && (k == SDLK_LEFT)) {  // wins -1
-                if (--win_target_ < 1) win_target_ = 1;
-            } else if (row == 1 && (k == SDLK_RIGHT)) {  // wins +1
-                if (++win_target_ > 100) win_target_ = 100;
-            } else if (row == 1 && k == SDLK_PAGEUP) {  // wins +5 (sub_406DDE 0x174)
-                win_target_ += 5;
-                if (win_target_ > 100) win_target_ = 100;
-            } else if (row == 1 && k == SDLK_PAGEDOWN) {  // wins -5 (371)
-                win_target_ -= 5;
-                if (win_target_ < 1) win_target_ = 1;
-            }
-        }
-        // Re-roll the sample-block pattern on entry and whenever the LEVEL row
+    // Cursor blink + footer anchors, same VALUELST sources as the sibling
+    // screens (sub_413BD6 / sub_413FB9).
+    const int blink_base = static_cast<int>(values_.column_or(690, 0, 2));
+    const int blink_spread = static_cast<int>(values_.column_or(690, 1, 2));
+    const float fcx = static_cast<float>(values_.column_or(790, 0, 320));
+    const float ffy = static_cast<float>(values_.column_or(790, 1, 440));
+    const float lw = static_cast<float>(values_.column_or(735, 3, 300));  // clip width
+
+    // One frame of the screen (sub_406DDE's per-frame body 8107-8153) — a
+    // lambda so the F1 help browser composites over the identical frame.
+    auto draw_frame = [&]() {
+        // Re-roll the sample-block pattern on entry and whenever the LEVEL
         // changes (sub_406AA3's v35 re-arm) — never every frame.
-        if (selected_level_ != pattern_level) {
-            pattern_level = selected_level_;
+        if (level != pattern_level) {
+            pattern_level = level;
             int max_n = level_count > 1 ? level_count : 1;
             for (int i = 0; i < pysize; ++i) {
                 for (int j = 0; j < pxsize; ++j) {
@@ -2728,7 +3094,7 @@ AppInput GameApp::present_map_select() {
                         tile_of[static_cast<std::size_t>(i)][static_cast<std::size_t>(j)] = -1;
                         continue;
                     }
-                    int n = selected_level_;
+                    int n = level;
                     if (n < 0) {  // RANDOM: re-pick per cell (pinned quirk)
                         setup_lcg_ = setup_lcg_ * 1664525u + 1013904223u;
                         n = static_cast<int>((setup_lcg_ >> 16) % static_cast<unsigned>(max_n));
@@ -2736,14 +3102,13 @@ AppInput GameApp::present_map_select() {
                     tile_of[static_cast<std::size_t>(i)][static_cast<std::size_t>(j)] = n;
                 }
             }
-            field_stage = selected_level_;
+            field_stage = level;
             if (field_stage < 0) {
                 setup_lcg_ = setup_lcg_ * 1664525u + 1013904223u;
                 field_stage = static_cast<int>((setup_lcg_ >> 16) % static_cast<unsigned>(max_n));
             }
         }
 
-        audio_.update_music();
         SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
         SDL_RenderClear(sdl_renderer_.get());
         const Sprite& bg = assets_.frontend_pcx(glue);
@@ -2751,24 +3116,31 @@ AppInput GameApp::present_map_select() {
             SDL_FRect dst{0.0f, 0.0f, static_cast<float>(bg.w), static_cast<float>(bg.h)};
             SDL_RenderTexture(sdl_renderer_.get(), bg.tex, nullptr, &dst);
         }
-        // Sample-block preview panel (sub_406AA3, docs/re/setup-screens.md):
-        // a bordered box around a stretched field-swatch backdrop, then the
-        // 5x5 solid/brick grid drawn at native 40x36 cell size on top.
+        // Sample-block preview panel (sub_406AA3, level&rounds audit
+        // 2026-07-12): border fill = the general WHITE byte_49D38F —
+        // (240,248,252), NOT the old invented (40,40,60) — at (378,80,
+        // 224x202); the field swatch is a 1:1 CROP of FIELDn.PCX starting 48
+        // rows down (the `&v17[12*640]` int-indexing = 48 scanlines; NOT a
+        // stretch — sub_4428B4 is a plain rect copy), 220x198 at (380,82),
+        // which lines the backdrop's own board grid up under the drawn
+        // tiles; then the 5x5 solid/brick grid at native 40x36 cells.
         {
             const float bx = static_cast<float>(px - 22);
             const float by = static_cast<float>(py - 20);
             const float bw = static_cast<float>(pxsize * sim::kTileW + 24);
             const float bh = static_cast<float>(pysize * sim::kTileH + 22);
-            SDL_SetRenderDrawColor(sdl_renderer_.get(), 40, 40, 60, 255);
+            SDL_SetRenderDrawColor(sdl_renderer_.get(), 240, 248, 252, 255);
             SDL_FRect border{bx, by, bw, bh};
             SDL_RenderFillRect(sdl_renderer_.get(), &border);
             if (field_stage >= 0) {
                 const AssetStore::StagePreview& fprev = assets_.stage_preview(field_stage);
                 if (fprev.field) {
-                    SDL_FRect panel{static_cast<float>(px - 20), static_cast<float>(py - 18),
-                                    static_cast<float>(pxsize * sim::kTileW + 20),
-                                    static_cast<float>(pysize * sim::kTileH + 18)};
-                    SDL_RenderTexture(sdl_renderer_.get(), fprev.field, nullptr, &panel);
+                    const float sw = static_cast<float>(pxsize * sim::kTileW + 20);
+                    const float sh = static_cast<float>(pysize * sim::kTileH + 18);
+                    SDL_FRect src{0.0f, 48.0f, sw, sh};
+                    SDL_FRect panel{static_cast<float>(px - 20), static_cast<float>(py - 18), sw,
+                                    sh};
+                    SDL_RenderTexture(sdl_renderer_.get(), fprev.field, &src, &panel);
                 }
             }
             for (int i = 0; i < pysize; ++i) {
@@ -2789,21 +3161,130 @@ AppInput GameApp::present_map_select() {
                 }
             }
         }
-        // Row 0: LEVEL. getstring(210) is the level-line format (%s = name);
-        // name = getstring(150+n) for a specific level, getstring(149) for RANDOM.
+        // Both text rows in the SAME white ink + black outline (sub_41696C;
+        // byte_49D38F decodes to (240,248,252) — LUT 0x7FFF -> idx 72,
+        // level&rounds audit), clip getvalue(738)=300. The original marks the
+        // active row with the cursor sprite ALONE — the old per-row colour
+        // highlight and the grey key legend were invented.
         const std::string level_name =
-            selected_level_ < 0
-                ? assets_.getstring(149, "RANDOM")
-                : assets_.getstring(150 + selected_level_, level_fallback(selected_level_));
-        const std::string level_line = fmt_s(assets_.getstring(210, "LEVEL: %s"), level_name);
-        front_font_.draw(sdl_renderer_.get(), level_line, lx, ly, row == 0 ? 255 : 180,
-                         row == 0 ? 220 : 180, row == 0 ? 60 : 180);
-        // Row 1: NUMBER OF WINS. getstring(211) is the rounds-line format (%u).
-        const std::string wins_line = fmt_u(assets_.getstring(211, "WINS TO WIN: %u"), win_target_);
-        front_font_.draw(sdl_renderer_.get(), wins_line, lx, ly + lys, row == 1 ? 255 : 180,
-                         row == 1 ? 220 : 180, row == 1 ? 60 : 180);
-        front_font_.draw(sdl_renderer_.get(), "UP/DN ROW  LEFT/RIGHT CHANGE  ENTER START", lx,
-                         ly + lys * 3.0f, 150, 150, 150);
+            level < 0 ? assets_.getstring(149, "Random Each Game")
+                      : assets_.getstring(150 + level, level_fallback(level));
+        const std::string level_line = fmt_s(assets_.getstring(210, "%s"), level_name);
+        front_font_.draw_outlined(sdl_renderer_.get(), level_line, lx, ly, 240, 248, 252, 0, 0, 0,
+                                  lw);
+        // Wins line: getstring(211) "%u %s to win match" with the %s picked
+        // by the "win by kills" option — getstring(208) "Wins" /
+        // getstring(209) "Kills" (pseudo.c 8124-8127; the old single-%u
+        // splice left a literal "%s" on screen with the real MESSAGES.TXT).
+        const std::string wins_word =
+            assets_.getstring(options_.win_by_kills ? 209 : 208,
+                              options_.win_by_kills ? "Kills" : "Wins");
+        const std::string wins_line =
+            fmt_us(assets_.getstring(211, "%u %s to win match"), wins, wins_word);
+        front_font_.draw_outlined(sdl_renderer_.get(), wins_line, lx, ly + lys, 240, 248, 252, 0,
+                                  0, 0, lw);
+        // Footer (sub_413FB9): centred cyan "Press F1 for help".
+        const std::string help = assets_.getstring(330, "Press F1 for help");
+        const float help_w = static_cast<float>(front_font_.measure(help));
+        front_font_.draw_outlined(sdl_renderer_.get(), help, fcx - (help_w + 2.0f) / 2.0f, ffy, 96,
+                                  252, 252, 0, 0, 0);
+        // The bomber-dude row cursor (sub_413BD6 at 8140-8141): (getvalue(735)
+        // - 20, row_y + 16) — the +16 is the empirically pinned anchor nudge
+        // (measured off THIS screen's native capture; see options_screen.cpp).
+        Anim cur = resolve_sequence(assets_.misc(), "cursor1");
+        if (!cur.steps.empty()) {
+            const std::size_t st = cursor_blink_.step(SDL_GetTicks() / 1000ull, cur.steps.size(),
+                                                      blink_base, blink_spread);
+            const Sprite& sp = cur.steps[anim_step_index(st, cur.steps.size())];
+            if (sp.tex) {
+                SDL_FRect d{lx - 20.0f - static_cast<float>(sp.hx),
+                            ly + lys * static_cast<float>(row) + 16.0f -
+                                static_cast<float>(sp.hy),
+                            static_cast<float>(sp.w), static_cast<float>(sp.h)};
+                SDL_RenderTexture(sdl_renderer_.get(), sp.tex, nullptr, &d);
+            }
+        }
+    };
+
+    bool waiting = true;
+    while (waiting) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
+            if (ev.type != SDL_EVENT_KEY_DOWN) continue;
+            const SDL_Keycode k = ev.key.key;
+            if (k == SDLK_ESCAPE) {
+                // sub_406DDE's own Esc handler (pseudo.c 8186-8191) is called
+                // straight from sub_410F81's TAIL (pseudo.c 15516, gated
+                // `if (!dword_464A68)`) with NO loop back to the player
+                // screen afterwards — so this aborts the WHOLE Play flow to
+                // the menu, exactly like the Goldman wheel's own Esc (doc §5),
+                // NOT "back one screen" to present_setup. It also forfeits any
+                // pending gold player (`dword_46492C = -1`, doc §2's "Cleared
+                // to -1 by" list). The WORKING level/wins copies are simply
+                // dropped (8092-8093 re-seed on the next entry) — the
+                // committed selections stay untouched.
+                audio_.play(20);
+                gold_player_ = -1;
+                return AppInput::Back;
+            }
+            if (k == SDLK_F1) {
+                // 0x13B -> sub_41431C (pseudo.c 8208-8216): the same generic
+                // *.BM help browser, composited over this screen.
+                audio_.play(20);
+                HelpBrowser browser(assets_, front_font_);
+                browser.enter(values_.at_or(15, 1) != 0);
+                while (!browser.done()) {
+                    SDL_Event hev;
+                    while (SDL_PollEvent(&hev)) {
+                        if (hev.type == SDL_EVENT_QUIT) return AppInput::Quit;
+                        if (hev.type == SDL_EVENT_KEY_DOWN) browser.on_key(hev.key.key, audio_);
+                    }
+                    if (browser.viewing() && browser.viewer().done()) browser.close_viewer();
+                    audio_.update_music();
+                    draw_frame();
+                    browser.draw(sdl_renderer_.get());
+                    SDL_RenderPresent(sdl_renderer_.get());
+                    SDL_Delay(2);
+                }
+                continue;
+            }
+            if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) {
+                // Accept (LABEL_101, 8261-8271) — Space accepts too, and the
+                // key first rides the any-key blip 20 (8176), then the accept
+                // sting 10. Ignored inside the 1 s debounce window
+                // (8220-8228): the key still blips, nothing commits.
+                audio_.play(20);
+                if (SDL_GetTicks() < accept_after_ms) continue;
+                audio_.play(10);
+                selected_level_ = level;  // commit the working copies
+                win_target_ = wins;
+                waiting = false;
+                break;
+            }
+            audio_.play(20);
+            const bool ctrl = (ev.key.mod & SDL_KMOD_CTRL) != 0;
+            if (k == SDLK_UP || k == SDLK_DOWN)
+                row = (row + 1) % 2;  // 2 rows: either arrow toggles
+            else if (row == 0 && k == SDLK_LEFT) {  // --level, wrap below -1
+                if (--level < -1) level = level_count - 1;
+                accept_after_ms = SDL_GetTicks() + 1000;  // debounce re-arm (8325)
+            } else if (row == 0 && k == SDLK_RIGHT) {  // ++level, wrap above count-1 to -1
+                if (++level >= level_count) level = -1;
+                accept_after_ms = SDL_GetTicks() + 1000;
+            } else if (row == 1 && k == SDLK_LEFT) {  // wins -1 (Ctrl: -5, code 371)
+                wins -= ctrl ? 5 : 1;
+                if (wins < 1) wins = 1;
+                accept_after_ms = SDL_GetTicks() + 1000;
+            } else if (row == 1 && k == SDLK_RIGHT) {  // wins +1 (Ctrl: +5, code 372)
+                wins += ctrl ? 5 : 1;
+                if (wins > 100) wins = 100;
+                accept_after_ms = SDL_GetTicks() + 1000;
+            }
+        }
+
+        audio_.update_music();
+        draw_frame();
         SDL_RenderPresent(sdl_renderer_.get());
         SDL_Delay(2);
     }
@@ -3103,7 +3584,15 @@ AppInput GameApp::run_match() {
         // pair and keeps the renderer decoupled from GameApp's own state.
         renderer_->set_gold_player(gold_player_,
                                    is_team_mode());  // NOLINT(bugprone-unchecked-optional-access)
-        renderer_->draw_frame(sim_.state());         // NOLINT(bugprone-unchecked-optional-access)
+        // Inter-tick interpolation fraction (renderer.hpp's draw_frame doc):
+        // acc < tick_ns after the catch-up loop, so this is in [0,1) — how far
+        // into the current 50 ms tick this displayed frame falls. The original
+        // needed no such blend because its gameplay driver itself ran per
+        // displayed frame on the ms delta (sub_42A191); our fixed 20 Hz sim
+        // recovers that on-screen fluidity here, cosmetically.
+        const float interp_alpha = static_cast<float>(acc) / static_cast<float>(tick_ns);
+        renderer_->draw_frame(sim_.state(),
+                              interp_alpha);  // NOLINT(bugprone-unchecked-optional-access)
         // The player-row HUD strip (docs/re/in-match-shell.md "The player
         // row") needs GameApp's own win_count_/kill_count_/front_font_, none
         // of which Renderer owns — drawn as a GameApp-side overlay on top of
@@ -3489,8 +3978,8 @@ void GameApp::toggle_fullscreen() {
     fullscreen_ = !fullscreen_;
     // SDL3's borderless "desktop" fullscreen (no explicit SDL_DisplayMode) —
     // resizes the OS window/output only; kScreenW/kScreenH and the sim are
-    // untouched (SDL_LOGICAL_PRESENTATION_LETTERBOX keeps scaling correctly
-    // at any output size, task item 2).
+    // untouched (SDL_LOGICAL_PRESENTATION_STRETCH fills any output size edge
+    // to edge, matching the original's own presentation — see init()).
     SDL_SetWindowFullscreen(window_.get(), fullscreen_);
     options_dirty_ = true;  // persist the choice (task item 4), flush_options() below is the writer
 }
@@ -3524,8 +4013,8 @@ void GameApp::flush_options() {
     to_write.assign_keyboards = options_.assign_keyboards;
     to_write.lost_net_revert_ai = options_.lost_net_revert_ai;
     to_write.smallmemory = options_.small_memory;
-    // Row 8 (display-only) — round-trip whatever is currently shown so a
-    // hand-edited options.ini value isn't silently dropped on the next save.
+    // Row 8 — round-trip whatever is currently shown (the picker stores it
+    // extension-stripped + uppercased; a hand-edited value survives as-is).
     if (!options_.scheme_filename.empty()) to_write.schemefilename = options_.scheme_filename;
     to_write.diseases_destroyable = options_.diseases_destroyable;
     to_write.disable_game_music = options_.disable_game_music;
@@ -3534,15 +4023,19 @@ void GameApp::flush_options() {
     to_write.fullscreen = fullscreen_;
     // keydef=: always write the live KeyboardMapper bindings (both sets, all
     // 6 UI-exposed actions) so a rebind through the remap screen survives a
-    // restart. Slots 6-9 per set (no in-game UI, §2) are left at -1/absent
-    // here — save_options skips a -1 scancode, so any pre-existing keydef=
-    // line for those slots (from a hand-edit or a future feature) is left
-    // untouched by the read-modify-write rather than being clobbered blank.
+    // restart — translated back into the ORIGINAL's DOS/AT scancode space
+    // (dos_scancode.hpp; before 2026-07-13 the port wrote raw SDL_Scancode
+    // values here, which BM95.EXE would misread against the same install).
+    // An SDL key with no DOS equivalent writes 0 = unbound. Slots 6-9 per
+    // set (no in-game UI, §2) are left at -1/absent here — save_options
+    // skips a -1 scancode, so any pre-existing keydef= line for those slots
+    // (from a hand-edit or a future feature) is left untouched by the
+    // read-modify-write rather than being clobbered blank.
     assets::KeyDef kd;
     for (int set = 0; set < assets::KeyDef::kSets; ++set) {
         const KeySet& ks = keyboard_.key_set(set);
         for (int action = 0; action < kKeyActionCount; ++action)
-            kd.scancode[set][action] = ks.scancode[action];
+            kd.scancode[set][action] = dos_scancode_from_sdl(ks.scancode[action]);
     }
     to_write.keydef = kd;
     try {

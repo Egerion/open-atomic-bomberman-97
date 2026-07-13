@@ -36,6 +36,53 @@ constexpr int kWarpTicks = 18;
 // comes off panic_lcg_, never State::rng, so there is no golden impact.
 constexpr int kPanicSpread = 13;  // getvalue(330)
 
+// Inter-tick interpolation snap threshold (see draw_frame's doc comment in
+// renderer.hpp). Anything a moving entity legitimately covers in ONE 20 Hz
+// tick stays well under this: a max-skate hyper walker ~30 px, a kicked slide
+// getvalue(300)/100 = 10 px, a punched/thrown bomb's flight leg under a tile.
+// Warps, trampoline landings, and the flying-bomb field wrap all move a full
+// tile (36/40 px) or more in one tick — those must SNAP, not smear across
+// the screen.
+constexpr sim::Fixed kInterpSnapDelta = 32 * sim::kScale;
+
+void Renderer::capture_interp(const sim::State& s) {
+    if (s.tick == interp_tick_) return;
+    // A tick we've never seen (fresh match without reset_match, or a resumed
+    // demo) makes the previous snapshot meaningless only when there IS none;
+    // stale cross-round data is caught by reset_match and, failing that, by
+    // the snap threshold.
+    interp_valid_ = interp_tick_ != ~0ull;
+    prev_px_ = seen_px_;
+    prev_py_ = seen_py_;
+    prev_bombs_.swap(seen_bombs_);
+    prev_rovers_.swap(seen_rovers_);
+    for (int i = 0; i < sim::kMaxPlayers; ++i) {
+        seen_px_[i] = s.players[i].x;
+        seen_py_[i] = s.players[i].y;
+    }
+    seen_bombs_.assign(s.bombs.size(), EntSnap{});
+    for (std::size_t i = 0; i < s.bombs.size(); ++i)
+        seen_bombs_[i] = {s.bombs[i].active, s.bombs[i].x, s.bombs[i].y};
+    seen_rovers_.assign(s.rovers.size(), EntSnap{});
+    for (std::size_t i = 0; i < s.rovers.size(); ++i)
+        seen_rovers_[i] = {s.rovers[i].alive, s.rovers[i].x, s.rovers[i].y};
+    interp_tick_ = s.tick;
+}
+
+Renderer::Posf Renderer::interp_pos(sim::Fixed prev_x, sim::Fixed prev_y, sim::Fixed x,
+                                    sim::Fixed y, bool prev_ok) const {
+    const float fx = static_cast<float>(x) / static_cast<float>(sim::kScale);
+    const float fy = static_cast<float>(y) / static_cast<float>(sim::kScale);
+    if (!interp_valid_ || !prev_ok || interp_alpha_ >= 1.0f) return {fx, fy};
+    // Snap both axes together: lerping the small axis of a mostly-teleport
+    // move would draw one frame at a position the entity never occupied.
+    if (std::abs(x - prev_x) > kInterpSnapDelta || std::abs(y - prev_y) > kInterpSnapDelta)
+        return {fx, fy};
+    const float pfx = static_cast<float>(prev_x) / static_cast<float>(sim::kScale);
+    const float pfy = static_cast<float>(prev_y) / static_cast<float>(sim::kScale);
+    return {pfx + (fx - pfx) * interp_alpha_, pfy + (fy - pfy) * interp_alpha_};
+}
+
 void Renderer::draw_sprite(const Sprite& sp, float x, float y, Uint8 r, Uint8 g, Uint8 b) {
     if (!sp.tex) return;
     SDL_FRect dst{x - sp.hx, y - sp.hy, static_cast<float>(sp.w), static_cast<float>(sp.h)};
@@ -180,6 +227,14 @@ void Renderer::reset_match(bool untimed) {
     punch_pose_.fill(0);
     pickup_pose_.fill(0);
     panic_ticks_.fill(0);
+    // Drop the inter-tick snapshots: a new round restarts s.tick and reuses
+    // slots, so lerping from the previous match's positions would be garbage.
+    interp_tick_ = ~0ull;
+    interp_valid_ = false;
+    prev_bombs_.clear();
+    seen_bombs_.clear();
+    prev_rovers_.clear();
+    seen_rovers_.clear();
 }
 
 void Renderer::on_events(const sim::State& s) {
@@ -245,33 +300,40 @@ void Renderer::on_events(const sim::State& s) {
 
 void Renderer::sample_movement(const sim::State& s) {
     if (s.tick == last_tick_) return;
+    // Walk state comes from the sim's PlayerWalking events, NOT from the
+    // position delta: the original picks walk-vs-stand off the dispatched
+    // godir (+46) and advances the 16.16 leg phase by the tick's speed budget
+    // (sub_41F29B), which is burned even when a wall blocks every pixel step
+    // (sub_41EC84's loop spends 100 per iteration regardless) — a blocked
+    // walker pedals in place. Conversely a conveyor sliding an IDLE player is
+    // the +46 == -1 branch: no event, stand pose gliding along. The previous
+    // position-delta approximation got both wrong (froze the first, pedalled
+    // the second). The event's data is the disease-scaled budget in px, so
+    // one walk frame ~ one pixel of ATTEMPTED travel, molasses/hyper included.
+    std::array<std::int8_t, sim::kMaxPlayers> walk_px{};
+    for (const auto& ev : s.events) {
+        if (ev.type == sim::Event::Type::PlayerWalking && ev.player >= 0 &&
+            ev.player < sim::kMaxPlayers)
+            walk_px[ev.player] = ev.data;  // clamped 1..127 by the sim, so >0 == walking
+    }
     for (int i = 0; i < sim::kMaxPlayers; ++i) {
         const sim::Player& p = s.players[i];
-        bool m =
+        moving_[i] = p.present && p.alive && walk_px[i] > 0;
+        if (moving_[i]) walk_phase_[i] += static_cast<std::uint32_t>(walk_px[i]);
+        // Displacement is still tracked separately: the cornerhead fidget
+        // below cares about standing STILL while fully enclosed (its entry,
+        // sub_41F29B 23006-23013, checks only enclosure + state 0 — held keys
+        // don't cancel it, and boxed in they can't displace you anyway).
+        const bool displaced =
             last_tick_ != ~0ull && p.present && p.alive && (p.x != last_x_[i] || p.y != last_y_[i]);
-        moving_[i] = m;
-        // Advance the leg cycle by DISTANCE travelled, not once per tick: the
-        // original holds a 16.16 walk phase that increments with the character's
-        // speed and indexes the frame via phase >> 16 (sub_41F29B); its rover
-        // mover (sub_401B5C) likewise bumps the anim counter once per movement
-        // step. So one walk frame ~ one pixel of travel. We approximate the
-        // engine's per-tick speed with the actual Manhattan pixel delta this
-        // tick (sim pos is pixels*kScale) and add it to walk_phase_; draw_anim's
-        // `% statecnt` then picks the frame. Purely render-side.
-        if (m) {
-            std::uint32_t dpx = static_cast<std::uint32_t>(
-                (std::abs(p.x - last_x_[i]) + std::abs(p.y - last_y_[i])) / sim::kScale);
-            if (dpx == 0) dpx = 1;  // a sub-pixel step still nudges the cycle
-            walk_phase_[i] += dpx;
-        }
         last_x_[i] = p.x;
         last_y_[i] = p.y;
 
         // Idle-fidget bookkeeping (once per sim tick). While a live player is
         // standing still and fully boxed in, keep re-rolling "cornerhead"
-        // fidgets; the instant it can move again (or moves), cancel. Cosmetic —
+        // fidgets; the instant it moves (or the box opens), cancel. Cosmetic —
         // the rolls come off panic_lcg_, never State::rng (determinism intact).
-        bool panic = p.present && p.alive && !m && boxed_in(s, p.tile_x(), p.tile_y());
+        bool panic = p.present && p.alive && !displaced && boxed_in(s, p.tile_x(), p.tile_y());
         if (panic) {
             if (--panic_ticks_[i] <= 0) {
                 panic_variant_[i] = static_cast<int>(panic_roll() % kCornerheadVariants);
@@ -409,10 +471,16 @@ void Renderer::draw_bombs(const sim::State& s) {
     // UNDER those, not over them; our previous single `draw_world` pass drew
     // bombs after cells/flames (and after `draw_powerups`), compositing the
     // opposite way. See docs/re/facts.md "Draw order".
-    for (const auto& b : s.bombs) {
+    for (std::size_t bi = 0; bi < s.bombs.size(); ++bi) {
+        const auto& b = s.bombs[bi];
         if (!b.active) continue;
-        float bx = b.x / static_cast<float>(sim::kScale);
-        float by = b.y / static_cast<float>(sim::kScale);
+        // Inter-tick smoothing for kicked slides and flight legs; a slot that
+        // wasn't an active bomb last tick draws unsmoothed (prev_ok false).
+        const bool prev_ok = bi < prev_bombs_.size() && prev_bombs_[bi].active;
+        const Posf ip = interp_pos(prev_ok ? prev_bombs_[bi].x : 0, prev_ok ? prev_bombs_[bi].y : 0,
+                                   b.x, b.y, prev_ok);
+        float bx = ip.x;
+        float by = ip.y;
         float lift = 0.0f;
         if (b.flying && b.fly_total > 0) {
             float t = 1.0f - static_cast<float>(b.fly_ticks) / static_cast<float>(b.fly_total);
@@ -545,9 +613,11 @@ void Renderer::draw_world(const sim::State& s) {
         int i = order[k];
         const sim::Player& p = s.players[i];
         int dir = static_cast<int>(p.facing);
-        float sx = kFieldOriginX + p.x / static_cast<float>(sim::kScale);
-        float sy =
-            kFieldOriginY + p.y / static_cast<float>(sim::kScale) + sim::kTileH / 2.0f - 1.0f;
+        // Inter-tick smoothing (draw_frame's alpha): the shadow, body, and the
+        // carried bomb below all anchor off this one interpolated position.
+        const Posf ip = interp_pos(prev_px_[i], prev_py_[i], p.x, p.y, true);
+        float sx = kFieldOriginX + ip.x;
+        float sy = kFieldOriginY + ip.y + sim::kTileH / 2.0f - 1.0f;
         // Trampoline flight lift. CONFIRMED arc from sub_41F29B state 5 (raw
         // disasm 0x4204b3..0x420517): the body is blitted at y - v80 where
         //   v80 = getvalue(681) * (c < len/2 ? c : len - c)
@@ -603,11 +673,15 @@ void Renderer::draw_world(const sim::State& s) {
         int body_colour = disease_flash ? disease_flash_colour() : pv;
         const Anim* a = moving_[i] ? &q.walk[body_colour][dir] : &q.stand[body_colour][dir];
         std::size_t ph = moving_[i] ? walk_phase_[i] : 0;
-        // Boxed-in idle: replace the stand pose with the current "cornerhead"
-        // fidget (direction-independent). sample_movement already rolled the
-        // variant/duration this tick; the phase just rides the sim tick so the
-        // frames advance. Falls back to stand if the CORNER ANI is missing.
-        if (!moving_[i] && panic_ticks_[i] > 0 &&
+        // Boxed-in idle: replace the pose with the current "cornerhead" fidget
+        // (direction-independent). sample_movement already rolled the variant/
+        // duration this tick; the phase just rides the sim tick so the frames
+        // advance. NOT gated on moving_: the original's fidget states 20-39
+        // are entered off enclosure alone (sub_41F29B 23006-23013) and held
+        // keys don't exit them — a boxed-in player mashing into the walls
+        // still fidgets, it doesn't pedal. Falls back to stand if the CORNER
+        // ANI is missing.
+        if (panic_ticks_[i] > 0 &&
             !q.cornerhead[body_colour][panic_variant_[i]].steps.empty()) {
             a = &q.cornerhead[body_colour][panic_variant_[i]];
             ph = static_cast<std::size_t>(s.tick);
@@ -705,11 +779,14 @@ void Renderer::draw_world(const sim::State& s) {
     // world entity here. Falls back to a plain filled marker (rover =
     // brown/orange, ghost = pale blue-white) when the sequence is missing,
     // so a partial install still shows something instead of nothing.
-    for (const auto& r : s.rovers) {
+    for (std::size_t ri = 0; ri < s.rovers.size(); ++ri) {
+        const auto& r = s.rovers[ri];
         if (!r.alive) continue;
-        float sx = kFieldOriginX + r.x / static_cast<float>(sim::kScale);
-        float sy =
-            kFieldOriginY + r.y / static_cast<float>(sim::kScale) + sim::kTileH / 2.0f - 1.0f;
+        const bool prev_ok = ri < prev_rovers_.size() && prev_rovers_[ri].active;
+        const Posf ip = interp_pos(prev_ok ? prev_rovers_[ri].x : 0,
+                                   prev_ok ? prev_rovers_[ri].y : 0, r.x, r.y, prev_ok);
+        float sx = kFieldOriginX + ip.x;
+        float sy = kFieldOriginY + ip.y + sim::kTileH / 2.0f - 1.0f;
         const Anim& a = (r.kind == sim::RoverKind::Rover) ? q.rover[r.dir & 3] : q.ghost[r.dir & 3];
         if (!a.steps.empty()) {
             draw_anim(a, r.anim_step, sx, sy);
@@ -809,7 +886,9 @@ void Renderer::draw_hud(const sim::State& s) {
     }
 }
 
-void Renderer::draw_frame(const sim::State& s) {
+void Renderer::draw_frame(const sim::State& s, float alpha) {
+    capture_interp(s);
+    interp_alpha_ = alpha;
     SDL_SetRenderDrawColor(ren_, 0, 0, 0, 255);
     SDL_RenderClear(ren_);
     SDL_RenderTexture(ren_, assets_->field(), nullptr, nullptr);

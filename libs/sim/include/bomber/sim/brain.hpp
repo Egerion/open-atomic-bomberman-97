@@ -49,20 +49,22 @@ struct Brain {
 
     // The ranged-powerup pursuit (+24/+28/+32/+36; sub_40BAF5). Filled by
     // Stage 3; present now so the hashed layout is stable across stages. Target
-    // stored as a TILE (the powerup cell), timer as a tick countdown.
+    // stored as a TILE (the powerup cell); timer in wall-clock ms, exactly the
+    // original's `+28 += frameDelta` per displayed frame.
     struct PowerSeek {
         bool active = false;
-        std::int32_t timer = 0;    // ticks elapsed on the pursuit (times out at 10)
+        std::int32_t timer = 0;    // ms elapsed on the pursuit (times out at 10*50)
         std::int16_t tile_x = 0;   // the pursued powerup tile
         std::int16_t tile_y = 0;
         std::int8_t step_dir = 0;  // godir of the next step toward it
     } pow_seek;
 
     // The enemy pursuit (+10/+12/+16/+20; sub_40B8C2). Filled by Stage 5. Target
-    // stored as a player SLOT index (not a pointer); timer as a tick countdown.
+    // stored as a player SLOT index (not a pointer); timer in wall-clock ms
+    // (`+12 += frameDelta`), same scheme as pow_seek above.
     struct EnemySeek {
         bool active = false;
-        std::int32_t timer = 0;       // ticks elapsed (times out at 10)
+        std::int32_t timer = 0;       // ms elapsed (times out at 10*50)
         std::int8_t target_slot = 0;  // pursued opponent's player index
         std::int8_t step_dir = 0;     // godir of the next step toward it
     } enemy_seek;

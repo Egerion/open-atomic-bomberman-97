@@ -20,7 +20,7 @@ formats the asset pipeline already decodes:
 | Draw / no-winner | `DATA/RES/DRAW.PCX` | PCX | loads today |
 | (dead asset — see BONUS.PCX note) | `DATA/RES/BONUS.PCX` | PCX | loads today, but UNREFERENCED by the binary |
 | Credits image bar | `DATA/RES/CREDBAR.PCX` | PCX | loads today |
-| Head-to-head wipe | `DATA/ANI/HEADWIPE.ANI` | ANI | loads today |
+| Head-to-head wipe | `DATA/ANI/HEADWIPE.ANI` | ANI | DEAD ART — absent from MASTER.ALI, never loaded by the original or the port ("HEADWIPE.ANI is dead art" below) |
 | Boot/title music | `DATA/SOUND/TITLE.RSS` | RSS (id 1000, loop) | plays today, continuous across logos+title |
 | Menu music | `DATA/SOUND/MENU.RSS` | RSS (id 1010, loop) | plays today, from menu entry |
 | Menu-exit / accept sting | `DATA/SOUND/MENUEXIT.RSS` | RSS (id 10, one-shot) | plays today |
@@ -624,8 +624,8 @@ Key facts the spine reproduces:
   drawer, NOT a transition), and flip (`sub_41043C`). There is no HEADWIPE / fade
   on a waited screen — logos, title, results, and the `.BM` viewer all just
   replace the previous image. So the port presents these screens with a **cut**;
-  the only screen-to-screen wipe in the front-end is the menu→match select wipe
-  (`present_menu`), which is a separate, intentional effect. (Provenance:
+  and since 2026-07-12 ("HEADWIPE.ANI is dead art" below) EVERY other front-end
+  step, including menu→player setup, is a cut too. (Provenance:
   `sub_41522D` @ 0x41522D; `sub_429FF1`/`sub_429F1A` @ 0x429FF1/0x429F1A;
   `sub_41043C` @ 0x41043C.)
 - **`sub_42A088` does NOT touch music** — it loads a palette, blits, and runs
@@ -721,8 +721,8 @@ real `.SCH` writer `sub_403C16`) — chain and controls in
 | `336` Down | (blip only) | `++v10`, wraps 6→0 |
 | `280` | `sub_427961(10)` accept | jump v10=3 (**Options**, corrected) and select |
 | `315` | `sub_427961(10)` accept | jump v10=5 (**Help browser**, corrected) and select |
-| `286` | (blip only) | break the loop → run the current selection |
-| `288` | (blip only) | `sub_413D45()` — a toggle, no accept |
+| `286` | (blip only) | Alt+A — `break` lands on the ATTRACT path (30888-30894: `dword_464938=1`, roster save, `v10=0` → Play as an all-AI demo). CORRECTED 2026-07-12: the earlier "run the current selection" reading was wrong |
+| `288` | (blip only) | Alt+D — `sub_413D45()` @ 16752-16832, the hidden modal "Internal debugging information" WINZ window (getstring 400/401/405/410/411/415/420, 450x300 at y=100, Enter/Esc dismiss). CORRECTED 2026-07-12: not a toggle |
 | `5` = **Ctrl+E** (×6 in a row) | `sub_427961(10)` accept | `sub_40330E()` — **the MAP EDITOR** (corrected: code 5 is the Ctrl+E ASCII control code, the counter is `++v15 > 5` = six consecutive presses, and the target is the scheme editor, NOT a campaign — full chain in `docs/re/results-and-options.md` §5) |
 | idle > `getvalue(92)` s | (none) | **ATTRACT MODE** (corrected — it does NOT simply run the current row): sets the attract flag `dword_464938`, saves the roster/level/team config, forces v10=0 and dispatches Play as an AI-only demo match — see "Attract mode" below |
 
@@ -740,6 +740,24 @@ So the confirmed public item set + order is **Play, net-setup A, net-setup B,
 Options, Credits, Help browser, Quit** with an animated bomb-trigger cursor
 (the map editor and the roulette wheel exist but have no menu row — hidden
 trigger / automatic respectively).
+
+**Full-audit additions (2026-07-12, sub_42B9CE 30723-30928 end-to-end;
+PORTED same day):** (a) a **"V1.0" version string** draws every menu frame at
+(0,0), clip 50, grey `byte_49A624` (168,168,164) over the standard black
+outline (30779; the literal `aV10` is hardcoded, not a MESSAGES entry);
+(b) the menu is fully **pad-navigable** — the getkey `sub_4102B7` (14286-
+14333) polls all 10 joysticks whenever the key queue is empty and
+synthesizes v-codes (axis ≤30/≥70 crossings → 328/336/331/333, any button
+rising edge → **13** = Enter), and the quit confirm reads the same getkey;
+(c) **cursor-position memory**: the row resets to 0 after Options (30910-
+30912), after a cancelled quit (30920-30922) and after an attract demo
+(30894), and is KEPT after Play/Credits/Help/editor; (d) every inline return
+to the outer loop (quit-cancel, help browser, editor) re-arms `v14` →
+`sub_42741E(0x3F2)` **reloads MENU.RSS from sample 0**; (e) the cursor's
+frame counter is process-lifetime (phase never resets — cosmetic); (f) the
+menu **re-reads VALUELST.RES from disk** (`sub_4121FF`, 15717) before
+dispatching rows 0/1/2 — NOT ported (our ValueList loads once at boot; live
+re-tuning between matches is an accepted deviation, noted here).
 
 ### Escape / Quit-row dispatch — `sub_412987` -> `sub_41456C` — PINNED (2026-07-09)
 
@@ -773,10 +791,14 @@ exit?"` as the prompt and two buttons, **getstring(26)** = `" Yes "` and
 **getstring(25)** = `" No "`. Its own key loop (decompile ~17220-17270) blips
 (SFX 20) on every real key, then resolves the answer from the raw key code:
 **Y/y (89/121), Enter (13), Space (32) → Yes** (returns 1); **N/n (78/110),
-Escape (0x1B) → No** (returns 0); every other key is ignored and the dialog
-stays up. So the terminal "confirm" sting (SFX 10) and the 2600 exit-sting
-group only ever fire on an explicit **Yes** — Escape *inside* the dialog is a
-**cancel**, not a second-level exit.
+Q/q (0x51/0x71 — 17253-17267, ADDED to this list 2026-07-12), Escape (0x1B) →
+No** (returns 0); every other key is ignored and the dialog stays up. The
+dialog RESOLVES SILENTLY on both answers (its loop plays only the per-key
+blip 20 — the accept sting 10 never fires here; CORRECTED 2026-07-12): on
+**Yes**, `sub_412987` then stops the music (`sub_427342`) and plays the 2600
+exit-sting group — Escape *inside* the dialog is a **cancel**, not a
+second-level exit, and the cancel path exits through the OUTER menu loop
+(cursor home to row 0, MENU.RSS reloaded from sample 0).
 
 **Port fidelity of the menu sounds (FIXED 2026-07-08, RE-FIXED 2026-07-09
 with the real confirm dialog).** `present_menu` now matches the table: Up/Down
@@ -1153,32 +1175,39 @@ from any menu row in the original either (`docs/re/frontend-flow.md`
 "INPUT.BM menu-row binding — CONFIRMED NEGATIVE"; coverage-audit table
 row #23).
 
-## The transition — HEADWIPE.ANI, driven by the standard ANI pacer
+## HEADWIPE.ANI is dead art — every front-end screen change is a CUT (CORRECTED 2026-07-12)
 
-There is **no `headwipe` string** anywhere in the decompile, yet
-`DATA/ANI/HEADWIPE.ANI` ships. The engine therefore loads it the same generic
-way it loads every other ANI — by a runtime-built `DATA/ANI/<name>.ani` path
-(`aSSSAni = "%s/%s/%s.ani"`) — and plays it as a screen-to-screen wipe overlay.
-Its internal contents (via `strings`) are a **single sequence** built from one
-`HEAD`/`HEAD0` STAT with a run of FRAM leaves (`FOA0000.TGA`, …): a growing
-mask, exactly a horizontal head-to-head wipe.
+**CORRECTION (2026-07-12, prompted by Ege's live A/B report "the menu→player-
+setup transition is instant in the original, slow in the port").** The earlier
+version of this section inferred that the engine loads `DATA/ANI/HEADWIPE.ANI`
+generically and plays it as a menu→match-select wipe. That inference is now
+DISPROVEN on two independent grounds:
 
-Playback obeys the already-confirmed universal ANI rule (`docs/re/facts.md`
-"ANI per-step timing — CONFIRMED INERT", `sub_41DAA7`): the shown step is
-**`counter % statecnt`**, the owner advancing `counter` once per rendered
-frame. There is no per-step duration; the wipe simply steps one frame per tick
-until it has shown every step once. The spine's transition primitive advances a
-frame counter over the `HEADWIPE` sequence at the front-end frame rate and is
-"done" after `statecnt` frames — faithful to that driver. When HEADWIPE.ANI is
-absent the spine falls back to a wall-clock alpha fade (cosmetic only).
+1. **MASTER.ALI does not list HEADWIPE** (checked against the shipped
+   `DATA/ANI/MASTER.ALI`, 84 lines, no `head` entry). Per the ANI
+   sequence-name audit (facts.md — the boot loader `sub_41D695` loads ONLY the
+   files MASTER.ALI lists into the global pool), a file absent from MASTER.ALI
+   is **never loaded at all**. HEADWIPE.ANI is dead art on the CD, exactly
+   like FLAME.ANI and TRIGBOMB.ANI.
+2. **No call site exists**: there is no `headwipe` string anywhere in the
+   decompile (already noted before), and the menu dispatch `sub_42B9CE` calls
+   the selected handler (`sub_42A3F6` for Play) directly — no transition
+   primitive in between.
 
-**Scope: the wipe is NOT played on waited screens.** `sub_42A088` cuts (palette
-+ blit + flip, above) — it does not invoke HEADWIPE. So the logos, title,
-results, and `.BM` viewer all appear/dismiss by a cut, with no wipe. The port
-keeps the HEADWIPE transition only for the **menu→match select** step
-(`present_menu`), which is the one place a head-to-head wipe belongs; the earlier
-spine also ran the wipe out of every waited screen, which was wrong and has been
-removed.
+So the original's front end has **no screen-to-screen wipe anywhere**: the
+logos, title, menu, player setup, LEVEL & ROUNDS, results and `.BM` viewer all
+appear and dismiss by a plain cut (`sub_42A088`'s palette + blit + flip for
+waited screens; direct dispatch everywhere else). The file's contents (a
+single `HEAD` sequence of **211** 73x73 `FOA*.TGA` frames, `abtool ani`) are
+consistent with an abandoned asset, not a shipping wipe — 211 frames at the
+per-rendered-frame ANI rule would run ~3.5 s.
+
+**Port status:** the invented wipe is REMOVED (2026-07-12). `present_menu`
+now cuts straight to the selected flow, `AssetStore` no longer loads
+HEADWIPE.ANI, and the `Transition` primitive (transition.{hpp,cpp}) is deleted
+outright. The removed wipe was itself the user-visible bug: 211 frames × one
+vsynced frame each ≈ 3.5 seconds of dead time between the main menu and the
+player-setup screen, where the original cuts instantly.
 
 ## Audio: looping music vs one-shot SFX — the port model (matches the binary)
 
@@ -1229,7 +1258,7 @@ randomness (SFX group pick) uses `AudioEngine`'s own LCG, never `State::rng`.
 | SOUNDLST 1010 | main-menu music (`menu`), looping, started on **every** menu (re-)entry (`sub_42741E(0x3F2)`, `v14` re-armed once per `sub_42B9CE` outer-loop iteration — CORRECTED 2026-07-09, not a once-per-process gate) — replaces whatever track is currently playing (boot 1000, or 1020/1130 left by a match/results screen) | MENU.RSS | CONFIRMED (`sub_42B9CE`); NOT 0x3FC/1020 (that is `sub_42A3F6`'s round "win" track) |
 | SOUNDLST 1020 | **setup-screens music** (label `win`), looping, started at `sub_42A3F6` entry (`sub_42741E(0x3FC)`) — CORRECTED: plays under player/level setup, replaced at round init by the stage track; it does NOT underlie VICTORY | WIN.RSS | CONFIRMED (corrected 2026-07-08); port fixed — `game_app.cpp`'s `kWinMusicId` (1020) is now scoped to the Play/setup path only, never started for VICTORY (see "Results MUSIC") |
 | SOUNDLST 1130 | **outcome-tier music** (label `draw`), looping, started unconditionally at round end (`sub_42741E(0x46A)` BEFORE the survivor test) — under DRAW **and** RESULTS **and** VICTORY | DRAW.RSS | CONFIRMED (corrected 2026-07-08); port fixed — `game_app.cpp`'s `kDrawMusicId` (1130) now starts under DRAW, RESULTS, **and** VICTORY/TEAM alike (`audio_.start_music(kDrawMusicId)` in every outcome branch) |
-| SOUNDLST 1100+level, 1120 | per-level in-round stage music (`sub_4293E5` @ 0x4293E5, called from `sub_410B6E` round init unless the "Disable music during gameplay" option frees the music instead); 1120 (0x460) is the fallback when the level has no entry | per-level RSS | CONFIRMED (`docs/re/in-match-shell.md` step 2); port plays no in-round music — gap |
+| SOUNDLST 1100+level, 1120 | per-level in-round stage music (`sub_4293E5` @ 0x4293E5, called from `sub_410B6E` round init unless the "Disable music during gameplay" option frees the music instead); 1120 (0x460) is the fallback when the level has no entry | per-level RSS | CONFIRMED (`docs/re/in-match-shell.md` step 2); PORTED — `GameApp::start_match` starts `1100+stage` with the `has_track` 1120 fallback, and (2026-07-12) the disabled path now calls `AudioEngine::stop_music()` (the sub_427342 free) so a disabled round is SILENT instead of leaking the 1020 setup track into it |
 | SOUNDLST 10 | menu-exit / accept sting (`menuexit`), one-shot | MENUEXIT.RSS | CONFIRMED (`sub_427961(10)` accept path in `sub_42A088` + every menu select in `sub_42B9CE`) |
 | SOUNDLST 20 | nav blip (`letter1`), one-shot, on ANY key | LETTER1.RSS | CONFIRMED (`sub_427961(20)` in `sub_42A088`/`sub_42B9CE`/`sub_42A3F6`) |
 | SOUNDLST 40 | "you can't do that here" buzz (`enrt1`), one-shot | ENRT1.RSS | CONFIRMED **NETWORK-ONLY** (`sub_427961(40)` gated on `sub_40C06A()==1` in the results/setup wait loops); never fires in local play — correctly absent in the port |
@@ -1240,7 +1269,7 @@ randomness (SFX group pick) uses `AudioEngine`'s own LCG, never `State::rng`.
 
 The logo/title dwell is **no longer a tunable — it is CONFIRMED `getvalue(12)` =
 7 s** (VALUELST `12,7`), the same waited-screen timeout for all three boot
-screens; the port hard-codes 7000 ms from it. The one remaining **our tunable**
-in the front-end is the HEADWIPE frame cadence in ms for the surviving
-menu→match select wipe (the original steps per rendered frame; the spine uses a
-fixed ms-per-frame so it is resolution-independent). Neither touches the sim.
+screens; the port hard-codes 7000 ms from it. The former last front-end
+tunable — the HEADWIPE wipe cadence — is gone with the wipe itself
+("HEADWIPE.ANI is dead art" above): the front end now has NO guessed
+constants. None of this touches the sim.

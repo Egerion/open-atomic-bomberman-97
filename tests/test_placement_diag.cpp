@@ -135,9 +135,10 @@ TEST_CASE("B: constipation refuses every drop, flash cue always renderable") {
 }
 
 // --- C: stun blocks placement for its full window, then recovers ---------
-// head_stun_frames defaults to 16 ticks (0.8 s): a bomb bouncing on the head
-// (PowerupSystem::head_hit) locks placement out for nearly a second.
-TEST_CASE("C: a head-hit-sized stun blocks placement for its whole 16-tick window") {
+// head_stun_frames defaults to 16 FRAMES, burned 3 per 20 Hz tick (facts.md
+// "Canonical frame cadence") — ~0.27 s: a bomb bouncing on the head
+// (PowerupSystem::head_hit) locks placement out for about a quarter second.
+TEST_CASE("C: a head-hit-sized stun blocks placement for its whole 16-frame window") {
     Simulation s(open_config());
     State& st = s.state();
     st.players[1].alive = false;
@@ -158,8 +159,10 @@ TEST_CASE("C: a head-hit-sized stun blocks placement for its whole 16-tick windo
         if (placed_this_tick(s, 0) && first_place < 0) first_place = static_cast<long long>(st.tick);
     }
     std::printf("[C] stun0=%d refused_stun=%d first_place=%lld\n", stun0, refused_stun, first_place);
-    CHECK(refused_stun >= 6);   // a run of refusals through the stun window
-    CHECK(first_place >= 0);    // recovers once stun hits 0
+    // 16 frames span ceil(16/3) = 6 blocked ticks = >= 2 of this loop's
+    // 2-tick (release+press) iterations still refused.
+    CHECK(refused_stun >= 2);  // a run of refusals through the stun window
+    CHECK(first_place >= 0);   // recovers once stun hits 0
 }
 
 // --- D / F: chain-queue does NOT inflate the live-bomb count -------------

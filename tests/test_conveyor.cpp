@@ -159,7 +159,11 @@ TEST_CASE("a head-stunned player on a conveyor is still carried by the belt") {
     CHECK(moved == static_cast<int>(expected));  // the belt kept carrying it
     CHECK(p.tile_y() == 0);                      // along the belt lane
     CHECK(p.facing == Direction::Right);         // belt-forced facing, as when idle
-    CHECK(p.stun == 6);                          // countdown ticked 16 -> 6 meanwhile
+    // The +58 countdown burns once per canonical FRAME (3/tick — facts.md
+    // "Canonical frame cadence"): 16 frames are gone within ceil(16/3) = 6
+    // ticks. With no key held the belt behaviour is identical either way, so
+    // the movement checks above are unaffected by the early expiry.
+    CHECK(p.stun == 0);
 }
 
 TEST_CASE("a stunned player takes no new input and does not coast; input resumes after") {
@@ -182,10 +186,12 @@ TEST_CASE("a stunned player takes no new input and does not coast; input resumes
     const int x_at_stun = p.x;
     CHECK(x_at_stun > kTileWF / 2);  // the pre-stun walk really moved
 
-    p.stun = 3;       // ...then a stun lands (white-box, as the AI suite does)
+    // 9 frames = exactly 3 ticks of block at the canonical 3-frames-per-tick
+    // stun cadence (facts.md "Canonical frame cadence").
+    p.stun = 9;       // ...then a stun lands (white-box, as the AI suite does)
     run(s, 3, east);  // the key is HELD the whole time
     CHECK(p.x == x_at_stun);  // no coasting, no new input: frozen in place
-    CHECK(p.stun == 0);       // the countdown ran 3 -> 2 -> 1 -> 0
+    CHECK(p.stun == 0);       // 9 frames burned across the 3 blocked ticks
 
     run(s, 3, east);          // stun over: the held key moves the player again
     CHECK(p.x > x_at_stun);

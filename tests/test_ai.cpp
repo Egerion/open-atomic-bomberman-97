@@ -796,8 +796,11 @@ TEST_CASE("Audit fix: a stunned AI draws no RNG this tick") {
     stunned.tick(idle());  // a static, bomb/disease/hurry-free board: nothing
                             // else this tick touches rng (see the "golden
                             // inert" case above for the same baseline).
-    CHECK(stunned.state().rng == rng0);          // zero draws while stunned
-    CHECK(stunned.state().players[0].stun == 2);  // the countdown still ticks
+    CHECK(stunned.state().rng == rng0);  // zero draws while stunned
+    // stun=3 covers all kSubFrames sub-frames of the tick, so the AI is
+    // blocked for every one of its per-frame decide slots; the countdown
+    // itself burns once per frame (facts.md "Canonical frame cadence").
+    CHECK(stunned.state().players[0].stun == 0);
 
     // Control: the SAME board with no stun DOES draw (draws A/B fire every
     // tick for a present+alive+ai player) -- proving the comparison above is
@@ -860,4 +863,62 @@ TEST_CASE("Mislabel fix: an AI still bombs a stunned-but-alive enemy (+8 not +58
     }
     CHECK(dropped);             // behaviour 4 bombed the stunned-but-alive enemy
     CHECK(alive_when_targeted);  // the target was merely stunned, not dead, when chosen
+}
+
+
+TEST_CASE("2026-07-12 danger-map fix: a FLYING bomb casts danger (AI flees from under the arc)") {
+    // facts.md "AI danger map": sub_42331C's tail stamp (pseudo.c 25683-25705)
+    // gates only on the ACTIVE flag -- motion is never tested -- so an
+    // airborne (punched/thrown) bomb projects its full blast prediction from
+    // its instantaneous arc tile every frame. The old `|| b.flying` skip made
+    // AIs stand calmly underneath a sailing bomb.
+    Simulation s = open_arena(/*tx=*/5, /*ty=*/5, /*ai=*/true);
+    State& st = s.state();
+    Bomb b;
+    b.active = true;
+    b.flying = true;
+    b.owner = 1;
+    b.x = cx(5);
+    b.y = cy(5);
+    b.flame = 2;
+    b.fuse = 40;
+    b.fuse_init = 40;
+    b.fly_ticks = 1000;  // stays airborne for the whole test
+    b.fly_total = 1000;
+    b.from_x = b.x;
+    b.from_y = b.y;
+    b.to_x = b.x;
+    b.to_y = b.y;
+    st.bombs.push_back(b);
+
+    for (int t = 0; t < 20; ++t) s.tick(idle());
+    // The AI must have left the stamped tile (it started dead-centre under
+    // the bomb, danger != 0 -> behaviour 2 flees).
+    CHECK((tile_x(st.players[0]) != 5 || tile_y(st.players[0]) != 5));
+}
+
+TEST_CASE("2026-07-12 danger-map fix: a CARRIED bomb casts danger from the carrier's tile") {
+    // facts.md "AI danger map": the carried pass (sub_42331C(1,..) at 25784)
+    // runs the SAME tail stamp, so a bomb held over a player's head projects
+    // its blast from the CARRIER's tile every frame -- the original's AIs
+    // scatter around a bomb-carrying player; ours used to ignore the carrier
+    // entirely (the carried slot is deactivated by try_grab).
+    Simulation s = open_arena(/*tx=*/5, /*ty=*/5, /*ai=*/true);
+    State& st = s.state();
+    Player& carrier = st.players[1];
+    carrier.present = true;
+    carrier.alive = true;
+    carrier.x = cx(6);
+    carrier.y = cy(5);
+    carrier.carrying = true;
+    carrier.carried_flame = 2;  // ray covers (4..8, 5): the AI's tile included
+    carrier.max_bombs = 0;      // the held-key drop edge below has nothing to place
+
+    // Hold the carrier's bomb key so the throw block never fires (a released
+    // key would lob the carried bomb on the very first tick).
+    TickInputs in{};
+    in.players[1].action1 = true;
+    for (int t = 0; t < 20; ++t) s.tick(in);
+    CHECK(st.players[1].carrying);  // still carrying: the danger really came from the carrier
+    CHECK((tile_x(st.players[0]) != 5 || tile_y(st.players[0]) != 5));
 }

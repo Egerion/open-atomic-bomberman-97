@@ -28,48 +28,50 @@ public:
     // "Per-tick call order — END-TO-END" finding 1.
     using PixelFn = bool (*)(void* ctx, Player& p);
 
-    // Moves one player for one tick in direction d (also sets facing).
-    // Positions are integer field pixels; the speed budget is added per tick
-    // and spent 100 units per one-pixel step, remainder carried over.
-    void move(Player& p, Direction d) { move(p, d, 0, nullptr, nullptr); }
-
-    // As above, plus a signed extra_budget added to (or subtracted from) this
-    // tick's move budget before it is spent. Used by the conveyor
-    // (StageActorSystem): a belt contributes getvalue(190+idx) 1/100-px units.
-    // The disease speed factors apply only to the player's own speed, exactly
-    // as in sub_41F29B where the conveyor term is added AFTER those factors.
-    void move(Player& p, Direction d, std::int32_t extra_budget) {
-        move(p, d, extra_budget, nullptr, nullptr);
+    // Moves one player for ONE SUB-FRAME of delta_ms in direction d (also sets
+    // facing). Positions are integer field pixels; the budget accrues
+    // `frame_budget(speed, delta_ms)` per call (the original's per-displayed-
+    // frame `speed × frameDelta / 50`) and is spent 100 units per one-pixel
+    // step, remainder carried over. The caller (player_turn) invokes this once
+    // per canonical sub-frame (constants.hpp kSubFrameMs).
+    void move(Player& p, Direction d, std::int32_t delta_ms = kMsPerTick) {
+        move(p, d, 0, nullptr, nullptr, true, nullptr, nullptr, delta_ms);
     }
 
     // Full form: `on_center(ctx, p, tx, ty)` fires each per-pixel step that
     // settles the player exactly on tile (tx,ty)'s centre — the faithful
     // step-on trigger point (sub_41EC84 v35 == -1). Pass nullptr to skip it.
     //
+    // extra_budget is the conveyor term, getvalue(190+idx) 1/100-px units
+    // SIGNED (with/against the belt), delta-scaled inside like the speed term
+    // but never disease-scaled — sub_41F29B adds it AFTER those factors.
+    //
     // use_player_speed selects whether the player's own speed (p.speed, disease-
     // scaled) is folded into the budget. sub_41F29B only adds it when the player
     // HAS a movement input (its case (b)); when the conveyor FORCES movement with
-    // no input (case (a)) the budget is exactly getvalue(190+idx), no speed term
+    // no input (case (a)) the budget is exactly the belt term, no speed term
     // at all. Defaults to true for every ordinary (player-initiated) move.
     // `on_pixel(pixel_ctx, p)` fires after every committed pixel step (flame
     // death + pickup live there — sub_41EC84 22699-22717); a true return kills
     // the walk (death mid-move). Pass nullptr to skip.
     void move(Player& p, Direction d, std::int32_t extra_budget, StepOnFn on_center, void* ctx,
-              bool use_player_speed = true, PixelFn on_pixel = nullptr,
-              void* pixel_ctx = nullptr);
+              bool use_player_speed = true, PixelFn on_pixel = nullptr, void* pixel_ctx = nullptr,
+              std::int32_t delta_ms = kMsPerTick);
 
     // Ice / input-lag (VALUELST ids 450-460, Hockey Rink; docs/re/facts.md
-    // "Ice / input-lag", sub_41F29B ~23058-23078). Pushes this tick's desired
-    // direction (`want_godir`: -1 = none, 0..3 = Up/Right/Down/Left) into
-    // `p.ice_history` and returns the EFFECTIVE direction to actually move
-    // with this tick: the sample that is exactly `delay_ticks` ticks old
-    // (clamped to the buffer's capacity), where delay_ticks is derived from
-    // the current level's ice_delay_ms. Safe to call unconditionally every
-    // tick for every player: AI players are exempt in the original (gated on
-    // the player-type byte +16 != 1) and are returned unchanged with the
-    // buffer untouched; on every level but Hockey Rink ice_delay_ms is 0, so
-    // this returns want_godir unchanged WITHOUT writing the buffer — keeping
-    // `p.ice_history` a fixed all-zero hashed field there (see player.hpp).
+    // "Ice / input-lag", sub_41F29B ~23058-23078). Pushes this SUB-FRAME's
+    // desired direction (`want_godir`: -1 = none, 0..3 = Up/Right/Down/Left)
+    // into `p.ice_history` and returns the EFFECTIVE direction to actually
+    // move with: the oldest-needed sample whose age has reached the level's
+    // ice_delay_ms (ages advance one sub-frame ≈ 16.7 ms per call — the
+    // original pushes once per displayed frame, so the 30-slot buffer spans
+    // ~500 ms at the canonical 60 fps, exactly its original capacity). Safe
+    // to call unconditionally every sub-frame for every player: AI players
+    // are exempt in the original (gated on the player-type byte +16 != 1) and
+    // are returned unchanged with the buffer untouched; on every level but
+    // Hockey Rink ice_delay_ms is 0, so this returns want_godir unchanged
+    // WITHOUT writing the buffer — keeping `p.ice_history` a fixed all-zero
+    // hashed field there (see player.hpp).
     int ice_delay(Player& p, int want_godir) const;
 
 private:

@@ -4556,6 +4556,223 @@ primitives]; `sub_4518D0` 56871-56884; `sub_42647A` field-geometry init
 `aFlameSGreen` 1569-1570; `abtool ani` dumps of shipped `MFLAME.ANI`,
 `FLAME.ANI`, `XBRICK0/1/5/10.ANI`, 2026-07-10.)
 
+## Walk pose keys off the DISPATCHED godir, not displacement (2026-07-12, `sub_41F29B` anim selection)
+
+User live-comparison report against the real install (running natively, see
+memory/original-game-runs-natively.md): in the original, a player (human or
+AI) pushing into a wall keeps playing the walking leg animation — visible
+"pedalling in place" — while our port froze to the stand pose. Confirmed as a
+port deviation, root-caused, and fixed:
+
+- **Pose selection**: the walk-vs-stand pick in `sub_41F29B`'s anim-state
+  block (23080-23110; `walkbomb`/`standbomb` variants via +37 at 23088/23099,
+  the cosmetic stand-frame pick at ~23086) keys off the player's dispatched
+  direction word **+46 (godir)** — set by input/AI/ice-buffer each tick,
+  -1 = idle — NOT off whether the position actually changed. The mover's
+  budget loop spends 100/iteration **even when every pixel step is blocked**
+  (`sub_41EC84`; our `MovementSystem::move` mirrors this), so the engine's
+  own model is "walking, just not getting anywhere" and the leg cycle (the
+  16.16 walk phase advanced by the tick's disease-scaled speed budget)
+  advances regardless of the wall.
+- **Conveyor corollary** (already pinned in the ice/stun audit, "+46 == -1
+  takes the IDLE movement branch ~23413"): a belt carrying an IDLE player is
+  the idle-on-conveyor branch — godir stays -1 → **stand pose sliding
+  along**, no leg animation.
+- **Cornerhead interplay**: the boxed-in fidget states 20-39 are entered off
+  enclosure alone (23006-23013, before input acquisition) and exit only on
+  anim-complete or the box opening — held keys do NOT cancel them, so a
+  fully-enclosed player mashing into the walls fidgets rather than pedals.
+
+**Port** (presentation-only; events are unhashed, golden untouched): the sim
+emits a per-tick `Event::Type::PlayerWalking` (player, tile, data = the
+disease-scaled walk budget in px) whenever the walking dispatch runs
+(`simulation.cpp` `player_turn`, right after `eff_godir` resolves);
+`Renderer::sample_movement` now derives the pose and the leg-phase advance
+from that event instead of the previous position-delta approximation (which
+froze the wall-pusher AND wrongly pedalled the belt-idle slider), and the
+cornerhead draw override no longer requires "not moving". Perceptual side
+note: this restores most of the original's characteristic AI "jitter" — its
+AI constantly steers into walls/corners while re-deciding, which reads as
+frantic leg-buzzing there and read as calm standing in our port. Tests:
+`tests/test_move.cpp` "PlayerWalking event follows the dispatch, not
+displacement".
+
+(Provenance: the +78 state-machine audit's line cites [23006-23013,
+23080-23110, 23413-23453] and the movement stepper's budget-loop fact, both
+already in this file; live A/B observation vs the shipped original,
+2026-07-12. The exact 16.16 phase-increment line in `sub_41F29B` was pinned
+during the original stepper RE — the walk-phase field and its speed-driven
+advance predate this entry; this entry corrects only WHERE the port sourced
+the advance from.)
+
+## Canonical frame cadence — the per-frame vs 50 ms two-clock model, PORTED (2026-07-12)
+
+The original has TWO clocks, and the port previously collapsed both onto the
+20 Hz tick:
+
+1. **The 50 ms quantum** `[0x46494C] = 1000/getvalue(30)`: every anim/state
+   counter advances through a per-entity ms accumulator
+   (`acc += frameDelta; while (acc > 0) { acc -= 50; ++counter }` —
+   sub_41F29B's +82/+80 idiom, sub_426D06's flame/burn pacing, etc.), i.e.
+   fuses, flames, diseases, animations all quantize to 20 Hz **on average**
+   regardless of the display rate. Our tick-based counters model this layer
+   exactly; nothing changed there.
+2. **The display frame**: the gameplay driver `sub_42A191` is a per-DISPLAYED-
+   frame callback in a DirectDraw flip loop (docs/re/in-match-shell.md), with
+   the measured integer-ms delta `[0x464958]`. Input acquisition
+   (sub_41E61E), the AI brain (sub_40A1C6 with all its whims/RNG draws and
+   its `+= frameDelta` pursuit timers), the movement-budget accruals
+   (`speed × frameDelta / 50` — player sub_41F29B, rover/ghost sub_401B5C,
+   sliding bomb sub_42331C), and the head-stun `--+58` (22982-22984, a plain
+   per-frame decrement, NOT accumulator-quantized) genuinely run at display
+   rate — **60-70 fps on period hardware**, ~60 fps on the reference Win11
+   install. The original's gameplay is therefore mildly frame-rate-dependent
+   by construction; bit-exact parity with a live run is impossible in
+   principle, so the port pins a CANONICAL display rate.
+
+**Canonical rate = 60 fps**, expressed as the repeating integer-ms delta
+pattern `{17, 17, 16}` (sums to the 50 ms tick; `constants.hpp kSubFrameMs`).
+Ported consequences (all deliberate behaviour changes, goldens recaptured in
+the same commit — golden A stayed byte-identical, pinning that the no-input
+path is untouched; golden E's bounce-count + veer-RNG assertions passed
+unchanged through the recapture):
+
+- **Player pass** (`player_turn`): input decode + AI decide + ice-buffer push
+  + budget accrual + per-pixel mover now run as three sub-frames per tick.
+  Walk accrual keeps the original's truncation: `923×17/50 + 923×17/50 +
+  923×16/50 = 313+313+295 = **921**` per 50 ms — the stock walker is sub-1%
+  slower than the old flat 923, exactly as the original at 60 fps.
+  **[VERIFY]** whether the molasses ÷3 / hyper ×3/2 factors multiply the raw
+  speed before the delta division or the per-frame accrual after it — the
+  two orders differ by ≤1 unit per frame at sub-50 deltas (identical at 50);
+  the port scales the accrual (movement.cpp).
+- **AI cadence**: sub_40A1C6 fires per sub-frame — three decisions, three
+  whim rolls, three wander re-rolls per tick, restoring the original's
+  "frantic" temperature (the user-visible complaint that motivated this).
+  Pursuit timers (+12/+28) accrue the ms delta and time out at
+  `10 × [0x46494C]` = 500 ms wall clock (brain.hpp). The danger/obstacle
+  grids stay cached per tick — the original rebuilds per frame, but bombs/
+  flames are static between our sub-frames, so one build is identical.
+- **Head stun**: `+58` burns once per frame → 16-frame head hit ≈ 267 ms
+  (was 800 ms — 3× too long). Gate-then-decrement order preserved
+  (`if (+58>0) { block input; --+58 }`).
+- **Ice buffer**: pushed per sub-frame; the 30-slot history spans ~500 ms,
+  its original capacity at 60 fps (was 1.5 s at one push per tick).
+- **Rovers/ghosts** (`sub_401B5C`): `budget += speed×delta/50 + 100` per
+  frame → the flat +100 term triples to +300/tick. Rovers/ghosts now
+  visibly outpace a same-speed walker, as in the original (the old port ran
+  them at a third of their real pace). Folding the three accruals into one
+  pass is exact: the field is static during the rover pass, so the pixel
+  sequence (and its centre-tile RNG draws) is unchanged by instalment size.
+- **Conveyor term**: `getvalue(190+idx) × delta / 50` per sub-frame (exact
+  totals for the shipped belt speeds, which are divisible).
+
+**Deliberately still tick-quantized** (each ≤50 ms of phase, invisible, and
+kept to bound the blast radius): the LABEL_246 bomb-action tail runs once per
+tick with the AI's action-key presses OR-latched across its sub-frames (all
+four blocks are edge-gated, so only the auto-drop diseases' intra-tick
+attempt density differs); HUMAN direction sampling stays one sample per tick
+(the shell's per-frame tap latch already covers the edge-consumed action
+keys; a per-sub-frame direction feed would change the TickInputs contract —
+possible follow-up); sliding/flying bombs integrate their three accruals in
+one pass (exact, same argument as rovers — kicked speed 1000 divides
+evenly); and cross-entity interleaving stays entity-serialized within the
+tick (the original interleaves whole passes per frame).
+
+(Provenance: in-match-shell.md's sub_42A191 per-frame findings + 14-16 ms tap
+measurements; facts.md "Speed = a spent budget" [`speed × frameDelta /
+0x46494C`], "Movers advance the counter once per pixel-step" [rover budget
+`+= speed*dt/msPerFrame + 100`], the +78 state-machine audit's 22982-22984
+stun block and +80/+82 accumulator idiom, ai.md §3.6/§3.5's `+= frameDelta`
+timers and `10*dword_46494C` timeouts, "Ice / input-lag"'s per-frame
+age/shift/insert; live A/B against the shipped original on the reference
+install, 2026-07-12. Port: constants.hpp kSubFrames/kSubFrameMs/frame_budget,
+simulation.cpp player_turn, movement.cpp, stage_actors.cpp, ai.cpp/brain.hpp,
+rovers.cpp; tests test_move/test_conveyor/test_disease/test_state_machine/
+test_placement_diag/test_ai updated to the frame model; goldens B/C/D/E and
+the visual goldens recaptured, A byte-identical. ADR-0006.)
+
+## AI danger map — under-population audit, PORTED (2026-07-12, `sub_42331C` tail stamp / `sub_40970B` / `sub_40B20F`)
+
+User live-comparison: the original's AIs are visibly more active/jittery even
+after the canonical-frame-cadence port tripled the decide rate. A full
+differential re-read of the danger-map WRITERS and the flee path found the
+port's danger grid under-populated and under-scaled — danger is the one input
+that forces behaviour 2 (the reliable mover), so the original spends more
+time skittering while ours idled in the calm wander regime. Six findings, all
+ported in `ai.cpp` (goldens carry no AI players; all 42 suites stayed green):
+
+1. **Flying bombs stamp danger.** The per-bomb tail stamp (pseudo.c
+   25683-25705) gates only on the ACTIVE flag and the carried-pass parity —
+   motion is never tested — so a punched/thrown bomb casts its full blast
+   prediction from its instantaneous arc tile every frame. The port's
+   `|| b.flying` skip (with a wrong "airborne bombs cast no prediction"
+   comment) made AIs stand calmly under a sailing bomb.
+2. **Carried bombs stamp danger from the carrier's tile.** The carried pass
+   (`sub_42331C(1, ·)` at 25784, called per frame at 29530) runs the same
+   tail stamp — enemies scatter around a bomb-carrying player. Our carried
+   bombs are deactivated slots (`try_grab`), so the port now stamps them off
+   `Player::carrying`/`carried_flame`; the elapsed term is approximated at 0
+   (no carry-age counter; the throw restarts the fuse anyway).
+3. **The danger value is elapsed MILLISECONDS + 100** (`v = +68 + 100`,
+   25685; +68 accrues the per-frame ms delta) — range 100..~2100 over a 2 s
+   fuse, so cross-source ordering against the closing walls (110..250) and
+   flame (1000) depends on the ms scale. The port's tick-based 100..~140
+   ranked every bomb below the walls, flipping flee-route choices whenever
+   sources compete (hurry-up especially). Now `(fuse_init - fuse) * 50`; a
+   waiting trigger bomb (unbounded +68 accrual in the original) is
+   approximated at a full fuse's worth — past the point it outranks flame,
+   as an aged trigger bomb genuinely does.
+4. **The flee/danger branch never passes down.** `sub_40970B` inits its
+   best-tracker at 10000 (9936) — with any open neighbour it returns a step;
+   firstdir is null only when fully boxed in — and `sub_40B20F` 10816-10829
+   always latches `+2=1` after the BFS, standing (godir -1, own tile as
+   target, return 1) when `here <= min`. Behaviours 3-7 never run in that
+   state: no whim draws, no bomb drops, no wander re-rolls while standing in
+   inescapable danger. The port's start-danger init + pass-down did all of
+   those — an RNG-stream and activity divergence, now mirrored exactly.
+5. **Flee BFS ring cap = 20** (`a4`, 10048-10053), best-so-far kept. The
+   port's frontier had only the 100-node cap.
+6. **The enclosure lookahead burns an iteration per corner turn**
+   (27201-27223: the candidate exiting the ring turns the cursor and
+   re-stamps the pre-turn tile with the already-decayed value) — near
+   corners it covers fewer than 15 distinct future bricks. Ported via a
+   direction-change detector over the spiral positions; the ring-advance
+   diagonal counts as a turn (documented approximation of the
+   ++ring/++x/++y branch).
+
+Verified-faithful in the same audit (no change): the wander behaviour's
+exact structure, sub_40A59D/sub_40A76E/sub_424D37, the dispatcher's
+hold-still semantics (the caller presets godir -1 and resets the key bytes
+per frame — "keeps last direction" is disproven), every behaviour whim/gate
+polarity, the BFS RNG contract, and the flame 1000 stamps. Tests:
+tests/test_ai.cpp "2026-07-12 danger-map fix" pair (flying + carried).
+
+## Ice buffer flows through flight states — PORTED (2026-07-12 follow-up to "Ice / input-lag")
+
+Same-day audit of the Hockey Rink report: the ice block (sub_41F29B
+23058-23078) sits ABOVE the player-state dispatch, so it ages/pushes/resolves
+every frame in EVERY alive state — a bouncing/warping player pushes that
+frame's -1 godir (offset 46 is reset to -1 at 22980 before the gated input
+read). The port froze the buffer during bounce/warp (early-return before
+`ice_delay`), so landing on an icy level replayed up to 250 ms of stale
+PRE-flight direction — a phantom movement burst the original doesn't have.
+Fixed: the bounce/warp branches and the mid-turn flight `continue` now push
+-1 per sub-frame (`simulation.cpp`; a no-op on every delay-0 level, keeping
+the hashed `ice_history` untouched there).
+
+Confirmed in the same pass: VALUELST 450-460 are wall-clock MILLISECONDS
+(the file's own legend; only 452 = Hockey Rink is non-zero, 250), the ages
+accrue the real frame delta, and the resolve compares them raw — our
+sub-frame model reproduces the designed 250 ms exactly at any 20-120 fps
+frame rate. CAVEAT (open observation, not ported): the original's buffer is
+30 REAL FRAMES, so on an uncapped fast machine its effective lag collapses to
+~30 frames' wall time (min(250 ms, span)) — a natively-running BM95.EXE at
+very high fps feels LESS icy than its own design. If A/B feel-parity against
+the native Win11 run (rather than the designed 250 ms) is ever wanted,
+measure that run's real frame rate first and clamp the delay to the 30-frame
+span at that rate.
+
 ## Still guessed — not yet extracted from the binary
 
 | Constant | Current value | Status |

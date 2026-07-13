@@ -1,5 +1,7 @@
 #include "bomber/game/bmscreen.hpp"
 
+#include "bomber/game/dialog_chrome.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <cstddef>
@@ -24,29 +26,38 @@ namespace {
 // The original draws into a 600x256-ish scroll window (sub_43C734(20,440,600,
 // 256,4)); we paint the same inset text over a dark panel spanning the logical
 // surface, since our front-end is RGBA rather than the paletted VGA page.
-constexpr int kTextTop = 34;
-constexpr int kTextLeft = 34;
+// The viewer WINDOW — CONFIRMED (chrome audit 2026-07-12): sub_43C734(20,
+// 440, 600, 256, 4) = y=20, h=440, w=600, x auto-centred -> (20, 20, 600,
+// 440), repainted every frame with the WINZ.PCX 9-patch (sub_41726B @
+// pseudo.c 16423) — the blue tiled border the user compared against. Text
+// insets 34/34 from the window origin (v37 = 34 @ 16437, v35 base 34 @
+// 16456) -> screen (54, 54); per-line clip budget 532 px (v59 @ 16406).
+constexpr float kWinX = 20.0f;
+constexpr float kWinY = 20.0f;
+constexpr float kWinW = 600.0f;
+constexpr float kWinH = 440.0f;
+constexpr int kTextTop = 54;   // kWinY + 34
+constexpr int kTextLeft = 54;  // kWinX + 34
+constexpr int kLineClipW = 532;
 constexpr int kVisibleHeight = 344;
 
-// The panel the text sits on. The original composites over the menu page; we
-// darken a full-width band so light text stays legible on any backdrop.
-constexpr float kPanelX = 16.0f;
-constexpr float kPanelY = 16.0f;
-constexpr float kPanelW = 608.0f;  // ~ the 600 px scroll window
-constexpr float kPanelH = 380.0f;
+// Text ink — CONFIRMED byte_49D38F pure white, drawn through the low-level
+// string blit dword_45C378 with NO outline (pseudo.c 16458-16461), unlike
+// every sub_41696C site. The old (230,230,210) tint was a port invention.
+constexpr Uint8 kInkR = 255, kInkG = 255, kInkB = 255;
 
-// Text ink. The original selects a palette index (byte_49D38F, the global draw
-// colour); in truecolour we render a light near-white so the .BM prose reads on
-// the dark panel. This is a cosmetic port choice (paletted VGA -> RGBA), noted
-// in docs/re/frontend-flow.md; layout/advance are the faithful part.
-constexpr Uint8 kInkR = 230, kInkG = 230, kInkB = 210;
+// The bottom control row (pseudo.c 16408-16412): five sub_432298 bevel
+// buttons at window-relative y=388, posting key codes when clicked — up/down
+// arrows (FONT6 glyphs \x18/\x19, EXE bytes @ 0x459148), "Page" variants,
+// and "Done". Drawn for parity; this port's viewer is keyboard-driven (the
+// same codes the buttons would post).
+constexpr float kButtonRowY = 388.0f;  // window-relative
 
-// HelpBrowser's list dialog ink — the general white draw colour byte_49D38F
-// (docs/re/results-and-options.md §4/§5, the SAME ink SchemeFilePicker's own
-// list dialog uses at the identical (100, 100) sub_41485A call site).
+// HelpBrowser's list dialog item ink — the general white draw colour
+// byte_49D38F (§4/§5, the SAME ink SchemeFilePicker's own list dialog uses
+// at the identical (100,100) sub_41485A call site); the SELECTED row inverts
+// to the dark base coat over a light band (draw_list_selection).
 constexpr Uint8 kListInkR = 255, kListInkG = 255, kListInkB = 255;
-constexpr Uint8 kListSelR = 255, kListSelG = 220, kListSelB = 80;
-constexpr Uint8 kListHintR = 160, kListHintG = 160, kListHintB = 160;
 
 // The browser's two error dialogs (§4: "manual disabled" getstring(5)/(95),
 // "no .BM files found" getstring(4)/(95)) draw in byte_49D0DA — PINNED in
@@ -130,6 +141,31 @@ float FontTextures::draw(SDL_Renderer* ren, const std::string& s, float x, float
     return x;
 }
 
+float FontTextures::draw_outlined(SDL_Renderer* ren, const std::string& s, float x, float y,
+                                  Uint8 r, Uint8 g, Uint8 b, Uint8 outline_r, Uint8 outline_g,
+                                  Uint8 outline_b, float max_w) const {
+    // Clip the run to max_w pixels of advance (sub_41696C 18542-18551): stop
+    // at the first glyph whose advance would cross the limit.
+    std::string run = s;
+    if (max_w > 0) {
+        float w = 0;
+        std::size_t n = 0;
+        for (char ch : s) {
+            const int a = advance(static_cast<unsigned char>(ch));
+            if (w + static_cast<float>(a) > max_w) break;
+            w += static_cast<float>(a);
+            ++n;
+        }
+        run = s.substr(0, n);
+    }
+    // Four outline passes (the (w+2) scratch buffer pins ±1 horizontally; see
+    // the header comment), then the ink pass on top.
+    static constexpr float kOff[4][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+    for (const auto& o : kOff)
+        draw(ren, run, x + o[0], y + o[1], outline_r, outline_g, outline_b);
+    return draw(ren, run, x, y, r, g, b);
+}
+
 // --- BmScreen -------------------------------------------------------------
 
 void BmScreen::enter(const std::string& bm_name) {
@@ -163,10 +199,10 @@ void BmScreen::on_key(SDL_Keycode key) {
     switch (key) {
         case SDLK_RETURN:
         case SDLK_KP_ENTER:
-        case SDLK_SPACE:
         case SDLK_ESCAPE:
-            // Enter (13) and Escape (27) both finish the viewer in sub_41302D
-            // (LABEL_100 sets the done flag on 13/27); Space accepts too.
+            // Enter (13) and Escape (27) finish the viewer (sub_41302D
+            // 16530-16594). Space does NOT — 32 falls through every branch
+            // (CORRECTED 2026-07-12; the old Space-dismiss was invented).
             done_ = true;
             break;
         case SDLK_UP:
@@ -175,12 +211,17 @@ void BmScreen::on_key(SDL_Keycode key) {
         case SDLK_DOWN:
             if (top_ < max_scroll()) ++top_;  // one line down (v54++)
             break;
-        case SDLK_PAGEUP: {
+        case SDLK_PAGEUP:
+        case SDLK_LEFT: {
+            // Left (331) pages up alongside PgUp (329) — sub_41302D treats
+            // both identically (chrome audit 2026-07-12).
             top_ -= visible_rows() - 1;  // v54 -= v60 - 1
             if (top_ < 0) top_ = 0;
             break;
         }
-        case SDLK_PAGEDOWN: {
+        case SDLK_PAGEDOWN:
+        case SDLK_RIGHT: {
+            // Right (333) pages down alongside PgDn (337).
             top_ += visible_rows() - 1;  // v54 += v60 - 1
             int m = max_scroll();
             if (top_ > m) top_ = m;
@@ -193,11 +234,12 @@ void BmScreen::on_key(SDL_Keycode key) {
 
 void BmScreen::draw(SDL_Renderer* ren) const {
     if (!ren) return;
-    // Dark panel behind the text (see kPanel* rationale above).
-    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(ren, 0, 0, 0, 200);
-    SDL_FRect panel{kPanelX, kPanelY, kPanelW, kPanelH};
-    SDL_RenderFillRect(ren, &panel);
+    // The WINZ-9-patch viewer window (see the kWin* block above) — the
+    // original repaints it every dirty frame (sub_41726B @ 16423); the old
+    // translucent black band was a port stand-in from before the 9-patch
+    // primitive existed.
+    draw_dialog_chrome(ren, DialogRect{kWinX, kWinY, kWinW, kWinH},
+                       assets_ ? &assets_->frontend_pcx("WINZ") : nullptr);
 
     if (!font_ || !font_->loaded()) return;
     const int lh = font_->line_height();
@@ -207,7 +249,9 @@ void BmScreen::draw(SDL_Renderer* ren) const {
     // One screen row per line, from the current top. Each line lays its
     // segments left to right: text runs are drawn with the font, an <IMG>
     // segment blits the named PCX inline and advances the pen by its width —
-    // exactly sub_41302D's per-line split-at-tag draw.
+    // exactly sub_41302D's per-line split-at-tag draw, clipped to the 532-px
+    // line budget (v59).
+    const float clip_right = static_cast<float>(kTextLeft + kLineClipW);
     for (int j = 0; j < vis; ++j) {
         int li = top_ + j;
         if (li < 0 || li >= total) continue;
@@ -215,7 +259,19 @@ void BmScreen::draw(SDL_Renderer* ren) const {
         float x = static_cast<float>(kTextLeft);
         for (const auto& seg : doc_.lines[static_cast<std::size_t>(li)]) {
             if (seg.is_text()) {
-                x = font_->draw(ren, seg.value, x, y, kInkR, kInkG, kInkB);
+                // Trim the run to the remaining clip budget (sub_41302D
+                // consumes v59 per glyph advance).
+                std::string run = seg.value;
+                float w = 0;
+                std::size_t n = 0;
+                for (char ch : run) {
+                    const int a = font_->advance(static_cast<unsigned char>(ch));
+                    if (x + w + static_cast<float>(a) > clip_right) break;
+                    w += static_cast<float>(a);
+                    ++n;
+                }
+                run.resize(n);
+                x = font_->draw(ren, run, x, y, kInkR, kInkG, kInkB);
             } else {
                 // Inline image: look it up as a front-end PCX by its base name
                 // (case as written; the install FS was case-insensitive). Blit
@@ -231,6 +287,15 @@ void BmScreen::draw(SDL_Renderer* ren) const {
             }
         }
     }
+
+    // Bottom control row (pseudo.c 16408-16412), window-relative x per the
+    // original's literals: \x18 @30, \x19 @60, "Page \x18" @120,
+    // "Page \x19" @190, "Done" @516.
+    draw_dialog_button(ren, *font_, kWinX + 30.0f, kWinY + kButtonRowY, "\x18");
+    draw_dialog_button(ren, *font_, kWinX + 60.0f, kWinY + kButtonRowY, "\x19");
+    draw_dialog_button(ren, *font_, kWinX + 120.0f, kWinY + kButtonRowY, "Page \x18");
+    draw_dialog_button(ren, *font_, kWinX + 190.0f, kWinY + kButtonRowY, "Page \x19");
+    draw_dialog_button(ren, *font_, kWinX + 516.0f, kWinY + kButtonRowY, "Done");
 }
 
 // --- HelpBrowser ------------------------------------------------------------
@@ -291,6 +356,22 @@ void HelpBrowser::on_key(SDL_Keycode key, AudioEngine& audio) {
             row_ = (row_ + 1) % count;
             audio.play(20);
             break;
+        case SDLK_PAGEUP:
+            row_ = std::max(0, row_ - kVisibleRows);  // 329
+            audio.play(20);
+            break;
+        case SDLK_PAGEDOWN:
+            row_ = std::min(count - 1, row_ + kVisibleRows);  // 337
+            audio.play(20);
+            break;
+        case SDLK_HOME:
+            row_ = 0;  // 327
+            audio.play(20);
+            break;
+        case SDLK_END:
+            row_ = count - 1;  // 335
+            audio.play(20);
+            break;
         case SDLK_RETURN:
         case SDLK_KP_ENTER:
         case SDLK_SPACE:
@@ -307,6 +388,20 @@ void HelpBrowser::on_key(SDL_Keycode key, AudioEngine& audio) {
             done_ = true;
             break;
         default:
+            // Letter-jump (sub_42FEB0 @ 32603): a printable key selects the
+            // first entry whose filename starts with it (case-insensitive).
+            if (key >= SDLK_A && key <= SDLK_Z) {
+                const char want = static_cast<char>('a' + (key - SDLK_A));
+                for (int i = 0; i < count; ++i) {
+                    std::string f = entries_[static_cast<std::size_t>(i)].filename().string();
+                    if (!f.empty() &&
+                        std::tolower(static_cast<unsigned char>(f[0])) == want) {
+                        row_ = i;
+                        audio.play(20);
+                        break;
+                    }
+                }
+            }
             break;
     }
     if (row_ < top_) top_ = row_;
@@ -323,52 +418,57 @@ void HelpBrowser::draw(SDL_Renderer* ren) const {
         return;
     }
     // No backdrop paint here (class doc): sub_41485A's list is a floating
-    // panel, not a screen cut. A small scrim behind the text keeps it legible
-    // over whatever the caller drew (the menu art, or the frozen match
-    // field) — a cosmetic RGBA concession, same rationale as BmScreen's own
-    // dark panel (paletted VGA -> truecolour, docs/re/frontend-flow.md).
-    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(ren, 0, 0, 0, 190);
-    SDL_FRect panel{84.0f, 84.0f, 460.0f,
-                     124.0f + static_cast<float>(kVisibleRows) * 20.0f + 24.0f - 84.0f};
-    SDL_RenderFillRect(ren, &panel);
+    // panel composited over whatever the caller drew (the menu art, or the
+    // frozen match field).
     if (!font_ || !font_->loaded()) return;
     if (disabled_ || entries_.empty()) {
-        // §4's two gated error dialogs, both drawn through sub_414340 in ink
-        // byte_49D0DA (PINNED, kErrorInk* above — the RGB (252,80,80) team-1
-        // red, decoded from the RGB555 LUT and confirmed to be the SAME
-        // global sub_4141F8 returns for team-1 players). Only the first line
-        // differs: "manual disabled" = getstring(5), "no .BM files found" =
-        // getstring(4); both share the getstring(95) second line ("NOTE!").
-        const std::string first =
+        // §4's two gated error dialogs, both drawn through sub_414340 — the
+        // WINZ-9-patch acknowledge box (draw_acknowledge_dialog) with an " Ok "
+        // button, ink byte_49D0DA (RGB (252,80,80) team-1 red). "manual
+        // disabled" = getstring(5), "no .BM files found" = getstring(4); both
+        // share getstring(95) "NOTE!" as the header. (The old bare red text at
+        // (100,100) with no chrome was a port stand-in.)
+        const std::string body =
             assets_ ? assets_->getstring(disabled_ ? 5 : 4,
                                           disabled_ ? "Online manual disabled."
                                                     : "No help files found!")
                     : std::string(disabled_ ? "Online manual disabled." : "No help files found!");
-        const std::string second =
+        const std::string head =
             assets_ ? assets_->getstring(95, "NOTE!") : std::string("NOTE!");
-        font_->draw(ren, first, 100.0f, 100.0f, kErrorInkR, kErrorInkG, kErrorInkB);
-        font_->draw(ren, second, 100.0f, 124.0f, kErrorInkR, kErrorInkG, kErrorInkB);
+        const std::string ok = assets_ ? assets_->getstring(90, " Ok ") : std::string(" Ok ");
+        draw_acknowledge_dialog(ren, *font_, assets_ ? &assets_->frontend_pcx("WINZ") : nullptr,
+                                head, body, ok, kErrorInkR, kErrorInkG, kErrorInkB);
         return;
     }
-    // sub_41485A at (100, 100), header getstring(600) — the SAME dialog
-    // primitive/coordinates SchemeFilePicker's *.SCH picker uses (§4/§5).
+    // The generic bevel list dialog (sub_42DBCC) at y=100, header
+    // getstring(600) — the SAME primitive/coords SchemeFilePicker's *.SCH
+    // picker uses (§4/§5). Width fits the widest of header/entries.
     const std::string header = assets_ ? assets_->getstring(600, "Available help files:")
                                         : std::string("Available help files:");
-    font_->draw(ren, header, 100.0f, 100.0f, kListInkR, kListInkG, kListInkB);
     int count = static_cast<int>(entries_.size());
-    int last = std::min(count, top_ + kVisibleRows);
+    float content_w = static_cast<float>(font_->measure(header));
+    for (const auto& e : entries_)
+        content_w = std::max(content_w, static_cast<float>(font_->measure(e.filename().string())));
+    content_w = std::max(content_w, 200.0f);
+
+    const int last = std::min(count, top_ + kVisibleRows);
+    const int visible = last - top_;
+    const ListDialogLayout lay =
+        draw_list_dialog(ren, *font_, header, 100.0f, content_w, kVisibleRows, count, top_);
     for (int i = top_; i < last; ++i) {
-        bool sel = (i == row_);
-        Uint8 r = sel ? kListSelR : kListInkR, g = sel ? kListSelG : kListInkG,
-              b = sel ? kListSelB : kListInkB;
-        std::string line =
-            (sel ? "> " : "  ") + entries_[static_cast<std::size_t>(i)].filename().string();
-        font_->draw(ren, line, 100.0f, 124.0f + static_cast<float>(i - top_) * 20.0f, r, g, b);
+        const int vi = i - top_;
+        const bool sel = (i == row_);
+        const float ty = lay.item_y0 + static_cast<float>(vi) * lay.item_h;
+        std::string name = entries_[static_cast<std::size_t>(i)].filename().string();
+        if (sel) {
+            // Inverted-band selection: dark base-coat ink over the light band.
+            draw_list_selection(ren, lay, vi);
+            font_->draw(ren, name, lay.item_x, ty, kDialogFillR, kDialogFillG, kDialogFillB);
+        } else {
+            font_->draw(ren, name, lay.item_x, ty, kListInkR, kListInkG, kListInkB);
+        }
     }
-    font_->draw(ren, "UP/DOWN SELECT   ENTER OPEN   ESC CANCEL", 100.0f,
-                124.0f + static_cast<float>(kVisibleRows) * 20.0f + 8.0f, kListHintR, kListHintG,
-                kListHintB);
+    (void)visible;
 }
 
 }  // namespace bomber::game

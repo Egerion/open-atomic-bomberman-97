@@ -56,6 +56,14 @@ void AudioEngine::start_music(int id) {
                            static_cast<int>(music_.samples.size() * 2));
 }
 
+void AudioEngine::stop_music() {
+    // The analogue of the original's sub_427342 "free the music handle": the
+    // current track stops and nothing loops until the next start_music().
+    // Clearing music_ makes update_music() a no-op (its empty() guard).
+    music_.samples.clear();
+    if (ok_ && music_stream_) SDL_ClearAudioStream(music_stream_);
+}
+
 void AudioEngine::update_music() {
     if (!ok_ || !music_stream_ || music_.samples.empty()) return;
     const int refill_below =

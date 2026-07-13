@@ -12,14 +12,14 @@ install and are never committed (clean-room, same as every other asset).
 
 The key-remap UI this doc's CORRECTION left as "elsewhere" is now located:
 **`sub_407B9D` @ 0x407B9D**, reached from the Options screen's (`sub_4080DC`)
-"Define keyboard layouts" row — a 2×6 clickable button grid, one keyboard set
-× six actions, each rebindable via a raw-scancode capture
+"Define keyboard layouts" row — a MOUSE-driven 2×6 clickable button grid,
+two keyboard sets × six actions, each rebindable via a raw-scancode capture
 (`sub_407AD9`/`byte_4A2BA0[256]`). Bindings live in the same
 `dword_4645BC[10*set+action]` array `options.ini`'s `keydef=` reads/writes,
 and are flushed to disk on normal app exit (an atexit-style hook,
 `sub_405DE3`), not on screen close. Full RE: `docs/re/results-and-options.md`
-§2 (remap UI) and §3 (the Options screen + the complete 22-key options.ini
-table). This resolves the open item and confirms `sub_42B0CE`/`sub_42B47D`
+§2 (remap UI, incl. the 2026-07-13 mouse/cursor/defaults corrections) and §3
+(the Options screen + the complete 22-key options.ini table). This resolves the open item and confirms `sub_42B0CE`/`sub_42B47D`
 genuinely have nothing to do with key rebinding — they stay the START/JOIN
 NET GAME screens per the CORRECTION below.
 
@@ -40,7 +40,8 @@ getvalue ids):
   (category 0 / off), **221** (1), **222**+sub (2), **223**+sub (3), **224** (4),
   prefixed by the player label msg **51** (formatted with i+1). Drawn at
   getvalue(710)=x **70**, y = getvalue(711)=**170** + getvalue(712)=**24**·i,
-  colour getvalue(713). The cursor for the selected player (`v108`) is drawn via
+  clip width getvalue(713) (see the column-4 correction in the layout section
+  below). The cursor for the selected player (`v108`) is drawn via
   `sub_413BD6(x-15, …)`. In team mode (`dword_464964`) a team marker (msg **230**,
   `sub_4141F8`) is appended.
 - Joystick pane: heading msg **40** at getvalue(715)=**(300,140)**; per-joystick
@@ -193,18 +194,38 @@ see frontend-flow.md "Attract mode".
 
 ### Screen 1 — PLAYER INPUT TYPE SELECTION (`sub_410F81` @0x410F81)
 
-VALUELST legend (confirmed by the file's own comments before the 700 block):
+VALUELST legend (confirmed by the file's own comments before the 700 block).
+**Column-4 CORRECTION (2026-07-12 pixel-RE pass):** the 4th column is the CLIP
+WIDTH handed to the text primitive `sub_41696C` as its max-width argument
+(header 200, slot rows 150, joystick heading 170, joystick rows 320) — NOT a
+colour. Colour never comes from VALUELST on this screen: every string is
+drawn by `sub_41696C`'s 4-outline-passes + ink scheme (pseudo.c 18516-18572;
+the (w+2) scratch buffer pins the ±1 px outline), header/joystick pane in
+white `byte_49D38F` over black, slot rows in `sub_41672F(i)` (the slot's own
+.RMP-tail colour) over `sub_416867(i)` (black; WHITE for slot 1, the black
+player — docs/re/player-colour.md CORRECTION), and the centred footer
+`getstring(330)` "Press F1 for help" at VALUELST 790 = (320,440) in cyan
+`byte_497F8F` (96,252,252). There is NO state dimming (OFF/COM rows keep full
+ink) and NO selected-row recolour — the selection is marked solely by the
+bomber-dude cursor `sub_413BD6` (MISC.ANI "cursor1", hotspot-anchored at
+`getvalue(710)-15, row_y` — this screen alone uses -15; options/level use
+-20; idle step 0, timed blink per VALUELST 690 = {base 2, spread 2} seconds,
+one step per rendered frame). F1 (key 0x13B, 15432-15436) opens the generic
+sub_41431C *.BM browser. All ported 2026-07-12 (present_setup rewrite:
+outlined text, real colours, cursor1 indicator, footer, F1; the invented
+grey joystick pane, +70 selected-row boost and key-legend line removed).
 ```
 ; PLAYER INPUT TYPE SELECTION:
 705, 40,140,  0,200   ; text heading of player input type listings
-710, 70,170, 24,150   ; actual listing of player input types  (x, y0, ystep, colour)
+710, 70,170, 24,150   ; actual listing of player input types  (x, y0, ystep, W)
 715,300,140,  0,170   ; text heading of available joysticks
 720,320,170, 24,320   ; actual listing of available joysticks
 ```
 
 - **Backdrop:** random `GLUE<n>` via `sub_4148E5()` (getvalue 16 = 7). **Music:**
   1020 (inherited from `sub_42A3F6`; the screen starts no track). Header
-  `getstring(50)` at getvalue(705) = **(40,140)**, colour getvalue(706).
+  `getstring(50)` at getvalue(705) = **(40,140)**, clip width getvalue(708)=200
+  (white/black-outline ink — see the column-4 correction above).
 - **10-slot list** (`for i in 0..9`): `sub_421DD2(i, &type, &sub)` reads
   **type = player byte +16**, **sub = byte +17** from `dword_461BC4[38*i]`
   (152 B/player). Line by category:
@@ -213,10 +234,12 @@ VALUELST legend (confirmed by the file's own comments before the 700 block):
   - `type==3` → `getstring(223)` + sub (**JOYSTICK %u**)
   - `type==4` → `getstring(224)` (**OTHER**)
   - else (0) → `getstring(220)` (**OFF**)
-  Prefixed by `getstring(51)` formatted with `i+1` (the "Player %u" label).
-  Drawn at x = getvalue(710) = **70**, y = getvalue(711)=**170** +
-  getvalue(712)=**24**·i, colour getvalue(713)=**150**. Cursor for the selected
-  slot (`v108`) via `sub_413BD6(getvalue(710)-15, …)`.
+  The row is ONE combined sprintf of `getstring(51)` = "Player %u: %s" with
+  args (i+1, typetext) — pseudo.c 15169-15195 (a two-piece concat leaves a
+  literal "%s" on screen with the real MESSAGES.TXT). Drawn at x =
+  getvalue(710) = **70**, y = getvalue(711)=**170** + getvalue(712)=**24**·i,
+  clip width getvalue(713)=**150**. Cursor for the selected slot (`v108`) via
+  `sub_413BD6(getvalue(710)-15, …)`.
 - **COLOUR is per-slot and IMPLICIT — there is NO colour picker on this screen.**
   Each of the 10 slots has a **fixed colour keyed by its index**: VALUELST
   **200-247** are RGB triplets (stride 5) with the file's own comments
@@ -404,12 +427,15 @@ sub_4151AD();          // apply the CURRENT (glue) palette — no new backdrop
      `byte_49D38F` (a fixed UI ink, not level-dependent — the same byte
      `sub_4141F8` uses for the "team 2" tint elsewhere in this doc).
    - `sub_4152D7(&field[12*640], v18-20, XSize*40+20, v19-18, YSize*36+18,
-     …)` — crops the top 12 scanlines off the 640-wide field bitmap and
-     stretch-blits the remainder to fill a panel sized `(XSize*40+20) ×
-     (YSize*36+18)` at `(v18-20, v19-18)`. In effect: **the selected level's
-     FIELD background image, stretched to fill a panel just behind/around
-     the block grid** — a colour swatch of "what this level's backdrop looks
-     like", not gameplay geometry.
+     …)` — CORRECTED 2026-07-12 (level&rounds audit): the source expression
+     indexes an `int*`, so `12*640` int elements = **48 scanlines**, not 12;
+     and `sub_4152D7` -> `sub_4428B4` (pseudo.c 47637-47641) is a **plain
+     1:1 rect copy, NOT a stretch**. So: a 220×198 crop of FIELDn.PCX
+     starting at (0,48), copied to (v18-20, v19-18) = (380,82) — which puts
+     the backdrop's own board grid (origin (20,68)) flush under the drawn
+     tile cells (dest inset +20,+18). The earlier "12 scanlines +
+     stretch-blit" reading is superseded. Border fill = the general white
+     `byte_49D38F` (240,248,252).
 2. **The 5×5 block grid** — `for (i in 0..YSize) for (j in 0..XSize)` at
    cell `(v18 + 40*j, v19 + 36*i)` (40×36 = the same `TILEn.ANI` cell pitch
    the in-match renderer uses, `sim::kTileW/kTileH` — **no stretching**, 1:1
@@ -441,10 +467,14 @@ sub_4151AD();          // apply the CURRENT (glue) palette — no new backdrop
 **Reproduction note:** this is cosmetic set-dressing (a random illustrative
 maze pattern + the level's own tile art), not the level's actual layout —
 faithfully reproducing the checkerboard/4-in-5-brick/2×2-clear-corner rule
-and the per-cell RANDOM tileset re-roll is what "1:1" means here; the exact
-12px field crop is a minor pixel-level nicety the port approximates by
-stretching the whole `FIELD<n>` texture into the panel rect instead (a
-cosmetic simplification, not a gameplay fact).
+and the per-cell RANDOM tileset re-roll is what "1:1" means here. PORTED
+2026-07-12: the port now also does the exact 48-row 1:1 crop (the old
+whole-texture stretch is gone), the white border fill, the outlined white
+row text with the cursor1 sprite as the ONLY selection marker, the
+getstring(211) "%u %s to win match" wins line (208/209 Wins/Kills), the
+centred cyan F1 footer, Space-accept + the 1 s accept debounce, Ctrl+arrow
+±5 wins, F1 -> help browser, and Escape discarding the working level/wins
+copies (present_map_select, game_app.cpp).
 
 ### Message IDs the two screens use (purpose only; text stays in the file)
 

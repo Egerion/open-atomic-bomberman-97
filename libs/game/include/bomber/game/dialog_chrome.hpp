@@ -83,11 +83,79 @@ void draw_dialog_text(SDL_Renderer* ren, const FontTextures& font, const std::st
 // face = the window base coat washed toward white by sub_442C28's brightness
 // ramp -> (108,112,108), two-ring inset bevel at insets 1 and 2 (light
 // top/left (108,116,128), dark bottom/right (60,68,56) — the raised "up"
-// state, the only one drawn here), 1-px black outline, label ink
-// dword_45C478 -> idx 178 -> (168,168,164). `x, y` are WINDOW-relative
-// top-left pixels.
+// state), 1-px black outline, label ink dword_45C478 -> idx 178 ->
+// (168,168,164). `x, y` are WINDOW-relative top-left pixels. `pressed`
+// draws the "down" bitmap instead (pseudo.c 35238-35256): the SAME
+// construction with the bevel colour pair SWAPPED and WITHOUT the
+// sub_442C28 wash — only the "up" bitmap gets the lightened face, so the
+// pressed face is the raw base coat (88,84,80).
 void draw_dialog_button(SDL_Renderer* ren, const FontTextures& font, float x, float y,
-                        const std::string& label);
+                        const std::string& label, bool pressed = false);
+
+// A 1-px beveled rectangle in the shared UI palette (sub_44240C): the raised
+// ("up" — light top/left, dark bottom/right) or sunken (swapped) frame the
+// generic list dialog draws around its panel, title strip, scrollbar track
+// and thumb. Fills the interior with (face_*) first, then the two 1-px bevel
+// strips. Bevel colours are the button widget's own dword_45C470/45C474.
+void draw_bevel_rect(SDL_Renderer* ren, float x, float y, float w, float h, bool raised,
+                     Uint8 face_r, Uint8 face_g, Uint8 face_b);
+
+// Layout returned by draw_list_dialog so the caller can place its item text
+// and the inverted selection band on top of the chrome.
+struct ListDialogLayout {
+    DialogRect win;   // full window rect (x auto-centred)
+    float item_x;     // left edge of item text
+    float item_y0;    // baseline y of the first visible item
+    float item_h;     // per-row pitch (one font line)
+    float item_w;     // item text column width (selection-band width)
+    float done_x;     // "Done" button window-x
+    float done_y;     // "Done" button window-y
+    bool has_scrollbar;
+};
+
+// The generic bevel LIST dialog — sub_42DBCC (chrome audit, docs/re/
+// results-and-options.md §4): a 1-px black outer rect, a raised bevel, a
+// SUNKEN title strip at (5,5) with the centred grey title
+// (byte_495390[dword_45C478] = (168,168,164)), a dark item area
+// (dword_45C46C = the base coat), a right-hand scrollbar (arrow buttons +
+// sunken track + proportional bevel thumb) when total_rows > visible_rows,
+// and a centred "Done" button at the bottom. Draws the chrome ONLY and
+// returns the layout; the caller draws item text (its own ink) and the
+// selection as an inverted band (draw_list_selection). `y_px` is the window
+// top (100 for the help/scheme pickers); the window is horizontally centred
+// and `content_w` px wide.
+ListDialogLayout draw_list_dialog(SDL_Renderer* ren, const FontTextures& font,
+                                  const std::string& title, float y_px, float content_w,
+                                  int visible_rows, int total_rows, int top_row);
+
+// The selection highlight for a list row — the original inverts the video
+// under the selected item (sub_442C28). In truecolour we approximate that
+// with a filled bevel-light band the caller draws its item text over in the
+// dark base-coat ink; `row_index` is 0-based within the visible window.
+void draw_list_selection(SDL_Renderer* ren, const ListDialogLayout& lay, int visible_index);
+
+// sub_414340 — the ACKNOWLEDGE modal (PINNED from the body, pseudo.c
+// 17003-17107): two centered lines (top = the EAX/LODWORD arg — getstring(95)
+// "NOTE!" at every UI call site — bottom = the EDX/HIDWORD arg), width =
+// max(measure(top), measure(bottom), 80) + 64, height = 4*fontheight + 64 +
+// linesHeight (2*fontheight when both lines are non-empty), vertically AND
+// horizontally centered, WINZ 9-patch (sub_41726B @ 17070), lines at
+// window-relative y = fontheight+32 and +fontheight+2 more, centered via
+// sub_4172BA's `cx - (w+2)/2`, and ONE sub_432298 button labelled
+// getstring(27) " Ok " at x = width/2 - 32, y = height - 32 - fontheight - 6,
+// widget id 27 (clicking posts the Esc code). Its key loop plays the nav
+// blip (sub_427961(20)) for ANY real key and closes only on Enter(13)/
+// Space(32)/Esc(27) — the CALLER owns that loop; these helpers only draw.
+DialogRect acknowledge_dialog_rect(const FontTextures& font, const std::string& top,
+                                   const std::string& bottom);
+// The Ok button's screen-space rect inside `win` (sub_432298's text-derived
+// size at sub_414340's pinned position) for callers that hit-test the click.
+DialogRect acknowledge_ok_rect(const FontTextures& font, const DialogRect& win,
+                               const std::string& ok_label);
+void draw_acknowledge_dialog(SDL_Renderer* ren, const FontTextures& font, const Sprite* winz,
+                             const std::string& top, const std::string& bottom,
+                             const std::string& ok_label, Uint8 ink_r, Uint8 ink_g, Uint8 ink_b,
+                             bool ok_pressed = false);
 
 // The sub_41456C confirm-dialog family (PINNED geometry, pseudo.c
 // 17128-17277): vertically AND horizontally centered, height = `4*fontheight

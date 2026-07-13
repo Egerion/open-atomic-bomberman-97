@@ -52,6 +52,19 @@ public:
     float draw(SDL_Renderer* ren, const std::string& s, float x, float y, Uint8 r, Uint8 g,
                Uint8 b) const;
 
+    // The original front-end text primitive sub_41696C (pseudo.c 18516-18572)
+    // renders every string FIVE times: four passes in the outline colour and
+    // one ink pass on top, into a scratch (w+2)-wide buffer — i.e. every
+    // frontend string carries a 1-px outline — and CLIPS the run to `max_w`
+    // pixels (its 4th argument; VALUELST rows 705/710/715/720/790 column 3).
+    // The decompile's vararg mangling loses the four passes' exact offsets;
+    // the (w+2) buffer pins the horizontal reach at ±1, so the four cardinal
+    // 1-px offsets are used here. max_w <= 0 disables the clip. Returns the x
+    // just past the ink run.
+    float draw_outlined(SDL_Renderer* ren, const std::string& s, float x, float y, Uint8 r,
+                        Uint8 g, Uint8 b, Uint8 outline_r, Uint8 outline_g, Uint8 outline_b,
+                        float max_w = 0) const;
+
 private:
     struct GlyphTex {
         SDL_Texture* tex = nullptr;  // owned via owners_ below; null for blanks
@@ -162,7 +175,10 @@ public:
     // (getstring(5)/getstring(95)), checked ahead of the glob (§4).
     bool disabled() const { return disabled_; }
 
-    static constexpr int kVisibleRows = 13;  // sub_42DBCC's 13-row dialog
+    // sub_42DBCC tries heights 13*line_h+22 down to 9 and takes visible =
+    // attempt-3, capped at 10 (chrome audit §3). 10 is the steady-state
+    // count for a list that overflows.
+    static constexpr int kVisibleRows = 10;
 
 private:
     const AssetStore* assets_ = nullptr;

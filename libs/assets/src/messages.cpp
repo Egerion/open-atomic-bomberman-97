@@ -36,7 +36,16 @@ void parse_stream(std::istream& in, Messages& m) {
             // Everything after the FIRST comma is the message text, kept as-is
             // apart from surrounding whitespace (it may contain commas and %
             // specifiers). No ';'-truncation — the text is the payload.
-            m.strings[id] = trim(raw.substr(comma + 1));
+            std::string val = trim(raw.substr(comma + 1));
+            // MESSAGES.TXT quotes SOME payloads and not others (e.g.
+            // `50,"Available players:"` vs `10,Are you sure...`); the
+            // original's string loader strips ONE surrounding pair of double
+            // quotes so `"%u %s to win match"` renders unquoted. Without this
+            // every getstring-fed UI label showed literal quotes (caught
+            // 2026-07-12 on the live setup screen).
+            if (val.size() >= 2 && val.front() == '"' && val.back() == '"')
+                val = val.substr(1, val.size() - 2);
+            m.strings[id] = std::move(val);
         } catch (const std::exception&) {
             m.warnings.push_back("line " + std::to_string(lineno));
         }

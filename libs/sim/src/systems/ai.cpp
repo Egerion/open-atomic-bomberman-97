@@ -82,29 +82,32 @@ void AISystem::ensure_grids() {
         for (int x = 0; x < kGridWidth; ++x)
             if (s_.flame[y][x] > 0) raise(x, y, 1000);
 
-    // 2) Live bombs (predicted blast). The bomb updater (sub_42331C ~25685)
-    //    writes v = (bomb+66 >> 16) + 100 at the bomb tile and propagates the
+    // 2) Live bombs (predicted blast). The bomb updater (sub_42331C 25683-
+    //    25705) writes v = (bomb+68) + 100 at the bomb tile and propagates the
     //    SAME v along the 4 rays out to the bomb's flame length, stopping at a
     //    wall/brick (sub_425FB9) or another bomb (sub_422E48), one tile past a
-    //    floor powerup (sub_42542D). Field +66 is the ELAPSED fuse phase
-    //    (docs/re/ai.md §9.2), so a bomb nearer detonation is more dangerous.
-    //    Our integer image: elapsed_ticks = fuse_total - remaining (a waiting
-    //    trigger bomb, fuse<=0, is a standing threat -> the max). Airborne bombs
-    //    occupy no tile and cast no blast prediction (they can't chain).
-    for (const auto& b : s_.bombs) {
-        if (!b.active || b.flying) continue;
-        std::int32_t elapsed;
-        if (b.fuse <= 0) {
-            elapsed = s_.tuning.fuse_frames;  // trigger-armed / at detonation: max
-        } else {
-            elapsed = s_.tuning.fuse_frames - b.fuse;
-            if (elapsed < 0) elapsed = 0;
-        }
-        const std::int32_t v = elapsed + 100;
-        const int bx = b.tile_x(), by = b.tile_y();
+    //    floor powerup (sub_42542D). Three facts CORRECTED by the 2026-07-12
+    //    danger-map audit (facts.md "AI danger map"):
+    //      - +68 is the elapsed fuse phase in MILLISECONDS (it accrues the
+    //        per-frame ms delta), so v ranges 100..~2100 over a 2 s fuse —
+    //        cross-source ordering against the closing walls (110..250) and
+    //        flame (1000) depends on that scale; tick counts must be
+    //        ms-scaled. A waiting trigger bomb accrues without bound; our
+    //        image has no age counter, so it ranks at a full fuse's worth
+    //        (past the point it outranks flame, as an aged trigger bomb does
+    //        in the original — documented approximation).
+    //      - FLYING bombs stamp too: the tail stamp's only gates are the
+    //        active flag and the carried-pass parity — motion is never
+    //        tested, so a punched/thrown bomb casts its blast from its
+    //        instantaneous arc tile every frame (its +68 is frozen mid-air,
+    //        matching our paused fuse). The old `|| b.flying` skip made AIs
+    //        stand calmly under a sailing bomb.
+    //      - The per-bomb duration word +74 (our fuse_init), not the global
+    //        tuning value, anchors the elapsed computation.
+    auto stamp_blast = [&](int bx, int by, int reach, std::int32_t v) {
         raise(bx, by, v);
         for (int d = 0; d < 4; ++d) {
-            for (int i = 1; i <= b.flame; ++i) {
+            for (int i = 1; i <= reach; ++i) {
                 const int rx = bx + kDX[d] * i, ry = by + kDY[d] * i;
                 if (!grid::in_grid(rx, ry)) break;
                 // Stop AT a wall/brick without marking it (flame won't reach a
@@ -117,6 +120,29 @@ void AISystem::ensure_grids() {
                 if (s_.floor[ry][rx] != PowerupType::None) break;
             }
         }
+    };
+    for (const auto& b : s_.bombs) {
+        if (!b.active) continue;  // carried slots are inactive — stamped below
+        std::int32_t elapsed_ms;
+        if (b.fuse <= 0) {
+            elapsed_ms = b.fuse_init * kMsPerTick;  // aged trigger bomb (see above)
+        } else {
+            elapsed_ms = (b.fuse_init - b.fuse) * kMsPerTick;
+            if (elapsed_ms < 0) elapsed_ms = 0;
+        }
+        stamp_blast(b.tile_x(), b.tile_y(), b.flame, elapsed_ms + 100);
+    }
+    // Carried bombs (motion 3): sub_42331C's carried pass (25784, called per
+    // frame at 29530) runs the SAME tail stamp — a bomb on a player's head
+    // projects its blast from the CARRIER's tile every frame, which is why
+    // the original's AIs scatter around a bomb-carrying player. Our carried
+    // bombs are deactivated slots (BombSystem::try_grab), so stamp them off
+    // the carrier's own fields; the elapsed term is 0 (v = 100) — the port
+    // tracks no carry age (the throw restarts the fuse anyway; documented
+    // approximation, facts.md "AI danger map").
+    for (const auto& p : s_.players) {
+        if (!p.present || !p.alive || !p.carrying) continue;
+        stamp_blast(p.tile_x(), p.tile_y(), p.carried_flame, 100);
     }
 
     // 3) The closing walls ("fire-god"): during the hurry phase the enclosure
@@ -128,14 +154,40 @@ void AISystem::ensure_grids() {
         const int depth = s_.tuning.enclosement_depth;
         const int lookahead = s_.tuning.fire_god_lookahead;  // getvalue(910) = 15
         const int total = enclose_total(depth);
+        // The original's walk (pseudo.c 27201-27223) advances its own spiral
+        // cursor one candidate per iteration and, when the candidate exits
+        // the current ring, TURNS instead — burning that iteration on a
+        // re-stamp of the pre-turn tile with the already-decayed value — so
+        // near corners it covers fewer than 15 distinct future bricks.
+        // Reproduced here by burning an iteration whenever the direction
+        // between consecutive spiral positions changes (the ring-advance
+        // diagonal counts as a turn too — a documented approximation of the
+        // ++ring/++x/++y branch; facts.md "AI danger map" item 6).
         std::int32_t v = 10 * lookahead + 100;
-        for (int k = 0; k < lookahead; ++k) {
-            const int idx = s_.enclose_index + k;  // walls not yet dropped, in order
-            if (idx >= total) break;
+        int idx = s_.enclose_index;  // walls not yet dropped, in order
+        int prev_x = -1, prev_y = -1, pdx = 0, pdy = 0;
+        for (int k = 0; k < lookahead && idx < total; ++k) {
             int wx = 0, wy = 0;
-            if (enclose_pos(idx, depth, &wx, &wy)) raise(wx, wy, v);
+            if (!enclose_pos(idx, depth, &wx, &wy)) break;
+            if (prev_x >= 0) {
+                const int dx = wx - prev_x, dy = wy - prev_y;
+                if (dx != pdx || dy != pdy) {
+                    raise(prev_x, prev_y, v);  // wasted corner iteration
+                    v -= 10;
+                    pdx = dx;
+                    pdy = dy;
+                    continue;  // the spiral does not advance this iteration
+                }
+            }
+            raise(wx, wy, v);
             v -= 10;
-            if (v < 0) v = 0;
+            if (prev_x >= 0) {
+                pdx = wx - prev_x;
+                pdy = wy - prev_y;
+            }
+            prev_x = wx;
+            prev_y = wy;
+            ++idx;
         }
     }
 }
@@ -212,7 +264,7 @@ int AISystem::flee_bfs(int sx, int sy, int& best_x, int& best_y) {
     // epoch grid (O(1) reset via a bumped epoch — deterministic, no per-tick
     // clear). Cost is the ring order, implicit in the FIFO expansion.
     struct Node {
-        int x, y, first;
+        int x, y, first, depth;
     };
     Node open[100];
     int open_n = 0;
@@ -223,7 +275,13 @@ int AISystem::flee_bfs(int sx, int sy, int& best_x, int& best_y) {
 
     best_x = sx;
     best_y = sy;
-    std::int32_t best_danger = danger_at(sx, sy);
+    // The best-tracker inits at 10000 (sub_40970B 9936), NOT at the start
+    // tile's own danger — so with ANY open neighbour the BFS returns a step,
+    // even when nothing beats the danger the AI is standing in; -1 means
+    // "fully boxed in", nothing else (CORRECTED 2026-07-12, facts.md "AI
+    // danger map" item 4 — the old start-danger init returned -1 whenever no
+    // strictly-safer tile existed, sending the caller down the chain).
+    std::int32_t best_danger = 10000;
 
     // Seed with the (up to 4) open, in-bounds neighbours of the start, each
     // tagged with the godir it came from (the eventual return value). The seed
@@ -232,7 +290,7 @@ int AISystem::flee_bfs(int sx, int sy, int& best_x, int& best_y) {
         if (obstacle_at(nx, ny)) return;
         if (visited_epoch[ny][nx] == epoch) return;
         visited_epoch[ny][nx] = epoch;
-        if (open_n < 100) open[open_n++] = {nx, ny, first};
+        if (open_n < 100) open[open_n++] = {nx, ny, first, 1};
         const std::int32_t dn = danger_at(nx, ny);
         if (dn < best_danger) {
             best_danger = dn;
@@ -257,6 +315,11 @@ int AISystem::flee_bfs(int sx, int sy, int& best_x, int& best_y) {
     int head = 0;
     while (head < open_n) {
         const Node cur = open[head++];
+        // Ring cap: sub_40970B stops expanding after 20 rings (its a4 = 20,
+        // pseudo.c 10048-10053) while keeping the best-so-far step — an
+        // improvement further than 20 steps away is invisible to the
+        // original's flee (CORRECTED 2026-07-12, facts.md "AI danger map").
+        if (cur.depth >= 20) continue;
         for (int s2 = 0; s2 < 4; ++s2) {
             const int g = tie > 0 ? s2 : (3 - s2);
             const int nx = cur.x + kDX[g], ny = cur.y + kDY[g];
@@ -270,7 +333,7 @@ int AISystem::flee_bfs(int sx, int sy, int& best_x, int& best_y) {
                 best_y = ny;
                 if (dn == 0) return cur.first;  // reached a fully-safe tile: done
             }
-            if (open_n < 100) open[open_n++] = {nx, ny, cur.first};
+            if (open_n < 100) open[open_n++] = {nx, ny, cur.first, cur.depth + 1};
         }
     }
 
@@ -581,25 +644,23 @@ bool AISystem::behave_walk_path(int i, PlayerInput& out) {
         // (b) Flee: no directed goal, run to the lowest-danger reachable tile.
         int bx = 0, by = 0;
         const int first = flee_bfs(px, py, bx, by);  // the flee behaviour's RNG draw
-        if (first < 0) {
-            // No reachable improvement / boxed in: drop the target and pass down
-            // (the original returns 0 here; wander/other behaviours take over).
-            br.has_path_target = false;
-            return false;
-        }
 
-        // The original always latches has_path_target = 1 after a successful flee
-        // BFS (line 10820), then decides between "stand" and "step".
+        // The original always latches has_path_target = 1 after the flee BFS
+        // (line 10820) and then either STANDS or STEPS — the danger branch
+        // NEVER passes down (CORRECTED 2026-07-12, facts.md "AI danger map"
+        // item 4): the `here <= min` stand-latch (10824-10829) covers both
+        // "no strictly-safer tile" AND "fully boxed in" (flee firstdir 0),
+        // storing the OWN tile as target, writing godir -1 and returning 1 —
+        // so behaviours 3-7 never run and draw NOTHING that frame. The old
+        // pass-down ran the rest of the chain on every such frame: extra whim
+        // draws, possible bomb drops and wander re-rolls while standing in
+        // inescapable danger — an RNG-stream and activity divergence.
         const std::int32_t here = danger_at(px, py);
-        if (here <= danger_at(bx, by)) {
-            // Can't improve: stand and re-plan (godir -1). The original latches
-            // the current tile as the target and returns 1 (acts, holds still).
-            // In practice flee_bfs only returns first>=0 when it found a STRICTLY
-            // safer tile (danger(best) < here), so this mirrors a branch the
-            // original rarely hits (equal-danger ties); kept for faithfulness.
+        if (first < 0 || here <= danger_at(bx, by)) {
             br.has_path_target = true;
             br.path_target_x = static_cast<std::int16_t>(px);
             br.path_target_y = static_cast<std::int16_t>(py);
+            br.path_target_cost = here;  // nonzero: the stale-target drop above ignores it
             write_move(out, -1);
             return true;
         }
@@ -745,10 +806,13 @@ bool AISystem::behave_seek_powerup(int i, PlayerInput& out) {
 
     if (!br.pow_seek.active) return false;  // no target: pass down to behaviour 6/7
 
-    // Timeout after ~10 ticks (original: timer += frameDelta; give up at
-    // 10*msPerFrame; NO rand draw on this timeout, unlike enemy-seek).
-    ++br.pow_seek.timer;
-    if (br.pow_seek.timer >= 10) {
+    // Timeout after 500 ms of pursuit (original: `timer(+28) += frameDelta`
+    // per frame; give up at `10 * [0x46494C]` = 10 × 50 ms. NO rand draw on
+    // this timeout, unlike enemy-seek). The timer is wall-clock ms, accrued
+    // per sub-frame — at the canonical 60 fps that is ~30 decides, exactly
+    // the original's own count.
+    br.pow_seek.timer += delta_ms_;
+    if (br.pow_seek.timer >= 10 * kMsPerTick) {
         br.pow_seek.active = false;
         return false;
     }
@@ -995,11 +1059,13 @@ bool AISystem::behave_seek_enemy(int i, PlayerInput& out) {
 
     if (!br.enemy_seek.active) return false;  // no target: pass down to behaviour 7
 
-    // Timeout: tick the timer, then at >= 10 give up on a 1/50 roll. The %50 is
-    // evaluated ONLY when the timer condition holds (short-circuit &&), exactly
-    // as the original orders `(10*msPerFrame <= +12) && !(rand()%50)`.
-    ++br.enemy_seek.timer;
-    if (br.enemy_seek.timer >= 10 && random_below(s_, 50) == 0) {
+    // Timeout: accrue the frame delta, then at >= 500 ms give up on a 1/50
+    // roll. The %50 is evaluated ONLY when the timer condition holds
+    // (short-circuit &&), exactly as the original orders
+    // `(10*msPerFrame <= +12) && !(rand()%50)` — +12 accrues frameDelta per
+    // displayed frame, so the threshold is 10 × 50 ms of wall clock.
+    br.enemy_seek.timer += delta_ms_;
+    if (br.enemy_seek.timer >= 10 * kMsPerTick && random_below(s_, 50) == 0) {
         br.enemy_seek.active = false;
         return false;
     }
@@ -1119,7 +1185,8 @@ void AISystem::press_action(PlayerInput& out) {
 // seek enemy (%50-acquire + the finder's %10 draws / %50-timeout / path / %2),
 // [7] wander. Only ONE behaviour body runs per tick (short-circuit).
 // ---------------------------------------------------------------------------
-void AISystem::decide(int i, PlayerInput& out) {
+void AISystem::decide(int i, PlayerInput& out, std::int32_t delta_ms) {
+    delta_ms_ = delta_ms;  // this frame's ms delta — the pursuit timers accrue it
     ensure_grids();
 
     // Draw A — leading scratch alloc (sub_40A1C6 line 10359). Unconditional.

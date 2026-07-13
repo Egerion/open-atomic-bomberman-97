@@ -191,46 +191,105 @@ It is not "elsewhere" in the sense of a dedicated main-menu row — **it is
 item 15 of the interactive Options screen**, `sub_4080DC` (see §3 below):
 selecting **"Define keyboard layouts"** invokes `sub_407B9D` @ 0x407B9D.
 
-Confirmed screen layout and flow:
+Confirmed screen layout and flow (2026-07-13 full re-read — CORRECTS the
+default scancodes, the name-table size, and the capture's "Esc cancels"
+claim below, and adds the mouse/widget facts the 1:1 port rebuild needed):
 
-- **Backdrop:** whatever the Options screen already has on-screen (no new
-  `sub_4148E5`/`sub_42A088` call — `sub_407B9D` draws directly over the
-  Options screen's own frame). Header `getstring(1100)` ("Keyboard
-  definitions") at fixed (400, 20) via `sub_41696C`.
+- **Backdrop:** no new `sub_4148E5`/`sub_42A088` call — and "draws over the
+  Options frame" is now precise: every frame of `sub_407B9D`'s loop starts
+  with `sub_415CA4()`, a plain `memcpy` of the SAVED BACKDROP STORE
+  (`dword_460BCC`, filled by the image loads) back onto the work surface
+  (pseudo.c 18131-18139). That store holds the Options screen's random GLUE
+  picture only — the Options ROWS were never saved into it — so this screen
+  shows the GLUE backdrop with its own chrome over it, not the option rows.
+  Header `getstring(1100)` ("Keyboard definitions") at **(20, 20) clip
+  400** via `sub_41696C`, ink `byte_49D37A` yellow (x recovered from the
+  raw EXE bytes @ 0x407BD0; an earlier pass misread the clip width as the
+  x, "(400, 20)").
+- **The screen is MOUSE-driven, with a visible cursor.** `sub_407B9D`
+  brackets its whole loop in `sub_431178()` / `sub_431360()` — the widget
+  library's mouse-cursor draw/undraw pair (the same pair `sub_41485A`'s
+  list dialogs use), so the cursor shows for exactly this screen. The
+  cursor is the widget library's default **8×8 bitmap** (`byte_45C310`,
+  armed by `sub_430EDC(0, …)` with hotspot (1,1); `sub_430E4C` remaps it in
+  place: cell 15 → white `byte_49D38F`, 1 → `byte_497498` (LUT 0x2108 →
+  (60,68,56), the bevel-dark element), 0 → the transparent key). The
+  64-byte pattern, read from BM95.EXE data @ VA 0x45C310 (W=white, 1=dark,
+  .=transparent):
+
+  ```
+  1111111.
+  1WWWWW1.
+  1WWWW11.
+  1WWWW11.
+  1WWWWW11
+  1W11WWW1
+  11111WW1
+  ....1111
+  ```
 - **2×6 button grid** — `for keyboard_set in 0..1, for action in 0..5`: a
-  clickable button (`sub_432298`, a mouse-hit-testable label widget, id =
-  `1000*keyboard_set + action`) at **x = 320·keyboard_set + 100, y =
-  60·action + 60**, labelled `getstring(1110)` ("Key %u, %s") formatted
-  with the keyboard-set number and the action name `getstring(1120+action)`
-  (action names: **1120 Move Up, 1121 Move Right, 1122 Move Down, 1123 Move
-  Left, 1124 Action 1, 1125 Action 2** — six bindable actions per keyboard
-  set, matching options.ini's `keydef=<set>,<action>,<scancode>` triples).
+  REAL bevel-button widget (`sub_432298`, id = `1000*keyboard_set + action
+  + 1000`) at **x = 320·keyboard_set + 100, y = 60·action + 60**, labelled
+  `getstring(1110)` ("Key %u, %s") formatted with the **0-based** set
+  number and the action name `getstring(1120+action)` (action names: **1120
+  Move Up, 1121 Move Right, 1122 Move Down, 1123 Move Left, 1124 Action 1,
+  1125 Action 2** — six bindable actions per keyboard set, matching
+  options.ini's `keydef=<set>,<action>,<scancode>` triples). Buttons are
+  created ONCE (first loop pass) and destroyed on exit (`sub_43322C` × 13).
   Below each button, the **currently-bound key's name** is shown via
-  `getstring(1140)` ("Key: '%s'") using a **256-entry scancode→name string
-  table** (`off_45B914[scancode]`) indexed by the low 7 bits of
-  `dword_4645BC[10*set + action] & 0x7F` — the SAME array `options.ini`'s
-  `keydef=` reader/writer targets (§3's key mapping table).
-- **Rebind interaction:** clicking a button (hit id `1000*set+action`)
-  calls **`sub_407AD9(action_label)`** @ 0x407AD9 — a modal capture: shows
-  "Press key for '%s'" (`getstring(1105)`), waits 500 ms, then polls a raw
-  **256-byte keyboard-state array** (`byte_4A2BA0[256]`, the low-level
-  scancode state table, distinct from the queued `sub_4102B7` getkey used
-  everywhere else in the UI) every frame until a key is down (returns its
-  scancode) or Esc cancels (returns 0/no-op). The returned scancode is
-  stored straight into `dword_4645BC[10*set+action]` — no validation,
-  duplicates across actions are allowed (only options.ini's *reader* clamps
-  `set∈[0,1]` / `action∈[0,9]` — note the reader's array is sized for 10
-  actions per set even though the UI only exposes 6; slots 6-9 per set are
-  therefore write-only from options.ini and have no in-game rebind UI).
-- **Restore defaults button** — a separate widget (id 999) labelled
-  `getstring(1130)` ("Return to default keys") at (40, 430); selecting it
-  calls `sub_40614A()` (hardcodes the 12 default scancodes — the same
-  defaults options.ini ships pre-filled, `200/205/208/203/57/46` for set 0
-  and `17/32/31/30/2/3` for set 1) and pops a confirm dialog
-  (`getstring(1131)`/`getstring(95)`, `sub_414340`).
-- **Exit:** Enter/Esc/Space (`< 0x20`, `== 0x20`) leave the screen; row 999
-  (F1-style help hook, `sub_41431C` — the generic `.BM` browser, §4) is
-  also reachable via key `0x13B`.
+  `getstring(1140)` ("Key: '%s'") at (x, y+22) clip 200, white ink —
+  CORRECTED: the name table `off_45B914` has **0x59 = 89 entries** (not
+  256), indexed by `code & 0x7F`, and the line is **not drawn at all** when
+  the masked code is ≥ 0x59 (pseudo.c 8743-8744). The masking makes the
+  E0-extended arrow codes alias their numpad names — the default set 0
+  displays as `(8)Up / (6)Right / (2)Down / (4)Left / Space / Enter`. The
+  table content is pinned verbatim in the port
+  (`libs/game/include/bomber/game/dos_scancode.hpp`; read from the EXE data
+  2026-07-13). An unbound 0 still has a table entry (the empty string), so
+  it shows `Key: ''`.
+- **Clicks arrive through the key queue.** The widget pump (`sub_432998`)
+  shows a button's "down" bitmap while the mouse is held INSIDE it and
+  posts its id into the same `sub_4102B7` getkey stream on RELEASE inside;
+  `sub_407B9D` just reads ids back out of getkey (1000..2998 grid, 999
+  defaults). There is NO keyboard navigation over the grid.
+- **Rebind interaction:** a grid click calls **`sub_407AD9(button_label)`**
+  @ 0x407AD9 — a modal capture through `sub_412E33`'s completion window
+  (the WINZ percent dialog, frontend-flow.md): `sub_412E0C` copies
+  "Press key for '%s'" (`getstring(1105)`, formatted with the button's own
+  label) into the caption buffer, the window shows it with a `"%d%%"` (=
+  "0%") yellow readout and the empty 300-px track, then the routine waits
+  500 ms (`sub_413CB0(500)`), flushes the key queue (`sub_41043C`), and
+  polls the raw **256-byte keyboard-state array** (`byte_4A2BA0[256]`)
+  every frame until a key is down. The 0..255 ascending scan keeps
+  OVERWRITING its result, so the highest held index wins. CORRECTED — there
+  is **no Esc-cancel**: the caller stores the return value into
+  `dword_4645BC[10*set+action]` UNCONDITIONALLY (pseudo.c 8779-8780), and a
+  pressed Esc is itself seen by the raw poll (scancode 1), so **Esc binds
+  Esc**; the only way the earlier-documented "returns 0" happens is the
+  race where the queued Esc arrives after the key is already released — a
+  timing artifact that stores 0 (unbound), not a cancel that preserves the
+  old binding. No validation, duplicates across actions are allowed (only
+  options.ini's *reader* clamps `set∈[0,1]` / `action∈[0,9]` — the array is
+  sized for 10 actions per set even though the UI exposes 6; slots 6-9 per
+  set are write-only from options.ini and have no in-game rebind UI).
+- **Restore defaults button** — widget id 999 labelled `getstring(1130)`
+  ("Return to default keys") at (40, 430); it calls `sub_40614A()` and pops
+  the `sub_414340` acknowledge modal (`getstring(95)` "NOTE!" over
+  `getstring(1131)`, general white ink, its own " Ok " button). CORRECTED
+  from the body (pseudo.c 7644-7677) — the hardcoded defaults are: **set 0
+  = 200/205/208/203/57/28** (arrows + Space + **Enter** — not 46/'C') and
+  **set 1 = 19/34/33/32/31/30** (**R/G/F/D + S + A** — not 17/32/31/30/2/3;
+  action 2 becomes 16/'Q' when the BIOS keyboard-nationality global
+  `dword_4A2CA4 == 1`, an AZERTY accommodation).
+- **Exit:** Enter(13)/Esc(27)/Space(32) leave the screen (pseudo.c
+  8783-8792); **F1** (`0x13B`) opens the generic `.BM` help browser
+  (`sub_41431C`, §4) without leaving. (An earlier revision garbled this
+  bullet by conflating the F1 hook with widget id 999 — 999 is the
+  defaults button above.)
+- **No sound.** `sub_407B9D` contains no `sub_427961` call — the only
+  audible thing on this screen is the nav blip inside `sub_414340`'s own
+  key loop (the NOTE modal: blip 20 on any key, closes on Enter/Space/Esc
+  or its Ok button, whose widget id IS 27).
 
 **Persistence — CONFIRMED via an exit-time write-back, not per-edit.** The
 key bindings live in the SAME `dword_4645BC[10*set+action]` array
@@ -248,10 +307,31 @@ exits normally** — there is no "Save" button and no immediate write on
 closing the Options/key-remap screen; a crash or force-quit loses unsaved
 changes, exactly like the rest of the settings.
 
-(Provenance: `sub_407B9D` @ 0x407B9D pseudo.c 8686-8821; `sub_407AD9`
-@ 0x407AD9 pseudo.c 8636-8685; `sub_406A2A`/`sub_405DE3`/`sub_410EBF` cross-
-reference pseudo.c 7543-7586, 7914-7929; MESSAGES.TXT ids 1100/1105/1110/
-1120-1125/1130/1131/1140.)
+**Port status (2026-07-13): rebuilt 1:1** (`libs/game/keyremap_screen.*`,
+`GameApp::present_keyremap_screen`): mouse-driven grid with press-on-hold /
+fire-on-release and the widget-lib 8×8 cursor (SDL_HideCursor for the
+screen's duration = the 431178/431360 bracket), GLUE-backdrop restore, the
+89-entry key-name table + `<0x59` display rule via `dos_scancode.hpp`,
+unconditional capture store after the 500 ms arm delay (raw
+SDL_GetKeyboardState poll, highest index wins; the queued-Esc race artifact
+is NOT reproduced), the real `sub_414340` NOTE modal (sized from its lines,
+Ok button, blip-20 key loop), LUT-true inks, Enter/Space/Esc exit, F1 help,
+no invented sounds. `keydef=` now round-trips in the ORIGINAL's DOS
+scancode space (`dos_scancode.cpp` translates at the ini boundary; before
+this pass the port wrote raw SDL_Scancode values, which BM95.EXE would
+misread against a shared install), and `default_key_set()` now IS
+sub_40614A's set (the port's old arrows+RCtrl / WASD+LCtrl pairing and its
+Space-OR-bomb read() shim were invented and are gone).
+
+(Provenance: `sub_407B9D` @ 0x407B9D pseudo.c 8686-8821 (re-read in full
+2026-07-13); `sub_407AD9` @ 0x407AD9 pseudo.c 8636-8685; `sub_40614A` @
+0x40614A pseudo.c 7644-7677; `sub_415CA4` @ 0x415CA4 pseudo.c 18131-18139;
+`sub_431178`/`sub_431360` pseudo.c 34336-34463; `sub_430EDC`/`sub_430E4C` @
+0x430EDC/0x430E4C pseudo.c 34192-34310; `sub_432998` @ 0x432998 pseudo.c
+35400+; `sub_414340` @ 0x414340 pseudo.c 17003-17107; `off_45B914` +
+`byte_45C310` read from BM95.EXE data (PE section map, 2026-07-13);
+`sub_406A2A`/`sub_405DE3`/`sub_410EBF` cross-reference pseudo.c 7543-7586,
+7914-7929; MESSAGES.TXT ids 27/95/1100/1105/1110/1120-1125/1130/1131/1140.)
 
 ## 3. The Options screen — `sub_4080DC` (CORRECTED: this is NOT the map editor)
 
@@ -290,8 +370,8 @@ confirming the `+25` idiom already seen elsewhere in the codebase.
 | 5 | 255 | Win Matches By Kill Total | `dword_46497C` (`win_by_kills=`) | toggle; forced off whenever Team Play is on |
 | 6 | 256 | Gold Bomberman | `dword_4648BC` (`goldman=`) | toggle; also resets `dword_46492C=-1` (clears the pending roulette winner) — INLINE on every press, not gated on the net before/after value (`docs/re/goldman-roulette.md` §2.1) |
 | 7 | 257 | Enclosement Depth | `dword_464974` (`enclosement_depth=`) | cycle 0..`getvalue(28)-1` (=0..3: None/A Little/A Lot/All the way, msg 315-318) |
-| 8 | 258 | Scheme File | `byte_4648C4[100]` (`schemefilename=`) | `sub_4076FE(±1)` — step through the on-disk `.SCH` list |
-| 9 | 259 | Play Time | `dword_464948` (`playtime=`), read via `sub_4078FE()` | `sub_4076FE(±1)` — same stepper helper as Scheme File (shared cursor state) |
+| 8 | 258 | Scheme File | `byte_4648C4[100]` (`schemefilename=`) | `sub_407582` — the `*.SCH` file-picker LIST DIALOG (CORRECTED 2026-07-13: BOTH dispatch switches route here via `goto LABEL_46`, pseudo.c 9342-9343/9443-9445, so Left/Right/Enter/Space all OPEN THE PICKER; the earlier `sub_4076FE` claim was the Play Time stepper). The picker: `sub_411D17("*.SCH")` path-maps into DATA/SCHEMES, `sub_41404B` findfirst/qsort glob, each row `aSS` = `"%s: %s"` (filename + the file's `-N` name via `sub_404BE9`, default `getstring(727)` "No Scheme Name"), list dialog `sub_41485A` at (100,100) header `getstring(721)`; a selection is cut at its FIRST '.' (strchr — drops extension AND the ": name" suffix), strcpy'd into `byte_4648C4`, then UPPERCASED (`sub_412A3B` = strupr). Empty glob → `sub_414340` error `getstring(95)`/`getstring(720)` in `byte_49A390` dark red (164,0,0). The stored name is re-parsed into the live scheme at Play-flow entry (`sub_410F81` → `sub_4046CC` → `sub_403EEE`). |
+| 9 | 259 | Play Time | `dword_464948` (`playtime=`), read via `sub_4078FE()` | `sub_4076FE(±1)` — the CONFIRMED fixed stepper chain 60-90-120-150-180-240-300-600-1001("Infinite", `getstring(280)`), wrapping both ways; an off-list value (hand-edited ini) snaps to `getvalue(100)` (= 150 shipped) instead of stepping (pseudo.c 8489-8559) |
 | 10 | 260 | Assign Keyboard Player | `dword_464968` (`assign_keyboards=`) | toggle |
 | 11 | 261 | Diseases Can Be Destroyed | `dword_464990` (`diseases_destroyable=`) | toggle |
 | 12 | 262 | Lost net players revert to AI | `dword_464928` (`lost_net_revert_ai=`) | toggle |
@@ -326,20 +406,26 @@ a full re-read of `sub_4080DC`'s decompiled body (pseudo.c 8914-9491, not
 just the summary table above) against `libs/game/src/options_screen.cpp`.
 Five confirmed mismatches, all now fixed in the port:
 
-1. **All 19 rows draw unconditionally, in the SAME ink, always** — the
-   render loop (pseudo.c 9097-9290) calls `sub_41696C` once per row for
-   EVERY row 0-18 with no gating, and every single call passes the SAME ink
-   argument, `byte_49D38F` (`v112`/`v113`/.../`v129` in the decompile, all
-   assigned from the identical global right before the draw). There is no
-   "hide the unsupported rows" branch and no per-row/selected recolour
-   anywhere in the function. The port previously hid rows 2/8/10/12/14/16/
-   17/18 (net/modem/legacy) entirely — this was the invented deviation, not
-   an omission the original also makes. Fixed: all 19 rows now draw, in the
-   original's order, in the same ink; the 5 rows this port genuinely cannot
-   act on (Node Name/Scheme File-browsing/Modem/Net Protocol/Adjust Audio's
-   sub-screen) are shown with a static `(N/A)` value and their Left/Right/
-   Enter are documented no-ops, matching CLAUDE.md's "no invented visuals"
-   the other direction — showing what the original shows, not fabricating
+1. **All rows draw unconditionally, in the SAME ink, always** — the
+   render loop (pseudo.c 9097-9290) calls `sub_41696C` once per row with no
+   gating, and every single call passes the SAME ink argument,
+   `byte_49D38F` (`v112`/`v113`/.../`v129` in the decompile, all assigned
+   from the identical global right before the draw). There is no "hide the
+   unsupported rows" branch and no per-row/selected recolour anywhere in
+   the function. The port previously hid rows 2/8/10/12/14/16/17
+   (net/modem/legacy) entirely — this was the invented deviation, not an
+   omission the original also makes. CORRECTED 2026-07-12 (chrome audit):
+   the drawn set is **18 rows, getstring(250) @9098 .. getstring(267)
+   @9281 — there is NO 19th "Adjust Audio" row**: getstring(268) is never
+   fetched anywhere in the binary; only the DEAD dispatch `case 18`
+   (sub_407542's "Audio Adjustment screen will be here..." stub) exists,
+   unreachable behind `v168 = 18`. The same audit replaced the port's
+   hardcoded ALL-CAPS row strings with the real MESSAGES.TXT compositions
+   (mixed-case labels 250-267; values via getstring 25/26 with their
+   padding spaces, 295-297, 315-318, 280/281 M:SS play time, the real
+   node-name and four-field modem lines), matching CLAUDE.md's "no
+   invented visuals" the other direction — showing what the original
+   shows, not fabricating
    an interaction it doesn't have.
 2. **No title/header text** — no `getstring`/`sub_41696C` call exists in the
    function before the row loop, and the caller (the row-3 dispatch,
@@ -362,10 +448,15 @@ Five confirmed mismatches, all now fixed in the port:
    pixel citation. Fixed: `"cursor1"` is resolved from `AssetStore::misc()`
    (MISC.ANI, already loaded for the editor's teamring markers; its
    sequence table is confirmed `cursor1, goldman, ring, safe, scan,
-   teamring0, teamring1`) and drawn as a real sprite at `(x-20, row_y)`,
-   paced by a simple per-drawn-frame counter (not an exact reproduction of
-   the original's random-delay timing, which is cosmetic-only and out of
-   scope for a presentation screen).
+   teamring0, teamring1`) and drawn as a real sprite at `(x-20, row_y)`.
+   Pacing PORTED faithfully 2026-07-12 (the earlier per-drawn-frame spin was
+   an accepted stand-in): sub_413BD6 IDLES on step 0 and blinks — one step
+   per rendered frame through the sequence — every getvalue(690) +
+   rand()%getvalue(691) SECONDS (VALUELST 690 = {2,2}, the file's own "blink
+   rate of the little bomber-dude cursor" legend); the shared
+   `CursorIndicator` (cursor_indicator.hpp) now drives both this screen and
+   the player-setup screen's instance (the setup screen anchors at x-15,
+   uniquely — every other caller uses x-20).
 4. **Row-navigation wraps over 18, not 19 — row 18 is permanently
    unreachable** — `v168 = 18;` (pseudo.c 9086) is a plain literal, used
    verbatim by both the Up-key underflow wrap (`v166 = v168 - 1`) and the

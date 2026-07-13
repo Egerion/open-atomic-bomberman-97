@@ -10,8 +10,11 @@ using namespace bomber::sim;
 using namespace bomber::sim::test;
 
 TEST_CASE("speed follows the carried-budget rule") {
-    // start_speed added per tick, 100 spent per pixel, remainder carried
-    // across ticks (~ start_speed/100 px per tick).
+    // frame_budget(start_speed, delta) added per canonical sub-frame (facts.md
+    // "Canonical frame cadence" — the original accrues speed*delta/50 per
+    // displayed frame), 100 spent per pixel, remainder carried across frames.
+    // The integer truncation is the original's own: 923 -> 313+313+295 = 921
+    // per tick, NOT 923.
     Simulation s(open_config());
     Player& p = s.state().players[0];
     TickInputs right;
@@ -20,13 +23,14 @@ TEST_CASE("speed follows the carried-budget rule") {
     run(s, 10, right);
     int moved = (p.x - x0) / 100;
     long budget = 0, expected = 0;
-    for (int t = 0; t < 10; ++t) {
-        budget += s.state().tuning.start_speed;
-        while (budget > 0) {
-            budget -= 100;
-            ++expected;
+    for (int t = 0; t < 10; ++t)
+        for (int f = 0; f < kSubFrames; ++f) {
+            budget += frame_budget(s.state().tuning.start_speed, kSubFrameMs[f]);
+            while (budget > 0) {
+                budget -= 100;
+                ++expected;
+            }
         }
-    }
     CHECK(moved == static_cast<int>(expected));
     CHECK(p.tile_y() == 0);  // stayed on the lane
 }
@@ -66,6 +70,47 @@ TEST_CASE("a centred player walking into a wall stops dead on the centre") {
     CHECK(p.tile_x() == 0);
     CHECK(p.x == kTileWF / 2);  // clamped exactly at the tile centre
     CHECK(p.tile_y() == 1);     // did not drift off the row
+}
+
+TEST_CASE("PlayerWalking event follows the dispatch, not displacement") {
+    // The walk pose/leg cycle keys off the walking DISPATCH (godir reached the
+    // mover), never off pixels moved — a wall-blocked walker pedals in place
+    // (event.hpp's PlayerWalking doc comment; docs/re/facts.md "Walk pose").
+    Simulation s(open_config());
+    Player& p = s.state().players[0];
+    TickInputs right;
+    right.players[0].right = true;
+    auto walked = [&]() -> int {
+        for (const auto& e : s.state().events)
+            if (e.type == Event::Type::PlayerWalking && e.player == 0) return e.data;
+        return 0;
+    };
+    // The tick's summed per-sub-frame accrual, in whole px (921/100 = 9 for
+    // the stock 923 — the canonical-cadence truncation, see the budget test).
+    long tick_budget = 0;
+    for (int f = 0; f < kSubFrames; ++f)
+        tick_budget += frame_budget(s.state().tuning.start_speed, kSubFrameMs[f]);
+    const int tick_px = static_cast<int>(tick_budget / 100);
+
+    // Free walking: fires with the tick's budget in px.
+    s.tick(right);
+    CHECK(walked() == tick_px);
+
+    // Fully wall-blocked: parked dead-centre against the pillar at (1,1),
+    // still pushing — zero displacement, the event keeps firing every tick.
+    p.x = kTileWF / 2;
+    p.y = kTileHF + kTileHF / 2;
+    run(s, 3, right);  // settle hard against the wall
+    const Fixed fx = p.x, fy = p.y;
+    s.tick(right);
+    CHECK(p.x == fx);
+    CHECK(p.y == fy);
+    CHECK(walked() == tick_px);
+
+    // Idle: no direction dispatched, no event (a conveyor push without input
+    // stays in this branch too — the belt never sets godir).
+    s.tick(TickInputs{});
+    CHECK(walked() == 0);
 }
 
 // Goldman wheel clogs (docs/re/goldman-roulette.md §9.1): a speed PENALTY,

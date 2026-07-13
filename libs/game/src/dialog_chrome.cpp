@@ -120,7 +120,7 @@ void draw_dialog_text(SDL_Renderer* ren, const FontTextures& font, const std::st
 }
 
 void draw_dialog_button(SDL_Renderer* ren, const FontTextures& font, float x, float y,
-                        const std::string& label) {
+                        const std::string& label, bool pressed) {
     const float label_w = text_w(font, label);
     const float h = line_h(font);
     const float w = label_w + 16.0f;
@@ -129,19 +129,30 @@ void draw_dialog_button(SDL_Renderer* ren, const FontTextures& font, float x, fl
     // sub_432298 "up" bitmap, in its own order: face fill (the washed base
     // coat), two light/dark rings at insets 2 and 1 (sub_44240C x2), then
     // the 1-px black outline at the very edge (sub_442384). Rings drawn as
-    // per-edge 1-px strips: light top+left, dark bottom+right.
+    // per-edge 1-px strips: light top+left, dark bottom+right. The "down"
+    // bitmap (pseudo.c 35238-35256) swaps the ring colour pair and skips the
+    // sub_442C28 wash — its face is the raw window base coat.
     SDL_FRect face{x, y, w, bh};
-    SDL_SetRenderDrawColor(ren, kButtonFaceR, kButtonFaceG, kButtonFaceB, 255);
+    if (pressed)
+        SDL_SetRenderDrawColor(ren, kDialogFillR, kDialogFillG, kDialogFillB, 255);
+    else
+        SDL_SetRenderDrawColor(ren, kButtonFaceR, kButtonFaceG, kButtonFaceB, 255);
     SDL_RenderFillRect(ren, &face);
     for (float inset = 2.0f; inset >= 1.0f; inset -= 1.0f) {
         const float x0 = x + inset, y0 = y + inset;
         const float rw = w - 2 * inset, rh = bh - 2 * inset;
-        SDL_SetRenderDrawColor(ren, kBevelLightR, kBevelLightG, kBevelLightB, 255);
+        if (pressed)
+            SDL_SetRenderDrawColor(ren, kBevelDarkR, kBevelDarkG, kBevelDarkB, 255);
+        else
+            SDL_SetRenderDrawColor(ren, kBevelLightR, kBevelLightG, kBevelLightB, 255);
         SDL_FRect top{x0, y0, rw, 1};
         SDL_RenderFillRect(ren, &top);
         SDL_FRect left{x0, y0, 1, rh};
         SDL_RenderFillRect(ren, &left);
-        SDL_SetRenderDrawColor(ren, kBevelDarkR, kBevelDarkG, kBevelDarkB, 255);
+        if (pressed)
+            SDL_SetRenderDrawColor(ren, kBevelLightR, kBevelLightG, kBevelLightB, 255);
+        else
+            SDL_SetRenderDrawColor(ren, kBevelDarkR, kBevelDarkG, kBevelDarkB, 255);
         SDL_FRect bottom{x0, y0 + rh - 1, rw, 1};
         SDL_RenderFillRect(ren, &bottom);
         SDL_FRect right{x0 + rw - 1, y0, 1, rh};
@@ -153,6 +164,147 @@ void draw_dialog_button(SDL_Renderer* ren, const FontTextures& font, float x, fl
 
     font.draw(ren, label, x + (w - label_w) / 2.0f, y + 3.0f, kButtonInkR, kButtonInkG,
               kButtonInkB);
+}
+
+void draw_bevel_rect(SDL_Renderer* ren, float x, float y, float w, float h, bool raised,
+                     Uint8 face_r, Uint8 face_g, Uint8 face_b) {
+    // sub_44240C: fill the interior, then a 1-px light strip on the top+left
+    // and a 1-px dark strip on the bottom+right for the raised look (swapped
+    // for sunken). The button widget uses the same pair.
+    SDL_FRect face{x, y, w, h};
+    SDL_SetRenderDrawColor(ren, face_r, face_g, face_b, 255);
+    SDL_RenderFillRect(ren, &face);
+    const Uint8 lr = raised ? kBevelLightR : kBevelDarkR;
+    const Uint8 lg = raised ? kBevelLightG : kBevelDarkG;
+    const Uint8 lb = raised ? kBevelLightB : kBevelDarkB;
+    const Uint8 dr = raised ? kBevelDarkR : kBevelLightR;
+    const Uint8 dg = raised ? kBevelDarkG : kBevelLightG;
+    const Uint8 db = raised ? kBevelDarkB : kBevelLightB;
+    SDL_SetRenderDrawColor(ren, lr, lg, lb, 255);
+    SDL_FRect top{x, y, w, 1};
+    SDL_RenderFillRect(ren, &top);
+    SDL_FRect left{x, y, 1, h};
+    SDL_RenderFillRect(ren, &left);
+    SDL_SetRenderDrawColor(ren, dr, dg, db, 255);
+    SDL_FRect bottom{x, y + h - 1, w, 1};
+    SDL_RenderFillRect(ren, &bottom);
+    SDL_FRect right{x + w - 1, y, 1, h};
+    SDL_RenderFillRect(ren, &right);
+}
+
+ListDialogLayout draw_list_dialog(SDL_Renderer* ren, const FontTextures& font,
+                                  const std::string& title, float y_px, float content_w,
+                                  int visible_rows, int total_rows, int top_row) {
+    const float h = line_h(font);
+    // Window: title strip (1 line) + a small gap + `visible_rows` item lines
+    // + a "Done" button row. Width = content + side padding (the audit's
+    // "+20" over the widest of title/items; the caller already sized
+    // content_w to the widest column). x is auto-centred.
+    const float win_w = content_w + 20.0f;
+    const float win_h = (h + 8.0f) + 8.0f + static_cast<float>(visible_rows) * h + (h + 12.0f);
+    const DialogRect win = dialog_rect(y_px, win_h, win_w);
+
+    // Raised panel with a 1-px black outer rect (sub_442384 + the bevel).
+    draw_bevel_rect(ren, win.x, win.y, win.w, win.h, /*raised=*/true, kDialogFillR, kDialogFillG,
+                    kDialogFillB);
+    SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
+    SDL_FRect outline{win.x, win.y, win.w, win.h};
+    SDL_RenderRect(ren, &outline);
+
+    // Sunken title strip at (5,5), the centred grey title inside it.
+    const float strip_h = h + 8.0f;
+    draw_bevel_rect(ren, win.x + 5.0f, win.y + 5.0f, win.w - 10.0f, strip_h, /*raised=*/false,
+                    kDialogFillR, kDialogFillG, kDialogFillB);
+    const float tw = text_w(font, title);
+    draw_dialog_text(ren, font, title, win.x + (win.w - tw) / 2.0f, win.y + 5.0f + 4.0f,
+                     kButtonInkR, kButtonInkG, kButtonInkB);
+
+    const bool scrollbar = total_rows > visible_rows;
+    ListDialogLayout lay{};
+    lay.win = win;
+    lay.item_x = win.x + 8.0f;
+    lay.item_y0 = win.y + strip_h + 8.0f;
+    lay.item_h = h;
+    lay.item_w = win.w - 16.0f - (scrollbar ? 18.0f : 0.0f);
+    lay.has_scrollbar = scrollbar;
+
+    if (scrollbar) {
+        // Right-hand scrollbar: up/down arrow buttons + a sunken track + a
+        // proportional raised thumb (sub_42DBCC 32439-32469). FONT6 glyphs
+        // \x18/\x19 are the arrows.
+        const float sx = win.x + win.w - 17.0f;
+        const float track_y0 = lay.item_y0;
+        const float track_h = static_cast<float>(visible_rows) * h;
+        draw_dialog_button(ren, font, sx, track_y0 - h - 4.0f, "\x18");
+        draw_dialog_button(ren, font, sx, track_y0 + track_h + 2.0f, "\x19");
+        draw_bevel_rect(ren, sx, track_y0, 15.0f, track_h, /*raised=*/false, kDialogFillR,
+                        kDialogFillG, kDialogFillB);
+        const float frac = static_cast<float>(visible_rows) / static_cast<float>(total_rows);
+        const float thumb_h = std::max(track_h * frac, 8.0f);
+        const float max_top = static_cast<float>(total_rows - visible_rows);
+        const float pos = max_top > 0 ? static_cast<float>(top_row) / max_top : 0.0f;
+        const float thumb_y = track_y0 + pos * (track_h - thumb_h);
+        draw_bevel_rect(ren, sx, thumb_y, 15.0f, thumb_h, /*raised=*/true, kButtonFaceR,
+                        kButtonFaceG, kButtonFaceB);
+    }
+
+    // "Done" button centred at the bottom (w/2 - 32).
+    lay.done_x = win.x + win.w / 2.0f - 32.0f;
+    lay.done_y = win.y + win.h - h - 8.0f;
+    draw_dialog_button(ren, font, lay.done_x, lay.done_y, "Done");
+    return lay;
+}
+
+void draw_list_selection(SDL_Renderer* ren, const ListDialogLayout& lay, int visible_index) {
+    // The original inverts the video under the selected row (sub_442C28); in
+    // truecolour we fill a bevel-light band the caller draws its dark-ink
+    // item text over.
+    SDL_FRect band{lay.item_x - 2.0f, lay.item_y0 + static_cast<float>(visible_index) * lay.item_h,
+                   lay.item_w, lay.item_h};
+    SDL_SetRenderDrawColor(ren, kBevelLightR, kBevelLightG, kBevelLightB, 255);
+    SDL_RenderFillRect(ren, &band);
+}
+
+DialogRect acknowledge_dialog_rect(const FontTextures& font, const std::string& top,
+                                   const std::string& bottom) {
+    const float h = line_h(font);
+    const float lines_h = (!top.empty() && !bottom.empty()) ? 2.0f * h : h;
+    const float win_w = std::max(std::max(text_w(font, top), text_w(font, bottom)), 80.0f) + 64.0f;
+    const float win_h = 4.0f * h + 64.0f + lines_h;
+    return dialog_rect_vcentered(win_h, win_w);
+}
+
+DialogRect acknowledge_ok_rect(const FontTextures& font, const DialogRect& win,
+                               const std::string& ok_label) {
+    const float h = line_h(font);
+    // sub_414340's pinned button placement: x = width/2 - 32,
+    // y = height - 32 - fontheight - 6 (window-relative); the button sizes
+    // itself from its label inside sub_432298 (measure+16 x fontheight+6).
+    return DialogRect{win.x + win.w / 2.0f - 32.0f, win.y + win.h - 32.0f - h - 6.0f,
+                      text_w(font, ok_label) + 16.0f, h + 6.0f};
+}
+
+void draw_acknowledge_dialog(SDL_Renderer* ren, const FontTextures& font, const Sprite* winz,
+                             const std::string& top, const std::string& bottom,
+                             const std::string& ok_label, Uint8 ink_r, Uint8 ink_g, Uint8 ink_b,
+                             bool ok_pressed) {
+    const float h = line_h(font);
+    DialogRect win = acknowledge_dialog_rect(font, top, bottom);
+    draw_dialog_chrome(ren, win, winz);
+
+    // Lines at window-relative y = fontheight+32 (top) and +fontheight+2
+    // more (bottom), centered via sub_4172BA's `cx - (w+2)/2`.
+    const float line1_y = win.y + h + 32.0f;
+    if (!top.empty())
+        draw_dialog_text(ren, font, top, win.x + win.w / 2.0f - (text_w(font, top) + 2.0f) / 2.0f,
+                         line1_y, ink_r, ink_g, ink_b);
+    if (!bottom.empty())
+        draw_dialog_text(ren, font, bottom,
+                         win.x + win.w / 2.0f - (text_w(font, bottom) + 2.0f) / 2.0f,
+                         line1_y + h + 2.0f, ink_r, ink_g, ink_b);
+
+    DialogRect ok = acknowledge_ok_rect(font, win, ok_label);
+    draw_dialog_button(ren, font, ok.x, ok.y, ok_label, ok_pressed);
 }
 
 void draw_confirm_dialog(SDL_Renderer* ren, const FontTextures& font, const Sprite* winz,
@@ -172,11 +324,15 @@ void draw_confirm_dialog(SDL_Renderer* ren, const FontTextures& font, const Spri
     DialogRect win = dialog_rect_vcentered(win_h, win_w);
     draw_dialog_chrome(ren, win, winz);
 
+    // Prompt centring is sub_4172BA's exact `cx - (w+2)/2` (pseudo.c
+    // 18703-18704) — one px left of a plain (win.w - w)/2 for even widths
+    // (level&rounds audit 2026-07-12; the port's last unexplained constant).
     const float line1_y = win.y + h + 32.0f;
-    draw_dialog_text(ren, font, line1, win.x + (win.w - w1) / 2.0f, line1_y, ink_r, ink_g, ink_b);
+    draw_dialog_text(ren, font, line1, win.x + win.w / 2.0f - (w1 + 2.0f) / 2.0f, line1_y, ink_r,
+                     ink_g, ink_b);
     if (!line2.empty())
-        draw_dialog_text(ren, font, line2, win.x + (win.w - w2) / 2.0f, line1_y + h + 2.0f, ink_r,
-                         ink_g, ink_b);
+        draw_dialog_text(ren, font, line2, win.x + win.w / 2.0f - (w2 + 2.0f) / 2.0f,
+                         line1_y + h + 2.0f, ink_r, ink_g, ink_b);
 
     const float btn_y = win.y + win.h - 32.0f - h - 6.0f;
     draw_dialog_button(ren, font, win.x + win.w / 2.0f - 80.0f, btn_y, yes_label);
