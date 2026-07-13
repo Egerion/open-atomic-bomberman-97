@@ -444,12 +444,24 @@ const std::vector<Anim>& AssetStore::deaths_for(int player) const {
 const Sprite& AssetStore::frontend_pcx(const std::string& name) const {
     auto classic = front_pcx_.find(name);
     if (classic == front_pcx_.end()) {
+        // The main menu and the GLUE screens (options/setup/level-select) are
+        // SNAPPED to the shared master palette in the original: sub_42B9CE
+        // (30760) and sub_4148E5 (17342-17343) load MAINMENU/GLUE<n> through
+        // sub_4151CC -> sub_4150F0, the SAME snapping loader the match uses,
+        // with COLOR.PAL master left active (no per-screen palette upload).
+        // The logos/TITLE/DRAW/results backdrops instead bring their OWN
+        // palette (sub_42A088 -> sub_41522D) and are NOT snapped, so a
+        // name-keyed rule is exact: MAINMENU + GLUE<n> snap, everything else
+        // (TITLE, DRAW, WIN, WINZ, ...) stays raw. Verified in the binary
+        // (docs/re/facts.md "In-match colour quantization" front-end addendum).
+        const bool snap = name == "MAINMENU" || name.rfind("GLUE", 0) == 0;
         // Cache an entry for every request (even failures) so a missing file logs
         // once and thereafter returns the same empty Sprite the Screen skips.
         Sprite sp{};
         try {
             auto img = assets::pcx::load(game_dir_ / "DATA" / "RES" / (name + ".PCX"));
-            sdl::TexturePtr tex{make_texture(ren_, img)};
+            sdl::TexturePtr tex{
+                make_texture(ren_, img, SDL_SCALEMODE_NEAREST, snap ? &colorpal_ : nullptr)};
             sp = {tex.get(), img.width, img.height, 0, 0};
             front_textures_.push_back(std::move(tex));
         } catch (const std::exception& e) {
