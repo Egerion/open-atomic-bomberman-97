@@ -6,10 +6,21 @@
 
 namespace bomber::game {
 
-SDL_Texture* make_texture(SDL_Renderer* ren, const assets::Image& img, SDL_ScaleMode scale_mode) {
+SDL_Texture* make_texture(SDL_Renderer* ren, const assets::Image& img, SDL_ScaleMode scale_mode,
+                          const assets::colorpal::Palette* snap) {
+    // In-match master-palette snap (colorpal.hpp): quantize a COPY so the
+    // caller's decoded image is left intact (recolor paths reuse it). A no-op
+    // when snap is null/inert.
+    assets::Image snapped;
+    const assets::Image* src = &img;
+    if (snap && snap->ok()) {
+        snapped = img;
+        snap->remap(snapped);
+        src = &snapped;
+    }
     SDL_Surface* surf =
-        SDL_CreateSurfaceFrom(img.width, img.height, SDL_PIXELFORMAT_RGBA32,
-                              const_cast<std::uint8_t*>(img.rgba.data()), img.width * 4);
+        SDL_CreateSurfaceFrom(src->width, src->height, SDL_PIXELFORMAT_RGBA32,
+                              const_cast<std::uint8_t*>(src->rgba.data()), src->width * 4);
     if (!surf) return nullptr;
     SDL_Texture* tex = SDL_CreateTextureFromSurface(ren, surf);
     SDL_DestroySurface(surf);
@@ -87,18 +98,18 @@ void AniTextures::load(SDL_Renderer* ren, const std::filesystem::path& path,
     reset();
     data_ = assets::ani::load(path);
     textures_.assign(data_.frames.size(), nullptr);
-    for (std::size_t i = 0; i < data_.frames.size(); ++i) {
-        if (data_.frames[i].image.empty()) continue;
-        // In-match master-palette snap for classic map art (colorpal.hpp):
-        // the original quantizes every decoded cel to the shared 256-colour
-        // hardware palette; our raw RGB555 expand5 otherwise renders a few %
-        // brighter/more-saturated than the original.
-        if (snap) snap->remap(data_.frames[i].image);
-        textures_[i] = make_texture(ren, data_.frames[i].image);
-    }
+    // In-match master-palette snap for classic match art (colorpal.hpp): the
+    // original quantizes every decoded cel to the shared 256-colour hardware
+    // palette; our raw RGB555 expand5 otherwise renders a few % brighter/more-
+    // saturated. Passed to make_texture so the retained data_ image stays raw
+    // (recolored() re-snaps its own copies).
+    for (std::size_t i = 0; i < data_.frames.size(); ++i)
+        if (!data_.frames[i].image.empty())
+            textures_[i] = make_texture(ren, data_.frames[i].image, SDL_SCALEMODE_NEAREST, snap);
 }
 
-AniTextures AniTextures::recolored(SDL_Renderer* ren, const std::int32_t rgb[3]) const {
+AniTextures AniTextures::recolored(SDL_Renderer* ren, const std::int32_t rgb[3],
+                                   const assets::colorpal::Palette* snap) const {
     AniTextures out;
     out.data_ = data_;
     out.textures_.assign(out.data_.frames.size(), nullptr);
@@ -106,13 +117,14 @@ AniTextures AniTextures::recolored(SDL_Renderer* ren, const std::int32_t rgb[3])
         auto& f = out.data_.frames[i];
         if (f.image.empty()) continue;
         f.image = recolor_image(std::move(f.image), rgb);
-        out.textures_[i] = make_texture(ren, f.image);
+        out.textures_[i] = make_texture(ren, f.image, SDL_SCALEMODE_NEAREST, snap);
     }
     return out;
 }
 
 AniTextures AniTextures::recolored(SDL_Renderer* ren, const std::array<std::uint8_t, 256>& rmp,
-                                   const std::array<std::uint8_t, 3>& tail_rgb) const {
+                                   const std::array<std::uint8_t, 3>& tail_rgb,
+                                   const assets::colorpal::Palette* snap) const {
     // Per-frame dispatch: the index remap only exists for PALETTED (type 11)
     // frames; this install stores most player art as 16bpp type 4 (survey:
     // 2299 of 2327 frames), where recolor_image_rmp is a structural no-op —
@@ -130,7 +142,7 @@ AniTextures AniTextures::recolored(SDL_Renderer* ren, const std::array<std::uint
         if (f.image.empty()) continue;
         f.image = f.image.paletted() ? recolor_image_rmp(std::move(f.image), rmp)
                                      : recolor_image(std::move(f.image), tail);
-        out.textures_[i] = make_texture(ren, f.image);
+        out.textures_[i] = make_texture(ren, f.image, SDL_SCALEMODE_NEAREST, snap);
     }
     return out;
 }

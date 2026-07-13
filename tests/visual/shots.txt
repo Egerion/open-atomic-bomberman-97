@@ -8,13 +8,14 @@
 # VALUELST.RES/level rotation. Recapture procedure: see README.md.
 #
 # label                 tick  sha256
-# Recaptured 2026-07-13: the in-match master-palette colour snap (COLOR.PAL,
-# colorpal.hpp / facts.md "In-match colour quantization") now applies to the
-# classic field + tile/brick art, so the demo's FIELD10 tiles shift ~2-3% to
-# their master-palette colours. The FIELD10 field itself is identity (authored
-# in the palette); the visible win is FIELD1's dither, not in this demo level.
-walking                 10    a2c6ab596afa1a226fdf35846812ff9448dc169caf3cea0123fecd42f4e37d21
-bomb_pulse               40    db91369fe11ea8185c11e2e9164d0c108392ebec56327da2a1fad8bbd109705b
-explosion_mid_flame     65    3ab138acd9be7b1c4a1a77a34e8c8a19c3cc6b9ef21b45a307fb7200dc2c90cc
-brick_crumble           68    fa889e275ca070e71606ff95fdb655269d0dc94048a5b60f845e45cc9936a077
-powerup_revealed        76    28dd81d51742a2abf8b85d7a94a5c1797d0c4c36ed06103e7b54a6a48d92b6d9
+# Recaptured 2026-07-13 (twice): the in-match master-palette colour snap
+# (COLOR.PAL, colorpal.hpp / facts.md "In-match colour quantization") now
+# applies to EVERY match-drawn asset: field, tiles/bricks, and all sprites
+# (players, bombs, flames, powerups, poses, death anims). Front-end art and
+# DATA_HD are not snapped. The demo's FIELD10 field is identity; tiles +
+# sprites shift ~2-3% to their master-palette colours.
+walking                 10    1161e1dc8f3ab8332c772a33778ad357bfff60d9f68a721699e087147868afe4
+bomb_pulse               40    ba58c6fe53f5fd62488003e6c85f7a0ed4e0ed8d7664f3b88f993e7575a93da5
+explosion_mid_flame     65    97dc87ba575ad9d88078eb7ed675296b9d7947fd9d726db0486229c5137f1786
+brick_crumble           68    f1bee6eee66ae28fec90df72f71d351bcaf75d24a2c0d101a02ebbc7382a18de
+powerup_revealed        76    8f077ea7459cb8e0013dfb943555bf27b2eb508e0eaf816feb74cda4963e3d79

@@ -46,8 +46,16 @@ struct Anim {
 // Uploads an RGBA8 image with the requested sampling mode (nullptr on error).
 // Classic assets retain crisp nearest-neighbour sampling; high-resolution
 // override art uses linear sampling for a modern presentation.
+//
+// When `snap` is non-null and ok(), the image is run through the in-match
+// master-palette quantization (colorpal.hpp) before upload — the original
+// snaps EVERY match-time asset (field, tiles, sprites, flames, powerups) to
+// the one shared 256-colour hardware palette. Pass it for classic match art;
+// leave nullptr for front-end screens and DATA_HD truecolour, which the
+// original loads through its non-snapping path.
 SDL_Texture* make_texture(SDL_Renderer* ren, const assets::Image& img,
-                          SDL_ScaleMode scale_mode = SDL_SCALEMODE_NEAREST);
+                          SDL_ScaleMode scale_mode = SDL_SCALEMODE_NEAREST,
+                          const assets::colorpal::Palette* snap = nullptr);
 
 // Retargets the green armour of the pre-rendered player sprites, a faithful
 // port of the engine's remap-table builder sub_414A65 (0x414A65): a
@@ -95,17 +103,22 @@ public:
 
     // A copy with the fallback truecolour player-armour recolor (sub_414A65
     // approximation) applied to every frame. Used only when a colour has no
-    // `.RMP` file.
-    AniTextures recolored(SDL_Renderer* ren, const std::int32_t rgb[3]) const;
+    // `.RMP` file. `snap` (colorpal.hpp) quantizes AFTER the recolor — the
+    // original snaps the final displayed colour, so the recoloured result is
+    // constrained to the shared match palette exactly like every other cel.
+    AniTextures recolored(SDL_Renderer* ren, const std::int32_t rgb[3],
+                          const assets::colorpal::Palette* snap = nullptr) const;
 
     // A copy with the AUTHENTIC `.RMP` index-remap applied to every PALETTED
     // frame (the original blit's per-colour table, docs/re/player-colour.md).
     // tail_rgb = the `.RMP` tail percents (0..100): non-paletted 16bpp type-4
     // frames (most of this install — 2299 of 2327) instead get the truecolour
     // green-excess recolour targeting the same tail colour, so the whole set
-    // resolves to one colour rather than silently staying green.
+    // resolves to one colour rather than silently staying green. `snap` snaps
+    // AFTER recolor (see the sibling overload).
     AniTextures recolored(SDL_Renderer* ren, const std::array<std::uint8_t, 256>& rmp,
-                          const std::array<std::uint8_t, 3>& tail_rgb) const;
+                          const std::array<std::uint8_t, 3>& tail_rgb,
+                          const assets::colorpal::Palette* snap = nullptr) const;
 
     void reset();
 

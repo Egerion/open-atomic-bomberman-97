@@ -51,28 +51,34 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
                      e.what());
     }
     try {
-        kfont_.load(ren, ani_dir / "KFONT.ANI");
-        hurry_.load(ren, ani_dir / "HURRY.ANI");
-        bombs_.load(ren, ani_dir / "BOMBS.ANI");
-        duds_.load(ren, ani_dir / "DUDS.ANI");
+        // The in-match master-palette snap (colorpal.hpp) is applied to EVERY
+        // match-drawn asset — the original renders the whole match on one
+        // shared 256-colour palette. Front-end art (MISC cursor, EDIT tiles,
+        // the goldman wheel, backdrops, fonts) and DATA_HD are deliberately
+        // NOT snapped (the original loads those through its non-snapping path).
+        const auto* snap = &colorpal_;
+        kfont_.load(ren, ani_dir / "KFONT.ANI", snap);
+        hurry_.load(ren, ani_dir / "HURRY.ANI", snap);
+        bombs_.load(ren, ani_dir / "BOMBS.ANI", snap);
+        duds_.load(ren, ani_dir / "DUDS.ANI", snap);
         // MFLAME.ANI, not FLAME.ANI — CORRECTED 2026-07-09 (docs/re/facts.md
         // "ANI sequence-name audit"): MASTER.ALI comments out `;-flame.ani`
         // and loads `-mflame.ani` instead, so FLAME.ANI's "flame <piece>
         // green" sequences (7-step cycles) never enter the original's pool;
         // MFLAME.ANI's same-named sequences (5-step cycles) are the ones
         // actually shown.
-        flame_.load(ren, ani_dir / "MFLAME.ANI");
-        stand_.load(ren, ani_dir / "STAND.ANI");
-        walk_.load(ren, ani_dir / "WALK.ANI");
-        kick_.load(ren, ani_dir / "KICK.ANI");
-        shadow_.load(ren, ani_dir / "SHADOW.ANI");
+        flame_.load(ren, ani_dir / "MFLAME.ANI", snap);
+        stand_.load(ren, ani_dir / "STAND.ANI", snap);
+        walk_.load(ren, ani_dir / "WALK.ANI", snap);
+        kick_.load(ren, ani_dir / "KICK.ANI", snap);
+        shadow_.load(ren, ani_dir / "SHADOW.ANI", snap);
 
         // Animated floor-powerup art (POWERS.ANI, seq "power <name>"). Shared and
         // NOT player-coloured, loaded once. Cosmetic: a missing/broken file must
         // NOT abort the load — draw_powerups falls back to the static POW*.PCX.
         try {
             auto p = ani_dir / "POWERS.ANI";
-            if (fs::exists(p)) powers_.load(ren, p);
+            if (fs::exists(p)) powers_.load(ren, p, snap);
         } catch (const std::exception& e) {
             std::fprintf(stderr, "POWERS.ANI load failed: %s\n", e.what());
         }
@@ -83,13 +89,13 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
         // file must NOT abort the load — the tile simply isn't drawn.
         try {
             auto p = ani_dir / "CONVEYOR.ANI";
-            if (fs::exists(p)) conveyor_.load(ren, p);
+            if (fs::exists(p)) conveyor_.load(ren, p, snap);
         } catch (const std::exception& e) {
             std::fprintf(stderr, "CONVEYOR.ANI load failed: %s\n", e.what());
         }
         try {
             auto p = ani_dir / "EXTRAS.ANI";
-            if (fs::exists(p)) extras_.load(ren, p);
+            if (fs::exists(p)) extras_.load(ren, p, snap);
         } catch (const std::exception& e) {
             std::fprintf(stderr, "EXTRAS.ANI load failed: %s\n", e.what());
         }
@@ -101,7 +107,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
         // marker fallback in place (docs/re/facts.md "ANI sequence-name audit").
         try {
             auto p = ani_dir / "ALIENS1.ANI";
-            if (fs::exists(p)) aliens1_.load(ren, p);
+            if (fs::exists(p)) aliens1_.load(ren, p, snap);
         } catch (const std::exception& e) {
             std::fprintf(stderr, "ALIENS1.ANI load failed: %s\n", e.what());
         }
@@ -112,7 +118,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
         // abort the load — the bomb draw falls back to the normal pulse.
         try {
             auto p = ani_dir / "TRIGANIM.ANI";
-            if (fs::exists(p)) trigbomb_.load(ren, p);
+            if (fs::exists(p)) trigbomb_.load(ren, p, snap);
         } catch (const std::exception& e) {
             std::fprintf(stderr, "TRIGANIM.ANI load failed: %s\n", e.what());
         }
@@ -218,7 +224,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
         for (int i = 0; i < kCornerFiles; ++i) {
             auto p = ani_dir / ("CORNER" + std::to_string(i) + ".ANI");
             try {
-                if (fs::exists(p)) corner_[i].load(ren, p);
+                if (fs::exists(p)) corner_[i].load(ren, p, snap);
             } catch (const std::exception& e) {
                 std::fprintf(stderr, "cornerhead load failed (%s): %s\n", p.string().c_str(),
                              e.what());
@@ -232,7 +238,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
         for (int i = 0; i < kBwalkFiles; ++i) {
             auto p = ani_dir / ("BWALK" + std::to_string(i + 1) + ".ANI");
             try {
-                if (fs::exists(p)) bwalk_[i].load(ren, p);
+                if (fs::exists(p)) bwalk_[i].load(ren, p, snap);
             } catch (const std::exception& e) {
                 std::fprintf(stderr, "carry-bomb load failed (%s): %s\n", p.string().c_str(),
                              e.what());
@@ -247,7 +253,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
         for (int i = 0; i < kPunchFiles; ++i) {
             auto p = ani_dir / ("PUNBOMB" + std::to_string(i + 1) + ".ANI");
             try {
-                if (fs::exists(p)) punch_[i].load(ren, p);
+                if (fs::exists(p)) punch_[i].load(ren, p, snap);
             } catch (const std::exception& e) {
                 std::fprintf(stderr, "punch-pose load failed (%s): %s\n", p.string().c_str(),
                              e.what());
@@ -261,7 +267,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
         for (int i = 0; i < kPupFiles; ++i) {
             auto p = ani_dir / ("PUP" + std::to_string(i + 1) + ".ANI");
             try {
-                if (fs::exists(p)) pickup_[i].load(ren, p);
+                if (fs::exists(p)) pickup_[i].load(ren, p, snap);
             } catch (const std::exception& e) {
                 std::fprintf(stderr, "pickup-pose load failed (%s): %s\n", p.string().c_str(),
                              e.what());
@@ -273,7 +279,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
             "POWSPOOG", "POWGOLD",  "POWTRIG",  "POWJELLY", "POWEBOLA", "POWRAND"};
         for (int i = 0; i < sim::kPowerupKinds; ++i) {
             auto img = assets::pcx::load(res_dir / (std::string(kPowFiles[i]) + ".PCX"));
-            sdl::TexturePtr tex{make_texture(ren, img)};
+            sdl::TexturePtr tex{make_texture(ren, img, SDL_SCALEMODE_NEAREST, snap)};
             powerups_[i] = {tex.get(), img.width, img.height, 0, 0};
             powerup_textures_.push_back(std::move(tex));
         }
@@ -283,7 +289,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
             auto p = ani_dir / ("XPLODE" + std::to_string(i) + ".ANI");
             if (!fs::exists(p)) continue;
             AniTextures ani;
-            ani.load(ren, p);
+            ani.load(ren, p, snap);
             collect_death_anims(ani, deaths_);
             xplode_.push_back(std::move(ani));
         }
@@ -305,9 +311,12 @@ void AssetStore::build_player_sets(const std::int32_t colors[][3]) {
         const bool use_rmp = (p < kColors) && rmp_ok_[p];
         auto recolor = [&](const AniTextures& src) {
             // rmp_rgb_[p] = the .RMP tail — the fallback target for the 16bpp
-            // type-4 frames the index remap cannot touch (sprites.cpp).
-            return use_rmp ? src.recolored(ren_, rmp_[p], rmp_rgb_[p])
-                           : src.recolored(ren_, colors[p]);
+            // type-4 frames the index remap cannot touch (sprites.cpp). The
+            // in-match master-palette snap runs AFTER the recolor (colorpal.hpp)
+            // so the player sprites are constrained to the shared match palette
+            // like every other cel.
+            return use_rmp ? src.recolored(ren_, rmp_[p], rmp_rgb_[p], &colorpal_)
+                           : src.recolored(ren_, colors[p], &colorpal_);
         };
 
         walk_c_[p] = recolor(walk_);

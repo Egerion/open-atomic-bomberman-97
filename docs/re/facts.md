@@ -4820,9 +4820,16 @@ truecolour overrides or the front-end screens (the original loads those
 through the non-snapping `sub_41BDA4`/`sub_41522D` path). A missing COLOR.PAL
 leaves the quantizer inert (raw decode, the pre-fix look). Tests:
 `tests/test_colorpal.cpp` (synthetic-file mechanics); visual goldens
-recaptured (FIELD10 tiles shift ~2-3%). NOT yet snapped: the character/bomb/
-powerup/flame sprites (also type-4; a subtle ~2-3% follow-up — the field is
-the visible win).
+recaptured. Applied to EVERY match-drawn asset (2026-07-13 follow-up, per the
+user's "it's everywhere"): field, tiles/bricks, and all sprites — bombs, duds,
+flames, powerups, players, the walk/stand/kick/carry/punch/pickup/cornerhead
+poses, and the death animations. Player/bomb sprites snap AFTER the .RMP/
+truecolour recolour (make_texture's snap param via AniTextures::recolored), so
+the shared-palette constraint applies to the final displayed colour. NOT
+snapped: the front-end screens (MISC cursor, EDIT tiles, goldman wheel,
+backdrops, fonts) and the DATA_HD truecolour overrides, which the original
+loads through its non-snapping path (`sub_41BDA4`/`sub_41522D`). The one large
+shift is FIELD1's dither; everything else is a subtle ~2-3%.
 
 ## Still guessed — not yet extracted from the binary
 
