@@ -405,10 +405,17 @@ const AssetStore::StagePreview& AssetStore::stage_preview(int stage) const {
     // a missing/broken file logs once and thereafter just draws nothing —
     // same guarded-cache shape as frontend_pcx() above (docs/re/setup-
     // screens.md "sample-block preview").
+    // The LEVEL & ROUNDS preview swatch is snapped in the original: sub_406AA3
+    // loads FIELD<n>.PLT and the tile art through the SAME snapping loader
+    // sub_4150F0 the match uses (pseudo.c 7985), NOT the front-end own-palette
+    // path. So the preview's FIELD1 reads the muted master-palette dither just
+    // like an in-match FIELD1, not the raw vivid blue (docs/re/facts.md
+    // "In-match colour quantization").
     StagePreview sp{};
     try {
         AniTextures tiles;
-        tiles.load(ren_, game_dir_ / "DATA" / "ANI" / ("TILES" + std::to_string(stage) + ".ANI"));
+        tiles.load(ren_, game_dir_ / "DATA" / "ANI" / ("TILES" + std::to_string(stage) + ".ANI"),
+                   &colorpal_);
         const std::string n = std::to_string(stage);
         sp.solid = resolve_sequence(tiles, "tile " + n + " solid");
         sp.brick = resolve_sequence(tiles, "tile " + n + " brick");
@@ -419,7 +426,7 @@ const AssetStore::StagePreview& AssetStore::stage_preview(int stage) const {
     try {
         auto img = assets::pcx::load(game_dir_ / "DATA" / "RES" /
                                      ("FIELD" + std::to_string(stage) + ".PCX"));
-        sdl::TexturePtr tex{make_texture(ren_, img)};
+        sdl::TexturePtr tex{make_texture(ren_, img, SDL_SCALEMODE_NEAREST, &colorpal_)};
         sp.field = tex.get();
         stage_preview_field_.emplace(stage, std::move(tex));
     } catch (const std::exception& e) {
