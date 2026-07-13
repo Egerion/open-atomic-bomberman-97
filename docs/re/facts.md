@@ -4832,26 +4832,32 @@ loads through its non-snapping path (`sub_41BDA4`/`sub_41522D`). The one large
 shift is FIELD1's dither; everything else is a subtle ~2-3%.
 
 **Front-end vs match, verified in the binary (2026-07-13, per "check the
-screens too, exactly").** Two decode entry points: `sub_4150F0` = `sub_41BE63`
-SNAPS (decode + `sub_41BBBD` remap to `byte_495390`/COLOR.PAL); `sub_415120` =
-`sub_41BDA4` does NOT. The only caller of the non-snapping `sub_415120` is
-`sub_41522D` (17713-17736), which decodes a `.plt`/PCX with its OWN palette,
-converts it to 6-bit (`>>2`) and uploads it as the ACTIVE hardware palette
-(`sub_42C534`) — i.e. the screen brings its own colours. `sub_41522D` is
-called from exactly one place, the full-screen backdrop primitive `sub_42A088`
-(29440), whose callers are the logos, TITLE, DRAW, and the results/victory
-screens (29825/30130/30203-30207). So every full-screen FRONT-END backdrop
-uses its own palette, NO snap — the port blitting them raw is 1:1. The
-`sub_4150F0` (snapping) callers are: `sub_4165FC` (18429, the match asset
-loader), `sub_406AA3` (**7985 — the LEVEL & ROUNDS preview swatch: field +
-tiles ARE snapped, same loader as the match**; ported — `stage_preview` now
-snaps, so its FIELD1 reads the muted dither too), `sub_41302D` (16370, the
-`.BM` viewer's inline images), and `sub_414DF4` (17546, WINZ.PCX the dialog
-9-patch, at graphics init). WINZ measured raw→snap = **2.15/channel mean, max
-9** (its border blue (0,91,111) is unchanged — authored in the master
-palette), so it is left raw as imperceptible; the rare `.BM` inline images are
-likewise left raw. Both are technically snapped in the original but with no
-visible effect / negligible surface.
+screens too, exactly" — two passes; the first split was WRONG and is corrected
+here).** Two decode entry points: `sub_4150F0` = `sub_41BE63` SNAPS (decode +
+`sub_41BBBD` remap to `byte_495390`/COLOR.PAL); `sub_415120` = `sub_41BDA4`
+does NOT. The distinction is by SCREEN, and there are TWO front-end groups:
+
+- **Own-palette, NOT snapped** (`sub_42A088` @29440 -> `sub_41522D`, which
+  decodes with `sub_415120` and UPLOADS the screen's own palette via
+  `sub_42C534`): the logos, TITLE, DRAW, and results/victory screens
+  (callers 29825/30130/30203-30207). Port blitting these raw is 1:1.
+- **SNAPPED to the master palette, no per-screen upload** (`sub_4151CC`
+  @17691 -> `sub_4150F0`, blits into the backdrop save page with COLOR.PAL
+  master left active): the **main menu** (`sub_42B9CE` 30760, MAINMENU) and
+  **every GLUE backdrop** (`sub_4148E5` 17342, the options/setup/level-select
+  screens). These were the earlier mistake — the port blitted MAINMENU/GLUE
+  raw. Ported: `frontend_pcx` now snaps MAINMENU + GLUE<n>. Measured:
+  MAINMENU is IDENTITY (authored in the master palette, so the main menu
+  already matched), but GLUE0 shifts 6.6/channel over 66% of its pixels
+  (GLUE3 identity) — the pre-match backdrops now match for the non-master
+  glue pictures.
+
+Also snapped (`sub_4150F0`): the LEVEL & ROUNDS preview swatch (`sub_406AA3`
+7985, field + tiles — `stage_preview` now snaps, FIELD1 reads the muted
+dither), the `.BM` viewer's inline images (`sub_41302D` 16370), and WINZ.PCX
+the dialog 9-patch (`sub_414DF4` 17546). WINZ measured raw→snap **2.15/channel
+mean, border blue (0,91,111) unchanged** (master-palette-authored), and the
+`.BM` inline images are rare — both left raw as imperceptible, documented.
 
 ## Still guessed — not yet extracted from the binary
 
