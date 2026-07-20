@@ -10,6 +10,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
+#include "bomber/sim/rng.hpp"
 #include "helpers.hpp"
 
 using namespace bomber::sim;
@@ -118,4 +119,49 @@ TEST_CASE("colour fields are hashed state") {
     d.state().flame[0][1] = 10;
     d.state().flame_colour[0][1] = 2;
     CHECK(c.hash() != d.hash());
+}
+
+// Brick-reveal cure roll (empty hook, RNG-count only). sub_425107's first
+// statement on every brick ignite is `if (!(rand_() % 30)) sub_42BE0B()`;
+// sub_42BE0B is empty (pseudo.c 30942), so the roll only CONSUMES one RNG
+// draw with no gameplay effect. The port must reproduce that draw or its
+// whole downstream RNG stream drifts one step per brick reveal. Verified by
+// two identical sims where one bomb's blast hits a plain brick (no hidden
+// token, no overpowered relocate, no floor powerup -> the ONLY RNG that tick
+// is the cure roll) and the other's hits blank floor: the brick run's rng
+// must be exactly one xorshift step ahead of the blank run's.
+TEST_CASE("a brick ignite consumes exactly one RNG draw (empty cure hook)") {
+    auto build = [](bool brick) {
+        MatchConfig cfg = open_config();  // (odd,odd) pillars, no scattered powerups
+        Simulation s(cfg);
+        State& st = s.state();
+        // Keep both players ALIVE (2 sides, else bombs F1's round-end freeze
+        // holds the fuse and it never explodes) but well clear of the blast so
+        // no death scatter draws. Player 1 stays at its (14,10) corner spawn.
+        st.players[0].x = 8 * kTileWF + kTileWF / 2;
+        st.players[0].y = 8 * kTileHF + kTileHF / 2;
+        // (3,0) is blank in open_config (y even); make it a brick in one run.
+        if (brick) st.cells[0][3] = Cell::Brick;
+        // A bomb at (2,0), flame 1, fuse 1: its right arm hits (3,0) and nothing
+        // else it touches ((1,0),(2,1),(2,0)) draws RNG. hidden[0][3] is None
+        // (spawn_counts 0), so the reveal path draws nothing but the cure roll.
+        put_bomb(st, 2, 0, /*owner=*/0, /*colour=*/0, /*flame=*/1, /*fuse=*/1);
+        return s;
+    };
+    Simulation with_brick = build(true), no_brick = build(false);
+    const std::uint32_t rng0 = with_brick.state().rng;
+    REQUIRE(no_brick.state().rng == rng0);  // identical setup RNG position
+
+    with_brick.tick(TickInputs{});  // fuse 1 -> 0, explodes, right arm hits the brick
+    no_brick.tick(TickInputs{});    // same, but the arm runs into blank floor
+
+    REQUIRE(with_brick.state().burning[0][3] > 0);  // the brick really ignited
+    // Blank run: no RNG drawn this tick. Brick run: exactly the one cure roll.
+    CHECK(no_brick.state().rng == rng0);
+    // One xorshift32 step (the rng.hpp stream) applied to the pre-explosion rng.
+    std::uint32_t expected = rng0;
+    expected ^= expected << 13;
+    expected ^= expected >> 17;
+    expected ^= expected << 5;
+    CHECK(with_brick.state().rng == expected);
 }

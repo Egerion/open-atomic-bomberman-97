@@ -75,8 +75,18 @@
 # flame cross) -- the moves are the intended consequence of the now-faithful
 # setup scatter, same reason test_golden B/C moved. headless 49/49 green.
 # (ASCII only in this file -- non-ASCII bytes break cmake file(STRINGS).)
+# 2026-07-20 brick-reveal cure roll (facts.md "Brick-reveal cure roll"):
+# sub_425107 draws one rand%30 per brick ignite (calling an EMPTY hook), a
+# pure RNG-count draw the port was missing. Added it -> the demo's RNG stream
+# shifts from the FIRST brick destruction onward. Only the three post-brick
+# shots moved (explosion_mid_flame t65, brick_crumble t68, powerup_revealed
+# t76); walking t10 and bomb_pulse t40 (both BEFORE any brick is destroyed)
+# are byte-identical -- crisp confirmation the draw only enters the stream at
+# brick-reveal time. brick_crumble BMP eyeballed (flame cross + crumbling
+# brick + player, coherent). headless 49/49 green (goldens unaffected: their
+# blasts stay inside the radius-2 spawn pocket and reach no intact brick).
 walking                 10    b712e5c1f4749837e2d0e4f3fe871c520ab1a32132d86fa5134157f575d4551b
 bomb_pulse               40    60fda181cfdf47a55418a88a98ad626ac2db942c2e45ee60bce18eb60451a4ad
-explosion_mid_flame     65    6cf6a9e82ca43588991e0beb3158d4da0e9e421334bbe1b7de623846f7f21962
-brick_crumble           68    618e06e00cb9a81c737200b2582994a2bf97a38ca4d506ab09febb02e0fc573c
-powerup_revealed        76    69c47165c281c4452db8cf1068e997720c229d6fa2df45af0d626ddc5c130597
+explosion_mid_flame     65    1e06b6f2d5b9f27414c4e8c520c3c08c374a8bd280c6eb8403c2cd34982cfe4b
+brick_crumble           68    a9817642ddde3b57e68e3b56fa46a98c9571181360a5dd7f51a247b9633fb6fb
+powerup_revealed        76    e3284a4d93e1ef5d52826f6c528f0b9b08913774dd0859393efb18418f9f82cd

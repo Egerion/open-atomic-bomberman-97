@@ -5107,6 +5107,41 @@ future disassembly pass (e.g. covering code outside the currently
 transliterated range, or a closer register-level read of `sub_4214BC`'s
 neighbourhood) finds the real mechanism, replace this port and its citation.
 
+## Brick-reveal cure roll (empty hook, RNG-count only) — CONFIRMED (2026-07-20, `sub_425107`/`sub_42BE0B`)
+
+`sub_425107` (the brick-reveal/relocate routine the flame arm calls on every
+brick ignite, pseudo.c 26274) opens with, as its very FIRST statement:
+
+```c
+if ( !(rand_() % 30) )
+    sub_42BE0B();
+```
+
+and `sub_42BE0B` is an EMPTY function (pseudo.c 30942, body `{ ; }` — a
+dead/stubbed debug hook; its only other caller sits behind an equally-inert
+path). So the roll has **no gameplay effect** — it merely CONSUMES one
+`rand_()` draw per brick ignite. That still matters: the RNG stream is the
+determinism contract, so a port that skips this draw runs one step short per
+brick reveal, and every downstream random outcome (which powerup a *later*
+reveal shows, a disease roll, a head-hit or death scatter tile) drifts out of
+step with the original on any brick-bearing match — the classic "small
+differences everywhere."
+
+**Ported** in `FlameSystem::spread_to`'s brick branch as `(void)random_below(s,
+30)`, unconditional and BEFORE the relocate/reveal work (exactly where
+sub_425107 does it, also firing on a re-hit of an already-crumbling brick,
+matching the per-ignite call). `tests/test_flame_colour.cpp` pins that a lone
+brick ignite advances `State::rng` by exactly one xorshift step (two identical
+sims, one blast into a plain brick, one into blank floor). Golden hashes are
+unaffected — every golden scenario's blasts stay inside the radius-2 spawn
+pocket and reach no intact brick — but the demo match destroys bricks, so the
+three post-brick visual-golden shots (t65/t68/t76) were recaptured while
+t10/t40 (pre-brick) stayed byte-identical.
+
+(Provenance: fidelity-audit batch-2 flagged this as a pre-existing systematic
+RNG-count omission; native-port transliteration of sub_425107/sub_42BE0B made
+the empty hook visible at source level. docs/re/fidelity-audit.md.)
+
 ## Still guessed — not yet extracted from the binary
 
 | Constant | Current value | Status |

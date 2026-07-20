@@ -125,6 +125,20 @@ bool FlameSystem::spread_to(int tx, int ty, std::uint8_t owner, std::uint8_t col
         // docs/re/facts.md "Brick crumble timing".
         s.burning[ty][tx] = static_cast<std::uint8_t>(
             std::clamp<std::int32_t>(s.tuning.brick_burn_frames, 1, 255));
+        // sub_425107's very FIRST statement, before any relocate/reveal work,
+        // is `if (!(rand_() % 30)) sub_42BE0B();` (pseudo.c 26288-26291). But
+        // sub_42BE0B is an EMPTY function (pseudo.c 30942 `{ ; }` — a dead/
+        // stubbed debug hook), so the roll has NO gameplay effect — it only
+        // CONSUMES one RNG draw per brick ignite. Reproduce that draw (result
+        // discarded) so the RNG stream stays byte-aligned with the original:
+        // without it the port ran one draw short per brick reveal, so every
+        // downstream random outcome (which powerup a later reveal picks, a
+        // disease roll, a scatter tile) drifted out of step with the original
+        // on any brick-bearing match. Unconditional and BEFORE the relocate/
+        // reveal, exactly where sub_425107 does it (also fires on a re-hit of
+        // an already-crumbling brick, matching the per-ignite call). docs/re/
+        // facts.md "Brick-reveal cure roll (empty hook, RNG-count only)".
+        (void)random_below(s, 30);
         // Punch/Grab/SuperDisease may relocate instead of revealing here —
         // see relocate_overpowered_here. Runs BEFORE the reveal check below,
         // exactly where sub_425107 sits relative to LABEL_33 in the original
