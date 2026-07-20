@@ -177,13 +177,28 @@ bool RoverSystem::step(Rover& r, int rover_index) {
         // running "score" field of its own to add to (docs/re/campaign.md
         // port status: campaign scoring lives above the sim, like the
         // AI-kill-score id 1300 already does).
+        // FIX (rovers F1, docs/re/audit/tileregen_rovers.md Finding 1):
+        // sub_401B5C (raw disasm 0x401E24-0x401E82, confirmed via
+        // `native/tools/disasm.py 0x401B5C 0x401F76`) does NOT branch out of
+        // the pixel-budget loop on flame contact -- it sets the dead flag
+        // and falls straight through into the same-tile landing-kill check
+        // below, then unconditionally `jmp`s (0x401ED3 -> 0x401c0f) back to
+        // the loop's own top, consuming the REST of this tick's
+        // move_budget. That can re-enter this very branch on a later tile
+        // crossed in the same tick, re-awarding the flame owner's kill-score
+        // each time (the dead flag is never consulted inside the loop, only
+        // at the top of the NEXT call -- reaping/deactivation is deferred to
+        // this rover's next tick(), which the port already does for free by
+        // simply not calling step() again once r.alive is false and by
+        // erasing it after this tick's batch). So: mark dead, push the
+        // event, but do NOT return -- let control fall through to the
+        // landing-tile kill and keep looping.
         if (grid::in_grid(ntx, nty) && s.flame[nty][ntx] > 0) {
             const std::uint8_t owner = s.flame_owner[nty][ntx];
             s.events.push_back({Event::Type::RoverDied, static_cast<std::int8_t>(rover_index),
                                 static_cast<std::int8_t>(ntx), static_cast<std::int8_t>(nty),
                                 static_cast<std::int8_t>(owner)});
             r.alive = false;
-            return false;
         }
 
         // Landing-tile kill (sub_421CB5 + sub_41DE63): a live, non-COMPUTER
@@ -220,7 +235,10 @@ bool RoverSystem::step(Rover& r, int rover_index) {
                                 static_cast<std::int8_t>(ntx), static_cast<std::int8_t>(nty), -1});
         }
     }
-    return true;
+    // r.alive may have gone false mid-loop (flame death, above) without
+    // stopping the loop -- return its final state so tick()'s live-count
+    // and erase-if-dead behaviour is unchanged from before this fix.
+    return r.alive;
 }
 
 void RoverSystem::tick() {

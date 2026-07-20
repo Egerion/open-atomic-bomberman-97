@@ -70,7 +70,9 @@ const char* refusal_reason(const State& s, int i) {
 TEST_CASE("A: solo refill is one tick after a normal explosion") {
     Simulation s(open_config());
     State& st = s.state();
-    st.players[1].alive = false;
+    // player 1 stays alive at its far (14,10) corner (2-side quorum): this test
+    // measures a real explosion's refill timing, and with 1 side the bombs F1
+    // freeze would hold the fuse and it never explodes.
     Player& p = st.players[0];
     p.max_bombs = 1;
     p.flame = 1;  // blast reaches only (1,0)/(0,1); a bystander tile stays safe
@@ -135,9 +137,10 @@ TEST_CASE("B: constipation refuses every drop, flash cue always renderable") {
 }
 
 // --- C: stun blocks placement for its full window, then recovers ---------
-// head_stun_frames defaults to 16 FRAMES, burned 3 per 20 Hz tick (facts.md
-// "Canonical frame cadence") — ~0.27 s: a bomb bouncing on the head
-// (PowerupSystem::head_hit) locks placement out for about a quarter second.
+// head_stun_frames defaults to 16 FRAMES, burned kSubFrames per 20 Hz tick
+// (facts.md "Canonical frame cadence"): a bomb bouncing on the head
+// (PowerupSystem::head_hit) locks placement out for 16 canonical frames —
+// ~89 ms at the measured ~180 fps cadence, so barely beyond one tick.
 TEST_CASE("C: a head-hit-sized stun blocks placement for its whole 16-frame window") {
     Simulation s(open_config());
     State& st = s.state();
@@ -148,21 +151,29 @@ TEST_CASE("C: a head-hit-sized stun blocks placement for its whole 16-frame wind
     p.stun = st.tuning.head_stun_frames;
     const int stun0 = p.stun;
 
+    // Every tick the stun fully covers refuses the press outright (the key
+    // never acquires while +58 > 0, and LABEL_246 sees it blocked).
     int refused_stun = 0;
-    long long first_place = -1;
-    for (int t = 0; t < stun0 + 6; ++t) {
+    const int full_ticks = stun0 / kSubFrames;  // ticks with every sub-frame stunned
+    for (int t = 0; t < full_ticks; ++t) {
         const char* r = refusal_reason(st, 0);
+        put(p, 4, 4);
+        s.tick(press1(0));
+        if (r && std::string(r) == "STUN" && !placed_this_tick(s, 0)) ++refused_stun;
+    }
+    CHECK(refused_stun == full_ticks);  // refused through the whole covered window
+
+    // The remainder of the window dies mid-tick; a held press lands as soon
+    // as the last stunned sub-frame passes.
+    long long first_place = -1;
+    for (int t = 0; t < 6 && first_place < 0; ++t) {
         put(p, 4, 4);
         s.tick(TickInputs{});
         s.tick(press1(0));
-        if (r && std::string(r) == "STUN" && !placed_this_tick(s, 0)) ++refused_stun;
-        if (placed_this_tick(s, 0) && first_place < 0) first_place = static_cast<long long>(st.tick);
+        if (placed_this_tick(s, 0)) first_place = static_cast<long long>(st.tick);
     }
     std::printf("[C] stun0=%d refused_stun=%d first_place=%lld\n", stun0, refused_stun, first_place);
-    // 16 frames span ceil(16/3) = 6 blocked ticks = >= 2 of this loop's
-    // 2-tick (release+press) iterations still refused.
-    CHECK(refused_stun >= 2);  // a run of refusals through the stun window
-    CHECK(first_place >= 0);   // recovers once stun hits 0
+    CHECK(first_place >= 0);  // recovers once stun hits 0
 }
 
 // --- D / F: chain-queue does NOT inflate the live-bomb count -------------
@@ -173,7 +184,9 @@ TEST_CASE("C: a head-hit-sized stun blocks placement for its whole 16-frame wind
 TEST_CASE("F: a chained bomb frees the owner's slot on its own deferred tick (no inflation)") {
     Simulation s(open_config());
     State& st = s.state();
-    st.players[1].alive = false;
+    // player 1 stays alive at its far (14,10) corner (2-side quorum): this test
+    // measures the chained slot-free timing across two real explosions, frozen
+    // by bombs F1 if only 1 side remains.
     Player& p = st.players[0];
     p.max_bombs = 2;
     p.flame = 3;  // A at (0,0) reaches (2,0)

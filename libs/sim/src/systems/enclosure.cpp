@@ -156,6 +156,21 @@ void EnclosureSystem::drop_wall(int wx, int wy) {
             // pass (which runs before enclosure.update() in our own tick
             // order) instead of exploding here — the faithful equivalent.
             b.fuse = 1;
+            // FIX (enclosure F1, docs/re/audit/enclosure.md Finding 1):
+            // sub_426818's bomb-crush loop (native/src/game/batch_0x42583B.cpp
+            // lines 769-820; pseudo.c 27262 `sub_423209((int)v6, -1)` then an
+            // unconditional `goto LABEL_47`, pseudo.c 27263) queues only the
+            // FIRST grounded bomb it finds on the crushed tile per drop event
+            // -- there is no path back to the top of that while(1) loop on
+            // the ON branch, so the search runs at most once. A second
+            // grounded bomb sharing the exact same tile (structurally
+            // possible: sub_422E48 is a linear scan by cell coordinate, not
+            // a 1:1 per-cell grid) is left untouched by this event. Break
+            // after the first match to match; the OFF branch below
+            // deliberately keeps looping to exhaustion (matches
+            // sub_424841's fall-through re-search, no goto LABEL_47 on that
+            // path).
+            break;
         } else {
             b.active = false;
             if (s.players[b.owner].bombs_placed > 0) --s.players[b.owner].bombs_placed;

@@ -12,6 +12,17 @@ namespace bomber::sim {
 
 struct Tuning {
     // Timing reference: original runs a nominal 20 frames/second (id 25/30).
+    // Round-start input freeze: sub_4214BC arms dword_4621E0 = 50ms ×
+    // getvalue(30) at round init (pseudo.c ~23959), and sub_41F29B's
+    // acquisition gate (`v113 && !dword_4621E0`, 23028) skips BOTH the AI
+    // brain and the human DirectInput read while it runs — nobody moves or
+    // acts for the first getvalue(30) × 50 ms ≈ 1 s of every round (the
+    // sprite colour-shuffle window). getvalue(30)'s own legend is "how many
+    // frames per second are we gonna attempt to get?" — the engine reuses
+    // the 20 fps target as "one second's worth of 50 ms frames", so the
+    // value doubles as a TICK count for us. docs/re/facts.md "Round-start
+    // input freeze".
+    std::int32_t input_freeze_ticks = 20;  // id 30
     std::int32_t fuse_frames = 40;         // id 41
     std::int32_t start_speed = 923;        // id 42, 1/100 px per frame
     std::int32_t skate_speed_bonus = 150;  // id 90
@@ -211,6 +222,7 @@ struct Tuning {
     bool apply(int id, std::int64_t value) {
         auto v = static_cast<std::int32_t>(value);
         switch (id) {
+            case 30: input_freeze_ticks = v; return true;
             case 41: fuse_frames = v; return true;
             case 42: start_speed = v; return true;
             case 90: skate_speed_bonus = v; return true;

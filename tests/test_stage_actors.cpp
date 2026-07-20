@@ -329,11 +329,20 @@ TEST_CASE("a jelly bomb bounces off a warphole instead of entering it") {
     Bomb& b = add_bomb(st, 3, 0, /*moving=*/true, Direction::Right);
     b.jelly = true;
 
-    run(s, 10, TickInputs{});  // roll east and hit the warphole's doorstep
+    // Roll east into the warphole's doorstep and ping-pong. (A jelly bomb never
+    // stops, so with the faster kicked speed — bombs F2 — it may reverse more
+    // than once within the window; assert the invariant, not the final dir.)
+    bool bounced = false;
+    for (int t = 0; t < 10; ++t) {
+        s.tick(TickInputs{});
+        for (const auto& e : s.state().events)
+            if (e.type == Event::Type::JellyBounced) bounced = true;
+        CHECK(st.bombs[0].tile_x() <= 4);  // never crosses onto the warphole (5,0)
+    }
 
     REQUIRE_FALSE(st.bombs.empty());
-    CHECK(st.bombs[0].tile_x() <= 4);       // never crossed onto (5,0)
-    CHECK(st.bombs[0].dir == Direction::Left);  // reversed (ping-pong), like a wall
+    CHECK(bounced);                   // reversed off the warphole, like a wall
+    CHECK(st.bombs[0].moving);        // still ping-ponging — never stopped
     CHECK_FALSE(saw_warp(s));
 }
 

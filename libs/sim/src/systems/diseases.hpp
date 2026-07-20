@@ -20,8 +20,9 @@ public:
     // flag — only the first disease of a batch plays a voice line.
     void give(int idx, Disease d, bool announce);
 
-    // The skull powerup: `count` random diseases (rand()%9). Swap is only
-    // eligible when there is somebody to swap with, else it is re-rolled.
+    // The skull powerup: `count` random diseases (rand()%9). A Swap roll with
+    // nobody to swap with is lost (no teleport) but STILL announces, matching
+    // sub_41DFB6's announce-before-target-scan order (diseases.md finding 1).
     // Skull = 1, purple "super" skull = 3 (sub_41E21E cases 2 / 0xB).
     void assign_random(int idx, int count);
 
@@ -34,8 +35,6 @@ public:
     void spread_and_age();
 
 private:
-    bool has_swap_target(int idx) const;
-
     State& s_;
 };
 

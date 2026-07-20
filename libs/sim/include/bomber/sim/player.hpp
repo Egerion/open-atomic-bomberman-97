@@ -130,6 +130,11 @@ struct Player {
     std::int32_t carried_fuse = 0, carried_flame = 2;
     bool carried_jelly = false, carried_trigger = false;
     std::uint8_t carried_owner = 0;
+    // The carried bomb's colour (Bomb::colour): the original never recreates
+    // a grabbed bomb — it just flips its motion state to 3 — so both halves
+    // of its +60 dword (colour byte AND owner word) survive the carry
+    // untouched. Preserved here for the same reason carried_owner is.
+    std::uint8_t carried_colour = 0;
     bool jelly = false;
     bool prev_action1 = false;  // for edge detection (part of state!)
     bool prev_action2 = false;

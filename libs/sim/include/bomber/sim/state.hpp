@@ -22,6 +22,14 @@ struct State {
     std::uint64_t tick = 0;
     std::uint32_t rng = 0x12345678;
     std::int32_t ticks_left = 0;  // match countdown; 0 = time up (draw)
+    // Round-start input freeze, in ticks (dword_4621E0: armed to 50ms ×
+    // getvalue(30) ≈ 1 s by round init sub_4214BC, counted down at the top
+    // of every player pass, and while nonzero sub_41F29B's `v113 &&
+    // !dword_4621E0` gate skips BOTH the AI brain and the human input read —
+    // nobody moves or acts during the opening colour-shuffle second). Armed
+    // by build_state from Tuning::input_freeze_ticks; 0 on raw test states.
+    // docs/re/facts.md "Round-start input freeze".
+    std::int32_t input_freeze = 0;
     bool hurry = false;           // walls are closing in
     std::int32_t enclose_index = 0;
     std::int32_t enclose_timer = 0;
@@ -70,8 +78,16 @@ struct State {
     std::array<std::array<PowerupType, kGridWidth>, kGridHeight> floor{};
     // Remaining ticks of flame in a cell (0 = none).
     std::array<std::array<std::uint8_t, kGridWidth>, kGridHeight> flame{};
-    // Which player's bomb produced the flame (valid while flame > 0).
+    // Which player's bomb produced the flame (valid while flame > 0) — the
+    // KILL-CREDIT owner (flame record word +62), which a chain hit rewrites
+    // to the chainer before the chained bomb explodes.
     std::array<std::array<std::uint8_t, kGridWidth>, kGridHeight> flame_owner{};
+    // Which player's COLOUR the flame is drawn in (valid while flame > 0) —
+    // the igniting bomb's creation-time colour (Bomb::colour, the original's
+    // flame record byte +60), which unlike flame_owner never transfers on a
+    // chain: a chained bomb's flames keep the original placer's colour.
+    // docs/re/facts.md "Bomb/flame colour is not the owner".
+    std::array<std::array<std::uint8_t, kGridWidth>, kGridHeight> flame_colour{};
     // Which flame-arm PIECE this cell shows (valid while flame > 0), decided
     // ONCE at ignition (FlameKind — see its own doc comment in types.hpp for
     // the full sub_42331C/off_45BEA0 citation). The epicentre is always
@@ -141,6 +157,24 @@ struct State {
 
     // Cleared at the start of every tick; excluded from state_hash().
     std::vector<Event> events;
+
+    // Per-sub-frame presentation trace: player i's position + facing at the
+    // END of canonical sub-frame f of THIS tick (constants.hpp kSubFrames).
+    // The original renders every DISPLAYED frame at the player's live
+    // per-frame position, so its ~180 fps micro-zigzag (AI re-decides and
+    // the mover steps once per frame) is visible on screen; a renderer that
+    // lerps only the 20 Hz tick endpoints filters all of that out
+    // mathematically (every direction change with period < 100 ms cancels).
+    // This trace lets the presentation play the tick's real intra-tick
+    // motion back instead. Derived per-tick output EXACTLY like `events`:
+    // rebuilt every tick, never hashed, never read back by the sim
+    // (CLAUDE.md determinism contract rule 4). docs/re/facts.md "Canonical
+    // frame cadence" (sub-frame trace addendum).
+    struct SubSample {
+        Fixed x = 0, y = 0;
+        Direction facing = Direction::Down;
+    };
+    std::array<std::array<SubSample, kSubFrames>, kMaxPlayers> sub_trace{};
 };
 
 }  // namespace bomber::sim

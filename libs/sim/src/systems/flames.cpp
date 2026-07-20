@@ -26,7 +26,7 @@ void FlameSystem::burn_powerup_here(int tx, int ty) {
         powerups_.scatter(PowerupType::Disease);
 }
 
-bool FlameSystem::ignite_epicentre(int tx, int ty, std::uint8_t owner) {
+bool FlameSystem::ignite_epicentre(int tx, int ty, std::uint8_t owner, std::uint8_t colour) {
     // The bomb's own tile (sub_42331C epicentre block, pseudo.c 25619-25636):
     // ALWAYS ignited (it is inherently blank — a bomb cannot rest on
     // solid/brick), THEN any powerup there is destroyed. No stop/occupancy
@@ -38,13 +38,14 @@ bool FlameSystem::ignite_epicentre(int tx, int ty, std::uint8_t owner) {
     s.flame[ty][tx] = static_cast<std::uint8_t>(
         std::clamp<std::int32_t>(s.tuning.flame_frames, 1, 255));
     s.flame_owner[ty][tx] = owner;
+    s.flame_colour[ty][tx] = colour;
     s.flame_kind[ty][tx] = FlameKind::Center;  // off_45BEA0[8], pseudo.c 25625
     burn_powerup_here(tx, ty);
     return true;
 }
 
-bool FlameSystem::spread_to(int tx, int ty, std::uint8_t owner, Direction from_dir,
-                            bool is_last_of_reach) {
+bool FlameSystem::spread_to(int tx, int ty, std::uint8_t owner, std::uint8_t colour,
+                            Direction from_dir, bool is_last_of_reach) {
     // The extending arm (sub_42331C per-direction loop, pseudo.c 25637-25678).
     // Per tile step, in order: a GROUNDED bomb here stops the arm and QUEUES
     // it for a forced detonation next tick (sub_423209 @ 25645 — CONFIRMED a
@@ -90,6 +91,10 @@ bool FlameSystem::spread_to(int tx, int ty, std::uint8_t owner, Direction from_d
             if (s.players[hit->owner].bombs_placed > 0) --s.players[hit->owner].bombs_placed;
             ++s.players[owner].bombs_placed;
         }
+        // ONLY the owner word moves — the chained bomb's COLOUR byte (the
+        // other half of the original's +60 dword) is untouched by the
+        // 25644 transfer, so its eventual explosion still flames in the
+        // original placer's colour. See Bomb::colour.
         hit->owner = owner;
         const int skip = (grid::to_godir(from_dir) + 2) & 3;
         queue_chain(hit->id, skip);
@@ -140,6 +145,7 @@ bool FlameSystem::spread_to(int tx, int ty, std::uint8_t owner, Direction from_d
     s.flame[ty][tx] = static_cast<std::uint8_t>(
         std::clamp<std::int32_t>(s.tuning.flame_frames, 1, 255));
     s.flame_owner[ty][tx] = owner;
+    s.flame_colour[ty][tx] = colour;
     // kind = godir (a TIP) only at the arm's FULL configured reach, else
     // godir+4 (a MID) — pseudo.c 25673-25677 `if (reach-1==m) v45=k; else
     // v45=k+4;`, decided here (only on the "arm continues" path) exactly
@@ -230,16 +236,26 @@ void FlameSystem::explode(std::size_t bomb_index, int skip_dir) {
     int reach = b.flame;
     s.events.push_back({Event::Type::Explosion, static_cast<std::int8_t>(b.owner),
                         static_cast<std::int8_t>(cx), static_cast<std::int8_t>(cy), 0});
-    ignite_epicentre(cx, cy, b.owner);
-    for (Direction d : {Direction::Up, Direction::Down, Direction::Left, Direction::Right}) {
+    ignite_epicentre(cx, cy, b.owner, b.colour);
+    // Cast the four arms in ASCENDING GODIR order 0,1,2,3 = Up,Right,Down,Left
+    // (flames.md finding 1; sub_42331C's `for (k=0; k<4; ++k)` indexes
+    // dword_45BECC/dword_45BEDC directly by k, so k IS the godir). The prior
+    // enum-declaration braced list {Up,Down,Left,Right} visited godir 0,2,3,1 —
+    // a different permutation. The arms are otherwise independent, so the order
+    // is inert EXCEPT where an arm draws State::rng (relocate_overpowered_here /
+    // burn_powerup_here -> scatter): with two such draws across different
+    // directions in one explosion, the wrong order desyncs the RNG stream for
+    // the rest of the match. Golden-affecting (determinism contract rule 2).
+    for (int g = 0; g < 4; ++g) {
+        const Direction d = grid::from_godir(g);
         // A chain-triggered bomb (skip_dir >= 0) never re-casts an arm back
         // toward the flame that triggered it (bomb+56, pseudo.c 25621:
         // `if (!field56 || k+1 != field56)`) — every OTHER direction still
         // gets its normal full-reach arm.
-        if (skip_dir >= 0 && grid::to_godir(d) == skip_dir) continue;
+        if (skip_dir >= 0 && g == skip_dir) continue;
         for (int i = 1; i <= reach; ++i) {
-            if (!spread_to(cx + grid::dir_dx(d) * i, cy + grid::dir_dy(d) * i, b.owner, d,
-                           i == reach))
+            if (!spread_to(cx + grid::dir_dx(d) * i, cy + grid::dir_dy(d) * i, b.owner, b.colour,
+                           d, i == reach))
                 break;
         }
     }

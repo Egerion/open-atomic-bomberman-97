@@ -30,19 +30,31 @@ inline constexpr std::int32_t kMsPerTick = 1000 / kTicksPerSecond;  // 50
 // once per DISPLAYED frame with the measured integer-ms delta [0x464958]:
 // timers/anims quantize back to 50 ms through per-entity accumulators, but
 // input acquisition, AI decisions and the movement-budget accruals genuinely
-// run at display rate (~60 fps on period hardware and on the reference Win11
-// install). A deterministic sim cannot consume measured deltas, so we pin the
-// canonical display rate at 60 fps — the repeating {17,17,16} integer-ms
-// pattern (sums to the 50 ms tick) — and run those per-frame mechanics as
-// three fixed sub-frames per tick.
-inline constexpr int kSubFrames = 3;
-inline constexpr std::int32_t kSubFrameMs[kSubFrames] = {17, 17, 16};
+// run at display rate. A deterministic sim cannot consume measured deltas, so
+// we pin a CANONICAL display rate and run those per-frame mechanics as a fixed
+// number of sub-frames per tick.
+//
+// Rate = ~180 fps (nine sub-frames per 50 ms tick). The original is NOT vsync-
+// limited on modern hardware: DirectDraw's windowed present does not block on
+// vblank under DWM, so BM95.EXE free-runs at whatever the GPU delivers. On the
+// reference Win11 box (NVIDIA TITAN X, 60 Hz panel) a full 180 s draw round
+// rendered 33146 frames (bmstats "Last Run"), i.e. ~180 fps of gameplay-driver
+// callbacks — so the AI brain, input sampling and movement budget genuinely ran
+// ~9x per tick, not 3x. The earlier 60 fps / 3-sub-frame choice (ADR-0006,
+// pre-measurement) left the AI ~3x too calm and the head-stun ~3x too long
+// versus what the user actually sees. Nine sub-frames restores that: at ~180 fps
+// a 16-frame head stun is ~89 ms (was 267 ms at 3 sub-frames), the 30-slot ice
+// buffer spans ~167 ms, and the AI re-decides nine times per tick. The {6,5,...}
+// pattern sums to the 50 ms tick. (kSubFrames is the single tuning lever for the
+// AI/movement "temperature"; drop it toward 3 for a calmer, period-hardware feel.)
+inline constexpr int kSubFrames = 9;
+inline constexpr std::int32_t kSubFrameMs[kSubFrames] = {6, 5, 6, 5, 6, 5, 6, 5, 6};
 
 // One frame's movement-budget accrual: sub_41F29B / sub_401B5C / sub_42331C's
 // `speed * frameDelta / [0x46494C]`, with the original's integer truncation
-// kept — at 60 fps a stock 923 walker accrues 313+313+295 = 921 per 50 ms,
-// not 923. That sub-1% shortfall is the original's own arithmetic, not a
-// port artefact.
+// kept — at nine sub-frames a stock 923 walker accrues 5x110 + 4x92 = 918 per
+// 50 ms, not 923. That sub-1% shortfall is the original's own per-frame
+// truncation (finer here than the old 921 at 3 sub-frames), not a port artefact.
 constexpr Fixed frame_budget(Fixed speed, std::int32_t delta_ms) {
     return speed * delta_ms / kMsPerTick;
 }

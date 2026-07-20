@@ -100,6 +100,11 @@ TEST_CASE("a chain explosion sets off a fizzling dud") {
     s.tick(press1(0));  // live bomb at (0,2)
     REQUIRE(s.state().bombs.size() == 2);
     CHECK(s.state().bombs[0].dud_left > 0);
+    // Walk the owner clear so it survives its own live bomb — otherwise the
+    // round drops to 1 side and bombs F1 freezes the chain that fires the dud.
+    // Player 1 stays alive at its far (14,10) corner: a 2-side quorum.
+    s.state().players[0].x = 10 * kTileWF + kTileWF / 2;
+    s.state().players[0].y = 8 * kTileHF + kTileHF / 2;
     // Let the live bomb explode; its flame QUEUES the dud, which forcibly
     // detonates the NEXT tick (docs/re/facts.md "Chain-reaction timing",
     // sub_423209's deferred queue — not the same tick). The dud state is

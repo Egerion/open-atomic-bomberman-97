@@ -130,12 +130,17 @@ TEST_CASE("clogs reduces per-tick walking distance, mirroring the skate speed bo
     run(s, 10, right);
     int moved = (p.x - x0) / 100;
 
+    // Canonical sub-frame accrual (constants.hpp kSubFrames/frame_budget):
+    // the clogs-reduced speed accrues per canonical frame with the
+    // original's own integer truncation, not once per 50 ms tick.
     long budget = 0, expected = 0;
     for (int t = 0; t < 10; ++t) {
-        budget += p.speed;  // the clogs-reduced speed
-        while (budget > 0) {
-            budget -= 100;
-            ++expected;
+        for (int f = 0; f < kSubFrames; ++f) {
+            budget += frame_budget(p.speed, kSubFrameMs[f]);
+            while (budget > 0) {
+                budget -= 100;
+                ++expected;
+            }
         }
     }
     CHECK(moved == static_cast<int>(expected));
@@ -161,12 +166,17 @@ TEST_CASE("clogs and molasses disease compose in the pinned order: clogs folds i
     run(s, 20, right);
     int moved = (p.x - x0) / 100;
 
+    // Clogs fold into speed BEFORE the /3 (sub_41F29B §9.1), and the disease
+    // factor scales the SPEED before the per-frame delta division (pseudo.c
+    // 23432-23440, the resolved [VERIFY] — movement.cpp's accrual comment).
     long budget = 0, expected = 0;
     for (int t = 0; t < 20; ++t) {
-        budget += clogged_speed / 3;  // clogs folded in BEFORE the /3, matching sub_41F29B
-        while (budget > 0) {
-            budget -= 100;
-            ++expected;
+        for (int f = 0; f < kSubFrames; ++f) {
+            budget += frame_budget(clogged_speed / 3, kSubFrameMs[f]);
+            while (budget > 0) {
+                budget -= 100;
+                ++expected;
+            }
         }
     }
     CHECK(moved == static_cast<int>(expected));

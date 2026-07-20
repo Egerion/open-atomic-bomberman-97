@@ -284,8 +284,13 @@ int AISystem::flee_bfs(int sx, int sy, int& best_x, int& best_y) {
     std::int32_t best_danger = 10000;
 
     // Seed with the (up to 4) open, in-bounds neighbours of the start, each
-    // tagged with the godir it came from (the eventual return value). The seed
-    // order uses the tie-break so equal-cost first steps are randomized.
+    // tagged with the godir it came from (the eventual return value). Seed
+    // order is FIXED godir 0..3 — the original's runner-seed loop is a plain
+    // `for (i = 0; i < 4; ++i)` (sub_40970B pseudo.c ~9911-9930); the ±1 tie
+    // draw (v40, our `tie`) only flips the ±90° CHILD-spawn order deeper in
+    // the walk, which our flattened expansion loop below models. Seeding in
+    // tie-flipped order made equal-danger first steps flip ~50% per decide —
+    // an oscillation the original does not have (2026-07-16 movement audit).
     auto consider = [&](int nx, int ny, int first) {
         if (obstacle_at(nx, ny)) return;
         if (visited_epoch[ny][nx] == epoch) return;
@@ -299,11 +304,7 @@ int AISystem::flee_bfs(int sx, int sy, int& best_x, int& best_y) {
         }
     };
     visited_epoch[sy][sx] = epoch;
-    // Expand the four godirs in a tie-flipped order (0..3 or 3..0):
-    for (int s2 = 0; s2 < 4; ++s2) {
-        const int g = tie > 0 ? s2 : (3 - s2);
-        consider(sx + kDX[g], sy + kDY[g], g);
-    }
+    for (int g = 0; g < 4; ++g) consider(sx + kDX[g], sy + kDY[g], g);
     if (best_danger == 0) {
         // A neighbour is already safe — return the first step toward it.
         for (int k = 0; k < open_n; ++k)
@@ -377,8 +378,11 @@ int AISystem::directed_bfs(int sx, int sy, int tx, int ty, int max_depth, int& o
     ++epoch;
 
     // Seed with the (up to 4) open, in-bounds neighbours of the start, tagged
-    // with the godir they came from (the eventual return value), in tie-flipped
-    // order so equal-length first steps resolve randomized-but-deterministically.
+    // with the godir they came from (the eventual return value), in FIXED
+    // godir order 0..3 — the original's seed loop is a plain `for (i = 0;
+    // i < 4; ++i)` (sub_4092A1 pseudo.c 9721-9740, `v20[4] = i`); the ±1 tie
+    // draw only flips ±90° child-spawn order deeper (kept in the expansion
+    // loop below). See flee_bfs's seed comment (2026-07-16 movement audit).
     auto seed = [&](int nx, int ny, int first) -> int {
         if (obstacle_at(nx, ny)) return 0;
         if (nx == tx && ny == ty) return first + 1;  // neighbour IS the goal
@@ -388,8 +392,7 @@ int AISystem::directed_bfs(int sx, int sy, int tx, int ty, int max_depth, int& o
         return 0;
     };
     visited_epoch[sy][sx] = epoch;
-    for (int s2 = 0; s2 < 4; ++s2) {
-        const int g = tie > 0 ? s2 : (3 - s2);
+    for (int g = 0; g < 4; ++g) {
         const int hit = seed(sx + kDX[g], sy + kDY[g], g);
         if (hit) {
             // A neighbour IS the goal: found in "pass 0", so out_iters == 0 — this
@@ -487,8 +490,9 @@ int AISystem::powerup_scan_bfs(int sx, int sy, int max_depth, int& out_iters, in
         return 0;
     };
     visited_epoch[sy][sx] = epoch;
-    for (int s2 = 0; s2 < 4; ++s2) {
-        const int g = tie > 0 ? s2 : (3 - s2);
+    // Fixed 0..3 seed order, same as directed_bfs above (sub_4092A1's plain
+    // seed loop; the tie draw only steers the expansion below).
+    for (int g = 0; g < 4; ++g) {
         const int hit = seed(sx + kDX[g], sy + kDY[g], g);
         if (hit) {
             out_iters = 0;  // "pass 0" hit — matches the original's ring counter
@@ -645,22 +649,36 @@ bool AISystem::behave_walk_path(int i, PlayerInput& out) {
         int bx = 0, by = 0;
         const int first = flee_bfs(px, py, bx, by);  // the flee behaviour's RNG draw
 
-        // The original always latches has_path_target = 1 after the flee BFS
-        // (line 10820) and then either STANDS or STEPS — the danger branch
-        // NEVER passes down (CORRECTED 2026-07-12, facts.md "AI danger map"
-        // item 4): the `here <= min` stand-latch (10824-10829) covers both
-        // "no strictly-safer tile" AND "fully boxed in" (flee firstdir 0),
-        // storing the OWN tile as target, writing godir -1 and returning 1 —
-        // so behaviours 3-7 never run and draw NOTHING that frame. The old
-        // pass-down ran the rest of the chain on every such frame: extra whim
-        // draws, possible bomb drops and wander re-rolls while standing in
-        // inescapable danger — an RNG-stream and activity divergence.
+        // Two distinct outcomes here — the 2026-07-12 "danger branch never
+        // passes down" correction over-reached by folding them together
+        // (re-pinned 2026-07-16 movement audit, pseudo.c 10816-10829):
+        //
+        //  1. FULLY BOXED IN (flee found no first dir at all, v5 == 0): the
+        //     original CLEARS the target flag and returns 0 — behaviours 3-7
+        //     DO get this frame's turn (whims, drop gates, wander re-rolls:
+        //     the trapped-in-danger fidget, with all its RNG draws).
+        if (first < 0) {
+            br.has_path_target = false;
+            return false;
+        }
+        //  2. NO STRICTLY-SAFER TILE (`here <= min`, 10824-10829): latch the
+        //     OWN tile as target, write godir -1 and return 1 — behaviours
+        //     3-7 never run and draw NOTHING that frame.
         const std::int32_t here = danger_at(px, py);
-        if (first < 0 || here <= danger_at(bx, by)) {
+        if (here <= danger_at(bx, by)) {
             br.has_path_target = true;
             br.path_target_x = static_cast<std::int16_t>(px);
             br.path_target_y = static_cast<std::int16_t>(py);
-            br.path_target_cost = here;  // nonzero: the stale-target drop above ignores it
+            // ai.md finding 2 (sub_40B20F 607-615, disasm 0x40B3EC-0x40B422):
+            // this "can't improve, stand" branch writes ONLY the target tile
+            // (+4/+6) and godir -1 — it does NOT touch path_target_cost (+8).
+            // Leaving +8 stale is load-bearing: the top-of-branch stale-target
+            // invalidation fires on `has_path_target && cost==0 && danger!=0`,
+            // so a brain whose +8 is still 0 (never improved, or last improved
+            // to full safety) re-enters the FLEE sub-branch next tick (a fresh
+            // flee_bfs + its RNG draw) rather than the DIRECTED one. Writing
+            // `cost = here` (always nonzero here) suppressed that, diverging the
+            // BFS-call/RNG sequence in the trapped-in-persistent-danger case.
             write_move(out, -1);
             return true;
         }
@@ -891,14 +909,13 @@ bool AISystem::behave_punch(int i, PlayerInput& out) {
 //   1. capacity guard: sub_4245DA(me) — my live-bomb count — must be < my
 //      maxBombs(+86), the same disasm-confirmed spare-slot gate as behaviour 3
 //      (§9.3 RESOLVED);
-//   2. a Manhattan gate on the actor's SNAPPED position (+20/+24): abs(tileX) +
-//      abs(tileY) >= 3. In the original +20/+24 is a stale spawn/punch snapshot
-//      (set to the current position only at spawn/punch, NOT during walking), so
-//      this is a near-constant TRUE per player — abs-sum of a spawn tile is >= 3
-//      for every real Bomberman start except a hypothetical (1,1) corner. We do
-//      not track that snapshot field; the faithful determinable analog is the
-//      AI's current tile, which EQUALS the spawn snapshot at match start and
-//      gives the same near-always-true result (docs/re/ai.md §3.4 [VERIFY]);
+//   2. a Manhattan gate = distance TRAVELLED since the actor's +20/+24 snapshot
+//      (set at spawn and at warp step-on): abs(curTileX - snapX) + abs(curTileY
+//      - snapY) >= 3. Near-constant FALSE right after a spawn/warp (distance 0)
+//      and only true once the AI has net-displaced >= 3 tiles. We reuse
+//      warp_to_x/y (the port's +20/+24 — seeded to the spawn tile at setup)
+//      (ai.md finding 1, disasm-confirmed 0x40AC24-0x40AC6D — the summary in
+//      ai.md §3.4/§9.4 that called this "near-always TRUE" is corrected);
 //   3. scan the 5-tile plus/cross (kEnemyScanX/Y, the OOB tables) for a live
 //      (active +0, not-dead +8) ENEMY player (sub_421CB5 `*i && !i[2]`, pseudo.c
 //      24207 — `!i[2]` is +8/died-this-round, NOT the +58 stun), self excluded
@@ -920,11 +937,21 @@ bool AISystem::behave_bomb_enemy(int i, PlayerInput& out) {
     // RESOLVED), matching behaviour 3.
     if (out_of_bomb_slots(p)) return false;
 
-    // (2) Manhattan gate: abs(tileX) + abs(tileY) >= 3 over the actor's snapped
-    // position. See the header note — we use the current tile as the faithful
-    // analog of the stale +20/+24 snapshot (equal at spawn, near-always true).
-    const int mx = px < 0 ? -px : px;
-    const int my = py < 0 ? -py : py;
+    // (2) Manhattan gate (ai.md finding 1; sub_40ABED, disasm-confirmed
+    // 0x40AC24-0x40AC6D): the original gate is the Manhattan DISTANCE the AI
+    // has travelled since its last spawn/warp snapshot (+20/+24) >= 3 tiles —
+    // `abs(currentTileX - snapX) + abs(currentTileY - snapY) >= 3`, an explicit
+    // `sub` before each `abs_`, NOT the absolute-coordinate magnitude the old
+    // port (and ai.md §3.4's summary) used. The snapshot lives in warp_to_x/y
+    // (the port's +20/+24: set to the spawn tile at setup.cpp, to the warp exit
+    // at start_warp). So the gate is near-constant FALSE right after a spawn or
+    // a warp (distance 0) and only opens once the AI has net-displaced >= 3
+    // tiles — a freshly-spawned/just-warped AI will NOT bomb a cornered enemy
+    // until it has moved away. Changes WHEN behaviour 4 (and its rand()%5) is
+    // considered -> RNG-order-relevant.
+    const int dxs = px - p.warp_to_x, dys = py - p.warp_to_y;
+    const int mx = dxs < 0 ? -dxs : dxs;
+    const int my = dys < 0 ? -dys : dys;
     if (mx + my < 3) return false;
 
     // (3) Scan the 5-tile cross for a live enemy (sub_421CB5), self excluded.

@@ -182,6 +182,11 @@ TEST_CASE("a SLIDING trigger bomb can be detonated remotely (sub_424B41)") {
     b.dir = Direction::Right;
     s.state().bombs.push_back(b);
 
+    // Advance one tick so this pre-placed bomb's creation stamp (default 0)
+    // predates the trigger press — sub_424B41 requires a STRICTLY earlier stamp
+    // (bombs F4), so a same-tick bomb is not yet remote-detonable. The bomb
+    // keeps sliding through the idle tick (still a sliding trigger bomb).
+    run(s, 1);
     s.tick(press2(0));
     CHECK(s.state().bombs.empty());  // went off despite sliding
     bool flame_seen = false;

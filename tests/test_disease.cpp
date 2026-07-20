@@ -136,6 +136,36 @@ TEST_CASE("swap exchanges position only, not move_budget") {
     CHECK(swap_seen);
 }
 
+TEST_CASE("a swap roll with no valid target still emits the pickup announce") {
+    // diseases.md finding 1: sub_41DFB6 (batch_0x41DAA7.cpp:308-315, pseudo.c
+    // 22041+) plays the pickup voice line as soon as the disease roll (v7) and
+    // announce flag (a2) are known — strictly BEFORE the `if (v7 == 7)` Swap
+    // target scan. A Swap that finds nobody alive to swap with therefore STILL
+    // announces (the sound is a pure function of v7 + a2). The earlier port
+    // `continue`d past give() on a no-target Swap and silenced the whole pickup
+    // (its own "A skull token always emits an Infected event" comment was the
+    // exact assumption this case disproves). Here player 1 is dead, so player 0
+    // is the last one standing with no swap partner: a skull that rolls Swap
+    // must still emit its Infected cue AND leave player 0 in place.
+    bool swap_seen = false;
+    for (std::uint32_t seed = 1; seed <= 300 && !swap_seen; ++seed) {
+        MatchConfig cfg = open_config();
+        cfg.seed = seed;
+        Simulation s(cfg);
+        s.state().players[1].alive = false;  // p0 is the last player standing
+        int t0x = s.state().players[0].tile_x(), t0y = s.state().players[0].tile_y();
+        s.state().floor[t0y][t0x] = PowerupType::Disease;  // p0 stands on a skull
+        run(s, 1);
+        for (auto& e : s.state().events)
+            if (e.type == Event::Type::Infected && e.data == static_cast<int>(Disease::Swap)) {
+                swap_seen = true;
+                CHECK(s.state().players[0].tile_x() == t0x);  // no target -> did not move
+                CHECK(s.state().players[0].tile_y() == t0y);
+            }
+    }
+    CHECK(swap_seen);  // the no-target Swap still announced (silenced pre-fix)
+}
+
 TEST_CASE("a stunned-but-alive player still ages its disease") {
     // CORRECTED 2026-07-10 (facts.md "Stun does NOT gate flame-death or
     // pickup"): sub_41F29B's freshness--/age/cure block is nested inside the
@@ -147,11 +177,11 @@ TEST_CASE("a stunned-but-alive player still ages its disease") {
     // spurious `stun > 0` skip here.
     Simulation s(open_config());
     infect(s.state().players[0], Disease::Slow, 10);
-    s.state().players[0].stun = 5;
+    s.state().players[0].stun = kSubFrames + 2;
     run(s, 1);
     // Stun burns once per canonical FRAME (kSubFrames per tick — facts.md
     // "Canonical frame cadence"); the disease timer ages per tick.
-    CHECK(s.state().players[0].stun == 2);           // 5 - kSubFrames
+    CHECK(s.state().players[0].stun == 2);           // (kSubFrames + 2) - kSubFrames
     CHECK(s.state().players[0].disease_timer == 9);  // and the disease ages right alongside it
     run(s, 2);
     CHECK(s.state().players[0].stun == 0);

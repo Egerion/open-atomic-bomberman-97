@@ -47,6 +47,12 @@ bomber_add_test(bomber_rover_tests    rovers       test_rovers.cpp)
 bomber_add_test(bomber_tickorder_tests tick_order  test_tick_order.cpp)
 bomber_add_test(bomber_regen_tests    tile_regen   test_regen.cpp)
 bomber_add_test(bomber_ice_tests      ice_delay    test_ice.cpp)
+bomber_add_test(bomber_freeze_tests   input_freeze test_freeze.cpp)
+bomber_add_test(bomber_flamecolour_tests flame_colour test_flame_colour.cpp)
+bomber_add_test(bomber_spawnpocket_tests spawn_pocket test_spawn_pocket.cpp)
+bomber_add_test(bomber_roverflame_tests rover_flame  test_rover_flame.cpp)
+bomber_add_test(bomber_enclosurestomp_tests enclosure_stomp test_enclosure_stomp.cpp)
+bomber_add_test(bomber_fidelity_tests fidelity_audit test_fidelity_audit.cpp)
 
 # ANI pacing helper lives in the game lib (header-only, SDL-free): frame =
 # counter % statecnt, mirroring sub_41DAA7. Own target so it needn't link sim.

@@ -35,6 +35,11 @@ MatchConfig pillars_config() {
     for (int y = 0; y < kGridHeight; ++y)
         for (int x = 0; x < kGridWidth; ++x)
             cfg.cells[y][x] = (x % 2 == 1 && y % 2 == 1) ? Cell::Solid : Cell::Blank;
+    // Disarm the round-start input freeze (facts.md "Round-start input
+    // freeze", VALUELST id 30 ≈ 1 s of dead input): these scenarios were
+    // captured acting from tick 0 and golden E's scripted choreography
+    // depends on it; tests/test_freeze.cpp pins the freeze itself.
+    cfg.tuning.input_freeze_ticks = 0;
     return cfg;
 }
 
@@ -415,6 +420,131 @@ MatchConfig pillars_config() {
 // checkpoints, E's bounce count and final rng, A's final rng — proving the
 // hashing change alters no behaviour, only the digest layout.
 //
+// UPDATE 2026-07-16 (movement-fidelity audit + colour split, facts.md
+// "Bomb/flame colour is not the owner", "Round-start input freeze", and the
+// resolved disease-scaling [VERIFY] under "Canonical frame cadence"):
+//   1. HASH-LAYOUT: Bomb::colour (bits 44-47 of the bomb flags word),
+//      State::flame_colour (bits 56-63 of the per-cell grid word),
+//      Player::carried_colour (bits 58-61 of the carried word) and
+//      State::input_freeze (bits 40-55 of the campaign word) are new hashed
+//      fields — all PACKED into existing mix words (zero new mix calls), so
+//      zero-valued states digest identically: golden A and golden B's setup
+//      hash are byte-identical through this update, while every checkpoint
+//      with live bombs/flames moves.
+//   2. BEHAVIOUR: disease speed factors now scale the SPEED before the
+//      per-frame delta division (sub_41F29B 23432-23440; ±1 budget unit per
+//      sub-frame, diseased players only) — nudges golden D's trajectories.
+//      The AI-only fixes in the same commit (BFS seed order, boxed-in flee
+//      pass-down) cannot touch these scenarios (no AI players).
+//   3. The new round-start input freeze (VALUELST id 30, ~1 s) is DISARMED
+//      in every config here (see pillars_config) to preserve the scenarios'
+//      act-from-tick-0 semantics; tests/test_freeze.cpp pins the freeze.
+// Safety net held: golden D's kExpectedRng at all four checkpoints, golden
+// E's bounce count (10) and final veer rng, and golden A's final rng all
+// passed UNCHANGED before this recapture — the RNG stream is untouched.
+//
+// UPDATE 2026-07-19 (spawn-pocket clear widened, docs/re/facts.md "Spawn-
+// pocket clear"): `build_state`'s per-spawn brick clear grew from a radius-1
+// "plus" (spawn tile + 4 orthogonal neighbours) to a radius-2 "plus" (spawn
+// tile + 2 tiles in each of the 4 orthogonal directions, 9 cells total) —
+// fixing the first-round AI mass-suicide bug (a corner AI's own opening bomb
+// had its entire escape pocket inside its own blast radius, so the faithful
+// flee logic could never find a strictly safer tile). The exact original
+// mechanism could NOT be pinned to a specific BM95.EXE function despite an
+// exhaustive search (every one of the board tile array's ~19 writer call
+// sites was inspected — see the comment in `libs/sim/src/setup.cpp`); the
+// new radius is the smallest shape matching live observation of the running
+// original. The clear itself draws NO RNG (a pure cell-array write keyed off
+// already-resolved spawn coordinates), so this is a DELIBERATE but RNG-
+// neutral behaviour change: it only removes bricks that used to sit within
+// 2 tiles of a spawn, shrinking each affected scenario's brick population
+// (and hence its powerup-hiding candidate pool) before any RNG is drawn.
+// Reach: only scenarios with an actual Brick tile inside a spawn's new
+// radius-2 pocket move.
+//   - Golden B (all-Brick board, 4 corner spawns): every corner's pocket
+//     gains 3 more cleared cells (12 total across 4 spawns), shrinking the
+//     brick-hiding candidate pool built in `build_state` before the first
+//     powerup-placement RNG draw — moves the setup hash and all 6
+//     checkpoints.
+//   - Golden C (`pillars_config` + one deliberately-placed brick at (2,0),
+//     exactly 2 tiles from the (0,0) spawn along the x-axis): that brick is
+//     now cleared at setup instead of surviving for the trigger-duel
+//     choreography to detonate — moves the single pinned hash.
+//   - Golden A (no players), D (`pillars_config`, no Brick cells at all —
+//     every spawn's pocket already reads Blank), and E (`pillars_config`
+//     plus one Solid override 5 tiles from its spawn, outside pocket range)
+//     are UNTOUCHED: verified byte-identical before recapturing B/C below —
+//     golden D's kExpectedRng at all four checkpoints, golden E's bounce
+//     count (10) and final veer rng, and golden A's final rng all pass
+//     UNCHANGED.
+// `tests/test_sim.cpp`'s brick/powerup fixtures that used to sit 2 tiles
+// from a corner spawn were relocated to an interior tile clear of both
+// pockets (same commit) rather than recaptured — they test unrelated
+// bomb/brick/powerup mechanics that have nothing to do with spawn placement.
+//
+// UPDATE 2026-07-20 (SIM-side fidelity audit batch, docs/re/audit/*.md +
+// docs/re/fidelity-audit.md): a mixed behaviour + hash-layout recapture from
+// the confirmed audit fixes. The ones that reach these scenarios:
+//   - bombs F1 (round-end freeze, sub_42331C @ 25603): at <= 1 alive side the
+//     fuse/explosion/chain tail freezes. Reaches B/C/D/E once a round decides.
+//   - bombs F2 (kicked/conveyor flat +100*kSubFrames ground bonus, LABEL_21):
+//     kicked bombs travel ~19 px/tick, not ~10 — repositions every kicked
+//     bomb. Reaches E most visibly (bounce count 10 -> 21, and the faster
+//     detonation moves E's death-scatter draws -> final rng 0xc6a9f3b2 ->
+//     0x405862fb) and any scenario that kicks a bomb.
+//   - bombs F3 (conveyor coast) / stage_actors F1 (belt facing): no scenario
+//     here lays a conveyor, so inert.
+//   - flames F1 (arm iteration order 0,1,2,3): reorders an explosion's RNG
+//     draws only when >= 2 arms draw (relocate/scatter) in one blast — no
+//     golden blast does, so RNG-neutral here (proved: A/D rng unchanged).
+//   - diseases F2 (clear() leaves disease_fresh alone): reaches D (the only
+//     scenario that cures diseases) as a hashed-field-only, RNG-neutral delta.
+//   - bombs F4 (created_tick, same-tick trigger exclusion): a new hashed bomb
+//     field + a one-tick placement->trigger gap. Reaches C (trigger duel) and
+//     grows every bomb-bearing scenario's hash layout.
+//   - AI snapshot seed (ai F1, warp_to = spawn tile at setup): a
+//     previously-zero hashed field now = the spawn tile. RNG-neutral; grows
+//     every player-bearing setup hash (B setup moved from this alone).
+//   - setup/powerups F1 (seed all 13 start_with baselines): INERT here — every
+//     golden config uses the stock start_with (bomb 1 / flame 2 / rest 0),
+//     which the new full seeding reproduces byte-for-byte.
+// RNG safety net (verified BEFORE recapturing the hashes): golden A's final
+// rng is UNCHANGED (0x2a — no players/bombs), golden D's kExpectedRng is
+// UNCHANGED at all four checkpoints (no golden blast hits the flames-F1 reorder
+// and no D death reaches the freeze within 800 ticks). Golden E's final rng
+// DID move — a deliberate, behaviour-driven change (bombs F2 repositions the
+// detonation, shifting the death scatter), recaptured with its own note at the
+// assertion. Golden A's hash is UNCHANGED (0 bombs -> no created_tick word,
+// 0 players -> no warp_to word); B/C/D/E hashes all recaptured.
+// UPDATE 2026-07-20 (SIM-side fidelity audit BATCH 2, docs/re/audit/setup.md
+// finding 1 + docs/re/audit/diseases.md finding 1): a DELIBERATE behaviour
+// recapture reaching golden B and C ONLY.
+//   - setup F1 (hidden-powerup scatter): build_state's powerup-under-brick
+//     scatter now uses sub_4258E5's INDEPENDENT REJECTION SAMPLING (draw a
+//     random (x,y) — rand()%W then rand()%H — retry <=200 times, silently drop
+//     on exhaustion; plus the interleaved 1-in-10 gate per negative-N unit)
+//     instead of the old pre-built-brick-list removal (1 draw/placement). The
+//     draw COUNT/ORDER at the tick-0 boundary shifts for every scheme that has
+//     bricks AND a nonzero spawn_count, so the setup RNG state (and the
+//     dud-gate draw that follows) moves. Reaches B (all-brick board, default
+//     positive spawn_counts) — setup hash + all 6 checkpoints — and C (one
+//     brick + default spawn_counts) — its single hash. D and E BOTH zero all
+//     spawn_counts (`for (auto& c : cfg.tuning.spawn_counts) c = 0;`), so their
+//     scatter draws nothing either way and stays BYTE-IDENTICAL; A never runs
+//     build_state. VERIFIED before recapture: golden A's rng, golden D's
+//     kExpectedRng at all four checkpoints and its 200/400/600/800 hashes, and
+//     golden E's bounce count (21) and final rng all pass UNCHANGED — the whole
+//     move is confined to B and C's setup-seeded stream.
+//   - diseases F1 (Swap-with-no-target announce): DiseaseSystem::give() now
+//     emits the pickup Infected event BEFORE the Swap target scan (sub_41DFB6
+//     announces on the roll, not on a successful swap). RNG-neutral AND
+//     hash-neutral here — the announce is a derived event (never hashed, rule
+//     4) and adds no State::rng draw, and no golden scenario ever rolls a
+//     no-target Swap regardless. Pinned by tests/test_disease.cpp.
+// (flames F2 from the audit was investigated and NOT applied — see
+// docs/re/audit/flames.md's resolution: the arm's visible-powerup interceptor
+// destroys a re-hit revealed token before it can reach sub_425107, so the port
+// is already faithful and no golden moves.)
 TEST_CASE("golden A: empty state, 10000 ticks") {
     Simulation a;
     a.state().rng = 42u;
@@ -439,13 +569,14 @@ TEST_CASE("golden B: 4-player brick match with all abilities") {
     cfg.spawns = {{0, 0}, {14, 10}, {14, 0}, {0, 10}};
     cfg.player_count = 4;
     cfg.seed = 0xB0BB1E5;
+    cfg.tuning.input_freeze_ticks = 0;  // see pillars_config's disarm note
     cfg.born_with[static_cast<int>(PowerupType::Kick)] = true;
     cfg.born_with[static_cast<int>(PowerupType::Punch)] = true;
     cfg.born_with[static_cast<int>(PowerupType::Grab)] = true;
     cfg.born_with[static_cast<int>(PowerupType::Spooger)] = true;
     cfg.born_with[static_cast<int>(PowerupType::Jelly)] = true;
     Simulation s(cfg);
-    CHECK(s.hash() == 0x1ca11f61db23bad4ull);  // setup itself is pinned
+    CHECK(s.hash() == 0x9d2e691cfae15d3aull);  // setup itself is pinned (setup F1 recapture 2026-07-20)
 
     // Recaptured 2026-07-12 (canonical frame cadence, facts.md "Canonical
     // frame cadence"): the walk budget accrues per 60 fps frame with the
@@ -455,12 +586,12 @@ TEST_CASE("golden B: 4-player brick match with all abilities") {
     // and E's bounce-count + veer-RNG assertions passed unchanged, pinning
     // that the choreography itself still plays out.
     static constexpr std::uint64_t kExpected[6] = {
-        0xc2da828b2f6dbcacull,  // tick 500
-        0xdc139384d37e5924ull,  // tick 1000
-        0x743ba65caad04e9cull,  // tick 1500
-        0x85273bc791b87409ull,  // tick 2000
-        0x55883df24a5c5ddcull,  // tick 2500
-        0x285c4b776a21ab79ull,  // tick 3000
+        0x608a718e0f0f7f5eull,  // tick 500  (setup F1 recapture 2026-07-20)
+        0xa4e6ced6f087779cull,  // tick 1000
+        0xd941f8ebb9f0f797ull,  // tick 1500
+        0xd82e656367a1dc66ull,  // tick 2000
+        0x510710fdce69da65ull,  // tick 2500
+        0x5d86b9c91e3a4340ull,  // tick 3000
     };
     for (std::uint64_t t = 0; t < 3000; ++t) {
         s.tick(pattern(t));
@@ -479,7 +610,12 @@ TEST_CASE("golden C: trigger bombs and a fast hurry phase") {
     Simulation s(cfg);
     for (std::uint64_t t = 0; t < 1500; ++t) s.tick(pattern(t * 7 + 3));
     // Recaptured 2026-07-12 (canonical frame cadence — see golden B's note).
-    CHECK(s.hash() == 0xbff1bb0e07f7934eull);
+    // Recaptured again 2026-07-19 (spawn-pocket clear — see the file-level
+    // UPDATE note above): the (2,0) test brick is cleared at setup now.
+    // Recaptured again 2026-07-20 (setup F1 rejection-sampling scatter — see the
+    // file-level BATCH 2 UPDATE note): C's default positive spawn_counts now
+    // draw the rejection-sampling stream at setup, shifting the tick-0 RNG.
+    CHECK(s.hash() == 0x0df571426a3b1c79ull);
 }
 
 TEST_CASE("golden D: the disease gauntlet") {
@@ -544,10 +680,10 @@ TEST_CASE("golden D: the disease gauntlet") {
     // goes quiet (the gauntlet resolves earlier), which is the expected shape
     // of a cadence change, not draw-order corruption.
     static constexpr std::uint64_t kExpectedHash[4] = {
-        0x2d424b9f81566c0full,  // tick 200
-        0x9f0cd6cc39309794ull,  // tick 400
-        0xd1e5d420e7e429e0ull,  // tick 600
-        0x6afba77fa4f1e920ull,  // tick 800
+        0xe76e75d8b615b6a9ull,  // tick 200
+        0x082bb11e8df32868ull,  // tick 400
+        0xd569b06d4458de97ull,  // tick 600
+        0x2271b07fe241f9cbull,  // tick 800
     };
     static constexpr std::uint32_t kExpectedRng[4] = {0x49cffff6u, 0xf1401d55u, 0xf1401d55u,
                                                       0xf1401d55u};
@@ -612,10 +748,10 @@ TEST_CASE("golden E: jelly ping-pong and a veering punched flight") {
     // the recapture: the script's held-key choreography still lands every
     // kick/punch, only the pixel timeline shifted.
     static constexpr std::uint64_t kExpected[4] = {
-        0xcc4eca1d3b90667bull,  // tick 75
-        0xd34fbade88af1284ull,  // tick 150
-        0x2deb150e7dea6c8aull,  // tick 225
-        0xd10d9025d8c02765ull,  // tick 300
+        0x0a0e87de3f4cf08eull,  // tick 75
+        0x6162447dfc47740eull,  // tick 150
+        0xfa342e260426f05bull,  // tick 225
+        0x9e82c7d2a36b5120ull,  // tick 300
     };
     int bounces = 0;
     for (std::uint64_t t = 0; t < 300; ++t) {
@@ -624,10 +760,14 @@ TEST_CASE("golden E: jelly ping-pong and a veering punched flight") {
             if (e.type == Event::Type::JellyBounced) ++bounces;
         if ((t + 1) % 75 == 0) CHECK(s.hash() == kExpected[(t + 1) / 75 - 1]);
     }
-    // 10 with the audit's kick fidelity (was 7): the kick lands on the walk-up's
-    // ARRIVAL tick and the returning jelly bomb is REDIRECTED east by the still-
-    // facing player (sub_42464B) instead of waiting for the body-block reverse,
-    // so the ping-pong starts sooner and completes more legs in 300 ticks.
-    CHECK(bounces == 10);                 // the ping-pong really happened
-    CHECK(s.state().rng == 0xc6a9f3b2u);  // the veer roll really consumed RNG
+    // 21 with the bombs F2 kicked-speed fix (was 10): the +100*kSubFrames flat
+    // ground-speed bonus makes the ping-pong jelly bomb travel ~19 px/tick
+    // instead of ~10, so it completes more than twice as many legs between the
+    // wall and the player in 300 ticks. The final rng also moved (0xc6a9f3b2 ->
+    // 0x405862fb): the faster bomb sits on a different tile when it detonates,
+    // so its kill lands differently and the death-scatter draw sequence shifts
+    // (see the file-level 2026-07-20 UPDATE note). A jelly bounce itself draws
+    // no RNG — the shift is the repositioned explosion, not the bounces.
+    CHECK(bounces == 21);                 // the ping-pong really happened
+    CHECK(s.state().rng == 0x405862fbu);  // recaptured: bombs F2 repositioned the detonation
 }

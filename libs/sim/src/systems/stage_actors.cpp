@@ -160,12 +160,22 @@ bool StageActorSystem::move_on_actor(Player& p, int want_godir, bool moving,
         // is EXACTLY conveyor_speed here — sub_41F29B's case (a) never reads the
         // player's own speed (that only happens in case (b), on player input),
         // so use_player_speed=false (docs/re/stage-actors.md §3).
-        const Fixed fx = p.x, fy = p.y;
         const Direction saved_facing = p.facing;
         movement_.move(p, grid::from_godir(belt_dir), belt, &on_step_center, &sctx,
                        /*use_player_speed=*/false, on_pixel, pixel_ctx, delta_ms);
-        if (p.x == fx && p.y == fy)
-            p.facing = saved_facing;  // blocked: revert the forced facing
+        // stage_actors.md finding 1 (sub_41F29B 779-796, batch_0x41F29B.cpp:
+        // 789-795): after a non-fatal belt-forced push the original ALWAYS
+        // reverts both the requested dir (+46) and the facing (+44) to the
+        // pre-push value — `!sub_41EC84(...)` is true on every tick except the
+        // rare one a flamed belt kills the player mid-step (and simulation.cpp
+        // returns on !p.alive before facing is read again). So an idle player
+        // parked on a belt keeps FACING (and posing walking in) whatever
+        // direction they last actively chose, not the belt direction — which
+        // also drives their punch/kick direction if they act with no
+        // directional input that tick. The prior port only reverted on zero
+        // net displacement (the blocked case), leaving facing == belt_dir
+        // whenever the belt actually moved them. facing is hashed -> golden.
+        p.facing = saved_facing;
     }
     return p.x != bx || p.y != by;
 }

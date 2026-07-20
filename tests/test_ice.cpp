@@ -42,34 +42,44 @@ TEST_CASE("ice delay is inert off Hockey Rink: movement matches the plain speed-
     const int x0 = p.x;
     run(s, 10, right);
     int moved = (p.x - x0) / 100;
+    // Canonical sub-frame accrual (constants.hpp kSubFrames/frame_budget) —
+    // identical to test_move.cpp's baseline.
     long budget = 0, expected = 0;
     for (int t = 0; t < 10; ++t) {
-        budget += s.state().tuning.start_speed;
-        while (budget > 0) {
-            budget -= 100;
-            ++expected;
+        for (int f = 0; f < kSubFrames; ++f) {
+            budget += frame_budget(s.state().tuning.start_speed, kSubFrameMs[f]);
+            while (budget > 0) {
+                budget -= 100;
+                ++expected;
+            }
         }
     }
-    CHECK(moved == static_cast<int>(expected));   // identical to test_move.cpp's baseline
+    CHECK(moved == static_cast<int>(expected));
     for (auto v : p.ice_history) CHECK(v == -1);  // buffer never written off-level
 }
 
-TEST_CASE("Hockey Rink delays a human player's first step by exactly 5 ticks (250ms/50ms)") {
+TEST_CASE("Hockey Rink delays a human's first step by the 250ms lag, capped by the history") {
     Simulation s(hockey_config());
     Player& p = s.state().players[0];
     TickInputs right;
     right.players[0].right = true;
     const int x0 = p.x;
 
-    // want_godir is pushed into the history every tick starting tick 1; the
-    // buffer starts all "-1" (no direction) at setup, so index 5 (the
-    // 250ms-old sample) only starts holding a REAL sample from tick 6 on —
-    // movement stays frozen for the first 5 ticks.
-    for (int t = 1; t <= 5; ++t) {
+    // The buffer is pushed once per canonical SUB-FRAME (the original pushes
+    // once per displayed frame); it starts all "-1" at setup, so the delayed
+    // slot only reads a REAL sample once `lag + 1` pushes have happened. The
+    // lag slot is ceil(250 ms in canonical frames) CLAMPED to the 30-slot
+    // buffer — the original's own behaviour when the frame rate outruns its
+    // fixed history (at ~180 fps its 30 slots span only ~166 ms), see
+    // MovementSystem::ice_delay.
+    int lag = (250 * kSubFrames + kMsPerTick - 1) / kMsPerTick;
+    if (lag >= Player::kIceHistoryLen) lag = Player::kIceHistoryLen - 1;
+    const int frozen_ticks = lag / kSubFrames;  // full ticks the slot still reads -1
+    for (int t = 1; t <= frozen_ticks; ++t) {
         s.tick(right);
         CHECK(p.x == x0);
     }
-    s.tick(right);  // tick 6: the delayed sample finally reads "Right"
+    s.tick(right);  // the delayed sample turns "Right" partway through this tick
     CHECK(p.x > x0);
 }
 

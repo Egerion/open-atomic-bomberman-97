@@ -48,19 +48,24 @@ void MovementSystem::move(Player& p, Direction d, std::int32_t extra_budget, Ste
     const int g = godir(d);
     const int dxg = DX[g], dyg = DY[g];
 
-    // Per-frame budget accrual (sub_41F29B): `speed × frameDelta / 50`, then
-    // the disease factors — molasses divides by 3 first, then hyper/super
-    // multiplies by 3/2 (order pinned; whether the original scales before or
-    // after the delta division is flagged [VERIFY] in facts.md "Canonical
-    // frame cadence" — identical at delta 50, ±1 unit at sub-frame deltas).
-    // Only folded in when the player actually supplied the move (case (b) in
-    // sub_41F29B); a conveyor forcing an idle player (case (a)) contributes
-    // ONLY its own term — see the use_player_speed doc comment in the header.
+    // Per-frame budget accrual (sub_41F29B 23432-23440): the disease factors
+    // scale the SPEED first — molasses divides by 3, then hyper/super
+    // multiplies by 3/2 — and only THEN the delta division runs (`v91 =
+    // base + skates·gv(90) − clogs·gv(91); if (molasses) v91 /= 3;
+    // if (hyper/super) v91 = 3*v91/2; v91 = delta*v91/50`). Resolves the
+    // former facts.md [VERIFY] on this ordering (2026-07-16 movement audit):
+    // factors FIRST, delta scaling SECOND — identical at delta 50, ±1 budget
+    // unit per sub-frame versus the old scale-after order, diseased players
+    // only. Only folded in when the player actually supplied the move (case
+    // (b) in sub_41F29B); a conveyor forcing an idle player (case (a))
+    // contributes ONLY its own term — see the use_player_speed doc comment
+    // in the header.
     std::int32_t eff = 0;
     if (use_player_speed) {
-        eff = frame_budget(p.speed, delta_ms);
-        if (p.sick(Disease::Slow)) eff /= 3;
-        if (p.sick(Disease::Fast) || p.sick(Disease::Super)) eff = 3 * eff / 2;
+        std::int32_t sp = p.speed;
+        if (p.sick(Disease::Slow)) sp /= 3;
+        if (p.sick(Disease::Fast) || p.sick(Disease::Super)) sp = 3 * sp / 2;
+        eff = frame_budget(sp, delta_ms);
     }
 
     // The conveyor budget (extra_budget) is added AFTER the disease factors,

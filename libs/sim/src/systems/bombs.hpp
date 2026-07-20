@@ -97,9 +97,12 @@ private:
     // carried bomb, else kicked_bomb_speed).
     void slide(std::size_t index, std::int32_t budget);
 
-    // A resting bomb sitting on a conveyor tile is pushed along the belt at the
-    // belt speed (sub_42331C case 0, getvalue(190+idx)). Sets it moving in the
-    // belt direction so slide() carries it; a bomb already moving is left alone.
+    // A resting bomb (motion state 0) sitting on a conveyor tile is pushed one
+    // tick's worth along the belt at the belt speed (sub_42331C case 0,
+    // getvalue(190+idx)). The belt tile is re-checked EVERY tick and the bomb
+    // never enters kicked motion-state-1, so it FREEZES the instant it clears
+    // the belt instead of coasting on (bombs.md finding 3); a kicked/flying
+    // bomb is left to advance_bombs.
     void conveyor_carry(std::size_t index);
 
     State& s_;

@@ -1,8 +1,6 @@
 // Initial match state construction (Simulation constructor backend).
 
 #include <algorithm>
-#include <utility>
-#include <vector>
 
 #include "bomber/sim/rng.hpp"
 #include "bomber/sim/simulation.hpp"
@@ -18,6 +16,9 @@ State build_state(const MatchConfig& config) {
     s.tuning = config.tuning;
     s.forbidden = config.forbidden;
     s.ticks_left = config.tuning.game_seconds * kTicksPerSecond;
+    // Round-start input freeze (sub_4214BC `dword_4621E0 = 50 * getvalue(30)`
+    // — see Tuning::input_freeze_ticks / State::input_freeze).
+    s.input_freeze = config.tuning.input_freeze_ticks;
     s.cells = config.cells;
     for (auto& row : s.hidden) row.fill(PowerupType::None);
     for (auto& row : s.floor) row.fill(PowerupType::None);
@@ -53,10 +54,52 @@ State build_state(const MatchConfig& config) {
         p.ice_history.fill(-1);
         int tx = std::clamp(config.spawns[i].x, 0, kGridWidth - 1);
         int ty = std::clamp(config.spawns[i].y, 0, kGridHeight - 1);
-        // The original clears the spawn tile and its orthogonal neighbours
-        // so every player starts with room to move.
-        static constexpr int ndx[] = {0, 1, -1, 0, 0}, ndy[] = {0, 0, 0, 1, -1};
-        for (int n = 0; n < 5; ++n) {
+        // Spawn-pocket clear: force the landing tile and a 2-tile orthogonal
+        // "plus" around it to Blank, regardless of the scheme's random brick
+        // roll, so nobody starts a match already sealed inside their own
+        // opening bomb.
+        //
+        // NOT PINNED to a specific original function, despite a real search
+        // effort. The board's tile array (`dword_46222C`) has exactly ONE
+        // writer in BM95.EXE, `sub_425E36` (pseudo.c ~26781), reached only
+        // through its three thin wrappers `sub_425E9B`/`sub_425EFC`/
+        // `sub_425F79` or directly. Every one of that family's ~19 call
+        // sites was read: bomb-flame burn-through (pseudo.c 7252, 7266,
+        // 25669, 27412), netplay tile-sync replication (12149, 12189,
+        // 12483, 12637, 22406 — remote-position desync correction, gated on
+        // `dword_460058`'s netplay flag), the warphole neighbour clear
+        // (26537/26541, already ported — see the warphole comment
+        // elsewhere in this codebase), and the HURRY wall drop (27235).
+        // None run at match setup or reference the spawn-coordinate arrays
+        // (`dword_46460C`/`dword_46465C`). The round-init sequence itself
+        // (`sub_410B6E`, pseudo.c ~14689: `sub_4260F5` board build ->
+        // `sub_4214BC` player placement -> `sub_4258E5` powerup scatter ->
+        // `sub_40551F` rovers -> `sub_40151B` campaign hazards) and the
+        // .SCH loader (`sub_403EEE`) were read in full: `sub_4214BC` only
+        // stores each player's coordinates (see the ice_history comment
+        // above) and clears no cell. `DATA/SCHEMES/BASIC.SCH`'s raw grid is
+        // a uniform ':'-candidate field with no blank cells authored near
+        // any `-S` spawn, so the shape is not scheme-baked either. No
+        // VALUELST id documents a "spawn safe radius"
+        // (docs/valuelst-map.md, docs/re/id-audit.md) — the nearest
+        // relative is id 695, the UNRELATED tile-*regeneration* clear
+        // radius (`sub_422351`, docs/re/facts.md "Per-level tile
+        // regeneration"), which gates brick REGROWTH near live players,
+        // not initial spawn placement.
+        //
+        // Since the mechanism could not be pinned to a function after this
+        // search, the shape below is the smallest one that matches live
+        // observation of the running original (BM95.EXE screenshots,
+        // 2026-07-19 session): each corner spawn opens with a cross/plus
+        // pocket whose arms reach 2 tiles, not 1 — wide enough that a
+        // flame-2 bomb dropped on the spawn tile does not seal every
+        // reachable cell (the previous radius-1 guess left the WHOLE
+        // pocket inside that blast, `docs/re/facts.md` "Spawn-pocket
+        // clear"). This is a best-effort widening, not a confirmed port —
+        // revisit if a future disassembly pass finds the real call site.
+        static constexpr int ndx[] = {0, 1, -1, 0, 0, 2, -2, 0, 0};
+        static constexpr int ndy[] = {0, 0, 0, 1, -1, 0, 0, 2, -2};
+        for (int n = 0; n < 9; ++n) {
             int cx2 = tx + ndx[n], cy2 = ty + ndy[n];
             if (cx2 >= 0 && cx2 < kGridWidth && cy2 >= 0 && cy2 < kGridHeight &&
                 s.cells[cy2][cx2] == Cell::Brick)
@@ -64,9 +107,42 @@ State build_state(const MatchConfig& config) {
         }
         p.x = grid::tile_center_x(tx);
         p.y = grid::tile_center_y(ty);
-        p.speed = s.tuning.start_speed;
+        // AI behaviour-4 reset snapshot (ai.md finding 1; the original's actor
+        // +20/+24, written at spawn by sub_4214BC's `v6[5]/v6[6] = spawn tile`
+        // at batch_0x420D4E.cpp:402-403, and at warp step-on to the warp exit).
+        // The port already stores the warp exit in warp_to_x/y at start_warp —
+        // it IS the +20/+24 field — so seed it to the SPAWN TILE here to
+        // complete the dual use: behave_bomb_enemy gates on distance travelled
+        // FROM this snapshot, which is 0 right after spawn/warp (gate FALSE),
+        // not the absolute map-coordinate magnitude the old port used. warp_to
+        // is overwritten before it is ever read for an actual warp, so this
+        // spawn seed does not affect warp relocation.
+        p.warp_to_x = tx;
+        p.warp_to_y = ty;
+        // Seed ALL 13 per-kind starting-inventory baselines from VALUELST ids
+        // 50-62 (setup.md finding 2 / powerups.md finding 1; sub_4214BC's
+        // `for (j=0;j<15;++j) +86+j = getvalue(50+j)` at
+        // batch_0x420D4E.cpp:427-428), not just ExtraBomb/Flame. The original's
+        // is an unconditional raw byte write with no eviction/clamp (that only
+        // runs for the Goldman-wheel bonus and the scheme born_with overlay
+        // below): counted kinds take the value, flag kinds are set when the
+        // baseline is nonzero. Silent under the shipped VALUELST (every kind but
+        // bomb=1/flame=2 is 0, matching the C++ defaults) but a real gap for a
+        // custom VALUELST setting Kick/Skate/... (ids 52-62) nonzero — those 11
+        // kinds previously had NO baseline path and silently started at 0.
         p.max_bombs = s.tuning.start_with[static_cast<int>(PowerupType::ExtraBomb)];
         p.flame = s.tuning.start_with[static_cast<int>(PowerupType::Flame)];
+        p.skates = s.tuning.start_with[static_cast<int>(PowerupType::Skate)];
+        p.kick = s.tuning.start_with[static_cast<int>(PowerupType::Kick)] > 0;
+        p.punch = s.tuning.start_with[static_cast<int>(PowerupType::Punch)] > 0;
+        p.grab = s.tuning.start_with[static_cast<int>(PowerupType::Grab)] > 0;
+        p.spooge = s.tuning.start_with[static_cast<int>(PowerupType::Spooger)] > 0;
+        p.goldflame = s.tuning.start_with[static_cast<int>(PowerupType::Goldflame)] > 0;
+        p.trigger = s.tuning.start_with[static_cast<int>(PowerupType::Trigger)] > 0;
+        p.jelly = s.tuning.start_with[static_cast<int>(PowerupType::Jelly)] > 0;
+        // skates fold into the walk speed (the original applies the skate factor
+        // per-tick; the port bakes it into `speed`, matching PowerupSystem).
+        p.speed = s.tuning.start_speed + p.skates * s.tuning.skate_speed_bonus;
         for (int k = 0; k < kPowerupKinds; ++k)
             if (config.born_with[k]) powerups.apply(p, static_cast<PowerupType>(k));
         // Goldman wheel award (docs/re/goldman-roulette.md §4/§8): a per-
@@ -103,28 +179,52 @@ State build_state(const MatchConfig& config) {
     rover_system.spawn(RoverKind::Rover, config.campaign_rovers, config.campaign_rover_speed);
 
     // Hide powerups under randomly chosen bricks (seeded RNG — deterministic).
-    std::vector<std::pair<int, int>> bricks;
-    for (int y = 0; y < kGridHeight; ++y)
-        for (int x = 0; x < kGridWidth; ++x)
-            if (s.cells[y][x] == Cell::Brick) bricks.emplace_back(x, y);
-
+    // Faithful to sub_4258E5's non-network branch (setup.md finding 1;
+    // batch_0x42583B.cpp:222-255, pseudo.c 26647-26679): INDEPENDENT REJECTION
+    // SAMPLING per unit, NOT list-removal. For each kind k in 0..12 (the loop
+    // reads getvalue(k+400) = our spawn_counts[k], scheme-overridable):
+    //   - positive count (v22=1): place every unit unconditionally. Negative
+    //     count -N: attempt |N| units, each gated by a 1-in-10 roll
+    //     (`v22 || !(rand()%10)`, so the gate draws ONLY on the negative path,
+    //     INTERLEAVED immediately before the unit's own scan — not batched up
+    //     front the way the old port pre-rolled all |N| gates).
+    //   - each attempted unit draws a fresh random (x, y) — rand()%W then
+    //     rand()%H, x FIRST — retrying up to 200 times and taking the first
+    //     cell that is a Brick with no powerup record yet (sub_425FB9==2 &&
+    //     !sub_42542D). If all 200 tries miss, the unit is SILENTLY DROPPED
+    //     (no candidate side-list, no compensating retry) — the original's own
+    //     under-placement behaviour on a sparse/crowded board.
+    // The draw order/count now mirrors the original draw-for-draw (2 per try,
+    // <=200 tries/unit, plus one 1-in-10 gate per negative-N unit), replacing
+    // the old single-draw-per-placement list-removal. This shifts the setup RNG
+    // stream for every scheme that has bricks AND a nonzero count (golden B/C
+    // recaptured 2026-07-20; D/E zero all spawn_counts, so their scatter draws
+    // nothing either way and stays byte-identical). Setup-only reproducibility
+    // fidelity, not real-game bit-matching — the real game seeds brick fill off
+    // the wall clock (docs/valuelst-map.md "brick fill").
     for (int k = 0; k < kPowerupKinds; ++k) {
         if (config.forbidden[k]) continue;
         std::int32_t want = config.spawn_override[k] > MatchConfig::kNoOverride
                                 ? config.spawn_override[k]
                                 : s.tuning.spawn_counts[k];
-        std::int32_t count = want;
+        bool always = true;  // v22
         if (want < 0) {
-            // Negative N: |N| attempts, each with a 1-in-10 chance.
-            count = 0;
-            for (int i = 0; i < -want; ++i)
-                if (random_below(s, 10) == 0) ++count;
+            always = false;
+            want = -want;
         }
-        for (int i = 0; i < count && !bricks.empty(); ++i) {
-            std::uint32_t pick = random_below(s, static_cast<std::uint32_t>(bricks.size()));
-            auto [bx, by] = bricks[pick];
-            bricks.erase(bricks.begin() + pick);
-            s.hidden[by][bx] = static_cast<PowerupType>(k);
+        for (std::int32_t m = 0; m < want; ++m) {
+            // v22 || !(rand()%10): the gate draws (and can reject) only on the
+            // negative-N path; a positive count short-circuits with no draw.
+            if (!always && random_below(s, 10) != 0) continue;
+            for (int n = 0; n < 200; ++n) {
+                const int rx = static_cast<int>(random_below(s, kGridWidth));
+                const int ry = static_cast<int>(random_below(s, kGridHeight));
+                if (s.cells[ry][rx] == Cell::Brick && s.hidden[ry][rx] == PowerupType::None &&
+                    s.floor[ry][rx] == PowerupType::None) {
+                    s.hidden[ry][rx] = static_cast<PowerupType>(k);
+                    break;
+                }
+            }
         }
     }
 

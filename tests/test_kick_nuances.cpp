@@ -42,9 +42,10 @@ void push_sliding_bomb(Simulation& s, int tx, int ty, Direction dir,
 
 TEST_CASE("a bomb sliding into a flame tile explodes") {
     Simulation s(open_config());
-    // Keep both spawned players out of the bomb's lane so they don't block it.
-    s.state().players[0].alive = false;
-    s.state().players[1].alive = false;
+    // Both spawned players stay ALIVE at their far corners (0,0)/(14,10),
+    // clear of the row-0 bomb lane — a 2-side quorum, so the chain drain that
+    // forcibly detonates the flame-caught bomb is not frozen (bombs F1).
+    park_players_clear(s);
 
     push_sliding_bomb(s, 2, 0, Direction::Right);
     // A long-lived flame at (4,0) owned by player 1 (>0 so the slide's flame
@@ -76,8 +77,7 @@ TEST_CASE("a bomb sliding into a flame tile explodes") {
 // jelly stop-vs-bounce branch, pseudo.c 25545-25554).
 TEST_CASE("a jelly bomb sliding into flame bounces, but still chain-detonates") {
     Simulation s(open_config());
-    s.state().players[0].alive = false;
-    s.state().players[1].alive = false;
+    park_players_clear(s);  // 2-side quorum: the deferred detonation is not frozen (bombs F1)
 
     push_sliding_bomb(s, 2, 0, Direction::Right);
     s.state().bombs[0].jelly = true;
@@ -124,7 +124,8 @@ TEST_CASE("a bomb kicked into a fresh explosion is caught by the flame") {
     // End-to-end: a real kick, then the bomb rolls into flame from another
     // bomb's blast and goes off, instead of sliding past it.
     Simulation s(open_config());
-    s.state().players[1].alive = false;
+    // player 1 stays alive at (14,10) for the 2-side quorum (bombs F1); it is
+    // far clear of the row-0 lane the kicked bomb travels.
     Player& p = s.state().players[0];
     p.kick = true;
     p.flame = 1;
@@ -244,8 +245,12 @@ TEST_CASE("kick + action2 stops own sliding bombs at the next tile centre (sub_4
     push_sliding_bomb(s, 2, 0, Direction::Right, /*owner=*/0);
     s.state().bombs[0].x -= 15 * kScale;
 
-    s.tick(press2(0));  // flag it (slide covers 10 px this tick: 5 px short)
-    CHECK(s.state().bombs[0].stop_pending);
+    // press2 flags the bomb (+57); the SAME tick's slide (kicked speed + the
+    // flat +100*kSubFrames bonus, bombs F2 = 19 px) carries it onto the (2,0)
+    // centre and the pending-stop snaps it there — it halts ON the centre, not
+    // 15 px back where the key was pressed. (With the pre-F2 10 px/tick this
+    // took two ticks; the deferred-flag mechanic is unchanged, only faster.)
+    s.tick(press2(0));
     run(s, 2);
     const Bomb& b = s.state().bombs[0];
     CHECK(!b.moving);  // halted ON the centre, not where the key was pressed

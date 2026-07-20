@@ -38,6 +38,12 @@ Simulation open_arena(int tx, int ty, bool ai) {
     // These AI sandboxes were never meant to exercise the match clock at all,
     // so give them a real, generous countdown to keep the enclosure dormant.
     st.ticks_left = 9999 * kTicksPerSecond;
+    // These single-player AI sandboxes are not testing the round-end freeze
+    // (bombs F1: <= 1 alive side halts all fuses/chains). Mark them campaign-
+    // style so bombs behave as before that freeze existed — the exemption is
+    // RNG-neutral (only the AISystem's own draws matter, and it never reads
+    // this flag), so every fixed-seed AI decision below is unchanged.
+    st.campaign_hazards_active = true;
     Player& p = st.players[0];
     p.present = true;
     p.alive = true;
@@ -230,11 +236,16 @@ TEST_CASE("Stage 3: a seeking AI walks to a nearby powerup and collects it") {
     latch();
 
     bool collected = false;
-    for (int t = 0; t < 40 && !collected; ++t) {
-        // Keep the pursuit alive across the ~10-tick timeout so a slow crossing
-        // still reaches the goal (models continuous re-acquisition of the same
-        // in-range powerup — the original re-rolls the whim every tick).
-        if (!st.brains[0].pow_seek.active) latch();
+    // Re-latch EVERY tick: at the canonical kSubFrames decides per tick the
+    // close-range 50% give-up roll (`iters == 0 && rand%2`, the original's
+    // line-10989 order) drops the pursuit almost every tick once the AI is
+    // within 2 tiles, so a hold-once harness stalls — continuous
+    // re-acquisition (what the original's every-frame 1/50 whim converges to
+    // on a board with one powerup) is the deterministic way to exercise the
+    // directed walk. The window is generous for the same reason: the last
+    // two tiles are crossed in fits and starts, exactly like the original.
+    for (int t = 0; t < 200 && !collected; ++t) {
+        latch();
         s.tick(idle());
         if (st.floor[puy][pux] == PowerupType::None) collected = true;
     }
@@ -327,7 +338,11 @@ TEST_CASE("Stage 4: an AI beside a brick drops a bomb and flees its own blast") 
 
     bool dropped = false;
     bool survived_to_blast = true;
-    for (int t = 0; t < 120; ++t) {
+    // Generous window: WHEN the 1-in-5 whim fires is seed- and cadence-
+    // dependent (kSubFrames decides per tick), and after the blast the brick
+    // stays Cell::Brick for its whole brick_burn_frames crumble — run long
+    // enough for drop + fuse + crumble to all complete.
+    for (int t = 0; t < 300; ++t) {
         s.tick(idle());
         if (!st.bombs.empty()) dropped = true;
         // The AI must never end a tick standing on flame (behaviour 2 + the veto).
@@ -788,18 +803,17 @@ TEST_CASE("Audit fix: a stunned AI draws no RNG this tick") {
     // reading input), so this was invisible to gameplay but not to the RNG
     // stream -- and that stream is the whole determinism contract.
     Simulation stunned = open_arena(/*tx=*/5, /*ty=*/5, /*ai=*/true);
-    stunned.state().players[0].stun = 3;  // head-hit stun (see the sibling
-                                           // pickup_pause test below for the
-                                           // independent grab counter)
+    // One full tick's worth of frames: the stun must cover EVERY per-frame
+    // decide slot of this tick (kSubFrames of them) for the zero-draw claim.
+    stunned.state().players[0].stun = kSubFrames;
     const std::uint32_t rng0 = stunned.state().rng;
 
     stunned.tick(idle());  // a static, bomb/disease/hurry-free board: nothing
                             // else this tick touches rng (see the "golden
                             // inert" case above for the same baseline).
     CHECK(stunned.state().rng == rng0);  // zero draws while stunned
-    // stun=3 covers all kSubFrames sub-frames of the tick, so the AI is
-    // blocked for every one of its per-frame decide slots; the countdown
-    // itself burns once per frame (facts.md "Canonical frame cadence").
+    // The countdown itself burns once per frame (facts.md "Canonical frame
+    // cadence"), so exactly one tick drains it.
     CHECK(stunned.state().players[0].stun == 0);
 
     // Control: the SAME board with no stun DOES draw (draws A/B fire every

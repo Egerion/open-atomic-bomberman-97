@@ -56,7 +56,16 @@ std::uint64_t state_hash(const State& s) {
                 // but fully deterministic values here, not a gameplay change
                 // (CLAUDE.md determinism contract rule 5; tests/
                 // test_golden.cpp recaptured in the same commit).
-                (static_cast<std::uint64_t>(s.flame_kind[y][x]) << 48));
+                (static_cast<std::uint64_t>(s.flame_kind[y][x]) << 48) |
+                // Flame draw colour (docs/re/facts.md "Bomb/flame colour is
+                // not the owner"): the igniting bomb's creation-time colour,
+                // distinct from flame_owner since a chain hit rewrites only
+                // the latter. Fills this packed word's last spare byte
+                // (56-63). 0 wherever flame[y][x]==0 (unread there) — a
+                // ONE-TIME hash-layout growth (CLAUDE.md determinism
+                // contract rule 5; tests/test_golden.cpp recaptured in the
+                // same commit).
+                (static_cast<std::uint64_t>(s.flame_colour[y][x]) << 56));
         }
     }
     // Stage-actor layout (docs/re/stage-actors.md): static per match but
@@ -140,7 +149,10 @@ std::uint64_t state_hash(const State& s) {
                 // Carried bomb kind (set on the thrown bomb in throw_carried) —
                 // hashed state while held, not just at throw time.
                 (static_cast<std::uint64_t>(p.carried_jelly) << 56) |
-                (static_cast<std::uint64_t>(p.carried_trigger) << 57));
+                (static_cast<std::uint64_t>(p.carried_trigger) << 57) |
+                // Carried colour (see carried_owner at 48): a slot < 10, so
+                // 4 bits — the tail bits 58-61 of this word.
+                (static_cast<std::uint64_t>(p.carried_colour & 0xF) << 58));
         mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.stun)) |
             (static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.move_budget)) << 32));
         // Grab pickup-pause (Player::pickup_pause, player state +78==4):
@@ -234,6 +246,12 @@ std::uint64_t state_hash(const State& s) {
             // "Core-feel audit" §4): gameplay state (it decides where a
             // sliding bomb halts), so hashed.
             (static_cast<std::uint64_t>(b.stop_pending) << 43) |
+            // Creation-time colour (Bomb::colour, the original's bomb +60
+            // byte; facts.md "Bomb/flame colour is not the owner"): a player
+            // SLOT (< kMaxPlayers = 10), so 4 bits hold it — the gap bits
+            // 44-47 this word already had. Equal to `owner` except on a
+            // chain-transferred bomb's final tick.
+            (static_cast<std::uint64_t>(b.colour & 0xF) << 44) |
             (static_cast<std::uint64_t>(b.owner) << 48) |
             (static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.fly_ticks) & 0x3F) << 56));
         // fuse_init (creation-time duration, sub_422EDE word +74; facts.md
@@ -241,6 +259,12 @@ std::uint64_t state_hash(const State& s) {
         // eviction relight, so hashed alongside dud_left in the same word.
         mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.dud_left)) |
             (static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.fuse_init)) << 32));
+        // Creation-tick stamp (Bomb::created_tick, the original's +64; bombs.md
+        // finding 4): gates same-tick trigger detonation, so gameplay state.
+        // A ONE-TIME hash-layout growth (determinism rule 5; test_golden.cpp
+        // recaptured in the same commit) — every scenario with bombs now mixes
+        // real but fully deterministic creation ticks here.
+        mix(b.created_tick);
     }
     // Pending chain-detonation queue (docs/re/facts.md "Chain-reaction
     // timing", sub_423209's dword_4621F8/FC/462200): gameplay state — it
@@ -273,7 +297,12 @@ std::uint64_t state_hash(const State& s) {
     // pacing" clause 3): both always 0/false on a non-campaign match, so
     // mix(0) for every existing golden scenario.
     mix(static_cast<std::uint64_t>(s.campaign_hazards_active) |
-        (static_cast<std::uint64_t>(static_cast<std::uint32_t>(s.hazard_clear_timer)) << 8));
+        (static_cast<std::uint64_t>(static_cast<std::uint32_t>(s.hazard_clear_timer)) << 8) |
+        // Round-start input freeze (State::input_freeze, dword_4621E0;
+        // facts.md "Round-start input freeze"): gates input/AI acquisition,
+        // so gameplay state. Small tick count — bits 40-55 of this word. 0
+        // on raw test states (armed only by build_state from tuning id 30).
+        (static_cast<std::uint64_t>(static_cast<std::uint32_t>(s.input_freeze) & 0xFFFF) << 40));
     return h;
 }
 

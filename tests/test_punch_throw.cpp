@@ -167,7 +167,9 @@ TEST_CASE("a punched bomb hops over a floor powerup instead of landing on it") {
 
 TEST_CASE("a thrown bomb restarts its fuse from scratch (LABEL_246 zeroes elapsed +68)") {
     Simulation s(open_config());
-    s.state().players[1].alive = false;
+    // player 1 stays alive at its far (14,10) corner (2-side quorum) so the
+    // bomb's fuse actually burns down — with only 1 side the bombs F1 freeze
+    // holds every fuse and `burnt` never drops below fuse_frames.
     Player& p = s.state().players[0];
     p.grab = true;
     p.facing = Direction::Down;

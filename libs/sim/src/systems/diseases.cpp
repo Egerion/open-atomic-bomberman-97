@@ -8,21 +8,36 @@
 namespace bomber::sim {
 
 void DiseaseSystem::clear(Player& p) {
+    // diseases.md finding 2: neither original cure site touches the freshness
+    // field (+128). sub_41DF4C (the direct cure) zeroes only age (+120),
+    // duration (+124) and the 14-byte flag block (+132..+145); the contagion
+    // source-clear (multiply off) likewise leaves +128 alone. disease_fresh is
+    // written ONLY on a fresh infection (give()) and read only via a live
+    // disease (disease_timer > 0), so a stale value on a healthy player is
+    // unobservable — but zeroing it here diverged from a byte-accurate oracle
+    // mirror on that hashed field alone. Leave it untouched to stay byte-exact.
     p.disease.fill(false);
     p.disease_timer = 0;
-    p.disease_fresh = 0;
-}
-
-bool DiseaseSystem::has_swap_target(int idx) const {
-    for (int j = 0; j < kMaxPlayers; ++j)
-        if (j != idx && s_.players[j].present && s_.players[j].alive)
-            return true;
-    return false;
 }
 
 void DiseaseSystem::give(int idx, Disease d, bool announce) {
     State& s = s_;
     Player& p = s.players[idx];
+    // Announce FIRST — before the Swap branch ever checks for a target
+    // (diseases.md finding 1). sub_41DFB6 (batch_0x41DAA7.cpp:308-314, pseudo.c
+    // 26290+/22041+) resolves and plays the pickup voice line as soon as the
+    // disease roll (v7) and announce flag (a2) are known, at lines 308-314 —
+    // strictly BEFORE the `if (v7 == 7)` Swap target scan at line 315. A rolled
+    // Swap that finds nobody alive to swap with therefore STILL makes its sound
+    // (the sound is a pure function of v7 + a2, never of whether the scan
+    // succeeds). The earlier port `continue`d past give() on a no-target Swap,
+    // silencing the whole pickup (and, for a SuperDisease skull, all three
+    // rolls, since only the first announces). The announce is NOT a State::rng
+    // draw: the per-disease-vs-"oh no" pick is presentation-side (SoundDirector,
+    // determinism-contract rule 6), so restoring it shifts no RNG.
+    if (announce)
+        s.events.push_back({Event::Type::Infected, static_cast<std::int8_t>(idx), -1, -1,
+                            static_cast<std::int8_t>(d)});
     if (d == Disease::Swap) {
         // sub_41DFB6's target scan requires the SAME "valid other player" test
         // its contagion sibling (sub_41F29B) uses: not self, present, and NOT
@@ -52,9 +67,6 @@ void DiseaseSystem::give(int idx, Disease d, bool announce) {
         p.disease_timer = s.tuning.disease_frames[i];
         p.disease_fresh = s.tuning.disease_freshness;
     }
-    if (announce)
-        s.events.push_back({Event::Type::Infected, static_cast<std::int8_t>(idx), -1, -1,
-                            static_cast<std::int8_t>(d)});
 }
 
 void DiseaseSystem::assign_random(int idx, int count) {
@@ -62,12 +74,17 @@ void DiseaseSystem::assign_random(int idx, int count) {
     // NET-GAME-only — a local game accepts the first roll). A Swap with no
     // valid target is simply LOST (the original's 200-try random-player scan
     // finds nobody and falls through assigning nothing) — it does NOT reroll
-    // into a different disease. Our target pick inside give() replaces that
-    // scan with one draw over the valid set (same outcome distribution,
-    // documented internal-RNG deviation).
+    // into a different disease. give() handles that no-target case itself: its
+    // Swap branch scans the valid set and does nothing when it is empty. It is
+    // still called unconditionally so the pickup ANNOUNCE fires either way
+    // (diseases.md finding 1 — the original announces before the target scan);
+    // the earlier `continue` here skipped give() entirely and silenced the cue.
+    // Our target pick inside give() replaces the original's 200-try scan with
+    // one draw over the valid set (same outcome distribution, documented
+    // internal-RNG deviation; no draw at all when the set is empty, matching
+    // the original's fall-through — RNG count unchanged by this fix).
     for (int c = 0; c < count; ++c) {
         auto d = static_cast<Disease>(random_below(s_, kDiseaseKinds));
-        if (d == Disease::Swap && !has_swap_target(idx)) continue;
         give(idx, d, c == 0);
     }
 }

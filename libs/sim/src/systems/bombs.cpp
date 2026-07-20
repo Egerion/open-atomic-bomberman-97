@@ -14,7 +14,9 @@ void BombSystem::place(Player& p, std::uint8_t owner, int tx, int ty, int fuse_s
     Bomb b;
     b.active = true;
     b.id = s.next_bomb_id++;
+    b.created_tick = s.tick;  // bomb +64 (sub_422EDE); gates same-tick trigger
     b.owner = owner;
+    b.colour = owner;  // creation-time colour byte (bomb +60); never transferred
     b.x = grid::tile_center_x(tx);
     b.y = grid::tile_center_y(ty);
     // Bomb kind is exclusive and gated (sub_41EB13): jelly sets kind 2, then the
@@ -144,6 +146,7 @@ bool BombSystem::try_grab(Player& p, int who) {
     if (!b) return false;
     p.carrying = true;
     p.carried_owner = b->owner;
+    p.carried_colour = b->colour;
     // Store the creation-time DURATION, not the frozen remnant: the throw
     // restarts the fuse from scratch (sub_41F29B LABEL_246 zeroes elapsed +68
     // before sub_424987), so the remnant is never consumed by anything.
@@ -170,7 +173,9 @@ void BombSystem::throw_carried(Player& p, int who) {
     Bomb nb;
     nb.active = true;
     nb.id = s_.next_bomb_id++;
+    nb.created_tick = s_.tick;  // a freshly-launched bomb is stamped this tick
     nb.owner = p.carried_owner;
+    nb.colour = p.carried_colour;
     nb.x = grid::tile_center_x(p.tile_x());
     nb.y = grid::tile_center_y(p.tile_y());
     // Fresh full fuse on release (sub_41F29B LABEL_246: `+68 = 0` right before
@@ -204,9 +209,17 @@ bool BombSystem::detonate_triggered(int owner) {
     // same relative point (right after all players act, before bombs move),
     // so a same-tick trigger press is caught by that SAME tick's drain.
     // docs/re/facts.md "Chain-reaction timing".
+    // bombs.md finding 4 (sub_424B41 @ pseudo.c 26036): the scan requires a
+    // candidate's creation stamp be STRICTLY EARLIER than the current tick
+    // (the running-best is seeded with `dword_464994` = this tick), so a
+    // trigger bomb placed the SAME tick as the trigger-detonate press is not
+    // yet remote-detonable — the player must wait one tick. Our vector is in
+    // creation order, so the first eligible bomb with created_tick < s.tick is
+    // the oldest (== the original's min-stamp scan).
     for (std::size_t bi = 0; bi < s_.bombs.size(); ++bi) {
         Bomb& b = s_.bombs[bi];
-        if (b.active && b.trigger && b.owner == owner && !b.flying) {
+        if (b.active && b.trigger && b.owner == owner && !b.flying &&
+            b.created_tick < s_.tick) {
             flames_.queue_chain(b.id);
             return true;
         }
@@ -511,40 +524,64 @@ void BombSystem::slide(std::size_t index, std::int32_t budget) {
 
 void BombSystem::conveyor_carry(std::size_t index) {
     Bomb& b = s_.bombs[index];
-    if (b.flying || b.moving) return;  // already in motion: leave it
+    // Only a RESTING bomb (motion state 0) is belt-pushed; a kicked bomb
+    // (motion state 1, b.moving) and a flying bomb are handled by advance_bombs
+    // directly and never enter here.
+    if (b.flying || b.moving) return;
     const int tx = b.tile_x(), ty = b.tile_y();
-    if (!grid::in_grid(tx, ty)) return;
-    if (s_.actor_type[ty][tx] != ActorType::Conveyor) return;
-    // sub_42331C case 0: a resting bomb on a conveyor is pushed along the belt.
-    // Set it sliding in the belt direction; slide() then carries it at belt
-    // speed. It stops (and, if jelly, ping-pongs) at obstacles exactly like a
-    // kicked bomb, but at getvalue(190+idx) instead of getvalue(300).
-    const int nx = tx + grid::dir_dx(grid::from_godir(s_.actor_dir[ty][tx]));
-    const int ny = ty + grid::dir_dy(grid::from_godir(s_.actor_dir[ty][tx]));
-    if (!grid::tile_open(s_, nx, ny) || grid::bomb_at(s_, nx, ny)) return;  // blocked: stay put
-    b.moving = true;
+    if (!grid::in_grid(tx, ty) || s_.actor_type[ty][tx] != ActorType::Conveyor) return;
+    // sub_42331C case 0 (batch_0x422DDD.cpp:512-547): a resting bomb whose
+    // CURRENT tile is a conveyor is pushed one frame's worth along the belt —
+    // and the belt check is re-run EVERY tick (bombs.md finding 3). The case
+    // NEVER writes the motion word to 1 (`goto LABEL_115` when the tile is not
+    // a belt), so a belt bomb stays motion-state-0: the instant it slides off
+    // the belt onto a non-conveyor tile it simply stops being processed here
+    // and FREEZES, rather than coasting on at kicked speed. Because it is
+    // never state 1, sub_4247C5's "stop my sliding bombs" (state-1-only) also
+    // cannot touch it. We slide with a TRANSIENT moving flag (slide() drives a
+    // motion-1 bomb) and clear it right after, so the bomb is re-evaluated as
+    // resting next tick — the belt re-imposes its direction (line 523) each
+    // frame, so any jelly bounce inside slide() is moot on a belt.
     b.dir = grid::from_godir(s_.actor_dir[ty][tx]);
+    b.moving = true;
+    // Belt speed (getvalue(190+idx)) + the flat LABEL_21 bonus — see the F2
+    // note in advance_bombs for the +100 * kSubFrames folding.
+    slide(index, s_.tuning.conveyor_speed() + 100 * kSubFrames);
+    b.moving = false;  // back to motion state 0 (belt re-evaluated next tick)
 }
 
 void BombSystem::advance_bombs() {
     for (std::size_t i = 0; i < s_.bombs.size(); ++i) {
         Bomb& b = s_.bombs[i];
         if (!b.active) continue;
-        // A resting bomb on a belt starts sliding along it (belt speed).
-        conveyor_carry(i);
         if (b.flying) {
             fly(b);
-        } else if (b.moving) {
-            // Belt speed if the bomb is currently on a conveyor tile, else the
-            // kicked-bomb speed (VALUELST 300). Mirrors sub_42331C, where a
-            // conveyor push uses getvalue(190+idx) and a kick uses getvalue(300).
-            const int tx = b.tile_x(), ty = b.tile_y();
-            const bool on_belt = grid::in_grid(tx, ty) &&
-                                 s_.actor_type[ty][tx] == ActorType::Conveyor;
-            const std::int32_t budget =
-                on_belt ? s_.tuning.conveyor_speed() : s_.tuning.kicked_bomb_speed;
-            slide(i, budget);  // by index: a slide into flame detonates it
+            continue;
         }
+        if (b.moving) {
+            // Kicked/redirected bomb (sub_42331C case 1): slides at the kicked
+            // speed (getvalue(300), the bomb's +112 field) regardless of the
+            // tile underneath — the belt is consulted only by case 0 (resting).
+            //
+            // bombs F2 (bombs.md finding 2; sub_42331C LABEL_21 @
+            // batch_0x422DDD.cpp:551, pseudo.c 25396): case 0 (conveyor) AND
+            // case 1 (kicked) both add a FLAT +100 budget units on TOP of the
+            // speed accrual, PER FRAME (flight, case 2, does not). The original
+            // runs the bomb pass once per displayed frame; the clean-room folds
+            // the whole tick's slide into one pass, so the per-tick equivalent
+            // of the per-frame +100 is +100 * kSubFrames — exactly how the
+            // speed term itself is already folded (one tick's worth of the
+            // per-frame accrual), and how rovers.cpp folds the identical
+            // rover/ghost +100 (facts.md "Canonical frame cadence": "the flat
+            // +100 term triples to +300/tick" was written at kSubFrames=3).
+            // Without it kicked bombs ran ~9% slow, belts ~18-29% ("everything
+            // slightly slow").
+            slide(i, s_.tuning.kicked_bomb_speed + 100 * kSubFrames);
+            continue;
+        }
+        // Resting bomb: pushed only while it sits on a belt tile (re-checked
+        // every tick; freezes the moment it leaves the belt).
+        conveyor_carry(i);
     }
 }
 

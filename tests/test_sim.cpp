@@ -19,25 +19,35 @@ MatchConfig test_config() {
 }  // namespace
 
 TEST_CASE("bomb explodes at its fuse and burns the brick") {
-    Simulation s(test_config());
-    CHECK(s.state().cells[0][2] == Cell::Brick);
-    s.tick(press1(0));  // drop at (0,0)
+    MatchConfig cfg = open_config();
+    // The epicentre sits at an interior tile well outside every spawn's
+    // 2-tile pocket clear (docs/re/facts.md "Spawn-pocket clear"), so this
+    // deliberately-placed brick survives setup instead of being forced back
+    // to Blank. Player 0 is relocated there directly (bypassing test_config,
+    // whose (2,0) brick now sits INSIDE player 0's own spawn pocket and
+    // would never survive construction).
+    cfg.cells[4][6] = Cell::Brick;  // one brick within player 0's reach
+    Simulation s(cfg);
+    s.state().players[0].x = 4 * kTileWF + kTileWF / 2;
+    s.state().players[0].y = 4 * kTileHF + kTileHF / 2;
+    CHECK(s.state().cells[4][6] == Cell::Brick);
+    s.tick(press1(0));  // drop at (4,4)
     CHECK(!s.state().bombs.empty());
     CHECK(s.state().players[0].bombs_placed == 1);
     run(s, s.state().tuning.fuse_frames - 1);
     CHECK(s.state().bombs.empty());        // exploded exactly at fuse
-    CHECK(s.state().flame[0][0] > 0);      // epicenter
-    CHECK(s.state().flame[0][1] > 0);      // one to the right
+    CHECK(s.state().flame[4][4] > 0);      // epicenter
+    CHECK(s.state().flame[4][5] > 0);      // one to the right
     // The brick stays BLOCKING (still Cell::Brick) for the whole crumble —
     // sub_425EFC's cell-type write nets to a no-op at ignition; the cell
     // only flips to Blank once `burning` finishes (docs/re/facts.md "Brick
     // crumble timing"). It is destroyed in the sense that it is now
     // crumbling (unrecoverable) and its hidden powerup, if any, has already
     // revealed — but it does not open up to movement/flame-arms yet.
-    CHECK(s.state().cells[0][2] == Cell::Brick);
-    CHECK(s.state().burning[0][2] > 0);           // crumbling
-    CHECK(s.state().flame[0][2] == 0);     // flame stops at the brick it burns
-    CHECK(s.state().flame[1][1] == 0);     // solid pillar untouched
+    CHECK(s.state().cells[4][6] == Cell::Brick);
+    CHECK(s.state().burning[4][6] > 0);           // crumbling
+    CHECK(s.state().flame[4][6] == 0);     // flame stops at the brick it burns
+    CHECK(s.state().flame[5][5] == 0);     // solid pillar untouched
     CHECK(s.state().players[0].bombs_placed == 0);
     // Player 0 stood on the bomb: died in the blast.
     CHECK(!s.state().players[0].alive);
@@ -45,8 +55,8 @@ TEST_CASE("bomb explodes at its fuse and burns the brick") {
 
     // Once the crumble timer runs out, the tile finally opens up.
     run(s, s.state().tuning.brick_burn_frames);
-    CHECK(s.state().cells[0][2] == Cell::Blank);
-    CHECK(s.state().burning[0][2] == 0);
+    CHECK(s.state().cells[4][6] == Cell::Blank);
+    CHECK(s.state().burning[4][6] == 0);
 }
 
 TEST_CASE("flame reach stops at range and solids") {
@@ -77,6 +87,12 @@ TEST_CASE("flame arm stops at a floor powerup, without igniting its tile") {
 
 TEST_CASE("flame arm stops at a bomb it chain-detonates, without igniting past it") {
     Simulation s(open_config());
+    // Keep player 0 alive and clear of the igniter's (0,0) blast so the round
+    // stays at 2 sides — otherwise the igniter kills the corner-spawned player 0,
+    // deciding the round and freezing the chain drain that fires the victim
+    // (bombs F1). Player 1 stays at its far (14,10) corner.
+    s.state().players[0].x = 10 * kTileWF + kTileWF / 2;
+    s.state().players[0].y = 8 * kTileHF + kTileHF / 2;
     s.state().cells[0][1] = Cell::Blank;  // clear path for the arm to reach x=1
     Bomb victim;
     victim.active = true;
@@ -171,21 +187,27 @@ TEST_CASE("a chain-detonated bomb skips re-blasting back toward its trigger") {
 }
 
 TEST_CASE("burned brick reveals its powerup, players pick it up") {
-    Simulation s(test_config());
-    s.state().hidden[0][2] = PowerupType::ExtraBomb;  // plant under the brick
+    // See the previous test's comment: relocated off test_config()'s (2,0)
+    // brick, which now sits inside player 0's own spawn pocket.
+    MatchConfig cfg = open_config();
+    cfg.cells[4][6] = Cell::Brick;
+    Simulation s(cfg);
+    s.state().players[0].x = 4 * kTileWF + kTileWF / 2;
+    s.state().players[0].y = 4 * kTileHF + kTileHF / 2;
+    s.state().hidden[4][6] = PowerupType::ExtraBomb;  // plant under the brick
     s.tick(press1(0));
     run(s, s.state().tuning.fuse_frames - 1);
-    CHECK(s.state().burning[0][2] > 0);
+    CHECK(s.state().burning[4][6] > 0);
     // The powerup reveals RIGHT NOW, at ignition (sub_425107, called
     // immediately after the brick starts crumbling) — well before the tile
     // itself opens up (docs/re/facts.md "Brick crumble timing"). It is
     // visible/fading-in but still not collectible: the tile is still Brick,
     // still blocking, so a player cannot reach it yet.
-    CHECK(s.state().floor[0][2] == PowerupType::ExtraBomb);
-    CHECK(s.state().hidden[0][2] == PowerupType::None);
-    CHECK(s.state().cells[0][2] == Cell::Brick);
+    CHECK(s.state().floor[4][6] == PowerupType::ExtraBomb);
+    CHECK(s.state().hidden[4][6] == PowerupType::None);
+    CHECK(s.state().cells[4][6] == Cell::Brick);
     run(s, s.state().tuning.brick_burn_frames);
-    CHECK(s.state().floor[0][2] == PowerupType::ExtraBomb);  // still there, now collectible
+    CHECK(s.state().floor[4][6] == PowerupType::ExtraBomb);  // still there, now collectible
 
     // Verify pickup by placing a powerup under player 1.
     int tx = s.state().players[1].tile_x(), ty = s.state().players[1].tile_y();
@@ -208,25 +230,33 @@ TEST_CASE("a hidden Punch powerup relocates instead of revealing near match star
     for (int y = 0; y < kGridHeight; ++y)
         for (int x = 0; x < kGridWidth; ++x)
             if (cfg.cells[y][x] == Cell::Blank) cfg.cells[y][x] = Cell::Brick;
+    // Both spawns' 2-tile pockets (docs/re/facts.md "Spawn-pocket clear")
+    // are cleared back to Blank by setup, so no brick survives within a
+    // spawn-dropped bomb's flame-2 reach any more. Relocate player 0 to an
+    // interior tile clear of both pockets, and open a path to (6,4) exactly
+    // the way a spawn's own pocket would (landing tile + one step toward the
+    // target), so (6,4) survives as the nearest still-Brick tile on the ray
+    // a bomb dropped there reaches. Every OTHER brick hides an (ordinary-
+    // kind) ExtraBomb token; only (6,4) hides the "over-powerful" one under
+    // test.
+    cfg.cells[4][4] = Cell::Blank;  // player 0's new landing tile
+    cfg.cells[4][5] = Cell::Blank;  // clear path for the flame to reach (6,4)
     Simulation s(cfg);
-    // Player 0's spawn tile and its orthogonal neighbours were cleared back
-    // to Blank by setup, so (0,2) survives as the nearest still-Brick tile
-    // on the ray a bomb dropped at (0,0) reaches. Every OTHER brick hides an
-    // (ordinary-kind) ExtraBomb token; only (0,2) hides the "over-powerful"
-    // one under test.
+    s.state().players[0].x = 4 * kTileWF + kTileWF / 2;
+    s.state().players[0].y = 4 * kTileHF + kTileHF / 2;
     for (int y = 0; y < kGridHeight; ++y)
         for (int x = 0; x < kGridWidth; ++x)
             if (s.state().cells[y][x] == Cell::Brick) s.state().hidden[y][x] = PowerupType::ExtraBomb;
-    s.state().hidden[0][2] = PowerupType::Punch;
+    s.state().hidden[4][6] = PowerupType::Punch;
 
     s.tick(press1(0));
     run(s, s.state().tuning.fuse_frames - 1);
 
-    CHECK(s.state().burning[0][2] > 0);  // ignites/crumbles exactly as normal
+    CHECK(s.state().burning[4][6] > 0);  // ignites/crumbles exactly as normal
     // NOT Punch: pass 1 is virtually guaranteed to find one of the ~100+
     // ExtraBomb candidates and swap it in here instead.
-    CHECK(s.state().floor[0][2] == PowerupType::ExtraBomb);
-    CHECK(s.state().hidden[0][2] == PowerupType::None);
+    CHECK(s.state().floor[4][6] == PowerupType::ExtraBomb);
+    CHECK(s.state().hidden[4][6] == PowerupType::None);
 
     // The Punch token itself is not lost — it moved to whichever brick the
     // swap picked.
@@ -239,7 +269,7 @@ TEST_CASE("a hidden Punch powerup relocates instead of revealing near match star
                 py = y;
             }
     CHECK(punch_tiles == 1);
-    CHECK((px != 2 || py != 0));  // relocated to a DIFFERENT tile than (0,2)
+    CHECK((px != 6 || py != 4));  // relocated to a DIFFERENT tile than (6,4)
 }
 
 TEST_CASE("a hidden Punch powerup reveals normally once the relocation window is disabled") {
@@ -248,18 +278,24 @@ TEST_CASE("a hidden Punch powerup reveals normally once the relocation window is
         for (int x = 0; x < kGridWidth; ++x)
             if (cfg.cells[y][x] == Cell::Blank) cfg.cells[y][x] = Cell::Brick;
     cfg.tuning.overpowered_relocate_seconds = 0;  // gate closed from tick 0
+    // See the previous test: open a path from player 0's new landing tile to
+    // the brick under test, the way a spawn's own pocket clear would.
+    cfg.cells[4][4] = Cell::Blank;
+    cfg.cells[4][5] = Cell::Blank;
     Simulation s(cfg);
+    s.state().players[0].x = 4 * kTileWF + kTileWF / 2;
+    s.state().players[0].y = 4 * kTileHF + kTileHF / 2;
     for (int y = 0; y < kGridHeight; ++y)
         for (int x = 0; x < kGridWidth; ++x)
             if (s.state().cells[y][x] == Cell::Brick) s.state().hidden[y][x] = PowerupType::ExtraBomb;
-    s.state().hidden[0][2] = PowerupType::Punch;
+    s.state().hidden[4][6] = PowerupType::Punch;
 
     s.tick(press1(0));
     run(s, s.state().tuning.fuse_frames - 1);
 
-    CHECK(s.state().burning[0][2] > 0);
-    CHECK(s.state().floor[0][2] == PowerupType::Punch);  // reveals in place, no relocation
-    CHECK(s.state().hidden[0][2] == PowerupType::None);
+    CHECK(s.state().burning[4][6] > 0);
+    CHECK(s.state().floor[4][6] == PowerupType::Punch);  // reveals in place, no relocation
+    CHECK(s.state().hidden[4][6] == PowerupType::None);
 }
 
 TEST_CASE("a hidden Punch powerup with no swap partner moves to an empty brick unrevealed") {
@@ -267,19 +303,25 @@ TEST_CASE("a hidden Punch powerup with no swap partner moves to an empty brick u
     for (int y = 0; y < kGridHeight; ++y)
         for (int x = 0; x < kGridWidth; ++x)
             if (cfg.cells[y][x] == Cell::Blank) cfg.cells[y][x] = Cell::Brick;
+    // See the earlier tests: open a path from player 0's new landing tile to
+    // the brick under test, the way a spawn's own pocket clear would.
+    cfg.cells[4][4] = Cell::Blank;
+    cfg.cells[4][5] = Cell::Blank;
     Simulation s(cfg);
+    s.state().players[0].x = 4 * kTileWF + kTileWF / 2;
+    s.state().players[0].y = 4 * kTileHF + kTileHF / 2;
     // Nothing else on the board hides (or shows) a token, so pass 1 (needs
     // ANOTHER record to swap with) is guaranteed to exhaust; pass 2 (needs
     // only an EMPTY brick) has ~100+ candidates and is virtually certain to
     // succeed.
-    s.state().hidden[0][2] = PowerupType::Punch;
+    s.state().hidden[4][6] = PowerupType::Punch;
 
     s.tick(press1(0));
     run(s, s.state().tuning.fuse_frames - 1);
 
-    CHECK(s.state().burning[0][2] > 0);                  // still ignites/crumbles as normal
-    CHECK(s.state().floor[0][2] == PowerupType::None);   // no reveal at all this ignition
-    CHECK(s.state().hidden[0][2] == PowerupType::None);  // and gone from the original tile
+    CHECK(s.state().burning[4][6] > 0);                  // still ignites/crumbles as normal
+    CHECK(s.state().floor[4][6] == PowerupType::None);   // no reveal at all this ignition
+    CHECK(s.state().hidden[4][6] == PowerupType::None);  // and gone from the original tile
 
     int punch_tiles = 0, px = -1, py = -1;
     for (int y = 0; y < kGridHeight; ++y)
@@ -290,7 +332,7 @@ TEST_CASE("a hidden Punch powerup with no swap partner moves to an empty brick u
                 py = y;
             }
     CHECK(punch_tiles == 1);  // not lost -- moved
-    CHECK((px != 2 || py != 0));
+    CHECK((px != 6 || py != 4));
 }
 
 TEST_CASE("powerup accumulation respects the VALUELST limits") {
@@ -392,6 +434,65 @@ TEST_CASE("full-state determinism incl. seeded setup") {
     CHECK(c.hash() != a.hash());
 }
 
+TEST_CASE("hidden-powerup scatter draws like the original's rejection sampling") {
+    // setup.md finding 1: sub_4258E5's non-network branch
+    // (batch_0x42583B.cpp:222-255, pseudo.c 26647-26679) places each unit by
+    // INDEPENDENT REJECTION SAMPLING — a fresh random (x,y) (rand()%W then
+    // rand()%H), retried up to 200 times, SILENTLY DROPPED on exhaustion — not
+    // by removing an entry from a pre-built brick list (1 draw/placement, never
+    // misses). On a brickLESS board every try fails, fully determining the draw
+    // COUNT: 200 tries * 2 draws = 400 per requested unit. The old list-removal
+    // drew ZERO here (its candidate list was empty), so this pins the fix.
+    MatchConfig cfg = open_config();  // (odd,odd) solids, rest Blank -> NO bricks
+    for (auto& c : cfg.tuning.spawn_counts) c = 0;
+    cfg.tuning.spawn_counts[static_cast<int>(PowerupType::ExtraBomb)] = 2;
+    cfg.seed = 0x00ABCDEFu;
+    Simulation s(cfg);
+
+    // Brickless board: all 2 requested units exhaust their scan and drop.
+    int placed = 0;
+    for (int y = 0; y < kGridHeight; ++y)
+        for (int x = 0; x < kGridWidth; ++x)
+            if (s.state().hidden[y][x] != PowerupType::None) ++placed;
+    CHECK(placed == 0);
+
+    // Replay build_state's exact draw sequence from the seed: 0 rover draws
+    // (campaign counts default 0), 2 units * 200 tries * 2 draws = 800 failing
+    // scatter draws, then the single unconditional dud-gate draw. The local
+    // xorshift32 mirrors rng.hpp's next_random exactly.
+    std::uint32_t r = cfg.seed;
+    auto draw = [&] {
+        r ^= r << 13;
+        r ^= r >> 17;
+        r ^= r << 5;
+    };
+    for (int i = 0; i < 800 + 1; ++i) draw();
+    CHECK(s.state().rng == r);  // draw-for-draw match with sub_4258E5
+}
+
+TEST_CASE("hidden-powerup scatter only ever hides tokens under bricks") {
+    // The placement half of setup.md finding 1: a token can land only on a
+    // Brick cell with no record yet (sub_425FB9==2 && !sub_42542D), and on a
+    // plentiful-brick board every requested unit finds a home within 200 tries.
+    MatchConfig cfg = open_config();
+    for (int y = 0; y < kGridHeight; ++y)
+        for (int x = 0; x < kGridWidth; ++x)
+            if (!(x % 2 == 1 && y % 2 == 1)) cfg.cells[y][x] = Cell::Brick;
+    for (auto& c : cfg.tuning.spawn_counts) c = 0;
+    cfg.tuning.spawn_counts[static_cast<int>(PowerupType::Flame)] = 6;
+    cfg.seed = 0x24680u;
+    Simulation s(cfg);
+    int placed = 0;
+    for (int y = 0; y < kGridHeight; ++y)
+        for (int x = 0; x < kGridWidth; ++x)
+            if (s.state().hidden[y][x] != PowerupType::None) {
+                ++placed;
+                CHECK(s.state().hidden[y][x] == PowerupType::Flame);
+                CHECK(s.state().cells[y][x] == Cell::Brick);  // never a blank/solid tile
+            }
+    CHECK(placed == 6);  // plentiful bricks -> no unit exhausts its 200-try scan
+}
+
 TEST_CASE("the match clock counts down to a TimeUp event") {
     MatchConfig cfg = test_config();
     cfg.tuning.game_seconds = 1;  // 20 ticks
@@ -423,6 +524,14 @@ TEST_CASE("hurry walls spiral in, crush, and detonate bombs") {
     cfg.tuning.hurry_seconds =
         8;  // banner at tick 41 (remaining 7s); walls arm tick 121 (remaining 3s)
     cfg.tuning.enclosement_depth = 1;
+    // Two survivors deep in the interior (ring 4 — untouched by a depth-1
+    // closure and clear of the (4,0) stomp blast) keep the round at >= 2 alive
+    // sides AFTER the corner players are crushed, so the wall-stomped bomb
+    // still forcibly detonates. Without them the round is decided the moment
+    // player 0 is crushed (tick 126) and bombs F1 freezes the stomp bomb.
+    cfg.spawns.push_back({7, 4});
+    cfg.spawns.push_back({7, 6});
+    cfg.player_count = 4;
     Simulation s(cfg);
     run(s, 41);
     CHECK(s.state().hurry);               // banner fired at moment 1 (tick 41)
@@ -758,7 +867,10 @@ TEST_CASE("a bomb landing on a head stuns and scatters powerups") {
     b.y = vy * kTileHF + kTileHF / 2;
     s.state().bombs.push_back(b);
     s.tick(press2(0));  // punch -> bomb flies 3 tiles east onto victim
-    run(s, 12);         // bomb lands (~9 ticks) while stun (20) still active
+    // Tick up to the landing (~9 ticks of flight): the 16-frame stun now
+    // burns kSubFrames per tick, so observe it the moment it lands instead
+    // of overshooting past its ~2-tick life.
+    for (int guard = 0; v.stun == 0 && guard < 30; ++guard) s.tick(TickInputs{});
     CHECK(v.stun > 0);  // dazed
     CHECK((v.max_bombs < 4 || v.flame < 5 || !v.kick));  // lost at least one power
     int floor_count = 0;
@@ -766,7 +878,8 @@ TEST_CASE("a bomb landing on a head stuns and scatters powerups") {
         for (int x = 0; x < kGridWidth; ++x)
             if (s.state().floor[y][x] != PowerupType::None) ++floor_count;
     CHECK(floor_count >= 1);  // dropped powers landed on the floor
-    // While stunned the victim can't move.
+    // While stunned the victim can't move (the fresh 16-frame stun covers
+    // every sub-frame of this next tick).
     Fixed by = v.y;
     TickInputs up;
     up.players[1].up = true;
@@ -801,7 +914,7 @@ TEST_CASE("a stunned-but-alive player still burns and still picks up floor power
     // (a) Flame death is not blocked by stun.
     {
         Player& p = s.state().players[0];
-        p.stun = 5;  // stand-in for an ongoing head-hit/grab-pause stun
+        p.stun = 2 * kSubFrames;  // stand-in stun outliving this tick's frames
         int tx = p.tile_x(), ty = p.tile_y();
         s.state().flame[ty][tx] = 200;  // active flame underfoot this tick
         run(s, 1);
@@ -812,7 +925,7 @@ TEST_CASE("a stunned-but-alive player still burns and still picks up floor power
     // (b) Floor-powerup pickup is not blocked by stun.
     {
         Player& p = s.state().players[1];
-        p.stun = 5;
+        p.stun = 2 * kSubFrames;
         int before = p.flame;
         int tx = p.tile_x(), ty = p.tile_y();
         s.state().floor[ty][tx] = PowerupType::Flame;
@@ -852,7 +965,9 @@ TEST_CASE("a head hit can drop goldflame (kind 8)") {
     b.y = vy * kTileHF + kTileHF / 2;
     s.state().bombs.push_back(b);
     s.tick(press2(0));  // punch → flight
-    run(s, 12);         // land on the victim's head
+    // Tick up to the landing; observe the stun the tick it lands (see the
+    // head-hit scatter test above for the cadence note).
+    for (int guard = 0; v.stun == 0 && guard < 30; ++guard) s.tick(TickInputs{});
     CHECK(v.stun > 0);
     CHECK(!v.goldflame);  // the goldflame flag was removed as a dropped power
     bool gold_on_floor = false;

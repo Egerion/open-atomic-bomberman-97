@@ -55,7 +55,11 @@ private:
     // Ignites the exploding bomb's own tile unconditionally (sub_42331C
     // epicentre block). Distinct from spread_to: no bomb/powerup occupancy
     // stop applies here, only to the extending arm.
-    bool ignite_epicentre(int tx, int ty, std::uint8_t owner);
+    // `colour` alongside `owner` on both igniters: the original's flame-cell
+    // init (sub_426FCC) takes them as separate arguments (colour from the
+    // bomb's +60 byte, owner from its +62 word) and stores both in the cell
+    // record — see Bomb::colour.
+    bool ignite_epicentre(int tx, int ty, std::uint8_t owner, std::uint8_t colour);
 
     // A flame ARM reaches (tx,ty), travelling in direction `from_dir`
     // (sub_42331C per-direction loop). `is_last_of_reach` is whether this is
@@ -66,8 +70,8 @@ private:
     // Returns true if the arm continues past this cell, false if it stops
     // here (bomb chain-queued, powerup burned, solid wall, or brick
     // ignited).
-    bool spread_to(int tx, int ty, std::uint8_t owner, Direction from_dir,
-                   bool is_last_of_reach);
+    bool spread_to(int tx, int ty, std::uint8_t owner, std::uint8_t colour,
+                   Direction from_dir, bool is_last_of_reach);
 
     // Destroys any floor powerup at (tx,ty), with the diseases_destroyable
     // skull-relocation compensation. Shared by the epicentre and the arm.

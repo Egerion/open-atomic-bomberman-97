@@ -365,6 +365,13 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, AISystem* ai_sys, 
     // blocks are edge-gated, so the only cadence difference is the auto-drop
     // diseases' intra-tick attempt density (documented in the same entry).
     FieldCtx fctx{&s, i, &powerups, &diseases};
+    // Round-start input freeze (dword_4621E0, sub_41F29B's `v113 &&
+    // !dword_4621E0` gate at 23028): while it runs, the AI brain and the
+    // human input read are BOTH skipped — same slot as the stun gate below,
+    // but without consuming stun (their countdowns are independent). Stage
+    // actors, the ice-buffer flow and the LABEL_246 tail (with its inputs
+    // dead, so only auto-drop can act) all run normally underneath it.
+    const bool frozen = s.input_freeze > 0;
     std::int32_t walk_budget = 0;  // summed accruals -> the PlayerWalking event
     for (int sub = 0; sub < kSubFrames; ++sub) {
         // +58 head-stun: gate first, then decrement — the original's
@@ -378,6 +385,7 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, AISystem* ai_sys, 
         // hence continue, not break.
         if (p.bounce > 0 || p.warp > 0) {
             (void)movement.ice_delay(p, -1);
+            s.sub_trace[i][sub] = {p.x, p.y, p.facing};
             continue;
         }
 
@@ -387,7 +395,7 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, AISystem* ai_sys, 
         // original skipping the call outright); its action-key presses are
         // OR-latched into `in` for the once-per-tick tail below.
         PlayerInput sub_in = tick_in;
-        if (ai_sys && !sub_stunned) {
+        if (ai_sys && !sub_stunned && !frozen) {
             ai_sys->decide(i, sub_in, kSubFrameMs[sub]);
             in.action1 = in.action1 || sub_in.action1;
             in.action2 = in.action2 || sub_in.action2;
@@ -400,7 +408,7 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, AISystem* ai_sys, 
         // decode for it — the mover then takes the idle branch (stage actors
         // still drive it), never a keyed one.
         int want_godir = -1;
-        if (!sub_stunned) {
+        if (!sub_stunned && !frozen) {
             const bool up = sub_in.up, down = sub_in.down, left = sub_in.left,
                        right = sub_in.right;
 
@@ -509,6 +517,13 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, AISystem* ai_sys, 
             const int sy = ((py % kTileH) + kTileH) % kTileH - kTileH / 2;
             if (sx * DX[probe] + sy * DY[probe] == 0) bombs.try_kick(p, kGodir[probe], i);
         }
+
+        // Presentation sub-frame trace (State::sub_trace, derived output like
+        // s.events): where this player ended THIS canonical frame — the
+        // renderer plays these back so the original's per-frame micro-motion
+        // (direction flips up to kSubFrames× per tick) survives to the screen
+        // instead of being lerped away between tick endpoints.
+        s.sub_trace[i][sub] = {p.x, p.y, p.facing};
     }
 
     // Presentation walk-state event (see PlayerWalking's doc comment in
@@ -545,7 +560,12 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, AISystem* ai_sys, 
         p.prev_action1 = in.action1;
         p.prev_action2 = in.action2;
     } else {
-        bomb_actions(/*blocked=*/p.stun > 0);
+        // The round-start freeze reaches LABEL_246 with the key bytes never
+        // acquired (their per-frame 0 reset stands), exactly like a stun tick
+        // — blocked=true reproduces that; auto-drop still overrides, as the
+        // original's v112 force is computed at LABEL_246 itself, outside the
+        // acquisition gate.
+        bomb_actions(/*blocked=*/p.stun > 0 || frozen);
     }
 }
 
@@ -559,6 +579,15 @@ void field_vs_players(State& s, PowerupSystem& powerups, DiseaseSystem& diseases
 
 void run_tick(State& s, const TickInputs& inputs) {
     s.events.clear();
+    // Presentation sub-frame trace prefill (State::sub_trace): every sample
+    // starts at the player's tick-entry position/facing; player_turn's
+    // sub-frame loop overwrites sample f as it moves, and the endpoint
+    // restamp at the bottom of this function pins the LAST sample to the
+    // tick's true final position. Derived output — never hashed.
+    for (int i = 0; i < kMaxPlayers; ++i) {
+        const Player& pp = s.players[i];
+        for (int f = 0; f < kSubFrames; ++f) s.sub_trace[i][f] = {pp.x, pp.y, pp.facing};
+    }
 
     // Systems are cheap stack objects wired to the shared state; their
     // construction order is irrelevant, the CALL order below is not.
@@ -603,6 +632,18 @@ void run_tick(State& s, const TickInputs& inputs) {
                     powerups, diseases);
     }
 
+    // 1b. Round-start input freeze countdown (dword_4621E0: armed to 50ms ×
+    //     getvalue(30) = 1000 ms by round init sub_4214BC, decremented by the
+    //     measured frame delta at the top of the player-pass entry sub_420F07,
+    //     pseudo.c 23642-23645; while nonzero player_turn's acquisition gate
+    //     skips the AI brain and the human input decode). The original's gate
+    //     opens on the frame at t >= 1000 ms — exactly 1000 ms of dead input.
+    //     At tick granularity that boundary needs the decrement AFTER the
+    //     pass (ticks 0..19 read 20..1 and stay frozen; tick 20 reads 0):
+    //     decrementing before the pass would cut the window one tick short.
+    //     docs/re/facts.md "Round-start input freeze".
+    if (s.input_freeze > 0) --s.input_freeze;
+
     // 2. Campaign rover/ghost hazards: drive the mover 1 tick (spawn/wander/
     // flame-death/landing-tile kill) and the "all hazards dead" grace timer
     // (docs/re/campaign.md "Round pacing", sub_4016DA). The original calls
@@ -621,6 +662,23 @@ void run_tick(State& s, const TickInputs& inputs) {
     if (s.ticks_left > 0 && --s.ticks_left == 0)
         s.events.push_back({Event::Type::TimeUp, -1, -1, -1, 0});
 
+    // bombs F1 (docs/re/audit/bombs.md finding 1; sub_42331C's per-bomb tail
+    // gated on `sub_421969() > 1` at pseudo.c 25603 / batch_0x422DDD.cpp:799):
+    // once a round is decided down to <= 1 alive SIDE, the original FREEZES
+    // every still-armed bomb — the entire fuse-elapsed accrual, the timeout
+    // explosion, and the nested flame-arm spread all sit behind that gate, so
+    // no fuse counts down, no chain propagates, and no trigger press resolves
+    // (the chain-queue drain's forced elapsed=duration write is inert without
+    // the same gate) until the round transitions. sub_421969 returns a forced
+    // 2 in campaign (dword_46489C), so the freeze is EXEMPT there
+    // (rovers/ghosts are not players; the round does not end by elimination) —
+    // mirrored by !s.campaign_hazards_active. sides_remaining() generalizes
+    // free-for-all (team 0 = distinct sides) and team mode exactly like
+    // dword_4621D4/dword_4621DC. Bomb MOVEMENT (advance_bombs, step 5 — the
+    // switch cases BEFORE the 25603 gate) is NOT frozen; only the fuse/
+    // explosion/chain tail is.
+    const bool bombs_frozen = sides_remaining(s) <= 1 && !s.campaign_hazards_active;
+
     // 4. Drain the chain-detonation queue (docs/re/facts.md "Chain-reaction
     // timing", sub_423209/dword_462200): a flame arm that reached another
     // bomb, a trigger-button press, a flying bomb landing on flame, or a
@@ -634,14 +692,16 @@ void run_tick(State& s, const TickInputs& inputs) {
     // bombs.advance_bombs / tick_fuses, below — i.e. during the original's
     // per-bomb-slot loop, which runs AFTER its own drain already fired) is
     // only caught by the NEXT tick's drain — one chain LINK per tick, not
-    // the whole chain at once.
-    flames.drain_chain_queue();
+    // the whole chain at once. Frozen once the round is decided (bombs F1).
+    if (!bombs_frozen) flames.drain_chain_queue();
 
-    // 5. Kicked bombs slide; airborne bombs fly.
+    // 5. Kicked bombs slide; airborne bombs fly. NOT frozen by bombs F1
+    //    (movement is the original's switch cases, before the freeze gate).
     bombs.advance_bombs();
 
-    // 6. Fuses (paused while a bomb is airborne).
-    bombs.tick_fuses();
+    // 6. Fuses (paused while a bomb is airborne). Frozen once the round is
+    //    decided down to <= 1 alive side (bombs F1).
+    if (!bombs_frozen) bombs.tick_fuses();
 
     // NOTE (documented deviation, facts.md "Per-tick call order" accepted
     // deviations): the original interleaves steps 5/6 PER BOMB SLOT — slot
@@ -681,6 +741,17 @@ void run_tick(State& s, const TickInputs& inputs) {
     s.bombs.erase(
         std::remove_if(s.bombs.begin(), s.bombs.end(), [](const Bomb& b) { return !b.active; }),
         s.bombs.end());
+
+    // 12. Pin every player's LAST sub-frame sample to the tick's true
+    // endpoint: post-loop relocations (trampoline apex teleport, warp
+    // midpoint, head-hit scatter) move a player after its own sub-frame loop
+    // finished, and the trace playback's final segment must land exactly on
+    // the position the next tick starts from (the renderer's per-segment
+    // snap threshold then renders such a relocation as a clean snap).
+    for (int i = 0; i < kMaxPlayers; ++i) {
+        const Player& pp = s.players[i];
+        s.sub_trace[i][kSubFrames - 1] = {pp.x, pp.y, pp.facing};
+    }
 
     ++s.tick;
 }
