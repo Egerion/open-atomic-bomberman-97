@@ -27,3 +27,9 @@ extracted/
 *.nam
 *.til
 pseudo.c
+
+# The 1:1 native transliteration project (native/) is DERIVED from the
+# binary's decompilation — it lives on disk for local work and as the
+# behavioural oracle for the clean-room port, but is never committed
+# (same policy as pseudo.c itself).
+native/

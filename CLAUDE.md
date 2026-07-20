@@ -69,7 +69,11 @@ The sim is deterministic lockstep (`docs/adr/0003`). Rules:
 - Constants not yet confirmed against the binary are marked "our tunable" in
   `tuning.hpp` and listed as remaining guesses in facts.md. The former only
   known guess, fuse pause while a bomb is airborne, was confirmed 2026-07-03
-  against `sub_42331C`; facts.md's "Still guessed" table is currently empty.
+  against `sub_42331C`. facts.md's "Still guessed" table now holds one entry
+  again: the spawn-pocket clear shape/radius (`libs/sim/src/setup.cpp`) —
+  an exhaustive 2026-07-19 search of every writer to the board's tile array
+  found no original function that clears bricks around a spawn, so the port
+  uses the smallest shape matching live observation instead of a citation.
 - VALUELST-driven values go through `Tuning::apply(id, value)`; document ids
   in `docs/valuelst-map.md`.
 
