@@ -62,7 +62,7 @@ private:
     // 256 master colours, 6-bit VGA values already scaled *4 to 8-bit; entry 0
     // is a white sentinel in the file, forced to black at load (the original's
     // load-time fixup).
-    std::array<std::uint8_t, 256 * 3> master_{};
+    std::array<std::uint8_t, std::size_t{256} * 3> master_{};
     std::array<std::uint8_t, 32768> lut_{};  // RGB555 -> master index
 };
 

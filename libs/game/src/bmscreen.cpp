@@ -41,6 +41,15 @@ constexpr int kTextLeft = 54;  // kWinX + 34
 constexpr int kLineClipW = 532;
 constexpr int kVisibleHeight = 344;
 
+// Inline images are CENTERED on their text row and clipped to the window band
+// [34, height-62] (window-relative) — sub_41302D @ 16456-16497. In screen
+// space the band is [kTextTop, kImgClipBottom]. The render loop runs ±kImageBleed
+// lines beyond the visible rows (the original's `for (j = -16; j < v39+16)`) so
+// a tall centered image whose OWN line is just off-screen still blits the half
+// that pokes into the visible area.
+constexpr float kImgClipBottom = kWinY + (kWinH - 62.0f);  // 398: window height-62
+constexpr int kImageBleed = 16;
+
 // Text ink — CONFIRMED byte_49D38F pure white, drawn through the low-level
 // string blit dword_45C378 with NO outline (pseudo.c 16458-16461), unlike
 // every sub_41696C site. The old (230,230,210) tint was a port invention.
@@ -246,16 +255,17 @@ void BmScreen::draw(SDL_Renderer* ren) const {
     const int vis = visible_rows();
     const int total = static_cast<int>(doc_.lines.size());
 
-    // One screen row per line, from the current top. Each line lays its
-    // segments left to right: text runs are drawn with the font, an <IMG>
-    // segment blits the named PCX inline and advances the pen by its width —
-    // exactly sub_41302D's per-line split-at-tag draw, clipped to the 532-px
-    // line budget (v59).
+    // One screen row per line (plus a ±kImageBleed margin, see that constant).
+    // Each line lays its segments left to right: text runs draw with the font,
+    // an <IMG> segment blits the named PCX CENTERED on the row and advances the
+    // pen by its full width — sub_41302D's per-line split-at-tag draw, clipped
+    // to the 532-px line budget (v59) and the vertical image band.
     const float clip_right = static_cast<float>(kTextLeft + kLineClipW);
-    for (int j = 0; j < vis; ++j) {
+    for (int j = -kImageBleed; j < vis + kImageBleed; ++j) {
         int li = top_ + j;
         if (li < 0 || li >= total) continue;
-        float y = static_cast<float>(kTextTop + j * lh);
+        const bool row_visible = (j >= 0 && j < vis);
+        const float y = static_cast<float>(kTextTop + j * lh);  // row top (v35)
         float x = static_cast<float>(kTextLeft);
         for (const auto& seg : doc_.lines[static_cast<std::size_t>(li)]) {
             if (seg.is_text()) {
@@ -271,17 +281,50 @@ void BmScreen::draw(SDL_Renderer* ren) const {
                     ++n;
                 }
                 run.resize(n);
-                x = font_->draw(ren, run, x, y, kInkR, kInkG, kInkB);
+                // Rows inside the ±kImageBleed margin still advance the pen (so a
+                // trailing <IMG> lands at the right X) but draw no text — only
+                // the vis-window rows are visible.
+                if (row_visible) font_->draw(ren, run, x, y, kInkR, kInkG, kInkB);
+                x += w;
             } else {
                 // Inline image: look it up as a front-end PCX by its base name
-                // (case as written; the install FS was case-insensitive). Blit
-                // its top-left at the pen and advance past it. A missing image
-                // just draws nothing and does not advance (matches the original
-                // skipping an image whose palette/asset failed to load).
+                // (case as written; the install FS was case-insensitive). A
+                // missing image draws nothing but still advances (matches the
+                // original skipping an image whose palette/asset failed to load).
                 const Sprite& sp = assets_->frontend_pcx(seg.value);
                 if (sp.tex) {
-                    SDL_FRect dst{x, y, static_cast<float>(sp.w), static_cast<float>(sp.h)};
-                    SDL_RenderTexture(ren, sp.tex, nullptr, &dst);
+                    // CENTER the image vertically on the row: sub_41302D sets the
+                    // blit Y to `rowY - (imageHeight - lineHeight)/2` (integer
+                    // div), NOT the row top. Top-aligning (the old port bug)
+                    // shifted every inline image DOWN by ~half its height, so the
+                    // credits' "----->" arrows no longer met their photos.
+                    int img_top = static_cast<int>(y) - (sp.h - lh) / 2;
+                    int src_y = 0;
+                    int draw_h = sp.h;
+                    // Vertical clip to the image band [kTextTop, kImgClipBottom]
+                    // (window 34 .. height-62): a centered tall image can extend
+                    // past the text rows both ways; the original skips the parts
+                    // outside the band (source-row offset at the top, height
+                    // clamp at the bottom).
+                    if (img_top < kTextTop) {
+                        src_y = kTextTop - img_top;
+                        draw_h = sp.h - src_y;
+                        img_top = kTextTop;
+                    }
+                    if (static_cast<float>(img_top + draw_h) > kImgClipBottom)
+                        draw_h = static_cast<int>(kImgClipBottom) - img_top;
+                    // Right clip to the 532-px line budget (v32 = min(width, v36),
+                    // where the remaining budget v36 == clip_right - pen).
+                    int draw_w = sp.w;
+                    if (x + static_cast<float>(draw_w) > clip_right)
+                        draw_w = static_cast<int>(clip_right - x);
+                    if (draw_h > 0 && draw_w > 0) {
+                        SDL_FRect src{0.0f, static_cast<float>(src_y),
+                                      static_cast<float>(draw_w), static_cast<float>(draw_h)};
+                        SDL_FRect dst{x, static_cast<float>(img_top),
+                                      static_cast<float>(draw_w), static_cast<float>(draw_h)};
+                        SDL_RenderTexture(ren, sp.tex, &src, &dst);
+                    }
                     x += static_cast<float>(sp.w);
                 }
             }

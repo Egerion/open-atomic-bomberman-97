@@ -69,6 +69,21 @@ public:
     // and the HURRY! banner.
     void on_events(const sim::State& s);
 
+    // Rolls the per-tick render snapshots forward for ONE freshly-simulated
+    // tick — the inter-tick interpolation baseline (capture_interp) and the
+    // walk/fidget/carry/gold-sparkle bookkeeping (sample_movement). The match
+    // loop MUST call this once per sim_.tick() inside its catch-up loop, so
+    // that when a slow displayed frame advances the sim two ticks at once the
+    // interpolation `prev` is the PENULTIMATE tick (a 1-tick lerp span), not
+    // two ticks back (a 2-tick span that snaps/double-speeds for ~3 frames —
+    // the "jump/hitch" jitter). Both callees are tick-keyed no-ops on repeat,
+    // so draw_frame's own calls below stay correct for the demo/screenshot
+    // path that ticks-then-draws without this loop. See draw_frame's doc.
+    void advance_tick(const sim::State& s) {
+        capture_interp(s);
+        sample_movement(s);
+    }
+
     // Forgets per-match cosmetic state (call when a new match starts). `untimed`
     // is the PRESENTATION-side "no time limit" flag (options_.playtime_seconds
     // == 1001, docs/re/in-match-shell.md §3's dword_4601A8 == 1001) — the sim's
@@ -92,6 +107,7 @@ private:
         std::uint64_t start = 0;
     };
 
+    void draw_cells(const sim::State& s);   // static solid/brick tiles (background layer)
     void draw_actors(const sim::State& s);  // conveyor/trampoline floor tiles
     void draw_bombs(const sim::State& s);
     void draw_powerups(const sim::State& s);
@@ -113,6 +129,18 @@ private:
     };
     Posf interp_pos(sim::Fixed prev_x, sim::Fixed prev_y, sim::Fixed x, sim::Fixed y,
                     bool prev_ok) const;
+
+    // On-screen FIELD-pixel position + facing for PLAYER i: plays back the
+    // sim's per-sub-frame trace (State::sub_trace) across the tick interval
+    // instead of lerping the two 20 Hz endpoints. The original draws every
+    // displayed frame at the player's live per-frame position, so its
+    // ~180 fps micro-zigzag (AI direction flips up to kSubFrames× per tick)
+    // is visible; an endpoint lerp filters all of it out. `out_dir` receives
+    // the active segment's facing so the sprite flips mid-tick too. Falls
+    // back to the endpoint (and p.facing) when no previous tick exists or
+    // alpha >= 1; each SEGMENT applies the same snap threshold interp_pos
+    // uses, so warps/teleports still snap instead of smearing.
+    Posf player_interp(const sim::State& s, int i, int& out_dir) const;
 
     void draw_sprite(const Sprite& sp, float x, float y, Uint8 r = 255, Uint8 g = 255,
                      Uint8 b = 255);
@@ -177,9 +205,15 @@ private:
     // event-driven like kick/punch above.
     std::array<int, sim::kMaxPlayers> pickup_pose_{};
     // Idle "cornerhead" fidget: while a player is boxed in and standing still it
-    // cycles random fidgets (sub_41F29B). Purely cosmetic — reads the sim state,
-    // never mutates it, and rolls off the panic LCG below (never State::rng).
-    std::array<int, sim::kMaxPlayers> panic_ticks_{};
+    // cycles random fidgets (sub_41F29B). `panic_active_` marks the fidget as
+    // running; `panic_elapsed_` is the elapsed-frame counter (the ANI phase),
+    // which re-rolls a fresh variant once it reaches the current variant's own
+    // frame count — the original re-rolls on ANI-cycle completion, NOT on a
+    // fixed tick spread (see sample_movement). Purely cosmetic — reads the sim
+    // state, never mutates it, and rolls off the panic LCG below (never
+    // State::rng).
+    std::array<bool, sim::kMaxPlayers> panic_active_{};
+    std::array<int, sim::kMaxPlayers> panic_elapsed_{};
     std::array<int, sim::kMaxPlayers> panic_variant_{};
     // Bomb-pickup carry arc (docs/re/id-audit.md item 4, VALUELST 500/502/
     // 504/506): ticks elapsed since this player started carrying a bomb,
@@ -201,6 +235,10 @@ private:
     bool interp_valid_ = false;          // prev_* holds a real earlier tick
     float interp_alpha_ = 1.0f;          // this frame's fraction (set by draw_frame)
     std::array<sim::Fixed, sim::kMaxPlayers> prev_px_{}, prev_py_{}, seen_px_{}, seen_py_{};
+    // The latest tick's per-sub-frame player trace (State::sub_trace copy,
+    // rolled by capture_interp): describes the motion prev_p*_ -> seen_p*_
+    // that player_interp plays back.
+    std::array<std::array<sim::State::SubSample, sim::kSubFrames>, sim::kMaxPlayers> trace_{};
     std::vector<EntSnap> prev_bombs_, seen_bombs_;
     std::vector<EntSnap> prev_rovers_, seen_rovers_;
 

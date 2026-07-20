@@ -12,10 +12,6 @@
 
 namespace bomber::game {
 
-// How long a kick/punch pose stays up before returning to walk/stand. The
-// KICK/PUNCH sequences are short, so ~8 ticks (~0.4 s) reads cleanly.
-constexpr int kActionPoseTicks = 8;
-
 // Trampoline hop height per elapsed frame. CONFIRMED VALUELST id 681 = 35
 // ("how many pixels vertically do you move each frame?"), read by sub_41F29B
 // state 5 to blit the flying body at y - 35*min(c, len-c). Presentation-only —
@@ -26,15 +22,6 @@ constexpr int kHopPixelsPerFrame = 35;
 // StageActorSystem::kWarpTicks (a private sim header); the "spin" warp animation
 // (WALK.ANI, sub_41F29B states 6/7) advances by elapsed = kWarpTicks - warp.
 constexpr int kWarpTicks = 18;
-
-// Spread of the idle-fidget duration: the boxed-in "cornerhead" fidget rolls
-// `20 + rand()%getvalue(330)` ticks per fidget (sub_41F29B ~23011, guarded so
-// the modulus is >= 1). VALUELST id 330 = 13 (CONFIRMED — the file labels it
-// "how many cornerhead animations there are"; it is BOTH the fidget-duration
-// spread and the number of cornerhead sequences, so it equals
-// kCornerheadVariants above, not a coincidence). Presentation-only: the roll
-// comes off panic_lcg_, never State::rng, so there is no golden impact.
-constexpr int kPanicSpread = 13;  // getvalue(330)
 
 // Inter-tick interpolation snap threshold (see draw_frame's doc comment in
 // renderer.hpp). Anything a moving entity legitimately covers in ONE 20 Hz
@@ -60,6 +47,9 @@ void Renderer::capture_interp(const sim::State& s) {
         seen_px_[i] = s.players[i].x;
         seen_py_[i] = s.players[i].y;
     }
+    // This tick's per-sub-frame player motion (prev endpoints -> the seen
+    // endpoints captured above) for player_interp's playback.
+    trace_ = s.sub_trace;
     seen_bombs_.assign(s.bombs.size(), EntSnap{});
     for (std::size_t i = 0; i < s.bombs.size(); ++i)
         seen_bombs_[i] = {s.bombs[i].active, s.bombs[i].x, s.bombs[i].y};
@@ -67,6 +57,37 @@ void Renderer::capture_interp(const sim::State& s) {
     for (std::size_t i = 0; i < s.rovers.size(); ++i)
         seen_rovers_[i] = {s.rovers[i].alive, s.rovers[i].x, s.rovers[i].y};
     interp_tick_ = s.tick;
+}
+
+Renderer::Posf Renderer::player_interp(const sim::State& s, int i, int& out_dir) const {
+    const sim::Player& p = s.players[i];
+    out_dir = static_cast<int>(p.facing);
+    const float fx = static_cast<float>(p.x) / static_cast<float>(sim::kScale);
+    const float fy = static_cast<float>(p.y) / static_cast<float>(sim::kScale);
+    if (!interp_valid_ || interp_alpha_ >= 1.0f) return {fx, fy};
+    // Map alpha onto the tick's kSubFrames playback segments: segment f runs
+    // from sample f-1 (or the previous tick's endpoint for f == 0) to sample
+    // f. Sample kSubFrames-1 is pinned to the tick's true endpoint by the
+    // sim (run_tick step 12), so alpha -> 1 converges on exactly the
+    // position the old endpoint lerp used.
+    const float t = interp_alpha_ * static_cast<float>(sim::kSubFrames);
+    int f = static_cast<int>(t);
+    if (f >= sim::kSubFrames) f = sim::kSubFrames - 1;
+    const float local = t - static_cast<float>(f);
+    const auto& seg_end = trace_[i][f];
+    const sim::Fixed x0 = f == 0 ? prev_px_[i] : trace_[i][f - 1].x;
+    const sim::Fixed y0 = f == 0 ? prev_py_[i] : trace_[i][f - 1].y;
+    out_dir = static_cast<int>(seg_end.facing);
+    const float ex = static_cast<float>(seg_end.x) / static_cast<float>(sim::kScale);
+    const float ey = static_cast<float>(seg_end.y) / static_cast<float>(sim::kScale);
+    // Same both-axes snap rule as interp_pos, applied per SEGMENT: a warp/
+    // trampoline/scatter relocation lands entirely in one segment and snaps
+    // there instead of smearing across the field.
+    if (std::abs(seg_end.x - x0) > kInterpSnapDelta || std::abs(seg_end.y - y0) > kInterpSnapDelta)
+        return {ex, ey};
+    const float sx = static_cast<float>(x0) / static_cast<float>(sim::kScale);
+    const float sy = static_cast<float>(y0) / static_cast<float>(sim::kScale);
+    return {sx + (ex - sx) * local, sy + (ey - sy) * local};
 }
 
 Renderer::Posf Renderer::interp_pos(sim::Fixed prev_x, sim::Fixed prev_y, sim::Fixed x,
@@ -226,7 +247,8 @@ void Renderer::reset_match(bool untimed) {
     kick_pose_.fill(0);
     punch_pose_.fill(0);
     pickup_pose_.fill(0);
-    panic_ticks_.fill(0);
+    panic_active_.fill(false);
+    panic_elapsed_.fill(0);
     // Drop the inter-tick snapshots: a new round restarts s.tick and reuses
     // slots, so lerping from the previous match's positions would be garbage.
     interp_tick_ = ~0ull;
@@ -251,12 +273,28 @@ void Renderer::on_events(const sim::State& s) {
                 hurry_until_ = s.tick + 60;  // ~3 s of flashing banner
                 break;
             case sim::Event::Type::BombKicked:
-                if (ev.player >= 0 && ev.player < sim::kMaxPlayers)
-                    kick_pose_[ev.player] = kActionPoseTicks;
+                // The kick pose plays for exactly the KICK.ANI sequence's own
+                // frame count, like the pickup pose below — sub_41F29B state 1
+                // exits when its elapsed frame passes the sequence's statecnt
+                // (sub_41DA5C, pseudo.c ~23119-23129/native batch_0x41F29B), NOT
+                // a fixed tick budget. dir = the player's facing at the event.
+                if (ev.player >= 0 && ev.player < sim::kMaxPlayers) {
+                    const auto& seq =
+                        seqs_->kick[render_colour(s, ev.player)]
+                                   [static_cast<int>(s.players[ev.player].facing)];
+                    kick_pose_[ev.player] = static_cast<int>(seq.steps.size());
+                }
                 break;
             case sim::Event::Type::BombPunched:
-                if (ev.player >= 0 && ev.player < sim::kMaxPlayers)
-                    punch_pose_[ev.player] = kActionPoseTicks;
+                // Same as BombKicked: the punch pose runs for PUNCH.ANI's own
+                // length (sub_41F29B state 2, pseudo.c ~23135-23145), not a
+                // guessed constant.
+                if (ev.player >= 0 && ev.player < sim::kMaxPlayers) {
+                    const auto& seq =
+                        seqs_->punch[render_colour(s, ev.player)]
+                                    [static_cast<int>(s.players[ev.player].facing)];
+                    punch_pose_[ev.player] = static_cast<int>(seq.steps.size());
+                }
                 break;
             case sim::Event::Type::BombGrabbed:
                 // "Picking up a bomb" transitional pose (PUP*.ANI "pickup
@@ -330,17 +368,36 @@ void Renderer::sample_movement(const sim::State& s) {
         last_y_[i] = p.y;
 
         // Idle-fidget bookkeeping (once per sim tick). While a live player is
-        // standing still and fully boxed in, keep re-rolling "cornerhead"
-        // fidgets; the instant it moves (or the box opens), cancel. Cosmetic —
-        // the rolls come off panic_lcg_, never State::rng (determinism intact).
+        // standing still and fully boxed in, cycle "cornerhead" fidgets; the
+        // instant it moves (or the box opens), cancel. The original
+        // (sub_41F29B, pseudo.c ~23011 entry / ~23236-23246 exit; native
+        // batch_0x41F29B) rolls a VARIANT once — `rand() % getvalue(330) + 20`,
+        // where id 330 is the variant COUNT (=13=kCornerheadVariants), never a
+        // duration — and holds it until that variant's own ANI plays through
+        // one full cycle (elapsed frame >= its sub_41DA5C statecnt), at which
+        // point, still boxed in, it re-rolls a fresh variant on the next tick.
+        // So the re-roll cadence is the chosen art's own length, not a fixed
+        // `20 + rand()%13` spread; and the displayed frame is an elapsed-since-
+        // entry counter (panic_elapsed_), not a raw global-tick phase. Cosmetic
+        // — rolls come off panic_lcg_, never State::rng (determinism intact).
         bool panic = p.present && p.alive && !displaced && boxed_in(s, p.tile_x(), p.tile_y());
         if (panic) {
-            if (--panic_ticks_[i] <= 0) {
+            if (!panic_active_[i]) {
                 panic_variant_[i] = static_cast<int>(panic_roll() % kCornerheadVariants);
-                panic_ticks_[i] = 20 + static_cast<int>(panic_roll() % kPanicSpread);
+                panic_elapsed_[i] = 0;
+                panic_active_[i] = true;
+            } else {
+                ++panic_elapsed_[i];
+                const int len = static_cast<int>(
+                    seqs_->cornerhead[render_colour(s, i)][panic_variant_[i]].steps.size());
+                if (len <= 0 || panic_elapsed_[i] >= len) {
+                    panic_variant_[i] = static_cast<int>(panic_roll() % kCornerheadVariants);
+                    panic_elapsed_[i] = 0;
+                }
             }
         } else {
-            panic_ticks_[i] = 0;
+            panic_active_[i] = false;
+            panic_elapsed_[i] = 0;
         }
 
         // Bomb-pickup carry arc bookkeeping (docs/re/id-audit.md item 4):
@@ -492,7 +549,9 @@ void Renderer::draw_bombs(const sim::State& s) {
         }
         float sx = kFieldOriginX + bx;
         float sy = kFieldOriginY + by + sim::kTileH / 2.0f - 1.0f - lift;
-        int bo = render_colour(s, b.owner);
+        // Colour byte, not the (chain-transferable) owner word — see
+        // Bomb::colour / facts.md "Bomb/flame colour is not the owner".
+        int bo = render_colour(s, b.colour);
         // Bomb sprite selection (mirrors the original's "bomb %s green" pick
         // from the EXCLUSIVE kind set at creation — trigger overrides jelly,
         // sub_41EB13 — plus the dud state suffix, sub_42331C):
@@ -513,26 +572,49 @@ void Renderer::draw_bombs(const sim::State& s) {
     }
 }
 
-void Renderer::draw_world(const sim::State& s) {
+void Renderer::draw_cells(const sim::State& s) {
     const SequenceSet& q = *seqs_;
-    std::size_t pulse = static_cast<std::size_t>(s.tick);
-
-    // Static cells (anchored at bottom-center via their hotspots).
+    // Static solid/brick tiles, anchored at bottom-center via their hotspots.
+    // These belong to the BACKGROUND layer, drawn before every sprite pass:
+    // the original never draws them per frame at all — sub_425D22 STAMPS
+    // "tile %u solid"/"tile %u brick" into the background surface whenever a
+    // cell changes (sub_425EFC/sub_425E9B), so bombs (including a flying
+    // bomb's whole arc), powerups, flames and players all composite OVER
+    // them. Our previous single draw_world pass painted these statics after
+    // draw_bombs, which buried an airborne bomb behind any brick/solid tile
+    // it crossed. docs/re/facts.md "Draw order" (tile layer addendum).
+    //
+    // A burning brick draws NO static brick here: the ignition stamp
+    // (sub_425EFC's blank-then-revert dance) erases the brick from the
+    // background — sub_425D22 runs while the cell type is momentarily 0 —
+    // leaving bare floor for the crumble frames (drawn later, in
+    // draw_world's sub_426D06-equivalent pass) to composite over, even
+    // though the CELL stays Brick (blocking) until `burning` expires.
     for (int y = 0; y < sim::kGridHeight; ++y) {
         for (int x = 0; x < sim::kGridWidth; ++x) {
             float sx = tile_screen_x(x) + sim::kTileW / 2.0f;
             float sy = tile_screen_y(y) + sim::kTileH - 1.0f;
             if (s.cells[y][x] == sim::Cell::Solid)
                 draw_anim(q.solid, 0, sx, sy);
-            // A burning brick keeps its cell as Cell::Brick for the whole
-            // crumble (the flame-audit fix, docs/re/facts.md "Brick crumble
-            // timing" — the tile only opens once `burning` hits 0), so the
-            // burn animation MUST be tested BEFORE the static-brick draw:
-            // otherwise `cells==Brick` wins for every burning tick and the
-            // crumble frames never render (the brick just pops out). The
-            // original draws the crumble ("brick %s" burn frames) over the
-            // still-Brick cell, advancing 0->last as `burning` counts down.
-            else if (s.burning[y][x] > 0)
+            else if (s.cells[y][x] == sim::Cell::Brick && s.burning[y][x] == 0)
+                draw_anim(q.brick, 0, sx, sy);
+        }
+    }
+}
+
+void Renderer::draw_world(const sim::State& s) {
+    const SequenceSet& q = *seqs_;
+    std::size_t pulse = static_cast<std::size_t>(s.tick);
+
+    // Brick-crumble frames ("brick %s" burn art, the kind-9 branch of the
+    // original's flame/burn animator sub_426D06). Drawn HERE — after bombs
+    // and powerups, matching sub_426D06's slot in the per-frame sequence —
+    // over the bare floor the ignition stamp left behind (see draw_cells).
+    for (int y = 0; y < sim::kGridHeight; ++y) {
+        for (int x = 0; x < sim::kGridWidth; ++x) {
+            float sx = tile_screen_x(x) + sim::kTileW / 2.0f;
+            float sy = tile_screen_y(y) + sim::kTileH - 1.0f;
+            if (s.burning[y][x] > 0)
                 // Frame pacing: sub_426D06's per-cell counter (+48) is a
                 // monotonic tick counter reset to 0 at ignition (sub_426FCC's
                 // `*(_WORD*)(v8+48)=0`) and advanced by exactly 1 per tick
@@ -546,8 +628,6 @@ void Renderer::draw_world(const sim::State& s) {
                 draw_anim(q.burn,
                           static_cast<std::size_t>(s.tuning.brick_burn_frames - s.burning[y][x]),
                           sx, sy);
-            else if (s.cells[y][x] == sim::Cell::Brick)
-                draw_anim(q.brick, 0, sx, sy);
         }
     }
 
@@ -561,8 +641,13 @@ void Renderer::draw_world(const sim::State& s) {
     for (int y = 0; y < sim::kGridHeight; ++y) {
         for (int x = 0; x < sim::kGridWidth; ++x) {
             if (s.flame[y][x] == 0) continue;
-            int owner = s.flame_owner[y][x];
-            const FlameSet& fset = q.flames[render_colour(s, owner)];
+            // Colour from flame_colour, NOT flame_owner: the owner word is
+            // kill credit and moves to the chainer on a chain hit, while the
+            // drawn colour (the flame record's +60 byte, from the igniting
+            // bomb's creation-time colour) never transfers — overlapping
+            // explosions from different players keep their own colours.
+            // docs/re/facts.md "Bomb/flame colour is not the owner".
+            const FlameSet& fset = q.flames[render_colour(s, s.flame_colour[y][x])];
             const Anim* a = &flame_piece(fset, s.flame_kind[y][x]);
             if (a->steps.empty()) continue;
             // Frame pacing: same free-running, ignition-zeroed per-cell
@@ -595,27 +680,32 @@ void Renderer::draw_world(const sim::State& s) {
             // our kTileH is) re-anchors flames to tile CENTRE before the per-
             // STAT dy nudge, while bricks (kind 9) keep the raw tile-bottom
             // anchor. Omitting it drew flames ~kTileH/2 px too low.
-            draw_sprite(sp, sx + static_cast<float>(sp.dx),
-                        sy + static_cast<float>(sp.dy - sim::kTileH / 2));
+            const int dy_centre = sp.dy - sim::kTileH / 2;  // integer semantics intended
+            draw_sprite(sp, sx + static_cast<float>(sp.dx), sy + static_cast<float>(dy_centre));
         }
     }
 
     sample_movement(s);
 
-    // Players, bottom-anchored, in Y order so lower players draw in front.
-    std::array<int, sim::kMaxPlayers> order{};
-    int n = 0;
-    for (int i = 0; i < sim::kMaxPlayers; ++i)
-        if (s.players[i].present && s.players[i].alive) order[n++] = i;
-    std::sort(order.begin(), order.begin() + n,
-              [&s](int a, int b) { return s.players[a].y < s.players[b].y; });
-    for (int k = 0; k < n; ++k) {
-        int i = order[k];
+    // Players, bottom-anchored, in FIXED SLOT ORDER 0..9 every frame. The
+    // original's per-player loop (sub_420F07, native batch_0x420D4E.cpp:176
+    // `for (i = 0; i < 10; ++i) sub_41F29B(&dword_461BC4[38*i])`, pseudo.c
+    // ~23639; facts.md "Draw order" — "slots 0..9 ascending") has no Y-sort,
+    // depth buffer, or re-ordering: the higher SLOT always wins an overlap
+    // regardless of screen position. A prior pseudo-3D Y-sort (lower player
+    // drawn in front) was removed here — it silently changed which sprite won
+    // an overlap on every multiplayer round.
+    for (int i = 0; i < sim::kMaxPlayers; ++i) {
         const sim::Player& p = s.players[i];
+        if (!p.present || !p.alive) continue;
+        // Sub-frame trace playback (player_interp): position AND facing come
+        // from the active intra-tick segment, so the original's per-frame
+        // micro-motion — the AI's stutter-step direction flips, the human
+        // wall-vibrate — reaches the screen instead of being lerped away
+        // between the two 20 Hz endpoints. The shadow, body, and the carried
+        // bomb below all anchor off this one interpolated position.
         int dir = static_cast<int>(p.facing);
-        // Inter-tick smoothing (draw_frame's alpha): the shadow, body, and the
-        // carried bomb below all anchor off this one interpolated position.
-        const Posf ip = interp_pos(prev_px_[i], prev_py_[i], p.x, p.y, true);
+        const Posf ip = player_interp(s, i, dir);
         float sx = kFieldOriginX + ip.x;
         float sy = kFieldOriginY + ip.y + sim::kTileH / 2.0f - 1.0f;
         // Trampoline flight lift. CONFIRMED arc from sub_41F29B state 5 (raw
@@ -672,7 +762,17 @@ void Renderer::draw_world(const sim::State& s) {
         bool disease_flash = (p.disease_timer & 8) != 0;
         int body_colour = disease_flash ? disease_flash_colour() : pv;
         const Anim* a = moving_[i] ? &q.walk[body_colour][dir] : &q.stand[body_colour][dir];
-        std::size_t ph = moving_[i] ? walk_phase_[i] : 0;
+        // Leg-cycle pacing: ONE anim frame per THREE pixels walked. The
+        // original's pose frame is `(u16)player[+48] / 3 % statecnt`
+        // (sub_41F29B pseudo.c 23410), and +48 advances once per PIXEL step
+        // inside the mover's per-pixel loop (sub_41EC84, 22718). walk_phase_
+        // accumulates the same per-tick pixel budget (PlayerWalking event),
+        // so /3 here reproduces the original exactly. Without it the cycle
+        // ran 3x fast AND froze outright whenever the per-tick pixel count
+        // hit a multiple of the sequence length (the reported "walk anim
+        // stops after some skates" — e.g. 10 px/tick vs a 10-frame WALK.ANI).
+        // docs/re/facts.md "Walk leg-cycle pacing".
+        std::size_t ph = moving_[i] ? walk_phase_[i] / 3 : 0;
         // Boxed-in idle: replace the pose with the current "cornerhead" fidget
         // (direction-independent). sample_movement already rolled the variant/
         // duration this tick; the phase just rides the sim tick so the frames
@@ -681,20 +781,27 @@ void Renderer::draw_world(const sim::State& s) {
         // keys don't exit them — a boxed-in player mashing into the walls
         // still fidgets, it doesn't pedal. Falls back to stand if the CORNER
         // ANI is missing.
-        if (panic_ticks_[i] > 0 &&
+        if (panic_active_[i] &&
             !q.cornerhead[body_colour][panic_variant_[i]].steps.empty()) {
             a = &q.cornerhead[body_colour][panic_variant_[i]];
-            ph = static_cast<std::size_t>(s.tick);
+            // Elapsed-since-entry phase (sub_41F29B draws the fidget at its own
+            // up-counter, pseudo.c ~23238), so each rolled variant plays a clean
+            // 0..statecnt-1 cycle before sample_movement re-rolls the next one —
+            // not a raw global-tick phase that could start mid-animation.
+            ph = static_cast<std::size_t>(panic_elapsed_[i]);
         }
         // A recent kick/punch overrides walk/stand with the action pose, played
         // once over its lifetime (falls back to walk/stand if the ANI is
         // missing so nothing ever blanks out).
+        // elapsed = the sequence's own length - the remaining countdown (which
+        // on_events seeded FROM that same length, F3) — the original's
+        // elapsed-from-0 frame, ticking up to statecnt.
         if (kick_pose_[i] > 0 && !q.kick[body_colour][dir].steps.empty()) {
             a = &q.kick[body_colour][dir];
-            ph = static_cast<std::size_t>(kActionPoseTicks - kick_pose_[i]);
+            ph = static_cast<std::size_t>(static_cast<int>(a->steps.size()) - kick_pose_[i]);
         } else if (punch_pose_[i] > 0 && !q.punch[body_colour][dir].steps.empty()) {
             a = &q.punch[body_colour][dir];
-            ph = static_cast<std::size_t>(kActionPoseTicks - punch_pose_[i]);
+            ph = static_cast<std::size_t>(static_cast<int>(a->steps.size()) - punch_pose_[i]);
         }
         // Carrying a grabbed bomb wins over the idle fidget and the kick/punch
         // poses (a carrying player can't kick/punch): show the "holding a bomb"
@@ -706,7 +813,9 @@ void Renderer::draw_world(const sim::State& s) {
                 moving_[i] ? &q.walkbomb[body_colour][dir] : &q.standbomb[body_colour][dir];
             if (!c->steps.empty()) {
                 a = c;
-                ph = moving_[i] ? walk_phase_[i] : 0;
+                // Same +48/3 pacing as walk/stand above — the original's
+                // carry poses share the one counter and the one /3 site.
+                ph = moving_[i] ? walk_phase_[i] / 3 : 0;
             }
             // The "picking up" transitional pose (PUP*.ANI, sub_41F29B
             // action-state 4) wins over the steady carry pose while its
@@ -716,7 +825,15 @@ void Renderer::draw_world(const sim::State& s) {
             const Anim& up = q.pickup[body_colour][dir];
             if (pickup_pose_[i] > 0 && !up.steps.empty()) {
                 a = &up;
-                ph = static_cast<std::size_t>(static_cast<int>(up.steps.size()) - pickup_pose_[i]);
+                // The DISPLAYED frame is walk-phase-driven, NOT elapsed-since-
+                // grab: the original unconditionally recomputes v110 =
+                // sub_41DAA7(seq, (u16)player[+0x30] / 3) at the shared draw
+                // tail (pseudo.c 23410; disasm-confirmed 0x420350-0x420379,
+                // `idiv ebx` with ebx=3), discarding the elapsed-based frame the
+                // pickup block computed. Only pickup_pose_'s countdown (the
+                // state's exit timer, set from the sequence length) survives.
+                // Same +48/3 walk leg-cycle as the walk/stand/carry poses above.
+                ph = moving_[i] ? walk_phase_[i] / 3 : 0;
             }
         }
         // Warp/teleport pose wins over everything: while warping the player is
@@ -732,7 +849,7 @@ void Renderer::draw_world(const sim::State& s) {
         }
         draw_anim(*a, ph, sx, sy);
         if (p.carrying) {  // held bomb rides above the head
-            int bo = render_colour(s, p.carried_owner);
+            int bo = render_colour(s, p.carried_colour);
             // Bomb-pickup carry arc (docs/re/id-audit.md item 4; VALUELST
             // 500/502/504/506, "the curve (upwards) of a bomb being picked
             // up"). Pinned consumer: the BOMB tick function `sub_42331C`'s
@@ -892,9 +1009,13 @@ void Renderer::draw_frame(const sim::State& s, float alpha) {
     SDL_SetRenderDrawColor(ren_, 0, 0, 0, 255);
     SDL_RenderClear(ren_);
     SDL_RenderTexture(ren_, assets_->field(), nullptr, nullptr);
+    // Static solid/brick tiles first: they are part of the original's
+    // BACKGROUND surface (sub_425D22 stamps them into it), so every sprite
+    // pass below — including a flying bomb mid-arc — composites over them.
+    draw_cells(s);
     draw_actors(s);  // conveyor/trampoline floor tiles, under powerups + entities
     // Order matches sub_42A191's per-frame call sequence (docs/re/facts.md
-    // "Draw order"): actors, then bombs, then powerups, then flame/burn
+    // "Draw order"): actors, then bombs, then powerups, then burn/flame
     // (inside draw_world), then players (also draw_world) last.
     draw_bombs(s);
     draw_powerups(s);

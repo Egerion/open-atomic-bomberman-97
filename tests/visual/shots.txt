@@ -14,8 +14,69 @@
 # (players, bombs, flames, powerups, poses, death anims). Front-end art and
 # DATA_HD are not snapped. The demo's FIELD10 field is identity; tiles +
 # sprites shift ~2-3% to their master-palette colours.
-walking                 10    1161e1dc8f3ab8332c772a33778ad357bfff60d9f68a721699e087147868afe4
-bomb_pulse               40    ba58c6fe53f5fd62488003e6c85f7a0ed4e0ed8d7664f3b88f993e7575a93da5
-explosion_mid_flame     65    97dc87ba575ad9d88078eb7ed675296b9d7947fd9d726db0486229c5137f1786
-brick_crumble           68    f1bee6eee66ae28fec90df72f71d351bcaf75d24a2c0d101a02ebbc7382a18de
-powerup_revealed        76    8f077ea7459cb8e0013dfb943555bf27b2eb508e0eaf816feb74cda4963e3d79
+#
+# Recaptured 2026-07-16 (canonical ~180 fps cadence + tile-layer draw order,
+# facts.md "Canonical frame cadence" / "Draw order"): kSubFrames 3 -> 9
+# shifts every walker's pixel timeline (918 vs 921 units/tick truncation), and
+# static solid/brick tiles moved to a background pass under bombs/powerups/
+# flames (sub_425D22 stamps them into the background surface, so a flying
+# bomb's whole arc now composites OVER tiles). BMPs eyeballed before pinning:
+# tiles/conveyors/bombs/flames/players composite in the original's order.
+#
+# `walking` recaptured 2026-07-19 (facts.md "Walk leg-cycle pacing"): the leg
+# cycle now advances one frame per THREE pixels walked (sub_41F29B's +48/3),
+# so tick 10's stride frame shifted. Only this shot moves -- the other four
+# have no mid-stride walker on a differing frame index. (ASCII only in this
+# file: cmake file(STRINGS) splits lines at non-ASCII bytes, orphaning the
+# remainder as an uncommented "row".)
+#
+# ALL FIVE recaptured 2026-07-19 (spawn-pocket clear widened, facts.md
+# "Spawn-pocket clear"): build_state's per-spawn brick clear grew from a
+# radius-1 orthogonal "plus" to a radius-2 one (9 cells: spawn tile + 2 tiles
+# in each cardinal direction), fixing the first-round AI mass-suicide bug.
+# BASIC.SCH (this demo's scheme, 90% brick density) puts both scripted
+# players in board corners, so every shot's brick population near each
+# spawn changes from frame 1 onward -- eyeballed the recaptured BMPs first
+# (build/windows-fetch/apps/game/visual_shots): both corners now show the
+# wider cross-shaped clear pocket, matching the live BM95.EXE screenshots
+# that motivated the fix; nothing else in the scene looks different.
+#
+# 2026-07-20 renderer fidelity fixes (audit row 9, F1-F4): player draw order
+# is now fixed slot 0..9 (was Y-sorted); cornerhead fidget re-rolls on ANI-
+# cycle completion with an elapsed phase (was a 20+rand%13 tick spread on a
+# raw global-tick phase); kick/punch pose duration is the sequence's own
+# frame count (was a hardcoded 8); the pickup pose FRAME is walk-phase-driven
+# (was elapsed-since-grab, disasm-confirmed 0x420350). NOT RECAPTURED: these
+# four fixes DO NOT move any pinned frame -- an instrumented run of the full
+# 200-tick scripted demo shows none of the changed paths ever fire (no player
+# overlap, no kick/punch/grab event, no boxed-in idle fidget), so the demo
+# never exercises them. The walking shot (t10, two players) still matches
+# byte-for-byte, confirming the slot-order loop restructure did not regress
+# normal rendering (BMP eyeballed).
+#
+# RECAPTURED 2026-07-20 against the FINAL sim (the fidelity-audit sim fixes
+# all landed: bombs F1-F4 round-end freeze + kicked/conveyor +100/frame speed
+# + coast-stop + same-tick-trigger, flames F1 arm order, ai F1/F2, setup
+# start_with). Four shots moved because the demo's bombs/flames now travel and
+# explode on the faithful timeline (kicked bombs 19 px/tick not 10; explosion
+# arm cast order godir 0,1,2,3). `walking` (t10) is byte-identical -- no bomb
+# or flame in frame yet. All four changed BMPs eyeballed (explosion_mid_flame:
+# two flame crosses composite correctly over tiles + bomb + player;
+# bomb_pulse: two live bombs correctly placed) -- coherent scenes, not
+# glitches. headless suite 49/49 green at recapture time.
+#
+# RE-RECAPTURED 2026-07-20 (batch 2 sim fixes: setup F1 hidden-powerup scatter
+# now uses the original's rejection sampling, shifting the setup RNG stream, so
+# the demo's whole bomb/powerup timeline moves from tick 1 -- ALL 5 shots moved,
+# incl. walking t10, which now has a bomb on-board that the shifted timeline
+# dropped earlier). Both walking (t10) and powerup_revealed (t76) BMPs eyeballed
+# and confirmed coherent (walking: two players mid-stride + a correctly-placed
+# bomb; powerup_revealed: two revealed tokens in reveal-flash over a decaying
+# flame cross) -- the moves are the intended consequence of the now-faithful
+# setup scatter, same reason test_golden B/C moved. headless 49/49 green.
+# (ASCII only in this file -- non-ASCII bytes break cmake file(STRINGS).)
+walking                 10    b712e5c1f4749837e2d0e4f3fe871c520ab1a32132d86fa5134157f575d4551b
+bomb_pulse               40    60fda181cfdf47a55418a88a98ad626ac2db942c2e45ee60bce18eb60451a4ad
+explosion_mid_flame     65    6cf6a9e82ca43588991e0beb3158d4da0e9e421334bbe1b7de623846f7f21962
+brick_crumble           68    618e06e00cb9a81c737200b2582994a2bf97a38ca4d506ab09febb02e0fc573c
+powerup_revealed        76    69c47165c281c4452db8cf1068e997720c229d6fa2df45af0d626ddc5c130597

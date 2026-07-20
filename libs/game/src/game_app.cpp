@@ -343,7 +343,8 @@ bool GameApp::init() {
     // STRETCH — matching how the original fills the panel edge to edge on
     // the reference machine — and demo runs keep the LETTERBOX scaler every
     // existing pin was captured under.
-    const bool demo_mode = opts_.demo_ticks > 0 || !opts_.demo_shots.empty();
+    const bool demo_mode =
+        opts_.demo_ticks > 0 || !opts_.demo_shots.empty() || !opts_.bm_shot_name.empty();
     SDL_SetRenderLogicalPresentation(ren, kScreenW, kScreenH,
                                      demo_mode ? SDL_LOGICAL_PRESENTATION_LETTERBOX
                                                : SDL_LOGICAL_PRESENTATION_STRETCH);
@@ -787,6 +788,14 @@ void GameApp::start_match(std::uint32_t seed) {
         cfg.campaign_ghosts = stage_rec.ghosts;
         cfg.campaign_ghost_speed = stage_rec.ghost_speed;
     }
+    // --demo / --demo-shots: disarm the round-start input freeze (VALUELST
+    // id 30 ≈ 1 s of dead input, facts.md "Round-start input freeze") — the
+    // scripted demo match's tick-indexed input script and the visual-golden
+    // shot ticks (tests/visual/shots.txt) were all captured acting from tick
+    // 0, and shifting the whole choreography by 20 ticks would re-time every
+    // pinned frame for no coverage gain. A demo-fixture pin like the
+    // LETTERBOX scaler in init(); live play keeps the authentic freeze.
+    if (opts_.demo) cfg.tuning.input_freeze_ticks = 0;
     sim_ = sim::Simulation(cfg);
     if (assets_.load_stage(stage)) {
         seqs_.resolve_stage(assets_, stage);
@@ -814,8 +823,8 @@ void GameApp::start_match(std::uint32_t seed) {
     // just above — the sim gets a very long but finite clock instead), so
     // tell the renderer directly rather than trying to infer "untimed" back
     // out of ticks_left.
-    renderer_->reset_match(options_.playtime_seconds ==
-                           1001);  // NOLINT(bugprone-unchecked-optional-access)
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — emplaced in init()
+    renderer_->reset_match(options_.playtime_seconds == 1001);
     sounds_.reset();
 }
 
@@ -3515,6 +3524,18 @@ AppInput GameApp::run_match() {
         std::uint64_t now = SDL_GetTicksNS();
         acc += now - last;
         last = now;
+        // Long-stall guard (spiral-of-death / teleport clamp). A window drag,
+        // alt-tab, asset stall, or a debugger break can hand us a multi-hundred-
+        // ms delta; without a cap the `while` below fires that many catch-up
+        // ticks in one frame — the sim lurches (entities snap-teleport across
+        // the board, past the 32 px interp snap threshold) and, worse, the loop
+        // can wedge trying to out-run real time. Cap the queue at a few ticks'
+        // worth: excess wall-time is DROPPED (the match briefly runs in slow
+        // motion) rather than fast-forwarded. Does not touch determinism — the
+        // sim still advances one deterministic tick per crossing; only how many
+        // crossings a single frailty-induced hitch produces is bounded.
+        constexpr std::uint64_t kMaxCatchupTicks = 4;
+        if (acc > kMaxCatchupTicks * tick_ns) acc = kMaxCatchupTicks * tick_ns;
         while (acc >= tick_ns) {
             acc -= tick_ns;
             // Consume the frame-sampled latch on the FIRST tick of a catch-up
@@ -3532,6 +3553,13 @@ AppInput GameApp::run_match() {
             sim_.tick(in);
             sounds_.on_tick(sim_.state());
             renderer_->on_events(sim_.state());  // NOLINT(bugprone-unchecked-optional-access)
+            // Roll the renderer's inter-tick snapshots forward for THIS tick,
+            // inside the catch-up loop — so a frame that advances the sim two
+            // ticks still leaves interp `prev` at the penultimate tick (a clean
+            // 1-tick lerp span) instead of two ticks back (the snap/double-speed
+            // jitter). Tick-keyed, so draw_frame's own trailing call is a no-op
+            // on the live path and still primes the demo/screenshot path.
+            renderer_->advance_tick(sim_.state());  // NOLINT(bugprone-unchecked-optional-access)
             // §1's kill tally (sub_421B0F): a GameApp-side pass over this
             // tick's events, separate from the renderer's own on_events walk
             // (renderer_ never mutates GameApp state — CLAUDE.md's libs/game
@@ -3582,8 +3610,8 @@ AppInput GameApp::run_match() {
         // renderer which player/team is the pending gold winner every frame —
         // gold_player_ only changes between rounds, but this is a cheap int
         // pair and keeps the renderer decoupled from GameApp's own state.
-        renderer_->set_gold_player(gold_player_,
-                                   is_team_mode());  // NOLINT(bugprone-unchecked-optional-access)
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — emplaced in init()
+        renderer_->set_gold_player(gold_player_, is_team_mode());
         // Inter-tick interpolation fraction (renderer.hpp's draw_frame doc):
         // acc < tick_ns after the catch-up loop, so this is in [0,1) — how far
         // into the current 50 ms tick this displayed frame falls. The original
@@ -3591,8 +3619,8 @@ AppInput GameApp::run_match() {
         // displayed frame on the ms delta (sub_42A191); our fixed 20 Hz sim
         // recovers that on-screen fluidity here, cosmetically.
         const float interp_alpha = static_cast<float>(acc) / static_cast<float>(tick_ns);
-        renderer_->draw_frame(sim_.state(),
-                              interp_alpha);  // NOLINT(bugprone-unchecked-optional-access)
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — emplaced in init()
+        renderer_->draw_frame(sim_.state(), interp_alpha);
         // The player-row HUD strip (docs/re/in-match-shell.md "The player
         // row") needs GameApp's own win_count_/kill_count_/front_font_, none
         // of which Renderer owns — drawn as a GameApp-side overlay on top of
@@ -4046,9 +4074,38 @@ void GameApp::flush_options() {
     }
 }
 
+int GameApp::run_bm_shot() {
+    // Mirror present_bm_screen's one-frame composite (MAINMENU backdrop +
+    // BmScreen::draw), scrolled bm_shot_scroll lines down, then SaveBMP —
+    // a headless snapshot of the sub_41302D viewer for layout verification.
+    BmScreen bm(assets_, front_font_);
+    bm.enter(opts_.bm_shot_name);
+    for (int i = 0; i < opts_.bm_shot_scroll; ++i) bm.on_key(SDLK_DOWN);
+    SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
+    SDL_RenderClear(sdl_renderer_.get());
+    const Sprite& bg = assets_.frontend_pcx("MAINMENU");
+    if (bg.tex) {
+        SDL_FRect d{0, 0, static_cast<float>(bg.w), static_cast<float>(bg.h)};
+        SDL_RenderTexture(sdl_renderer_.get(), bg.tex, nullptr, &d);
+    }
+    bm.draw(sdl_renderer_.get());
+    // Read the backbuffer BEFORE presenting (SDL swaps on present, leaving the
+    // read target undefined) — the same order run_demo's capture relies on.
+    bool ok = save_screenshot(opts_.bm_shot_out);
+    if (ok)
+        std::printf("bm-shot: %s scroll %d -> %s\n", opts_.bm_shot_name.c_str(),
+                    opts_.bm_shot_scroll, opts_.bm_shot_out.string().c_str());
+    return ok ? 0 : 1;
+}
+
 int GameApp::run() {
     if (const char* env = std::getenv("BOMBER_BOOT_MATCH"); env && *env) opts_.boot_match = true;
     if (!init()) return opts_.game_dir.empty() ? 2 : 1;
+    if (!opts_.bm_shot_name.empty()) {
+        int rc = run_bm_shot();
+        flush_options();
+        return rc;
+    }
     if (opts_.demo) {
         if (!opts_.demo_shot_dir.empty()) {
             std::error_code ec;

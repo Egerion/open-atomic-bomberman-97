@@ -63,6 +63,14 @@ public:
         // (also via env BOMBER_BOOT_MATCH). The spine still exists; this just
         // starts the app in the Match state for quick iteration.
         bool boot_match = false;
+        // Dev capture hook (--bm-shot): render one `.BM` text screen (Credits /
+        // Manual / ...) over the MAINMENU backdrop, scrolled `bm_shot_scroll`
+        // lines down, and save it as a BMP — the front-end analogue of --demo's
+        // match-frame capture, used to eyeball/regress the sub_41302D viewer
+        // layout without driving the menu by hand.
+        std::string bm_shot_name;               // e.g. "CREDITS"
+        std::filesystem::path bm_shot_out;       // BMP output path
+        int bm_shot_scroll = 0;                  // lines scrolled down before capture
     };
 
     explicit GameApp(Options opts) : opts_(std::move(opts)) {}
@@ -78,7 +86,7 @@ public:
     ~GameApp() {
         try {
             flush_options();
-        } catch (...) {
+        } catch (...) {  // NOLINT(bugprone-empty-catch) — see the doc comment above
         }
     }
 
@@ -110,6 +118,8 @@ private:
     void flush_options();
     void start_match(std::uint32_t seed);
     int run_demo();
+    // --bm-shot capture: draw one `.BM` screen over MAINMENU and SaveBMP it.
+    int run_bm_shot();
     // Reads back the current backbuffer and writes it as a BMP. Shared by
     // run_demo()'s legacy single-shot path and its --demo-shots multi-shot
     // path. Returns false (and leaves stderr diagnostics to the caller) on

@@ -22,9 +22,16 @@
 //     match as --demo, saving a named "<label>.bmp" under <outdir> at each
 //     requested tick instead of one final frame. All shots share one run, so
 //     they stay consistent with each other. See tests/visual/README.md.
+//
+//   bomber_game --bm-shot <NAME> <out.bmp> [scroll] [game_dir] [scheme.sch]
+//     Headless capture of one `.BM` text screen (the sub_41302D viewer):
+//     renders NAME.BM (e.g. CREDITS) over the MAINMENU backdrop, scrolled
+//     `scroll` lines down, and saves it as a BMP. The front-end analogue of
+//     --demo for eyeballing / regression-checking the credits & help layout.
 
 #include <SDL3/SDL_main.h>
 
+#include <cctype>
 #include <cstdlib>
 #include <string>
 #include <utility>
@@ -70,6 +77,13 @@ int main(int argc, char** argv) {
             opts.demo = true;
             opts.demo_shots = parse_demo_shots(argv[++i]);
             opts.demo_shot_dir = argv[++i];
+        } else if (a == "--bm-shot" && i + 2 < argc) {
+            // --bm-shot <NAME> <out.bmp> [scroll]: capture one .BM text screen.
+            opts.demo = true;  // reuse the demo path's audio skip / headless intent
+            opts.bm_shot_name = argv[++i];
+            opts.bm_shot_out = argv[++i];
+            if (i + 1 < argc && std::isdigit(static_cast<unsigned char>(argv[i + 1][0])))
+                opts.bm_shot_scroll = std::atoi(argv[++i]);
         } else if (a == "--match") {
             opts.boot_match = true;  // skip the front-end, boot straight into a match
         } else {
