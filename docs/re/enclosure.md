@@ -54,7 +54,14 @@ if ( result <= v1 - 5 ) {      // remaining <= hurry_seconds - 5   (NON-STRICT)
         dword_462244 = rand() % 3;
         dword_45BE9C = 1;
         dword_46223C = sub_43ACF8();   // = timeGetTime(), the drop clock
-        sub_405D0C();          // clear warpholes+trampolines from the actor grid
+        sub_405D0C();          // NOT an actor-grid clear — CORRECTED 2026-07-20
+                               // (fidelity audit): sub_405D0C is a LEVEL-SELECT
+                               // lobby-screen broadcast-table cleanup, unrelated
+                               // to gameplay actors (its real body,
+                               // native/src/game/batch_0x405B3A.cpp ~298-325,
+                               // touches no warphole/trampoline cell). The port
+                               // correctly implements NO actor clear on arm.
+                               // Do NOT add one. See docs/re/audit/enclosure.md F0.
     }
 } else if ( dword_45BE9C ) {   // DISARM (only if time somehow went back up)
     dword_45BE9C = 0;
@@ -442,7 +449,7 @@ before handing off to the Results screen.
 | sub_412135  | `getvalue(id)` — Watcom register convention, `@<eax>` both ways (confirms the edx-preserved-across-a-call reading in §2) |
 | sub_43ACF8  | `timeGetTime()` — the ms drop clock                        |
 | sub_425E9B  | set a tile solid (the wall drop)                           |
-| sub_405D0C  | clear warpholes(type≤1)+trampolines(type 3) from actor grid on arm |
+| sub_405D0C  | **NOT actor-grid clear (corrected 2026-07-20)** — a level-select lobby broadcast-table cleanup (batch_0x405B3A.cpp ~298-325); no gameplay-actor effect. Port correctly does nothing here. audit/enclosure.md F0 |
 | sub_421D3F  | player finder: present && !dead && type != 4 (network-spectator) && tile match |
 | sub_41DE63  | shared player-kill routine (crush/flame-death/rover-kill); early-out on type 4 or movement-state 5/6/7 |
 | sub_42542D / sub_4254F3 | powerup finder / unconditional destroy (no relocation) |

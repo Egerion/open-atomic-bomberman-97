@@ -15,10 +15,13 @@ Verified 2026-07-09 against `libs/sim/include/bomber/sim/tuning.hpp`'s actual
 `Tuning::apply` switch/range table (`docs/re/id-audit.md`) — this table had
 drifted from the code (it was missing several ids `apply` already handles,
 and wrongly implied 25/30/31 route through `apply` when they're hardcoded
-mirrors instead; both fixed below).
+mirrors instead; both fixed below). Since 2026-07-16 id 30 DOES also route
+through `apply` — not as a frame rate, but as the round-start input-freeze
+tick count its round-init consumer derives from it (see its row).
 
 | id | meaning | original value |
 |---|---|---|
+| 30 | nominal frames/second target ("how many frames per second are we gonna attempt to get?") — hardcoded-mirrored as the 20 Hz tick (see below), AND consumed by round init as the round-start input freeze: `dword_4621E0 = 50ms × getvalue(30)` ≈ 1 s of dead input/AI at every round start (`Tuning::input_freeze_ticks`, `docs/re/facts.md` "Round-start input freeze") | 20 |
 | 41 | bomb fuse length, frames | 40 (= 2 s) |
 | 42 | starting walk speed | 923 |
 | 90 | speed added per skate | 150 |

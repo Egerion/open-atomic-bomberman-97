@@ -557,6 +557,17 @@ positions, not an RNG-order/determinism break, and is left as a known,
 accepted simplification (porting the exact beam-flood would be a much larger,
 higher-risk rewrite for a cosmetic difference).
 
+**SEED-ORDER correction (2026-07-16 movement audit):** within that accepted
+simplification, one nuance was ported wrong. The original SEEDS its runner
+list in fixed godir order 0..3 (`for (i = 0; i < 4; ++i)`, `v20[4] = i` —
+sub_4092A1 9721-9740, sub_40970B 9911-9930); the ±1 draw only flips the
+±90° CHILD-spawn order deeper in the walk. The port seeded the four
+first-step candidates in tie-flipped order, so with two equal-cost first
+steps the chosen step flipped ~50% per decide — up to kSubFrames times per
+tick, an oscillation the original does not have. All three BFS seed loops
+(directed/flee/powerup-scan) now seed fixed 0..3; the tie draw still steers
+the expansion loops (its v35/v40 role). Draw count/order unchanged.
+
 **Overflow note:** past the fixed 100-node frontier the original calls a
 `__noreturn` fatal handler (`sub_4091C9` failing → `sub_4128C9`, 15987); the
 port silently caps further pushes (`if (open_n < 100)`). Unreachable on any of
@@ -706,9 +717,14 @@ this per-player pass) is cleared to false for: a stun/pickup-pause countdown
 freeze. So the original skips the **entire** dispatch — draws A/B included —
 for a stunned, entering, dying, or globally-frozen player, not just an absent
 or dead one. Our `simulation.cpp` tick loop already excludes dying/dead via
-its own `present && alive` guard, and has no wall-clock/menu concept to freeze
-against (`dword_4621E0` has no equivalent in a headless, externally-ticked
-sim — pausing is simply "the caller stops calling `tick()`"), but it was
+its own `present && alive` guard. **CORRECTED 2026-07-16: `dword_4621E0` is
+NOT a menu/pause concept with no headless equivalent — it is the ROUND-START
+INPUT FREEZE, armed to `50ms × getvalue(30)` ≈ 1 s by round init
+`sub_4214BC` (pseudo.c ~23959) and counted down per frame at the top of
+`sub_420F07` (23642-23645). Ported as `State::input_freeze` (facts.md
+"Round-start input freeze"); `player_turn`'s acquisition gate now mirrors
+both halves of `v113 && !dword_4621E0`.** The 2026-07-10 pass was also
+missing the
 missing the **stun** exclusion: a stunned-but-still-`alive` AI player (e.g.
 mid `pickup_pause` after a grab) would still get `AISystem::decide()` called,
 drawing draws A/B (and possibly a behaviour's draws) on a tick the original
@@ -962,12 +978,11 @@ a row in §8's table (one precision fix: b5b is `sub_409C1F` line 10128, not
    regardless of `Player::stun`, drawing spurious RNG on a tick the original
    skips outright (gameplay-invisible, since `player_turn` already no-ops a
    stunned player's turn, but not RNG-invisible). Fixed:
-   `if (p.ai && p.stun == 0) ai.decide(i, in);`. The other two components of
-   `v113` (entering/dying player-type modes, and the global freeze
-   `dword_4621E0`) have no equivalent gap: dying/dead is already excluded by
-   the loop's own `present && alive` guard, and a headless, externally-ticked
-   sim has no menu/pause state to freeze against (pausing is simply "the
-   caller stops calling `tick()`").
+   `if (p.ai && p.stun == 0) ai.decide(i, in);`. Of the other two components
+   of `v113`'s gate, dying/dead is already excluded by the loop's own
+   `present && alive` guard; `dword_4621E0` was later identified as the
+   round-start input freeze and ported 2026-07-16 (see the §7 correction
+   above / facts.md "Round-start input freeze").
 
 ### Why none of this touches golden
 

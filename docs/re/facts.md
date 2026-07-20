@@ -4632,6 +4632,11 @@ The original has TWO clocks, and the port previously collapsed both onto the
 
 **Canonical rate = 60 fps**, expressed as the repeating integer-ms delta
 pattern `{17, 17, 16}` (sums to the 50 ms tick; `constants.hpp kSubFrameMs`).
+**[SUPERSEDED 2026-07-16 — canonical rate re-pinned at ~180 fps, nine
+sub-frames `{6,5,6,5,6,5,6,5,6}`; see the UPDATE block at the end of this
+entry. The two-clock model and everything else below stands; re-scale the
+worked numbers (921→918 walk units, 267 ms→89 ms stun, 500 ms→~166 ms ice
+span, 3×→9× decide rate) accordingly.]**
 Ported consequences (all deliberate behaviour changes, goldens recaptured in
 the same commit — golden A stayed byte-identical, pinning that the no-input
 path is untouched; golden E's bounce-count + veer-RNG assertions passed
@@ -4642,10 +4647,13 @@ unchanged through the recapture):
   Walk accrual keeps the original's truncation: `923×17/50 + 923×17/50 +
   923×16/50 = 313+313+295 = **921**` per 50 ms — the stock walker is sub-1%
   slower than the old flat 923, exactly as the original at 60 fps.
-  **[VERIFY]** whether the molasses ÷3 / hyper ×3/2 factors multiply the raw
-  speed before the delta division or the per-frame accrual after it — the
-  two orders differ by ≤1 unit per frame at sub-50 deltas (identical at 50);
-  the port scales the accrual (movement.cpp).
+  **[VERIFY → RESOLVED 2026-07-16]** the molasses ÷3 / hyper ×3/2 factors
+  multiply the SPEED before the delta division: pseudo.c 23432-23440 reads
+  `v91 = base + skates·gv(90) − clogs·gv(91); if (molasses) v91 /= 3;
+  if (hyper/super) v91 = 3*v91/2; v91 = delta*v91/50` — factors first, delta
+  scaling second (≤1 unit per frame difference, diseased players only). The
+  port now matches (movement.cpp's accrual; test_move's molasses case pins
+  the order).
 - **AI cadence**: sub_40A1C6 fires per sub-frame — three decisions, three
   whim rolls, three wander re-rolls per tick, restoring the original's
   "frantic" temperature (the user-visible complaint that motivated this).
@@ -4692,6 +4700,43 @@ rovers.cpp; tests test_move/test_conveyor/test_disease/test_state_machine/
 test_placement_diag/test_ai updated to the frame model; goldens B/C/D/E and
 the visual goldens recaptured, A byte-identical. ADR-0006.)
 
+**UPDATE 2026-07-16 — canonical rate re-pinned at ~180 fps (nine sub-frames),
+and the sub-frame motion now reaches the screen.**
+
+1. **Rate.** The original is NOT vsync-limited on modern hardware: DirectDraw's
+   windowed present does not block on vblank under DWM, so BM95.EXE free-runs.
+   Measured on the reference Win11 box: a full 180 s draw round rendered
+   33146 frames (bmstats "Last Run") ≈ **184 gameplay-driver callbacks per
+   second** — the AI brain, input sampling and movement budgets genuinely ran
+   ~9× per 50 ms tick, not 3×. The user-visible symptom of the 60 fps pin was
+   "our AIs are calmer than the native original" (still, after the danger-map
+   audit). `kSubFrames = 9`, `kSubFrameMs = {6,5,6,5,6,5,6,5,6}`; the 30-slot
+   ice buffer now spans ~166 ms, which CAPS Hockey Rink's 250 ms lag exactly
+   as the original's fixed 30-slot history does at this frame rate (the
+   resolve loop runs out and the oldest sample stays in effect —
+   MovementSystem::ice_delay, test_ice). A 16-frame head stun is ~89 ms.
+   `kSubFrames` remains the single "temperature" lever: 3 ≈ period hardware,
+   9 ≈ the reference install. Since the original is frame-rate-dependent by
+   construction, matching the user's OWN native session is the fidelity
+   target.
+2. **Sub-frame presentation trace** (`State::sub_trace`, renderer
+   `player_interp`): the sim records every player's position+facing at the
+   end of each canonical sub-frame — a derived per-tick output exactly like
+   `s.events` (rebuilt every tick, never hashed) — and the renderer plays the
+   trace back across the tick interval instead of lerping the two 20 Hz
+   endpoints. Without this, EVERY direction change with period < 100 ms is
+   mathematically invisible on screen (the endpoint lerp is a low-pass
+   filter): a bot zigzagging 9× inside a tick rendered as standing still,
+   which was the dominant cause of the "less jitter than the original"
+   report — the sim already twitched faithfully, the presentation discarded
+   it. The last trace sample is pinned to the tick's true endpoint (run_tick
+   step 12) so post-loop relocations (warp/trampoline/head-hit scatter) snap
+   cleanly via the per-segment threshold.
+3. Goldens: hash constants recaptured 2026-07-16 for the colour-split hash
+   layout + the disease-scaling order fix (see test_golden.cpp's UPDATE
+   note); the RNG-stream safety net passed unchanged. Visual goldens
+   recaptured for the cadence timeline + tile-layer draw order.
+
 ## AI danger map — under-population audit, PORTED (2026-07-12, `sub_42331C` tail stamp / `sub_40970B` / `sub_40B20F`)
 
 User live-comparison: the original's AIs are visibly more active/jittery even
@@ -4723,14 +4768,20 @@ ported in `ai.cpp` (goldens carry no AI players; all 42 suites stayed green):
    waiting trigger bomb (unbounded +68 accrual in the original) is
    approximated at a full fuse's worth — past the point it outranks flame,
    as an aged trigger bomb genuinely does.
-4. **The flee/danger branch never passes down.** `sub_40970B` inits its
+4. **The flee/danger `here <= min` branch never passes down — but the
+   fully-boxed-in case DOES.** (CORRECTED 2026-07-16: the 2026-07-12 wording
+   folded both cases together and over-reached.) `sub_40970B` inits its
    best-tracker at 10000 (9936) — with any open neighbour it returns a step;
-   firstdir is null only when fully boxed in — and `sub_40B20F` 10816-10829
-   always latches `+2=1` after the BFS, standing (godir -1, own tile as
-   target, return 1) when `here <= min`. Behaviours 3-7 never run in that
-   state: no whim draws, no bomb drops, no wander re-rolls while standing in
-   inescapable danger. The port's start-danger init + pass-down did all of
-   those — an RNG-stream and activity divergence, now mirrored exactly.
+   firstdir is null only when fully boxed in. `sub_40B20F`'s flee branch
+   (10816-10829) then splits: `if (!v5) { *(+2) = 0; return 0; }` — a
+   fully-BOXED-IN AI in danger CLEARS the target flag and passes down, so
+   behaviours 3-7 DO run that frame (whim draws, drop gates, wander
+   re-rolls: the trapped-in-danger fidget). Only past that does it latch
+   `+2=1` and, when `here <= min` (no strictly-safer tile), stand (godir -1,
+   own tile as target, return 1) with behaviours 3-7 never running. The
+   2026-07-12 port froze the boxed-in case calmly (write_move(-1)/return 1)
+   — an RNG-stream and jitter divergence, now mirrored exactly (ai.cpp
+   behave_walk_path).
 5. **Flee BFS ring cap = 20** (`a4`, 10048-10053), best-so-far kept. The
    port's frontier had only the 100-node cap.
 6. **The enclosure lookahead burns an iteration per corner turn**
@@ -4859,11 +4910,208 @@ the dialog 9-patch (`sub_414DF4` 17546). WINZ measured raw→snap **2.15/channel
 mean, border blue (0,91,111) unchanged** (master-palette-authored), and the
 `.BM` inline images are rare — both left raw as imperceptible, documented.
 
+## Bomb/flame colour is not the owner — CONFIRMED (2026-07-16, `sub_422EDE`/`sub_42331C`/`sub_426FCC`)
+
+The original keeps a bomb's DRAWN COLOUR and its OWNER as two separate fields
+packed into one dword at bomb +60: the low BYTE (+60) is the colour, written
+once at creation (`sub_422EDE`'s `*((_BYTE*)v18 + 60) = v16`, from the
+placer's own colour byte — which team mode forces to 0/2 at actor init,
+pseudo.c 23916-23927), and the WORD at +62 is the owner id (`*((_WORD*)v18 +
+31) = a5`). Every consumer keeps them separate:
+
+- **Flame ignition** (`sub_42331C`'s epicentre/arm calls at 25625/25677 and
+  the brick branch at 25667): `sub_426FCC(x, y, *(_BYTE*)(bomb+60), kind,
+  *(int*)(bomb+60) >> 16)` — colour from the byte, owner from the high word —
+  and the flame-cell record stores BOTH (+60 colour / +62 owner,
+  `sub_426FCC` 27494-27500). The flame drawer `sub_426D06` blits with the
+  record's colour byte; kill credit compares the record's +62 word
+  (23316/23327).
+- **Chain hits transfer ONLY the owner word**: pseudo.c 25644
+  `*(_WORD*)(v48+62) = *(_WORD*)(v75+62)` — the chained bomb's kill credit
+  (and capacity slot, see "Bomb capacity is a derived live-bomb count") moves
+  to the chainer, but its colour byte is untouched, so its eventual explosion
+  still flames in the ORIGINAL placer's colour. Overlapping/chained
+  explosions from different players visibly keep their own colours.
+- Grab/punch never rewrite either field (the only +60/+62 writers in the
+  binary are creation and the 25644 chain transfer).
+
+**The port bug this fixes:** a single `Bomb::owner`/`flame_owner[][]` carried
+both meanings, so a cross-player chain recoloured the chained bomb and its
+whole explosion to the chainer's colour (the user-reported "flames lose their
+colour when two players' explosions meet"). Ported: `Bomb::colour` +
+`Player::carried_colour` + `State::flame_colour[][]` (all hashed — packed
+into existing hash words, so zero-valued states digest identically;
+test_golden.cpp recaptured in the same commit), set at creation/ignition and
+never transferred; the renderer draws bombs, carried bombs and flames from
+the colour fields and keeps attribution (kill credit, capacity) on the owner
+fields. `tests/test_flame_colour.cpp` pins the split.
+
+## Round-start input freeze — CONFIRMED (2026-07-16, `sub_4214BC`/`sub_420F07`/`sub_41F29B`)
+
+Round init arms `dword_4621E0 = [0x46494C] × getvalue(30)` = 50 ms × 20 =
+**1000 ms** (pseudo.c ~23959, right beside the `dword_4621E8` colour-spin
+timer). The player-pass entry `sub_420F07` decrements it by the measured
+frame delta at the top of every frame (23642-23645, clamped at 0), and
+`sub_41F29B`'s acquisition gate `if (v113 && !dword_4621E0)` (23028) skips
+BOTH the AI brain (`sub_40A1C6`) and the human input read (`sub_41E61E`)
+while it runs — nobody moves or acts for the first second of every round
+(the sprite colour-shuffle window). getvalue(30)'s own VALUELST legend is
+"how many frames per second are we gonna attempt to get?" — the engine
+reuses the 20 fps target as "one second's worth of 50 ms frames". LABEL_246
+still runs (its key bytes just stay at their per-frame reset), so only the
+diarrhea auto-drop force could act during the window. NOTE: docs/re/ai.md §7
+previously dismissed `dword_4621E0` as a menu/pause freeze with no headless
+equivalent — it is actually this round-scoped gameplay timer.
+
+Ported: `Tuning::input_freeze_ticks` (id 30, default 20) →
+`State::input_freeze` (hashed), armed by `build_state`, decremented once per
+tick AFTER the player pass (run_tick step 1b — the post-pass decrement
+reproduces the original's exact t = 1000 ms gate-open boundary at tick
+granularity), gating the AI decide + human decode + bomb-action tail in
+`player_turn`. `tests/helpers.hpp` and the golden/demo fixtures disarm it to
+keep act-from-tick-0 scenarios; `tests/test_freeze.cpp` pins the window.
+
+## Draw order — tile layer addendum (2026-07-16, `sub_425D22`/`sub_425EFC`)
+
+The static solid/brick tiles are NOT drawn per frame at all: they live in the
+BACKGROUND surface. `sub_425D22` stamps "tile %u solid"/"tile %u brick" into
+the background whenever a cell's type changes (`sub_425E36` writes the type,
+`sub_425D22` restores the field patch via `sub_4166BF` then blits the tile),
+called from `sub_425EFC`/`sub_425E9B`. Consequently EVERY per-frame sprite —
+bombs (including a punched/thrown bomb's whole flight arc), powerups, flames,
+players — composites OVER the tiles. Also: `sub_425EFC`'s blank-stamp-revert
+dance at brick ignition (26826-26846) means a CRUMBLING brick's background
+shows bare floor for the whole burn — the crumble frames (sub_426D06 kind 9)
+composite over floor, not over a still-drawn brick, even though the cell TYPE
+stays Brick (blocking) until the burn expires.
+
+**The port bug this fixes:** the renderer painted static cells after
+draw_bombs, so an airborne bomb crossing a brick/solid tile vanished behind
+it (user-reported). Ported: `Renderer::draw_cells` (solid + non-burning
+brick) runs right after the field blit, before every sprite pass; the
+brick-crumble frames stay in draw_world's flame/burn slot (sub_426D06's
+position, after bombs/powerups). Visual goldens recaptured in the same
+commit.
+
+## Walk leg-cycle pacing — CONFIRMED (2026-07-19, `sub_41F29B`/`sub_41EC84`)
+
+The walk/stand/carry pose frame is `(u16)player[+48] / 3 % statecnt`
+(sub_41F29B pseudo.c 23410 — one shared `sub_41DAA7(seq, +48/3)` site for
+walk, walkbomb, stand and standbomb), and the +48 counter advances **once per
+PIXEL step** at the tail of the per-pixel mover loop (sub_41EC84, 22718) —
+i.e. **one animation frame per three pixels walked**. While standing (godir
+-1) the SAME counter instead increments once per displayed frame (23084),
+which is invisible for the single-frame stand poses but keeps the phase
+continuous across stop/start. The counter is never reset on pose changes;
+kick/punch/warp/trampoline states use the separate +80 counter (50 ms
+quantized) — not this one — and the death anim reads +48 WITHOUT the /3
+(23459), advancing once per 50 ms via its own accumulator.
+
+**The port bug this fixes** (user-reported "walk animation stops after
+collecting some skates"): the renderer advanced the leg cycle one FRAME per
+pixel (no /3), which both ran 3x fast and — worse — froze the cycle
+completely whenever the per-tick pixel budget hit an exact multiple of the
+sequence length (`(phase + k*nframes) % nframes` is constant), e.g. a
+1-skate 10 px/tick walker against a 10-frame WALK.ANI: the legs stopped
+pedalling and the player glided in the stand-still stride. Ported:
+renderer.cpp divides `walk_phase_` by 3 at both pose sites (walk and
+walkbomb). The visual goldens' walking frame recaptured in the same commit.
+
+(Provenance: native-port transliteration of sub_41F29B/sub_41EC84 — the
+pose-tail and pixel-loop are now source-level readable; line cites above.)
+
+## Spawn-pocket clear — NOT PINNED, best-effort widening (2026-07-19)
+
+**The bug.** `libs/sim/src/setup.cpp`'s per-spawn brick clear (present since
+the project's first commit, no RE citation) only cleared the spawn tile's 4
+orthogonal neighbours (a radius-1 "plus", 5 cells). On a dense scheme like
+the shipped `BASIC.SCH` (90% brick density, every non-`(odd,odd)` cell a
+brick candidate — verified against the raw file, `DATA/SCHEMES/BASIC.SCH`
+has no blank cells authored near any `-S` spawn), a corner spawn's escape
+pocket was then only 1 tile deep in each direction — entirely inside a
+default flame-2 bomb's blast radius (`Tuning::start_with[Flame] = 2`). The
+(separately faithful) AI flee logic could never find a strictly safer tile,
+so a computer player dropping its own opening bomb near its spawn reliably
+self-killed within the first few seconds of round 1 — a mass-suicide
+epidemic on any dense/default scheme.
+
+**The search.** The board's tile array (`dword_46222C`) has exactly ONE
+writer in BM95.EXE: `sub_425E36` (pseudo.c 26781-26797), a plain bounds-
+checked `cells[y][x] = value` store. Every path that can reach it was
+enumerated and read:
+- Three thin wrappers, `sub_425E9B` (26802), `sub_425EFC` (26825, unused by
+  anything relevant), `sub_425F79` (26851) — all just call `sub_425E36`
+  plus a redraw.
+- All ~19 call sites of the whole family: bomb-flame burn-through (pseudo.c
+  7252, 7266, 25669, 27412 — the standard "flame reaches a brick, ignite it"
+  path), netplay tile-sync replication (12149, 12189, 12483, 12637, 22406 —
+  gated on `dword_460058`'s netplay flag, corrects a remote player's tile if
+  it desyncs onto a brick), the warphole neighbour clear (26537/26541,
+  already ported — see the warphole entry elsewhere in this file), and the
+  HURRY wall drop (27235, `docs/re/enclosure.md`). **None run at match setup
+  or reference the spawn-coordinate arrays** `dword_46460C`/`dword_46465C`.
+- The round-init sequence itself, `sub_410B6E` (pseudo.c ~14689-14857): board
+  build `sub_4260F5` → field/background load `sub_4165FC` (a `FIELD%u.PLT`
+  background BITMAP, unrelated to the tile grid) → tile redraw `sub_42633C`
+  → player placement `sub_4214BC` → powerup scatter `sub_4258E5` → rovers
+  `sub_40551F` → campaign hazards `sub_40151B`. Read in full: `sub_4214BC`
+  (23865-23962) only stores each player's resolved pixel coordinates into
+  its own struct (`sub_40F48C`, itself just another struct-field setter,
+  UNRELATED to the netplay position-sync arrays of the same name pattern
+  found nearby) — it clears no cell. `sub_4260F5`'s non-editor branch
+  (26927-26944) rolls brick density from the scheme grid alone, with no
+  reference to any spawn coordinate.
+- The `.SCH` loader, `sub_403EEE` (pseudo.c 6252-6499): parses `-R`/`-S`/`-P`
+  directly into the in-memory grid/spawn arrays, no post-process clear step.
+- `sub_4048EB`, the scheme-grid WRITER paired with the `sub_404852` reader
+  `sub_4260F5` consumes — its only 2 call sites (pseudo.c 5560, 5610) are
+  both inside the interactive scheme EDITOR's mouse-paint handler, not the
+  runtime match-setup path.
+- No VALUELST id documents a "spawn safe radius" (`docs/valuelst-map.md`,
+  `docs/re/id-audit.md`); the nearest relative, id 695, is the UNRELATED
+  tile-*regeneration* clear radius (`sub_422351`, "Per-level tile
+  regeneration" above), which gates brick REGROWTH near live players during
+  the match, not initial spawn placement.
+
+**Conclusion: the original mechanism could not be pinned to a function**
+despite this search covering every writer to the board's only tile array.
+Either it's produced by code outside the transliterated 0x401000-0x435000
+range this project's `pseudo.c` covers, or it's an emergent property of
+something not yet identified. This is an honest negative result, not a
+guess dressed up as a citation.
+
+**The port.** `libs/sim/src/setup.cpp` widens the cleared shape from the old
+radius-1 "plus" (5 cells) to a radius-2 orthogonal "plus" (9 cells: the
+spawn tile + 2 tiles in each of the 4 cardinal directions — NOT a diamond,
+NOT diagonals). This is the smallest shape that (a) matches live observation
+of the running original — BM95.EXE screenshots taken this session show each
+corner spawn opening with a cross/plus pocket whose arms reach ~2 tiles, not
+1 — and (b) is actually sufficient: a flame-2 bomb dropped on the spawn tile
+no longer has its blast seal every cell of the pocket, giving the AI's flee
+logic room to reach a tile outside its own blast before the fuse expires.
+Empirically verified in `tests/test_spawn_pocket.cpp`: on a golden-B-shaped
+dense 4-corner board with all 4 slots AI-controlled and no human input at
+all, every player survives the first 200 ticks (10 s) under the fix; reverting
+to the old radius-1 shape drops `alive_count` from 4 to 2 in the same window
+(checked by hand while pinning the test, not left in the suite).
+
+The clear draws no RNG (a deterministic cell-array write keyed off already-
+resolved spawn coordinates), so this is a DELIBERATE but RNG-neutral
+behaviour change — see `tests/test_golden.cpp`'s 2026-07-19 UPDATE note for
+the golden-hash recapture this forced (goldens B and C, whose boards have
+real Brick cells within a spawn's new radius-2 reach; A/D/E are byte-
+identical, proven before recapturing).
+
+**Residual uncertainty.** This is flagged explicitly as unconfirmed. If a
+future disassembly pass (e.g. covering code outside the currently
+transliterated range, or a closer register-level read of `sub_4214BC`'s
+neighbourhood) finds the real mechanism, replace this port and its citation.
+
 ## Still guessed — not yet extracted from the binary
 
 | Constant | Current value | Status |
 |---|---|---|
-| (none — fuse pause confirmed via `sub_42331C`, 2026-07-03) | | |
+| Spawn-pocket clear shape/radius (`libs/sim/src/setup.cpp`) | Radius-2 orthogonal "plus" (9 cells) | Best-effort widening matching live observation; exhaustive search of every board-tile-array writer found no original function — see "Spawn-pocket clear" above |
 
 ## Getting exactness where it matters (recommended path)
 

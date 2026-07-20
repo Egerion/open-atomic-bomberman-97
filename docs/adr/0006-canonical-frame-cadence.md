@@ -1,6 +1,7 @@
-# ADR-0006: Canonical frame cadence — 60 fps sub-frames inside the 20 Hz tick
+# ADR-0006: Canonical frame cadence — display-rate sub-frames inside the 20 Hz tick
 
-**Status:** Accepted
+**Status:** Accepted — amended 2026-07-16 (canonical rate 60 → ~180 fps; see
+"Amendment" below)
 **Date:** 2026-07-12
 **Deciders:** Ege
 
@@ -67,5 +68,30 @@ decision, so it is not the original's mechanic at all.
   (the facts entry's two-clock model is the checklist); golden B/C/D/E and
   the visual goldens were recaptured once for the cadence switch.
 - Revisit: per-sub-frame HUMAN direction sampling (needs a TickInputs
-  contract extension and shell plumbing); the [VERIFY] on the disease-factor
-  × delta truncation order.
+  contract extension and shell plumbing); ~~the [VERIFY] on the disease-factor
+  × delta truncation order~~ (resolved 2026-07-16: factors scale the SPEED
+  before the delta division — facts.md "Canonical frame cadence").
+
+## Amendment (2026-07-16): canonical rate = ~180 fps, nine sub-frames
+
+The 60 fps pin assumed the reference install presents at 60 Hz. Measured, it
+does not: DirectDraw's windowed present doesn't block on vblank under DWM, so
+BM95.EXE free-runs — a 180 s draw round rendered 33146 frames (bmstats),
+≈184 gameplay callbacks/second. The user's continued A/B complaint ("the
+original's AIs still jitter more") traced to exactly this 3× cadence gap.
+
+- `kSubFrames = 9`, `kSubFrameMs = {6,5,6,5,6,5,6,5,6}` (sums to 50 ms).
+  Worked numbers rescale: stock walk 918/100 px per tick, 16-frame head stun
+  ≈ 89 ms, the 30-slot ice history spans ~166 ms (capping Hockey Rink's
+  250 ms lag exactly as the original's fixed buffer does at this rate), AI
+  decides 9× per tick. `kSubFrames` stays the single "temperature" lever
+  (3 ≈ period hardware) — the original is frame-rate-dependent by
+  construction, and the fidelity target is the user's own native session.
+- **Sub-frame presentation trace** (same amendment): the sim publishes
+  `State::sub_trace` (per-player position+facing per sub-frame, a derived
+  unhashed per-tick output like `events`) and the renderer plays it back
+  across the tick interval (`player_interp`) instead of lerping the 20 Hz
+  endpoints — without it the endpoint lerp low-pass-filters ALL sub-tick
+  direction changes away and the restored jitter never reaches the screen.
+- Goldens + visual goldens recaptured 2026-07-16 (test_golden.cpp /
+  tests/visual/shots.txt UPDATE notes).

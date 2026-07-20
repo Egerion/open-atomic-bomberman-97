@@ -1135,6 +1135,21 @@ parser + the new `bmfont` parser):
   scroll region, one line per row at the **font cell height**; the left inset is
   **34 px**; the on-screen row count is `v60 = 344 / line_height`; each `<IMG>`
   segment blits its named PCX inline and advances the pen past it.
+- **Inline images are VERTICALLY CENTERED on their text row — CONFIRMED
+  (`sub_41302D` @ 16456-16497, `pseudo.c`):** the blit Y is
+  `v33 = rowY − (imageHeight − lineHeight) / 2` (`HIDWORD(v14) = v35 −
+  (*(imgptr+28) − fontHeight)/2`), NOT the row top. The image is then clipped
+  to the window band `[34, height−62]` (window-relative → screen `[54, 398]`):
+  a top source-row offset (`if (v33 < 34) { skip 34−v33 rows; v33 = 34; }`), a
+  bottom height clamp (`if (v31+v33 > h−62) v31 = h−62−v33`), and a right width
+  clamp to the 532-px line budget (`if (v32 > v36) v32 = v36`). Because a
+  centred tall image can poke past the visible rows both ways, the render loop
+  runs `for (j = −16; j < v39+16; ++j)` — images on lines up to 16 rows
+  off-screen still blit their visible half; text draws only for `0 ≤ j < v39`.
+  The port (`bmscreen.cpp`) originally **top-aligned** inline images
+  (`SDL_FRect{x, y, w, h}`), which shifted every credits photo/logo DOWN by
+  ~half its height so the `----->` arrows no longer met their photos (Ege's
+  "kaymalar" report, 2026-07-13); it now mirrors the centre-and-clip above.
 - **Scroll is keyboard-driven, one line at a time — there is NO auto/timed
   scroll.** Up (`328`) `--v54`, Down (`0x150`) `++v54`, PgUp (`0x149`) `v54 -=
   v60-1`, PgDn (`337`) `v54 += v60-1`, clamped to `[0, count - v60]`. **Enter
