@@ -67,9 +67,16 @@ TEST_CASE("bombs F1: the freeze is EXEMPT in campaign (sub_421969 forces 2)") {
 }
 
 // ---------------------------------------------------------------------------
-// bombs F2 — kicked/conveyor flat +100*kSubFrames ground bonus (LABEL_21 25396)
+// bombs F2 — kicked bomb slides at the BASE kicked speed (LABEL_21's flat +100
+// is a wash). sub_42331C case 1 adds +100 to the budget but first backs the
+// position off one direction step (`+28 -= dword_45BECC[dir]`); the shared
+// move loop spends that +100 re-advancing exactly that step, so the net
+// per-tick displacement is the speed term alone. Confirmed against the native
+// oracle (kicked slide ~0.25 tile/tick at both 1x and 9x cadence). An earlier
+// audit misread the +100 as a net boost and folded +100*kSubFrames, which ran
+// ~1.9x too fast; reverted 2026-07-20.
 // ---------------------------------------------------------------------------
-TEST_CASE("bombs F2: a kicked bomb slides speed + 100*kSubFrames units per tick") {
+TEST_CASE("bombs F2: a kicked bomb slides at the base kicked speed per tick") {
     Simulation s(open_config());
     Bomb b;
     b.active = true;
@@ -84,10 +91,10 @@ TEST_CASE("bombs F2: a kicked bomb slides speed + 100*kSubFrames units per tick"
 
     const Fixed x0 = s.state().bombs[0].x;
     run(s, 1);
-    // budget = kicked_bomb_speed(1000) + 100*kSubFrames(900) = 1900 units = 19 px,
-    // less than a tile so it is spent in full this tick (the pre-F2 budget was
-    // just 1000 = 10 px).
-    const Fixed expected = s.state().tuning.kicked_bomb_speed + 100 * kSubFrames;
+    // budget = kicked_bomb_speed(1000) = 10 px, less than a tile so it is spent
+    // in full this tick. The LABEL_21 +100 does NOT add to this: it is cancelled
+    // by the paired one-step position backoff in the same code path.
+    const Fixed expected = s.state().tuning.kicked_bomb_speed;
     CHECK(s.state().bombs[0].x - x0 == expected);
 }
 

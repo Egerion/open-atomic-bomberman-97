@@ -487,11 +487,13 @@ MatchConfig pillars_config() {
 // the confirmed audit fixes. The ones that reach these scenarios:
 //   - bombs F1 (round-end freeze, sub_42331C @ 25603): at <= 1 alive side the
 //     fuse/explosion/chain tail freezes. Reaches B/C/D/E once a round decides.
-//   - bombs F2 (kicked/conveyor flat +100*kSubFrames ground bonus, LABEL_21):
-//     kicked bombs travel ~19 px/tick, not ~10 — repositions every kicked
-//     bomb. Reaches E most visibly (bounce count 10 -> 21, and the faster
-//     detonation moves E's death-scatter draws -> final rng 0xc6a9f3b2 ->
-//     0x405862fb) and any scenario that kicks a bomb.
+//   - bombs F2 (kicked/conveyor speed): the kicked/conveyor slide runs at the
+//     BASE speed (~10 px/tick). An earlier audit folded a flat +100*kSubFrames
+//     "ground bonus" (LABEL_21) that pushed it to ~19 px/tick, but the native
+//     oracle showed the original's +100 is cancelled by a paired one-step
+//     position backoff (net ~0.25 tile/tick, cadence-invariant) — reverted
+//     2026-07-20. E is back at its pre-F2 values (bounce count 10, final rng
+//     0xc6a9f3b2). Rovers keep their +100 (a DIFFERENT sub with no backoff).
 //   - bombs F3 (conveyor coast) / stage_actors F1 (belt facing): no scenario
 //     here lays a conveyor, so inert.
 //   - flames F1 (arm iteration order 0,1,2,3): reorders an explosion's RNG
@@ -512,9 +514,10 @@ MatchConfig pillars_config() {
 // rng is UNCHANGED (0x2a — no players/bombs), golden D's kExpectedRng is
 // UNCHANGED at all four checkpoints (no golden blast hits the flames-F1 reorder
 // and no D death reaches the freeze within 800 ticks). Golden E's final rng
-// DID move — a deliberate, behaviour-driven change (bombs F2 repositions the
-// detonation, shifting the death scatter), recaptured with its own note at the
-// assertion. Golden A's hash is UNCHANGED (0 bombs -> no created_tick word,
+// DID move at batch 1 (the then-applied bombs F2 sped the kicked slide) — but
+// that F2 fix was WITHDRAWN and reverted (see the 2026-07-20 REVERT note
+// below), returning E to its pre-F2 values, so this line is historical.
+// Golden A's hash is UNCHANGED (0 bombs -> no created_tick word,
 // 0 players -> no warp_to word); B/C/D/E hashes all recaptured.
 // UPDATE 2026-07-20 (SIM-side fidelity audit BATCH 2, docs/re/audit/setup.md
 // finding 1 + docs/re/audit/diseases.md finding 1): a DELIBERATE behaviour
@@ -545,6 +548,16 @@ MatchConfig pillars_config() {
 // docs/re/audit/flames.md's resolution: the arm's visible-powerup interceptor
 // destroys a re-hit revealed token before it can reach sub_425107, so the port
 // is already faithful and no golden moves.)
+// REVERT 2026-07-20 (bombs F2 withdrawn as a false positive, docs/re/audit/
+// bombs.md Finding 2): the batch-1 "kicked/conveyor flat +100*kSubFrames ground
+// bonus" was WRONG — LABEL_21's +100 is cancelled by a paired one-step position
+// backoff the finding elided, so the faithful slide is the BASE speed (native
+// oracle: ~0.25 tile/tick, cadence-invariant; the +100 fold ran ~1.9x too fast
+// and diverged). Reverting restores E to its pre-F2 values: bounce count
+// 21 -> 10, final rng 0x405862fb -> 0xc6a9f3b2, and all four E checkpoint
+// hashes recaptured (below). B/C/D unaffected (no kicked/belt bomb in their
+// paths); goldens headless 49/49 green + visual goldens 5/5 re-recaptured. The
+// rover +100 (a DIFFERENT sub with no backoff) is NOT affected and stays.
 TEST_CASE("golden A: empty state, 10000 ticks") {
     Simulation a;
     a.state().rng = 42u;
@@ -748,10 +761,10 @@ TEST_CASE("golden E: jelly ping-pong and a veering punched flight") {
     // the recapture: the script's held-key choreography still lands every
     // kick/punch, only the pixel timeline shifted.
     static constexpr std::uint64_t kExpected[4] = {
-        0x0a0e87de3f4cf08eull,  // tick 75
-        0x6162447dfc47740eull,  // tick 150
-        0xfa342e260426f05bull,  // tick 225
-        0x9e82c7d2a36b5120ull,  // tick 300
+        0xd343f2937516cf68ull,  // tick 75
+        0x516af5acbcfa01c3ull,  // tick 150
+        0x1dfea719413b5bc9ull,  // tick 225
+        0x3162bd8cfbca0d2eull,  // tick 300
     };
     int bounces = 0;
     for (std::uint64_t t = 0; t < 300; ++t) {
@@ -760,14 +773,13 @@ TEST_CASE("golden E: jelly ping-pong and a veering punched flight") {
             if (e.type == Event::Type::JellyBounced) ++bounces;
         if ((t + 1) % 75 == 0) CHECK(s.hash() == kExpected[(t + 1) / 75 - 1]);
     }
-    // 21 with the bombs F2 kicked-speed fix (was 10): the +100*kSubFrames flat
-    // ground-speed bonus makes the ping-pong jelly bomb travel ~19 px/tick
-    // instead of ~10, so it completes more than twice as many legs between the
-    // wall and the player in 300 ticks. The final rng also moved (0xc6a9f3b2 ->
-    // 0x405862fb): the faster bomb sits on a different tile when it detonates,
-    // so its kill lands differently and the death-scatter draw sequence shifts
-    // (see the file-level 2026-07-20 UPDATE note). A jelly bounce itself draws
-    // no RNG — the shift is the repositioned explosion, not the bounces.
-    CHECK(bounces == 21);                 // the ping-pong really happened
-    CHECK(s.state().rng == 0x405862fbu);  // recaptured: bombs F2 repositioned the detonation
+    // 10 legs: the jelly ping-pong bomb travels at the base kicked speed
+    // (~10 px/tick). An earlier audit folded a flat +100*kSubFrames "ground
+    // bonus" here that pushed it to ~19 px/tick (21 legs), but that +100 is
+    // cancelled by a paired position backoff in the original (bombs F2, reverted
+    // 2026-07-20 after the native oracle showed the kicked slide is ~0.25
+    // tile/tick, cadence-invariant). Restoring the base speed restores the
+    // pre-F2 leg count and detonation rng. A jelly bounce itself draws no RNG.
+    CHECK(bounces == 10);                 // the ping-pong really happened
+    CHECK(s.state().rng == 0xc6a9f3b2u);  // base kicked speed: detonation back on its pre-F2 tile
 }

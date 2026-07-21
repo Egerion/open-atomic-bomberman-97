@@ -544,9 +544,12 @@ void BombSystem::conveyor_carry(std::size_t index) {
     // frame, so any jelly bounce inside slide() is moot on a belt.
     b.dir = grid::from_godir(s_.actor_dir[ty][tx]);
     b.moving = true;
-    // Belt speed (getvalue(190+idx)) + the flat LABEL_21 bonus — see the F2
-    // note in advance_bombs for the +100 * kSubFrames folding.
-    slide(index, s_.tuning.conveyor_speed() + 100 * kSubFrames);
+    // Belt speed (getvalue(190+idx)). The original's LABEL_21 also adds a flat
+    // +100 budget here, but see the F2 note in advance_bombs: that +100 is
+    // spent re-advancing a one-step position backoff the same code path does,
+    // so it nets to zero. The faithful per-tick displacement is the base belt
+    // speed alone.
+    slide(index, s_.tuning.conveyor_speed());
     b.moving = false;  // back to motion state 0 (belt re-evaluated next tick)
 }
 
@@ -563,20 +566,20 @@ void BombSystem::advance_bombs() {
             // speed (getvalue(300), the bomb's +112 field) regardless of the
             // tile underneath — the belt is consulted only by case 0 (resting).
             //
-            // bombs F2 (bombs.md finding 2; sub_42331C LABEL_21 @
-            // batch_0x422DDD.cpp:551, pseudo.c 25396): case 0 (conveyor) AND
-            // case 1 (kicked) both add a FLAT +100 budget units on TOP of the
-            // speed accrual, PER FRAME (flight, case 2, does not). The original
-            // runs the bomb pass once per displayed frame; the clean-room folds
-            // the whole tick's slide into one pass, so the per-tick equivalent
-            // of the per-frame +100 is +100 * kSubFrames — exactly how the
-            // speed term itself is already folded (one tick's worth of the
-            // per-frame accrual), and how rovers.cpp folds the identical
-            // rover/ghost +100 (facts.md "Canonical frame cadence": "the flat
-            // +100 term triples to +300/tick" was written at kSubFrames=3).
-            // Without it kicked bombs ran ~9% slow, belts ~18-29% ("everything
-            // slightly slow").
-            slide(i, s_.tuning.kicked_bomb_speed + 100 * kSubFrames);
+            // sub_42331C case 1 / LABEL_21 (batch_0x422DDD.cpp:551, pseudo.c
+            // 25393-25400): the original adds a flat +100 to the move budget
+            // — but the SAME code path first backs the bomb's position off by
+            // one direction step (`+28 -= dword_45BECC[dir]`, `+32 -=
+            // dword_45BEDC[dir]`), and the shared per-frame move loop then
+            // spends that +100 re-advancing exactly that one step. The +100
+            // and the backoff cancel; the net per-frame displacement is the
+            // speed term alone (getvalue(300), the +112 field). Confirmed
+            // against the native oracle: the kicked bomb slides ~0.25 tile/tick
+            // at BOTH 1x and 9x frame cadence — cadence-invariant, so the +100
+            // is not a net speed term to fold. (An earlier audit read the +100
+            // as a boost and folded +100 * kSubFrames here, which ran kicked
+            // bombs ~1.9x too fast; reverted 2026-07-20 after oracle adjudication.)
+            slide(i, s_.tuning.kicked_bomb_speed);
             continue;
         }
         // Resting bomb: pushed only while it sits on a belt tile (re-checked

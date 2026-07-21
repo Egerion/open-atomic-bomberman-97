@@ -245,11 +245,12 @@ TEST_CASE("kick + action2 stops own sliding bombs at the next tile centre (sub_4
     push_sliding_bomb(s, 2, 0, Direction::Right, /*owner=*/0);
     s.state().bombs[0].x -= 15 * kScale;
 
-    // press2 flags the bomb (+57); the SAME tick's slide (kicked speed + the
-    // flat +100*kSubFrames bonus, bombs F2 = 19 px) carries it onto the (2,0)
-    // centre and the pending-stop snaps it there — it halts ON the centre, not
-    // 15 px back where the key was pressed. (With the pre-F2 10 px/tick this
-    // took two ticks; the deferred-flag mechanic is unchanged, only faster.)
+    // press2 flags the bomb (+57); the flag persists across ticks and the
+    // pending-stop snaps the bomb onto a tile centre the moment its slide
+    // crosses one. At the base kicked speed (10 px/tick — the LABEL_21 +100 is
+    // a wash, bombs F2) the bomb is 15 px short, so it crosses the (2,0) centre
+    // on the SECOND slide tick and halts there, not 15 px back where the key
+    // was pressed.
     s.tick(press2(0));
     run(s, 2);
     const Bomb& b = s.state().bombs[0];

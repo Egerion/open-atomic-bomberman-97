@@ -13,7 +13,7 @@ clean-room sim gets wrong.
 ## Digest format (both sides MUST match)
 
 ```
-t=<tick> P=<n> | <slot>:<tx>,<ty>,<alive>,<bombs> ... | B=<liveBombs> F=<flameCells>
+t=<tick> P=<n> | <slot>:<tx>,<ty>,<alive>,<bombs> ... | B=<liveBombs>[ bomb:<tx>,<ty>,<moving>]* F=<flameCells>
 ```
 
 - Only OBSERVABLE gameplay state is compared. **rng is deliberately NOT emitted**
@@ -21,6 +21,28 @@ t=<tick> P=<n> | <slot>:<tx>,<ty>,<alive>,<bombs> ... | B=<liveBombs> F=<flameCe
 - Tile coordinates (`tx,ty`) are the robust cross-representation field; raw pixel
   / fixed-point positions differ in layout between the two ports.
 - `bombs` = live bombs a player owns; `B` = total live bombs; `F` = flame cells.
+- After `B=`, one ` bomb:<tx>,<ty>,<moving>` token per live bomb, in creation
+  order (native: bomb slots 0..99; mirror: `s.bombs` vector). `moving` = the
+  kicked/redirected SLIDE state (native motion word +46==1; mirror `Bomb::moving`);
+  a resting, belt-carried, or flying bomb reads 0 on both sides. Bomb POSITIONS
+  are the pre-explosion field that validates bombs F2 (kicked/conveyor speed) and
+  F3 (coast-stop) — unaffected by the known native flame gap / tick-rotation until
+  a bomb explodes or stops.
+
+## Scenarios
+
+- **base** (default): scripted human slot 0 sweeps + drops a bomb (see below).
+- **kick** (`--scenario=kick` mirror / `--oracle <out> <ticks> kick` native):
+  idle players; one bomb injected at tile (7,0) already kicked +x toward the
+  col-14 wall with a huge fuse. Validates F3 (both sides slide to col 14 and
+  STOP, `moving`->0, B stays 1) and the F2 kicked-speed comparison. This
+  scenario is what CAUGHT the F2 false positive: on 2026-07-20 it showed a
+  ~1.9x speed DIVERGENCE (mirror faster) because the clean-room had folded a
+  `+100*kSubFrames` "ground bonus" that the native slide loop cancels with a
+  paired per-frame position backoff (the native slide is base-speed and
+  cadence-invariant — same ~0.25 tile/tick at 1x and 9x). RESOLVED 2026-07-20:
+  the +100 fold was reverted (see `audit/bombs.md` Finding 2); the mirror now
+  matches the native kicked/belt speed.
 
 ## Scripted input (reproduce identically on the native side)
 
@@ -36,17 +58,24 @@ Setup: classic 15x11 open arena (odd/odd Solid pillars), corner spawns,
 
 ```
 cmake -S tools/oracle_mirror -B build/oracle_mirror
-cmake --build build/oracle_mirror
-build/oracle_mirror/mirror --seed=7 --ticks=200 > cleanroom.txt
+cmake --build build/oracle_mirror --config Debug
+build/oracle_mirror/Debug/mirror --ticks=80 --players=2 > cleanroom.txt
+# native (ground truth); CLI is positional: --oracle <out.txt> <ticks> [scenario]
+native/build32/Debug/bm_native.exe --oracle native.txt 80
+diff native.txt cleanroom.txt | head
+# kick scenario:
+build/oracle_mirror/Debug/mirror --ticks=40 --players=2 --scenario=kick > ck.txt
+native/build32/Debug/bm_native.exe --oracle cn.txt 40 kick
+diff cn.txt ck.txt | head
 ```
-
-Then, once the native oracle exists (`bm_native --oracle --seed=7 --ticks=200 >
-native.txt`), `diff native.txt cleanroom.txt | head` gives the first divergence.
 
 ## Status
 
-The clean-room mirror is DONE and validated (compiles, runs, emits the format).
-The **native oracle side is NOT yet built** — it is blocked on porting the
-match-core stub `sub_41F29B` (players) and driving the native match with a fixed
-seed + this script. See `native/docs/M3_NOTES.md` (Part B section) for exactly
-where the native side stands.
+BOTH sides are built and diffed. `native --oracle` sets up the same match
+directly and emits the same format; `sub_41F29B` (players) is ported. Current
+findings (see `native/docs/M3_NOTES.md`):
+- **base**: ticks 0-62 BYTE-IDENTICAL; first divergence t=63 is two documented
+  non-bugs (tick-rotation offset + native flame-spread gap).
+- **kick**: F3 coast-stop VALIDATED (both stop at the wall); bomb persistence
+  (B=1) OK; F2 kicked-SPEED shows a ~1.9x divergence (mirror faster) — an open
+  finding for RE adjudication (session 4 notes), not a resolved bug.

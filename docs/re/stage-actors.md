@@ -503,8 +503,13 @@ resting bomb is `state +16 == 9`, with a movement sub-mode `switch(+46)`.
    (LABEL_21). So a bomb resting on a belt slides along it. Our port
    (`bombs.cpp` `slide_on_conveyor`): a *non-moving* bomb on a conveyor tile is
    set moving in the belt direction with the belt budget, then handed to the
-   normal slide. (The `+100` per-tick kicker in LABEL_21 mirrors the existing
-   kicked-bomb `+ 100`; see the units note in bombs.cpp.)
+   normal slide at the base belt speed. (LABEL_21's `+= 100` is NOT a net
+   speed bonus: the two lines after it back the position off one direction
+   step, and the move loop spends that +100 re-advancing exactly that step —
+   it cancels. The port therefore adds nothing to the belt/kicked budget; an
+   earlier audit that folded a `+100` bonus here was reverted 2026-07-20 after
+   the native oracle showed the slide is base-speed and cadence-invariant. See
+   the F2 note in bombs.cpp and `audit/bombs.md` Finding 2.)
 2. **Dirarrow re-steering a sliding bomb** (pseudo.c ~25532, `case 2` slide
    loop): at a tile centre (`!v79 && !v80`), `if (actor && actor[1]==0)
    bomb[+44] = actor[22];` — the sliding bomb turns to the arrow's godir.

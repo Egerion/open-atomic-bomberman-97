@@ -109,71 +109,54 @@ any golden scenario's tail overlaps a last-kill-with-live-bomb situation.
 
 ---
 
-## Finding 2 — Kicked/conveyor bombs are missing the flat +100/tick ground-speed bonus
+## Finding 2 — [WITHDRAWN] "Kicked/conveyor bombs are missing the flat +100/tick ground bonus"
 
-**Severity: High** ("everywhere" — every kicked bomb and every conveyor
-ride, on every board that has either). **Confidence: High** (plain
-arithmetic, present verbatim in both the transliteration and pseudo.c, no
-register-loss ambiguity).
+**Status: FALSE POSITIVE. Applied 2026-07-20, then REVERTED the same day
+after the native oracle contradicted it.** The port's base-speed slide was
+already correct.
 
-**Original.** `sub_42331C`'s case 0 (bomb resting on a conveyor) and case 1
-(kicked bomb already sliding) both fall into `LABEL_21` (pseudo.c
-25376-25399, `batch_0x422DDD.cpp:512-554`):
+**The misread.** `sub_42331C`'s case 0 (bomb resting on a conveyor) and case
+1 (kicked bomb already sliding) both fall into `LABEL_21` (pseudo.c
+25393-25400, `batch_0x422DDD.cpp:512-554`). The finding quoted only the first
+two lines and elided the rest with `...`:
 
 ```c
 case 1:
   *(_DWORD *)(v75 + 116) += dword_464958 * *(_DWORD *)(v75 + 112) / (unsigned int)dword_46494C;  // += speed
 LABEL_21:
-  *(_DWORD *)(v75 + 116) += 100;   // <-- flat, unconditional, on top of speed
-  ...
+  *(_DWORD *)(v75 + 116) += 100;                          // budget += 100
+  *(_DWORD *)(v75 + 28) -= dword_45BECC[*(int *)(v75 + 42) >> 16];  // pos_x -= dir step  <-- ELIDED
+  *(_DWORD *)(v75 + 32) -= dword_45BEDC[*(int *)(v75 + 42) >> 16];  // pos_y -= dir step  <-- ELIDED
   break;
 ```
 
-The movement budget `+116` is consumed 100 units per pixel-step (the same
-"1/100 px" convention the port's own `Fixed`/`kScale` uses, per
-`constants.hpp`'s "matching VALUELST speed units" comment). So ground
-movement's real per-tick rate is **`speed + 100`** raw units, i.e. one
-*extra guaranteed pixel* every tick on top of whatever `getvalue(300)`
-(kicked) or `getvalue(190+idx)` (conveyor) contributes. Flight (case 2,
-punched/thrown) has no such kicker — its own accrual (pseudo.c 25417,
-`*(_DWORD*)(v75+116) += dword_464958 * *(_DWORD*)(v75+112)/dword_46494C;`)
-feeds straight into the while loop with nothing added.
+The two elided lines are a **one-step position backoff**: before the shared
+per-frame move loop runs, the bomb's position is stepped back one direction
+unit. The move loop spends budget at 100 units per step, so the `+= 100`
+funds exactly one step forward — which just re-establishes the position the
+backoff removed. **The +100 and the backoff cancel; the net per-frame
+displacement is the speed term alone.** The `getvalue(300)` (kicked) /
+`getvalue(190+idx)` (conveyor) value IS the authentic per-tick rate, with no
+bonus. (Flight, case 2, has neither the +100 nor a backoff — a genuinely
+different path.)
 
-**Port.** `BombSystem::advance_bombs` (`libs/sim/src/systems/bombs.cpp:544-549`)
-computes the tick's slide budget as the raw tuning value, with nothing
-added:
+**Oracle adjudication.** The `--oracle` native run slides a kicked bomb
+~0.25 tile/tick at BOTH 1x and 9x frame cadence — cadence-invariant, exactly
+what "the +100 is a wash" predicts (if it were a real per-frame bonus it
+would scale with cadence and 9x would be ~9x faster). The clean-room's
+pre-fix base-speed slide (1000 units/tick = ~0.25 tile/tick) matched this;
+the "fix" that folded `+100 * kSubFrames` (=1900 units/tick) ran ~1.9x too
+fast and DIVERGED from the oracle at t=4. Reverted in
+`bombs.cpp advance_bombs`/`conveyor_carry`, `tests/test_fidelity_audit.cpp`,
+`tests/test_kick_nuances.cpp`, golden E (`test_golden.cpp`), and the visual
+goldens.
 
-```cpp
-const std::int32_t budget =
-    on_belt ? s_.tuning.conveyor_speed() : s_.tuning.kicked_bomb_speed;
-slide(i, budget);
-```
-
-and `BombSystem::slide` (`bombs.cpp:367-370`) uses it directly as the
-per-tick pixel budget (`Fixed dist = budget;`). `fly()` correctly has no
-such addition (matching case 2) — only the ground path is short the +100.
-
-**Visible effect**, using the shipped tuning values (`libs/sim/include/bomber/sim/tuning.hpp:35,152-153`):
-
-| | original px/tick (speed+100)/100 | port px/tick speed/100 | port is slower by |
-|---|---|---|---|
-| kicked bomb (id 300 = 1000) | 11.0 | 10.0 | ~9.1% |
-| conveyor low (id 190 = 250) | 3.5 | 2.5 | ~28.6% |
-| conveyor medium (id 191 = 350, default) | 4.5 | 3.5 | ~22.2% |
-| conveyor high (id 192 = 450) | 5.5 | 4.5 | ~18.2% |
-
-Kicked bombs travel noticeably shorter distances before stopping-budget
-sums differ tick over tick (visible over any multi-tile kick), and belts —
-especially on low/medium speed, the common settings — are 20-30% slower
-than authentic, changing exactly how far a conveyor carries a bomb before a
-chain window closes or a player can catch up to it.
-
-**Suggested fix.** In `advance_bombs`, add the flat bonus to the ground
-budget: `budget = (on_belt ? conveyor_speed() : kicked_bomb_speed) + kScale;`
-(where `kScale == 100` is the existing "1 px" unit). Needs
-`tests/test_kick_nuances.cpp`/`tests/test_conveyor.cpp` distance
-recalculation and a golden recapture (any golden with a kicked or
-conveyor-carried bomb shifts its settle tick).
+**Not to be confused with the rover +100** (rovers.cpp, `sub_401B5C`): that
+IS a real net bonus, because that different function has NO paired backoff —
+it computes the candidate as one pixel *forward* from the current position,
+so its `+100` genuinely nets one extra pixel/frame (a rover/ghost advances
+even at speed 0). Only the bomb path (`sub_42331C`) has the cancelling
+backoff. The two must not be folded the same way.
 
 ---
 
@@ -181,8 +164,12 @@ conveyor-carried bomb shifts its settle tick).
 
 **Severity: High** (common on any board with conveyors — changes where a
 belt-launched bomb ends up on the very next tile past the belt's end).
-**Confidence: High**, contingent on Finding 2's reading of case 0/1 being
-correct (same evidence).
+**Confidence: High** — and INDEPENDENT of the withdrawn Finding 2. Finding 2
+was about the slide *speed* (the +100, which turned out to be a wash); this
+finding is about the motion *word* (`+46`) never being set to 1 in case 0, so
+a belt bomb freezes the instant it leaves the belt rather than coasting. That
+is a separate fact, and the native oracle VALIDATED it (the coast-stop
+matches).
 
 **Original.** Case 0 (pseudo.c 25362-25392, `batch_0x422DDD.cpp:512-547`)
 is re-entered from the top of the per-bomb switch **every tick**, and

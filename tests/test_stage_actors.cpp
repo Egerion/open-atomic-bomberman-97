@@ -330,8 +330,8 @@ TEST_CASE("a jelly bomb bounces off a warphole instead of entering it") {
     b.jelly = true;
 
     // Roll east into the warphole's doorstep and ping-pong. (A jelly bomb never
-    // stops, so with the faster kicked speed — bombs F2 — it may reverse more
-    // than once within the window; assert the invariant, not the final dir.)
+    // stops and may reverse more than once within the window, so assert the
+    // invariant — never crosses onto the warphole — not the final direction.)
     bool bounced = false;
     for (int t = 0; t < 10; ++t) {
         s.tick(TickInputs{});

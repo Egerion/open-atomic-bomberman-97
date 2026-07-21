@@ -85,8 +85,26 @@
 # brick-reveal time. brick_crumble BMP eyeballed (flame cross + crumbling
 # brick + player, coherent). headless 49/49 green (goldens unaffected: their
 # blasts stay inside the radius-2 spawn pocket and reach no intact brick).
-walking                 10    b712e5c1f4749837e2d0e4f3fe871c520ab1a32132d86fa5134157f575d4551b
-bomb_pulse               40    60fda181cfdf47a55418a88a98ad626ac2db942c2e45ee60bce18eb60451a4ad
-explosion_mid_flame     65    1e06b6f2d5b9f27414c4e8c520c3c08c374a8bd280c6eb8403c2cd34982cfe4b
-brick_crumble           68    a9817642ddde3b57e68e3b56fa46a98c9571181360a5dd7f51a247b9633fb6fb
-powerup_revealed        76    e3284a4d93e1ef5d52826f6c528f0b9b08913774dd0859393efb18418f9f82cd
+# ALL FIVE recaptured 2026-07-20 (bombs F2 REVERTED). An earlier audit folded a
+# flat +100*kSubFrames "ground bonus" onto the kicked/conveyor slide (LABEL_21);
+# the native oracle then showed that +100 is cancelled by a paired one-step
+# position backoff in the original, so the faithful kicked/belt slide is the
+# base speed alone (~0.25 tile/tick, cadence-invariant). Reverting the +100
+# restores the base speed. In THIS demo, player 1's bomb (placed at (6,8) t7)
+# rides the level's conveyor + dirarrows across the board and detonates at (2,7)
+# t46; at the slower base belt speed it sits earlier on that path at every tick,
+# so ALL five shots move -- walking (t10) shows the bomb mid-slide near player
+# 1's spawn (pixel-diffed vs the +100 build: a single sliding-bomb region in the
+# bottom-left, x428-547 y738-783, nothing else); the four later shots retime the
+# whole (2,7) explosion -> flame -> brick -> powerup cascade. The renderer is
+# UNCHANGED -- this is a pure sim-position shift, same class as test_golden E
+# (bounce count 21 -> 10, back to its pre-F2 native-matching value). The +100
+# build byte-reproduced the OLD pins exactly before the revert, confirming the
+# capture pipeline is deterministic and the move is the intended consequence.
+# Rovers keep their own +100 (a DIFFERENT sub, sub_401B5C, with no backoff --
+# genuinely nets one extra pixel/frame). headless 49/49 green at recapture.
+walking                 10    d613b1cb1cc1008762179a171a4b0c51776212aabfbcd415f5b471fb143869e8
+bomb_pulse               40    f23407d602f2d25df6736e6b64a8e45c177fdbac462c54f3c12df5884ae12048
+explosion_mid_flame     65    d4c0c2537325d30a161f583fa85b1992ad55c5cdb3fbd567dd35aaede0e49d64
+brick_crumble           68    e2ebb5881cff10baf2f83152760032304a8dfb4b01e31d29a5731e2d27cb8aa1
+powerup_revealed        76    6e027a63a70a2083d851f2793ac4cae618475ea7cd94563d2f1ad49a9c0009b9

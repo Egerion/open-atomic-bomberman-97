@@ -73,6 +73,34 @@ MatchConfig make_config(std::uint32_t seed, int players, bool slot1_ai) {
     return cfg;
 }
 
+// Tile-centre in field pixels*100 (mirrors grid::tile_center_*; grid.hpp is a
+// private sim header so we recompute from the public constants).
+Fixed tile_center_x(int tx) { return tx * kTileWF + kTileWF / 2; }
+Fixed tile_center_y(int ty) { return ty * kTileHF + kTileHF / 2; }
+
+// KICK/SLIDE scenario (bombs F2/F3): inject one bomb resting at tile (7,0),
+// already KICKED toward +x (Direction::Right), with a huge fuse so it never
+// explodes in the comparison window. It slides down the fully-open top row and
+// must STOP at the right wall (col 14) — the coast-stop is F3; the per-tick
+// displacement is F2. The native oracle sets up the exact same physical bomb
+// (same tile, same +x direction, kicked-bomb speed, long fuse) via sub_422EDE +
+// sub_42464B. Players stay idle (empty TickInputs) so nothing perturbs it.
+void inject_kicked_bomb(State& s) {
+    Bomb b;
+    b.active = true;
+    b.id = s.next_bomb_id++;
+    b.owner = 9;   // no present player -> both slots keep bombs_placed 0
+    b.colour = 9;
+    b.x = tile_center_x(7);
+    b.y = tile_center_y(0);
+    b.fuse_init = 100000;
+    b.fuse = 100000;  // never fires in the window (native +74 = 50*1000 likewise)
+    b.flame = 2;
+    b.moving = true;
+    b.dir = Direction::Right;  // +x, toward the right wall
+    s.bombs.push_back(b);
+}
+
 int count_flame_cells(const State& s) {
     int n = 0;
     for (int y = 0; y < kGridHeight; ++y)
@@ -99,7 +127,22 @@ void emit_digest(std::uint64_t t, const State& s) {
         std::printf(" %d:%d,%d,%d,%d", i, p.tile_x(), p.tile_y(),
                     p.alive ? 1 : 0, static_cast<int>(p.bombs_placed));
     }
-    std::printf(" | B=%d F=%d\n", count_live_bombs(s), count_flame_cells(s));
+    // Per-live-bomb tile position + kicked-slide motion flag, in vector
+    // (creation) order — the native side iterates its bomb slots 0..99 in the
+    // same order. `moving` is the kicked/redirected slide state (native motion
+    // word +46 == 1); a resting OR belt-carried bomb reads 0 on both sides
+    // (the clean-room clears its transient conveyor `moving` before this
+    // digest, matching the native's belt bomb that never leaves motion 0), and
+    // a flying bomb reads 0 too. Positions are the robust pre-explosion field
+    // for validating bombs F2 (kicked/conveyor speed) and F3 (coast-stop) —
+    // they are unaffected by the known native flame-spread gap and the tick-
+    // rotation offset until the bomb explodes/stops.
+    std::printf(" | B=%d", count_live_bombs(s));
+    for (const Bomb& b : s.bombs) {
+        if (!b.active) continue;
+        std::printf(" bomb:%d,%d,%d", b.tile_x(), b.tile_y(), b.moving ? 1 : 0);
+    }
+    std::printf(" F=%d\n", count_flame_cells(s));
 }
 
 }  // namespace
@@ -108,6 +151,7 @@ int main(int argc, char** argv) {
     std::uint32_t seed = 0x12345678u;
     int ticks = 200;
     int players = 2;
+    const char* scenario = "base";
     for (int i = 1; i < argc; ++i) {
         if (std::strncmp(argv[i], "--seed=", 7) == 0)
             seed = static_cast<std::uint32_t>(std::strtoul(argv[i] + 7, nullptr, 0));
@@ -115,8 +159,12 @@ int main(int argc, char** argv) {
             ticks = std::atoi(argv[i] + 8);
         else if (std::strncmp(argv[i], "--players=", 10) == 0)
             players = std::atoi(argv[i] + 10);
+        else if (std::strncmp(argv[i], "--scenario=", 11) == 0)
+            scenario = argv[i] + 11;
     }
-    std::fprintf(stderr, "mirror: seed=0x%08x ticks=%d players=%d\n", seed, ticks, players);
+    const bool kick_scenario = std::strcmp(scenario, "kick") == 0;
+    std::fprintf(stderr, "mirror: seed=0x%08x ticks=%d players=%d scenario=%s\n", seed, ticks,
+                 players, scenario);
 
     // Match the native --oracle config EXACTLY: slot 1 is an IDLE HUMAN, not an
     // AI. AI would diverge immediately by RNG (native LCG vs clean-room
@@ -124,10 +172,16 @@ int main(int argc, char** argv) {
     // The native side sets both slots to controller type 2 (local human);
     // slot 0 is scripted, slot 1 receives no input.
     Simulation sim(make_config(seed, players, /*slot1_ai=*/false));
+    // The kick scenario injects a sliding bomb into the initial state and keeps
+    // every player idle (empty TickInputs); the base scenario runs the scripted
+    // human + bomb-drop sequence.
+    if (kick_scenario) inject_kicked_bomb(sim.state());
     // Digest the initial state as tick 0, then each post-tick state.
     emit_digest(0, sim.state());
     for (int t = 1; t <= ticks; ++t) {
-        sim.tick(scripted_inputs(static_cast<std::uint64_t>(t)));
+        const TickInputs in =
+            kick_scenario ? TickInputs{} : scripted_inputs(static_cast<std::uint64_t>(t));
+        sim.tick(in);
         emit_digest(static_cast<std::uint64_t>(t), sim.state());
     }
     return 0;

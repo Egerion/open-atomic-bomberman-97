@@ -4673,7 +4673,13 @@ unchanged through the recapture):
   pass is exact: the field is static during the rover pass, so the pixel
   sequence (and its centre-tile RNG draws) is unchanged by instalment size.
 - **Conveyor term**: `getvalue(190+idx) × delta / 50` per sub-frame (exact
-  totals for the shipped belt speeds, which are divisible).
+  totals for the shipped belt speeds, which are divisible). NOTE: the belt (and
+  kicked) bomb slide has NO flat +100 bonus, unlike the rover above. The
+  original's LABEL_21 does add `+= 100`, but the two lines after it back the
+  position off one direction step and the move loop spends that +100 undoing
+  it — a wash (confirmed 2026-07-20 against the native oracle; an audit that
+  briefly folded a `+100 × kSubFrames` bonus here was reverted). The rover's
+  `sub_401B5C` +100 is real ONLY because that function has no such backoff.
 
 **Deliberately still tick-quantized** (each ≤50 ms of phase, invisible, and
 kept to bound the blast radius): the LABEL_246 bomb-action tail runs once per
