@@ -43,6 +43,20 @@ t=<tick> P=<n> | <slot>:<tx>,<ty>,<alive>,<bombs> ... | B=<liveBombs>[ bomb:<tx>
   cadence-invariant — same ~0.25 tile/tick at 1x and 9x). RESOLVED 2026-07-20:
   the +100 fold was reverted (see `audit/bombs.md` Finding 2); the mirror now
   matches the native kicked/belt speed.
+- **conveyor** (`--scenario=conveyor` mirror / `--oracle <out> <ticks> conveyor`
+  native): idle players; a short EAST belt on tiles (2,0)+(3,0) with open floor
+  at (4,0)+, and a RESTING bomb (motion 0, NOT kicked) on the belt's first tile.
+  Native injects the belt as two real stage-actor records (`sub_404E3C` alloc +
+  the `sub_404E99` conveyor fill: present=1 @+0, type=2 @+4, godir @+44, tile
+  x/y @+28/+32) and the bomb via `sub_422EDE` (no kick). Validates **F2 belt
+  speed** (the reverted base `conveyor_speed()`, no +100) and **F3 belt-exit
+  freeze** (the bomb stops the instant it steps off the belt, never coasting).
+  Result 2026-07-21: native and mirror agree tile-for-tile across all 41 ticks
+  EXCEPT a single 1-tick lag at the second tile boundary (native reaches (4,0)
+  at t17, mirror at t18) — the known tick-rotation offset (native frame-start
+  leads), NOT a speed error: it does NOT compound (the first crossing at t6 is
+  identical), whereas a residual +100 would race the mirror progressively ahead.
+  Both freeze permanently at (4,0). F2 belt + F3 CONFIRMED against the native.
 
 ## Scripted input (reproduce identically on the native side)
 

@@ -101,6 +101,32 @@ void inject_kicked_bomb(State& s) {
     s.bombs.push_back(b);
 }
 
+// CONVEYOR scenario (bombs F2 belt speed + F3 belt-exit freeze): a short EAST
+// belt on tiles (2,0)+(3,0) with open floor at (4,0)+, and a RESTING bomb
+// (motion 0, NOT kicked) on the belt's first tile. The belt pushes it east at
+// the base conveyor_speed() (the LABEL_21 +100 is backoff-cancelled) and it
+// FREEZES the instant it steps off the belt onto (4,0). The native oracle sets
+// up the identical belt (sub_404E3C actor records) + resting bomb.
+void inject_belt_bomb(State& s) {
+    for (int x = 2; x <= 3; ++x) {
+        s.actor_type[0][x] = ActorType::Conveyor;
+        s.actor_dir[0][x] = 1;  // godir 1 = east (Direction::Right)
+    }
+    Bomb b;
+    b.active = true;
+    b.id = s.next_bomb_id++;
+    b.owner = 9;   // no present player -> both slots keep bombs_placed 0
+    b.colour = 9;
+    b.x = tile_center_x(2);
+    b.y = tile_center_y(0);
+    b.fuse_init = 100000;
+    b.fuse = 100000;  // never fires in the window
+    b.flame = 2;
+    b.moving = false;  // RESTING (motion 0): only the belt under it pushes it
+    b.dir = Direction::Right;
+    s.bombs.push_back(b);
+}
+
 int count_flame_cells(const State& s) {
     int n = 0;
     for (int y = 0; y < kGridHeight; ++y)
@@ -163,6 +189,8 @@ int main(int argc, char** argv) {
             scenario = argv[i] + 11;
     }
     const bool kick_scenario = std::strcmp(scenario, "kick") == 0;
+    const bool conveyor_scenario = std::strcmp(scenario, "conveyor") == 0;
+    const bool idle_scenario = kick_scenario || conveyor_scenario;
     std::fprintf(stderr, "mirror: seed=0x%08x ticks=%d players=%d scenario=%s\n", seed, ticks,
                  players, scenario);
 
@@ -176,11 +204,12 @@ int main(int argc, char** argv) {
     // every player idle (empty TickInputs); the base scenario runs the scripted
     // human + bomb-drop sequence.
     if (kick_scenario) inject_kicked_bomb(sim.state());
+    if (conveyor_scenario) inject_belt_bomb(sim.state());
     // Digest the initial state as tick 0, then each post-tick state.
     emit_digest(0, sim.state());
     for (int t = 1; t <= ticks; ++t) {
         const TickInputs in =
-            kick_scenario ? TickInputs{} : scripted_inputs(static_cast<std::uint64_t>(t));
+            idle_scenario ? TickInputs{} : scripted_inputs(static_cast<std::uint64_t>(t));
         sim.tick(in);
         emit_digest(static_cast<std::uint64_t>(t), sim.state());
     }
