@@ -87,16 +87,20 @@ State build_state(const MatchConfig& config) {
         // regeneration"), which gates brick REGROWTH near live players,
         // not initial spawn placement.
         //
-        // Since the mechanism could not be pinned to a function after this
-        // search, the shape below is the smallest one that matches live
-        // observation of the running original (BM95.EXE screenshots,
-        // 2026-07-19 session): each corner spawn opens with a cross/plus
-        // pocket whose arms reach 2 tiles, not 1 — wide enough that a
-        // flame-2 bomb dropped on the spawn tile does not seal every
-        // reachable cell (the previous radius-1 guess left the WHOLE
-        // pocket inside that blast, `docs/re/facts.md` "Spawn-pocket
-        // clear"). This is a best-effort widening, not a confirmed port —
-        // revisit if a future disassembly pass finds the real call site.
+        // PROVEN DIVERGENCE (2026-07-21 native probe, facts.md "Spawn-pocket
+        // clear"): running the ORIGINAL's own `sub_4260F5` fill on BASIC.SCH
+        // 4000x shows every spawn tile is a brick ~90% of the time (== the
+        // density, no exception), and forcing a brick onto a spawn then running
+        // the real `sub_4214BC` placement leaves it a brick. The original
+        // places a brick ON the spawn and NEVER clears it — a player spawns
+        // boxed in and bombs its way out (classic high-density opening). So
+        // this clear reproduces NO original function; it is a deliberate
+        // workaround. The real bug it masks is the clean-room AI-flee logic
+        // failing at the boxed-in opening the original's AI survives; the
+        // faithful fix is to repair that AI path and DELETE this clear (then
+        // recapture goldens B/C). The shape below is the smallest that keeps
+        // the AI alive meanwhile: a radius-2 cross so a flame-2 spawn bomb
+        // cannot seal every reachable cell (radius-1 did, hence the suicides).
         static constexpr int ndx[] = {0, 1, -1, 0, 0, 2, -2, 0, 0};
         static constexpr int ndy[] = {0, 0, 0, 1, -1, 0, 0, 2, -2};
         for (int n = 0; n < 9; ++n) {

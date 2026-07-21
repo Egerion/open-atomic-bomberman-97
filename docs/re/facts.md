@@ -5079,12 +5079,39 @@ enumerated and read:
   regeneration" above), which gates brick REGROWTH near live players during
   the match, not initial spawn placement.
 
-**Conclusion: the original mechanism could not be pinned to a function**
-despite this search covering every writer to the board's only tile array.
-Either it's produced by code outside the transliterated 0x401000-0x435000
-range this project's `pseudo.c` covers, or it's an emergent property of
-something not yet identified. This is an honest negative result, not a
-guess dressed up as a citation.
+**RESOLVED EMPIRICALLY 2026-07-21 (native ground truth): there is NO
+spawn-pocket clear — the original leaves a brick ON the spawn.** The static
+search above (no setup-time tile writer, `sub_4048EB` editor-only, `.SCH` 'S'/
+'R' directives independent) is now confirmed by running the ORIGINAL's own
+board build. The native transliteration's `--oracle <out> 0 pocket` scenario
+(`native/src/main.cpp`, gitignored) builds BASIC.SCH's real scheme grid
+(15×11, '#' iff `(col&1 && row&1)`, else ':'), sets density 90, and runs the
+REAL `sub_4260F5` fill 4000× with varied seeds, reporting each cell's brick
+frequency:
+
+- Every non-pillar cell — INCLUDING all ten `-S` spawn tiles — reads **89–90%
+  brick**, exactly the density. p0 (0,0)=89%, p1 (14,10)=90%, … no spawn is an
+  outlier. The `(odd,odd)` pillars read 0% (they are '#'→solid, never brick).
+  So `sub_4260F5` applies the scheme+density with **zero spawn exception**.
+- A second probe FORCES a brick onto a spawn tile, runs the real `sub_4214BC`
+  placement, and re-reads the tile: it is **still a brick (=2)**. Placement
+  does not clear the tile a player lands on.
+
+So the original **places a brick on the spawn ~90% of the time and never
+clears it** — a player spawns boxed in and must bomb its way out (the classic
+high-density-scheme opening). No emergent mechanism, no out-of-range code: the
+pocket simply does not exist in the original.
+
+**Therefore the port's clear is a DELIBERATE DIVERGENCE, not a faithful port.**
+Kept as a pragmatic workaround (below), but re-labelled honestly: the true
+root cause of the "first-round AI mass-suicide" is the port's own AI-flee
+logic failing at the boxed-in bomb-your-way-out opening that the ORIGINAL's AI
+handles — the pocket clear MASKS that AI bug rather than reproducing an
+original behaviour. The faithful fix is to make the clean-room AI survive a
+spawn brick box the way `sub_40A1C6`'s does; until then the clear stays. The
+"BM95 screenshots show ~2-tile pockets" observation that motivated the widen
+is now suspect (different scheme/density, or post-opening bricks already
+bombed) and should NOT be treated as evidence of a setup-time clear.
 
 **The port.** `libs/sim/src/setup.cpp` widens the cleared shape from the old
 radius-1 "plus" (5 cells) to a radius-2 orthogonal "plus" (9 cells: the
@@ -5108,10 +5135,12 @@ the golden-hash recapture this forced (goldens B and C, whose boards have
 real Brick cells within a spawn's new radius-2 reach; A/D/E are byte-
 identical, proven before recapturing).
 
-**Residual uncertainty.** This is flagged explicitly as unconfirmed. If a
-future disassembly pass (e.g. covering code outside the currently
-transliterated range, or a closer register-level read of `sub_4214BC`'s
-neighbourhood) finds the real mechanism, replace this port and its citation.
+**No residual uncertainty about the mechanism** (as of the 2026-07-21 native
+probe): it is proven absent. The open item is now a PORT question, not an RE
+one — replace the divergent pocket clear with a faithful AI-flee fix that lets
+a clean-room AI escape a spawn brick box, then delete the clear and recapture
+goldens B/C. Tracked as the spawn-pocket follow-up, not a "still guessed"
+citation.
 
 ## Brick-reveal cure roll (empty hook, RNG-count only) — CONFIRMED (2026-07-20, `sub_425107`/`sub_42BE0B`)
 
@@ -5152,7 +5181,7 @@ the empty hook visible at source level. docs/re/fidelity-audit.md.)
 
 | Constant | Current value | Status |
 |---|---|---|
-| Spawn-pocket clear shape/radius (`libs/sim/src/setup.cpp`) | Radius-2 orthogonal "plus" (9 cells) | Best-effort widening matching live observation; exhaustive search of every board-tile-array writer found no original function — see "Spawn-pocket clear" above |
+| _(none — the last entry, the spawn-pocket clear, was RESOLVED 2026-07-21)_ | — | The spawn-pocket clear is no longer a "guess": a native `sub_4260F5` fill probe PROVED the original places a brick on the spawn ~90% of the time and never clears it (see "Spawn-pocket clear" above). The port's radius-2 clear is a proven DIVERGENCE (a workaround for a clean-room AI-flee bug), not an unextracted citation. Follow-up is a port AI fix, not an RE extraction. |
 
 ## Getting exactness where it matters (recommended path)
 
