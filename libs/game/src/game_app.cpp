@@ -944,10 +944,26 @@ AppInput GameApp::present_screen(const ScreenDef& def) {
     screen_->enter(def, SDL_GetTicks());  // NOLINT(bugprone-unchecked-optional-access)
     AppInput result = AppInput::Advance;
     bool waiting = true;
+    // Refresh-boundary pacing (see refresh_period_ns): even a static screen
+    // spins this loop uncapped on Windows without it — the same DWM
+    // non-blocking present as the animated loops.
+    const std::uint64_t period_ns = refresh_period_ns();
+    std::uint64_t pace_target_ns = SDL_GetTicksNS() + period_ns;
     while (waiting) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
+            if (ev.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+                // Gamepad advance (mirrors present_menu's pad->synthetic-key
+                // injection): present_screen's on_key treats every accept key
+                // as advance, so a controller button synthesizes Enter and
+                // walks the logo/title chain the same as a keyboard accept.
+                SDL_Event synth{};
+                synth.type = SDL_EVENT_KEY_DOWN;
+                synth.key.key = SDLK_RETURN;
+                SDL_PushEvent(&synth);
+                continue;
+            }
             if (ev.type == SDL_EVENT_KEY_DOWN) {
                 // Feed every key to the screen: sub_42A088 blips (SFX 20) on any
                 // key and, for the accept keys (Enter/Space/Escape), plays the
@@ -970,7 +986,7 @@ AppInput GameApp::present_screen(const ScreenDef& def) {
         SDL_RenderClear(sdl_renderer_.get());
         screen_->draw(sdl_renderer_.get());  // NOLINT(bugprone-unchecked-optional-access)
         SDL_RenderPresent(sdl_renderer_.get());
-        SDL_Delay(2);
+        pace_to_refresh(pace_target_ns, period_ns);
     }
 
     // No transition out: sub_42A088 CUTS between screens — it sets the palette
@@ -1927,6 +1943,28 @@ int GameApp::match_clinch() const {
     return -1;
 }
 
+std::uint64_t GameApp::refresh_period_ns() const {
+    std::uint64_t period_ns = 1'000'000'000ull / 60;
+    if (const SDL_DisplayMode* mode =
+            SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window_.get()));
+        mode && mode->refresh_rate_numerator > 0 && mode->refresh_rate_denominator > 0) {
+        period_ns = 1'000'000'000ull * mode->refresh_rate_denominator /
+                    static_cast<std::uint64_t>(mode->refresh_rate_numerator);
+    }
+    return period_ns;
+}
+
+void GameApp::pace_to_refresh(std::uint64_t& pace_target_ns, std::uint64_t period_ns) const {
+    const std::uint64_t after_present_ns = SDL_GetTicksNS();
+    if (after_present_ns < pace_target_ns) {
+        SDL_DelayNS(pace_target_ns - after_present_ns);
+        pace_target_ns += period_ns;
+    } else {
+        // Present blocked past the target (or we fell behind): re-phase.
+        pace_target_ns = after_present_ns + period_ns;
+    }
+}
+
 AppInput GameApp::run_boot_attract() {
     // The boot presentation (sub_42B060 @0x42B060) — STRAIGHT-LINE, no loop.
     // The original's exact order:
@@ -1952,10 +1990,15 @@ AppInput GameApp::run_boot_attract() {
     // it first), so a per-screen call would restart the boot music every time.
     audio_.start_music(kBootMusicId);
 
+    // Escape ADVANCES one screen like every other accept key (present_screen
+    // maps Escape->Back, but sub_42B060 treats it as an advance): a single
+    // Escape on IPLOGO must step to HSLOGO, not short-circuit the whole boot
+    // chain into the menu. So Back falls through to the next present_screen
+    // here — only Quit (window close) short-circuits.
     AppInput ev = present_screen(logo_screen("IPLOGO"));
-    if (ev == AppInput::Quit || ev == AppInput::Back) return ev;
+    if (ev == AppInput::Quit) return ev;
     ev = present_screen(logo_screen("HSLOGO"));
-    if (ev == AppInput::Quit || ev == AppInput::Back) return ev;
+    if (ev == AppInput::Quit) return ev;
 
     // The one-shot title intro sting, fired right before the title image. In the
     // binary this is sub_427BFB(2800), which is NOT a fixed clip: it picks a
@@ -2031,6 +2074,12 @@ AppInput GameApp::present_menu() {
     // exactly: quit_confirm gates a small modal drawn over the menu backdrop
     // (same box-plus-FontTextures convention as EditorScreen's SaveConfirm).
     bool quit_confirm = false;
+    // Refresh-boundary pacing (see refresh_period_ns / run_match): the blind
+    // SDL_Delay(2) this replaced let the loop free-run at 300-500 Hz on
+    // Windows (present does not block), so the `frame`-driven trigger cursor
+    // animated far too fast. Pace to one animation step per real refresh.
+    const std::uint64_t period_ns = refresh_period_ns();
+    std::uint64_t pace_target_ns = SDL_GetTicksNS() + period_ns;
     while (true) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -2124,6 +2173,9 @@ AppInput GameApp::present_menu() {
                     // Return through the outer loop re-arms v14 -> MENU.RSS
                     // reloads from sample 0 (goto LABEL_2 at 30882).
                     audio_.start_music(kMenuMusicId);
+                    // Time spent in the editor must NOT count toward the 30 s
+                    // attract idle trigger — reseed the idle clock on return.
+                    menu_idle_since_ms_ = SDL_GetTicks();
                 }
                 continue;  // Ctrl+E itself never falls into the row switch
             }
@@ -2161,6 +2213,7 @@ AppInput GameApp::present_menu() {
                 menu_index_ = 5;
                 if (present_help_browser() == AppInput::Quit) return AppInput::Quit;
                 audio_.start_music(kMenuMusicId);  // outer-loop v14 re-arm
+                menu_idle_since_ms_ = SDL_GetTicks();  // help time is not idle
                 continue;
             }
             if (menu_alt && ev.key.key == SDLK_A) {
@@ -2172,6 +2225,7 @@ AppInput GameApp::present_menu() {
             if (menu_alt && ev.key.key == SDLK_D) {
                 audio_.play(20);
                 if (present_debug_info_modal() == AppInput::Quit) return AppInput::Quit;
+                menu_idle_since_ms_ = SDL_GetTicks();  // debug-window time is not idle
                 continue;
             }
 
@@ -2226,6 +2280,7 @@ AppInput GameApp::present_menu() {
                         // outer loop -> v14 re-arm -> MENU.RSS reloads from
                         // sample 0.
                         audio_.start_music(kMenuMusicId);
+                        menu_idle_since_ms_ = SDL_GetTicks();  // help time is not idle
                         break;
                     }
                     // A row we have not built yet (Editor) still plays the
@@ -2360,7 +2415,7 @@ AppInput GameApp::present_menu() {
                                 prompt, "", yes_label, no_label, 164, 0, 0);
         }
         SDL_RenderPresent(sdl_renderer_.get());
-        SDL_Delay(2);
+        pace_to_refresh(pace_target_ns, period_ns);
     }
 }
 
@@ -2656,6 +2711,11 @@ AppInput GameApp::present_goldman_wheel() {
     wheel.enter(goldman_lcg_, segment_steps);
 
     AppInput result = AppInput::Advance;
+    // Refresh-boundary pacing (see refresh_period_ns): the wheel advances one
+    // spin step per wheel.tick(), so a blind SDL_Delay(2) free-running at
+    // 300-500 Hz on Windows spun it far too fast. Pace to the real refresh.
+    const std::uint64_t period_ns = refresh_period_ns();
+    std::uint64_t pace_target_ns = SDL_GetTicksNS() + period_ns;
     while (!wheel.done()) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -2679,7 +2739,7 @@ AppInput GameApp::present_goldman_wheel() {
         SDL_RenderClear(sdl_renderer_.get());
         wheel.draw(sdl_renderer_.get(), cx, cy, rx, ry, freq_x, freq_y);
         SDL_RenderPresent(sdl_renderer_.get());
-        SDL_Delay(2);
+        pace_to_refresh(pace_target_ns, period_ns);
     }
 
     if (wheel.aborted()) {
@@ -2890,7 +2950,69 @@ AppInput GameApp::present_setup() {
         }
     };
 
+    // sub_414340 error modal (batch_0x410401.cpp ~1152/1176): the start
+    // guards below pop a WINZ-9-patch acknowledge box — the reason line over
+    // getstring(96), dark-red ink, dismissed by Enter/Space/Escape (nav-blip
+    // on any key) — drawn over the frozen setup frame. Returns Quit if the
+    // window closed while it was up, else Advance (the screen stays open).
+    auto show_error = [&](const std::string& reason) -> AppInput {
+        const std::string sub = assets_.getstring(96, "Cannot start the game!");
+        const std::string ok = assets_.getstring(27, " Ok ");
+        while (true) {
+            SDL_Event mev;
+            while (SDL_PollEvent(&mev)) {
+                if (mev.type == SDL_EVENT_QUIT) return AppInput::Quit;
+                if (mev.type != SDL_EVENT_KEY_DOWN) continue;
+                audio_.play(20);  // nav blip on any key
+                if (mev.key.key == SDLK_RETURN || mev.key.key == SDLK_KP_ENTER ||
+                    mev.key.key == SDLK_SPACE || mev.key.key == SDLK_ESCAPE)
+                    return AppInput::Advance;
+            }
+            audio_.update_music();
+            draw_frame();
+            draw_acknowledge_dialog(sdl_renderer_.get(), front_font_, &assets_.frontend_pcx("WINZ"),
+                                    reason, sub, ok, 164, 0, 0);
+            SDL_RenderPresent(sdl_renderer_.get());
+            SDL_Delay(2);
+        }
+    };
+    // Start guard 1 (sub_42223E, batch_0x410401.cpp 1148-1168): at least two
+    // ACTIVE slots, or in TEAM mode at least two DISTINCT team values among
+    // the active slots — else the game refuses to start.
+    auto count_ok = [&]() {
+        if (team_play_) {
+            bool seen0 = false, seen1 = false;
+            for (int i = 0; i < 10; ++i) {
+                if (setup_type_[i] == 0) continue;  // OFF slots don't count
+                (setup_team_[i] ? seen1 : seen0) = true;
+            }
+            return seen0 && seen1;
+        }
+        int active = 0;
+        for (int i = 0; i < 10; ++i)
+            if (setup_type_[i] != 0) ++active;
+        return active >= 2;
+    };
+    // Start guard 2 (sub_422085, batch_0x410401.cpp 1172): two ACTIVE HUMAN
+    // slots (KEYBOARD=2 or JOYSTICK=3) may not share the same input type AND
+    // sub-index — same keyboard set or same stick. CPU (1)/OTHER (4)/OFF (0)
+    // are excluded.
+    auto dup_controller = [&]() {
+        for (int i = 0; i < 10; ++i) {
+            if (setup_type_[i] != 2 && setup_type_[i] != 3) continue;
+            for (int j = i + 1; j < 10; ++j) {
+                if (setup_type_[j] != 2 && setup_type_[j] != 3) continue;
+                if (setup_type_[i] == setup_type_[j] && setup_sub_[i] == setup_sub_[j]) return true;
+            }
+        }
+        return false;
+    };
+
     bool waiting = true;
+    // Enter/Space accept debounce (mirrors present_map_select's 1 s
+    // accept_after_ms, 8100/8220-8228): ignore an accept for 1 s after entry
+    // so a held Enter carried from the previous screen can't blast the start.
+    std::uint64_t accept_after_ms = SDL_GetTicks() + 1000;
     while (waiting) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -2915,6 +3037,12 @@ AppInput GameApp::present_setup() {
             // omitted. Checked BEFORE the general dispatch below so 'C'
             // itself never falls into the row-navigation switch.
             if (k == SDLK_C) {
+                // CUMULATIVE, not consecutive (sub_410F81 pseudo.c 840,
+                // 1193-1197): ONLY the 'C' handler touches this counter — no
+                // other key resets it — so 5 total 'C' presses across the
+                // visit arm the picker. (The old any-other-key reset below
+                // required 5 CONSECUTIVE presses, which the original never
+                // demanded.)
                 if (++campaign_trigger_count_ == 5) {
                     campaign_trigger_count_ = 0;
                     audio_.play(10);  // accept sting (SFX 10), mirrors the editor trigger
@@ -2922,7 +3050,6 @@ AppInput GameApp::present_setup() {
                 }
                 continue;
             }
-            campaign_trigger_count_ = 0;  // any other key resets the counter
 
             if (k == SDLK_ESCAPE) {
                 audio_.play(20);
@@ -2957,10 +3084,32 @@ AppInput GameApp::present_setup() {
                 campaign_stage_index_ = 0;
                 return AppInput::Back;
             }
-            // Enter (< 0x20 branch in sub_410F81) leaves this screen and proceeds
-            // to match init / the LEVEL screen.
-            if (k == SDLK_RETURN || k == SDLK_KP_ENTER) {
-                audio_.play(10);
+            // Enter/Space (batch_0x410401.cpp 1148-1182: Space, 0x20, routes
+            // through the SAME accept path as Enter) leaves this screen and
+            // proceeds to match init / the LEVEL screen — but only past the
+            // debounce and the two start guards.
+            if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) {
+                audio_.play(20);  // any-key blip first (sub_427961(20))
+                if (SDL_GetTicks() < accept_after_ms) continue;  // held-Enter debounce
+                // Guard 2 first (sub_422085): same-controller humans -> error
+                // getstring(45) over getstring(96).
+                if (dup_controller()) {
+                    if (show_error(assets_.getstring(
+                            45, "Two players cannot use the same controls!")) == AppInput::Quit)
+                        return AppInput::Quit;
+                    continue;
+                }
+                // Guard 1 (sub_42223E): too few players/teams -> error
+                // getstring(46) (solo) or getstring(48) (team) over
+                // getstring(96).
+                if (!count_ok()) {
+                    const std::string reason =
+                        team_play_ ? assets_.getstring(48, "You need at least two teams!")
+                                   : assets_.getstring(46, "You need at least two players!");
+                    if (show_error(reason) == AppInput::Quit) return AppInput::Quit;
+                    continue;
+                }
+                audio_.play(10);  // accept sting
                 waiting = false;
                 break;
             }
@@ -2968,14 +3117,19 @@ AppInput GameApp::present_setup() {
             if (k == SDLK_UP)
                 cursor = (cursor + 9) % 10;  // 328
             else if (k == SDLK_DOWN)
-                cursor = (cursor + 1) % 10;  // 336
+                cursor = (cursor + 1) % 10;                    // 336
             else if (k == SDLK_RIGHT)
-                cycle_input_type(cursor);              // 333 sub_421E80
-            else if (k == SDLK_LEFT || k == SDLK_0) {  // 331 / '0'
-                setup_type_[cursor] = 0;               // sub_421E33(i,0,0)
+                cycle_input_type(cursor);                      // 333 sub_421E80
+            else if (k == SDLK_LEFT || k == SDLK_0 || k == SDLK_O) {  // 331 / '0' / 'o' (111)
+                setup_type_[cursor] = 0;                       // sub_421E33(i,0,0)
                 setup_sub_[cursor] = 0;
             } else if (k == SDLK_T) {  // 'T' team toggle (+84)
-                setup_team_[cursor] = setup_team_[cursor] ? 0 : 1;
+                // batch_0x410401.cpp 1206-1223: only an ACTIVE slot toggles;
+                // an OFF slot buzzes (SFX 40) and does nothing.
+                if (setup_type_[cursor] != 0)
+                    setup_team_[cursor] = setup_team_[cursor] ? 0 : 1;
+                else
+                    audio_.play(40);
             } else if (k == SDLK_F1) {
                 // sub_410F81 15432-15436: key 0x13B (F1) dispatches the SAME
                 // generic *.BM help browser as menu row 5 / the options
@@ -3272,7 +3426,6 @@ AppInput GameApp::present_map_select() {
                 break;
             }
             audio_.play(20);
-            const bool ctrl = (ev.key.mod & SDL_KMOD_CTRL) != 0;
             if (k == SDLK_UP || k == SDLK_DOWN)
                 row = (row + 1) % 2;  // 2 rows: either arrow toggles
             else if (row == 0 && k == SDLK_LEFT) {  // --level, wrap below -1
@@ -3281,13 +3434,22 @@ AppInput GameApp::present_map_select() {
             } else if (row == 0 && k == SDLK_RIGHT) {  // ++level, wrap above count-1 to -1
                 if (++level >= level_count) level = -1;
                 accept_after_ms = SDL_GetTicks() + 1000;
-            } else if (row == 1 && k == SDLK_LEFT) {  // wins -1 (Ctrl: -5, code 371)
-                wins -= ctrl ? 5 : 1;
-                if (wins < 1) wins = 1;
+            } else if (row == 1 && k == SDLK_LEFT) {  // wins -1
+                if (--wins < 1) wins = 1;
                 accept_after_ms = SDL_GetTicks() + 1000;
-            } else if (row == 1 && k == SDLK_RIGHT) {  // wins +1 (Ctrl: +5, code 372)
-                wins += ctrl ? 5 : 1;
+            } else if (row == 1 && k == SDLK_RIGHT) {  // wins +1
+                if (++wins > 100) wins = 100;
+                accept_after_ms = SDL_GetTicks() + 1000;
+            } else if (row == 1 && k == SDLK_PAGEUP) {
+                // wins +5 (batch_0x405B3A.cpp 1097-1128, code 372) — WINS row
+                // only, clamp 1..100. Rebound from the old invented Ctrl+Left/
+                // Right, which the original never used.
+                wins += 5;
                 if (wins > 100) wins = 100;
+                accept_after_ms = SDL_GetTicks() + 1000;
+            } else if (row == 1 && k == SDLK_PAGEDOWN) {  // wins -5 (code 371), WINS row only
+                wins -= 5;
+                if (wins < 1) wins = 1;
                 accept_after_ms = SDL_GetTicks() + 1000;
             }
         }

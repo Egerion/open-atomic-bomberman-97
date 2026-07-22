@@ -390,12 +390,12 @@ void HelpBrowser::on_key(SDL_Keycode key, AudioEngine& audio) {
     int count = static_cast<int>(entries_.size());
     switch (key) {
         case SDLK_UP:
-        case SDLK_W:
+            // Arrow-only: the native list widget has no W/S alias (the removed
+            // W/S cases were invented).
             row_ = (row_ + count - 1) % count;
             audio.play(20);
             break;
         case SDLK_DOWN:
-        case SDLK_S:
             row_ = (row_ + 1) % count;
             audio.play(20);
             break;
@@ -478,7 +478,9 @@ void HelpBrowser::draw(SDL_Renderer* ren) const {
                     : std::string(disabled_ ? "Online manual disabled." : "No help files found!");
         const std::string head =
             assets_ ? assets_->getstring(95, "NOTE!") : std::string("NOTE!");
-        const std::string ok = assets_ ? assets_->getstring(90, " Ok ") : std::string(" Ok ");
+        // sub_414340's Ok button is getstring(27) (batch_0x413AED.cpp:503),
+        // the SAME id every other port call site uses — not getstring(90).
+        const std::string ok = assets_ ? assets_->getstring(27, " Ok ") : std::string(" Ok ");
         draw_acknowledge_dialog(ren, *font_, assets_ ? &assets_->frontend_pcx("WINZ") : nullptr,
                                 head, body, ok, kErrorInkR, kErrorInkG, kErrorInkB);
         return;

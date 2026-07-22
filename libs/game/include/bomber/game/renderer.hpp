@@ -252,7 +252,8 @@ private:
     // 100-slot particle pool, matching the original's `dword_4621CC` array.
     // Each entry is an independent floating spark, screen-position fixed at
     // spawn time (NOT re-anchored to the player every frame), aged once per
-    // sim tick and retired after `goldman_anim_`'s own frame count.
+    // RENDER frame (in draw_world, matching sub_420E39's per-engine-frame
+    // cadence) and retired after `goldman_anim_`'s own frame count.
     struct GoldSparkle {
         bool active = false;
         float x = 0, y = 0;

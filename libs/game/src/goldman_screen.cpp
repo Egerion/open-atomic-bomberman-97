@@ -18,7 +18,12 @@ void GoldmanScreen::lissajous_xy(int a, int circle_steps, int cx, int cy, int rx
 
 void GoldmanScreen::draw_anim_step(SDL_Renderer* ren, const Anim& a, float x, float y) const {
     if (a.steps.empty()) return;
-    const Sprite& sp = a.steps[anim_step_index(frame_, a.steps.size())];
+    // STATIC frame 0 (sub_425C7F / sub_41DAA7(v, 0), batch_0x42583B.cpp:301 /
+    // batch_0x40330E.cpp:366): both the 6 prize icons and the ring pointer are
+    // drawn at ANI frame 0 — they never per-sprite animate. The visible spin
+    // is the wheel ROTATION (the Lissajous position each is placed at), not a
+    // frame cycle, so feeding an incrementing frame_ here was wrong.
+    const Sprite& sp = a.steps[0];
     if (!sp.tex) return;
     SDL_FRect d{x - static_cast<float>(sp.hx), y - static_cast<float>(sp.hy),
                 static_cast<float>(sp.w), static_cast<float>(sp.h)};

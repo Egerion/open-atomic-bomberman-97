@@ -236,14 +236,13 @@ void OptionsScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
     audio.play(20);
     switch (key) {
         case SDLK_UP:
-        case SDLK_W:
             // CONFIRMED off-by-one (pseudo.c 9086/9391-9392, `v168 = 18`):
             // wraps over kCursorRowCount (18), not kCount (19) — row 18 is
-            // never reachable. See options_screen.hpp's file doc.
+            // never reachable. See options_screen.hpp's file doc. Arrow-only
+            // (batch_0x4074DC.cpp:860,871): the old W/S aliases were invented.
             row_ = (row_ + kCursorRowCount - 1) % kCursorRowCount;
             break;
-        case SDLK_DOWN:
-        case SDLK_S: row_ = (row_ + 1) % kCursorRowCount; break;
+        case SDLK_DOWN: row_ = (row_ + 1) % kCursorRowCount; break;
         case SDLK_LEFT: activate_row(-1); break;
         case SDLK_RIGHT:
         case SDLK_RETURN:

@@ -151,14 +151,11 @@ std::uint32_t Renderer::gold_roll() {
 // main per-tick loop while `!dword_464938 && dword_4648BC` (goldman option on,
 // not the attract/no-match state) and a gold player is pending.
 void Renderer::update_gold_sparkles(const sim::State& s) {
-    // Age + retire (sub_420E39): the pool ages on the SIM tick clock (its own
-    // `dword_4621F0 != dword_464994` gate), not the render-frame clock — this
-    // runs from sample_movement, already gated to once per new tick. Lifetime
-    // = the "goldman" sequence's own frame count (`sub_41DA5C`'s return).
-    const int lifetime = static_cast<int>(goldman_anim_.steps.size());
-    for (auto& sp : gold_sparkles_) {
-        if (sp.active && (lifetime <= 0 || ++sp.age > lifetime)) sp.active = false;
-    }
+    // SPAWN only (sub_420D4E) — runs once per new sim tick via sample_movement.
+    // Aging/retirement + frame advance is NOT here: the original's sub_420E39
+    // ages each particle once per ENGINE FRAME (batch_0x420D4E.cpp:136), not
+    // per sim tick, so it lives in draw_world's per-frame sparkle pass instead
+    // (aging here at 20 Hz made the sparkles ~9x too slow and lingering).
     if (gold_player_ < 0) return;
     // getvalue(1010): twinkle duration in seconds; the file's own legend says
     // 0 = indefinitely. A fresh bomber::sim::Simulation is built per round
@@ -946,9 +943,20 @@ void Renderer::draw_world(const sim::State& s) {
     // Gold Bomberman twinkle overlay (docs/re/goldman-roulette.md §6): drawn
     // last so the sparkles read on top of the player sprite, matching the
     // original's dedicated post-pass (`sub_420E39`, called after the main
-    // per-player loop in `sub_420F07`).
-    for (const auto& sp : gold_sparkles_)
-        if (sp.active) draw_anim(goldman_anim_, static_cast<std::size_t>(sp.age), sp.x, sp.y);
+    // per-player loop in `sub_420F07`). Each particle's frame advances once
+    // per REAL ENGINE FRAME here (batch_0x420D4E.cpp:136), NOT per sim tick —
+    // draw_world runs on the render clock, so `sp.age` doubles as the frame
+    // index and the retirement counter, bounded by the sequence length.
+    const int sparkle_lifetime = static_cast<int>(goldman_anim_.steps.size());
+    for (auto& sp : gold_sparkles_) {
+        if (!sp.active) continue;
+        if (sparkle_lifetime <= 0 || sp.age >= sparkle_lifetime) {
+            sp.active = false;
+            continue;
+        }
+        draw_anim(goldman_anim_, static_cast<std::size_t>(sp.age), sp.x, sp.y);
+        ++sp.age;
+    }
 }
 
 void Renderer::draw_hud(const sim::State& s) {
