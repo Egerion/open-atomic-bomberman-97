@@ -1923,15 +1923,19 @@ bool GameApp::is_team_mode() const {
 }
 
 int GameApp::match_clinch() const {
-    // §1 v73: the default win-count clinch, or — in team mode with
-    // win_by_kills set (§1's "in team mode with win_by_kills set, the clinch
-    // instead compares the highest round-kill total against ... the target,
-    // breaking ties by requiring a single unique leader") — the kill-count
-    // clinch via results.hpp's win_by_kills_clinch(), so both call sites
-    // (run_app's Results handler and present_scoreboard) agree on whether
-    // the match is over.
+    // §1 v73 (sub_42A3F6, batch_0x4293E5.cpp:1189-1255): the clinch splits on
+    // TEAM mode (dword_464964). The team branch is ALWAYS wins-based; the
+    // kill-count clinch (win_by_kills_clinch: highest round-kill total >=
+    // target, unique leader v78==1) lives ONLY in the NON-team branch's
+    // dword_46497C sub-case (line 1243). win_by_kills is inherently a non-team
+    // feature — team play forces it OFF (batch_0x405B3A.cpp:685-686
+    // `if (dword_464964) dword_46497C = 0;`, mirrored at
+    // options_screen.cpp's activate_row). The old `is_team_mode() &&
+    // win_by_kills` gate was therefore DEAD (never true), silently falling the
+    // "Win Matches By Kill Total" mode through to the round-win loop. Both call
+    // sites (run_app's Results handler and present_scoreboard) share this gate.
     const sim::State& s = sim_.state();
-    if (is_team_mode() && options_.win_by_kills) {
+    if (!is_team_mode() && options_.win_by_kills) {
         std::array<bool, sim::kMaxPlayers> present{};
         for (int i = 0; i < sim::kMaxPlayers; ++i) present[i] = s.players[i].present;
         return win_by_kills_clinch(kill_count_, present, win_target_);
@@ -2636,24 +2640,31 @@ AppInput GameApp::present_scoreboard() {
             std::string outcome;
             std::uint8_t oc[3];
             if (clinched_player < 0) {
-                // "Still needs N" reports against whichever tally the active
-                // clinch mode actually compares (§1): kill_count_ under
-                // win_by_kills, win_count_ otherwise — keeps this line
-                // consistent with what clinched_player was decided from.
-                const auto& lead_tally =
-                    (team_mode && options_.win_by_kills) ? kill_count_ : win_count_;
-                int needed = win_target_ - *std::max_element(lead_tally.begin(), lead_tally.end());
-                if (needed < 0) needed = 0;
-                std::string fmt = team_mode ? assets_.getstring(121, "Team still needs %u to win")
-                                            : assets_.getstring(120, "Still need %u to win");
-                outcome = fmt_u(fmt, needed);
+                // Pre-clinch line (batch_0x4293E5.cpp:1262-1263):
+                // getstring(dword_46497C + 120) formatted with the FLAT target
+                // v60 = dword_464A7C — NOT the remaining count. The strings are
+                // 120 "(Match winner must score %u victories)" / 121 "(... %u
+                // kills)", so the id keys off win_by_kills (a non-team feature),
+                // not team mode, and always shows the total goal.
+                std::string fmt =
+                    options_.win_by_kills
+                        ? assets_.getstring(121, "(Match winner must score %u kills)")
+                        : assets_.getstring(120, "(Match winner must score %u victories)");
+                outcome = fmt_u(fmt, static_cast<unsigned>(win_target_));
                 oc[0] = 168;
                 oc[1] = 168;
                 oc[2] = 164;  // byte_49A624: RGB555 (20,20,20) grey
             } else {
-                if (team_mode) {
-                    std::string fmt = assets_.getstring(36, "TEAM %u WINS THE MATCH!");
-                    outcome = fmt_u(fmt, static_cast<unsigned>(setup_team_[clinched_player] + 1));
+                // Clinch line (batch_0x4293E5.cpp:1300-1310): win_by_kills ->
+                // getstring(36) "PLAYER %u WINS THE MATCH!" with the winning
+                // player NUMBER (v73+1); else getstring(35) "%s WINS THE MATCH!"
+                // with the winner name. The native has NO team-specific win
+                // string here — the former `team_mode ? "TEAM %u WINS"` gate
+                // AND that fallback text were both invented (id 36 is "PLAYER
+                // %u", and the selector is win_by_kills, not team mode).
+                if (options_.win_by_kills) {
+                    std::string fmt = assets_.getstring(36, "PLAYER %u WINS THE MATCH!");
+                    outcome = fmt_u(fmt, static_cast<unsigned>(clinched_player + 1));
                 } else {
                     std::string fmt = assets_.getstring(35, "%s WINS THE MATCH!");
                     outcome = fmt_s(fmt, "P" + std::to_string(clinched_player + 1));

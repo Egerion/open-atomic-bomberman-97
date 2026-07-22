@@ -41,25 +41,36 @@ DONE 2026-07-08"; `docs/re/frontend-flow.md` now reads "RESULTS tally tier
   Per-player ink: `sub_41672F(i)` (non-team) / `sub_4141F8(team)` (team
   mode) — the same colour helpers already pinned in
   `docs/re/player-colour.md` and `docs/re/setup-screens.md`.
-- **Match-clinch check (v73):** the loop tracks the first player/team whose
-  `sub_421AC8` (win count) reaches `dword_464A7C` (the configured "number of
-  wins to clinch the match", `num_to_win_match=` in options.ini). In team
-  mode with `win_by_kills` (`dword_46497C`) set, the clinch instead compares
-  the **highest round-kill total** (`sub_421B0F`) against `dword_464A7C`,
-  breaking ties by requiring a single unique leader (`v78 == 1`).
+- **Match-clinch check (v73):** the check splits on **team mode**
+  (`dword_464964`, `sub_42A3F6` batch_0x4293E5.cpp:1189-1255).
+  - **Team branch (1189-1221):** ALWAYS wins-based — the first team whose
+    `sub_421AC8` (win count) reaches `dword_464A7C` (the configured "number of
+    wins to clinch the match", `num_to_win_match=`). `win_by_kills` is never
+    read here.
+  - **Non-team branch (1222-1255):** if `win_by_kills` (`dword_46497C`) is set
+    it compares the **highest round-kill total** against `dword_464A7C`,
+    breaking ties by requiring a single unique leader (`v78 == 1`); otherwise
+    it is the same wins-based check.
+  CORRECTED 2026-07-22: `win_by_kills` is a **non-team** feature — team play
+  forces it OFF (`batch_0x405B3A.cpp:685-686`, mirrored at
+  `options_screen.cpp`'s `activate_row`), so the kill-clinch belongs on the
+  NON-team path. The earlier "in team mode with win_by_kills" wording here was
+  the root cause of an inverted, dead `is_team_mode() && win_by_kills` gate in
+  `game_app.cpp match_clinch()` (fixed the same day).
 - **Outcome line** — drawn after the per-player list, at **x =
   getvalue(800), y = getvalue(801), colour = getvalue(803)** (VALUELST
   `; player %u wins the match...` → `800,150,94,0,400`):
   - **No clinch yet (v73 == -1):** `getstring(dword_46497C + 120)` formatted
-    with `dword_464A7C` (the wins-needed number) — i.e. two different
-    strings (id 120 or 121) depending on the `win_by_kills` mode, both
-    telling the player how many wins/kills are still needed. Ink =
+    with `dword_464A7C` (the **flat target**, NOT the remaining count) — id 120
+    `"(Match winner must score %u victories)"` or id 121 `"(... %u kills)"`,
+    keyed on `win_by_kills` (a non-team feature), stating the TOTAL goal. Ink =
     `byte_49A624` (a distinct "still playing" colour).
-  - **Match clinched (v73 != -1):** `getstring(36)` (team: `"PLAYER %u WINS
-    THE MATCH!"`-style, formatted `v73+1`) or `getstring(35)` (non-team,
-    formatted with the winner name string) depending on `dword_46497C`.
-    Ink = `byte_497F8F` (a distinct "match over" colour, different from the
-    still-playing ink above).
+  - **Match clinched (v73 != -1):** keyed on `win_by_kills` (`dword_46497C`),
+    NOT team mode: set → `getstring(36)` = `"PLAYER %u WINS THE MATCH!"`
+    formatted with the winning player number `v73+1`; unset → `getstring(35)`
+    = `"%s WINS THE MATCH!"` formatted with the winner name. There is NO
+    team-specific "TEAM wins" string on this path. Ink = `byte_497F8F` (a
+    distinct "match over" colour, different from the still-playing ink above).
 - **Sound:** the winner voice group **`sub_427BFB(2000)`** ("we have a
   winner", already pinned in frontend-flow.md) fires as soon as `v73 != -1`
   is computed — i.e. it plays under the RESULTS scoreboard itself, not only
