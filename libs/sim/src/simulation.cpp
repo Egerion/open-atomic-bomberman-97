@@ -407,17 +407,16 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, AISystem* ai_sys, 
         // want_godir = -1 and skip the whole opposite-key / reversed-disease
         // decode for it — the mover then takes the idle branch (stage actors
         // still drive it), never a keyed one.
-        // KNOWN DIVERGENCE (W3-A audit, 2026-07-22): the native player input
-        // direction (+46, packed as the high word of +44) is STICKY — it is
-        // never reset per-frame; the AI/human writers leave it stale when they
-        // don't command a new direction, so the mover coasts on the last
-        // direction. This port instead rebuilds want_godir fresh each sub-frame
-        // (default -1 = stop) — so an AI whose behaviour chain writes nothing
-        // (behave_walk_path's no-safe-neighbour case; a fully-passed chain)
-        // STOPS where the native keeps gliding. A faithful fix needs the exact
-        // +44/+46 mover-consumption + human-key-release-stop semantics REd first
-        // (packed field, multiple write paths) — not yet implemented; hashed
-        // (AI replays) but golden-safe (no golden spawns an AI).
+        // Rebuilding want_godir = -1 fresh each sub-frame IS faithful: sub_41F29B
+        // resets the native input direction +46 (`v111[23] = -1`, the word at
+        // offset 46) UNCONDITIONALLY at the top of every per-frame pass
+        // (batch_0x41F29B.cpp:329), BEFORE the input gate re-writes it — so a
+        // human who holds no key, or an AI whose behaviour chain commits no
+        // direction, is left at -1 and STOPS (the `+46 != -1` movement gate at
+        // :394 fails). The W3-A audit's "+46 is sticky / never reset" claim was
+        // a FALSE POSITIVE (2026-07-22): its `"+ 46) ="` grep missed this
+        // index-notation reset. So the port's stop-when-the-chain-writes-nothing
+        // is exact, not a divergence — verified, no change.
         int want_godir = -1;
         if (!sub_stunned && !frozen) {
             const bool up = sub_in.up, down = sub_in.down, left = sub_in.left,
