@@ -558,6 +558,24 @@ MatchConfig pillars_config() {
 // hashes recaptured (below). B/C/D unaffected (no kicked/belt bomb in their
 // paths); goldens headless 49/49 green + visual goldens 5/5 re-recaptured. The
 // rover +100 (a DIFFERENT sub with no backoff) is NOT affected and stays.
+// UPDATE 2026-07-22 (spawn-clear moved from a setup radius-2 pocket to the
+// faithful in-play radius-0, docs/re/facts.md "Spawn-pocket clear" + setup.cpp
+// + simulation.cpp player_turn): the original places a brick ON the spawn and
+// clears NO pocket (proven by a native fill probe); the single occupied tile is
+// opened in play on the player's first turn (sub_41E61E case 4), and a boxed-in
+// AI stalls instead of self-killing. Two goldens move:
+//   - B (dense all-brick 4-corner board): every spawn tile is now a brick at
+//     setup (opened on tick 1), and the players are boxed rather than sitting in
+//     a radius-2 pocket -- the AI trajectories and the whole run diverge. Setup
+//     hash + all 6 checkpoints recaptured.
+//   - C (pillars board with a deliberate (2,0) test brick): the removed radius-2
+//     pocket used to EAT that brick (it sits 2 tiles right of spawn (0,0)); the
+//     radius-0 clear leaves it, so the trigger-bomb run diverges. Its single
+//     hash recaptured.
+//   - A/D/E BYTE-IDENTICAL (verified: they still pass): A is empty; D and E use
+//     the pillars board with spawns on already-Blank tiles and no test brick
+//     within a spawn's old radius-2, so the removed setup clear changed nothing
+//     for them. The clear draws no RNG. headless 49/49 green.
 TEST_CASE("golden A: empty state, 10000 ticks") {
     Simulation a;
     a.state().rng = 42u;
@@ -589,7 +607,7 @@ TEST_CASE("golden B: 4-player brick match with all abilities") {
     cfg.born_with[static_cast<int>(PowerupType::Spooger)] = true;
     cfg.born_with[static_cast<int>(PowerupType::Jelly)] = true;
     Simulation s(cfg);
-    CHECK(s.hash() == 0x9d2e691cfae15d3aull);  // setup itself is pinned (setup F1 recapture 2026-07-20)
+    CHECK(s.hash() == 0x351ebb3e2d1a822dull);  // setup (spawn-clear radius-0 recapture 2026-07-22)
 
     // Recaptured 2026-07-12 (canonical frame cadence, facts.md "Canonical
     // frame cadence"): the walk budget accrues per 60 fps frame with the
@@ -599,12 +617,12 @@ TEST_CASE("golden B: 4-player brick match with all abilities") {
     // and E's bounce-count + veer-RNG assertions passed unchanged, pinning
     // that the choreography itself still plays out.
     static constexpr std::uint64_t kExpected[6] = {
-        0x608a718e0f0f7f5eull,  // tick 500  (setup F1 recapture 2026-07-20)
-        0xa4e6ced6f087779cull,  // tick 1000
-        0xd941f8ebb9f0f797ull,  // tick 1500
-        0xd82e656367a1dc66ull,  // tick 2000
-        0x510710fdce69da65ull,  // tick 2500
-        0x5d86b9c91e3a4340ull,  // tick 3000
+        0x56992b4865e8fb69ull,  // tick 500  (spawn-clear radius-0 recapture 2026-07-22)
+        0x9999016346801667ull,  // tick 1000
+        0x9759f29187ce031bull,  // tick 1500
+        0xe92d454dc191cc23ull,  // tick 2000
+        0x0c65f86d697d80dfull,  // tick 2500
+        0x693461cd57893e22ull,  // tick 3000
     };
     for (std::uint64_t t = 0; t < 3000; ++t) {
         s.tick(pattern(t));
@@ -628,7 +646,12 @@ TEST_CASE("golden C: trigger bombs and a fast hurry phase") {
     // Recaptured again 2026-07-20 (setup F1 rejection-sampling scatter — see the
     // file-level BATCH 2 UPDATE note): C's default positive spawn_counts now
     // draw the rejection-sampling stream at setup, shifting the tick-0 RNG.
-    CHECK(s.hash() == 0x0df571426a3b1c79ull);
+    // Recaptured again 2026-07-22 (spawn-clear radius-0 — see the file-level
+    // UPDATE note): the radius-2 setup pocket used to EAT this scenario's (2,0)
+    // test brick (2 tiles right of spawn (0,0)); the faithful radius-0 in-play
+    // clear leaves it, so the trigger-bomb scenario now interacts with that
+    // brick and the whole run diverges.
+    CHECK(s.hash() == 0x45c6fdda28a8085bull);
 }
 
 TEST_CASE("golden D: the disease gauntlet") {

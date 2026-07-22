@@ -103,8 +103,21 @@
 # capture pipeline is deterministic and the move is the intended consequence.
 # Rovers keep their own +100 (a DIFFERENT sub, sub_401B5C, with no backoff --
 # genuinely nets one extra pixel/frame). headless 49/49 green at recapture.
-walking                 10    d613b1cb1cc1008762179a171a4b0c51776212aabfbcd415f5b471fb143869e8
-bomb_pulse               40    f23407d602f2d25df6736e6b64a8e45c177fdbac462c54f3c12df5884ae12048
-explosion_mid_flame     65    d4c0c2537325d30a161f583fa85b1992ad55c5cdb3fbd567dd35aaede0e49d64
-brick_crumble           68    e2ebb5881cff10baf2f83152760032304a8dfb4b01e31d29a5731e2d27cb8aa1
-powerup_revealed        76    6e027a63a70a2083d851f2793ac4cae618475ea7cd94563d2f1ad49a9c0009b9
+# ALL FIVE recaptured 2026-07-22 (spawn-clear moved to faithful in-play
+# radius-0, facts.md "Spawn-pocket clear" + setup.cpp + simulation.cpp
+# player_turn): the original leaves a brick ON the spawn and clears NO pocket
+# (proven by a native fill probe); the single occupied spawn tile opens in play
+# on the player's first turn, not a radius-2 pocket at setup. The demo's two
+# scripted players spawn at BASIC.SCH tiles (10,8) and (6,10) (both brick under
+# the demo's fixed seed), so their old radius-2 pockets are now bricks -- the
+# board differs from tick 0 and the whole bomb/flame/brick timeline shifts.
+# Pixel-diffed walking (t10) vs the previous board: the change is confined to
+# the lower-centre playfield around those two spawns (x360-919 y568-927, TL/TR
+# quadrants byte-identical), coherent with restored spawn-pocket bricks + a
+# retimed cascade -- the renderer is UNCHANGED, this is a pure sim-board shift,
+# same class as test_golden B/C moving. headless 49/49 green at recapture.
+walking                 10    a940bb5d091c2a342927777d2a04282ce991906d5e2451f8f91898fed477b89c
+bomb_pulse               40    82e756a270b778ecfca9c3f469a1e48761739fe23782e18512bcaa0d13bccd87
+explosion_mid_flame     65    ef213069ac25ca21f2d9c3ed59dd75dfd0645ae83616bfdbbb52f9ff1747ea36
+brick_crumble           68    4782bd9587a113281c8f0548a7d1abb8a34e499f702775ded4d604652a682c3a
+powerup_revealed        76    2ab377bae2a28253e85643a6baad76293ecc117b1553bfe2597a7c116d784dd4

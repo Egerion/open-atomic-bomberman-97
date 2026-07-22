@@ -142,6 +142,26 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, AISystem* ai_sys, 
                  StageActorSystem& stage, MovementSystem& movement, PowerupSystem& powerups,
                  DiseaseSystem& diseases) {
     Player& p = s.players[i];
+
+    // Spawn-tile brick clear (sub_41E61E case 4, batch_0x41DAA7.cpp:660-664, and
+    // its AI-path equivalent): a player occupying a Brick tile clears it to
+    // Blank. Movement is brick-blocked, so a player never steps ONTO a brick
+    // during normal play -- this only ever fires at spawn, opening the single
+    // spawn tile that a dense scheme's random fill leaves bricked (~90% of the
+    // time; the original places a brick there and does NOT clear a pocket --
+    // facts.md "Spawn-pocket clear", proven 2026-07-21 by a native fill probe).
+    // RADIUS-0: only the occupied tile, NOT a pocket. Verified against the
+    // native (aispawn oracle scenario): the spawn brick clears on tick 1 with
+    // no bomb, and a boxed-in AI then stalls (behave_walk_path's "nowhere safe
+    // to step" branch returns 1, blocking blast-bricks) instead of self-killing
+    // -- which is why no wider pocket is needed. Draws no RNG.
+    {
+        const int ptx = p.tile_x(), pty = p.tile_y();
+        if (ptx >= 0 && ptx < kGridWidth && pty >= 0 && pty < kGridHeight &&
+            s.cells[pty][ptx] == Cell::Brick)
+            s.cells[pty][ptx] = Cell::Blank;
+    }
+
     // The tick's EFFECTIVE input for the bomb-action tail: a human's sample
     // as-is; for an AI, the action-key edges are OR-accumulated from its
     // per-sub-frame decisions in the loop below (the original consumes +56/

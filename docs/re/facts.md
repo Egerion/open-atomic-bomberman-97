@@ -5102,45 +5102,47 @@ clears it** — a player spawns boxed in and must bomb its way out (the classic
 high-density-scheme opening). No emergent mechanism, no out-of-range code: the
 pocket simply does not exist in the original.
 
-**Therefore the port's clear is a DELIBERATE DIVERGENCE, not a faithful port.**
-Kept as a pragmatic workaround (below), but re-labelled honestly: the true
-root cause of the "first-round AI mass-suicide" is the port's own AI-flee
-logic failing at the boxed-in bomb-your-way-out opening that the ORIGINAL's AI
-handles — the pocket clear MASKS that AI bug rather than reproducing an
-original behaviour. The faithful fix is to make the clean-room AI survive a
-spawn brick box the way `sub_40A1C6`'s does; until then the clear stays. The
-"BM95 screenshots show ~2-tile pockets" observation that motivated the widen
-is now suspect (different scheme/density, or post-opening bricks already
-bombed) and should NOT be treated as evidence of a setup-time clear.
+**FAITHFUL FIX LANDED 2026-07-22.** The setup radius-2 pocket clear was a
+DIVERGENCE; it is now deleted. Two findings from the native drove the fix:
+1. **The real clear is `sub_41E61E` case 4** (batch_0x41DAA7:660-664): a player
+   occupying a Brick tile clears it (`if sub_425FB9==2 -> sub_425F79(...,0)`).
+   Movement is brick-blocked, so this only ever fires at spawn — opening the
+   single OCCUPIED tile, radius-0, IN PLAY on the first tick (verified via the
+   `aispawn` oracle scenario: the spawn tile goes 2->0 at tick 1, no bomb).
+   Ported into `simulation.cpp` `player_turn`; `setup.cpp` clears nothing.
+2. **A boxed-in AI does not self-kill because it never drops.** Across 20 seeds
+   the native AI (real dense board, `aispawn`) survives 40/40 and drops ZERO
+   bombs. `sub_40AD8D` (blast-bricks) has no flee guard, but the priority
+   behaviour chain (`off_45BA78`) never REACHES it: `sub_40B20F`'s (behaviour 2)
+   danger-clear branch, finding NO walkable+safe neighbour (fully boxed),
+   returns 1 (stall) and blocks behaviours 3-7 (ai.md §3.2 line 245). The
+   clean-room `behave_walk_path` ALREADY implemented this correctly — so NO AI
+   code change was needed. The old radius-1 suicide happened only because the
+   radius-2 *setup* clear (and its radius-1 predecessor) gave the AI a small
+   pocket to walk INTO and blast-suicide; with the faithful radius-0 the AI is
+   fully boxed and its own stall logic keeps it alive, exactly like the native.
 
-**The port.** `libs/sim/src/setup.cpp` widens the cleared shape from the old
-radius-1 "plus" (5 cells) to a radius-2 orthogonal "plus" (9 cells: the
-spawn tile + 2 tiles in each of the 4 cardinal directions — NOT a diamond,
-NOT diagonals). This is the smallest shape that (a) matches live observation
-of the running original — BM95.EXE screenshots taken this session show each
-corner spawn opening with a cross/plus pocket whose arms reach ~2 tiles, not
-1 — and (b) is actually sufficient: a flame-2 bomb dropped on the spawn tile
-no longer has its blast seal every cell of the pocket, giving the AI's flee
-logic room to reach a tile outside its own blast before the fuse expires.
-Empirically verified in `tests/test_spawn_pocket.cpp`: on a golden-B-shaped
-dense 4-corner board with all 4 slots AI-controlled and no human input at
-all, every player survives the first 200 ticks (10 s) under the fix; reverting
-to the old radius-1 shape drops `alive_count` from 4 to 2 in the same window
-(checked by hand while pinning the test, not left in the suite).
+So the "first-round AI mass-suicide" was never an AI bug — it was the invented
+wide setup clear. The "BM95 screenshots show ~2-tile pockets" observation that
+motivated the widen was wrong (a different scheme/density, or bricks already
+bombed open). test_spawn_pocket.cpp now pins the radius-0 shape + the boxed-AI
+survival; goldens B/C recaptured (dense/test-brick boards), A/D/E byte-identical.
 
-The clear draws no RNG (a deterministic cell-array write keyed off already-
-resolved spawn coordinates), so this is a DELIBERATE but RNG-neutral
-behaviour change — see `tests/test_golden.cpp`'s 2026-07-19 UPDATE note for
-the golden-hash recapture this forced (goldens B and C, whose boards have
-real Brick cells within a spawn's new radius-2 reach; A/D/E are byte-
-identical, proven before recapturing).
+**The port (as shipped 2026-07-22).** `libs/sim/src/setup.cpp` clears NO
+pocket. The single occupied spawn tile is opened in play by
+`simulation.cpp`'s `player_turn` (the `sub_41E61E` case-4 radius-0 rule), and
+a boxed-in AI stalls via `behave_walk_path` — see the FAITHFUL FIX section
+above. The clear draws no RNG (a deterministic cell write keyed off the
+player's own tile), a DELIBERATE but RNG-neutral behaviour change — see
+`tests/test_golden.cpp`'s 2026-07-22 UPDATE note for the recapture it forced
+(goldens B and C; A/D/E byte-identical, proven before recapturing).
+`tests/test_spawn_pocket.cpp` pins both halves: the radius-0 shape (spawn tile
+Brick at setup, Blank after tick 1, neighbours still Brick) and the boxed-AI
+survival (4 AI, 200 ticks, all alive).
 
-**No residual uncertainty about the mechanism** (as of the 2026-07-21 native
-probe): it is proven absent. The open item is now a PORT question, not an RE
-one — replace the divergent pocket clear with a faithful AI-flee fix that lets
-a clean-room AI escape a spawn brick box, then delete the clear and recapture
-goldens B/C. Tracked as the spawn-pocket follow-up, not a "still guessed"
-citation.
+**No residual uncertainty.** The mechanism is proven (native fill probe +
+aispawn survival), ported faithfully, and the divergent setup clear is gone.
+Nothing is left open here.
 
 ## Brick-reveal cure roll (empty hook, RNG-count only) — CONFIRMED (2026-07-20, `sub_425107`/`sub_42BE0B`)
 
