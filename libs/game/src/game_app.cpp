@@ -1426,6 +1426,55 @@ bool GameApp::reload_scheme_from_name(const std::string& name) {
     return true;
 }
 
+std::string GameApp::present_scheme_filename_prompt(const std::string& seed) {
+    // sub_42E938 line-edit for the save-as target (sub_4028D2 exit,
+    // batch_0x402150.cpp:645-648): getstring(736) "Enter schemefilename (or
+    // press <Enter>):", max 30 chars, seeded with the source filename. Enter on
+    // the seed (or an empty box) keeps the seed; Escape cancels back to the seed
+    // too — the original writes byte_4648C4 either way, so both return `seed`.
+    // Returns the chosen stem (no extension; the caller sanitises + appends .SCH,
+    // the sub_40497C force-extension step). Interactive-only (never the demo).
+    const std::string label =
+        assets_.getstring(736, "Enter schemefilename (or press <Enter>):");
+    std::string entry = seed;
+    std::string result = seed;
+    SDL_StartTextInput(window_.get());
+    bool waiting = true;
+    while (waiting) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_EVENT_QUIT) {
+                waiting = false;  // result stays `seed`
+                break;
+            }
+            if (ev.type == SDL_EVENT_TEXT_INPUT) {
+                if (ev.text.text && entry.size() < 30) entry += ev.text.text;  // 30-char cap
+            } else if (ev.type == SDL_EVENT_KEY_DOWN) {
+                if (ev.key.key == SDLK_BACKSPACE) {
+                    if (!entry.empty()) entry.pop_back();
+                } else if (ev.key.key == SDLK_RETURN || ev.key.key == SDLK_KP_ENTER) {
+                    audio_.play(10);  // accept sting
+                    result = entry.empty() ? seed : entry;  // "or press <Enter>" keeps the seed
+                    waiting = false;
+                } else if (ev.key.key == SDLK_ESCAPE) {
+                    audio_.play(20);  // nav blip
+                    result = seed;  // cancel: keep the source filename
+                    waiting = false;
+                }
+            }
+        }
+        audio_.update_music();
+        SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
+        SDL_RenderClear(sdl_renderer_.get());
+        draw_text_entry_dialog(sdl_renderer_.get(), front_font_, 180.0f, label, entry, "Done",
+                               "Cancel");
+        SDL_RenderPresent(sdl_renderer_.get());
+        SDL_Delay(2);
+    }
+    SDL_StopTextInput(window_.get());
+    return result;
+}
+
 void GameApp::present_editor() {
     // The hidden scheme editor (docs/re/results-and-options.md §5): the
     // chooser (sub_403184) -> optionally the *.SCH file picker (sub_407582)
@@ -1470,6 +1519,10 @@ void GameApp::present_editor() {
 
         std::optional<assets::sch::Scheme> initial;
         bool opened = false;
+        // The SOURCE filename stem (byte_4648C4's seed) when editing an existing
+        // scheme — the faithful save-as prompt defaults to it so a save writes
+        // BACK to the source, not a name-derived sibling. Empty for a New scheme.
+        std::string source_stem;
         if (action == EditorChooserResult::New) {
             opened = true;  // sub_4028D2(1): blank board, EditorScreen::enter(nullopt, ...)
         } else if (action == EditorChooserResult::EditExisting) {
@@ -1493,6 +1546,7 @@ void GameApp::present_editor() {
             if (!picker.cancelled() && !picker.empty()) {
                 try {
                     initial = assets::sch::load(picker.selected());
+                    source_stem = picker.selected().stem().string();  // byte_4648C4 seed
                     opened = true;
                 } catch (const std::exception&) {
                     opened = false;  // corrupt/unreadable file: fall back to the chooser
@@ -1592,18 +1646,25 @@ void GameApp::present_editor() {
         }
         SDL_StopTextInput(window_.get());
 
-        // §5: exit writes through sub_403C16 — our assets::sch::write() — on
-        // a confirmed save. Written schemes go to the install's DATA/
-        // SCHEMES dir (the SAME place the game loads them, §3's "Scheme
-        // File" row / init()'s scheme_path), NEVER the repo. The file name
-        // is derived from the in-editor -N name (§5 'N'/'n'); an empty name
-        // falls back to a generic "EDITED.SCH" rather than inventing a
-        // prompt-less silent overwrite of BASIC.SCH.
+        // §5: exit writes through sub_403C16 — our assets::sch::write() — on a
+        // confirmed save. Written schemes go to the install's DATA/SCHEMES dir
+        // (the SAME place the game loads them), NEVER the repo. Faithful save-as
+        // (sub_4028D2 exit, batch_0x402150.cpp:645-649): the original pops a
+        // getstring(736) filename text-entry SEEDED with the source filename
+        // (byte_4648C4) and writes to whatever it holds — so editing an existing
+        // scheme and accepting the prompt overwrites the SOURCE. The port used
+        // to derive the name from the -N field, which turned "edit BASIC.SCH ->
+        // save" into a stray sibling instead of an update. Seed with the source
+        // stem when editing existing, else the -N name, else "EDITED".
         if (editor.save_requested()) {
             assets::sch::Scheme out = editor.grid().to_scheme();
-            std::string file_stem = out.name.empty() ? std::string("EDITED") : out.name;
+            const std::string seed =
+                !source_stem.empty() ? source_stem
+                                     : (out.name.empty() ? std::string("EDITED") : out.name);
+            std::string file_stem = present_scheme_filename_prompt(seed);
             for (auto& c : file_stem)
                 if (!std::isalnum(static_cast<unsigned char>(c))) c = '_';
+            if (file_stem.empty()) file_stem = "EDITED";  // never write a bare ".SCH"
             std::filesystem::path schemes_dir = opts_.game_dir / "DATA" / "SCHEMES";
             std::error_code ec;
             std::filesystem::create_directories(schemes_dir, ec);

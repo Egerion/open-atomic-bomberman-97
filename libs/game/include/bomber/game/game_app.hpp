@@ -239,6 +239,10 @@ private:
     // install's DATA/SCHEMES dir (never the repo) and reloads scheme_ so the
     // edit is immediately selectable through the existing scheme path.
     void present_editor();
+    // The scheme editor's save-as filename line-edit (sub_42E938, getstring
+    // 736), seeded with `seed` (the source filename when editing existing).
+    // Returns the chosen stem; Enter-on-empty or Escape returns `seed`.
+    std::string present_scheme_filename_prompt(const std::string& seed);
     // The hidden campaign-mode picker (docs/re/campaign.md, sub_4015C6):
     // reached ONLY via present_setup()'s raw 'C'x5 trigger (mirrors
     // present_editor's Ctrl+E x6 pattern) — there is no menu row. Globs
