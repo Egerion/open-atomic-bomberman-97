@@ -282,6 +282,23 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
             sdl::TexturePtr tex{make_texture(ren, img, SDL_SCALEMODE_NEAREST, snap)};
             powerups_[i] = {tex.get(), img.width, img.height, 0, 0};
             powerup_textures_.push_back(std::move(tex));
+            // Optional HD icon (DATA_HD/RES/POW*.PCX), truecolour + LINEAR, kept
+            // at the classic Sprite geometry — only the static-fallback draw
+            // path uses these (the animated POWERS.ANI HD is the primary route).
+            auto hp = game_dir / "DATA_HD" / "RES" / (std::string(kPowFiles[i]) + ".PCX");
+            if (fs::exists(hp)) {
+                try {
+                    auto himg = assets::pcx::load(hp);
+                    sdl::TexturePtr htex{make_texture(ren, himg, SDL_SCALEMODE_LINEAR, nullptr)};
+                    if (htex) {
+                        powerups_[i].tex_hd = htex.get();
+                        powerup_textures_.push_back(std::move(htex));
+                    }
+                } catch (const std::exception& e) {
+                    std::fprintf(stderr, "HD powerup icon '%s' skipped: %s\n", kPowFiles[i],
+                                 e.what());
+                }
+            }
         }
 
         // Death animations: every 'die green N' sequence across XPLODE*.ANI.
@@ -290,9 +307,58 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
             if (!fs::exists(p)) continue;
             AniTextures ani;
             ani.load(ren, p, snap);
+            // HD overlay BEFORE collecting so the death Sprites carry tex_hd
+            // (and build_player_sets' recolor propagates it to the coloured pools).
+            auto hp = game_dir / "DATA_HD" / "ANI" / ("XPLODE" + std::to_string(i) + ".ANI");
+            if (fs::exists(hp)) {
+                try {
+                    ani.load_hd_overlay(ren, hp);
+                } catch (const std::exception& e) {
+                    std::fprintf(stderr, "HD XPLODE%d skipped: %s\n", i, e.what());
+                }
+            }
             collect_death_anims(ani, deaths_);
             xplode_.push_back(std::move(ani));
         }
+
+        // ---- HD ANI overlays (DATA_HD/ANI/<NAME>.ANI) --------------------------
+        // Optional truecolour 4x re-encodes of the classic match ANIs. Each is a
+        // 1:1 frame upscale, uploaded LINEAR + un-snapped inside the AniTextures
+        // it overlays; a missing/mismatched file is silently ignored (classic
+        // look). Loaded here so the per-player recolour in build_player_sets
+        // (run afterwards) propagates the HD frames into the coloured sets too.
+        const auto hd_ani = game_dir / "DATA_HD" / "ANI";
+        auto hd_ov = [&](AniTextures& t, const std::string& file) {
+            auto p = hd_ani / file;
+            if (!fs::exists(p)) return;
+            try {
+                t.load_hd_overlay(ren, p);
+            } catch (const std::exception& e) {
+                std::fprintf(stderr, "HD ANI '%s' skipped: %s\n", file.c_str(), e.what());
+            }
+        };
+        hd_ov(bombs_, "BOMBS.ANI");
+        hd_ov(duds_, "DUDS.ANI");
+        hd_ov(flame_, "MFLAME.ANI");
+        hd_ov(stand_, "STAND.ANI");
+        hd_ov(walk_, "WALK.ANI");
+        hd_ov(kick_, "KICK.ANI");
+        hd_ov(shadow_, "SHADOW.ANI");
+        hd_ov(hurry_, "HURRY.ANI");
+        hd_ov(kfont_, "KFONT.ANI");
+        hd_ov(powers_, "POWERS.ANI");
+        hd_ov(conveyor_, "CONVEYOR.ANI");
+        hd_ov(extras_, "EXTRAS.ANI");
+        hd_ov(aliens1_, "ALIENS1.ANI");
+        hd_ov(trigbomb_, "TRIGANIM.ANI");
+        for (int f = 0; f < kCornerFiles; ++f)
+            hd_ov(corner_[f], "CORNER" + std::to_string(f) + ".ANI");
+        for (int f = 0; f < kBwalkFiles; ++f)
+            hd_ov(bwalk_[f], "BWALK" + std::to_string(f + 1) + ".ANI");
+        for (int f = 0; f < kPunchFiles; ++f)
+            hd_ov(punch_[f], "PUNBOMB" + std::to_string(f + 1) + ".ANI");
+        for (int f = 0; f < kPupFiles; ++f)
+            hd_ov(pickup_[f], "PUP" + std::to_string(f + 1) + ".ANI");
     } catch (const std::exception& e) {
         std::fprintf(stderr, "asset load failed: %s\n", e.what());
         return false;
@@ -392,6 +458,27 @@ bool AssetStore::load_stage(int stage) {
         xbrick_.load(ren_,
                      game_dir_ / "DATA" / "ANI" / ("XBRICK" + std::to_string(stage) + ".ANI"),
                      &colorpal_);
+        // Optional HD overlays for the per-stage tiles + crumbling bricks
+        // (DATA_HD/ANI/TILES<n>.ANI, XBRICK<n>.ANI). Loaded before resolve_stage
+        // resolves the solid/brick/burn sequences, so those Sprites carry tex_hd.
+        {
+            auto tp = game_dir_ / "DATA_HD" / "ANI" / ("TILES" + std::to_string(stage) + ".ANI");
+            if (fs::exists(tp)) {
+                try {
+                    tiles_.load_hd_overlay(ren_, tp);
+                } catch (const std::exception& e) {
+                    std::fprintf(stderr, "HD TILES%d skipped: %s\n", stage, e.what());
+                }
+            }
+            auto xp = game_dir_ / "DATA_HD" / "ANI" / ("XBRICK" + std::to_string(stage) + ".ANI");
+            if (fs::exists(xp)) {
+                try {
+                    xbrick_.load_hd_overlay(ren_, xp);
+                } catch (const std::exception& e) {
+                    std::fprintf(stderr, "HD XBRICK%d skipped: %s\n", stage, e.what());
+                }
+            }
+        }
     } catch (const std::exception& e) {
         std::fprintf(stderr, "stage %d load failed: %s\n", stage, e.what());
         return false;

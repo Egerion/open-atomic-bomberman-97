@@ -36,6 +36,13 @@ struct Sprite {
     // docs/re/facts.md "Flame draw offset"), which reads it explicitly at its
     // own draw site. Every other caller must keep ignoring these fields.
     int dx = 0, dy = 0;
+    // Optional HD override texture (DATA_HD/ANI, 4x de-dithered truecolour). The
+    // classic w/h/hx/hy above are KEPT unchanged (1x logical geometry), so
+    // positioning is identical; the renderer just samples this higher-res
+    // texture into the same logical dst rect when hd_enabled() — the exact
+    // trick the front-end HD PCX path uses (asset_store.cpp frontend_pcx). Null
+    // when no HD ANI override was authored for this frame -> classic tex used.
+    SDL_Texture* tex_hd = nullptr;
 };
 
 // A resolved animation: one Sprite per sequence step.
@@ -88,7 +95,10 @@ public:
             reset();
             data_ = std::move(o.data_);
             textures_ = std::move(o.textures_);
+            hd_textures_ = std::move(o.hd_textures_);
+            hd_images_ = std::move(o.hd_images_);
             o.textures_.clear();
+            o.hd_textures_.clear();
         }
         return *this;
     }
@@ -100,6 +110,18 @@ public:
     // used for the classic map art (tiles/bricks), NOT front-end or HD sets.
     void load(SDL_Renderer* ren, const std::filesystem::path& path,
               const assets::colorpal::Palette* snap = nullptr);
+
+    // Loads an optional HD override ANI (DATA_HD/ANI/<same-name>.ANI): 4x
+    // de-dithered truecolour frames re-encoded as CIMG type 4. Parsed with the
+    // SAME ani::load, uploaded LINEAR and WITHOUT the master-palette snap (the
+    // HD path is truecolour, exactly like the HD field/front-end PCX). The
+    // override must have the SAME frame count/order as the classic file (it is
+    // a 1:1 upscale of it) — a mismatch is ignored, leaving the classic look.
+    // Call AFTER load(). The HD frames' own dims/hotspots are irrelevant: the
+    // renderer keeps the classic 1x geometry and only swaps the texture. Throws
+    // (like load) on a malformed file; callers guard so a bad override just
+    // falls back to classic.
+    void load_hd_overlay(SDL_Renderer* ren, const std::filesystem::path& hd_path);
 
     // A copy with the fallback truecolour player-armour recolor (sub_414A65
     // approximation) applied to every frame. Used only when a colour has no
@@ -127,10 +149,21 @@ public:
     SDL_Texture* texture(std::size_t frame) const {
         return frame < textures_.size() ? textures_[frame] : nullptr;
     }
+    // The HD override texture for a frame, or nullptr when no override is loaded
+    // for it (frame index is shared 1:1 with texture() above). Recoloured copies
+    // carry their own HD textures, so this is valid on player sets too.
+    SDL_Texture* texture_hd(std::size_t frame) const {
+        return frame < hd_textures_.size() ? hd_textures_[frame] : nullptr;
+    }
 
 private:
     assets::ani::AniFile data_;
     std::vector<SDL_Texture*> textures_;
+    // Optional HD override, parallel to textures_ (same frame indices). Empty
+    // when no DATA_HD/ANI override exists. hd_images_ is retained so recolored()
+    // can rebuild recoloured HD textures for the per-player sets.
+    std::vector<SDL_Texture*> hd_textures_;
+    std::vector<assets::Image> hd_images_;
 };
 
 // Builds the Anim for the named sequence ("walk north", "bomb regular green"...).

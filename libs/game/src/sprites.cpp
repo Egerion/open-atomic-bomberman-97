@@ -119,6 +119,18 @@ AniTextures AniTextures::recolored(SDL_Renderer* ren, const std::int32_t rgb[3],
         f.image = recolor_image(std::move(f.image), rgb);
         out.textures_[i] = make_texture(ren, f.image, SDL_SCALEMODE_NEAREST, snap);
     }
+    // Recolour the retained HD frames too (never paletted -> green-excess), so
+    // the per-player HD sprite sets exist. LINEAR + un-snapped, like load_hd_overlay.
+    if (!hd_images_.empty()) {
+        out.hd_images_ = hd_images_;
+        out.hd_textures_.assign(out.hd_images_.size(), nullptr);
+        for (std::size_t i = 0; i < out.hd_images_.size(); ++i) {
+            if (out.hd_images_[i].empty()) continue;
+            out.hd_images_[i] = recolor_image(std::move(out.hd_images_[i]), rgb);
+            out.hd_textures_[i] =
+                make_texture(ren, out.hd_images_[i], SDL_SCALEMODE_LINEAR, nullptr);
+        }
+    }
     return out;
 }
 
@@ -144,6 +156,19 @@ AniTextures AniTextures::recolored(SDL_Renderer* ren, const std::array<std::uint
                                      : recolor_image(std::move(f.image), tail);
         out.textures_[i] = make_texture(ren, f.image, SDL_SCALEMODE_NEAREST, snap);
     }
+    // HD frames are re-encoded as type-4 truecolour (never paletted), so the
+    // index remap can't touch them: use the same green-excess tail recolour the
+    // non-paletted classic frames take, then upload LINEAR/un-snapped.
+    if (!hd_images_.empty()) {
+        out.hd_images_ = hd_images_;
+        out.hd_textures_.assign(out.hd_images_.size(), nullptr);
+        for (std::size_t i = 0; i < out.hd_images_.size(); ++i) {
+            if (out.hd_images_[i].empty()) continue;
+            out.hd_images_[i] = recolor_image(std::move(out.hd_images_[i]), tail);
+            out.hd_textures_[i] =
+                make_texture(ren, out.hd_images_[i], SDL_SCALEMODE_LINEAR, nullptr);
+        }
+    }
     return out;
 }
 
@@ -151,7 +176,34 @@ void AniTextures::reset() {
     for (auto* t : textures_)
         if (t) SDL_DestroyTexture(t);
     textures_.clear();
+    for (auto* t : hd_textures_)
+        if (t) SDL_DestroyTexture(t);
+    hd_textures_.clear();
+    hd_images_.clear();
     data_ = {};
+}
+
+void AniTextures::load_hd_overlay(SDL_Renderer* ren, const std::filesystem::path& hd_path) {
+    // Fresh overlay each call.
+    for (auto* t : hd_textures_)
+        if (t) SDL_DestroyTexture(t);
+    hd_textures_.clear();
+    hd_images_.clear();
+    // The HD ANI is a 1:1 upscale of the classic file — decoded the same way.
+    assets::ani::AniFile hd = assets::ani::load(hd_path);
+    // Must line up frame-for-frame with the classic set, or the texture swap
+    // would show the wrong cel. A mismatch means the override is stale/foreign;
+    // ignore it (leaves the classic look) rather than corrupt the animation.
+    if (hd.frames.size() != data_.frames.size()) return;
+    hd_images_.reserve(hd.frames.size());
+    hd_textures_.assign(hd.frames.size(), nullptr);
+    for (std::size_t i = 0; i < hd.frames.size(); ++i) {
+        hd_images_.push_back(std::move(hd.frames[i].image));
+        if (!hd_images_[i].empty())
+            // LINEAR + no palette snap: the HD path is truecolour, matching the
+            // HD field/front-end PCX loads (asset_store.cpp).
+            hd_textures_[i] = make_texture(ren, hd_images_[i], SDL_SCALEMODE_LINEAR, nullptr);
+    }
 }
 
 Anim resolve_sequence(const AniTextures& ani, const std::string& name) {
@@ -172,8 +224,12 @@ Anim resolve_sequence(const AniTextures& ani, const std::string& name) {
             // confirmed exception (real flame arms) reads st.dx/st.dy itself
             // at its own draw site (renderer.cpp draw_world) rather than
             // having it folded in here.
-            out.steps.push_back({ani.texture(static_cast<std::size_t>(st.frame)), f.image.width,
-                                 f.image.height, f.hotspot_x, f.hotspot_y, st.dx, st.dy});
+            Sprite sp{ani.texture(static_cast<std::size_t>(st.frame)), f.image.width,
+                      f.image.height, f.hotspot_x, f.hotspot_y, st.dx, st.dy};
+            // Classic geometry is kept; only the HD texture (if any) is attached
+            // — the renderer samples it into the same 1x logical dst rect.
+            sp.tex_hd = ani.texture_hd(static_cast<std::size_t>(st.frame));
+            out.steps.push_back(sp);
         }
         break;
     }
@@ -187,8 +243,10 @@ void collect_death_anims(const AniTextures& ani, std::vector<Anim>& out) {
         for (const auto& st : sq.steps) {
             if (st.frame < 0) continue;
             const auto& f = ani.data().frames[static_cast<std::size_t>(st.frame)];
-            a.steps.push_back({ani.texture(static_cast<std::size_t>(st.frame)), f.image.width,
-                               f.image.height, f.hotspot_x, f.hotspot_y});
+            Sprite sp{ani.texture(static_cast<std::size_t>(st.frame)), f.image.width,
+                      f.image.height, f.hotspot_x, f.hotspot_y};
+            sp.tex_hd = ani.texture_hd(static_cast<std::size_t>(st.frame));
+            a.steps.push_back(sp);
         }
         if (!a.steps.empty()) out.push_back(std::move(a));
     }
