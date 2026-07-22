@@ -146,6 +146,36 @@ void inject_flame_bomb(State& s) {
     s.bombs.push_back(b);
 }
 
+// FLIGHT scenario (punch arc, sub_42331C case 2): inject a bomb at (5,0) and
+// launch it EAST 3 tiles (mirroring BombSystem::launch(b, Right, 3, arc)). It
+// flies over from_* -> to_* and lands at (8,0). The native injects the same via
+// sub_4248C6. Compare the ground track + landing tile.
+void inject_flying_bomb(State& s) {
+    Bomb b;
+    b.active = true;
+    b.id = s.next_bomb_id++;
+    b.owner = 9;
+    b.colour = 9;
+    b.x = tile_center_x(5);
+    b.y = tile_center_y(0);
+    b.fuse_init = 100000;
+    b.fuse = 100000;
+    b.flame = 2;
+    // BombSystem::launch(b, Direction::Right, 3, punch_arc_first):
+    b.flying = true;
+    b.moving = false;
+    b.from_x = b.x;
+    b.from_y = b.y;
+    b.to_x = b.x + 3 * kTileWF;  // 3 tiles east
+    b.to_y = b.y;
+    b.dir = Direction::Right;
+    b.fly_arc = s.tuning.punch_arc_first;
+    const Fixed dist = 3 * kTileWF;
+    b.fly_total = std::max<std::int32_t>(1, dist / std::max(1, s.tuning.punched_bomb_speed));
+    b.fly_ticks = b.fly_total;
+    s.bombs.push_back(b);
+}
+
 int count_flame_cells(const State& s) {
     int n = 0;
     for (int y = 0; y < kGridHeight; ++y)
@@ -211,8 +241,9 @@ int main(int argc, char** argv) {
     const bool conveyor_scenario = std::strcmp(scenario, "conveyor") == 0;
     const bool flame_scenario = std::strcmp(scenario, "flame") == 0;
     const bool jelly_scenario = std::strcmp(scenario, "jelly") == 0;
-    const bool idle_scenario =
-        kick_scenario || conveyor_scenario || flame_scenario || jelly_scenario;
+    const bool flight_scenario = std::strcmp(scenario, "flight") == 0;
+    const bool idle_scenario = kick_scenario || conveyor_scenario || flame_scenario ||
+                               jelly_scenario || flight_scenario;
     std::fprintf(stderr, "mirror: seed=0x%08x ticks=%d players=%d scenario=%s\n", seed, ticks,
                  players, scenario);
 
@@ -229,6 +260,7 @@ int main(int argc, char** argv) {
     if (jelly_scenario) inject_kicked_bomb(sim.state(), /*jelly=*/true);
     if (conveyor_scenario) inject_belt_bomb(sim.state());
     if (flame_scenario) inject_flame_bomb(sim.state());
+    if (flight_scenario) inject_flying_bomb(sim.state());
     // Digest the initial state as tick 0, then each post-tick state.
     emit_digest(0, sim.state());
     for (int t = 1; t <= ticks; ++t) {

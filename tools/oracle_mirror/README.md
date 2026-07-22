@@ -69,6 +69,17 @@ t=<tick> P=<n> | <slot>:<tx>,<ty>,<alive>,<bombs> ... | B=<liveBombs>[ bomb:<tx>
   of 2026-07-22: the native transliteration casts a DIAGONAL (cells (2,2)..(6,6),
   centre (6,4) unlit) — a native-port geometry bug in the flame cast, NOT a
   clean-room bug. Scenario is ready for when the native cast is fixed.
+- **flight** (`--scenario=flight` / `--oracle <out> <ticks> flight`): inject a
+  bomb at (5,0) and launch it EAST into flight (`sub_42331C` case 2). Native via
+  `sub_4248C6(bomb, godir)`; mirror by setting the Bomb flight fields (mirroring
+  `BombSystem::launch(b, Right, 3, arc)`). Kind 0 (a punch), so the throw-only
+  `rand()%getvalue(667)` landing redirect never fires — deterministic. Result
+  2026-07-22: native and mirror fly (5,0)->(6,0)->(7,0)->(8,0) TICK-FOR-TICK and
+  land at (8,0) — the 3-tile punch arc + landing tile CONFIRMED. CAVEAT: the
+  native oracle then FAULTS at t10 (exit 3) processing the just-landed bomb — a
+  native-transliteration robustness bug (same class as the M3 9x-path fault),
+  NOT a gameplay divergence; the flight itself is fully validated through its
+  landing at t9.
 
 ## Scripted input (reproduce identically on the native side)
 
