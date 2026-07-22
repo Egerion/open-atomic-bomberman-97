@@ -344,7 +344,8 @@ bool GameApp::init() {
     // the reference machine — and demo runs keep the LETTERBOX scaler every
     // existing pin was captured under.
     const bool demo_mode =
-        opts_.demo_ticks > 0 || !opts_.demo_shots.empty() || !opts_.bm_shot_name.empty();
+        opts_.demo_ticks > 0 || !opts_.demo_shots.empty() || !opts_.bm_shot_name.empty() ||
+        !opts_.menu_shot_out.empty();
     SDL_SetRenderLogicalPresentation(ren, kScreenW, kScreenH,
                                      demo_mode ? SDL_LOGICAL_PRESENTATION_LETTERBOX
                                                : SDL_LOGICAL_PRESENTATION_STRETCH);
@@ -4415,11 +4416,47 @@ int GameApp::run_bm_shot() {
     return ok ? 0 : 1;
 }
 
+int GameApp::run_menu_shot() {
+    // One-frame headless snapshot of the main menu — the SAME composite
+    // present_menu draws (MAINMENU backdrop + "V1.0" + the animated trigger
+    // cursor), pinned to row 0 and animation frame 0 for determinism. The
+    // ground-truth reference is the native oracle's `bm_native --boot-shot`,
+    // which renders the ORIGINAL's own menu through the DirectDraw->SDL3 shim.
+    menu_index_ = 0;
+    SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
+    SDL_RenderClear(sdl_renderer_.get());
+    const Sprite& bg = assets_.frontend_pcx("MAINMENU");
+    if (bg.tex) {
+        SDL_FRect d{0, 0, static_cast<float>(bg.w), static_cast<float>(bg.h)};
+        SDL_RenderTexture(sdl_renderer_.get(), bg.tex, nullptr, &d);
+    }
+    front_font_.draw_outlined(sdl_renderer_.get(), "V1.0", 0, 0, 168, 168, 164, 0, 0, 0, 50.0f);
+    const int cx = static_cast<int>(values_.column_or(700, 0, kMenuCursorXFallback));
+    const int cy = static_cast<int>(values_.column_or(700, 1, kMenuCursorYFallback));
+    Anim cur = resolve_sequence(assets_.trigbomb(-1), "bomb trigger green");
+    if (!cur.steps.empty()) {
+        const Sprite& sp = cur.steps[anim_step_index(0, cur.steps.size())];
+        if (sp.tex) {
+            SDL_FRect d{static_cast<float>(cx - sp.hx), static_cast<float>(cy - sp.hy),
+                        static_cast<float>(sp.w), static_cast<float>(sp.h)};
+            SDL_RenderTexture(sdl_renderer_.get(), sp.tex, nullptr, &d);
+        }
+    }
+    bool ok = save_screenshot(opts_.menu_shot_out);
+    if (ok) std::printf("menu-shot -> %s\n", opts_.menu_shot_out.string().c_str());
+    return ok ? 0 : 1;
+}
+
 int GameApp::run() {
     if (const char* env = std::getenv("BOMBER_BOOT_MATCH"); env && *env) opts_.boot_match = true;
     if (!init()) return opts_.game_dir.empty() ? 2 : 1;
     if (!opts_.bm_shot_name.empty()) {
         int rc = run_bm_shot();
+        flush_options();
+        return rc;
+    }
+    if (!opts_.menu_shot_out.empty()) {
+        int rc = run_menu_shot();
         flush_options();
         return rc;
     }

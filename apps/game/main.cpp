@@ -84,6 +84,11 @@ int main(int argc, char** argv) {
             opts.bm_shot_out = argv[++i];
             if (i + 1 < argc && std::isdigit(static_cast<unsigned char>(argv[i + 1][0])))
                 opts.bm_shot_scroll = std::atoi(argv[++i]);
+        } else if (a == "--menu-shot" && i + 1 < argc) {
+            // --menu-shot <out.bmp>: capture the main-menu composite for pixel
+            // comparison against the native oracle's --boot-shot menu render.
+            opts.demo = true;  // reuse the demo path's audio skip / headless intent
+            opts.menu_shot_out = argv[++i];
         } else if (a == "--match") {
             opts.boot_match = true;  // skip the front-end, boot straight into a match
         } else {

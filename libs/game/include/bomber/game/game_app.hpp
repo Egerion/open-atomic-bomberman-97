@@ -70,6 +70,10 @@ public:
         // layout without driving the menu by hand.
         std::string bm_shot_name;               // e.g. "CREDITS"
         std::filesystem::path bm_shot_out;       // BMP output path
+        // Dev capture hook (--menu-shot): render the main-menu composite
+        // (MAINMENU backdrop + "V1.0" + the row-0 trigger cursor) to a BMP, for
+        // pixel comparison against the native oracle's --boot-shot menu render.
+        std::filesystem::path menu_shot_out;
         int bm_shot_scroll = 0;                  // lines scrolled down before capture
     };
 
@@ -120,6 +124,7 @@ private:
     int run_demo();
     // --bm-shot capture: draw one `.BM` screen over MAINMENU and SaveBMP it.
     int run_bm_shot();
+    int run_menu_shot();
     // Reads back the current backbuffer and writes it as a BMP. Shared by
     // run_demo()'s legacy single-shot path and its --demo-shots multi-shot
     // path. Returns false (and leaves stderr diagnostics to the caller) on
