@@ -403,10 +403,21 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, AISystem* ai_sys, 
 
         // Input decode -> want_godir (0=Up,1=Right,2=Down,3=Left, -1 = none).
         // A stunned player acquires NO new direction: the v113 gate skips
-        // sub_41E61E, so its +46 stays at the per-frame -1 reset. Force
+        // sub_41E61E, so its input direction is not updated this frame. Force
         // want_godir = -1 and skip the whole opposite-key / reversed-disease
         // decode for it — the mover then takes the idle branch (stage actors
         // still drive it), never a keyed one.
+        // KNOWN DIVERGENCE (W3-A audit, 2026-07-22): the native player input
+        // direction (+46, packed as the high word of +44) is STICKY — it is
+        // never reset per-frame; the AI/human writers leave it stale when they
+        // don't command a new direction, so the mover coasts on the last
+        // direction. This port instead rebuilds want_godir fresh each sub-frame
+        // (default -1 = stop) — so an AI whose behaviour chain writes nothing
+        // (behave_walk_path's no-safe-neighbour case; a fully-passed chain)
+        // STOPS where the native keeps gliding. A faithful fix needs the exact
+        // +44/+46 mover-consumption + human-key-release-stop semantics REd first
+        // (packed field, multiple write paths) — not yet implemented; hashed
+        // (AI replays) but golden-safe (no golden spawns an AI).
         int want_godir = -1;
         if (!sub_stunned && !frozen) {
             const bool up = sub_in.up, down = sub_in.down, left = sub_in.left,

@@ -1148,9 +1148,12 @@ bool AISystem::behave_wander(int i, PlayerInput& out) {
     const int px = p.tile_x(), py = p.tile_y();
 
     if (random_below(s_, 25) == 0) {
-        // Turn +-90 off the current wander dir. The original bases this on a
-        // stored byte (+62 BYTE2); with personality 0 that seed is 0, so the
-        // base is the current wander dir. v2 = (base + 2*(rand%2) - 1) & 3.
+        // Turn +-90 off the current wander dir. The original's base is
+        // BYTE2(*(brain+62)) (sub_40A81F, batch_0x40A140.cpp:275): the dword at
+        // +62 spans bytes 62-65, so BYTE2 is the byte at +64 — which IS
+        // wander_dir's own storage. So the base genuinely is the current
+        // wander_dir (via the byte alias, NOT via any "personality 0 seeds 0"
+        // reasoning). v2 = (wander_dir + 2*(rand%2) - 1) & 3.
         const int turn = (br.wander_dir + 2 * static_cast<int>(random_below(s_, 2)) - 1) & 3;
         // Adopt the new turn only if the CURRENT wander dir is itself safe to
         // step (mirrors the original's guard before overwriting wander_dir).
