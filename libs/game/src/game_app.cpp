@@ -579,10 +579,15 @@ constexpr int kDrawStingHi = 1999;
 // computed). (ScreenDef.background owns its own std::string copy, so this is
 // safe.)
 ScreenDef victory_screen(bool team_mode, int player, int team) {
+    // sub_42A3F6's VICTORY tail is sub_42A088(name, 0) (a CUT) then a hard
+    // sub_413CB0(3000) — a fixed 3 s blocking sleep that pumps only OS messages
+    // and reads NO game key. So the VICTORY/TEAM PCX shows for exactly 3 s and
+    // cannot be skipped (unlike the 6 s keypress-skippable port model this
+    // replaces). Non-skippable + 3000 ms reproduces both (Quit still exits).
     return ScreenDef{victory_background_name(team_mode, player, team),
                      {},
-                     kResultsDwellMs,
-                     /*skippable*/ true};
+                     /*dwell_ms*/ 3000,
+                     /*skippable*/ false};
 }
 // --- Main-menu model (sub_42B9CE) -----------------------------------------
 // The original menu highlights one of seven rows (its selection variable v10
@@ -1947,6 +1952,20 @@ int GameApp::match_clinch() const {
     return -1;
 }
 
+bool GameApp::auto_advance_results() const {
+    // sub_42A3F6's DRAW and RESULTS wait loops honour the 6 s auto-advance ONLY
+    // when `sub_42247A() || dword_4646B4` (batch_0x4293E5.cpp:1109/1333):
+    // sub_42247A returns 1 iff NO slot is human (every +16 type is OFF=0 or
+    // CPU=1 — batch_0x421E80.cpp), and dword_4646B4 is the attract/demo flag. A
+    // human match instead waits indefinitely for Enter. Our attract path is
+    // all-AI and the --demo/--demo-shots path is scripted, so both collapse to:
+    // auto-advance unless a real human (KEYBOARD=2 / JOYSTICK=3) is playing.
+    if (opts_.demo || opts_.demo_ticks > 0 || !opts_.demo_shots.empty()) return true;
+    for (int i = 0; i < sim::kMaxPlayers; ++i)
+        if (setup_type_[i] == 2 || setup_type_[i] == 3) return false;  // a human slot
+    return true;  // all-AI roster
+}
+
 std::uint64_t GameApp::refresh_period_ns() const {
     std::uint64_t period_ns = 1'000'000'000ull / 60;
     if (const SDL_DisplayMode* mode =
@@ -2552,7 +2571,10 @@ AppInput GameApp::present_scoreboard() {
                 waiting = false;
             }
         }
-        if (SDL_GetTicks() - start >= kResultsDwellMs) waiting = false;  // attract auto-advance
+        // sub_42A3F6's RESULTS loop only auto-advances after 6 s for an all-AI/
+        // attract roster; a human match waits for Enter (auto_advance_results()).
+        if (auto_advance_results() && SDL_GetTicks() - start >= kResultsDwellMs)
+            waiting = false;
         audio_.update_music();
         SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
         SDL_RenderClear(sdl_renderer_.get());
@@ -4044,14 +4066,21 @@ int GameApp::run_app() {
                         assign_gold_player(options_.goldman, is_team_mode(), clinched, setup_team_);
                 }
                 if (match_over) {
-                    // MATCH win: the target was reached -> VICTORY, then
-                    // back to the menu (next(Results, Advance) = Menu).
-                    audio_.start_music(kDrawMusicId);  // 1130 under VICTORY (doc §2 correction)
-                    audio_.play_random_in_range(2000, 2299);  // "we have a winner", under VICTORY
-                    // Team game -> TEAM<0/1>.PCX, else -> VICTORY<player>.PCX
-                    // (frontend-flow.md "VICTORY" §3, aTeamU vs aVictoryU).
-                    ev = present_screen(
-                        victory_screen(is_team_mode(), clinched, setup_team_[clinched]));
+                    // MATCH win. sub_42A3F6 still renders the RESULTS scoreboard
+                    // on the clinching round (with the "WINS THE MATCH!" outcome
+                    // line) and plays the 2000 "we have a winner" voice UNDER it
+                    // — the ONLY site that voice fires (batch_0x4293E5.cpp:1298,
+                    // inside the v73 != -1 clinch branch) — THEN cuts to VICTORY.
+                    // The port formerly skipped the scoreboard and jumped straight
+                    // to VICTORY (and mis-fired 2000 on every round win too).
+                    audio_.start_music(kDrawMusicId);  // 1130 under RESULTS/VICTORY (doc §2)
+                    audio_.play_random_in_range(2000, 2299);  // winner voice — clinch only
+                    ev = present_scoreboard();  // the clinch scoreboard (WINS THE MATCH!)
+                    // Then VICTORY<player>.PCX / TEAM<0/1>.PCX (frontend-flow.md
+                    // "VICTORY" §3, aTeamU vs aVictoryU).
+                    if (ev != AppInput::Quit)
+                        ev = present_screen(
+                            victory_screen(is_team_mode(), clinched, setup_team_[clinched]));
                     // Campaign stage advance (docs/re/campaign.md
                     // "Advances through campaign stages automatically",
                     // sub_401312/sub_40133F gated `if (dword_46489C)`): a
@@ -4094,12 +4123,13 @@ int GameApp::run_app() {
                         }
                     }
                 } else if (w >= 0) {
-                    // Round win, match not over: show the running scores. The
-                    // winner sting plays under THIS screen too (§1) — the
-                    // original fires it as soon as the round decision is known,
-                    // regardless of whether that decision also clinches the match.
-                    audio_.start_music(kDrawMusicId);  // 1130 under RESULTS too (doc §2 correction)
-                    audio_.play_random_in_range(2000, 2299);  // "we have a winner", under RESULTS
+                    // Round win, match not over: show the running scores. NO
+                    // winner voice here — sub_42A3F6 fires sub_427BFB(2000) only
+                    // in the clinch branch (v73 != -1); a non-clinching RESULTS
+                    // pass (v73 == -1, batch_0x4293E5.cpp:1260-1272) plays no
+                    // "we have a winner" cue. (The port formerly fired it every
+                    // round win.)
+                    audio_.start_music(kDrawMusicId);  // 1130 under RESULTS (doc §2 correction)
                     ev = present_scoreboard();
                 } else {
                     // DRAW (no survivor / time-up), OR the campaign_no_human_
@@ -4118,7 +4148,13 @@ int GameApp::run_app() {
                     // campaign stage", with no separate decrement needed.
                     audio_.start_music(kDrawMusicId);  // 1130 draw track under DRAW
                     audio_.play_random_in_range(kDrawStingLo, kDrawStingHi);
-                    ev = present_screen(draw_screen());
+                    // sub_42A3F6's DRAW loop only auto-advances (6 s) for an
+                    // all-AI/attract roster; a human match waits for Enter. A
+                    // 0 dwell means "no auto-advance" in the Screen model
+                    // (screen.cpp:47), so zero it out when a human is playing.
+                    ScreenDef ds = draw_screen();
+                    if (!auto_advance_results()) ds.dwell_ms = 0;
+                    ev = present_screen(ds);
                 }
                 // Fold the screen's dismissal into the flow-graph event: an
                 // undecided round's Advance becomes RoundContinue, so

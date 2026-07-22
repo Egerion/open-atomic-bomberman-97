@@ -402,6 +402,11 @@ private:
     // kill_count_ clinch via results.hpp's win_by_kills_clinch(). Returns the
     // clinching player's index, or -1 if the match is not yet decided.
     int match_clinch() const;
+    // True when the DRAW/RESULTS screens may auto-advance after their dwell
+    // (all-AI roster or a demo/attract run, mirroring sub_42A3F6's
+    // `sub_42247A() || dword_4646B4` gate); false = a human match, which waits
+    // for Enter. See auto_advance_results()'s definition for the full citation.
+    bool auto_advance_results() const;
 
     // Reset the per-match win tally + read the win target getvalue(310) at the
     // start of a fresh match (Menu -> StartMatch). Best-of-N, N = 2 by default.
