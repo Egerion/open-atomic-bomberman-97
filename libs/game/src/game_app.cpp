@@ -2682,7 +2682,10 @@ AppInput GameApp::present_scoreboard() {
         // display, so we always draw it — sub_42A3F6's "!dword_464AEC" gate is
         // about not re-drawing across frames of the SAME round, which our
         // per-round call already satisfies).
-        front_font_.draw(sdl_renderer_.get(), header, hx, hy, kHeaderR, kHeaderG, kHeaderB);
+        // sub_41696C (batch_0x4293E5.cpp:1171) — outlined, like every scoreboard
+        // string; the color2 outline is byte_495390[0] = black.
+        front_font_.draw_outlined(sdl_renderer_.get(), header, hx, hy, kHeaderR, kHeaderG,
+                                  kHeaderB, 0, 0, 0);
 
         // Per-player / per-team tally rows. Non-team rows keep the slot's own
         // ink (sub_41672F -> AssetStore::slot_color, docs/re/player-colour.md).
@@ -2709,8 +2712,9 @@ AppInput GameApp::present_scoreboard() {
                 const std::uint8_t c[3] = {static_cast<std::uint8_t>(team1 ? 252 : 255),
                                            static_cast<std::uint8_t>(team1 ? 80 : 255),
                                            static_cast<std::uint8_t>(team1 ? 80 : 255)};
-                front_font_.draw(sdl_renderer_.get(), line, rx,
-                                 ry0 + rystep * static_cast<float>(row), c[0], c[1], c[2]);
+                front_font_.draw_outlined(sdl_renderer_.get(), line, rx,
+                                          ry0 + rystep * static_cast<float>(row), c[0], c[1], c[2],
+                                          0, 0, 0);
                 ++row;
             }
         } else {
@@ -2740,8 +2744,15 @@ AppInput GameApp::present_scoreboard() {
                 splice_next(line, kill_count_[i]);
                 std::uint8_t c[3];
                 assets_.slot_color(i, c);
-                front_font_.draw(sdl_renderer_.get(), line, rx,
-                                 ry0 + rystep * static_cast<float>(row), c[0], c[1], c[2]);
+                // Outline colour = sub_416867(i) (batch_0x415C1F.cpp:394): in
+                // solo mode player 1 (the BLACK bomberman, index 1) gets a WHITE
+                // outline (byte_49D38F) so its dark ink stays legible; everyone
+                // else gets black (byte_495390[0]). (Team rows + header + outcome
+                // are always black.)
+                const std::uint8_t ol = i == 1 ? 255 : 0;
+                front_font_.draw_outlined(sdl_renderer_.get(), line, rx,
+                                          ry0 + rystep * static_cast<float>(row), c[0], c[1], c[2],
+                                          ol, ol, ol);
                 ++row;
             }
         }
@@ -2789,7 +2800,8 @@ AppInput GameApp::present_scoreboard() {
                 oc[1] = 252;
                 oc[2] = 252;  // byte_497F8F: RGB555 (10,31,31) cyan
             }
-            front_font_.draw(sdl_renderer_.get(), outcome, ox, oy, oc[0], oc[1], oc[2]);
+            front_font_.draw_outlined(sdl_renderer_.get(), outcome, ox, oy, oc[0], oc[1], oc[2], 0,
+                                      0, 0);
         }
 
         SDL_RenderPresent(sdl_renderer_.get());
@@ -3647,7 +3659,13 @@ void GameApp::draw_player_row(const sim::State& s) {
         splice_next(line, kill_count_[i]);
         std::uint8_t c[3];
         assets_.slot_color(i, c);
-        front_font_.draw(sdl_renderer_.get(), line, x, y, c[0], c[1], c[2]);
+        // In-match "S:x K:y" score overlay: sub_41696C (batch_0x420D4E.cpp's
+        // per-frame count-alive loop) — ink sub_41672F(i) == slot_color, outline
+        // sub_416867(i): black in team mode, else white for player 1 (the black
+        // bomberman) and black for everyone else. (Not in the demo/golden path —
+        // run_app draws it, run_demo does not.)
+        const std::uint8_t ol = (!is_team_mode() && i == 1) ? 255 : 0;
+        front_font_.draw_outlined(sdl_renderer_.get(), line, x, y, c[0], c[1], c[2], ol, ol, ol);
 
         // dword_461BC4 (+0x00, "active/moving state") gates the "xxx" overlay
         // -> sim::Player::alive, the per-ROUND flag (reset every round,
