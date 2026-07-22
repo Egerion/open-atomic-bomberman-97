@@ -627,9 +627,25 @@ void Renderer::draw_world(const sim::State& s) {
                 // brick_burn_frames - remaining reproduces that counter
                 // exactly (both start at 0, +1/tick). See docs/re/facts.md
                 // "Flame/burn frame pacing".
-                draw_anim(q.burn,
-                          static_cast<std::size_t>(s.tuning.brick_burn_frames - s.burning[y][x]),
-                          sx, sy);
+                // CLAMP to the last cel, do NOT wrap: sub_426D06's kind-9
+                // (brick crumble) draw holds the final disintegration frame
+                // once the counter passes statecnt-1, instead of the generic
+                // `% statecnt` wrap draw_anim otherwise applies. Most tilesets'
+                // XBRICK has FEWER cels than brick_burn_frames (9 vs 10 for
+                // FIELD0/1/5/... — Green Acres etc.), so on the LAST burn tick
+                // (burning==1, elapsed==brick_burn_frames-1==9) a wrap gives
+                // 9 % 9 == 0 = the FULL/fresh brick cel — a one-frame DARK
+                // "brick re-forms" flash the user reported on those maps. FIELD10
+                // (10-cel XBRICK) never wraps, which is why the visual golden
+                // (its demo field) never caught this. Clamp fixes the rest and
+                // leaves FIELD10 byte-identical.
+                {
+                    const std::size_t elapsed =
+                        static_cast<std::size_t>(s.tuning.brick_burn_frames - s.burning[y][x]);
+                    const std::size_t last =
+                        q.burn.steps.empty() ? 0 : q.burn.steps.size() - 1;
+                    draw_anim(q.burn, std::min(elapsed, last), sx, sy);
+                }
         }
     }
 
