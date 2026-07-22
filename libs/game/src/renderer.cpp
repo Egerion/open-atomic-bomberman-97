@@ -105,12 +105,16 @@ Renderer::Posf Renderer::interp_pos(sim::Fixed prev_x, sim::Fixed prev_y, sim::F
 }
 
 void Renderer::draw_sprite(const Sprite& sp, float x, float y, Uint8 r, Uint8 g, Uint8 b) {
-    if (!sp.tex) return;
+    // HD override when enabled and authored for this frame; the classic w/h/hx/hy
+    // are kept, so the higher-res texture is just sampled into the same logical
+    // dst rect (the front-end HD PCX trick, asset_store.cpp frontend_pcx).
+    SDL_Texture* tex = (assets_->hd_enabled() && sp.tex_hd) ? sp.tex_hd : sp.tex;
+    if (!tex) return;
     SDL_FRect dst{x - sp.hx, y - sp.hy, static_cast<float>(sp.w), static_cast<float>(sp.h)};
     bool tinted = r != 255 || g != 255 || b != 255;
-    if (tinted) SDL_SetTextureColorMod(sp.tex, r, g, b);
-    SDL_RenderTexture(ren_, sp.tex, nullptr, &dst);
-    if (tinted) SDL_SetTextureColorMod(sp.tex, 255, 255, 255);
+    if (tinted) SDL_SetTextureColorMod(tex, r, g, b);
+    SDL_RenderTexture(ren_, tex, nullptr, &dst);
+    if (tinted) SDL_SetTextureColorMod(tex, 255, 255, 255);
 }
 
 void Renderer::draw_anim(const Anim& a, std::size_t step, float x, float y, Uint8 r, Uint8 g,
@@ -505,10 +509,11 @@ void Renderer::draw_powerups(const sim::State& s) {
             // Fallback: the static POW*.PCX tile-fill (top-left anchor) when the
             // animated sequence is unavailable.
             const Sprite& p = assets_->powerup(kind);
-            if (!p.tex) continue;
+            SDL_Texture* ptex = (assets_->hd_enabled() && p.tex_hd) ? p.tex_hd : p.tex;
+            if (!ptex) continue;
             SDL_FRect dst{tile_screen_x(x), tile_screen_y(y), static_cast<float>(p.w),
                           static_cast<float>(p.h)};
-            SDL_RenderTexture(ren_, p.tex, nullptr, &dst);
+            SDL_RenderTexture(ren_, ptex, nullptr, &dst);
         }
     }
 }

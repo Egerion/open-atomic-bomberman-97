@@ -162,9 +162,18 @@ int MovementSystem::ice_delay(Player& p, int want_godir) const {
     // slot by the frame delta (dword_464958), shifts the buffer down one, and
     // inserts the fresh sample at slot 0 — once per DISPLAYED frame. This is
     // called once per canonical sub-frame (player_turn's kSubFrames loop), so
-    // it stays a plain FIFO push: slot k's age after this push is k sub-
-    // frames ≈ k * 50/3 ms, and the 30-slot buffer spans ~500 ms — exactly
-    // the original's own capacity at 60 fps.
+    // it stays a plain FIFO push: slot k's age is the sum of k sub-frame deltas
+    // (~5.56 ms each at kSubFrames=9), so the 30-slot buffer spans only ~167 ms.
+    // FRAMERATE-COUPLED, BY DESIGN DECISION (2026-07-22): the original's ice lag
+    // is nominally getvalue(450+level) = 250 ms for Hockey Rink, but it too is
+    // 30 frames of buffer, so at the canonical ~184 fps free-run (ADR-0006, the
+    // rate the port targets via kSubFrames=9) it CAPS at slot 29 ≈ 161 ms on
+    // BOTH sides — the port matches the native at that rate. (On slower/vsync-
+    // locked native hardware 30 frames span 500-1000 ms and the full 250 ms is
+    // delivered; the port deliberately does NOT chase that — it pins the ~184
+    // fps behaviour. To honour the nominal 250 ms instead you'd grow
+    // kIceHistoryLen to >= 46, a hashed-state + golden change, explicitly NOT
+    // done.) facts.md "Ice / input-lag".
     for (int k = Player::kIceHistoryLen - 1; k > 0; --k) p.ice_history[k] = p.ice_history[k - 1];
     p.ice_history[0] = static_cast<std::int8_t>(want_godir);
 

@@ -76,7 +76,13 @@ void SoundDirector::on_tick(const sim::State& s) {
             }
             case sim::Event::Type::BombKicked: audio_.play_random_in_range(120, 123); break;
             case sim::Event::Type::Explosion: audio_.play_random_in_range(200, 299); break;
-            case sim::Event::Type::TimeUp: audio_.play_random_in_range(1700, 1999); break;
+            // No sound at clock-zero: the original plays the tie/draw voice
+            // (1700-1999) only on the DRAW result screen, via the blocking
+            // sub_427BFB(1700) (batch_0x4293E5.cpp:1097) — NOT mid-round when
+            // ticks_left hits 0 (sudden death continues after that). The draw
+            // voice is already handled on the result screen (game_app.cpp).
+            // Playing it here fired it prematurely mid-round AND duplicated the
+            // result-screen sting. Removed 2026-07-22 (oracle audio audit).
             case sim::Event::Type::Hurry:
                 // "HURRY!" voice callout the frame the walls start closing. The
                 // per-frame game loop (sub_42A191 ~0x42A2C4) latches on
@@ -160,7 +166,10 @@ void SoundDirector::on_tick(const sim::State& s) {
                 if (ev.data == static_cast<std::int8_t>(sim::PowerupType::Jelly))
                     audio_.play(135);
                 else
-                    audio_.play_random_in_range(401, 499);
+                    // sub_41E21E sets v8=400 then sub_427961(400)
+                    // (batch_0x41DAA7.cpp:503) — the pickup block starts at 400
+                    // (400,woohoo1), so include it (was 401, dropping woohoo1).
+                    audio_.play_random_in_range(400, 499);
                 int n = ++pickups_[ev.player];
                 // "You are now AWESOME": 7th powerup, then every 5th after;
                 // the counter wraps back to 7 past 50 (sub_41E21E tail).

@@ -66,7 +66,15 @@ private:
     std::uint32_t next_rand();
     const assets::rss::Sound* get(int id);
 
-    static constexpr int kStreams = 8;
+    // Concurrent SFX voices. 8 was too few for Bomberman's chain reactions: a
+    // multi-kill emits several Explosion + PlayerDied events in adjacent ticks,
+    // and once all voices are busy `play()` steals the closest-to-finishing one
+    // — cutting off overlapping death screams (the user-reported "AI players
+    // scream less than the original on death"). The original's DirectSound voice
+    // cap lives in the (untransliterated) sound-engine init, so this is an
+    // approximation >= the old 8 that stops the starvation; raise/pin it if the
+    // exact binary cap is ever recovered. (2026-07-22 oracle audio audit.)
+    static constexpr int kStreams = 32;
     SDL_AudioStream* streams_[kStreams]{};
     SDL_AudioStream* music_stream_ = nullptr;
     assets::rss::Sound music_;
