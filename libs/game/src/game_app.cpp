@@ -3872,7 +3872,17 @@ AppInput GameApp::run_match() {
             // Team-aware round-over: "one SIDE left", not "one player left"
             // (docs/re/ai.md TEAM follow-up). sides_remaining() degenerates to
             // alive_count() when every team byte is 0 (the default), so a solo
-            // match's timing is unchanged.
+            // match's timing is unchanged. VERIFIED side-aware against the native
+            // (2026-07-22): the loop-exit `sub_421947() > 1` returns dword_4621D8
+            // = dword_4621E4, and sub_41F29B increments dword_4621E4 in team mode
+            // (dword_464964) only ONCE per team — guarded by the dword_4621B4
+            // [team+84] seen-flag (batch_0x41F29B.cpp:224-236) — over the
+            // non-eliminated slots (a life-less dead player returns early at :199
+            // and is not counted). So the original's round-exit counts distinct
+            // surviving TEAMS, exactly like sides_remaining(); the earlier
+            // "player-count" suspicion (it looked distinct from the side-count
+            // dword_4621DC) was a misread — both counters are team-aware, they
+            // differ only in alive precision (+0 respawnable vs +2 fully-settled).
             if (over_ticks < 0 && (sim::sides_remaining(s) <= 1 || s.ticks_left == 0)) {
                 // Linger a few seconds on the final frame, then hand back to the
                 // flow so the Results screen can come up.
