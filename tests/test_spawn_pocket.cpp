@@ -36,51 +36,57 @@ MatchConfig dense_corners_config() {
 
 }  // namespace
 
-TEST_CASE("spawn pocket: the original leaves a spawn brick; play opens ONLY that tile (radius-0)") {
-    // The faithful mechanism (docs/re/facts.md "Spawn-pocket clear", proven
-    // 2026-07-21): the original's board build places a brick on the spawn
-    // ~90% of the time and clears NO pocket at setup. The single spawn tile is
-    // opened IN PLAY, on the player's first turn, by the "player on a brick
-    // clears it" rule (sub_41E61E case 4) -- radius-0, the occupied tile only.
+TEST_CASE("spawn pocket: dense board corners clear to the pinned 9-cell plus, arms length 2") {
     Simulation s(dense_corners_config());
-
-    // At setup, before any tick, every spawn tile is STILL a brick -- no
-    // setup-time pocket clear (this is what the removed radius-2 hack did).
-    CHECK(s.state().cells[0][0] == Cell::Brick);    // p0 (0,0)
-    CHECK(s.state().cells[10][14] == Cell::Brick);  // p1 (14,10)
-    CHECK(s.state().cells[0][14] == Cell::Brick);   // p2 (14,0)
-    CHECK(s.state().cells[10][0] == Cell::Brick);   // p3 (0,10)
-
-    s.tick(TickInputs{});  // one tick: each player_turn opens its OWN tile
     const State& st = s.state();
 
-    // Radius-0: the four occupied spawn tiles are now Blank...
-    CHECK(st.cells[0][0] == Cell::Blank);
-    CHECK(st.cells[10][14] == Cell::Blank);
-    CHECK(st.cells[0][14] == Cell::Blank);
-    CHECK(st.cells[10][0] == Cell::Blank);
+    // Player 0 at (0,0): the pocket's axis-aligned cells within the grid are
+    // Blank (the tile itself + 2 tiles right + 2 tiles down); the diagonal
+    // pillar at (1,1) is untouched (already Solid, not Brick); everything
+    // one tile past each arm's tip is untouched Brick.
+    CHECK(st.cells[0][0] == Cell::Blank);  // spawn tile
+    CHECK(st.cells[0][1] == Cell::Blank);  // +1 right
+    CHECK(st.cells[0][2] == Cell::Blank);  // +2 right (arm tip)
+    CHECK(st.cells[1][0] == Cell::Blank);  // +1 down
+    CHECK(st.cells[2][0] == Cell::Blank);  // +2 down (arm tip)
+    CHECK(st.cells[1][1] == Cell::Solid);  // diagonal pillar, never touched
+    CHECK(st.cells[0][3] == Cell::Brick);  // +3 right: past the arm, still Brick
+    CHECK(st.cells[3][0] == Cell::Brick);  // +3 down: past the arm, still Brick
+    CHECK(st.cells[2][1] == Cell::Brick);  // off-axis (not on either ray): untouched
 
-    // ...but NOTHING else: every orthogonal neighbour of a spawn stays a brick
-    // (the player is boxed in, matching the native -- no pocket).
-    CHECK(st.cells[0][1] == Cell::Brick);    // p0 +1 right
-    CHECK(st.cells[1][0] == Cell::Brick);    // p0 +1 down
-    CHECK(st.cells[10][13] == Cell::Brick);  // p1 -1 left
-    CHECK(st.cells[9][14] == Cell::Brick);   // p1 -1 up
-    // Pillars are Solid throughout (never bricks, never touched).
-    CHECK(st.cells[1][1] == Cell::Solid);
-    CHECK(st.cells[9][13] == Cell::Solid);
+    // Player 1 at (14,10), the opposite corner: same shape, mirrored, and the
+    // grid-edge clamp in the offset loop doesn't over- or under-clear.
+    CHECK(st.cells[10][14] == Cell::Blank);  // spawn tile
+    CHECK(st.cells[10][13] == Cell::Blank);  // -1 left
+    CHECK(st.cells[10][12] == Cell::Blank);  // -2 left (arm tip)
+    CHECK(st.cells[9][14] == Cell::Blank);   // -1 up
+    CHECK(st.cells[8][14] == Cell::Blank);   // -2 up (arm tip)
+    CHECK(st.cells[9][13] == Cell::Solid);   // diagonal pillar, never touched
+    CHECK(st.cells[10][11] == Cell::Brick);  // -3 left: past the arm, still Brick
+    CHECK(st.cells[7][14] == Cell::Brick);   // -3 up: past the arm, still Brick
+
+    // Player 2 at (14,0) and player 3 at (0,10): the other two corners, spot-
+    // checked for the same arm-tip/off-arm boundary.
+    CHECK(st.cells[0][14] == Cell::Blank);   // spawn tile
+    CHECK(st.cells[0][12] == Cell::Blank);   // -2 left (arm tip)
+    CHECK(st.cells[2][14] == Cell::Blank);   // +2 down (arm tip)
+    CHECK(st.cells[0][11] == Cell::Brick);   // -3 left: past the arm
+    CHECK(st.cells[10][0] == Cell::Blank);   // spawn tile
+    CHECK(st.cells[10][2] == Cell::Blank);   // +2 right (arm tip)
+    CHECK(st.cells[8][0] == Cell::Blank);    // -2 up (arm tip)
+    CHECK(st.cells[10][3] == Cell::Brick);   // +3 right: past the arm
 }
 
 TEST_CASE("spawn pocket: AI players survive the opening 10s on a dense 4-corner board") {
     // The exact scenario the fix targets: a golden-B-shaped dense board, all
-    // 4 slots computer-controlled (ADR-0005), no human input at all -- the
-    // AISystem drives every decision. With the faithful RADIUS-0 spawn clear
-    // (each player opens only its own tile), every AI is BOXED IN by bricks and
-    // its behave_walk_path "nowhere safe to step" branch stalls it, so it never
-    // reaches blast-bricks and never drops the self-killing opening bomb --
-    // exactly what the native does (verified across 20 seeds via the aispawn
-    // oracle scenario). This is what the removed radius-2 pocket hack used to
-    // fake. Seed from golden B's own; a deterministic replay, not a stat claim.
+    // 4 slots computer-controlled (ADR-0005), no human input at all — the
+    // AISystem drives every drop/flee decision, including each player's very
+    // first bomb at/near its own spawn. Before the fix (radius-1 pocket) this
+    // reliably wiped out every AI within the first few seconds; the widened
+    // radius-2 pocket gives the flee logic a tile outside its own blast to
+    // retreat to. Seed picked from golden B's own (matches the board shape
+    // this file shares with tests/test_golden.cpp); the outcome is a
+    // deterministic replay, not a statistical claim.
     MatchConfig cfg = dense_corners_config();
     for (int i = 0; i < 4; ++i) cfg.ai[i] = true;
     cfg.seed = 0xB0BB1E5;

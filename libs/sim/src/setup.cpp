@@ -54,19 +54,61 @@ State build_state(const MatchConfig& config) {
         p.ice_history.fill(-1);
         int tx = std::clamp(config.spawns[i].x, 0, kGridWidth - 1);
         int ty = std::clamp(config.spawns[i].y, 0, kGridHeight - 1);
-        // NO spawn-pocket clear at setup. The original leaves the spawn tile a
-        // brick ~90% of the time and clears NO pocket (facts.md "Spawn-pocket
-        // clear", proven 2026-07-21 by a native `sub_4260F5` fill probe: every
-        // spawn tile reads the raw ~90% density, and the real `sub_4214BC`
-        // placement never clears a forced spawn brick). A player spawns boxed
-        // in. The faithful clear is RADIUS-0 and happens in play, not at setup:
-        // `player_turn` (simulation.cpp) opens the single OCCUPIED tile on the
-        // first tick, mirroring `sub_41E61E` case 4 (batch_0x41DAA7:660-664).
-        // A boxed-in AI then stalls rather than self-killing (behave_walk_path's
-        // "nowhere safe to step" branch), matching the native (verified across
-        // 20 seeds: boxed AIs survive and never drop). This REPLACED an invented
-        // radius-2 pocket clear that used to live here (a workaround for the AI
-        // suicide it masked); removed 2026-07-22.
+        // Spawn-pocket clear: force the landing tile and a 2-tile orthogonal
+        // "plus" around it to Blank, regardless of the scheme's random brick
+        // roll, so nobody starts a match already sealed inside their own
+        // opening bomb.
+        //
+        // NOT PINNED to a specific original function, despite a real search
+        // effort. The board's tile array (`dword_46222C`) has exactly ONE
+        // writer in BM95.EXE, `sub_425E36` (pseudo.c ~26781), reached only
+        // through its three thin wrappers `sub_425E9B`/`sub_425EFC`/
+        // `sub_425F79` or directly. Every one of that family's ~19 call
+        // sites was read: bomb-flame burn-through (pseudo.c 7252, 7266,
+        // 25669, 27412), netplay tile-sync replication (12149, 12189,
+        // 12483, 12637, 22406 — remote-position desync correction, gated on
+        // `dword_460058`'s netplay flag), the warphole neighbour clear
+        // (26537/26541, already ported — see the warphole comment
+        // elsewhere in this codebase), and the HURRY wall drop (27235).
+        // None run at match setup or reference the spawn-coordinate arrays
+        // (`dword_46460C`/`dword_46465C`). The round-init sequence itself
+        // (`sub_410B6E`, pseudo.c ~14689: `sub_4260F5` board build ->
+        // `sub_4214BC` player placement -> `sub_4258E5` powerup scatter ->
+        // `sub_40551F` rovers -> `sub_40151B` campaign hazards) and the
+        // .SCH loader (`sub_403EEE`) were read in full: `sub_4214BC` only
+        // stores each player's coordinates (see the ice_history comment
+        // above) and clears no cell. `DATA/SCHEMES/BASIC.SCH`'s raw grid is
+        // a uniform ':'-candidate field with no blank cells authored near
+        // any `-S` spawn, so the shape is not scheme-baked either. No
+        // VALUELST id documents a "spawn safe radius"
+        // (docs/valuelst-map.md, docs/re/id-audit.md) — the nearest
+        // relative is id 695, the UNRELATED tile-*regeneration* clear
+        // radius (`sub_422351`, docs/re/facts.md "Per-level tile
+        // regeneration"), which gates brick REGROWTH near live players,
+        // not initial spawn placement.
+        //
+        // PROVEN DIVERGENCE (2026-07-21 native probe, facts.md "Spawn-pocket
+        // clear"): running the ORIGINAL's own `sub_4260F5` fill on BASIC.SCH
+        // 4000x shows every spawn tile is a brick ~90% of the time (== the
+        // density, no exception), and forcing a brick onto a spawn then running
+        // the real `sub_4214BC` placement leaves it a brick. The original
+        // places a brick ON the spawn and NEVER clears it — a player spawns
+        // boxed in and bombs its way out (classic high-density opening). So
+        // this clear reproduces NO original function; it is a deliberate
+        // workaround. The real bug it masks is the clean-room AI-flee logic
+        // failing at the boxed-in opening the original's AI survives; the
+        // faithful fix is to repair that AI path and DELETE this clear (then
+        // recapture goldens B/C). The shape below is the smallest that keeps
+        // the AI alive meanwhile: a radius-2 cross so a flame-2 spawn bomb
+        // cannot seal every reachable cell (radius-1 did, hence the suicides).
+        static constexpr int ndx[] = {0, 1, -1, 0, 0, 2, -2, 0, 0};
+        static constexpr int ndy[] = {0, 0, 0, 1, -1, 0, 0, 2, -2};
+        for (int n = 0; n < 9; ++n) {
+            int cx2 = tx + ndx[n], cy2 = ty + ndy[n];
+            if (cx2 >= 0 && cx2 < kGridWidth && cy2 >= 0 && cy2 < kGridHeight &&
+                s.cells[cy2][cx2] == Cell::Brick)
+                s.cells[cy2][cx2] = Cell::Blank;
+        }
         p.x = grid::tile_center_x(tx);
         p.y = grid::tile_center_y(ty);
         // AI behaviour-4 reset snapshot (ai.md finding 1; the original's actor
