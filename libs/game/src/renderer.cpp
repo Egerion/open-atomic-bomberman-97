@@ -778,7 +778,22 @@ void Renderer::draw_world(const sim::State& s) {
         // is hashed sim state but this only READS it — presentation only, no
         // golden impact (State::rng is untouched; flash colour uses flash_lcg_).
         bool disease_flash = (p.disease_timer & 8) != 0;
-        int body_colour = disease_flash ? disease_flash_colour() : pv;
+        // Round-start colour REVEAL (sub_41F29B render, batch_0x41F29B.cpp:623-
+        // 630): while dword_4621E8 > 0 — the first getvalue(32) ticks
+        // (=40 -> ~2 s), a per-round timer set in sub_4214BC and counted down
+        // each frame — the BODY is drawn in the player's OWN slot colour so each
+        // player can spot their bomberman, THEN it switches to the team colour.
+        // Exactly the native's if/else-if order: the disease strobe wins, else
+        // the reveal, else the normal (team) colour. s.tick is the round-elapsed
+        // clock (resets each round). Only VISIBLE in Team Play — in solo the own
+        // slot colour already IS render_colour, so the visual golden (a solo
+        // demo) is byte-identical. Body-only: bombs/flames keep the creation
+        // (team) colour they were stamped with, matching the native (their +60
+        // is not the reveal path).
+        const std::int64_t reveal_ticks = values_ ? values_->at_or(32, 40) : 40;
+        const bool in_reveal = static_cast<std::int64_t>(s.tick) < reveal_ticks;
+        int body_colour =
+            disease_flash ? disease_flash_colour() : (in_reveal ? i : pv);
         const Anim* a = moving_[i] ? &q.walk[body_colour][dir] : &q.stand[body_colour][dir];
         // Leg-cycle pacing: ONE anim frame per THREE pixels walked. The
         // original's pose frame is `(u16)player[+48] / 3 % statecnt`
