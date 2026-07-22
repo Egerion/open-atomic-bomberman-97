@@ -282,8 +282,13 @@ bool GameApp::init() {
         conveyor_speed_index_ = loaded_opts.conveyor_speed;
         // Team Play ("team_play="): absent key ⇒ OFF, matching the confirmed
         // team-mode default (docs/re/setup-screens.md: "Team mode is toggled on
-        // the OPTIONS game-type screen, OFF by default").
-        team_play_ = loaded_opts.team_play.value_or(false);
+        // the OPTIONS game-type screen, OFF by default"). PINNED OFF on the
+        // demo/screenshot path (like the seed + LCGs, tests/visual/README.md):
+        // team_play changes the in-match player render (team vs own colour), so
+        // reading it from the mutable options.ini would make the visual golden
+        // depend on whatever the user last saved — a real fragility that surfaced
+        // once options.ini held team_play=1 (every golden shot went white).
+        team_play_ = !opts_.demo && loaded_opts.team_play.value_or(false);
         options_.team_play = team_play_;
         // Absent-key defaults for the sim-consumed toggles come from VALUELST,
         // mirroring sub_41095A's init order exactly: dword_464AE8=getvalue(40)
