@@ -167,9 +167,15 @@ float FontTextures::draw_outlined(SDL_Renderer* ren, const std::string& s, float
         }
         run = s.substr(0, n);
     }
-    // Four outline passes (the (w+2) scratch buffer pins ±1 horizontally; see
-    // the header comment), then the ink pass on top.
-    static constexpr float kOff[4][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+    // Four outline passes at the DIAGONAL corners, then the ink pass centred —
+    // the exact sub_41696C convention (batch_0x415C1F.cpp): it assembles the
+    // glyph into a (w+2)x(h+4) scratch buffer, drawing the outline colour 4x at
+    // buffer offsets (0,0),(2,2),(0,2),(2,0) and the ink ONCE at (1,1), i.e. the
+    // outline sits at the four DIAGONAL neighbours of the centred ink (not the
+    // cardinal N/S/E/W the port used before). The diagonal reach fills the glyph
+    // corners, giving the heavier black border the original shows on every
+    // sub_41696C string (menu, scoreboard, results, HUD).
+    static constexpr float kOff[4][2] = {{-1, -1}, {1, 1}, {-1, 1}, {1, -1}};
     for (const auto& o : kOff)
         draw(ren, run, x + o[0], y + o[1], outline_r, outline_g, outline_b);
     return draw(ren, run, x, y, r, g, b);
