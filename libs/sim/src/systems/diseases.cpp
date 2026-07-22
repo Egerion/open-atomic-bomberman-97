@@ -125,7 +125,19 @@ void DiseaseSystem::spread_and_age() {
     for (int i = 0; i < kMaxPlayers; ++i) {
         Player& p = s.players[i];
         if (!p.present || !p.alive) continue;  // !+8 (alive) only; +58 stun does not freeze aging
-        if (p.disease_fresh > 0) --p.disease_fresh;
+        // Freshness (+128) is a RAW per-FRAME counter in the native — sub_41F29B
+        // decrements it by 1 every displayed frame (batch_0x41F29B.cpp:279-281),
+        // exactly like the sibling head-stun counter +58 (:331) that this port
+        // already burns kSubFrames/tick (player_turn's sub-frame loop). It is NOT
+        // the ms-delta disease AGE (+120, decremented 1/tick correctly below).
+        // Burning it 1/tick made a freshly-infected player contagion-locked ~10
+        // ticks instead of the native's ~10 FRAMES (~1 tick), so multi-hop
+        // spread propagated ~kSubFrames× too slowly. Burn kSubFrames/tick to
+        // match. (facts.md's old "counts down by 1/tick" note was stale/pre-ADR-
+        // 0006.) No RNG draw — order/count unchanged; hashed field -> goldens
+        // recaptured.
+        if (p.disease_fresh > 0)
+            p.disease_fresh = p.disease_fresh > kSubFrames ? p.disease_fresh - kSubFrames : 0;
         if (p.disease_timer > 0 && s.tuning.diseases_time_limited && --p.disease_timer <= 0)
             clear(p);
     }

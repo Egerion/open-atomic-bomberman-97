@@ -368,7 +368,12 @@ sound is emitted, so contagion is silent.
 **Timer** (`sub_41F29B` ~22928): the disease field `+120` counts **up** by the
 frame delta each tick; when it exceeds the duration `+124` the disease is cured
 (`sub_41DF4C`). Our sim uses an equivalent per-tick countdown. Freshness `+128`
-counts down by 1/tick and gates re-spreading.
+is a DIFFERENT kind of counter: a RAW per-FRAME decrement (`--` once every
+displayed frame, `sub_41F29B` ~22927 / batch_0x41F29B.cpp:279), NOT a delta/tick
+countdown — the same cadence as the head-stun `+58`. It gates re-spreading, so
+the port burns it kSubFrames/tick (CORRECTED 2026-07-22 — the earlier "counts
+down by 1/tick" note here was stale/pre-ADR-0006 and made contagion re-spread
+~kSubFrames× too slow; see `diseases.cpp` `spread_and_age`).
 
 **Visual — CONFIRMED, re-traced exactly 2026-07-09 (`sub_41F29B` ~23252):**
 after the shadow blit, the body sprite's FRAME argument (normally the

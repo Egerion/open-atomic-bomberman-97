@@ -189,6 +189,24 @@ TEST_CASE("a stunned-but-alive player still ages its disease") {
     CHECK(s.state().players[0].sick(Disease::Slow));
 }
 
+TEST_CASE("disease freshness burns kSubFrames per tick, like the head-stun") {
+    // Freshness (+128) is a RAW per-FRAME counter in the native — sub_41F29B
+    // decrements it by 1 every displayed frame (batch_0x41F29B.cpp:279), the
+    // SAME cadence as the head-stun +58 pinned above, NOT the ms-delta disease
+    // AGE (+120, which correctly ages per tick). So it burns kSubFrames per tick.
+    // Pins the 2026-07-22 fix (the port had burned it 1/tick, leaving a
+    // freshly-infected player contagion-locked ~kSubFrames× too long). infect()
+    // zeroes freshness, so set it explicitly — this is the cadence the older
+    // tests never exercised.
+    Simulation s(open_config());
+    infect(s.state().players[0], Disease::Slow, 300);
+    s.state().players[0].disease_fresh = kSubFrames + 2;
+    run(s, 1);
+    CHECK(s.state().players[0].disease_fresh == 2);  // (kSubFrames + 2) - kSubFrames
+    run(s, 1);
+    CHECK(s.state().players[0].disease_fresh == 0);  // floored, never negative
+}
+
 TEST_CASE("a stunned-but-alive player still spreads and catches a disease") {
     // CORRECTED 2026-07-10 (facts.md "Stun does NOT gate flame-death or
     // pickup"): both ends of sub_41F29B's contagion scan gate on ALIVE, not
