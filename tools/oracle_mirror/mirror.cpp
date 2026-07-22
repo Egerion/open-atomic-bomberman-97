@@ -85,7 +85,7 @@ Fixed tile_center_y(int ty) { return ty * kTileHF + kTileHF / 2; }
 // displacement is F2. The native oracle sets up the exact same physical bomb
 // (same tile, same +x direction, kicked-bomb speed, long fuse) via sub_422EDE +
 // sub_42464B. Players stay idle (empty TickInputs) so nothing perturbs it.
-void inject_kicked_bomb(State& s) {
+void inject_kicked_bomb(State& s, bool jelly = false) {
     Bomb b;
     b.active = true;
     b.id = s.next_bomb_id++;
@@ -97,6 +97,7 @@ void inject_kicked_bomb(State& s) {
     b.fuse = 100000;  // never fires in the window (native +74 = 50*1000 likewise)
     b.flame = 2;
     b.moving = true;
+    b.jelly = jelly;           // jelly reverses at the wall instead of stopping
     b.dir = Direction::Right;  // +x, toward the right wall
     s.bombs.push_back(b);
 }
@@ -124,6 +125,24 @@ void inject_belt_bomb(State& s) {
     b.flame = 2;
     b.moving = false;  // RESTING (motion 0): only the belt under it pushes it
     b.dir = Direction::Right;
+    s.bombs.push_back(b);
+}
+
+// FLAME scenario (explosion arm cast): inject one bomb at interior tile (6,4)
+// with flame reach 2 and a short fuse; it explodes and casts a full cross. The
+// native injects the identical fixed-flame bomb (sub_422EDE), avoiding the
+// player-drop flame-stat mismatch. Expect F = 1 + 4*2 = 9 on both sides.
+void inject_flame_bomb(State& s) {
+    Bomb b;
+    b.active = true;
+    b.id = s.next_bomb_id++;
+    b.owner = 9;
+    b.colour = 9;
+    b.x = tile_center_x(6);
+    b.y = tile_center_y(4);
+    b.flame = 2;
+    b.fuse_init = 3;
+    b.fuse = 3;  // explodes a few ticks in
     s.bombs.push_back(b);
 }
 
@@ -190,7 +209,10 @@ int main(int argc, char** argv) {
     }
     const bool kick_scenario = std::strcmp(scenario, "kick") == 0;
     const bool conveyor_scenario = std::strcmp(scenario, "conveyor") == 0;
-    const bool idle_scenario = kick_scenario || conveyor_scenario;
+    const bool flame_scenario = std::strcmp(scenario, "flame") == 0;
+    const bool jelly_scenario = std::strcmp(scenario, "jelly") == 0;
+    const bool idle_scenario =
+        kick_scenario || conveyor_scenario || flame_scenario || jelly_scenario;
     std::fprintf(stderr, "mirror: seed=0x%08x ticks=%d players=%d scenario=%s\n", seed, ticks,
                  players, scenario);
 
@@ -204,7 +226,9 @@ int main(int argc, char** argv) {
     // every player idle (empty TickInputs); the base scenario runs the scripted
     // human + bomb-drop sequence.
     if (kick_scenario) inject_kicked_bomb(sim.state());
+    if (jelly_scenario) inject_kicked_bomb(sim.state(), /*jelly=*/true);
     if (conveyor_scenario) inject_belt_bomb(sim.state());
+    if (flame_scenario) inject_flame_bomb(sim.state());
     // Digest the initial state as tick 0, then each post-tick state.
     emit_digest(0, sim.state());
     for (int t = 1; t <= ticks; ++t) {
