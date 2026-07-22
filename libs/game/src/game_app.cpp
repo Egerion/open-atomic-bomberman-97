@@ -4,6 +4,7 @@
 #include <array>      // run_match's per-player tap latch
 #include <cctype>     // std::isalnum (present_editor's filename sanitizer)
 #include <chrono>     // random_boot_seed
+#include <cstdint>    // load_window_icon's .ICO byte parsing
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
@@ -158,6 +159,76 @@ void draw_boot_loading_dialog(SDL_Renderer* ren, const FontTextures& font, const
 }
 
 }  // namespace
+
+// Loads the original's BM95.ICO (a shipped install file, runtime-loaded like
+// every other asset — never committed) into an RGBA surface for the window
+// icon, matching the native's window/taskbar icon (sub_41095A sets it via the
+// EXE's own icon resource, which BM95.ICO mirrors). Picks the 32x32 8-bit entry
+// (or the largest 8-bit one), applies its BGRA palette + 1-bpp AND transparency
+// mask. Classic .ICO = a stack of bottom-up BMP DIBs. Returns nullptr on any
+// malformation (the window just stays icon-less). Caller owns the surface.
+static SDL_Surface* load_window_icon(const std::filesystem::path& ico_path) {
+    std::size_t sz = 0;
+    void* raw = SDL_LoadFile(ico_path.string().c_str(), &sz);
+    if (!raw) return nullptr;
+    const auto* d = static_cast<const std::uint8_t*>(raw);
+    auto u16 = [&](std::size_t o) { return static_cast<std::uint16_t>(d[o] | (d[o + 1] << 8)); };
+    auto u32 = [&](std::size_t o) {
+        return static_cast<std::uint32_t>(d[o] | (d[o + 1] << 8) | (d[o + 2] << 16) |
+                                          (static_cast<std::uint32_t>(d[o + 3]) << 24));
+    };
+    SDL_Surface* surf = nullptr;
+    do {
+        if (sz < 6 || u16(2) != 1) break;  // ICONDIR: reserved0, type==1
+        const int count = u16(4);
+        int best = -1, best_score = -1;
+        for (int i = 0; i < count; ++i) {
+            const std::size_t e = 6 + static_cast<std::size_t>(i) * 16;
+            if (e + 16 > sz) break;
+            const std::uint32_t off = u32(e + 12);
+            if (static_cast<std::size_t>(off) + 40 > sz) continue;
+            if (u16(off + 14) != 8) continue;  // 8-bpp DIB entries only (simple palette path)
+            const int w = d[e] ? d[e] : 256;
+            const int score = (w == 32) ? 10000 : w;  // prefer 32x32, else the largest
+            if (score > best_score) {
+                best_score = score;
+                best = i;
+            }
+        }
+        if (best < 0) break;
+        const std::size_t e = 6 + static_cast<std::size_t>(best) * 16;
+        const std::uint32_t off = u32(e + 12);
+        const int w = static_cast<int>(u32(off + 4));
+        const int hh = static_cast<int>(u32(off + 8)) / 2;  // DIB height is 2x (XOR bitmap + AND mask)
+        if (w <= 0 || hh <= 0 || w > 256 || hh > 256) break;
+        const std::size_t pal = off + 40;                                   // 256 BGRA entries
+        const std::size_t xoff = pal + 256 * 4;                             // XOR (colour) bitmap
+        const int rowb = ((w + 3) / 4) * 4;                                 // 8-bpp row, 4-aligned
+        const int maskrow = ((w + 31) / 32) * 4;                            // 1-bpp AND row, 4-aligned
+        const std::size_t aoff = xoff + static_cast<std::size_t>(rowb) * hh;  // AND (mask) bitmap
+        if (aoff + static_cast<std::size_t>(maskrow) * hh > sz) break;
+        surf = SDL_CreateSurface(w, hh, SDL_PIXELFORMAT_RGBA32);
+        if (!surf) break;
+        auto* px = static_cast<std::uint8_t*>(surf->pixels);
+        for (int y = 0; y < hh; ++y) {
+            const int sy = hh - 1 - y;  // DIB rows are bottom-up
+            for (int x = 0; x < w; ++x) {
+                const std::uint8_t idx = d[xoff + static_cast<std::size_t>(sy) * rowb + x];
+                const std::size_t p = pal + static_cast<std::size_t>(idx) * 4;
+                const std::uint8_t m = d[aoff + static_cast<std::size_t>(sy) * maskrow + (x / 8)];
+                const bool clear = (m >> (7 - (x & 7))) & 1;  // AND-mask bit set == transparent
+                std::uint8_t* o = px + static_cast<std::size_t>(y) * surf->pitch +
+                                  static_cast<std::size_t>(x) * 4;
+                o[0] = d[p + 2];  // R (palette is BGRA)
+                o[1] = d[p + 1];  // G
+                o[2] = d[p + 0];  // B
+                o[3] = clear ? 0 : 255;
+            }
+        }
+    } while (false);
+    SDL_free(raw);
+    return surf;
+}
 
 bool GameApp::init() {
     // Reseed the front end's presentation-only LCGs from real per-process
@@ -327,13 +398,19 @@ bool GameApp::init() {
     // the OS window/output — it never touches kScreenW/kScreenH or the sim.
     SDL_Window* win = nullptr;
     SDL_Renderer* ren = nullptr;
-    if (!SDL_CreateWindowAndRenderer("Open Bomberman", kScreenW * 2, kScreenH * 2,
+    // Window title matches the original (sub_41095A -> sub_43E5CC(aAtomicBomberma)).
+    if (!SDL_CreateWindowAndRenderer("Atomic Bomberman", kScreenW * 2, kScreenH * 2,
                                      SDL_WINDOW_RESIZABLE, &win, &ren)) {
         std::fprintf(stderr, "SDL_CreateWindowAndRenderer: %s\n", SDL_GetError());
         return false;
     }
     window_.reset(win);
     sdl_renderer_.reset(ren);
+    // Window/taskbar icon from the install's own BM95.ICO (matches the native).
+    if (SDL_Surface* icon = load_window_icon(opts_.game_dir / "BM95.ICO")) {
+        SDL_SetWindowIcon(window_.get(), icon);
+        SDL_DestroySurface(icon);
+    }
     // Demo/screenshot mode pins its OWN presentation: the visual-golden
     // harness hashes the presented backbuffer, so its pixels must not depend
     // on either the user's saved fullscreen state (a 3840x2160 fullscreen
@@ -4365,8 +4442,8 @@ void GameApp::toggle_fullscreen() {
 
 void GameApp::toggle_hd_artwork() {
     assets_.set_hd_enabled(!assets_.hd_enabled());
-    SDL_SetWindowTitle(window_.get(), assets_.hd_enabled() ? "Open Bomberman [HD]"
-                                                           : "Open Bomberman [Classic]");
+    SDL_SetWindowTitle(window_.get(), assets_.hd_enabled() ? "Atomic Bomberman [HD]"
+                                                           : "Atomic Bomberman [Classic]");
     std::fprintf(stderr, "artwork mode: %s\n", assets_.hd_enabled() ? "HD" : "classic");
 }
 
