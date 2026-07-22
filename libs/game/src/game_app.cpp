@@ -1444,13 +1444,13 @@ void GameApp::present_scheme_picker(OptionsScreen& opt, const std::string& backd
                 SDL_FRect d{0, 0, static_cast<float>(bg.w), static_cast<float>(bg.h)};
                 SDL_RenderTexture(sdl_renderer_.get(), bg.tex, nullptr, &d);
             }
-            // Ink = byte_49A390 (== kDialogInk, standard near-white dialog ink):
-            // sub_407582's empty-glob box is sub_414340(getstring(95)|getstring(
-            // 720), byte_49D37A, byte_49A390) (batch_0x4074DC.cpp:180-184) — not
-            // a red. The former (164,0,0) was invented.
+            // Ink = byte_49A390 = DARK RED (164,0,0): sub_407582's empty-glob box
+            // is sub_414340(getstring(95)|getstring(720), byte_49D37A,
+            // byte_49A390) (batch_0x4074DC.cpp:180-184); a3 (byte_49A390) is the
+            // foreground/ink = (164,0,0) warning red (docs/re/frontend-flow.md),
+            // NOT white. (Restores the correct red.)
             draw_acknowledge_dialog(sdl_renderer_.get(), front_font_,
-                                    &assets_.frontend_pcx("WINZ"), top, bottom, ok, kDialogInkR,
-                                    kDialogInkG, kDialogInkB);
+                                    &assets_.frontend_pcx("WINZ"), top, bottom, ok, 164, 0, 0);
             SDL_RenderPresent(sdl_renderer_.get());
             SDL_Delay(2);
         }
@@ -2024,8 +2024,9 @@ AppInput GameApp::present_campaign_complete() {
     // sub_40133F's stage-exhausted branch (batch_0x401010.cpp:288-296): when
     // `++dword_4648B0 >= dword_45E014` the original pops a blocking sub_414340
     // acknowledge modal — getstring(1220) "Congratulations!" over getstring(1225)
-    // "You made it through the whole campaign!", standard dialog ink
-    // (byte_49A390 == kDialogInk) — then returns to the menu. The port used to
+    // "You made it through the whole campaign!", ink byte_49A390 = (164,0,0) dark
+    // red (batch_0x401010.cpp:289/294, a3/foreground; frontend-flow.md) — then
+    // returns to the menu. The port used to
     // clear campaign state silently. Waits for Enter/Space/Escape (nav blip on
     // any key), like every other sub_414340 modal; Quit if the window closed.
     const std::string top = assets_.getstring(1220, "Congratulations!");
@@ -2046,7 +2047,7 @@ AppInput GameApp::present_campaign_complete() {
         SDL_RenderClear(sdl_renderer_.get());
         renderer_->draw_frame(sim_.state());  // NOLINT(bugprone-unchecked-optional-access) — backdrop
         draw_acknowledge_dialog(sdl_renderer_.get(), front_font_, &assets_.frontend_pcx("WINZ"), top,
-                                bottom, ok, kDialogInkR, kDialogInkG, kDialogInkB);
+                                bottom, ok, 164, 0, 0);  // byte_49A390 = (164,0,0) dark red
         SDL_RenderPresent(sdl_renderer_.get());
         SDL_Delay(2);
     }
@@ -2615,14 +2616,15 @@ AppInput GameApp::present_menu() {
             std::string prompt = assets_.getstring(10, "Are you sure you want to exit?");
             std::string yes_label = assets_.getstring(26, " Yes ");
             std::string no_label = assets_.getstring(25, " No ");
-            // Prompt ink = byte_49A390 (== kDialogInk), NOT a red: sub_412987's
-            // quit confirm is sub_41456C(getstring(10), 0, byte_49A390)
-            // (batch_0x411CF8.cpp) — the same standard near-white dialog ink
-            // every other sub_41456C/sub_414340 modal uses (campaign banner,
-            // editor confirms). The former (164,0,0) dark red was invented.
+            // Prompt ink = byte_49A390 = DARK RED (164,0,0): sub_412987's quit
+            // confirm is sub_41456C(getstring(10), 0, byte_49A390)
+            // (batch_0x411CF8.cpp), and byte_49A390 resolves to LUT offset
+            // 0x5000 -> (164,0,0) — a distinct WARNING RED, NOT the white
+            // byte_49D38F/kDialogInk (docs/re/frontend-flow.md "byte_49A390").
+            // sub_41456C's a3 slot is the foreground/ink. (This restores the
+            // correct red after a wrong same-day change to white.)
             draw_confirm_dialog(sdl_renderer_.get(), front_font_, &assets_.frontend_pcx("WINZ"),
-                                prompt, "", yes_label, no_label, kDialogInkR, kDialogInkG,
-                                kDialogInkB);
+                                prompt, "", yes_label, no_label, 164, 0, 0);
         }
         SDL_RenderPresent(sdl_renderer_.get());
         pace_to_refresh(pace_target_ns, period_ns);
@@ -3202,12 +3204,13 @@ AppInput GameApp::present_setup() {
             }
             audio_.update_music();
             draw_frame();
-            // Ink = byte_49A390 (== kDialogInk): the setup start-guard errors are
-            // sub_414340(getstring(46/48/45)|getstring(96), color1, byte_49A390)
-            // (batch_0x410401.cpp:1161/1175) — the same near-white as every other
-            // sub_414340 modal, not the invented (164,0,0) red.
+            // Ink = byte_49A390 = DARK RED (164,0,0): the setup start-guard
+            // errors are sub_414340(getstring(46/48/45)|getstring(96), color1,
+            // byte_49A390) (batch_0x410401.cpp:1161/1175), and byte_49A390
+            // resolves to (164,0,0) warning red (docs/re/frontend-flow.md), NOT
+            // white. (Restores the correct red.)
             draw_acknowledge_dialog(sdl_renderer_.get(), front_font_, &assets_.frontend_pcx("WINZ"),
-                                    reason, sub, ok, kDialogInkR, kDialogInkG, kDialogInkB);
+                                    reason, sub, ok, 164, 0, 0);
             SDL_RenderPresent(sdl_renderer_.get());
             SDL_Delay(2);
         }
