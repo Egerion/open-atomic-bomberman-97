@@ -57,6 +57,18 @@ t=<tick> P=<n> | <slot>:<tx>,<ty>,<alive>,<bombs> ... | B=<liveBombs>[ bomb:<tx>
   leads), NOT a speed error: it does NOT compound (the first crossing at t6 is
   identical), whereas a residual +100 would race the mirror progressively ahead.
   Both freeze permanently at (4,0). F2 belt + F3 CONFIRMED against the native.
+- **jelly** (`--scenario=jelly` / `--oracle <out> <ticks> jelly`): the kick
+  scenario with a KIND-2 (jelly) bomb. It slides to the col-14 wall and REVERSES
+  (ping-pongs back) instead of stopping (`sub_42331C` case 1 jelly branch).
+  Result 2026-07-22: native and mirror agree tile-for-tile on the way out
+  (7,0)->(14,0) and ping-pong back to (6,0); only the known ~1-tick rotation
+  offset appears on the return leg. Jelly bounce + ping-pong speed CONFIRMED.
+- **flame** (`--scenario=flame` / `--oracle <out> <ticks> flame`): injects a
+  flame-2 bomb at interior tile (6,4) and explodes it, comparing the flame cross
+  (F count + cell tiles). Mirror casts the correct cross F=9. NATIVE-BLOCKED as
+  of 2026-07-22: the native transliteration casts a DIAGONAL (cells (2,2)..(6,6),
+  centre (6,4) unlit) — a native-port geometry bug in the flame cast, NOT a
+  clean-room bug. Scenario is ready for when the native cast is fixed.
 
 ## Scripted input (reproduce identically on the native side)
 
