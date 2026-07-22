@@ -207,7 +207,16 @@ State build_state(const MatchConfig& config) {
     // fidelity, not real-game bit-matching — the real game seeds brick fill off
     // the wall clock (docs/valuelst-map.md "brick fill").
     for (int k = 0; k < kPowerupKinds; ++k) {
-        if (config.forbidden[k]) continue;
+        // NO forbidden-skip here: sub_4258E5 (batch_0x42583B.cpp) hides a powerup
+        // under bricks based ONLY on its count (getvalue(400+k) / the scheme
+        // override), with NO check of the per-powerup `forbidden` flag — that
+        // flag gates only the RANDOM-powerup re-roll (the 0xC case's s.forbidden
+        // == dword_4647E0), never the brick-hide. A former `if (forbidden)
+        // continue;` here SKIPPED the RNG draws the native makes for a
+        // forbidden-but-nonzero-count kind — an RNG-order divergence. Dormant on
+        // every shipped scheme (they zero a forbidden kind's count), so goldens
+        // are unmoved, but it would desync a user scheme that forbids a powerup
+        // while leaving its count > 0. (W3-C powerup audit.)
         std::int32_t want = config.spawn_override[k] > MatchConfig::kNoOverride
                                 ? config.spawn_override[k]
                                 : s.tuning.spawn_counts[k];

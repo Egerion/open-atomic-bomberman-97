@@ -263,8 +263,10 @@ void PowerupSystem::head_hit(int victim, int tx, int ty) {
 
 // A player dies (sub_41DBFE, invoked from sub_41F29B LABEL_26 when the death
 // animation completes). Scatters EVERY powerup the player accumulated ABOVE
-// its VALUELST start-with baseline back onto random floor tiles: iterate kinds
-// 0..14 in index order and, for each, drop the surplus.
+// its VALUELST start-with baseline back onto random floor tiles: iterate the
+// kPowerupKinds real kinds (0..12) in index order and, for each, drop the
+// surplus. (The native's pad slots 13/14 are seeded to their own baseline by
+// sub_4214BC, so they never carry surplus — iterating them would be a no-op.)
 //
 // This is NOT the head hit. The head hit drops a rand-limited COUNT
 // (getvalue(670)+rand%getvalue(671)) of RANDOMLY ROLLED kinds (rand%15); death
