@@ -1871,6 +1871,38 @@ AppInput GameApp::present_campaign_banner() {
     }
 }
 
+AppInput GameApp::present_campaign_complete() {
+    // sub_40133F's stage-exhausted branch (batch_0x401010.cpp:288-296): when
+    // `++dword_4648B0 >= dword_45E014` the original pops a blocking sub_414340
+    // acknowledge modal — getstring(1220) "Congratulations!" over getstring(1225)
+    // "You made it through the whole campaign!", standard dialog ink
+    // (byte_49A390 == kDialogInk) — then returns to the menu. The port used to
+    // clear campaign state silently. Waits for Enter/Space/Escape (nav blip on
+    // any key), like every other sub_414340 modal; Quit if the window closed.
+    const std::string top = assets_.getstring(1220, "Congratulations!");
+    const std::string bottom = assets_.getstring(1225, "You made it through the whole campaign!");
+    const std::string ok = assets_.getstring(27, " Ok ");
+    while (true) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
+            if (ev.type != SDL_EVENT_KEY_DOWN) continue;
+            audio_.play(20);  // nav blip on any key
+            if (ev.key.key == SDLK_RETURN || ev.key.key == SDLK_KP_ENTER ||
+                ev.key.key == SDLK_SPACE || ev.key.key == SDLK_ESCAPE)
+                return AppInput::Advance;
+        }
+        audio_.update_music();
+        SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
+        SDL_RenderClear(sdl_renderer_.get());
+        renderer_->draw_frame(sim_.state());  // NOLINT(bugprone-unchecked-optional-access) — backdrop
+        draw_acknowledge_dialog(sdl_renderer_.get(), front_font_, &assets_.frontend_pcx("WINZ"), top,
+                                bottom, ok, kDialogInkR, kDialogInkG, kDialogInkB);
+        SDL_RenderPresent(sdl_renderer_.get());
+        SDL_Delay(2);
+    }
+}
+
 int GameApp::round_winner() const {
     // A round win is exactly one SIDE of survivors with the clock still
     // running; a mutual wipe-out or a time-out is a draw. Mirrors sub_42A3F6,
@@ -4117,6 +4149,11 @@ int GameApp::run_app() {
                             // roster/settings", which this breaks).
                             ev = AppInput::CampaignContinue;
                         } else {
+                            // Whole campaign cleared: the "Congratulations! You
+                            // made it through the whole campaign!" banner
+                            // (sub_40133F, getstring 1220/1225) before returning
+                            // to the menu.
+                            if (present_campaign_complete() == AppInput::Quit) return 0;
                             campaign_active_ = false;  // dword_46489C = 0 (stage list exhausted)
                             campaign_stages_.clear();
                             campaign_stage_index_ = 0;

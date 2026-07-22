@@ -290,6 +290,10 @@ private:
     // from present_campaign_confirm's above (different getstring ids,
     // different content), but the same dialog FAMILY.
     AppInput present_campaign_banner();
+    // The "Congratulations! You made it through the whole campaign!" acknowledge
+    // modal (sub_40133F stage-exhausted branch, getstring 1220/1225) shown once
+    // the last campaign stage is cleared, before returning to the menu.
+    AppInput present_campaign_complete();
     // The IPLOGO -> HSLOGO -> TITLE boot presentation (sub_42B060). LINEAR — no
     // attract re-run: each screen advances on a key OR the getvalue(12) = 7 s
     // timeout, and the title's Advance (key or timeout) returns so run_app drops
