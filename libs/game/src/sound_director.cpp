@@ -161,21 +161,25 @@ void SoundDirector::on_tick(const sim::State& s) {
                 break;
             }
             case sim::Event::Type::PowerupPicked: {
-                // Jelly plays the boing (135) instead of a pickup voice, as in
-                // sub_41E21E case 0xA.
-                if (ev.data == static_cast<std::int8_t>(sim::PowerupType::Jelly))
-                    audio_.play(135);
-                else
-                    // sub_41E21E sets v8=400 then sub_427961(400)
-                    // (batch_0x41DAA7.cpp:503) — the pickup block starts at 400
-                    // (400,woohoo1), so include it (was 401, dropping woohoo1).
-                    audio_.play_random_in_range(400, 499);
-                int n = ++pickups_[ev.player];
-                // "You are now AWESOME": 7th powerup, then every 5th after;
-                // the counter wraps back to 7 past 50 (sub_41E21E tail).
-                if (n == 7 || (n > 7 && (n - 7) % 5 == 0))
-                    pending_.push_back({s.tick + 8, {1400, 1699}});
+                // sub_41E21E (batch_0x41DAA7.cpp:495-503): v8 defaults to the
+                // pickup voice (400, or 135 for jelly, case 0xA), but the
+                // "You are now AWESOME" MILESTONE OVERWRITES it to 1400 — then a
+                // SINGLE sub_427961(v8). So on a milestone the pickup voice is
+                // REPLACED by 1400, not layered, and plays immediately. The port
+                // used to play BOTH (pickup voice now + 1400 on an invented
+                // +8-tick delay) — two sounds where the original plays one.
+                const int n = ++pickups_[ev.player];
+                // 7th powerup, then every 5th after; the counter wraps to 7 past
+                // 50 (sub_41E21E tail).
+                const bool milestone = (n == 7 || (n > 7 && (n - 7) % 5 == 0));
                 if (n > 50) pickups_[ev.player] = 7;
+                if (milestone)
+                    audio_.play_random_in_range(1400, 1699);  // replaces the pickup voice
+                else if (ev.data == static_cast<std::int8_t>(sim::PowerupType::Jelly))
+                    audio_.play(135);  // jelly boing
+                else
+                    // 400 (woohoo1) starts the pickup block (was 401, dropping it).
+                    audio_.play_random_in_range(400, 499);
                 break;
             }
             case sim::Event::Type::PlayerDied: {
