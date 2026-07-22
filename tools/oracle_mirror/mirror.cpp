@@ -176,6 +176,16 @@ void inject_flying_bomb(State& s) {
     s.bombs.push_back(b);
 }
 
+// PLAYERBELT scenario (player-on-conveyor carry): an EAST belt on row 0 from
+// (0,0) to (6,0), under player 0's spawn. No bomb — the idle player 0 is
+// carried east by the belt. The native sets up the same actor records.
+void inject_playerbelt(State& s) {
+    for (int x = 0; x <= 6; ++x) {
+        s.actor_type[0][x] = ActorType::Conveyor;
+        s.actor_dir[0][x] = 1;  // godir 1 = east
+    }
+}
+
 int count_flame_cells(const State& s) {
     int n = 0;
     for (int y = 0; y < kGridHeight; ++y)
@@ -242,8 +252,9 @@ int main(int argc, char** argv) {
     const bool flame_scenario = std::strcmp(scenario, "flame") == 0;
     const bool jelly_scenario = std::strcmp(scenario, "jelly") == 0;
     const bool flight_scenario = std::strcmp(scenario, "flight") == 0;
+    const bool playerbelt_scenario = std::strcmp(scenario, "playerbelt") == 0;
     const bool idle_scenario = kick_scenario || conveyor_scenario || flame_scenario ||
-                               jelly_scenario || flight_scenario;
+                               jelly_scenario || flight_scenario || playerbelt_scenario;
     std::fprintf(stderr, "mirror: seed=0x%08x ticks=%d players=%d scenario=%s\n", seed, ticks,
                  players, scenario);
 
@@ -261,6 +272,7 @@ int main(int argc, char** argv) {
     if (conveyor_scenario) inject_belt_bomb(sim.state());
     if (flame_scenario) inject_flame_bomb(sim.state());
     if (flight_scenario) inject_flying_bomb(sim.state());
+    if (playerbelt_scenario) inject_playerbelt(sim.state());
     // Digest the initial state as tick 0, then each post-tick state.
     emit_digest(0, sim.state());
     for (int t = 1; t <= ticks; ++t) {

@@ -80,6 +80,12 @@ t=<tick> P=<n> | <slot>:<tx>,<ty>,<alive>,<bombs> ... | B=<liveBombs>[ bomb:<tx>
   native-transliteration robustness bug (same class as the M3 9x-path fault),
   NOT a gameplay divergence; the flight itself is fully validated through its
   landing at t9.
+- **playerbelt** (`--scenario=playerbelt` / `--oracle <out> <ticks> playerbelt`):
+  an EAST belt on row 0 from (0,0) to (6,0), under player 0's spawn, no bomb.
+  The idle player 0 is CARRIED east by the belt (movement.cpp belt-add /
+  sub_41F29B ~23417). Result 2026-07-22: native and mirror carry player 0
+  (0,0)->(1,0)@t6 ->(2,0)@t17 ->(3,0)@t29 ->(4,0)@t40 TICK-FOR-TICK (no offset).
+  Player conveyor-carry CONFIRMED against the native.
 
 ## Scripted input (reproduce identically on the native side)
 
