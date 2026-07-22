@@ -14,15 +14,29 @@ synthetic tables.
 
 ## Why index-remap, not a truecolour tint
 
-The sprites are stored 8-bit **paletted** (ANI CIMG type 11: a raw index buffer +
-a 1024-byte RGBA palette per frame). The engine recolours by rewriting each
-pixel's palette INDEX through the colour's table, then doing the palette lookup —
-so only the indices in the "colour band" move; the shadow, casing, outline and
-transparent indices are untouched. Our earlier port instead scaled the decoded
-RGB by a green-excess TINT (`recolor_image`), which on DESATURATED armour pixels
-preserved the achromatic baseline and washed every non-black colour toward WHITE
-(black collapsed to the baseline and happened to look right). The fix is to do
-the real index remap; the tint survives only as the missing-file fallback.
+The engine recolours at the palette-INDEX level: it rewrites each pixel's MASTER-
+palette index through the colour's table, then does the palette lookup — so only
+the indices in the "colour band" (100..174) move; the shadow, casing, outline and
+transparent indices are untouched.
+
+CORRECTED 2026-07-22 (CIMG survey + colour-pipeline audit): the player ANI cels
+are NOT stored as paletted CIMG type 11 — a survey of STAND/WALK/KICK/BOMBS/
+PUNBOMB/CORNER/BWALK/XPLODE returns **100% type-4** (16bpp RGB555), 0 type-11.
+The index level is still where the recolour happens, because the in-match back
+buffer is 8-bit master-palette-indexed: a type-4 pixel is decoded straight to a
+master index via the COLOR.PAL RGB555->index LUT (`byte_495390`, colorpal.hpp
+`index_of`) at load, and THAT index is what `sub_415A1C` remaps through the
+colour's `dword_460564` (== the loaded `.RMP`). So the mechanism is identical for
+both cel types; only the source of the index differs (own palette for type-11,
+the master LUT for type-4).
+
+Our earlier port scaled the decoded RGB by a green-excess TINT (`recolor_image`),
+which on DESATURATED armour pixels preserved the achromatic baseline and washed
+every non-black colour toward WHITE (black collapsed to the baseline and happened
+to look right). The FAITHFUL fix (`recolor_image_master`, landed 2026-07-22)
+reproduces the native index path for type-4: snap -> `.RMP` remap -> master
+lookup, giving the artist-authored per-colour shades. The green-excess tint now
+survives ONLY as the fallback when COLOR.PAL is unavailable.
 
 ## `.RMP` file format — CONFIRMED (259 bytes)
 

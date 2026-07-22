@@ -103,8 +103,19 @@
 # capture pipeline is deterministic and the move is the intended consequence.
 # Rovers keep their own +100 (a DIFFERENT sub, sub_401B5C, with no backoff --
 # genuinely nets one extra pixel/frame). headless 49/49 green at recapture.
-walking                 10    d613b1cb1cc1008762179a171a4b0c51776212aabfbcd415f5b471fb143869e8
-bomb_pulse               40    f23407d602f2d25df6736e6b64a8e45c177fdbac462c54f3c12df5884ae12048
-explosion_mid_flame     65    d4c0c2537325d30a161f583fa85b1992ad55c5cdb3fbd567dd35aaede0e49d64
-brick_crumble           68    e2ebb5881cff10baf2f83152760032304a8dfb4b01e31d29a5731e2d27cb8aa1
-powerup_revealed        76    6e027a63a70a2083d851f2793ac4cae618475ea7cd94563d2f1ad49a9c0009b9
+#
+# Recaptured 2026-07-22 (FAITHFUL player recolour, docs/re/player-colour.md +
+# results-and-options.md colour audit): all player art is 16bpp CIMG type-4
+# (a survey of STAND/WALK/KICK/BOMBS/... returns 100% type-4), so the recolour
+# now mirrors the native exactly for those frames -- snap each pixel to a master
+# index, remap through the colour's .RMP (dword_460564, master-index ->
+# master-index), re-look-up the master palette (sprites.cpp recolor_image_master)
+# -- replacing the green-excess TINT approximation with the artist-authored
+# per-colour shades. Every shot with a player body shifts; the white player in
+# particular is no longer the old "blown-out blob". Verified by eye (walking +
+# powerup_revealed) before pinning. Debug == Release byte-identical.
+walking                 10    4acce93f8e799b24cc24d2833777f270ad112c8d67ce9b86414adf24f173820e
+bomb_pulse               40    2186552552f598614849aedf072547ce3e3cd6f773f204ee5320610e39f2cb88
+explosion_mid_flame     65    89281f200ffb75b36e0daf637a5b417488f00e7123a5fecadac781d46f05bf32
+brick_crumble           68    9544112bcd3ddf2e9e8a43c3ab9b522c180a48cbb3cead34807bae124b593aa0
+powerup_revealed        76    8ce43d390b4e423e2323cf24f43bfa869711f422029fe57468fc99b24eedf23a

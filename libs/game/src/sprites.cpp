@@ -93,6 +93,31 @@ assets::Image recolor_image_rmp(assets::Image img, const std::array<std::uint8_t
     return img;
 }
 
+static assets::Image recolor_image_master(assets::Image img,
+                                          const std::array<std::uint8_t, 256>& rmp,
+                                          const assets::colorpal::Palette& snap) {
+    // The FAITHFUL native player recolour for 16bpp (type-4) frames — which is
+    // ALL player art in this install (a CIMG survey of STAND/WALK/KICK/BOMBS/
+    // PUNBOMB/CORNER/BWALK/XPLODE returns 100% type-4, 0 type-11). The native
+    // stores even type-4 cels in the 8-bit back buffer as MASTER-palette indices
+    // (sub_41C837 decode: `*dst = byte_495390[rgb555]`); the player blit
+    // sub_415A1C then rewrites that index through the colour's remap table
+    // dword_460564[colour] (== the loaded `.RMP`, master-index -> master-index)
+    // and re-looks-up the master palette. Reproduce it exactly, per pixel:
+    //   master_idx = index_of(px) ; disp = master_rgb(rmp[master_idx]).
+    // Non-green master colours are identity in the .RMP (load-time backfill), so
+    // only the green armour band changes — the rest is snapped to its master
+    // colour, same as the base texture. This REPLACES the green-excess TINT
+    // approximation (recolor_image) with the artist-authored per-colour shades
+    // the original actually shows (2026-07-22 colour-pipeline audit, decision a).
+    for (std::size_t i = 0; i + 3 < img.rgba.size(); i += 4) {
+        if (img.rgba[i + 3] == 0) continue;  // transparent: leave as-is
+        const std::uint8_t idx = snap.index_of(img.rgba[i + 0], img.rgba[i + 1], img.rgba[i + 2]);
+        snap.master_rgb(rmp[idx], img.rgba[i + 0], img.rgba[i + 1], img.rgba[i + 2]);
+    }
+    return img;
+}
+
 void AniTextures::load(SDL_Renderer* ren, const std::filesystem::path& path,
                        const assets::colorpal::Palette* snap) {
     reset();
@@ -137,23 +162,31 @@ AniTextures AniTextures::recolored(SDL_Renderer* ren, const std::int32_t rgb[3],
 AniTextures AniTextures::recolored(SDL_Renderer* ren, const std::array<std::uint8_t, 256>& rmp,
                                    const std::array<std::uint8_t, 3>& tail_rgb,
                                    const assets::colorpal::Palette* snap) const {
-    // Per-frame dispatch: the index remap only exists for PALETTED (type 11)
-    // frames; this install stores most player art as 16bpp type 4 (survey:
-    // 2299 of 2327 frames), where recolor_image_rmp is a structural no-op —
-    // which left every player green. For those frames apply the truecolour
-    // green-excess recolour (the sub_414A65 BUILDER formula) with the .RMP
-    // TAIL percents — the same authoritative per-colour value the builder
-    // itself targets (docs/re/player-colour.md "the tail is the authoritative
-    // per-colour value"), so both frame types resolve to the same colour.
+    // Per-frame dispatch. All player art in this install is 16bpp type 4 (a CIMG
+    // survey returns 100% type-4), which the native recolours the SAME way as
+    // paletted art: snap each pixel to a master index, remap it through the
+    // colour's `.RMP` (dword_460564), re-look-up the master palette
+    // (recolor_image_master) — the artist-authored shades, not an arithmetic
+    // tint. The paletted (type-11) branch is kept for completeness; the
+    // green-excess `tail` path is only the LAST-resort fallback when no COLOR.PAL
+    // snap is available (missing install data), matching the pre-audit look.
     const std::int32_t tail[3] = {tail_rgb[0], tail_rgb[1], tail_rgb[2]};
+    const bool have_snap = snap && snap->ok();
     AniTextures out;
     out.data_ = data_;
     out.textures_.assign(out.data_.frames.size(), nullptr);
     for (std::size_t i = 0; i < out.data_.frames.size(); ++i) {
         auto& f = out.data_.frames[i];
         if (f.image.empty()) continue;
-        f.image = f.image.paletted() ? recolor_image_rmp(std::move(f.image), rmp)
-                                     : recolor_image(std::move(f.image), tail);
+        if (f.image.paletted())
+            f.image = recolor_image_rmp(std::move(f.image), rmp);
+        else if (have_snap)
+            f.image = recolor_image_master(std::move(f.image), rmp, *snap);
+        else
+            f.image = recolor_image(std::move(f.image), tail);
+        // recolor_image_master already emits final master-palette RGB, so the
+        // make_texture snap is an idempotent no-op there; it still snaps the
+        // paletted/fallback outputs.
         out.textures_[i] = make_texture(ren, f.image, SDL_SCALEMODE_NEAREST, snap);
     }
     // HD frames are re-encoded as type-4 truecolour (never paletted), so the

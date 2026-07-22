@@ -14,9 +14,13 @@ struct Image {
     // Faithful player recolouring (the original's .RMP remap, docs/re/
     // player-colour.md) works at the PALETTE-INDEX level: the blit remaps each
     // pixel's index through the colour's table (sub_415A1C) before the palette
-    // lookup. Truecolour rgba alone loses the indices, so for 8bpp paletted CIMG
-    // (type 11) we also keep the source indices + the frame's palette. Empty for
-    // 16bpp CIMG (type 4), which carries no palette and is never player-coloured.
+    // lookup. For 8bpp paletted CIMG (type 11) we keep the source indices + the
+    // frame's own palette so recolor_image_rmp can remap them directly. These
+    // stay EMPTY for 16bpp CIMG (type 4) — but type-4 IS still player-coloured
+    // (in fact ALL player art in this install is type-4): the native decodes a
+    // type-4 pixel straight to a MASTER-palette index via the COLOR.PAL LUT
+    // (colorpal.hpp index_of), so its recolour needs no per-frame palette —
+    // sprites.cpp recolor_image_master snaps then remaps through the same .RMP.
     std::vector<std::uint8_t> indices;  // width * height palette indices, or empty
     std::vector<std::uint8_t> palette;  // 256 * 4 RGBA source palette, or empty
 

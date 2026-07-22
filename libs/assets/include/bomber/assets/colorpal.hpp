@@ -50,6 +50,28 @@ public:
         b = master_[static_cast<std::size_t>(idx) * 3 + 2];
     }
 
+    // The master-palette INDEX a raw 8-bit RGB snaps to — the RGB555->index LUT
+    // lookup alone (sub_41C837's `byte_495390[rgb555]`), without the master-RGB
+    // write-back that snap() does. The faithful player recolour needs the bare
+    // index so it can rewrite it through the colour's .RMP table before the
+    // final master lookup (master_rgb below). `r>>3` inverts the loader's
+    // expand5, so index_of(expand5(rgb555)) == byte_495390[rgb555] exactly.
+    std::uint8_t index_of(std::uint8_t r, std::uint8_t g, std::uint8_t b) const {
+        const std::size_t off = (static_cast<std::size_t>(r >> 3) << 10) |
+                                (static_cast<std::size_t>(g >> 3) << 5) |
+                                static_cast<std::size_t>(b >> 3);
+        return lut_[off];
+    }
+
+    // The 8-bit RGB of master-palette entry `idx` (already *4-scaled at load).
+    // The other half of the faithful recolour: after remapping an index through
+    // a .RMP table, look the result up here for the displayed colour.
+    void master_rgb(std::uint8_t idx, std::uint8_t& r, std::uint8_t& g, std::uint8_t& b) const {
+        r = master_[static_cast<std::size_t>(idx) * 3 + 0];
+        g = master_[static_cast<std::size_t>(idx) * 3 + 1];
+        b = master_[static_cast<std::size_t>(idx) * 3 + 2];
+    }
+
     // Remap every OPAQUE pixel of a decoded match image in place. Transparent
     // pixels (alpha 0, the key colour) are left untouched so their transparency
     // survives. A no-op when !ok(). Apply to CLASSIC match art only (field
