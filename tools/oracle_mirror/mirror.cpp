@@ -47,6 +47,14 @@ TickInputs scripted_inputs(std::uint64_t t) {
     return in;
 }
 
+// WARP/TRAMP input: player 0 holds RIGHT every tick (walk east into the actor),
+// no bombs. Matches the native side (right=true always in those scenarios).
+TickInputs walk_east_inputs() {
+    TickInputs in{};
+    in.players[0].right = true;
+    return in;
+}
+
 // The classic open arena used by tests/helpers.hpp open_config(): 15x11 with
 // odd/odd Solid pillars, players in opposite corners.
 MatchConfig make_config(std::uint32_t seed, int players, bool slot1_ai) {
@@ -186,6 +194,27 @@ void inject_playerbelt(State& s) {
     }
 }
 
+// WARP scenario (player warphole teleport): two PAIRED warpholes at (5,0) and
+// (10,0). Player 0 walks east from (0,0), steps onto (5,0) and teleports to the
+// partner exit (10,0). The native resolves the partner at warp time via
+// sub_405A81's idno/linkto scan; the clean-room pre-resolves it into warp_dest_*
+// at setup, so point each hole's dest at the OTHER tile. NO sim RNG on either side.
+void inject_warp(State& s) {
+    s.actor_type[0][5] = ActorType::Warphole;
+    s.warp_dest_x[0][5] = 10;
+    s.warp_dest_y[0][5] = 0;  // (5,0) -> (10,0)
+    s.actor_type[0][10] = ActorType::Warphole;
+    s.warp_dest_x[0][10] = 5;
+    s.warp_dest_y[0][10] = 0;  // (10,0) -> (5,0)
+}
+
+// TRAMP scenario (player trampoline bounce): one trampoline at (3,0) on player
+// 0's east walk lane. The walking player is centred on it mid-walk
+// (on_step_center -> start_bounce), launches a 30-frame flight (Player::bounce
+// 30->0), and is teleported to a random nearby tile at the apex (bounce == mid,
+// on State::rng). Trampolines ignore actor_dir.
+void inject_tramp(State& s) { s.actor_type[0][3] = ActorType::Trampoline; }
+
 int count_flame_cells(const State& s) {
     int n = 0;
     for (int y = 0; y < kGridHeight; ++y)
@@ -201,7 +230,7 @@ int count_live_bombs(const State& s) {
     return n;
 }
 
-void emit_digest(std::uint64_t t, const State& s) {
+void emit_digest(std::uint64_t t, const State& s, bool tramp = false) {
     int present = 0;
     for (int i = 0; i < kMaxPlayers; ++i)
         if (s.players[i].present) ++present;
@@ -211,6 +240,19 @@ void emit_digest(std::uint64_t t, const State& s) {
         if (!p.present) continue;
         std::printf(" %d:%d,%d,%d,%d", i, p.tile_x(), p.tile_y(),
                     p.alive ? 1 : 0, static_cast<int>(p.bombs_placed));
+    }
+    // TRAMP scenario: mirror of the native `bnc:` token. p.bounce is the DOWN
+    // countdown (frames->0); the native state word is 5 while it is > 0, and the
+    // native elapsed counter == trampoline_bounce_frames - p.bounce.
+    if (tramp) {
+        const int len = s.tuning.trampoline_bounce_frames;
+        for (int i = 0; i < kMaxPlayers; ++i) {
+            const Player& p = s.players[i];
+            if (!p.present) continue;
+            const int st = (p.bounce > 0) ? 5 : 0;
+            const int el = (p.bounce > 0) ? (len - static_cast<int>(p.bounce)) : 0;
+            std::printf(" bnc:%d,%d,%d", i, st, el);
+        }
     }
     // Per-live-bomb tile position + kicked-slide motion flag, in vector
     // (creation) order — the native side iterates its bomb slots 0..99 in the
@@ -253,6 +295,8 @@ int main(int argc, char** argv) {
     const bool jelly_scenario = std::strcmp(scenario, "jelly") == 0;
     const bool flight_scenario = std::strcmp(scenario, "flight") == 0;
     const bool playerbelt_scenario = std::strcmp(scenario, "playerbelt") == 0;
+    const bool warp_scenario = std::strcmp(scenario, "warp") == 0;
+    const bool tramp_scenario = std::strcmp(scenario, "tramp") == 0;
     const bool idle_scenario = kick_scenario || conveyor_scenario || flame_scenario ||
                                jelly_scenario || flight_scenario || playerbelt_scenario;
     std::fprintf(stderr, "mirror: seed=0x%08x ticks=%d players=%d scenario=%s\n", seed, ticks,
@@ -273,13 +317,18 @@ int main(int argc, char** argv) {
     if (flame_scenario) inject_flame_bomb(sim.state());
     if (flight_scenario) inject_flying_bomb(sim.state());
     if (playerbelt_scenario) inject_playerbelt(sim.state());
+    if (warp_scenario) inject_warp(sim.state());
+    if (tramp_scenario) inject_tramp(sim.state());
     // Digest the initial state as tick 0, then each post-tick state.
-    emit_digest(0, sim.state());
+    emit_digest(0, sim.state(), tramp_scenario);
     for (int t = 1; t <= ticks; ++t) {
+        // warp/tramp: player 0 walks east every tick; else idle or the scripted sweep.
         const TickInputs in =
-            idle_scenario ? TickInputs{} : scripted_inputs(static_cast<std::uint64_t>(t));
+            (warp_scenario || tramp_scenario)
+                ? walk_east_inputs()
+                : (idle_scenario ? TickInputs{} : scripted_inputs(static_cast<std::uint64_t>(t)));
         sim.tick(in);
-        emit_digest(static_cast<std::uint64_t>(t), sim.state());
+        emit_digest(static_cast<std::uint64_t>(t), sim.state(), tramp_scenario);
     }
     return 0;
 }

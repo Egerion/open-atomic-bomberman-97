@@ -65,27 +65,49 @@ t=<tick> P=<n> | <slot>:<tx>,<ty>,<alive>,<bombs> ... | B=<liveBombs>[ bomb:<tx>
   offset appears on the return leg. Jelly bounce + ping-pong speed CONFIRMED.
 - **flame** (`--scenario=flame` / `--oracle <out> <ticks> flame`): injects a
   flame-2 bomb at interior tile (6,4) and explodes it, comparing the flame cross
-  (F count + cell tiles). Mirror casts the correct cross F=9. NATIVE-BLOCKED as
-  of 2026-07-22: the native transliteration casts a DIAGONAL (cells (2,2)..(6,6),
-  centre (6,4) unlit) — a native-port geometry bug in the flame cast, NOT a
-  clean-room bug. Scenario is ready for when the native cast is fixed.
+  (F count + cell tiles). Result 2026-07-22: both cast the correct cross F=9 —
+  centre (6,4) + arms to (4,4),(8,4),(6,2),(6,6) — matching tick-for-tick.
+  Explosion arm-cast CONFIRMED. (This scenario first EXPOSED a native-port
+  geometry bug — the native cast a diagonal (cells (2,2)..(6,6)) because a
+  Hex-Rays artefact `result=a2` in sub_426FCC clobbered the column with the row;
+  fixed in the native transliteration, then validated.)
 - **flight** (`--scenario=flight` / `--oracle <out> <ticks> flight`): inject a
   bomb at (5,0) and launch it EAST into flight (`sub_42331C` case 2). Native via
   `sub_4248C6(bomb, godir)`; mirror by setting the Bomb flight fields (mirroring
   `BombSystem::launch(b, Right, 3, arc)`). Kind 0 (a punch), so the throw-only
   `rand()%getvalue(667)` landing redirect never fires — deterministic. Result
   2026-07-22: native and mirror fly (5,0)->(6,0)->(7,0)->(8,0) TICK-FOR-TICK and
-  land at (8,0) — the 3-tile punch arc + landing tile CONFIRMED. CAVEAT: the
-  native oracle then FAULTS at t10 (exit 3) processing the just-landed bomb — a
-  native-transliteration robustness bug (same class as the M3 9x-path fault),
-  NOT a gameplay divergence; the flight itself is fully validated through its
-  landing at t9.
+  land at (8,0) — the 3-tile punch arc + landing tile CONFIRMED, and the bomb
+  rests at (8,0) for the rest of the run. (This scenario first EXPOSED a native
+  post-landing fault at t10 — an uninitialised `v16` (row) passed to sub_42708D
+  tripped the MSVC /RTCu check; fixed in the native transliteration, then the
+  full run validated.)
 - **playerbelt** (`--scenario=playerbelt` / `--oracle <out> <ticks> playerbelt`):
   an EAST belt on row 0 from (0,0) to (6,0), under player 0's spawn, no bomb.
   The idle player 0 is CARRIED east by the belt (movement.cpp belt-add /
   sub_41F29B ~23417). Result 2026-07-22: native and mirror carry player 0
   (0,0)->(1,0)@t6 ->(2,0)@t17 ->(3,0)@t29 ->(4,0)@t40 TICK-FOR-TICK (no offset).
   Player conveyor-carry CONFIRMED against the native.
+- **warp** (`--scenario=warp` / `--oracle <out> <ticks> warp`): two PAIRED
+  warpholes at (5,0) and (10,0); player 0 walks east, steps onto (5,0) and
+  TELEPORTS to (10,0). Native injects two type-1 actor records (idno @+44,
+  linkto @+46, paired by sub_405A81) + walks the player; mirror sets
+  actor_type=Warphole + warp_dest_* (the clean-room already implements
+  start_warp/tick_warp). NO sim RNG on either side. Result 2026-07-22: both walk
+  (0,0)->(5,0), freeze in the warp-out state, JUMP 5->10 (native t30, mirror
+  t31), then walk out to the wall — a constant ~1-tick rotation offset, the
+  teleport destination (10,0) identical. Player warphole teleport CONFIRMED.
+- **tramp** (`--scenario=tramp` / `--oracle <out> <ticks> tramp`): a trampoline
+  (type 3) at (3,0); player 0 walks east onto it and BOUNCES (30-frame flight,
+  input-locked, then a random-tile apex teleport). Adds a gated `bnc:<slot>,
+  <state>,<elapsed>` digest token (native +78 state / +80 counter; mirror
+  p.bounce). Result 2026-07-22: the DETERMINISTIC core matches — same trigger
+  tick (bounce state 5 at t13), same flight lockout (frozen on (3,0)), same
+  duration (elapsed 1..14 with the constant +1 rotation offset). The APEX
+  LANDING TILE diverges (native (4,2) vs mirror (2,2)) — EXPECTED: the apex
+  relocation draws `rand()%5` (native LCG) vs `random_below(s,5)` (clean-room
+  xorshift), the one RNG in the path; not a mechanic bug. Trampoline bounce
+  trigger + flight + duration CONFIRMED; landing tile is RNG-generator-divergent.
 
 ## Scripted input (reproduce identically on the native side)
 
