@@ -62,4 +62,38 @@ inline std::string format_clock(const std::string& fmt, int seconds_left) {
 inline constexpr int kClockWarningSeconds = 30;
 inline bool clock_warning(int seconds_left) { return seconds_left <= kClockWarningSeconds; }
 
+// Crash-proof MESSAGES.TXT single-specifier splices. The format string is the
+// user's own file, so ignore any %s/%% (leave literal) rather than risk a
+// wrong-type sprintf. Shared by the setup/results/debug screens and game_app;
+// previously duplicated file-locally (game_app.cpp, keyremap_screen.cpp).
+
+// Substitute the first %u/%d/%i with `v`, leaving any other specifier literal.
+inline std::string fmt_u(const std::string& f, int v) {
+    auto p = f.find('%');
+    if (p == std::string::npos) return f;
+    std::size_t q = p + 1;
+    while (q < f.size() && f[q] != 'u' && f[q] != 'd' && f[q] != 'i' && f[q] != 's' && f[q] != '%')
+        ++q;
+    if (q < f.size() && (f[q] == 'u' || f[q] == 'd' || f[q] == 'i'))
+        return f.substr(0, p) + std::to_string(v) + f.substr(q + 1);
+    return f;
+}
+
+// Substitute the first %s with `v`, leaving any other specifier literal.
+inline std::string fmt_s(const std::string& f, const std::string& v) {
+    auto p = f.find('%');
+    if (p == std::string::npos) return f;
+    std::size_t q = p + 1;
+    while (q < f.size() && f[q] != 'u' && f[q] != 'd' && f[q] != 'i' && f[q] != 's' && f[q] != '%')
+        ++q;
+    if (q < f.size() && f[q] == 's') return f.substr(0, p) + v + f.substr(q + 1);
+    return f;
+}
+
+// Both-args splice for two-specifier rows ("Player %u: %s"): the leading
+// numeric first, then the %s; a reordered MESSAGES.TXT degrades gracefully.
+inline std::string fmt_us(const std::string& f, int v, const std::string& s) {
+    return fmt_s(fmt_u(f, v), s);
+}
+
 }  // namespace bomber::game

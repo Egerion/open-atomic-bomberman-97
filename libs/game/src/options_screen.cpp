@@ -33,18 +33,8 @@ int playtime_index(int seconds) {
     return 0;
 }
 
-// Crash-proof single-%s splice (the same rule as game_app.cpp's fmt_s: the
-// format string is the user's own MESSAGES.TXT, so an unexpected specifier
-// stays literal rather than risking a wrong-type sprintf).
-std::string fmt_s(const std::string& f, const std::string& v) {
-    auto p = f.find('%');
-    if (p == std::string::npos) return f;
-    std::size_t q = p + 1;
-    while (q < f.size() && f[q] != 'u' && f[q] != 'd' && f[q] != 'i' && f[q] != 's' && f[q] != '%')
-        ++q;
-    if (q < f.size() && f[q] == 's') return f.substr(0, p) + v + f.substr(q + 1);
-    return f;
-}
+// fmt_s (the crash-proof single-%s splice) is shared via hud_format.hpp now —
+// this file previously carried its own copy.
 
 // Sequential splice for the four-field modem row (getstring(264) "Modem:
 // P:%u  I:%u  B:%u  #:%s"): each %u/%d/%i/%s in order takes the next

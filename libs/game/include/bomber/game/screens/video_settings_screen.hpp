@@ -1,0 +1,32 @@
+#pragma once
+
+#include "bomber/game/screen_context.hpp"
+
+// PORT-ONLY "Video Settings" panel (F10 from the menu), extracted from
+// GameApp::present_video_settings (ADR-0008): vsync / native-cadence / show-fps
+// toggles, kept SEPARATE from the RE'd Options screen so its exact rows stay
+// faithful. The three toggles + the options-dirty flag live on GameApp; the
+// screen mutates them through this pointer bundle (keeps the ctor at two args,
+// the <=4-param rule) and applies vsync live via ctx.sdl.
+
+namespace bomber::game {
+
+struct VideoToggleRefs {
+    bool* uncap_fps = nullptr;      // "VSync On" == uncap OFF
+    bool* native_cadence = nullptr;
+    bool* show_fps = nullptr;
+    bool* options_dirty = nullptr;  // set when any toggle changes (flush-on-exit)
+};
+
+class VideoSettingsScreen {
+public:
+    VideoSettingsScreen(ScreenContext ctx, VideoToggleRefs toggles)
+        : ctx_(ctx), toggles_(toggles) {}
+    void run();
+
+private:
+    ScreenContext ctx_;
+    VideoToggleRefs toggles_;
+};
+
+}  // namespace bomber::game

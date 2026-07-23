@@ -26,6 +26,7 @@
 #include "bomber/game/renderer.hpp"
 #include "bomber/game/results.hpp"
 #include "bomber/game/screen.hpp"
+#include "bomber/game/screen_context.hpp"
 #include "bomber/game/sdl.hpp"
 #include "bomber/game/sequences.hpp"
 #include "bomber/audio/sound_director.hpp"
@@ -136,6 +137,11 @@ private:
     // existing match loop. The pure transition graph lives in app_flow.hpp; the
     // methods below are the thin SDL side (render, audio, input) per state.
     int run_app();
+    // Builds a fresh ScreenContext (the shared-services bundle) from this app's
+    // stable members, so an extracted screen class can run without threading
+    // GameApp's whole member set (ADR-0008 god-object decomposition). Cheap —
+    // a value bundle of references/pointers; valid any time after init().
+    ScreenContext sctx();
     // Runs one asset-driven Screen (logo/title/results) to completion. sub_42A088
     // CUTS between screens (palette + blit + flip, no wipe), so there is no
     // transition out here — the next screen simply replaces this one. Returns the

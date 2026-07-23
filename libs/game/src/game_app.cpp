@@ -17,6 +17,10 @@
 #include "bomber/game/bmscreen.hpp"
 #include "bomber/game/dialog_chrome.hpp"
 #include "bomber/game/dos_scancode.hpp"
+#include "bomber/game/hud_format.hpp"
+#include "bomber/game/screens/debug_info_screen.hpp"
+#include "bomber/game/screens/help_screens.hpp"
+#include "bomber/game/screens/video_settings_screen.hpp"
 #include "bomber/game/sprites.hpp"
 #include "bomber/match/match_factory.hpp"
 #include "bomber/platform/frame_clock.hpp"
@@ -613,41 +617,9 @@ ScreenDef title_screen() {
 // in attract" loop (sub_42A3F6); we model it as a normal Screen with a bounded
 // dwell so an unattended machine returns to the menu on its own.
 constexpr std::uint32_t kResultsDwellMs = 6000;  // sub_42A3F6 attract auto-advance
-// Format a MESSAGES.TXT label that carries a single %u/%d/%i with `v`, safely:
-// the format string is the user's own file, so ignore any %s/%% (leave literal)
-// rather than risk a wrong-type sprintf. A minimal, crash-proof getstring format.
-std::string fmt_u(const std::string& f, int v) {
-    auto p = f.find('%');
-    if (p == std::string::npos) return f;
-    std::size_t q = p + 1;
-    while (q < f.size() && f[q] != 'u' && f[q] != 'd' && f[q] != 'i' && f[q] != 's' && f[q] != '%')
-        ++q;
-    if (q < f.size() && (f[q] == 'u' || f[q] == 'd' || f[q] == 'i'))
-        return f.substr(0, p) + std::to_string(v) + f.substr(q + 1);
-    return f;
-}
-
-// Same crash-proof single-specifier substitution for a %s label (the level-line
-// getstring(210)): splice `v` in for the first %s, leave any other specifier
-// literal. The format string is the user's own MESSAGES.TXT entry.
-std::string fmt_s(const std::string& f, const std::string& v) {
-    auto p = f.find('%');
-    if (p == std::string::npos) return f;
-    std::size_t q = p + 1;
-    while (q < f.size() && f[q] != 'u' && f[q] != 'd' && f[q] != 'i' && f[q] != 's' && f[q] != '%')
-        ++q;
-    if (q < f.size() && f[q] == 's') return f.substr(0, p) + v + f.substr(q + 1);
-    return f;
-}
-
-// Both-args splice for the two-specifier setup-screen rows — MESSAGES.TXT 51
-// "Player %u: %s" and 41 "Joy %u - %s", which the original sprintf's in ONE
-// call (sub_410F81 15169-15195 / 15240-15243). The leading numeric goes first,
-// then the %s; a modified MESSAGES.TXT that reorders them degrades gracefully
-// (the un-matched specifier stays literal, same crash-proof rule as above).
-std::string fmt_us(const std::string& f, int v, const std::string& s) {
-    return fmt_s(fmt_u(f, v), s);
-}
+// fmt_u/fmt_s/fmt_us (the crash-proof single-specifier MESSAGES.TXT splices)
+// moved to bomber/game/hud_format.hpp so the extracted screen classes share the
+// same helpers instead of re-deriving them — see that header.
 
 ScreenDef draw_screen() {
     // DRAW.PCX. The draw sting is a ONE-SHOT group play (sub_427BFB(1700) picks a
@@ -1035,6 +1007,12 @@ int GameApp::run_demo() {
     return ok ? 0 : 1;
 }
 
+ScreenContext GameApp::sctx() {
+    return ScreenContext{assets_,   audio_,      sounds_,       keyboard_,
+                         gamepads_, front_font_, cursor_blink_, values_,
+                         sdl_renderer_.get(), window_.get()};
+}
+
 AppInput GameApp::present_screen(const ScreenDef& def) {
     // Enter the screen (resets its clock/counter; music is NOT touched here —
     // the caller owns the continuous track, sub_42A088 only presents an image).
@@ -1094,78 +1072,11 @@ AppInput GameApp::present_screen(const ScreenDef& def) {
 }
 
 AppInput GameApp::present_bm_screen(const std::string& bm_name) {
-    // The `.BM` text-screen viewer (sub_41302D): MAINMENU.PCX as the persistent
-    // backdrop (the original composites the scroll window over the menu page),
-    // the parsed .BM text + inline images over it, keyboard line/page scroll,
-    // and Enter/Escape to dismiss. No auto-scroll or dwell — it waits for input
-    // exactly like the original.
-    BmScreen bm(assets_, front_font_);
-    bm.enter(bm_name);
-    AppInput result = AppInput::Advance;
-    while (!bm.done()) {
-        SDL_Event ev;
-        while (SDL_PollEvent(&ev)) {
-            if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
-            if (ev.type == SDL_EVENT_KEY_DOWN) {
-                if (ev.key.key == SDLK_ESCAPE) result = AppInput::Back;
-                bm.on_key(ev.key.key);
-            }
-        }
-        audio_.update_music();
-        SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
-        SDL_RenderClear(sdl_renderer_.get());
-        // Backdrop: keep the menu art behind the text panel.
-        const Sprite& bg = assets_.frontend_pcx("MAINMENU");
-        if (bg.tex) {
-            SDL_FRect d{0, 0, static_cast<float>(bg.w), static_cast<float>(bg.h)};
-            SDL_RenderTexture(sdl_renderer_.get(), bg.tex, nullptr, &d);
-        }
-        bm.draw(sdl_renderer_.get());
-        SDL_RenderPresent(sdl_renderer_.get());
-        SDL_Delay(2);
-    }
-
-    // No wipe out: the .BM viewer (sub_41302D) dismisses back to the menu by a
-    // cut, like every sub_42A088-style screen — the menu is redrawn from scratch
-    // on the next frame. No screen-to-screen transition here.
-    return result;
+    return BmTextScreen(sctx()).run(bm_name);
 }
 
 AppInput GameApp::present_help_browser() {
-    // sub_41431C -> sub_414235 (docs/re/results-and-options.md §4): glob every
-    // *.BM in the install root, show the list, open the pick through the same
-    // .BM viewer, and re-show the list on return (HelpBrowser owns that
-    // loop-back internally) until Esc cancels the list itself. MAINMENU stays
-    // the persistent backdrop behind both the list and the viewer, matching
-    // present_bm_screen's own convention (the original composites over
-    // whatever screen was already up — the menu here, the live match field at
-    // the in-round F1 call site, where the caller paints its own frame first).
-    HelpBrowser browser(assets_, front_font_);
-    // getvalue(15) ("is the online manual enabled?", default 1, §4): gate
-    // BEFORE the glob, matching sub_414235's own order.
-    browser.enter(values_.at_or(15, 1) != 0);
-    while (!browser.done()) {
-        SDL_Event ev;
-        while (SDL_PollEvent(&ev)) {
-            if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
-            if (ev.type != SDL_EVENT_KEY_DOWN) continue;
-            browser.on_key(ev.key.key, audio_);
-        }
-        if (browser.viewing() && browser.viewer().done()) browser.close_viewer();
-        audio_.update_music();
-        SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
-        SDL_RenderClear(sdl_renderer_.get());
-        const Sprite& bg = assets_.frontend_pcx("MAINMENU");
-        if (bg.tex) {
-            SDL_FRect d{0, 0, static_cast<float>(bg.w), static_cast<float>(bg.h)};
-            SDL_RenderTexture(sdl_renderer_.get(), bg.tex, nullptr, &d);
-        }
-        browser.draw(sdl_renderer_.get());
-        SDL_RenderPresent(sdl_renderer_.get());
-        SDL_Delay(2);
-    }
-    // No wipe out — same cut-back-to-caller convention as present_bm_screen.
-    return AppInput::Advance;
+    return HelpBrowserScreen(sctx()).run();
 }
 
 AppInput GameApp::present_help_browser_modal() {
@@ -1201,53 +1112,7 @@ AppInput GameApp::present_help_browser_modal() {
 }
 
 AppInput GameApp::present_debug_info_modal() {
-    // sub_413D45 (declaration doc): the hidden Alt+D "Internal debugging
-    // information" window — a 450x300 WINZ-9-patch panel at y=100, centred on
-    // x, over the frozen menu backdrop; Enter/Escape dismiss it, nothing else
-    // does. The original's stat values (heap/audio memory, net id, retransmit
-    // rate, audio cache hits) have no port equivalents — labels are the real
-    // getstring rows, values honest placeholders.
-    while (true) {
-        SDL_Event ev;
-        while (SDL_PollEvent(&ev)) {
-            if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
-            if (ev.type != SDL_EVENT_KEY_DOWN) continue;
-            if (!ev.key.repeat) audio_.play(20);  // any-real-key blip
-            if (ev.key.key == SDLK_RETURN || ev.key.key == SDLK_KP_ENTER ||
-                ev.key.key == SDLK_ESCAPE)
-                return AppInput::Advance;
-        }
-        audio_.update_music();
-        SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
-        SDL_RenderClear(sdl_renderer_.get());
-        const Sprite& bg = assets_.frontend_pcx("MAINMENU");
-        if (bg.tex) {
-            SDL_FRect d{0, 0, static_cast<float>(bg.w), static_cast<float>(bg.h)};
-            SDL_RenderTexture(sdl_renderer_.get(), bg.tex, nullptr, &d);
-        }
-        const DialogRect win{(kScreenW - 450.0f) / 2.0f, 100.0f, 450.0f, 300.0f};
-        draw_dialog_chrome(sdl_renderer_.get(), win, &assets_.frontend_pcx("WINZ"));
-        const float lh = static_cast<float>(front_font_.line_height());
-        float ty = win.y + 16.0f;
-        auto line = [&](const std::string& s) {
-            draw_dialog_text(sdl_renderer_.get(), front_font_, s, win.x + 24.0f, ty, 255, 255,
-                             255);
-            ty += lh + 6.0f;
-        };
-        line(assets_.getstring(400, "Internal debugging information"));
-        ty += lh;
-        line(fmt_u(assets_.getstring(405, "Total memory usage: %u"), 0));
-        line(fmt_u(assets_.getstring(410, "Audio memory usage: %u"), 0));
-        line(fmt_u(assets_.getstring(411, "Audio cache hits: %u"), 0));
-        line(fmt_u(assets_.getstring(415, "Network id: %u"), 0));
-        line(fmt_u(assets_.getstring(420, "Retransmit rate: %u"), 0));
-        ty = win.y + win.h - 16.0f - lh;
-        draw_dialog_text(sdl_renderer_.get(), front_font_,
-                         assets_.getstring(401, "Press [Enter] or [Esc] to continue"),
-                         win.x + 24.0f, ty, 255, 255, 255);
-        SDL_RenderPresent(sdl_renderer_.get());
-        SDL_Delay(2);
-    }
+    return DebugInfoScreen(sctx()).run();
 }
 
 void GameApp::present_video_settings() {
@@ -1260,72 +1125,7 @@ void GameApp::present_video_settings() {
     // Alt+D debug window above; Up/Down select, Enter/Space/Left/Right toggle,
     // Esc closes. Toggles apply live and mark options_dirty_ so flush_options
     // round-trips them.
-    int row = 0;
-    constexpr int kRows = 3;
-    while (true) {
-        SDL_Event ev;
-        while (SDL_PollEvent(&ev)) {
-            if (ev.type == SDL_EVENT_QUIT) return;
-            if (ev.type != SDL_EVENT_KEY_DOWN || ev.key.repeat) continue;
-            audio_.play(20);  // nav blip
-            switch (ev.key.key) {
-                case SDLK_UP: row = (row + kRows - 1) % kRows; break;
-                case SDLK_DOWN: row = (row + 1) % kRows; break;
-                case SDLK_LEFT:
-                case SDLK_RIGHT:
-                case SDLK_RETURN:
-                case SDLK_KP_ENTER:
-                case SDLK_SPACE:
-                    if (row == 0) {
-                        uncap_fps_ = !uncap_fps_;  // "VSync" On == uncap OFF
-                        SDL_SetRenderVSync(sdl_renderer_.get(), uncap_fps_ ? 0 : 1);
-                    } else if (row == 1) {
-                        native_cadence_ = !native_cadence_;
-                    } else {
-                        show_fps_ = !show_fps_;
-                    }
-                    options_dirty_ = true;
-                    break;
-                case SDLK_ESCAPE:
-                    return;
-                default:
-                    break;
-            }
-        }
-        audio_.update_music();
-        SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
-        SDL_RenderClear(sdl_renderer_.get());
-        const Sprite& bg = assets_.frontend_pcx("MAINMENU");
-        if (bg.tex) {
-            SDL_FRect d{0, 0, static_cast<float>(bg.w), static_cast<float>(bg.h)};
-            SDL_RenderTexture(sdl_renderer_.get(), bg.tex, nullptr, &d);
-        }
-        const DialogRect win{(kScreenW - 380.0f) / 2.0f, 140.0f, 380.0f, 190.0f};
-        draw_dialog_chrome(sdl_renderer_.get(), win, &assets_.frontend_pcx("WINZ"));
-        const float lh = static_cast<float>(front_font_.line_height());
-        draw_dialog_text(sdl_renderer_.get(), front_font_, "VIDEO SETTINGS (port)", win.x + 24.0f,
-                         win.y + 16.0f, 255, 255, 255);
-        const char* labels[kRows] = {"VSync", "Native cadence", "Show FPS"};
-        const bool vals[kRows] = {!uncap_fps_, native_cadence_, show_fps_};
-        float ry = win.y + 16.0f + 2.0f * lh;
-        for (int i = 0; i < kRows; ++i) {
-            const bool sel = (i == row);
-            const std::string shown = std::string(sel ? "> " : "  ") + labels[i] + ":  " +
-                                      (vals[i] ? "On" : "Off");
-            // Selected row yellow, others a dim white — same read-at-a-glance
-            // convention as the fps overlay's green/white.
-            draw_dialog_text(sdl_renderer_.get(), front_font_, shown, win.x + 24.0f, ry,
-                             sel ? 255 : 200, sel ? 220 : 200, sel ? 80 : 200);
-            ry += lh + 6.0f;
-        }
-        // Centred so it can't spill past the panel edge (the reported overflow).
-        const std::string hint = "Enter toggle    Esc close";
-        draw_dialog_text(sdl_renderer_.get(), front_font_, hint,
-                         win.x + (win.w - static_cast<float>(front_font_.measure(hint))) / 2.0f,
-                         win.y + win.h - 16.0f - lh, 255, 255, 255);
-        SDL_RenderPresent(sdl_renderer_.get());
-        SDL_Delay(2);
-    }
+    VideoSettingsScreen(sctx(), {&uncap_fps_, &native_cadence_, &show_fps_, &options_dirty_}).run();
 }
 
 AppInput GameApp::present_options_screen() {
