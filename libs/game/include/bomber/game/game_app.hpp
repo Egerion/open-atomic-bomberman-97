@@ -28,6 +28,7 @@
 #include "bomber/game/screen.hpp"
 #include "bomber/game/screen_context.hpp"
 #include "bomber/game/screens/editor_state.hpp"
+#include "bomber/game/screens/menu_state.hpp"
 #include "bomber/game/screens/options_state.hpp"
 #include "bomber/game/sdl.hpp"
 #include "bomber/game/sequences.hpp"
@@ -155,6 +156,12 @@ private:
     // opts_.scheme — see editor_state.hpp), bundled by reference so EditorRunner
     // needs no GameApp&. Built fresh on demand like sctx()/options_state().
     EditorEditState editor_state();
+    // The main menu's shared-state seam (ADR-0009 §6): the non-service members
+    // present_menu + roll_attract_match read/write (menu_index_/the attract
+    // roster+level+LCG/the F10 video toggles/the four editor members — see
+    // menu_state.hpp), bundled by reference so MenuScreen needs no GameApp&.
+    // Built fresh on demand like sctx()/options_state()/editor_state().
+    MenuState menu_state();
     // Runs one asset-driven Screen (logo/title/results) to completion. sub_42A088
     // CUTS between screens (palette + blit + flip, no wipe), so there is no
     // transition out here — the next screen simply replaces this one. Returns the
@@ -322,24 +329,10 @@ private:
     // (doc: "neither the player screen nor the LEVEL & ROUNDS screen is
     // shown"), going straight into run_match with the rolled roster/stage.
     AppInput present_menu();
-    // Attract-mode entry (sub_4224E2's save + sub_410F81's attract branch,
-    // doc "Attract mode" point 1): snapshots the CURRENT roster/level/team
-    // selections into attract_saved_ (so the player's own choices are
-    // untouched, doc "Menu re-entry restores everything" / sub_422552), then
-    // overwrites setup_type_/setup_sub_/setup_team_ with a random 3..10
-    // COMPUTER-only roster and selected_level_ with a random stage that
-    // BYPASSES the VALUELST 1150-1160 enable flags (input.hpp's
-    // fill_attract_roster/attract_stage_pick — pure helpers, unit-tested).
-    // Also forces team_play_ off (doc: "forces team play off") and clears any
-    // pending campaign/goldman state so they stay inert for the duration (doc
-    // point 2's "campaign trigger inert during attract" requirement + goldman
-    // §2's `!dword_464938` gate — the wheel is skipped by run_app's own
-    // attract_ check at the StartMatch call site, not by clearing
-    // gold_player_ here, so a real pending prize still survives an attract
-    // interlude). The two rolls advance attract_lcg_, a dedicated
-    // presentation LCG (never State::rng) — same shape as setup_lcg_/
-    // goldman_lcg_ elsewhere in this file.
-    void roll_attract_match();
+    // roll_attract_match (the sub_4224E2 attract entry — the sub_422552 save +
+    // the roster/stage rolls) moved into MenuScreen (screens/menu_screen.hpp)
+    // with present_menu; it was only ever called by present_menu's idle/Alt+A
+    // branches. restore_from_attract stays here because run_app calls it.
     // Attract-mode exit (sub_422552, doc "Menu re-entry restores everything"):
     // writes attract_saved_ back over setup_type_/setup_sub_/setup_team_/
     // selected_level_/team_play_ and clears attract_. Called on EVERY path
@@ -573,13 +566,8 @@ private:
     // overwriting them for the demo roster (sub_4224E2), restored by
     // restore_from_attract() (sub_422552) — doc: "Menu re-entry restores
     // everything", so the player's own pre-attract choices survive untouched.
-    struct AttractSaved {
-        std::array<int, sim::kMaxPlayers> type{};
-        std::array<int, sim::kMaxPlayers> sub{};
-        std::array<int, sim::kMaxPlayers> team{};
-        int level = -1;
-        bool team_play = false;
-    };
+    // The AttractSaved type moved to screens/menu_state.hpp (ADR-0009's
+    // AttractState seam) so MenuScreen's roll_attract_match can name it too.
     AttractSaved attract_saved_{};
     // Dedicated presentation LCG (never State::rng) for the two attract rolls
     // (roster-count, stage) — same shape as setup_lcg_/goldman_lcg_. Reseeded
