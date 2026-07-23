@@ -23,6 +23,7 @@
 #include "bomber/game/screens/boot_screen.hpp"
 #include "bomber/game/screens/debug_info_screen.hpp"
 #include "bomber/game/screens/help_screens.hpp"
+#include "bomber/game/screens/scheme_filename_prompt.hpp"
 #include "bomber/game/screens/video_settings_screen.hpp"
 #include "bomber/game/sprites.hpp"
 #include "bomber/match/match_factory.hpp"
@@ -1316,82 +1317,11 @@ void GameApp::present_scheme_picker(OptionsScreen& opt, const std::string& backd
 }
 
 bool GameApp::reload_scheme_from_name(const std::string& name) {
-    // Accept the name with or without an extension ("BASIC" from the picker
-    // / a hand-edited "BASIC.SCH" from options.ini alike).
-    std::string want = name;
-    if (auto dot = want.find('.'); dot != std::string::npos) want.erase(dot);
-    for (auto& c : want) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    if (want.empty()) return false;
-    std::filesystem::path schemes_dir = opts_.game_dir / "DATA" / "SCHEMES";
-    std::error_code ec;
-    std::filesystem::path found;
-    for (const auto& entry : std::filesystem::directory_iterator(schemes_dir, ec)) {
-        if (!entry.is_regular_file()) continue;
-        std::string stem = entry.path().stem().string();
-        std::string ext = entry.path().extension().string();
-        for (auto& c : stem) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-        for (auto& c : ext) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-        if (ext == ".SCH" && stem == want) {
-            found = entry.path();
-            break;
-        }
-    }
-    if (found.empty()) return false;
-    try {
-        scheme_ = assets::sch::load(found);
-    } catch (const std::exception&) {
-        return false;
-    }
-    return true;
+    return reload_scheme(scheme_, opts_.game_dir, name);
 }
 
 std::string GameApp::present_scheme_filename_prompt(const std::string& seed) {
-    // sub_42E938 line-edit for the save-as target (sub_4028D2 exit,
-    // batch_0x402150.cpp:645-648): getstring(736) "Enter schemefilename (or
-    // press <Enter>):", max 30 chars, seeded with the source filename. Enter on
-    // the seed (or an empty box) keeps the seed; Escape cancels back to the seed
-    // too — the original writes byte_4648C4 either way, so both return `seed`.
-    // Returns the chosen stem (no extension; the caller sanitises + appends .SCH,
-    // the sub_40497C force-extension step). Interactive-only (never the demo).
-    const std::string label =
-        assets_.getstring(736, "Enter schemefilename (or press <Enter>):");
-    std::string entry = seed;
-    std::string result = seed;
-    SDL_StartTextInput(window_.get());
-    bool waiting = true;
-    while (waiting) {
-        SDL_Event ev;
-        while (SDL_PollEvent(&ev)) {
-            if (ev.type == SDL_EVENT_QUIT) {
-                waiting = false;  // result stays `seed`
-                break;
-            }
-            if (ev.type == SDL_EVENT_TEXT_INPUT) {
-                if (ev.text.text && entry.size() < 30) entry += ev.text.text;  // 30-char cap
-            } else if (ev.type == SDL_EVENT_KEY_DOWN) {
-                if (ev.key.key == SDLK_BACKSPACE) {
-                    if (!entry.empty()) entry.pop_back();
-                } else if (ev.key.key == SDLK_RETURN || ev.key.key == SDLK_KP_ENTER) {
-                    audio_.play(10);  // accept sting
-                    result = entry.empty() ? seed : entry;  // "or press <Enter>" keeps the seed
-                    waiting = false;
-                } else if (ev.key.key == SDLK_ESCAPE) {
-                    audio_.play(20);  // nav blip
-                    result = seed;  // cancel: keep the source filename
-                    waiting = false;
-                }
-            }
-        }
-        audio_.update_music();
-        SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
-        SDL_RenderClear(sdl_renderer_.get());
-        draw_text_entry_dialog(sdl_renderer_.get(), front_font_, 180.0f, label, entry, "Done",
-                               "Cancel");
-        SDL_RenderPresent(sdl_renderer_.get());
-        SDL_Delay(2);
-    }
-    SDL_StopTextInput(window_.get());
-    return result;
+    return SchemeFilenamePrompt(sctx()).run(seed);
 }
 
 void GameApp::present_editor() {

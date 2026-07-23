@@ -1,9 +1,14 @@
 #pragma once
 
+#include <cctype>
 #include <cstdint>
+#include <exception>
+#include <filesystem>
 #include <string>
+#include <system_error>
 
 #include "bomber/assets/reslist.hpp"
+#include "bomber/assets/sch.hpp"
 
 // Cross-screen front-end helpers shared by the pre-match screens (player setup,
 // options, level select, scheme editor, campaign picker). Kept as free
@@ -23,8 +28,44 @@ inline std::string pick_glue(std::uint32_t& setup_lcg, const assets::res::ValueL
     setup_lcg = setup_lcg * 1664525u + 1013904223u;
     int glue_n = static_cast<int>(values.column_or(16, 0, 7));  // getvalue(16)
     if (glue_n < 1) glue_n = 1;
-    return "GLUE" +
-           std::to_string(static_cast<int>((setup_lcg >> 16) % static_cast<unsigned>(glue_n)));
+    return "GLUE" + std::to_string(static_cast<int>((setup_lcg >> 16) % static_cast<unsigned>(glue_n)));
+}
+
+// Case-insensitive DATA/SCHEMES/<name>.SCH resolve (name given with or without an
+// extension) + assets::sch::load into `scheme`. Returns false (scheme untouched)
+// when the name doesn't resolve or the file is corrupt. Shared by the Options
+// scheme-picker, the campaign stage loader, and init()'s options.ini
+// schemefilename= resolution (the original re-parses byte_4648C4 at Play-flow
+// entry, sub_410F81 -> sub_4046CC -> sub_403EEE).
+inline bool reload_scheme(assets::sch::Scheme& scheme, const std::filesystem::path& game_dir,
+                          const std::string& name) {
+    // Accept the name with or without an extension ("BASIC" from the picker /
+    // a hand-edited "BASIC.SCH" from options.ini alike).
+    std::string want = name;
+    if (auto dot = want.find('.'); dot != std::string::npos) want.erase(dot);
+    for (auto& c : want) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    if (want.empty()) return false;
+    std::filesystem::path schemes_dir = game_dir / "DATA" / "SCHEMES";
+    std::error_code ec;
+    std::filesystem::path found;
+    for (const auto& entry : std::filesystem::directory_iterator(schemes_dir, ec)) {
+        if (!entry.is_regular_file()) continue;
+        std::string stem = entry.path().stem().string();
+        std::string ext = entry.path().extension().string();
+        for (auto& c : stem) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        for (auto& c : ext) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        if (ext == ".SCH" && stem == want) {
+            found = entry.path();
+            break;
+        }
+    }
+    if (found.empty()) return false;
+    try {
+        scheme = assets::sch::load(found);
+    } catch (const std::exception&) {
+        return false;
+    }
+    return true;
 }
 
 }  // namespace bomber::game
