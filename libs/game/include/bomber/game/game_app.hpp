@@ -27,6 +27,7 @@
 #include "bomber/game/results.hpp"
 #include "bomber/game/screen.hpp"
 #include "bomber/game/screen_context.hpp"
+#include "bomber/game/screens/options_state.hpp"
 #include "bomber/game/sdl.hpp"
 #include "bomber/game/sequences.hpp"
 #include "bomber/audio/sound_director.hpp"
@@ -142,6 +143,12 @@ private:
     // GameApp's whole member set (ADR-0008 god-object decomposition). Cheap —
     // a value bundle of references/pointers; valid any time after init().
     ScreenContext sctx();
+    // The Options cluster's shared-state seam (ADR-0009 §4): a by-reference
+    // bundle of the non-service members present_options_screen and its two
+    // sub-screen runners read/write (options_/scheme_/setup_lcg_/... — see
+    // options_state.hpp). Built fresh on demand like sctx(), so the runner
+    // classes need no GameApp&.
+    OptionsEditState options_state();
     // Runs one asset-driven Screen (logo/title/results) to completion. sub_42A088
     // CUTS between screens (palette + blit + flip, no wipe), so there is no
     // transition out here — the next screen simply replaces this one. Returns the
@@ -211,29 +218,6 @@ private:
     // back to the menu, mirroring the other .BM-backed leaves) or Quit on
     // window close.
     AppInput present_options_screen();
-    // The key-remap sub-screen (docs/re/results-and-options.md §2,
-    // sub_407B9D): the MOUSE-DRIVEN 2x6 button grid, reached from the
-    // Options screen's "Define keyboard layouts" row. `backdrop` is the
-    // Options screen's own GLUE pick — sub_407B9D starts every frame with
-    // sub_415CA4's saved-backdrop restore (the GLUE image, not the Options
-    // rows), so this screen re-blits that same picture. Brackets itself in
-    // the widget library's cursor show/hide (sub_431178/sub_431360 —
-    // SDL_HideCursor + the 8x8 widget-lib arrow KeyRemapScreen draws). Edits
-    // a working copy; on Enter/Space/Esc-to-leave the caller applies it to
-    // the live KeyboardMapper AND marks options_dirty_ (write-on-exit,
-    // requirement 3) — never writes options.ini directly here.
-    void present_keyremap_screen(const std::string& backdrop);
-    // Options row 8 "Scheme File" (docs/re/results-and-options.md §3,
-    // CORRECTED 2026-07-13): sub_407582's *.SCH file-picker dialog, run
-    // modally over the Options screen's GLUE backdrop. A selection stores
-    // the filename truncated at its FIRST '.' and uppercased (sub_407582's
-    // strchr cut + sub_412A3B strupr) into the snapshot via
-    // opt.set_scheme_filename() AND reloads the live scheme_ so the next
-    // match plays it (the original re-parses byte_4648C4 at Play-flow
-    // entry, sub_410F81 -> sub_4046CC -> sub_403EEE). An empty glob shows
-    // the sub_414340 error pair getstring(95)/"NOTE!" over getstring(720)
-    // in byte_49A390's dark red (LUT 0x5000 -> (164,0,0)) instead.
-    void present_scheme_picker(OptionsScreen& opt, const std::string& backdrop);
     // Case-insensitive DATA/SCHEMES/<name>.SCH resolve (name given with or
     // without an extension) + assets::sch::load into scheme_. Returns false
     // (scheme_ untouched) when the name doesn't resolve or the file is
