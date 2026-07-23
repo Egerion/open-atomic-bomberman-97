@@ -7,7 +7,7 @@
 #include <vector>
 
 #include "bomber/game/asset_store.hpp"
-#include "bomber/game/audio_engine.hpp"
+#include "bomber/audio/audio_engine.hpp"
 
 // The generic asset-driven front-end Screen — the SDL-side realisation of the
 // original's one screen primitive `sub_42A088(name, wait)`

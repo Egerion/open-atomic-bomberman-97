@@ -10,7 +10,7 @@
 #include "bomber/assets/bmfont.hpp"
 #include "bomber/assets/bmtext.hpp"
 #include "bomber/game/asset_store.hpp"
-#include "bomber/game/audio_engine.hpp"
+#include "bomber/audio/audio_engine.hpp"
 #include "bomber/game/sdl.hpp"
 
 // The front-end `.BM` text-screen viewer — the SDL realisation of the original's

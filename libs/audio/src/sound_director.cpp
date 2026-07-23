@@ -1,4 +1,4 @@
-#include "bomber/game/sound_director.hpp"
+#include "bomber/audio/sound_director.hpp"
 
 namespace bomber::game {
 

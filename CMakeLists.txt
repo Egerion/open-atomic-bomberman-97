@@ -38,6 +38,7 @@ add_subdirectory(tests)
 if(BOMBER_BUILD_VIEWER)
   include(cmake/BomberSDL3.cmake)
   add_subdirectory(libs/platform)  # engine-base (ADR-0008): must precede libs/game
+  add_subdirectory(libs/audio)     # audio module (ADR-0008 stage 2): precedes game
   add_subdirectory(libs/game)
   add_subdirectory(apps/game)
   add_subdirectory(apps/viewer)

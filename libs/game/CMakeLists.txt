@@ -7,8 +7,6 @@ add_library(bomber_game_core STATIC
   src/asset_store.cpp
   src/sequences.cpp
   src/renderer.cpp
-  src/audio_engine.cpp
-  src/sound_director.cpp
   src/input.cpp
   src/dos_scancode.cpp
   src/gamepad.cpp
@@ -28,6 +26,6 @@ add_library(bomber::game ALIAS bomber_game_core)
 target_include_directories(bomber_game_core PUBLIC include)
 target_compile_features(bomber_game_core PUBLIC cxx_std_20)
 target_link_libraries(bomber_game_core
-  PUBLIC bomber::assets bomber::sim bomber::match SDL3::SDL3
+  PUBLIC bomber::assets bomber::sim bomber::match bomber::audio SDL3::SDL3
   PRIVATE bomber::warnings bomber::platform
 )

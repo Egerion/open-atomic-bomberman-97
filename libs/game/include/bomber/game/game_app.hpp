@@ -13,7 +13,7 @@
 #include "bomber/assets/sch.hpp"
 #include "bomber/game/app_flow.hpp"
 #include "bomber/game/asset_store.hpp"
-#include "bomber/game/audio_engine.hpp"
+#include "bomber/audio/audio_engine.hpp"
 #include "bomber/game/bmscreen.hpp"
 #include "bomber/game/campaign_screen.hpp"
 #include "bomber/game/editor_screen.hpp"
@@ -28,7 +28,7 @@
 #include "bomber/game/screen.hpp"
 #include "bomber/game/sdl.hpp"
 #include "bomber/game/sequences.hpp"
-#include "bomber/game/sound_director.hpp"
+#include "bomber/audio/sound_director.hpp"
 #include "bomber/sim/simulation.hpp"
 
 // The playable front-end: owns the SDL window, the asset store, the

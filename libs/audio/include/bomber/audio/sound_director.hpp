@@ -5,7 +5,7 @@
 #include <utility>
 #include <vector>
 
-#include "bomber/game/audio_engine.hpp"
+#include "bomber/audio/audio_engine.hpp"
 #include "bomber/sim/state.hpp"
 
 // Maps sim events onto the original SOUNDLST id ranges (docs/RE-NOTES.md):

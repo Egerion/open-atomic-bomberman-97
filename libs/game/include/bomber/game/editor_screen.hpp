@@ -30,7 +30,7 @@
 #include <vector>
 
 #include "bomber/game/asset_store.hpp"
-#include "bomber/game/audio_engine.hpp"
+#include "bomber/audio/audio_engine.hpp"
 #include "bomber/game/bmscreen.hpp"
 #include "bomber/game/editor_grid.hpp"
 
