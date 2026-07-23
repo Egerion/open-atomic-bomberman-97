@@ -27,6 +27,7 @@
 #include "bomber/game/results.hpp"
 #include "bomber/game/screen.hpp"
 #include "bomber/game/screen_context.hpp"
+#include "bomber/game/screens/editor_state.hpp"
 #include "bomber/game/screens/options_state.hpp"
 #include "bomber/game/sdl.hpp"
 #include "bomber/game/sequences.hpp"
@@ -149,6 +150,11 @@ private:
     // options_state.hpp). Built fresh on demand like sctx(), so the runner
     // classes need no GameApp&.
     OptionsEditState options_state();
+    // The scheme editor's shared-state seam (ADR-0009 §9): the non-service
+    // members present_editor reads/writes (setup_lcg_/scheme_/opts_.game_dir/
+    // opts_.scheme — see editor_state.hpp), bundled by reference so EditorRunner
+    // needs no GameApp&. Built fresh on demand like sctx()/options_state().
+    EditorEditState editor_state();
     // Runs one asset-driven Screen (logo/title/results) to completion. sub_42A088
     // CUTS between screens (palette + blit + flip, no wipe), so there is no
     // transition out here — the next screen simply replaces this one. Returns the
