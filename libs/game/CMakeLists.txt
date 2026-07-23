@@ -19,6 +19,8 @@ add_library(bomber_game_core STATIC
   src/editor_grid.cpp
   src/editor_screen.cpp
   src/campaign_screen.cpp
+  src/screens/asset_screen.cpp
+  src/screens/boot_screen.cpp
   src/screens/help_screens.cpp
   src/screens/debug_info_screen.cpp
   src/screens/video_settings_screen.cpp

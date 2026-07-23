@@ -10,6 +10,7 @@
 #include "bomber/game/cursor_indicator.hpp"
 #include "bomber/game/gamepad.hpp"
 #include "bomber/game/input.hpp"
+#include "bomber/game/screen.hpp"
 
 // The shared presentation services every front-end screen needs, bundled so a
 // screen can be its own class in its own file instead of a GameApp method
@@ -35,6 +36,7 @@ struct ScreenContext {
     GamepadMapper& gamepads;
     FontTextures& front_font;
     CursorIndicator& cursor_blink;
+    Screen& asset_screen;  // the sub_42A088 full-screen image presenter (logo/title/results)
     const assets::res::ValueList& values;
     SDL_Renderer* sdl = nullptr;
     SDL_Window* window = nullptr;

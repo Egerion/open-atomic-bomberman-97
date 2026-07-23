@@ -19,6 +19,8 @@
 #include "bomber/game/dos_scancode.hpp"
 #include "bomber/game/frontend_util.hpp"
 #include "bomber/game/hud_format.hpp"
+#include "bomber/game/screens/asset_screen.hpp"
+#include "bomber/game/screens/boot_screen.hpp"
 #include "bomber/game/screens/debug_info_screen.hpp"
 #include "bomber/game/screens/help_screens.hpp"
 #include "bomber/game/screens/video_settings_screen.hpp"
@@ -559,7 +561,7 @@ namespace {
 // Music tracks loop (sub_4273A4 sets loop count 0xFFFF); stings/blips are
 // one-shot (sub_427B36 sets loop count 0). AudioEngine mirrors this split:
 // start_music() = the looping music channel, play() = a one-shot SFX voice.
-constexpr int kBootMusicId = 1000;  // 0x3E8 — TITLE.RSS, the continuous boot track
+// kBootMusicId (1000) moved to screens/boot_screen.cpp with run_boot_attract.
 constexpr int kMenuMusicId = 1010;  // 0x3F2 — MENU.RSS, started on menu entry
 // The Play-handler music (sub_42A3F6), CORRECTED by docs/re/in-match-shell.md
 // §2 (supersedes this file's earlier "1020 under VICTORY" reading):
@@ -579,24 +581,16 @@ constexpr int kDrawMusicId = 1130;  // 0x46A — DRAW.RSS, DRAW *and* RESULTS *a
 // no entry (a stripped/minimal-install SOUNDLST — every built-in stage here
 // has a real 1100..1110 entry).
 constexpr int kStageMusicFallback = 1120;  // 0x460 — GENERIC.RSS
-// The title intro sting is a contiguous SOUNDLST GROUP (sub_427BFB(2800) picks a
-// random member): 2800..2810 = "ATOMIC BOMBERMAN!" takes (GEN8A/…); the file's
-// "2899 is the last intro" comment is the group's nominal end. We span 2800..2899
-// and let play_random_in_range hit only the loaded ids.
-constexpr int kTitleStingLo = 2800;
-constexpr int kTitleStingHi = 2899;
+// kTitleStingLo/Hi (2800..2899, the title intro sting group) moved to
+// screens/boot_screen.cpp with run_boot_attract.
 // The menu-quit / exit sting group (sub_427BFB(2600) in the quit handler
 // sub_412987): 2600..2699 = "go outside and play now!" takes (quitgame/EOFM7*/…).
 constexpr int kQuitStingLo = 2600;
 constexpr int kQuitStingHi = 2699;
 
-// The waited-screen dwell — CONFIRMED getvalue(12) = 7 (VALUELST line `12,7`).
-// sub_42A088's wait loop times out at start + getvalue(12) using C time_()
-// (whole seconds), then synthesizes Enter (13) and advances. The logos and the
-// title all share this one timeout; on the title's timeout the original falls
-// straight through to the menu (it does NOT re-run the intro). We express it in
-// ms (getvalue(12) * 1000) so it is resolution-independent.
-constexpr std::uint32_t kBootDwellMs = 7000;  // getvalue(12) == 7 s
+// kBootDwellMs (the getvalue(12)=7s waited-screen dwell) + the logo_screen/
+// title_screen ScreenDef factories moved to screens/boot_screen.cpp with
+// run_boot_attract (the only user of all three).
 
 // The main-menu ATTRACT idle timeout — CONFIRMED getvalue(92) = 30 (VALUELST
 // `92,30`), gated `> 5` (the file's own legend: values < 5 disable attract
@@ -607,12 +601,6 @@ constexpr std::uint32_t kBootDwellMs = 7000;  // getvalue(12) == 7 s
 constexpr std::int64_t kAttractIdleFallbackS = 30;
 constexpr std::int64_t kAttractIdleMinS = 5;  // getvalue(92) <= 5 disables attract
 
-ScreenDef logo_screen(const char* bg) {
-    return ScreenDef{bg, {}, /*dwell_ms*/ kBootDwellMs, /*skippable*/ true};
-}
-ScreenDef title_screen() {
-    return ScreenDef{"TITLE", {}, /*dwell_ms*/ kBootDwellMs, /*skippable*/ true};
-}
 // Results: DRAW (no survivor / time up) or VICTORY<player> (one survivor). The
 // original draws these with sub_42A088(name, 0) then a bespoke "any key, or 6 s
 // in attract" loop (sub_42A3F6); we model it as a normal Screen with a bounded
@@ -1009,67 +997,23 @@ int GameApp::run_demo() {
 }
 
 ScreenContext GameApp::sctx() {
-    return ScreenContext{assets_,   audio_,      sounds_,       keyboard_,
-                         gamepads_, front_font_, cursor_blink_, values_,
-                         sdl_renderer_.get(), window_.get()};
+    // *screen_ is emplaced in init() before run_app() drives any screen, so it is
+    // always engaged here (same invariant as renderer_, see the file-top note).
+    return ScreenContext{assets_,
+                         audio_,
+                         sounds_,
+                         keyboard_,
+                         gamepads_,
+                         front_font_,
+                         cursor_blink_,
+                         *screen_,  // NOLINT(bugprone-unchecked-optional-access)
+                         values_,
+                         sdl_renderer_.get(),
+                         window_.get()};
 }
 
 AppInput GameApp::present_screen(const ScreenDef& def) {
-    // Enter the screen (resets its clock/counter; music is NOT touched here —
-    // the caller owns the continuous track, sub_42A088 only presents an image).
-    screen_->enter(def, SDL_GetTicks());  // NOLINT(bugprone-unchecked-optional-access)
-    AppInput result = AppInput::Advance;
-    bool waiting = true;
-    // Refresh-boundary pacing (see refresh_period_ns): even a static screen
-    // spins this loop uncapped on Windows without it — the same DWM
-    // non-blocking present as the animated loops.
-    platform::FrameClock frame_clock(window_.get());
-    while (waiting) {
-        SDL_Event ev;
-        while (SDL_PollEvent(&ev)) {
-            if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
-            if (ev.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
-                // Gamepad advance (mirrors present_menu's pad->synthetic-key
-                // injection): present_screen's on_key treats every accept key
-                // as advance, so a controller button synthesizes Enter and
-                // walks the logo/title chain the same as a keyboard accept.
-                SDL_Event synth{};
-                synth.type = SDL_EVENT_KEY_DOWN;
-                synth.key.key = SDLK_RETURN;
-                SDL_PushEvent(&synth);
-                continue;
-            }
-            if (ev.type == SDL_EVENT_KEY_DOWN) {
-                // Feed every key to the screen: sub_42A088 blips (SFX 20) on any
-                // key and, for the accept keys (Enter/Space/Escape), plays the
-                // accept sting (SFX 10) and finishes. Escape additionally routes
-                // us "back"; Enter/Space "advance". The blip/sting come from the
-                // Screen, so the music track is untouched — only the screen ends.
-                screen_->on_key(ev.key.key);  // NOLINT(bugprone-unchecked-optional-access)
-                if (ev.key.key == SDLK_ESCAPE) {
-                    result = AppInput::Back;
-                    waiting = false;
-                }
-            }
-        }
-        std::uint64_t now = SDL_GetTicks();
-        screen_->update(now);                  // NOLINT(bugprone-unchecked-optional-access)
-        if (screen_->done()) waiting = false;  // NOLINT(bugprone-unchecked-optional-access)
-
-        audio_.update_music();
-        SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
-        SDL_RenderClear(sdl_renderer_.get());
-        screen_->draw(sdl_renderer_.get());  // NOLINT(bugprone-unchecked-optional-access)
-        SDL_RenderPresent(sdl_renderer_.get());
-        frame_clock.pace();
-    }
-
-    // No transition out: sub_42A088 CUTS between screens — it sets the palette
-    // (sub_41522D, instant; the >>2 is the 8->6-bit VGA palette conversion, NOT
-    // a fade loop), blits (sub_429FF1), and flips (sub_41043C). There is no wipe
-    // anywhere in the front end (docs/re/frontend-flow.md "HEADWIPE.ANI is
-    // dead art"), so the next screen simply replaces this one.
-    return result;
+    return present_asset_screen(sctx(), def);
 }
 
 AppInput GameApp::present_bm_screen(const std::string& bm_name) {
@@ -2036,57 +1980,7 @@ bool GameApp::auto_advance_results() const {
 }
 
 AppInput GameApp::run_boot_attract() {
-    // The boot presentation (sub_42B060 @0x42B060) — STRAIGHT-LINE, no loop.
-    // The original's exact order:
-    //   sub_42741E(0x3E8)         ; start the boot music (1000) FIRST of all
-    //   if (!sub_413D01()) {      ; skip-logos gate
-    //       show IPLOGO           ; sub_42A088(aIplogo, 1), a waited screen
-    //       show HSLOGO           ; sub_42A088(aHslogo, 1), a waited screen
-    //   }
-    //   sub_427BFB(2800)          ; the one-shot title intro sting, before TITLE
-    //   show TITLE                ; sub_42A088(aTitle, 1), a waited screen
-    //   return                    ; caller enters the menu (sub_42B9CE)
-    // sub_42B060 does NOT loop: each screen advances on a key OR the getvalue(12)
-    // = 7 s timeout (which synthesizes Enter, 13), and after the title it simply
-    // returns so the caller drops into the menu. There is NO attract re-run of
-    // the logos/title. So the port is linear: present each screen; a plain
-    // Advance (key accept OR the 7 s dwell) walks to the next; the title's
-    // Advance returns to run_app, which enters present_menu and switches to the
-    // 1010 menu music. Only Back/Quit short-circuit out.
-    //
-    // The boot music is started ONCE here and plays CONTINUOUSLY across the
-    // logos and the title — the logos are NOT silent. We must not (re)start the
-    // track per screen: start_music replaces the current track (sub_427342 frees
-    // it first), so a per-screen call would restart the boot music every time.
-    audio_.start_music(kBootMusicId);
-
-    // Escape ADVANCES one screen like every other accept key (present_screen
-    // maps Escape->Back, but sub_42B060 treats it as an advance): a single
-    // Escape on IPLOGO must step to HSLOGO, not short-circuit the whole boot
-    // chain into the menu. So Back falls through to the next present_screen
-    // here — only Quit (window close) short-circuits.
-    AppInput ev = present_screen(logo_screen("IPLOGO"));
-    if (ev == AppInput::Quit) return ev;
-    ev = present_screen(logo_screen("HSLOGO"));
-    if (ev == AppInput::Quit) return ev;
-
-    // The one-shot title intro sting, fired right before the title image. In the
-    // binary this is sub_427BFB(2800), which is NOT a fixed clip: it picks a
-    // RANDOM member of the contiguous SOUNDLST run starting at 2800 (the "ATOMIC
-    // BOMBERMAN!" intro group 2800..2810 — GEN8A/GEN8B/GEN8C/… ; the file's own
-    // "2899 is the last intro" comment bounds it). So each boot can voice a
-    // different take. play_random_in_range picks across exactly the loaded ids in
-    // that span, matching the group pick; it is a one-shot SFX voice, so it plays
-    // over the still-running boot track without disturbing it.
-    audio_.play_random_in_range(kTitleStingLo, kTitleStingHi);
-
-    // The title: a normal waited screen. present_screen returns Advance on a
-    // real accept OR the 7 s timeout — both fall through to the menu here,
-    // faithful to sub_42B060 synthesizing Enter on timeout and returning. Back
-    // (Escape) exits the app; Quit closes the window.
-    ev = present_screen(title_screen());
-    if (ev == AppInput::Quit || ev == AppInput::Back) return ev;
-    return AppInput::Advance;  // key OR 7 s timeout -> caller enters the menu
+    return BootScreen(sctx()).run();
 }
 
 AppInput GameApp::present_menu() {
