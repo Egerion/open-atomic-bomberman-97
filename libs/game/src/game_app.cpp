@@ -18,6 +18,7 @@
 #include "bomber/game/dos_scancode.hpp"
 #include "bomber/game/frontend_util.hpp"
 #include "bomber/game/hud_format.hpp"
+#include "bomber/game/match_outcome.hpp"
 #include "bomber/game/screens/asset_screen.hpp"
 #include "bomber/game/screens/boot_screen.hpp"
 #include "bomber/game/screens/campaign_screens.hpp"
@@ -27,6 +28,7 @@
 #include "bomber/game/screens/map_select_screen.hpp"
 #include "bomber/game/screens/menu_screen.hpp"
 #include "bomber/game/screens/options_screens.hpp"
+#include "bomber/game/screens/results_screens.hpp"
 #include "bomber/game/screens/scheme_filename_prompt.hpp"
 #include "bomber/game/screens/setup_screen.hpp"
 #include "bomber/game/screens/video_settings_screen.hpp"
@@ -569,18 +571,17 @@ namespace {
 // start_music() = the looping music channel, play() = a one-shot SFX voice.
 // kBootMusicId (1000) moved to screens/boot_screen.cpp with run_boot_attract.
 // kMenuMusicId (1010, 0x3F2 MENU.RSS) moved to screens/menu_screen.cpp with present_menu.
-// The Play-handler music (sub_42A3F6), CORRECTED by docs/re/in-match-shell.md
-// §2 (supersedes this file's earlier "1020 under VICTORY" reading):
-//   - Play entry (pseudo.c 29696): sub_42741E(0x3FC) = 1020 ("win") — this is
-//     actually the SETUP-SCREENS track (player select / LEVEL & ROUNDS), not
-//     victory music. Kept as kWinMusicId for the name's sake (matches
-//     SOUNDLST's own "win" label) but used only where the setup screens run.
-//   - Round end (pseudo.c 29820): sub_42741E(0x46A) = 1130 ("draw") replaces
-//     the stage track UNCONDITIONALLY, before the survivor test — so DRAW,
-//     the RESULTS tally, AND VICTORY/TEAM all play under 1130; nothing
-//     restarts 1020 anywhere in the outcome tier.
-// Both are looping tracks (start_music), replacing the menu/stage music.
-constexpr int kWinMusicId = 1020;   // 0x3FC — WIN.RSS, setup-screens backdrop (NOT victory)
+// kWinMusicId (1020, 0x3FC WIN.RSS — the SETUP-SCREENS backdrop track, player
+// select / LEVEL & ROUNDS, NOT victory music per docs/re/in-match-shell.md §2)
+// moved to screens/results_screens.cpp with the goldman wheel, its last user in
+// this file; setup_screen.cpp keeps its own copy too.
+// The outcome-tier music this file still owns (sub_42A3F6), CORRECTED by
+// docs/re/in-match-shell.md §2 (supersedes this file's earlier "1020 under
+// VICTORY" reading): at Round end (pseudo.c 29820) sub_42741E(0x46A) = 1130
+// ("draw") replaces the stage track UNCONDITIONALLY, before the survivor test —
+// so DRAW, the RESULTS tally, AND VICTORY/TEAM all play under 1130; nothing
+// restarts 1020 anywhere in the outcome tier. A looping track (start_music),
+// replacing the menu/stage music.
 constexpr int kDrawMusicId = 1130;  // 0x46A — DRAW.RSS, DRAW *and* RESULTS *and* VICTORY backdrop
 // Per-level in-round stage track fallback (sub_4293E5, docs/re/
 // in-match-shell.md §2): SOUNDLST 1100+level, or this id when the level has
@@ -959,6 +960,7 @@ ScreenContext GameApp::sctx() {
                          front_font_,
                          cursor_blink_,
                          *screen_,  // NOLINT(bugprone-unchecked-optional-access)
+                         seqs_,
                          values_,
                          sdl_renderer_.get(),
                          window_.get()};
@@ -1043,6 +1045,27 @@ CampaignState GameApp::campaign_state() {
                          opts_.game_dir};
 }
 
+ScoreboardState GameApp::scoreboard_state() {
+    // The RESULTS scoreboard's shared-state seam (ADR-0009 §8): the non-service
+    // members present_scoreboard reads (the frozen round's sim::State, the
+    // win/kill tally + roster it rows, the win-by-kills option, and the
+    // demo/roster flags auto_advance_results() consults) — bundled by reference/
+    // value so ScoreboardScreen needs no GameApp&. Built fresh on demand, same as
+    // sctx()/campaign_state(). Field order MUST track ScoreboardState's.
+    return ScoreboardState{sim_.state(), win_count_,  kill_count_,     win_target_,
+                           setup_team_,  team_play_,  setup_type_,     options_,
+                           opts_.demo,   opts_.demo_ticks, opts_.demo_shots};
+}
+
+GoldmanState GameApp::goldman_state() {
+    // The Goldman wheel's shared-state seam (ADR-0009 §8): the three non-service
+    // members present_goldman_wheel writes (the wheel's presentation LCG and the
+    // pending gold-player/prize pair) — bundled by non-const reference so
+    // GoldmanWheelScreen needs no GameApp&. Built fresh on demand, same as
+    // sctx()/scoreboard_state(). Field order MUST track GoldmanState's.
+    return GoldmanState{goldman_lcg_, gold_player_, gold_prize_};
+}
+
 AppInput GameApp::present_screen(const ScreenDef& def) {
     return present_asset_screen(sctx(), def);
 }
@@ -1107,99 +1130,31 @@ AppInput GameApp::present_campaign_complete() {
     return CampaignCompleteScreen(sctx(), match_backdrop()).run();
 }
 
-int GameApp::round_winner() const {
-    // A round win is exactly one SIDE of survivors with the clock still
-    // running; a mutual wipe-out or a time-out is a draw. Mirrors sub_42A3F6,
-    // which shows DRAW when the survivor query (sub_4219B0) returns none and
-    // VICTORY<idx> for the lone survivor. Team-aware via sim::winning_side
-    // (docs/re/ai.md TEAM follow-up, "our semantics"): teammates count as one
-    // side, so a solo match (every team byte 0) is unchanged — the returned
-    // slot is still the sole survivor, just resolved through the same-side
-    // rule instead of a raw single-player check.
-    const sim::State& s = sim_.state();
-    if (s.ticks_left == 0) return -1;  // time up -> draw
-    return sim::winning_side(s);
-}
+// The six match-outcome predicates were promoted VERBATIM to free functions in
+// bomber/game/match_outcome.hpp (ADR-0009 §10) so the extracted ScoreboardScreen
+// — which holds no GameApp& — can call the SAME clinch/outcome logic run_app and
+// run_match use. GameApp keeps these thin 1-line forwarders so its own callers
+// (run_app / run_match / draw_player_row, none extracted yet) stay byte-identical;
+// the full RE citations live on the free functions. Each forwarder qualifies the
+// call (::bomber::game::) so it names the free function, not itself.
+int GameApp::round_winner() const { return ::bomber::game::round_winner(sim_.state()); }
 
 bool GameApp::campaign_no_human_survivor() const {
-    // sub_4016DA clauses 4-5 (docs/re/campaign.md "Round pacing"), confirmed
-    // against pseudo.c 4634-4648: `for (i=0;i<10;++i) { sub_421DD2(i,&type,0);
-    // if (type!=1 && type && sub_4228C4(i)) return; }` — bail (no override)
-    // the instant ANY present, non-COMPUTER, ALIVE slot is found; falling
-    // through the loop means every human/joystick slot is dead. type==1 is
-    // COMPUTER (setup_type_'s own convention, matching sub_421DD2's "type"
-    // out-param) — a live COMPUTER slot does NOT stop the fall-through. The
-    // actual predicate is the SDL-free campaign_round_needs_replay
-    // (results.hpp, unit-tested in test_frontend.cpp) — this wrapper just
-    // gathers the three per-slot arrays it needs from sim::State/setup_type_.
-    if (!campaign_active_) return false;
-    const sim::State& s = sim_.state();
-    std::array<bool, sim::kMaxPlayers> present{};
-    std::array<bool, sim::kMaxPlayers> alive{};
-    for (int i = 0; i < sim::kMaxPlayers; ++i) {
-        present[i] = s.players[i].present;
-        alive[i] = s.players[i].alive;
-    }
-    return campaign_round_needs_replay(present, alive, setup_type_);
+    return ::bomber::game::campaign_no_human_survivor(campaign_active_, sim_.state(), setup_type_);
 }
 
 bool GameApp::is_team_mode() const {
-    // Team mode (docs/re/setup-screens.md dword_464964): any two ACTIVE
-    // players sharing a MatchConfig team means team rows/strings apply.
-    // setup_team_[] is the frontend's per-slot +84 byte; team_play_ is the
-    // game-type gate (start_match zeroes every slot's team when it is off,
-    // so gating on team_play_ here keeps this in lockstep with the roster
-    // actually built for the match in progress).
-    if (!team_play_) return false;
-    const sim::State& s = sim_.state();
-    std::array<bool, sim::kMaxPlayers> team_seen{};
-    for (int i = 0; i < sim::kMaxPlayers; ++i) {
-        if (!s.players[i].present) continue;
-        int t = setup_team_[i];
-        if (t < 0 || t >= sim::kMaxPlayers) continue;
-        if (team_seen[t]) return true;
-        team_seen[t] = true;
-    }
-    return false;
+    return ::bomber::game::is_team_mode(team_play_, sim_.state(), setup_team_);
 }
 
 int GameApp::match_clinch() const {
-    // §1 v73 (sub_42A3F6, batch_0x4293E5.cpp:1189-1255): the clinch splits on
-    // TEAM mode (dword_464964). The team branch is ALWAYS wins-based; the
-    // kill-count clinch (win_by_kills_clinch: highest round-kill total >=
-    // target, unique leader v78==1) lives ONLY in the NON-team branch's
-    // dword_46497C sub-case (line 1243). win_by_kills is inherently a non-team
-    // feature — team play forces it OFF (batch_0x405B3A.cpp:685-686
-    // `if (dword_464964) dword_46497C = 0;`, mirrored at
-    // options_screen.cpp's activate_row). The old `is_team_mode() &&
-    // win_by_kills` gate was therefore DEAD (never true), silently falling the
-    // "Win Matches By Kill Total" mode through to the round-win loop. Both call
-    // sites (run_app's Results handler and present_scoreboard) share this gate.
-    const sim::State& s = sim_.state();
-    if (!is_team_mode() && options_.win_by_kills) {
-        std::array<bool, sim::kMaxPlayers> present{};
-        for (int i = 0; i < sim::kMaxPlayers; ++i) present[i] = s.players[i].present;
-        return win_by_kills_clinch(kill_count_, present, win_target_);
-    }
-    for (int i = 0; i < sim::kMaxPlayers; ++i) {
-        if (!s.players[i].present) continue;
-        if (win_count_[i] >= win_target_) return i;
-    }
-    return -1;
+    return ::bomber::game::match_clinch(sim_.state(), team_play_, setup_team_, options_.win_by_kills,
+                                        kill_count_, win_count_, win_target_);
 }
 
 bool GameApp::auto_advance_results() const {
-    // sub_42A3F6's DRAW and RESULTS wait loops honour the 6 s auto-advance ONLY
-    // when `sub_42247A() || dword_4646B4` (batch_0x4293E5.cpp:1109/1333):
-    // sub_42247A returns 1 iff NO slot is human (every +16 type is OFF=0 or
-    // CPU=1 — batch_0x421E80.cpp), and dword_4646B4 is the attract/demo flag. A
-    // human match instead waits indefinitely for Enter. Our attract path is
-    // all-AI and the --demo/--demo-shots path is scripted, so both collapse to:
-    // auto-advance unless a real human (KEYBOARD=2 / JOYSTICK=3) is playing.
-    if (opts_.demo || opts_.demo_ticks > 0 || !opts_.demo_shots.empty()) return true;
-    for (int i = 0; i < sim::kMaxPlayers; ++i)
-        if (setup_type_[i] == 2 || setup_type_[i] == 3) return false;  // a human slot
-    return true;  // all-AI roster
+    return ::bomber::game::auto_advance_results(opts_.demo, opts_.demo_ticks, opts_.demo_shots,
+                                                setup_type_);
 }
 
 AppInput GameApp::run_boot_attract() {
@@ -1231,20 +1186,10 @@ void GameApp::restore_from_attract() {
 }
 
 void GameApp::reset_match_scores() {
-    win_count_.fill(0);
-    kill_count_.fill(0);
-    // getvalue(310) "how many wins to win a match?" (first-column value, else
-    // options.ini's num_to_win_match= if the VALUELST key is absent, else our
-    // own fallback of 2 (task item 5 / §5: "num_to_win_match ... should seed
-    // the frontend's win_target_ default"). The LEVEL & ROUNDS screen's WINS
-    // row (present_map_select) still overrides on top of whichever default
-    // wins here — this only affects the value shown before the player edits it.
-    auto it = values_.values.find(310);
-    if (it != values_.values.end())
-        win_target_ = static_cast<int>(it->second);
-    else
-        win_target_ = num_to_win_match_.value_or(2);
-    if (win_target_ < 1) win_target_ = 1;
+    // Forwarder to the free reset_match_scores() (match_outcome.hpp); writes
+    // win_count_/kill_count_/win_target_ in place, so they pass by non-const ref.
+    ::bomber::game::reset_match_scores(win_count_, kill_count_, win_target_, values_,
+                                       num_to_win_match_);
 }
 
 // The between-round RESULTS cumulative-tally screen (sub_42A3F6 tail,
@@ -1256,204 +1201,13 @@ void GameApp::reset_match_scores() {
 // or, if the outcome line reports a clinch, the flow instead shows the
 // VICTORY screen and never reaches this scoreboard (run_app's Results case).
 AppInput GameApp::present_scoreboard() {
-    const sim::State& s = sim_.state();
-
-    // Header — getstring(30) "Game Winner was %s !", getvalue(780/781/783).
-    const float hx = static_cast<float>(values_.column_or(780, 0, 150));
-    const float hy = static_cast<float>(values_.column_or(780, 1, 140));
-    // getvalue(783) is a colour index in the original — resolved:
-    // docs/re/results-and-options.md's "screen-ink byte globals" pin.
-    // byte_49D38F (general draw ink) is an offset into the shared RGB555 ->
-    // palette-index LUT (byte_495390), decoding to RGB555 (31,31,31) = white;
-    // verified against the install's FIELD0/5/10/MAINMENU.PCX palettes
-    // (nearest entry (255,255,255), dist2=0 on all four).
-    constexpr Uint8 kHeaderR = 255, kHeaderG = 255, kHeaderB = 255;
-
-    // Per-player row — getstring(31) non-team "Player %u score: %u (kills: %d)"
-    // / getstring(38) team "Team %u score: %u", getvalue(785/786/787/788).
-    const float rx = static_cast<float>(values_.column_or(785, 0, 150));
-    const float ry0 = static_cast<float>(values_.column_or(785, 1, 210));
-    const float rystep = static_cast<float>(values_.column_or(785, 2, 20));
-
-    // Outcome line — getvalue(800/801/803); string 120/121 "still need N" vs
-    // 35/36 "wins the match" depending on team mode (§1's dword_46497C /
-    // win_by_kills branch, wired below via options_.win_by_kills).
-    const float ox = static_cast<float>(values_.column_or(800, 0, 150));
-    const float oy = static_cast<float>(values_.column_or(800, 1, 94));
-
-    // Team mode + the §1 v73 match-clinch check — factored into is_team_mode()
-    // / match_clinch() (game_app.hpp) so run_app's Results handler (the
-    // VICTORY-vs-scoreboard decision) and this render agree on the exact same
-    // predicate, including the win_by_kills branch (docs/re/
-    // results-and-options.md §3 row 5, now live).
-    bool team_mode = is_team_mode();
-    int clinched_player = match_clinch();
-
-    // Header text (getstring(30), "Game Winner was %s !"), drawn once per
-    // round on entry — the winner named is this ROUND's winner (round_winner()),
-    // not necessarily the player who clinched the whole match.
-    const int round_w = round_winner();
-    const std::string header =
-        fmt_s(assets_.getstring(30, "Game Winner was %s !"),
-              round_w >= 0 ? "P" + std::to_string(round_w + 1) : std::string("-"));
-
-    const std::uint64_t start = SDL_GetTicks();
-    AppInput result = AppInput::Advance;
-    bool waiting = true;
-    while (waiting) {
-        SDL_Event ev;
-        while (SDL_PollEvent(&ev)) {
-            if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
-            if (ev.type == SDL_EVENT_KEY_DOWN) {
-                audio_.play(20);  // any-key blip then accept sting (sub_42A088)
-                audio_.play(10);
-                result = ev.key.key == SDLK_ESCAPE ? AppInput::Back : AppInput::Advance;
-                waiting = false;
-            }
-        }
-        // sub_42A3F6's RESULTS loop only auto-advances after 6 s for an all-AI/
-        // attract roster; a human match waits for Enter (auto_advance_results()).
-        if (auto_advance_results() && SDL_GetTicks() - start >= kResultsDwellMs)
-            waiting = false;
-        audio_.update_music();
-        SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
-        SDL_RenderClear(sdl_renderer_.get());
-        const Sprite& bg = assets_.frontend_pcx("RESULTS");
-        if (bg.tex) {
-            SDL_FRect dst{0.0f, 0.0f, static_cast<float>(bg.w), static_cast<float>(bg.h)};
-            SDL_RenderTexture(sdl_renderer_.get(), bg.tex, nullptr, &dst);
-        }
-
-        // Header, drawn once per round (this screen IS one round's worth of
-        // display, so we always draw it — sub_42A3F6's "!dword_464AEC" gate is
-        // about not re-drawing across frames of the SAME round, which our
-        // per-round call already satisfies).
-        // sub_41696C (batch_0x4293E5.cpp:1171) — outlined, like every scoreboard
-        // string; the color2 outline is byte_495390[0] = black.
-        front_font_.draw_outlined(sdl_renderer_.get(), header, hx, hy, kHeaderR, kHeaderG,
-                                  kHeaderB, 0, 0, 0);
-
-        // Per-player / per-team tally rows. Non-team rows keep the slot's own
-        // ink (sub_41672F -> AssetStore::slot_color, docs/re/player-colour.md).
-        // Team rows use the original's fixed two-ink helper sub_4141F8
-        // (@0x4141F8, `team ? byte_49D0DA : byte_49D38F`) — both inks are
-        // RGB555 offsets into the byte_495390 LUT (results-and-options.md §1
-        // "screen-ink byte globals"): team 0 = the general white ink
-        // (31,31,31), team != 0 = red (31,10,10) -> (252,80,80) against the
-        // install's shared UI palette entries.
-        if (team_mode) {
-            std::array<bool, sim::kMaxPlayers> team_drawn{};
-            int row = 0;
-            for (int i = 0; i < sim::kMaxPlayers; ++i) {
-                if (!s.players[i].present) continue;
-                int t = setup_team_[i];
-                if (t < 0 || t >= sim::kMaxPlayers || team_drawn[t]) continue;
-                team_drawn[t] = true;
-                std::string line =
-                    fmt_u(assets_.getstring(38, "Team %u score: %u"), static_cast<unsigned>(t + 1));
-                // getstring(38) carries one %u (team number); splice the score
-                // in after it manually since fmt_u only substitutes the first.
-                line += " " + std::to_string(win_count_[i]);
-                const bool team1 = t != 0;  // sub_4141F8's `a1 ?` branch
-                const std::uint8_t c[3] = {static_cast<std::uint8_t>(team1 ? 252 : 255),
-                                           static_cast<std::uint8_t>(team1 ? 80 : 255),
-                                           static_cast<std::uint8_t>(team1 ? 80 : 255)};
-                front_font_.draw_outlined(sdl_renderer_.get(), line, rx,
-                                          ry0 + rystep * static_cast<float>(row), c[0], c[1], c[2],
-                                          0, 0, 0);
-                ++row;
-            }
-        } else {
-            int row = 0;
-            for (int i = 0; i < sim::kMaxPlayers; ++i) {
-                if (!s.players[i].present) continue;
-                // getstring(31) "Player %u score: %u (kills: %d)" — two
-                // independent counters (§1): win_count_ (match score) and
-                // kill_count_ (cumulative match kills, NOT round kills
-                // despite the string's "kills" label — see kill_count_'s
-                // declaration comment in game_app.hpp for the §1 citation;
-                // tallied every tick from PlayerDied events, self-kills
-                // excluded per our documented semantics).
-                std::string line = assets_.getstring(31, "Player %u score: %u (kills: %d)");
-                line = fmt_u(line, i + 1);
-                // fmt_u only substitutes the FIRST specifier; splice the
-                // remaining two (score, kills) in by hand so the RE'd format
-                // string still reads naturally with real fallback text.
-                auto splice_next = [](std::string& f, int v) {
-                    auto p = f.find('%');
-                    if (p == std::string::npos) return;
-                    std::size_t q = p + 1;
-                    while (q < f.size() && f[q] != 'u' && f[q] != 'd' && f[q] != 'i') ++q;
-                    if (q < f.size()) f = f.substr(0, p) + std::to_string(v) + f.substr(q + 1);
-                };
-                splice_next(line, win_count_[i]);
-                splice_next(line, kill_count_[i]);
-                std::uint8_t c[3];
-                assets_.slot_color(i, c);
-                // Outline colour = sub_416867(i) (batch_0x415C1F.cpp:394): in
-                // solo mode player 1 (the BLACK bomberman, index 1) gets a WHITE
-                // outline (byte_49D38F) so its dark ink stays legible; everyone
-                // else gets black (byte_495390[0]). (Team rows + header + outcome
-                // are always black.)
-                const std::uint8_t ol = i == 1 ? 255 : 0;
-                front_font_.draw_outlined(sdl_renderer_.get(), line, rx,
-                                          ry0 + rystep * static_cast<float>(row), c[0], c[1], c[2],
-                                          ol, ol, ol);
-                ++row;
-            }
-        }
-
-        // Outcome line inks — pinned (results-and-options.md §1 "screen-ink
-        // byte globals"): byte_49A624 ("still playing") and byte_497F8F
-        // ("match over") are RGB555 offsets into the byte_495390 LUT,
-        // decoding to (20,20,20) mid-grey and (10,31,31) cyan; resolved to
-        // (168,168,164) and (96,252,252) against the install's shared UI
-        // palette entries (identical across FIELD0/5/10 + MAINMENU.PCX).
-        {
-            std::string outcome;
-            std::uint8_t oc[3];
-            if (clinched_player < 0) {
-                // Pre-clinch line (batch_0x4293E5.cpp:1262-1263):
-                // getstring(dword_46497C + 120) formatted with the FLAT target
-                // v60 = dword_464A7C — NOT the remaining count. The strings are
-                // 120 "(Match winner must score %u victories)" / 121 "(... %u
-                // kills)", so the id keys off win_by_kills (a non-team feature),
-                // not team mode, and always shows the total goal.
-                std::string fmt =
-                    options_.win_by_kills
-                        ? assets_.getstring(121, "(Match winner must score %u kills)")
-                        : assets_.getstring(120, "(Match winner must score %u victories)");
-                outcome = fmt_u(fmt, static_cast<unsigned>(win_target_));
-                oc[0] = 168;
-                oc[1] = 168;
-                oc[2] = 164;  // byte_49A624: RGB555 (20,20,20) grey
-            } else {
-                // Clinch line (batch_0x4293E5.cpp:1300-1310): win_by_kills ->
-                // getstring(36) "PLAYER %u WINS THE MATCH!" with the winning
-                // player NUMBER (v73+1); else getstring(35) "%s WINS THE MATCH!"
-                // with the winner name. The native has NO team-specific win
-                // string here — the former `team_mode ? "TEAM %u WINS"` gate
-                // AND that fallback text were both invented (id 36 is "PLAYER
-                // %u", and the selector is win_by_kills, not team mode).
-                if (options_.win_by_kills) {
-                    std::string fmt = assets_.getstring(36, "PLAYER %u WINS THE MATCH!");
-                    outcome = fmt_u(fmt, static_cast<unsigned>(clinched_player + 1));
-                } else {
-                    std::string fmt = assets_.getstring(35, "%s WINS THE MATCH!");
-                    outcome = fmt_s(fmt, "P" + std::to_string(clinched_player + 1));
-                }
-                oc[0] = 96;
-                oc[1] = 252;
-                oc[2] = 252;  // byte_497F8F: RGB555 (10,31,31) cyan
-            }
-            front_font_.draw_outlined(sdl_renderer_.get(), outcome, ox, oy, oc[0], oc[1], oc[2], 0,
-                                      0, 0);
-        }
-
-        SDL_RenderPresent(sdl_renderer_.get());
-        SDL_Delay(2);
-    }
-    return result;
+    // Forwarder to the extracted ScoreboardScreen (ADR-0009 §8). The whole
+    // between-round RESULTS tally — RESULTS.PCX, the per-player/team win+kill
+    // rows in slot ink, and the clinch/outcome line (via the promoted
+    // match_outcome.hpp predicates run_app also uses) — now lives in
+    // screens/results_screens.cpp; run_app still drives it through the same
+    // Results edge.
+    return ScoreboardScreen(sctx(), scoreboard_state()).run();
 }
 
 // A random GLUE<n> backdrop (sub_4148E5 @0x4148E5): getvalue(16) = glue count,
@@ -1464,76 +1218,13 @@ AppInput GameApp::present_scoreboard() {
 // the one presentation-LCG advance — see that header. Call sites below pass
 // setup_lcg_ + values_ explicitly.
 
-// The Goldman Roulette wheel (docs/re/goldman-roulette.md), sub_4034BC. Run
-// from run_app's Menu/StartMatch handler, BEFORE present_setup — the exact
-// gate order at the head of sub_410F81 (doc §2): !attract (this port has no
-// attract-mode match yet, so that leg is always true) && goldman option on
-// && local game (always true, no network play) && a gold player pending
-// (gold_player_ >= 0 — doc's re-entry check re-derived from sub_4034BC's own
-// internal guard, "with no pending gold player the function is a silent
-// no-op"). The caller (run_app) is expected to have already checked
-// options_.goldman && gold_player_ >= 0 before calling this, matching the
-// doc's gate order; this function itself only runs the spin/award, plus the
-// Esc-abort's gold_player_ clear (doc §2 "Cleared to -1 by: Esc on the
-// wheel").
+// Forwarder to the extracted GoldmanWheelScreen (ADR-0009 §8). The wheel's spin
+// setup (5 goldman_lcg_ draws), the per-frame advance/draw, the F1 help browser,
+// and the Esc-abort gold_player_ forfeit / prize award now live in
+// screens/results_screens.cpp; run_app's Menu/StartMatch handler still gates the
+// call (options_.goldman && gold_player_ >= 0, doc §2) and drives it the same way.
 AppInput GameApp::present_goldman_wheel() {
-    audio_.start_music(kWinMusicId);  // 1020 inherits from the Play handler (doc §7); no new music
-    const int segment_steps = static_cast<int>(values_.column_or(1004, 0, kWheelSegmentSteps));
-    const int cx = static_cast<int>(values_.column_or(1000, 0, 320));
-    const int cy = static_cast<int>(values_.column_or(1000, 1, 240));
-    const int rx = static_cast<int>(values_.column_or(1002, 0, 200));
-    const int ry = static_cast<int>(values_.column_or(1002, 1, 150));
-    const int freq_x = static_cast<int>(values_.column_or(1006, 0, 1));
-    const int freq_y = static_cast<int>(values_.column_or(1006, 1, 1));
-
-    GoldmanScreen wheel(assets_, seqs_, front_font_);
-    // Advance a dedicated presentation LCG seed per spin (never State::rng) —
-    // same shape as setup_lcg_/panic_lcg_ elsewhere in this file.
-    goldman_lcg_ = goldman_lcg_ * 1664525u + 1013904223u;
-    wheel.enter(goldman_lcg_, segment_steps);
-
-    AppInput result = AppInput::Advance;
-    // Refresh-boundary pacing (see refresh_period_ns): the wheel advances one
-    // spin step per wheel.tick(), so a blind SDL_Delay(2) free-running at
-    // 300-500 Hz on Windows spun it far too fast. Pace to the real refresh.
-    platform::FrameClock frame_clock(window_.get());
-    while (!wheel.done()) {
-        SDL_Event ev;
-        while (SDL_PollEvent(&ev)) {
-            if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
-            if (ev.type != SDL_EVENT_KEY_DOWN) continue;
-            const SDL_Keycode k = ev.key.key;
-            if (k == SDLK_F1) {
-                // doc §5: F1 opens the SAME generic *.BM help browser
-                // (sub_41431C) every other F1 site opens — the old fixed
-                // OPTIONS.BM cut here was a stale stand-in (chrome audit
-                // 2026-07-12, fix list item 9).
-                AppInput help = present_help_browser();
-                if (help == AppInput::Quit) return AppInput::Quit;
-                continue;
-            }
-            wheel.on_key(k, audio_);
-        }
-        wheel.tick(audio_);
-        audio_.update_music();
-        SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
-        SDL_RenderClear(sdl_renderer_.get());
-        wheel.draw(sdl_renderer_.get(), cx, cy, rx, ry, freq_x, freq_y);
-        SDL_RenderPresent(sdl_renderer_.get());
-        frame_clock.pace();
-    }
-
-    if (wheel.aborted()) {
-        // doc §2/§5: Esc aborts the WHOLE Play flow and forfeits the gold
-        // player — the caller must skip present_setup/present_map_select and
-        // return to the menu on AppInput::Back.
-        gold_player_ = -1;
-        return AppInput::Back;
-    }
-    // doc §4: the prize persists (gold_prize_) until the NEXT spin; start_match
-    // re-applies it every round of the following match via born_with_extra.
-    gold_prize_ = wheel.prize();
-    return result;
+    return GoldmanWheelScreen(sctx(), goldman_state()).run();
 }
 
 AppInput GameApp::present_setup() {
