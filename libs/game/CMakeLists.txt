@@ -26,6 +26,7 @@ add_library(bomber_game_core STATIC
   src/screens/video_settings_screen.cpp
   src/screens/scheme_filename_prompt.cpp
   src/screens/options_screens.cpp
+  src/screens/editor_screen_runner.cpp
   src/game_app.cpp
 )
 add_library(bomber::game ALIAS bomber_game_core)
