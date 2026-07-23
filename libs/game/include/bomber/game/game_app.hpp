@@ -31,6 +31,7 @@
 #include "bomber/game/screens/editor_state.hpp"
 #include "bomber/game/screens/map_select_state.hpp"
 #include "bomber/game/screens/match_backdrop.hpp"
+#include "bomber/game/screens/match_runner_state.hpp"
 #include "bomber/game/screens/menu_state.hpp"
 #include "bomber/game/screens/options_state.hpp"
 #include "bomber/game/screens/results_state.hpp"
@@ -207,6 +208,13 @@ private:
     // — see results_state.hpp), bundled by reference so GoldmanWheelScreen needs
     // no GameApp&. Built fresh on demand like sctx()/scoreboard_state().
     GoldmanState goldman_state();
+    // The match runtime's shared-state seam (ADR-0009 §10): the non-service
+    // members run_match + start_match + collect_inputs + draw_player_row +
+    // draw_fps_overlay read/write (the ticked sim_/renderer_, the round seed, the
+    // kill tally, the F7/F8/F9 live levers, and the read-only MatchConfig inputs —
+    // see match_runner_state.hpp), bundled by reference so MatchRunner needs no
+    // GameApp&. Built fresh on demand like sctx()/goldman_state().
+    MatchRunnerState match_runner_state();
     // Runs one asset-driven Screen (logo/title/results) to completion. sub_42A088
     // CUTS between screens (palette + blit + flip, no wipe), so there is no
     // transition out here — the next screen simply replaces this one. Returns the
@@ -384,29 +392,11 @@ private:
     // reaches Results).
     AppInput run_match();
 
-    // The in-round "player row" HUD strip (docs/re/in-match-shell.md "The
-    // player row" — corrects that document's earlier "no score/kill HUD
-    // element exists" claim, which missed this block inside sub_420F07):
-    // for every slot that has ever been in this match, draws "S:<wins>
-    // K:<kills>" in that player's own colour at a 5-column x 2-row grid
-    // across the top of the screen (VALUELST 113-119), overlaying the
-    // MISC.ANI "xxx" marker on a slot that is dead THIS round. Called once
-    // per rendered frame from run_match, after Renderer::draw_frame — needs
-    // GameApp's own win_count_/kill_count_/front_font_/seqs_, none of which
-    // Renderer owns (CLAUDE.md's libs/game boundary: Renderer reads sim
-    // State + events only).
-    void draw_player_row(const sim::State& s);
-
-    // F8 framerate-indicator overlay (top-right of the match view): the live
-    // presented-frame rate plus the vsync/mode state F8 toggles. A port-only
-    // dev/A-B aid (see uncap_fps_), not an RE'd HUD element.
-    void draw_fps_overlay(int fps);
-
     // The six match-outcome predicates below are thin forwarders to the free
     // functions of the same names in bomber/game/match_outcome.hpp, where they
-    // were promoted VERBATIM (ADR-0009 §10) so the extracted ScoreboardScreen can
-    // call the SAME clinch/outcome logic run_app / run_match use without a
-    // GameApp&. Kept as methods so this file's own callers stay byte-identical;
+    // were promoted VERBATIM (ADR-0009 §10) so the extracted ScoreboardScreen and
+    // MatchRunner can call the SAME clinch/outcome logic run_app uses without a
+    // GameApp&. Kept as methods for run_app, this file's last remaining caller;
     // the full RE citations live on the free functions in that header.
     //
     // The winner of the round just ended (sole survivor index, or -1 for a draw).
@@ -450,11 +440,6 @@ private:
     // (selected_level_) + win target (win_target_), Escape backs to present_setup.
     // Returns Advance to start the match, Back to the player screen, Quit on close.
     AppInput present_map_select();
-    // A slot bound to JOYSTICK sub reads GamepadMapper::read(sub); a slot bound
-    // to KEYBOARD sub 0/1 reads the shared KeyboardMapper's player 0/1 half;
-    // OFF/COMPUTER slots get neutral input (AI/absent drives them elsewhere).
-    // Assembles the full TickInputs for sim_.tick() each match tick.
-    sim::TickInputs collect_inputs() const;
 
     int menu_index_ = 0;  // highlighted main-menu row (persists across visits)
     // The hidden scheme-editor trigger's same-key repeat counter (§5,
