@@ -11,6 +11,7 @@
 #include "bomber/game/gamepad.hpp"
 #include "bomber/game/input.hpp"
 #include "bomber/game/screen.hpp"
+#include "bomber/game/sequences.hpp"
 
 // The shared presentation services every front-end screen needs, bundled so a
 // screen can be its own class in its own file instead of a GameApp method
@@ -37,6 +38,7 @@ struct ScreenContext {
     FontTextures& front_font;
     CursorIndicator& cursor_blink;
     Screen& asset_screen;  // the sub_42A088 full-screen image presenter (logo/title/results)
+    SequenceSet& seqs;     // shared ANI sequences (the Goldman wheel's prize/ring icons)
     const assets::res::ValueList& values;
     SDL_Renderer* sdl = nullptr;
     SDL_Window* window = nullptr;

@@ -33,6 +33,7 @@
 #include "bomber/game/screens/match_backdrop.hpp"
 #include "bomber/game/screens/menu_state.hpp"
 #include "bomber/game/screens/options_state.hpp"
+#include "bomber/game/screens/results_state.hpp"
 #include "bomber/game/screens/setup_state.hpp"
 #include "bomber/game/sdl.hpp"
 #include "bomber/game/sequences.hpp"
@@ -194,6 +195,18 @@ private:
     // free load_campaign_stage need no GameApp&. Built fresh on demand like
     // sctx()/map_select_state().
     CampaignState campaign_state();
+    // The RESULTS scoreboard's shared-state seam (ADR-0009 §8): the non-service
+    // members present_scoreboard reads (the frozen round's sim::State, the
+    // win/kill tally + roster + options it rows, and the demo/roster flags
+    // auto_advance_results() consults — see results_state.hpp), bundled so
+    // ScoreboardScreen needs no GameApp&. Built fresh on demand like sctx()/
+    // campaign_state().
+    ScoreboardState scoreboard_state();
+    // The Goldman wheel's shared-state seam (ADR-0009 §8): the three non-service
+    // members present_goldman_wheel writes (goldman_lcg_/gold_player_/gold_prize_
+    // — see results_state.hpp), bundled by reference so GoldmanWheelScreen needs
+    // no GameApp&. Built fresh on demand like sctx()/scoreboard_state().
+    GoldmanState goldman_state();
     // Runs one asset-driven Screen (logo/title/results) to completion. sub_42A088
     // CUTS between screens (palette + blit + flip, no wipe), so there is no
     // transition out here — the next screen simply replaces this one. Returns the
@@ -389,42 +402,23 @@ private:
     // dev/A-B aid (see uncap_fps_), not an RE'd HUD element.
     void draw_fps_overlay(int fps);
 
-    // The winner of the round just ended: the sole surviving player's index, or
-    // -1 for a draw (no survivor, or the clock ran out). Drives the Results
-    // screen's DRAW-vs-VICTORY choice and the "player N wins" naming.
+    // The six match-outcome predicates below are thin forwarders to the free
+    // functions of the same names in bomber/game/match_outcome.hpp, where they
+    // were promoted VERBATIM (ADR-0009 §10) so the extracted ScoreboardScreen can
+    // call the SAME clinch/outcome logic run_app / run_match use without a
+    // GameApp&. Kept as methods so this file's own callers stay byte-identical;
+    // the full RE citations live on the free functions in that header.
+    //
+    // The winner of the round just ended (sole survivor index, or -1 for a draw).
     int round_winner() const;
-
-    // Campaign round-pacing clauses 4-5 (docs/re/campaign.md "Round pacing",
-    // sub_4016DA): true when every PRESENT, ALIVE slot is COMPUTER
-    // (setup_type_[i] == 1), i.e. no human/joystick player survives this
-    // round — regardless of whether an AI side is still alive and would
-    // otherwise be sim::winning_side()'s pick. The original force-ends (and,
-    // via `--dword_4648B0` undoing sub_40133F's next `++`, REPLAYS) the
-    // stage the instant this holds, so an AI "winning" a campaign round with
-    // no human left standing must NOT be credited as a win. Strictly wider
-    // than round_winner()'s plain draw (mutual total wipeout) — this also
-    // fires when a COMPUTER side is the sole sim-declared survivor.
+    // Campaign clauses 4-5: no human/joystick player survives this round.
     bool campaign_no_human_survivor() const;
-
-    // True when at least two ACTIVE players share a MatchConfig team
-    // (docs/re/setup-screens.md dword_464964). Factored out so run_app's
-    // Results handler (the VICTORY-vs-scoreboard decision) and
-    // present_scoreboard (the scoreboard's own clinch/outcome-line render)
-    // agree on the SAME team_mode/win_by_kills gate — a divergence here would
-    // let the two disagree about whether the match is over.
+    // At least two ACTIVE players share a MatchConfig team (dword_464964).
     bool is_team_mode() const;
-    // The §1 v73 match-clinch check, factored so run_app's Results handler
-    // and present_scoreboard call the identical predicate: the default
-    // win-count clinch, or (team mode + options_.win_by_kills) the
-    // kill_count_ clinch via results.hpp's win_by_kills_clinch(). Returns the
-    // clinching player's index, or -1 if the match is not yet decided.
+    // The §1 v73 match-clinch check; the clinching player's index, or -1.
     int match_clinch() const;
-    // True when the DRAW/RESULTS screens may auto-advance after their dwell
-    // (all-AI roster or a demo/attract run, mirroring sub_42A3F6's
-    // `sub_42247A() || dword_4646B4` gate); false = a human match, which waits
-    // for Enter. See auto_advance_results()'s definition for the full citation.
+    // The DRAW/RESULTS screens may auto-advance after their dwell (all-AI/demo).
     bool auto_advance_results() const;
-
     // Reset the per-match win tally + read the win target getvalue(310) at the
     // start of a fresh match (Menu -> StartMatch). Best-of-N, N = 2 by default.
     void reset_match_scores();
