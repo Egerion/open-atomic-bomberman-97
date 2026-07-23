@@ -27,8 +27,10 @@
 #include "bomber/game/results.hpp"
 #include "bomber/game/screen.hpp"
 #include "bomber/game/screen_context.hpp"
+#include "bomber/game/screens/campaign_state.hpp"
 #include "bomber/game/screens/editor_state.hpp"
 #include "bomber/game/screens/map_select_state.hpp"
+#include "bomber/game/screens/match_backdrop.hpp"
 #include "bomber/game/screens/menu_state.hpp"
 #include "bomber/game/screens/options_state.hpp"
 #include "bomber/game/sdl.hpp"
@@ -169,6 +171,21 @@ private:
     // bundled by reference so MapSelectScreen needs no GameApp&. Built fresh on
     // demand like sctx()/menu_state().
     MapSelectState map_select_state();
+    // The match-coupled backdrop seam (ADR-0009 §8): the live Renderer + sim
+    // State the campaign confirm/banner/complete dialogs and the in-round help
+    // modal draw as their frozen backdrop — kept SEPARATE from the front-end-
+    // service-only ScreenContext (match-runtime members, not presentation
+    // services). Built fresh on demand like sctx(); NOLINTs the renderer_
+    // optional deref exactly as sctx() does *screen_.
+    MatchBackdrop match_backdrop();
+    // The campaign flow's shared-state seam (ADR-0009 §8): the non-service
+    // members present_campaign_picker + load_campaign_stage read/write
+    // (campaign_active_/campaign_stages_/campaign_stage_index_/campaign_banner_/
+    // the setup_type_/sub_/team_ roster/setup_lcg_/scheme_/opts_.game_dir — see
+    // campaign_state.hpp), bundled by reference so CampaignPickerScreen and the
+    // free load_campaign_stage need no GameApp&. Built fresh on demand like
+    // sctx()/map_select_state().
+    CampaignState campaign_state();
     // Runs one asset-driven Screen (logo/title/results) to completion. sub_42A088
     // CUTS between screens (palette + blit + flip, no wipe), so there is no
     // transition out here — the next screen simply replaces this one. Returns the
@@ -270,34 +287,14 @@ private:
     // mode untouched (port convenience — the original's own error-dialog
     // path for the analogous cases, §3).
     void present_campaign_picker();
-    // Loads campaign stage `campaign_stage_index_`'s scheme by name
-    // (resolves `<scheme>.SCH` case-insensitively under DATA/SCHEMES,
-    // mirroring the case-insensitive glob every other picker already uses)
-    // into scheme_, and seeds setup_type_ from the stage's AI count
-    // (docs/re/campaign.md "Rover/ghost/AI roster — CORRECTED"): the real
-    // per-stage seeder is sub_40151B (gated dword_46489C), NOT sub_42288C
-    // (that only clears a per-slot UI latch) — it flips exactly `ai_count`
-    // RANDOMLY-chosen OFF slots to COMPUTER (sub_422928: `rand()%10` +
-    // retry-on-occupied) and separately spawns `rovers`/`ghosts` as
-    // autonomous map-hazard actors (sub_401AAE/sub_401B05) in a particle
-    // table libs/sim has no equivalent of — NOT folded into COMPUTER slots
-    // (a prior mislabelling, corrected). Also sets campaign_banner_ to the
-    // stage's display text (docs/re/campaign.md "Stage banner"). Returns
-    // false (and leaves state untouched) if the scheme can't be
-    // resolved/loaded, so the caller can bail out of campaign mode cleanly
-    // instead of starting a match with a stale board.
-    bool load_campaign_stage(int index);
-    // The campaign-activation confirmation dialog (sub_4015C6, docs/re/
-    // campaign.md "Campaign-activation confirmation dialog"): the REAL
-    // sub_43C734-chromed two-line modal the picker shows right after a
-    // successful pick/parse — getstring(95)="NOTE!" on top, getstring(1210)=
-    // "Campaign Mode Activated!" below (line order CONFIRMED from
-    // sub_414340's own draw order plus sub_4015C6's explicit LODWORD
-    // assignment, not guessed — see the .cpp comment and the doc section).
-    // Dismiss keys mirror sub_414340's key loop exactly: Enter/Space/Escape
-    // confirm, every other key is a no-op (dialog stays up). Replaces the
-    // former accept-sting stand-in (formerly a coverage-audit.md crumb, now closed).
-    AppInput present_campaign_confirm();
+    // load_campaign_stage moved out of GameApp into a free function in
+    // screens/campaign_state.hpp (ADR-0009 §8): it is called by BOTH
+    // present_campaign_picker (now CampaignPickerScreen) AND run_app's Results
+    // auto-advance handler, so it takes a CampaignState (built by
+    // campaign_state()) instead of being a private method only one of them
+    // could reach. present_campaign_confirm likewise moved to
+    // CampaignConfirmScreen (screens/campaign_screens.hpp) — only the picker
+    // called it, so no GameApp forwarder remains.
     // The campaign stage-start banner (docs/re/campaign.md "Stage banner"):
     // a blocking two-line dialog, "(<stage name>)" (getstring 1235="(%s)")
     // over "Prepare to begin Campaign!" (getstring 1230), shown once per
