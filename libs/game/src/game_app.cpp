@@ -248,6 +248,22 @@ static SDL_Surface* load_window_icon(const std::filesystem::path& ico_path) {
 }
 
 bool GameApp::init() {
+    seed_front_end_rngs();
+
+    fs::path game;
+    fs::path scheme_path;
+    if (!resolve_install_paths(game, scheme_path)) return false;
+    if (!load_config(game, scheme_path)) return false;
+
+    SDL_Renderer* ren = nullptr;
+    if (!init_video(ren)) return false;
+    if (!load_assets(ren, game)) return false;
+
+    build_presentation(ren);
+    return true;
+}
+
+void GameApp::seed_front_end_rngs() {
     // Reseed the front end's presentation-only LCGs from real per-process
     // entropy, mirroring sub_41095A's boot-time `time_(); srand_();` (see
     // random_boot_seed()'s comment above) — done first, before anything that
@@ -273,8 +289,10 @@ bool GameApp::init() {
     if (opts_.demo) {
         setup_lcg_ = attract_lcg_ = goldman_lcg_ = next_seed_ = 0xD3701234u;
     }
+}
 
-    fs::path game = !opts_.game_dir.empty() ? opts_.game_dir : assets::default_game_dir();
+bool GameApp::resolve_install_paths(fs::path& game, fs::path& scheme_path) {
+    game = !opts_.game_dir.empty() ? opts_.game_dir : assets::default_game_dir();
     if (game.empty() || !fs::is_directory(game / "DATA")) {
         std::fprintf(stderr,
                      "usage: bomber_game [game_dir] [scheme.sch]\n"
@@ -282,9 +300,11 @@ bool GameApp::init() {
         return false;
     }
     opts_.game_dir = game;
-    fs::path scheme_path =
-        !opts_.scheme.empty() ? opts_.scheme : game / "DATA" / "SCHEMES" / "BASIC.SCH";
+    scheme_path = !opts_.scheme.empty() ? opts_.scheme : game / "DATA" / "SCHEMES" / "BASIC.SCH";
+    return true;
+}
 
+bool GameApp::load_config(const fs::path& game, const fs::path& scheme_path) {
     try {
         scheme_ = assets::sch::load(scheme_path);
         values_ = assets::res::load_values(game / "DATA" / "RES" / "VALUELST.RES");
@@ -405,7 +425,10 @@ bool GameApp::init() {
         std::fprintf(stderr, "%s\n", e.what());
         return false;
     }
+    return true;
+}
 
+bool GameApp::init_video(SDL_Renderer*& ren) {
     video_.emplace();
     if (!video_->ok()) {
         std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
@@ -425,7 +448,7 @@ bool GameApp::init() {
     // fullscreen toggle (Alt+Enter/F11, sdl_event_filter below) just resizes
     // the OS window/output — it never touches kScreenW/kScreenH or the sim.
     SDL_Window* win = nullptr;
-    SDL_Renderer* ren = nullptr;
+    ren = nullptr;
     // Window title matches the original (sub_41095A -> sub_43E5CC(aAtomicBomberma)).
     if (!SDL_CreateWindowAndRenderer("Atomic Bomberman", kScreenW * 2, kScreenH * 2,
                                      SDL_WINDOW_RESIZABLE, &win, &ren)) {
@@ -485,7 +508,10 @@ bool GameApp::init() {
     // vsync ON by default; OFF when the Video Settings "vsync" toggle (uncap_fps_)
     // is set, so the render loop can free-run to the sub-frame rate (~180 fps).
     SDL_SetRenderVSync(ren, uncap_fps_ ? 0 : 1);
+    return true;
+}
 
+bool GameApp::load_assets(SDL_Renderer* ren, const fs::path& game) {
     // FONT6, loaded standalone BEFORE the boot LOADING dialogs — matching the
     // real init order (docs/re/frontend-flow.md "FONT6 timing", CONFIRMED):
     // sub_41095A calls sub_414DF4 (which pins FONT6 via sub_431E9C(6) as its
@@ -530,7 +556,10 @@ bool GameApp::init() {
                                  assets_.getstring(200, "Loading sound...").c_str());
         if (!audio_.init(game)) std::fprintf(stderr, "audio unavailable, continuing silent\n");
     }
+    return true;
+}
 
+void GameApp::build_presentation(SDL_Renderer* ren) {
     base_tuning_ = match::build_match_config(scheme_, 2, 0, &values_).tuning;
     // Seed setup-screen slot colours from VALUELST for any colour without a .RMP
     // tail (a loaded .RMP keeps its own authoritative tail), then build the
@@ -546,7 +575,6 @@ bool GameApp::init() {
     // dialogs — matching sub_41095A's real init order. assets_.load() reloads
     // the same FONT6.FON into assets_.frontend_font() (harmless — identical
     // file), so no second build() is needed here.
-    return true;
 }
 
 namespace {
@@ -940,52 +968,12 @@ AppInput GameApp::present_bm_screen(const std::string& bm_name) {
     return BmTextScreen(sctx()).run(bm_name);
 }
 
-AppInput GameApp::present_help_browser() {
-    return HelpBrowserScreen(sctx()).run();
-}
-
-AppInput GameApp::present_help_browser_modal() {
-    return HelpBrowserModal(sctx(), match_backdrop()).run();
-}
-
-AppInput GameApp::present_debug_info_modal() {
-    return DebugInfoScreen(sctx()).run();
-}
-
-void GameApp::present_video_settings() {
-    // PORT-ONLY screen (NOT RE'd) — the video/cadence toggles that otherwise
-    // only live on the F7/F8/F9 keys (show_fps_/uncap_fps_/native_cadence_),
-    // surfaced as a small panel and persisted via the Video Settings keys
-    // (install.hpp). Kept SEPARATE from the RE'd Options screen so its exact 18
-    // rows stay faithful (no invented rows there — the deliberate design choice
-    // for these modern-only settings). Same WINZ-panel modal shape as the
-    // Alt+D debug window above; Up/Down select, Enter/Space/Left/Right toggle,
-    // Esc closes. Toggles apply live and mark options_dirty_ so flush_options
-    // round-trips them.
-    VideoSettingsScreen(sctx(), {&uncap_fps_, &native_cadence_, &show_fps_, &options_dirty_}).run();
-}
-
 AppInput GameApp::present_options_screen() {
     return OptionsScreenRunner(sctx(), options_state()).run();
 }
 
 bool GameApp::reload_scheme_from_name(const std::string& name) {
     return reload_scheme(scheme_, opts_.game_dir, name);
-}
-
-std::string GameApp::present_scheme_filename_prompt(const std::string& seed) {
-    return SchemeFilenamePrompt(sctx()).run(seed);
-}
-
-void GameApp::present_editor() {
-    // Forwarder to the extracted EditorRunner (ADR-0009 §9). Still a GameApp
-    // method because present_menu (not yet extracted) calls it from its own
-    // event pump; inlined away once present_menu itself moves out.
-    EditorRunner(sctx(), editor_state()).run();
-}
-
-void GameApp::present_campaign_picker() {
-    CampaignPickerScreen(sctx(), campaign_state(), match_backdrop()).run();
 }
 
 AppInput GameApp::present_campaign_banner() {

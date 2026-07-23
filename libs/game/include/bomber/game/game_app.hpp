@@ -108,7 +108,27 @@ public:
     int run();
 
 private:
+    // init() is a straight-line boot sequence; these are its ordered steps
+    // (ADR-0008 god-object decomposition — a pure extract-method split, each
+    // runs exactly where it did in the original single function). init() just
+    // calls them in order, threading the resolved install paths and the live
+    // SDL renderer between the steps that need them.
     bool init();
+    void seed_front_end_rngs();  // reseed the presentation LCGs (demo pins them)
+    // Resolve the install dir + scheme path (out-params), or fail with usage.
+    bool resolve_install_paths(std::filesystem::path& game,
+                               std::filesystem::path& scheme_path);
+    // Load scheme + VALUELST + options.ini into the config members; false on any
+    // parse error (the whole load is one try/catch).
+    bool load_config(const std::filesystem::path& game,
+                     const std::filesystem::path& scheme_path);
+    // SDL init + window/renderer creation + logical-presentation/vsync setup;
+    // hands back the live renderer (used by the two asset steps below).
+    bool init_video(SDL_Renderer*& ren);
+    // FONT6 + the boot LOADING dialogs wrapped around assets_.load()/audio init.
+    bool load_assets(SDL_Renderer* ren, const std::filesystem::path& game);
+    // Base tuning + per-player recolor + Renderer/Screen construction.
+    void build_presentation(SDL_Renderer* ren);
     // PORT ENHANCEMENT (not RE'd — the original has no fullscreen concept):
     // the Alt+Enter/F11 fullscreen toggle, wired as a global SDL_EventFilter
     // (installed once in init()) so it works from every one of this file's
@@ -231,47 +251,6 @@ private:
     // exits on Enter/Escape (sub_41302D). Returns Back on Escape else Advance
     // (both route the leaf back to the menu), or Quit on window close.
     AppInput present_bm_screen(const std::string& bm_name);
-    // The generic help-file browser (sub_41431C -> sub_414235, docs/re/
-    // results-and-options.md §4): globs every `*.BM` in the install root and
-    // lists them via HelpBrowser (bmscreen.hpp), opening the selection
-    // through the same BmScreen viewer present_bm_screen uses. sub_41431C is
-    // ONE routine the original wires to F1/row-5 everywhere — CONFIRMED
-    // (2026-07-08) called from FOUR sites in our port, all sharing this one
-    // non-modal entry point: the main menu's row 5 (present_menu's Enter
-    // case, no wipe — mirrors sub_42B9CE's `case 5: sub_41431C(); break;`),
-    // the Options screen's F1 (sub_4080DC, present_options_screen — §3), and
-    // the editor chooser's F1 (sub_403184, present_editor — §5); the in-round
-    // F1 key uses the separate present_help_browser_modal() below instead,
-    // since it must freeze the sim rather than draw over MAINMENU (docs/re/
-    // in-match-shell.md §1's sub_42A16F(1)/(0) bracket). Gated on getvalue(15)
-    // ahead of the glob (HelpBrowser::enter's manual_enabled param). Owns its
-    // own nested SDL event loop, same shape as present_bm_screen/
-    // present_editor. Returns Quit on window close, else Advance (the browser
-    // was cancelled/closed normally).
-    AppInput present_help_browser();
-    // The same browser, opened mid-round by run_match's F1 key (docs/re/
-    // in-match-shell.md §1): identical widget/loop, but the backdrop is the
-    // LAST rendered match frame (renderer_->draw_frame) instead of MAINMENU,
-    // since the original composites the list dialog over whatever screen was
-    // already up rather than cutting to the menu — and the sim is never
-    // ticked while this runs (the caller does not call sim_.tick from
-    // inside), matching the sub_42A16F(1)/(0) freeze.
-    AppInput present_help_browser_modal();
-    // The hidden Alt+D "Internal debugging information" window (sub_413D45 @
-    // pseudo.c 16752-16832, reached from sub_42B9CE's raw-code 288 dispatch
-    // at 30819-30822): a modal WINZ-9-patch window, 450 px wide x 300 tall at
-    // y = 100, header getstring(400), stat lines getstring(405/410/411/415/
-    // 420), footer getstring(401) "Press [Enter] or [Esc] to continue" —
-    // dismissed by Enter or Escape only. The stats it reports (heap/audio
-    // memory, net id, retransmit rate, audio cache hits) have no meaningful
-    // equivalents in this port, so the labels render with honest zero/(N/A)
-    // values; the WINDOW and its keys are the faithful part. frontend-flow.md's
-    // old "a toggle" note for key 288 was wrong — it is this blocking dialog.
-    AppInput present_debug_info_modal();
-    // PORT-ONLY "Video Settings" panel (F10 from the menu): vsync / native
-    // cadence / show-fps toggles, persisted. Separate from the RE'd Options
-    // screen by design (see the definition's comment).
-    void present_video_settings();
     // The interactive Options screen (Team Play / Conveyor Speed): random
     // GLUE<n> backdrop, FONT6 text, Up/Down select a row, Left/Right change
     // its value, Enter/Esc leave (docs/re/frontend-flow.md "Interactive
@@ -289,33 +268,6 @@ private:
     // (scheme_ untouched) when the name doesn't resolve or the file is
     // corrupt.
     bool reload_scheme_from_name(const std::string& name);
-    // The hidden scheme editor (docs/re/results-and-options.md §5,
-    // sub_403184/sub_4028D2/sub_402595): reached ONLY via present_menu()'s
-    // raw Ctrl+E x6 trigger (sub_42B9CE's `++counter > 5` on key code 5) —
-    // there is no menu row. Runs the chooser -> (file picker ->) editor ->
-    // (powerup sub-editor) nested loop to completion and, on a confirmed
-    // save, writes the edited scheme via assets::sch::write() into the
-    // install's DATA/SCHEMES dir (never the repo) and reloads scheme_ so the
-    // edit is immediately selectable through the existing scheme path.
-    void present_editor();
-    // The scheme editor's save-as filename line-edit (sub_42E938, getstring
-    // 736), seeded with `seed` (the source filename when editing existing).
-    // Returns the chosen stem; Enter-on-empty or Escape returns `seed`.
-    std::string present_scheme_filename_prompt(const std::string& seed);
-    // The hidden campaign-mode picker (docs/re/campaign.md, sub_4015C6):
-    // reached ONLY via present_setup()'s raw 'C'x5 trigger (mirrors
-    // present_editor's Ctrl+E x6 pattern) — there is no menu row. Globs
-    // `*.cam` in the install root (CampaignFilePicker, campaign_screen.hpp),
-    // and on a confirmed selection parses it (assets::res::load_campaign)
-    // and, if it yields at least one stage, arms campaign mode: seeds the
-    // roster from stage 0's AI count (sub_40151B/sub_422928 semantics —
-    // CORRECTED 2026-07-09, see load_campaign_stage below) and sets
-    // campaign_active_ so the Play flow skips present_map_select() and
-    // auto-advances stages (run_app's Menu/Results handlers). A cancelled
-    // picker, an unreadable file, or a file with zero stages leaves campaign
-    // mode untouched (port convenience — the original's own error-dialog
-    // path for the analogous cases, §3).
-    void present_campaign_picker();
     // load_campaign_stage moved out of GameApp into a free function in
     // screens/campaign_state.hpp (ADR-0009 §8): it is called by BOTH
     // present_campaign_picker (now CampaignPickerScreen) AND run_app's Results
