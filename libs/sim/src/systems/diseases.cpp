@@ -1,11 +1,45 @@
 #include "systems/diseases.hpp"
 
+#include <array>
 #include <cstdlib>
 #include <utility>
 
 #include "bomber/sim/rng.hpp"
 
 namespace bomber::sim {
+
+namespace {
+
+// Per-disease ASSIGNMENT metadata (give()): whether the roll installs a
+// persistent per-kind flag + shared countdown, and which Tuning::disease_frames
+// slot times it. The disease EFFECTS are NOT here — they stay inline at their
+// nine gameplay hooks (movement Slow/Fast/Reversed, bombs ShortFuse/ShortFlame,
+// auto-drop Diarrhea/Super, ...). Only Swap is transient: it teleport-swaps at
+// assignment and leaves no flag, so its whole effect lives in give() below.
+//
+// ENUM-ORDER-FROZEN: kDiseases is indexed by static_cast<int>(Disease), and the
+// assignment roll casts random_below(kDiseaseKinds) straight to Disease
+// (assign_random). NEVER insert or reorder entries — append a new disease before
+// the end and bump kDiseaseKinds only, or the roll distribution / golden shift.
+struct DiseaseSpec {
+    Disease tag;      // identity (== the array index as an enum), for legibility
+    bool persistent;  // installs a per-kind flag + shared countdown (false only for Swap)
+    int duration_id;  // index into Tuning::disease_frames for the countdown length
+};
+
+constexpr std::array<DiseaseSpec, kDiseaseKinds> kDiseases = {{
+    {Disease::Slow,         true,  0},
+    {Disease::Fast,         true,  1},
+    {Disease::Constipation, true,  2},
+    {Disease::Diarrhea,     true,  3},
+    {Disease::ShortFlame,   true,  4},
+    {Disease::Super,        true,  5},
+    {Disease::ShortFuse,    true,  6},
+    {Disease::Swap,         false, 7},  // transient — teleport-swap, no flag/countdown
+    {Disease::Reversed,     true,  8},
+}};
+
+}  // namespace
 
 void DiseaseSystem::clear(Player& p) {
     // diseases.md finding 2: neither original cure site touches the freshness
@@ -38,7 +72,10 @@ void DiseaseSystem::give(int idx, Disease d, bool announce) {
     if (announce)
         s.events.push_back({Event::Type::Infected, static_cast<std::int8_t>(idx), -1, -1,
                             static_cast<std::int8_t>(d)});
-    if (d == Disease::Swap) {
+    // Assignment metadata (kDiseases): !persistent selects Swap, the sole
+    // transient kind; persistent kinds install their flag + countdown below.
+    const DiseaseSpec& sp = kDiseases[static_cast<int>(d)];
+    if (!sp.persistent) {
         // sub_41DFB6's target scan requires the SAME "valid other player" test
         // its contagion sibling (sub_41F29B) uses: not self, present, and NOT
         // DEAD (`v3 != v5 && *((_BYTE*)v3+16) && (…||*v3) && !v3[2]`, pseudo.c
@@ -64,7 +101,7 @@ void DiseaseSystem::give(int idx, Disease d, bool announce) {
     } else {
         int i = static_cast<int>(d);
         p.disease[i] = true;
-        p.disease_timer = s.tuning.disease_frames[i];
+        p.disease_timer = s.tuning.disease_frames[sp.duration_id];  // duration_id == i
         p.disease_fresh = s.tuning.disease_freshness;
     }
 }

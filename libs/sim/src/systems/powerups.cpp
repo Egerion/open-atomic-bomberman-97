@@ -1,92 +1,108 @@
 #include "systems/powerups.hpp"
 
 #include <algorithm>
+#include <array>
 
 #include "bomber/sim/rng.hpp"
 #include "grid.hpp"
 
 namespace bomber::sim {
 
-void PowerupSystem::apply(Player& p, PowerupType t) {
+namespace {
+
+// Per-kind powerup behaviour, collapsing the five parallel per-type switches
+// (apply / remove / held_count / reset_to_baseline / evict) into one data table.
+//
+// ENUM-ORDER-FROZEN: kPowerups is indexed by static_cast<int>(PowerupType), and
+// the RNG roll->kind mappings cast an integer index straight to PowerupType
+// (simulation.cpp Random reroll, head_hit's rand%15, death_scatter's kind loop).
+// NEVER insert or reorder entries — append a new kind before the end and bump
+// kPowerupKinds only, or the roll distribution and the golden hashes shift.
+//
+// Storage: `count` (ExtraBomb/Flame/Skate accumulation byte) OR `flag` (the seven
+// boolean glove/ability kinds). Disease/SuperDisease/Random carry no per-kind
+// count, so both are null and every op no-ops on them (the original's default:).
+//
+// Mutual exclusion (sub_41E21E via sub_41E16A): punch<->trigger, grab<->spooger,
+// trigger<->jelly evict each other and Trigger additionally drops Punch. Eviction
+// is NOT a silent clear — evict() SCATTERS the surplus token (drawing State::rng,
+// an order/count contract) and, for Trigger, downgrades the player's live trigger
+// bombs (sub_424C47). The evictN fields carry that in the ORDER the scatter draws
+// must follow: Trigger drops Punch (evict1) THEN Jelly (evict2). facts.md
+// "Core-feel audit" §2. Goldflame stores only its flag (+94); the blast reach is
+// computed at drop time (BombSystem::place, sub_41EB13). Trigger also resets the
+// live-trigger allowance (+85 = 0) via reset_trigger_placed.
+struct PowerupSpec {
+    std::int32_t Player::* count = nullptr;   // accumulation byte (ExtraBomb/Flame/Skate)
+    bool Player::* flag = nullptr;            // boolean kind (Kick/Punch/Grab/Spooger/Goldflame/Trigger/Jelly)
+    std::int32_t count_min = 0;               // remove() decrement floor (1 for bombs/flame, 0 for skate)
+    bool affects_speed = false;               // Skate recomputes the derived speed stat on apply/remove
+    bool reset_trigger_placed = false;        // Trigger refills the live-trigger allowance (+85 = 0)
+    PowerupType evict1 = PowerupType::None;   // apply-time mutual-exclusion eviction #1
+    PowerupType evict2 = PowerupType::None;   // apply-time eviction #2 (Trigger: Punch then Jelly)
+};
+
+constexpr std::array<PowerupSpec, kPowerupKinds> kPowerups = {{
+    /* 0  ExtraBomb    */ {&Player::max_bombs, nullptr, 1, false, false, PowerupType::None, PowerupType::None},
+    /* 1  Flame        */ {&Player::flame, nullptr, 1, false, false, PowerupType::None, PowerupType::None},
+    /* 2  Disease      */ {nullptr, nullptr, 0, false, false, PowerupType::None, PowerupType::None},
+    /* 3  Kick         */ {nullptr, &Player::kick, 0, false, false, PowerupType::None, PowerupType::None},
+    /* 4  Skate        */ {&Player::skates, nullptr, 0, true, false, PowerupType::None, PowerupType::None},
+    /* 5  Punch        */ {nullptr, &Player::punch, 0, false, false, PowerupType::Trigger, PowerupType::None},
+    /* 6  Grab         */ {nullptr, &Player::grab, 0, false, false, PowerupType::Spooger, PowerupType::None},
+    /* 7  Spooger      */ {nullptr, &Player::spooge, 0, false, false, PowerupType::Grab, PowerupType::None},
+    /* 8  Goldflame    */ {nullptr, &Player::goldflame, 0, false, false, PowerupType::None, PowerupType::None},
+    /* 9  Trigger      */ {nullptr, &Player::trigger, 0, false, true, PowerupType::Punch, PowerupType::Jelly},
+    /* 10 Jelly        */ {nullptr, &Player::jelly, 0, false, false, PowerupType::Trigger, PowerupType::None},
+    /* 11 SuperDisease */ {nullptr, nullptr, 0, false, false, PowerupType::None, PowerupType::None},
+    /* 12 Random       */ {nullptr, nullptr, 0, false, false, PowerupType::None, PowerupType::None},
+}};
+
+}  // namespace
+
+// The derived speed stat (sub_41F29B's per-tick `base + skates*getvalue(90) -
+// clogs*getvalue(91)`, baked here), recomputed whenever the skate count changes
+// (apply/remove of a Skate). death_scatter's reset deliberately does NOT call it:
+// the original writes only the count byte on death, and a dead player's speed is
+// never read again.
+void PowerupSystem::recompute_speed(Player& p) {
     const Tuning& tn = s_.tuning;
-    auto limited = [&tn](std::int32_t v, PowerupType which) {
-        std::int32_t lim = tn.limits[static_cast<int>(which)];
-        return lim > 0 ? std::min(v, lim) : v;
-    };
-    switch (t) {
-        case PowerupType::ExtraBomb: p.max_bombs = limited(p.max_bombs + 1, t); break;
-        case PowerupType::Flame: p.flame = limited(p.flame + 1, t); break;
-        // Goldflame (sub_41E21E case 8 sets flag +94): the flag itself is the
-        // state; the blast reach is computed at drop time as max(gridW,gridH)
-        // in BombSystem::place (sub_41EB13). Storing a flag (not flame=99) is
-        // the literal port and keeps the stored `flame` untouched.
-        case PowerupType::Goldflame: p.goldflame = true; break;
-        case PowerupType::Skate:
-            p.skates = limited(p.skates + 1, t);
-            p.speed = tn.start_speed + p.skates * tn.skate_speed_bonus -
-                      p.clogs * tn.clogs_speed_penalty;
-            break;
-        case PowerupType::Kick: p.kick = true; break;
-        // Mutually exclusive glove/bomb kinds (sub_41E21E via sub_41E16A):
-        // punch↔trigger, grab↔spooger, trigger↔jelly all evict each other, and
-        // trigger additionally drops punch. Eviction is NOT a silent flag
-        // clear: sub_41E16A SCATTERS the evicted token back onto a random
-        // floor tile (sub_425BED -> sub_4255B2) whenever the count exceeds the
-        // VALUELST start-with baseline, and evicting Trigger additionally
-        // DOWNGRADES the player's live trigger bombs to normal timed bombs
-        // with a fresh fuse (sub_424C47). The scatter draws RNG (order/count
-        // contract) and the flags are hashed — golden recaptured.
-        // facts.md "Core-feel audit" §2.
-        case PowerupType::Punch:
-            p.punch = true;
-            evict(p, PowerupType::Trigger);
-            break;
-        case PowerupType::Grab:
-            p.grab = true;
-            evict(p, PowerupType::Spooger);
-            break;
-        case PowerupType::Spooger:
-            p.spooge = true;
-            evict(p, PowerupType::Grab);
-            break;
-        case PowerupType::Trigger:
-            // Trigger pickup (sub_41E21E case 9) resets the live-trigger
-            // counter (+85 = 0), refilling the placement allowance to a fresh
-            // max_bombs, then sets the flag and evicts punch + jelly (in that
-            // order — the scatter draws must follow it).
-            p.trigger_placed = 0;
-            p.trigger = true;
-            evict(p, PowerupType::Punch);
-            evict(p, PowerupType::Jelly);
-            break;
-        case PowerupType::Jelly:
-            p.jelly = true;
-            evict(p, PowerupType::Trigger);
-            break;
-        default: break;
+    p.speed = tn.start_speed + p.skates * tn.skate_speed_bonus - p.clogs * tn.clogs_speed_penalty;
+}
+
+void PowerupSystem::apply(Player& p, PowerupType t) {
+    const int kind = static_cast<int>(t);
+    if (kind >= kPowerupKinds) return;  // None / out-of-range: no-op (the original's default:)
+    const PowerupSpec& sp = kPowerups[kind];
+    if (sp.count) {
+        // Per-kind accumulation limit (VALUELST 550..562): cap only when > 0.
+        const std::int32_t lim = s_.tuning.limits[kind];
+        const std::int32_t v = p.*sp.count + 1;
+        p.*sp.count = (lim > 0) ? std::min(v, lim) : v;
+    } else if (sp.flag) {
+        p.*sp.flag = true;
     }
+    if (sp.reset_trigger_placed) p.trigger_placed = 0;
+    if (sp.affects_speed) recompute_speed(p);
+    // Mutual-exclusion evictions LAST, in table order — the scatter RNG draws
+    // (Trigger: Punch then Jelly) are part of the determinism contract.
+    if (sp.evict1 != PowerupType::None) evict(p, sp.evict1);
+    if (sp.evict2 != PowerupType::None) evict(p, sp.evict2);
 }
 
 void PowerupSystem::remove(Player& p, PowerupType t) {
-    switch (t) {
-        case PowerupType::ExtraBomb: if (p.max_bombs > 1) --p.max_bombs; break;
-        case PowerupType::Flame: if (p.flame > 1) --p.flame; break;
-        case PowerupType::Skate:
-            if (p.skates > 0) --p.skates;
-            // Recompute keeps the clogs penalty term (sub_41F29B's per-tick
-            // `base + skates*getvalue(90) - clogs*getvalue(91)`; we bake it).
-            p.speed = s_.tuning.start_speed + p.skates * s_.tuning.skate_speed_bonus -
-                      p.clogs * s_.tuning.clogs_speed_penalty;
-            break;
-        case PowerupType::Kick: p.kick = false; break;
-        case PowerupType::Goldflame: p.goldflame = false; break;
-        case PowerupType::Punch: p.punch = false; break;
-        case PowerupType::Grab: p.grab = false; break;
-        case PowerupType::Spooger: p.spooge = false; break;
-        case PowerupType::Trigger: p.trigger = false; break;
-        case PowerupType::Jelly: p.jelly = false; break;
-        default: break;
+    const int kind = static_cast<int>(t);
+    if (kind >= kPowerupKinds) return;  // None / out-of-range: no-op
+    const PowerupSpec& sp = kPowerups[kind];
+    if (sp.count) {
+        if (p.*sp.count > sp.count_min) --(p.*sp.count);
+    } else if (sp.flag) {
+        p.*sp.flag = false;
     }
+    // Skate: recompute keeps the clogs penalty term (sub_41F29B's per-tick
+    // `base + skates*getvalue(90) - clogs*getvalue(91)`), unconditionally after
+    // the guarded decrement — as the original does.
+    if (sp.affects_speed) recompute_speed(p);
 }
 
 // Mutual-exclusion eviction (sub_41E16A, flag-kind branch — sub_425C10 is
@@ -100,16 +116,11 @@ void PowerupSystem::remove(Player& p, PowerupType t) {
 void PowerupSystem::evict(Player& p, PowerupType t) {
     const int kind = static_cast<int>(t);
     const bool baseline = kind < kPowerupKinds && s_.tuning.start_with[kind] > 0;
-    const bool held = [&] {
-        switch (t) {
-            case PowerupType::Punch: return p.punch;
-            case PowerupType::Grab: return p.grab;
-            case PowerupType::Spooger: return p.spooge;
-            case PowerupType::Trigger: return p.trigger;
-            case PowerupType::Jelly: return p.jelly;
-            default: return false;  // only flag kinds are ever evicted
-        }
-    }();
+    // evict() is only ever called with the five flag kinds, whose held_count is
+    // the boolean flag as 0/1 — so `> 0` reproduces the original per-kind switch
+    // (and the kind-guard keeps a hypothetical out-of-range kind at false, the
+    // switch's old default).
+    const bool held = kind < kPowerupKinds && held_count(p, kind) > 0;
     if (held && !baseline) {
         scatter(t);  // sub_425BED before the count write, same draw order
         remove(p, t);
@@ -173,21 +184,13 @@ void PowerupSystem::scatter(PowerupType t) {
 // per-kind count (2 disease, 11 superdisease, 12 random, plus the pad slots
 // the original loops over) report 0, so they never register surplus.
 int PowerupSystem::held_count(const Player& p, int kind) const {
-    switch (static_cast<PowerupType>(kind)) {
-        case PowerupType::ExtraBomb: return p.max_bombs;
-        case PowerupType::Flame: return p.flame;
-        case PowerupType::Kick: return p.kick ? 1 : 0;
-        case PowerupType::Skate: return p.skates;
-        case PowerupType::Punch: return p.punch ? 1 : 0;
-        case PowerupType::Grab: return p.grab ? 1 : 0;
-        case PowerupType::Spooger: return p.spooge ? 1 : 0;
-        // Goldflame (kind 8, byte +94) IS a droppable kind: id 58 (goldflame
-        // start-with) = 0, so a set flag counts as surplus over the baseline.
-        case PowerupType::Goldflame: return p.goldflame ? 1 : 0;
-        case PowerupType::Trigger: return p.trigger ? 1 : 0;
-        case PowerupType::Jelly: return p.jelly ? 1 : 0;
-        default: return 0;  // disease/superdisease/random & pad kinds: no count
-    }
+    // Count kinds report their accumulation byte; flag kinds report 0/1 (so a set
+    // Goldflame flag, whose start-with baseline is 0, counts as surplus); the
+    // no-storage kinds (disease/superdisease/random & pad slots) report 0.
+    const PowerupSpec& sp = kPowerups[kind];
+    if (sp.count) return p.*sp.count;
+    if (sp.flag) return p.*sp.flag ? 1 : 0;
+    return 0;
 }
 
 // Write a kind's accumulated count back to its start-with baseline. Mirrors
@@ -196,19 +199,14 @@ int PowerupSystem::held_count(const Player& p, int kind) const {
 // `speed` here — the field is only ever reset on a dead player (death_scatter)
 // whose speed is never read again, keeping the byte-level write faithful.
 void PowerupSystem::reset_to_baseline(Player& p, int kind, int baseline) {
-    switch (static_cast<PowerupType>(kind)) {
-        case PowerupType::ExtraBomb: p.max_bombs = baseline; break;
-        case PowerupType::Flame: p.flame = baseline; break;
-        case PowerupType::Skate: p.skates = baseline; break;
-        case PowerupType::Kick: p.kick = false; break;
-        case PowerupType::Punch: p.punch = false; break;
-        case PowerupType::Grab: p.grab = false; break;
-        case PowerupType::Spooger: p.spooge = false; break;
-        case PowerupType::Goldflame: p.goldflame = false; break;
-        case PowerupType::Trigger: p.trigger = false; break;
-        case PowerupType::Jelly: p.jelly = false; break;
-        default: break;  // no count field to reset
-    }
+    // Count kinds are written back to the baseline; flag kinds are cleared to
+    // false (the original ignores `baseline` for flags — every flag kind's
+    // start-with is 0, so false == baseline anyway).
+    const PowerupSpec& sp = kPowerups[kind];
+    if (sp.count)
+        p.*sp.count = baseline;
+    else if (sp.flag)
+        p.*sp.flag = false;
 }
 
 // A bomb bonks a player on the head (sub_421F7E): a hardcoded 16-tick stun

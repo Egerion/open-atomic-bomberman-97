@@ -35,6 +35,43 @@ State build_state(const MatchConfig& config);  // setup.cpp
 
 namespace {
 
+// --- System / cadence bundles (ADR-0008: sim TurnContext/Systems) ------------
+// Reference bundles that collapse the per-tick sim calls from 12 parameters to
+// <=4. They are PLUMBING ONLY: never stored in State, never hashed, never
+// touched by RNG. The systems are the same cheap stack objects run_tick already
+// builds; the bundle just hands player_turn ONE reference instead of nine, so
+// the refactor is byte-identical to the old per-parameter signatures by
+// construction (ADR-0003 determinism contract untouched).
+struct Systems {
+    DiseaseSystem& diseases;
+    PowerupSystem& powerups;
+    FlameSystem& flames;
+    BombSystem& bombs;
+    MovementSystem& movement;
+    StageActorSystem& stage;
+    EnclosureSystem& enclosure;
+    TileRegenSystem& tile_regen;
+    AISystem& ai;
+    RoverSystem& rovers;
+};
+
+// The sub-frame delta schedule for one turn (constants.hpp): the canonical
+// {6,5,...} x kSubFrames for the deterministic 50 ms tick, or a single measured
+// wall-clock delta x 1 for the F9 native-cadence pass. `advance_timers` gates the
+// once-per-TICK duration counters (see player_turn). The member defaults
+// reproduce the old per-parameter defaults exactly.
+struct Cadence {
+    const std::int32_t* sched = kSubFrameMs;
+    int n_sub = kSubFrames;
+    bool advance_timers = true;
+};
+
+// One player-turn's context: which systems to run against, at what cadence.
+struct TurnContext {
+    Systems& sys;
+    Cadence cad;
+};
+
 // Flame-death + pickup resolution at one player's CURRENT tile. The original
 // runs this exact pair in TWO places (docs/re/facts.md "Per-tick call order —
 // END-TO-END"): after every committed pixel step inside the mover
@@ -144,10 +181,7 @@ bool on_move_pixel(void* ctx, Player& /*p*/) {
 // mode (run once per displayed frame). Everything the loop reads per sub-frame —
 // the AI's re-decide delta, the movement-budget accrual, the stun burn — comes
 // off this schedule, so the same body serves both cadences unchanged.
-void player_turn(State& s, int i, const PlayerInput& tick_in, AISystem* ai_sys, BombSystem& bombs,
-                 StageActorSystem& stage, MovementSystem& movement, PowerupSystem& powerups,
-                 DiseaseSystem& diseases, const std::int32_t* sched = kSubFrameMs,
-                 int n_sub = kSubFrames, bool advance_timers = true) {
+void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) {
     // `advance_timers` gates the once-per-TICK duration counters that live in
     // this per-frame-callable turn — pickup_pause, and the trampoline/warp
     // state timers (tick_bounce/tick_warp). On the deterministic tick path it is
@@ -157,6 +191,21 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, AISystem* ai_sys, 
     // (the reported trampoline/warp speed-up). Movement/AI/stun/ice keep running
     // every sub-frame regardless — those ARE per-frame in the original.
     Player& p = s.players[i];
+    // TurnContext unpacking: bind the same local names the body below already
+    // uses, so the plumbing changes but the logic/arithmetic/RNG-draw order stay
+    // byte-identical. `ai_sys` is the AI brain for a computer player, null for a
+    // human/replay (the old caller-side `p.ai ? &ai : nullptr`, moved in here).
+    // The system references are aliases into ctx.sys; the cadence triple mirrors
+    // the old sched/n_sub/advance_timers parameters one-for-one.
+    AISystem* ai_sys = p.ai ? &ctx.sys.ai : nullptr;
+    BombSystem& bombs = ctx.sys.bombs;
+    StageActorSystem& stage = ctx.sys.stage;
+    MovementSystem& movement = ctx.sys.movement;
+    PowerupSystem& powerups = ctx.sys.powerups;
+    DiseaseSystem& diseases = ctx.sys.diseases;
+    const std::int32_t* sched = ctx.cad.sched;
+    int n_sub = ctx.cad.n_sub;
+    bool advance_timers = ctx.cad.advance_timers;
     // The tick's EFFECTIVE input for the bomb-action tail: a human's sample
     // as-is; for an AI, the action-key edges are OR-accumulated from its
     // per-sub-frame decisions in the loop below (the original consumes +56/
@@ -625,10 +674,10 @@ enum class TickPhase { Full, Players, Systems };
 //              fuse/flame/hurry timers stay on their native 50 ms grid.
 //   Full     = both back-to-back, exactly as the fixed 20 Hz tick always has
 //              (the deterministic default — tick()/tests/oracle unchanged).
-// `sched`/`n_sub` are threaded straight to player_turn.
-void run_tick(State& s, const TickInputs& inputs, const std::int32_t* sched = kSubFrameMs,
-              int n_sub = kSubFrames, TickPhase phase = TickPhase::Full,
-              bool advance_timers = true) {
+// The Cadence (`sched`/`n_sub`/`advance_timers`) is threaded straight to
+// player_turn via the TurnContext built below.
+void run_tick(State& s, const TickInputs& inputs, Cadence cad = {},
+              TickPhase phase = TickPhase::Full) {
     if (phase != TickPhase::Systems) {
         s.events.clear();
         // Presentation sub-frame trace prefill (State::sub_trace): every sample
@@ -654,6 +703,13 @@ void run_tick(State& s, const TickInputs& inputs, const std::int32_t* sched = kS
     TileRegenSystem tile_regen{s};
     AISystem ai{s};
     RoverSystem rovers{s};
+
+    // Bundle the systems + this tick's cadence once, then hand player_turn a
+    // single TurnContext reference below (ADR-0008). Pure plumbing — see the
+    // Systems/Cadence/TurnContext comment near the top of this file.
+    Systems sys{diseases, powerups, flames,   bombs, movement,
+                stage,    enclosure, tile_regen, ai,  rovers};
+    TurnContext ctx{sys, cad};
 
     // 1. Players: movement (with conveyor/trampoline actors), bomb drop,
     //    throw/grab/trigger/punch. The conveyor push is part of the move budget
@@ -682,8 +738,7 @@ void run_tick(State& s, const TickInputs& inputs, const std::int32_t* sched = kS
         // call outright — RESOLVED, docs/re/ai.md §2/§7; facts.md "Player
         // state machine (+78) — COMPLETE"). present/alive above covers the
         // entering/dying/dead modes.
-        player_turn(s, i, inputs.players[i], p.ai ? &ai : nullptr, bombs, stage, movement,
-                    powerups, diseases, sched, n_sub, advance_timers);
+        player_turn(s, i, inputs.players[i], ctx);
     }
     }  // end (phase != Systems): the per-frame movement/AI pass
     // Players-only (F9 per-frame call): stop here — the 50 ms systems pass below
@@ -838,7 +893,7 @@ void Simulation::frame(const TickInputs& inputs, std::int32_t delta_ms) {
     // advance this frame; otherwise they hold, keeping those durations 20 Hz-
     // paced under the per-frame movement (matches the deterministic path).
     const bool crosses_tick = (systems_accum_ms_ + delta_ms) >= kMsPerTick;
-    run_tick(state_, inputs, sched, 1, TickPhase::Players, crosses_tick);
+    run_tick(state_, inputs, {sched, 1, crosses_tick}, TickPhase::Players);
     systems_accum_ms_ += delta_ms;
     // Spiral-of-death guard: a long stall (window drag, breakpoint, alt-tab)
     // must not fire a hundred systems passes in one frame — cap the queued
@@ -846,7 +901,9 @@ void Simulation::frame(const TickInputs& inputs, std::int32_t delta_ms) {
     if (systems_accum_ms_ > 4 * kMsPerTick) systems_accum_ms_ = 4 * kMsPerTick;
     while (systems_accum_ms_ >= kMsPerTick) {
         systems_accum_ms_ -= kMsPerTick;
-        run_tick(state_, inputs, kSubFrameMs, kSubFrames, TickPhase::Systems);
+        // Cadence irrelevant on the Systems phase (no player pass); the default
+        // {kSubFrameMs, kSubFrames, true} matches the old explicit arguments.
+        run_tick(state_, inputs, {}, TickPhase::Systems);
     }
 }
 

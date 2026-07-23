@@ -49,6 +49,11 @@ private:
     // speed stat — a dead player's speed is never read again).
     void reset_to_baseline(Player& p, int kind, int baseline);
 
+    // Rebuild the derived speed stat from the skate/clogs counts (sub_41F29B's
+    // per-tick `base + skates*getvalue(90) - clogs*getvalue(91)`). Called on any
+    // Skate apply/remove; NOT by the death reset (byte-write-only, see the .cpp).
+    void recompute_speed(Player& p);
+
     State& s_;
 };
 
