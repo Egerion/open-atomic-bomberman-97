@@ -28,6 +28,7 @@
 #include "bomber/game/screen.hpp"
 #include "bomber/game/screen_context.hpp"
 #include "bomber/game/screens/editor_state.hpp"
+#include "bomber/game/screens/map_select_state.hpp"
 #include "bomber/game/screens/menu_state.hpp"
 #include "bomber/game/screens/options_state.hpp"
 #include "bomber/game/sdl.hpp"
@@ -162,6 +163,12 @@ private:
     // menu_state.hpp), bundled by reference so MenuScreen needs no GameApp&.
     // Built fresh on demand like sctx()/options_state()/editor_state().
     MenuState menu_state();
+    // The LEVEL & ROUNDS screen's shared-state seam (ADR-0009 §7): the
+    // non-service members present_map_select reads/writes (selected_level_/
+    // win_target_/setup_lcg_/options_/gold_player_ — see map_select_state.hpp),
+    // bundled by reference so MapSelectScreen needs no GameApp&. Built fresh on
+    // demand like sctx()/menu_state().
+    MapSelectState map_select_state();
     // Runs one asset-driven Screen (logo/title/results) to completion. sub_42A088
     // CUTS between screens (palette + blit + flip, no wipe), so there is no
     // transition out here — the next screen simply replaces this one. Returns the
@@ -455,9 +462,6 @@ private:
     // OFF/COMPUTER slots get neutral input (AI/absent drives them elsewhere).
     // Assembles the full TickInputs for sim_.tick() each match tick.
     sim::TickInputs collect_inputs() const;
-    // GENERIC fallback name for built-in level `idx` (the real names load from the
-    // user's MESSAGES.TXT via getstring(150+idx); these are ours, never committed).
-    static const char* level_fallback(int idx);
 
     int menu_index_ = 0;  // highlighted main-menu row (persists across visits)
     // The hidden scheme-editor trigger's same-key repeat counter (§5,
