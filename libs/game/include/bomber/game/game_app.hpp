@@ -33,6 +33,7 @@
 #include "bomber/game/screens/match_backdrop.hpp"
 #include "bomber/game/screens/menu_state.hpp"
 #include "bomber/game/screens/options_state.hpp"
+#include "bomber/game/screens/setup_state.hpp"
 #include "bomber/game/sdl.hpp"
 #include "bomber/game/sequences.hpp"
 #include "bomber/audio/sound_director.hpp"
@@ -171,6 +172,13 @@ private:
     // bundled by reference so MapSelectScreen needs no GameApp&. Built fresh on
     // demand like sctx()/menu_state().
     MapSelectState map_select_state();
+    // The PLAYER INPUT screen's shared-state seam (ADR-0009 §7): the non-service
+    // members present_setup + cycle_input_type read/write (the setup_type_/sub_/
+    // team_ roster/setup_lcg_/campaign_trigger_count_/team_play_/gold_player_ + the
+    // campaign_active_/stages_/stage_index_ Esc tears down — see setup_state.hpp),
+    // bundled by reference so SetupScreen needs no GameApp&. Built fresh on demand
+    // like sctx()/map_select_state().
+    SetupState setup_state();
     // The match-coupled backdrop seam (ADR-0009 §8): the live Renderer + sim
     // State the campaign confirm/banner/complete dialogs and the in-round help
     // modal draw as their frozen backdrop — kept SEPARATE from the front-end-
@@ -448,12 +456,6 @@ private:
     // (selected_level_) + win target (win_target_), Escape backs to present_setup.
     // Returns Advance to start the match, Back to the player screen, Quit on close.
     AppInput present_map_select();
-    // Advance a slot's input type one step in the setup cycle (sub_421E80):
-    // OFF -> COMPUTER -> KEYBOARD sub 0 -> KEYBOARD sub 1 -> JOY0..JOY<n-1> ->
-    // OFF, where n = gamepads_.count() (docs/re/setup-screens.md). Delegates to
-    // the pure cycle_slot_input_type (input.hpp) so the wrap order is unit-
-    // tested without SDL.
-    void cycle_input_type(int slot);
     // A slot bound to JOYSTICK sub reads GamepadMapper::read(sub); a slot bound
     // to KEYBOARD sub 0/1 reads the shared KeyboardMapper's player 0/1 half;
     // OFF/COMPUTER slots get neutral input (AI/absent drives them elsewhere).

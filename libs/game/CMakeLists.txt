@@ -30,6 +30,7 @@ add_library(bomber_game_core STATIC
   src/screens/menu_screen.cpp
   src/screens/map_select_screen.cpp
   src/screens/campaign_screens.cpp
+  src/screens/setup_screen.cpp
   src/game_app.cpp
 )
 add_library(bomber::game ALIAS bomber_game_core)
