@@ -65,9 +65,25 @@ public:
         gold_team_mode_ = team_mode;
     }
 
+    // F9 native-cadence live path (game_app.cpp): when set, sample_movement
+    // advances the walk/carry/fidget phases every DISPLAYED frame instead of
+    // once per 20 Hz sim tick, so the walk cycle animates at the real frame rate
+    // (the sim's PlayerWalking events now arrive per frame). Matches the
+    // original's per-frame sub_41F29B animation clock. No effect on the
+    // deterministic path (default false → the once-per-tick gate stays).
+    void set_native_cadence(bool v) { native_cadence_ = v; }
+
+    // F9 only: interpolation fraction [0,1) for 50 ms-stepped entities (flying/
+    // sliding bombs, rovers) = the sim's systems accumulator / 50 ms. Players
+    // are drawn direct (they moved this frame); this lets the slower-cadence
+    // entities glide between their 20 Hz steps instead of stuttering.
+    void set_entity_interp(float a) { entity_alpha_ = a; }
+
     // Consumes this tick's events for the visual effects: death animations
-    // and the HURRY! banner.
-    void on_events(const sim::State& s);
+    // and the HURRY! banner. `tick_advanced` (default true = the deterministic
+    // once-per-tick call) gates the per-tick pose countdowns; the F9 per-frame
+    // path passes false on frames that didn't cross a sim tick.
+    void on_events(const sim::State& s, bool tick_advanced = true);
 
     // Rolls the per-tick render snapshots forward for ONE freshly-simulated
     // tick — the inter-tick interpolation baseline (capture_interp) and the
@@ -264,6 +280,8 @@ private:
     Anim goldman_anim_;     // MISC.ANI "goldman" sequence
     int gold_player_ = -1;  // -1 = no pending gold player (see set_gold_player)
     bool gold_team_mode_ = false;
+    bool native_cadence_ = false;  // F9 live path — see set_native_cadence
+    float entity_alpha_ = 1.0f;    // F9 bomb/rover interp fraction — set_entity_interp
     std::uint32_t gold_lcg_ = 0xB16B00B5u;
 };
 

@@ -134,18 +134,22 @@ int FontTextures::measure(const std::string& s) const {
 }
 
 float FontTextures::draw(SDL_Renderer* ren, const std::string& s, float x, float y, Uint8 r,
-                         Uint8 g, Uint8 b) const {
+                         Uint8 g, Uint8 b, float scale) const {
     for (char ch : s) {
         unsigned char c = static_cast<unsigned char>(ch);
         if (static_cast<std::size_t>(c) >= glyphs_.size()) continue;
         const GlyphTex& gt = glyphs_[c];
         if (gt.tex) {
             SDL_SetTextureColorMod(gt.tex, r, g, b);
-            SDL_FRect dst{x, y, static_cast<float>(gt.w), static_cast<float>(line_height_)};
+            // `scale` shrinks the destination rect only (glyph atlas untouched);
+            // scaling the dst here is self-contained, unlike SDL_SetRenderScale
+            // which perturbs the whole render transform.
+            SDL_FRect dst{x, y, static_cast<float>(gt.w) * scale,
+                          static_cast<float>(line_height_) * scale};
             SDL_RenderTexture(ren, gt.tex, nullptr, &dst);
             SDL_SetTextureColorMod(gt.tex, 255, 255, 255);
         }
-        x += static_cast<float>(gt.w + spacing_);
+        x += static_cast<float>(gt.w + spacing_) * scale;
     }
     return x;
 }

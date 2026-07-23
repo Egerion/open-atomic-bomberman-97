@@ -24,6 +24,21 @@ public:
     // Advances exactly one tick.
     void tick(const TickInputs& inputs);
 
+    // PORT-ONLY, NON-DETERMINISTIC live-feel path (F9 native-cadence mode, see
+    // simulation.cpp). Advances the movement/AI pass by one DISPLAYED frame of
+    // `delta_ms` measured wall-clock time and drains the 50 ms systems pass off
+    // an internal accumulator. Reproduces the original's per-frame gameplay
+    // driver (sub_42A191) for responsiveness testing; NOT for tests/oracle,
+    // which must use tick() (the deterministic fixed 20 Hz entry).
+    void frame(const TickInputs& inputs, std::int32_t delta_ms);
+
+    // Real-time carried in frame()'s 50 ms systems accumulator, in ms [0,50).
+    // The F9 render path uses accum/kMsPerTick as the interpolation fraction for
+    // 50 ms-stepped entities (flying/sliding bombs, rovers) so they glide
+    // instead of stepping at 20 Hz while movement runs per frame. Meaningless on
+    // the tick() path (stays 0).
+    std::int32_t systems_accum_ms() const { return systems_accum_ms_; }
+
     // FNV-1a digest of the entire gameplay state, for tests and future netplay.
     std::uint64_t hash() const;
 
@@ -34,6 +49,9 @@ public:
 
 private:
     State state_;
+    // Real-time carry for frame()'s 50 ms systems accumulator. Non-hashed,
+    // non-deterministic scratch — only the F9 live path touches it.
+    std::int32_t systems_accum_ms_ = 0;
 };
 
 // FNV-1a digest of a raw state (Simulation::hash forwards here).

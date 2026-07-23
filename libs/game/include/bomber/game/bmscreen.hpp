@@ -50,7 +50,7 @@ public:
     // Draw `s` at (x, y) in colour (r,g,b); returns the x just past the run so
     // callers can continue the same line (e.g. after an inline image).
     float draw(SDL_Renderer* ren, const std::string& s, float x, float y, Uint8 r, Uint8 g,
-               Uint8 b) const;
+               Uint8 b, float scale = 1.0f) const;
 
     // The original front-end text primitive sub_41696C (pseudo.c 18516-18572)
     // renders every string FIVE times: four passes in the outline colour and

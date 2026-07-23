@@ -138,9 +138,24 @@ bool on_move_pixel(void* ctx, Player& /*p*/) {
 // the original calls sub_40A1C6 instead of reading DirectInput, once per
 // displayed frame — docs/re/facts.md "Canonical frame cadence"). Humans and
 // replays pass their externally-supplied tick input through unchanged.
+// `sched`/`n_sub` are the sub-frame delta schedule for this pass: the canonical
+// {6,5,6,5,...} × kSubFrames for a fixed 50 ms tick (the deterministic default),
+// or a single measured wall-clock delta {delta_ms} × 1 for the F9 native-cadence
+// mode (run once per displayed frame). Everything the loop reads per sub-frame —
+// the AI's re-decide delta, the movement-budget accrual, the stun burn — comes
+// off this schedule, so the same body serves both cadences unchanged.
 void player_turn(State& s, int i, const PlayerInput& tick_in, AISystem* ai_sys, BombSystem& bombs,
                  StageActorSystem& stage, MovementSystem& movement, PowerupSystem& powerups,
-                 DiseaseSystem& diseases) {
+                 DiseaseSystem& diseases, const std::int32_t* sched = kSubFrameMs,
+                 int n_sub = kSubFrames, bool advance_timers = true) {
+    // `advance_timers` gates the once-per-TICK duration counters that live in
+    // this per-frame-callable turn — pickup_pause, and the trampoline/warp
+    // state timers (tick_bounce/tick_warp). On the deterministic tick path it is
+    // always true; on the F9 native-cadence path (player_turn runs once per
+    // DISPLAYED frame) it is true only on the frame that crosses a 50 ms tick,
+    // so those durations stay 20 Hz-paced instead of counting down ~9x too fast
+    // (the reported trampoline/warp speed-up). Movement/AI/stun/ice keep running
+    // every sub-frame regardless — those ARE per-frame in the original.
     Player& p = s.players[i];
     // The tick's EFFECTIVE input for the bomb-action tail: a human's sample
     // as-is; for an AI, the action-key edges are OR-accumulated from its
@@ -192,7 +207,7 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, AISystem* ai_sys, 
     // shared-stun code) it blocks the WHOLE tick it is decremented on: gate
     // on the pre-decrement value.
     const bool paused = p.pickup_pause > 0;
-    if (p.pickup_pause > 0) --p.pickup_pause;
+    if (advance_timers && p.pickup_pause > 0) --p.pickup_pause;
 
     // The four LABEL_246 blocks (sub_41F29B 23277-23380), in the original's
     // exact order: auto-drop force (diarrhea +135 / super +137) -> carried-
@@ -313,7 +328,7 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, AISystem* ai_sys, 
         // frame's -1 godir into the ice buffer — landing on an icy level then
         // replays neutral input, not a stale pre-flight direction burst
         // (facts.md "Ice / input-lag", flight-push fix 2026-07-12).
-        for (int f = 0; f < kSubFrames; ++f) {
+        for (int f = 0; f < n_sub; ++f) {
             if (p.stun > 0) --p.stun;
             (void)movement.ice_delay(p, -1);
         }
@@ -324,7 +339,7 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, AISystem* ai_sys, 
         } else {
             bomb_actions(/*blocked=*/true);
         }
-        stage.tick_bounce(p, i);
+        if (advance_timers) stage.tick_bounce(p, i);
         return;
     }
 
@@ -339,7 +354,7 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, AISystem* ai_sys, 
     // out, applies to states 6/7).
     if (stage.warping(p)) {
         // Same per-frame +58 + ice-buffer note as the bounce branch above.
-        for (int f = 0; f < kSubFrames; ++f) {
+        for (int f = 0; f < n_sub; ++f) {
             if (p.stun > 0) --p.stun;
             (void)movement.ice_delay(p, -1);
         }
@@ -350,7 +365,7 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, AISystem* ai_sys, 
         } else {
             bomb_actions(/*blocked=*/true);
         }
-        stage.tick_warp(p);
+        if (advance_timers) stage.tick_warp(p);
         return;
     }
 
@@ -373,7 +388,7 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, AISystem* ai_sys, 
     // dead, so only auto-drop can act) all run normally underneath it.
     const bool frozen = s.input_freeze > 0;
     std::int32_t walk_budget = 0;  // summed accruals -> the PlayerWalking event
-    for (int sub = 0; sub < kSubFrames; ++sub) {
+    for (int sub = 0; sub < n_sub; ++sub) {
         // +58 head-stun: gate first, then decrement — the original's
         // per-frame `if (+58 > 0) { v113 = 0; --+58; }` (22982-22984).
         const bool sub_stunned = p.stun > 0 || paused;
@@ -396,7 +411,7 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, AISystem* ai_sys, 
         // OR-latched into `in` for the once-per-tick tail below.
         PlayerInput sub_in = tick_in;
         if (ai_sys && !sub_stunned && !frozen) {
-            ai_sys->decide(i, sub_in, kSubFrameMs[sub]);
+            ai_sys->decide(i, sub_in, sched[sub]);
             in.action1 = in.action1 || sub_in.action1;
             in.action2 = in.action2 || sub_in.action2;
         }
@@ -476,7 +491,7 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, AISystem* ai_sys, 
         // per tick after the loop — see its doc comment in event.hpp): sum
         // the same disease-scaled accrual MovementSystem::move folds in.
         if (moving) {
-            Fixed add = frame_budget(p.speed, kSubFrameMs[sub]);
+            Fixed add = frame_budget(p.speed, sched[sub]);
             if (p.sick(Disease::Slow)) add /= 3;
             if (p.sick(Disease::Fast) || p.sick(Disease::Super)) add = 3 * add / 2;
             walk_budget += add;
@@ -496,7 +511,7 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, AISystem* ai_sys, 
         // actions). A mid-move pickup is usable the SAME tick — it lands
         // before the bomb-action block below. docs/re/facts.md "Per-tick call
         // order — END-TO-END" finding 1.
-        stage.move_on_actor(p, eff_godir, moving, kSubFrameMs[sub], &on_move_pixel, &fctx);
+        stage.move_on_actor(p, eff_godir, moving, sched[sub], &on_move_pixel, &fctx);
         if (!p.alive) {
             p.prev_action1 = in.action1;
             p.prev_action2 = in.action2;
@@ -543,10 +558,21 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, AISystem* ai_sys, 
     // the budget the mover burned. Events are unhashed derived outputs — no
     // golden impact.
     if (walk_budget > 0) {
-        s.events.push_back({Event::Type::PlayerWalking, static_cast<std::int8_t>(i),
-                            static_cast<std::int8_t>(p.tile_x()),
-                            static_cast<std::int8_t>(p.tile_y()),
-                            static_cast<std::int8_t>(std::clamp<Fixed>(walk_budget / kScale, 1, 127))});
+        // Whole-px units for the deterministic tick path (n_sub == kSubFrames):
+        // the summed 9-sub-frame budget is several px, so the int8 truncation is
+        // negligible and the renderer's /3 leg divisor is unchanged (golden/
+        // visual-golden byte-identical). But the F9 per-frame path (n_sub == 1)
+        // emits a SUB-pixel budget every frame; truncated to whole px it clamps
+        // up to 1, inflating the leg cycle ~3x (the reported "walk too fast").
+        // Emit that path in 1/16-px units instead — no clamp-up — and the
+        // renderer's native-cadence divisor (/48 = /3 * 16) undoes the scale, so
+        // the walk speed matches the tick path and is frame-rate-independent,
+        // exactly like the original's fixed-point per-frame leg phase.
+        const Fixed walk_unit = (n_sub == kSubFrames) ? kScale : kScale / 16;
+        s.events.push_back(
+            {Event::Type::PlayerWalking, static_cast<std::int8_t>(i),
+             static_cast<std::int8_t>(p.tile_x()), static_cast<std::int8_t>(p.tile_y()),
+             static_cast<std::int8_t>(std::clamp<Fixed>(walk_budget / walk_unit, 1, 127))});
     }
     // A settle on a trampoline centre launches an in-place hop; a settle on a
     // warphole centre teleports to the linked exit (no RNG). Both use a one-shot
@@ -587,16 +613,33 @@ void field_vs_players(State& s, PowerupSystem& powerups, DiseaseSystem& diseases
     for (int i = 0; i < kMaxPlayers; ++i) resolve_player_field(s, i, powerups, diseases);
 }
 
-void run_tick(State& s, const TickInputs& inputs) {
-    s.events.clear();
-    // Presentation sub-frame trace prefill (State::sub_trace): every sample
-    // starts at the player's tick-entry position/facing; player_turn's
-    // sub-frame loop overwrites sample f as it moves, and the endpoint
-    // restamp at the bottom of this function pins the LAST sample to the
-    // tick's true final position. Derived output — never hashed.
-    for (int i = 0; i < kMaxPlayers; ++i) {
-        const Player& pp = s.players[i];
-        for (int f = 0; f < kSubFrames; ++f) s.sub_trace[i][f] = {pp.x, pp.y, pp.facing};
+enum class TickPhase { Full, Players, Systems };
+
+// `phase` splits the tick for the F9 native-cadence mode (game_app.cpp):
+//   Players  = only the per-frame movement/AI pass, run once per DISPLAYED
+//              frame with a single measured wall-clock delta (sched={delta_ms},
+//              n_sub=1) — the low-latency, per-frame responsiveness the native
+//              gets from its ~180 fps free-run.
+//   Systems  = only the 50 ms-quantized systems pass (bombs/flames/enclosure/
+//              diseases + the tick counter), run off a real-time accumulator so
+//              fuse/flame/hurry timers stay on their native 50 ms grid.
+//   Full     = both back-to-back, exactly as the fixed 20 Hz tick always has
+//              (the deterministic default — tick()/tests/oracle unchanged).
+// `sched`/`n_sub` are threaded straight to player_turn.
+void run_tick(State& s, const TickInputs& inputs, const std::int32_t* sched = kSubFrameMs,
+              int n_sub = kSubFrames, TickPhase phase = TickPhase::Full,
+              bool advance_timers = true) {
+    if (phase != TickPhase::Systems) {
+        s.events.clear();
+        // Presentation sub-frame trace prefill (State::sub_trace): every sample
+        // starts at the player's tick-entry position/facing; player_turn's
+        // sub-frame loop overwrites sample f as it moves, and the endpoint
+        // restamp at the bottom of this function pins the LAST sample to the
+        // tick's true final position. Derived output — never hashed.
+        for (int i = 0; i < kMaxPlayers; ++i) {
+            const Player& pp = s.players[i];
+            for (int f = 0; f < kSubFrames; ++f) s.sub_trace[i][f] = {pp.x, pp.y, pp.facing};
+        }
     }
 
     // Systems are cheap stack objects wired to the shared state; their
@@ -618,6 +661,7 @@ void run_tick(State& s, const TickInputs& inputs) {
     //    the player turn (mirroring sub_41F29B, which does movement + the actor
     //    branches in one pass). No new tick step: the actor effects are folded
     //    into step 1 exactly where the original applies them.
+    if (phase != TickPhase::Systems) {
     for (int i = 0; i < kMaxPlayers; ++i) {
         Player& p = s.players[i];
         if (!p.present || !p.alive) continue;
@@ -639,8 +683,12 @@ void run_tick(State& s, const TickInputs& inputs) {
         // state machine (+78) — COMPLETE"). present/alive above covers the
         // entering/dying/dead modes.
         player_turn(s, i, inputs.players[i], p.ai ? &ai : nullptr, bombs, stage, movement,
-                    powerups, diseases);
+                    powerups, diseases, sched, n_sub, advance_timers);
     }
+    }  // end (phase != Systems): the per-frame movement/AI pass
+    // Players-only (F9 per-frame call): stop here — the 50 ms systems pass below
+    // is driven separately off the real-time accumulator in Simulation::frame.
+    if (phase == TickPhase::Players) return;
 
     // 1b. Round-start input freeze countdown (dword_4621E0: armed to 50ms ×
     //     getvalue(30) = 1000 ms by round init sub_4214BC, decremented by the
@@ -772,6 +820,34 @@ Simulation::Simulation(const MatchConfig& config) : state_(detail::build_state(c
 
 void Simulation::tick(const TickInputs& inputs) {
     run_tick(state_, inputs);
+}
+
+void Simulation::frame(const TickInputs& inputs, std::int32_t delta_ms) {
+    // F9 native-cadence path (game_app.cpp run_match): run the movement/AI pass
+    // ONCE for this displayed frame with the measured wall-clock delta (a single
+    // sub-frame of delta_ms), then advance the 50 ms-quantized systems pass off
+    // a real-time accumulator. Mirrors the original's per-frame gameplay driver
+    // (sub_42A191): movement/AI at the true frame rate (low latency, fps-scaled
+    // granularity), fuse/flame/hurry timers on their native 50 ms grid. This
+    // whole path is NON-DETERMINISTIC (delta is real wall-clock) — a live-feel
+    // lever only; tick() stays the deterministic entry the tests/oracle use.
+    if (delta_ms < 1) delta_ms = 1;  // never a zero-advance frame
+    const std::int32_t sched[1] = {delta_ms};
+    // Does this displayed frame cross a 50 ms tick boundary? If so the once-per-
+    // tick duration counters in player_turn (pickup_pause / bounce / warp) may
+    // advance this frame; otherwise they hold, keeping those durations 20 Hz-
+    // paced under the per-frame movement (matches the deterministic path).
+    const bool crosses_tick = (systems_accum_ms_ + delta_ms) >= kMsPerTick;
+    run_tick(state_, inputs, sched, 1, TickPhase::Players, crosses_tick);
+    systems_accum_ms_ += delta_ms;
+    // Spiral-of-death guard: a long stall (window drag, breakpoint, alt-tab)
+    // must not fire a hundred systems passes in one frame — cap the queued
+    // real time at a few ticks, exactly like run_match's kMaxCatchupTicks.
+    if (systems_accum_ms_ > 4 * kMsPerTick) systems_accum_ms_ = 4 * kMsPerTick;
+    while (systems_accum_ms_ >= kMsPerTick) {
+        systems_accum_ms_ -= kMsPerTick;
+        run_tick(state_, inputs, kSubFrameMs, kSubFrames, TickPhase::Systems);
+    }
 }
 
 std::uint64_t Simulation::hash() const {

@@ -195,6 +195,10 @@ private:
     // values; the WINDOW and its keys are the faithful part. frontend-flow.md's
     // old "a toggle" note for key 288 was wrong — it is this blocking dialog.
     AppInput present_debug_info_modal();
+    // PORT-ONLY "Video Settings" panel (F10 from the menu): vsync / native
+    // cadence / show-fps toggles, persisted. Separate from the RE'd Options
+    // screen by design (see the definition's comment).
+    void present_video_settings();
     // The interactive Options screen (Team Play / Conveyor Speed): random
     // GLUE<n> backdrop, FONT6 text, Up/Down select a row, Left/Right change
     // its value, Enter/Esc leave (docs/re/frontend-flow.md "Interactive
@@ -384,6 +388,11 @@ private:
     // Renderer owns (CLAUDE.md's libs/game boundary: Renderer reads sim
     // State + events only).
     void draw_player_row(const sim::State& s);
+
+    // F8 framerate-indicator overlay (top-right of the match view): the live
+    // presented-frame rate plus the vsync/mode state F8 toggles. A port-only
+    // dev/A-B aid (see uncap_fps_), not an RE'd HUD element.
+    void draw_fps_overlay(int fps);
 
     // The winner of the round just ended: the sole surviving player's index, or
     // -1 for a draw (no survivor, or the clock ran out). Drives the Results
@@ -676,6 +685,32 @@ private:
     // Loaded once in init(), applied to the window there, flipped by
     // Alt+Enter/F11 (handle_global_event), persisted by flush_options().
     bool fullscreen_ = false;
+    // PORT ENHANCEMENT — F8 "uncapped framerate" toggle. Default OFF keeps the
+    // vsync-locked, refresh-boundary-paced 60 fps render (smooth, tear-free).
+    // ON drops vsync and paces to the sim's SUB-FRAME rate instead
+    // (tick_ns / kSubFrames ≈ 5.56 ms → ~180 fps), so every one of the 9
+    // canonical sub-frames player_interp exposes reaches the screen instead of
+    // only the ~3 a 60 Hz cadence samples. That reproduces the original's
+    // uncapped ~184 fps free-run (docs "Canonical frame cadence"): the AI's
+    // per-frame direction whims and the creamy motion the 60 fps blend smooths
+    // away both come back. Tears on a ≤60 Hz panel exactly as the 1997 build
+    // does; clean on a high-refresh display. Not an RE'd behaviour (the binary
+    // has no such toggle), so it lives outside any sub_XXXX path. Not persisted
+    // — a live A/B lever, reset to OFF each launch.
+    bool uncap_fps_ = false;
+    // PORT ENHANCEMENT / SPIKE — F9 "native cadence" toggle. Default OFF keeps
+    // the deterministic fixed 20 Hz sim + inter-tick interpolation. ON drives
+    // the sim through Simulation::frame() once per DISPLAYED frame with the
+    // measured wall-clock delta (movement/AI at true frame rate, low latency;
+    // 50 ms-quantized systems on their own accumulator) and renders it directly
+    // (no interp), reproducing the original's per-frame gameplay driver
+    // (sub_42A191). NON-DETERMINISTIC — a live A/B feel lever, never committed
+    // as default and never on the tests/oracle path. Best combined with F8's
+    // uncapped fps so movement actually runs at ~180 Hz. Reset OFF each launch.
+    bool native_cadence_ = false;
+    // F7 — draw the FPS / cadence indicator (next to the match clock). Default
+    // ON while this is a live A/B feature; will be driven by a persisted setting.
+    bool show_fps_ = true;
 
     std::optional<sdl::VideoSubsystem> video_;
     sdl::WindowPtr window_;

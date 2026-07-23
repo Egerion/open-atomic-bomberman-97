@@ -124,6 +124,15 @@ struct Options {
     // RE'd toggle above. Normalized 0/1; absent key -> windowed (matching the
     // original's only mode).
     std::optional<bool> fullscreen;
+    // PORT-ONLY keys (same rationale/round-trip as `fullscreen` above), driven
+    // by the port's "Video Settings" screen (game_app.cpp). None exist in the
+    // 1997 binary. `vsync` off = uncapped ~180 fps render; `native_cadence` =
+    // the per-frame wall-clock sim path (non-deterministic live feel);
+    // `show_fps` = draw the fps/cadence readout by the match clock. Absent keys
+    // fall back to the faithful defaults (vsync on, cadence off, fps hidden).
+    std::optional<bool> vsync;
+    std::optional<bool> native_cadence;
+    std::optional<bool> show_fps;
 };
 
 // Reads and parses `<path>` (the install-root options.ini). A missing or

@@ -51,6 +51,16 @@ bomber_game <game_dir> <scheme>   # explicit install + scheme
 
 Player 0: arrows + Right Ctrl/Space (bomb), Right Shift (throw/grab/trigger/punch) · Player 1: WASD + Left Ctrl/E, Left Shift · Esc: quit. When one player remains the match restarts after 3 s. `--demo <ticks> <out.bmp>` renders a scripted match headlessly (CI/verification). Install auto-detection: `BOMBER_GAME_DIR` env var, `gamedir.txt`, or the standard install paths.
 
+**Port-only presentation options (Video Settings — F10 from the menu, ADR-0007).** Three modern-only toggles, kept off the RE'd Options screen so it stays a faithful reproduction, and persisted in `options.ini` (`vsync=` / `native_cadence=` / `show_fps=`, alongside `fullscreen=`):
+
+| Toggle | Live key | Effect | Default |
+|---|---|---|---|
+| VSync | F8 | on = ~60 fps vsync-locked; off = uncapped ~180 fps | on |
+| Native cadence | F9 | drives the sim per displayed frame off the wall clock — the original's low-latency "creamy" feel (non-deterministic live path; tests/oracle are unaffected) | off |
+| Show FPS | F7 | small fps/cadence readout by the match clock | off |
+
+Best combined: **F8 + F9** on a high-refresh display reproduces the original's in-match motion 1:1. Other presentation keys: Alt+Enter / F11 fullscreen, Tab HD/classic art. These are all port enhancements with no 1997 equivalent; the deterministic default build behaves exactly as before.
+
 `abtool` — headless asset inspector/extractor:
 
 ```

@@ -92,16 +92,22 @@ Renderer::Posf Renderer::player_interp(const sim::State& s, int i, int& out_dir)
 
 Renderer::Posf Renderer::interp_pos(sim::Fixed prev_x, sim::Fixed prev_y, sim::Fixed x,
                                     sim::Fixed y, bool prev_ok) const {
+    // Bombs/rovers step on the 20 Hz systems grid in BOTH modes. On the F9 path
+    // players are drawn direct (interp_alpha_ == 1) but these slower entities
+    // must still glide between their steps, so they use entity_alpha_ (the
+    // systems accumulator fraction) instead — otherwise a flying bomb stutters
+    // at 20 Hz against the per-frame world (the reported bug).
+    const float a = native_cadence_ ? entity_alpha_ : interp_alpha_;
     const float fx = static_cast<float>(x) / static_cast<float>(sim::kScale);
     const float fy = static_cast<float>(y) / static_cast<float>(sim::kScale);
-    if (!interp_valid_ || !prev_ok || interp_alpha_ >= 1.0f) return {fx, fy};
+    if (!interp_valid_ || !prev_ok || a >= 1.0f) return {fx, fy};
     // Snap both axes together: lerping the small axis of a mostly-teleport
     // move would draw one frame at a position the entity never occupied.
     if (std::abs(x - prev_x) > kInterpSnapDelta || std::abs(y - prev_y) > kInterpSnapDelta)
         return {fx, fy};
     const float pfx = static_cast<float>(prev_x) / static_cast<float>(sim::kScale);
     const float pfy = static_cast<float>(prev_y) / static_cast<float>(sim::kScale);
-    return {pfx + (fx - pfx) * interp_alpha_, pfy + (fy - pfy) * interp_alpha_};
+    return {pfx + (fx - pfx) * a, pfy + (fy - pfy) * a};
 }
 
 void Renderer::draw_sprite(const Sprite& sp, float x, float y, Uint8 r, Uint8 g, Uint8 b) {
@@ -260,13 +266,19 @@ void Renderer::reset_match(bool untimed) {
     seen_rovers_.clear();
 }
 
-void Renderer::on_events(const sim::State& s) {
-    // Age the action poses once per tick (on_events is called exactly once per
-    // sim tick, before the frame is drawn).
-    for (int i = 0; i < sim::kMaxPlayers; ++i) {
-        if (kick_pose_[i] > 0) --kick_pose_[i];
-        if (punch_pose_[i] > 0) --punch_pose_[i];
-        if (pickup_pose_[i] > 0) --pickup_pose_[i];
+void Renderer::on_events(const sim::State& s, bool tick_advanced) {
+    // Age the action poses once per SIM TICK. on_events is called once per tick
+    // on the deterministic path (tick_advanced defaults true), but once per
+    // DISPLAYED FRAME on the F9 native-cadence path — where `tick_advanced` is
+    // only true on the frame that actually crossed a 50 ms tick, so the
+    // kick/punch/pickup countdowns don't play ~9x too fast (the reported
+    // throw/pickup speed-up).
+    if (tick_advanced) {
+        for (int i = 0; i < sim::kMaxPlayers; ++i) {
+            if (kick_pose_[i] > 0) --kick_pose_[i];
+            if (punch_pose_[i] > 0) --punch_pose_[i];
+            if (pickup_pose_[i] > 0) --pickup_pose_[i];
+        }
     }
     for (const auto& ev : s.events) {
         switch (ev.type) {
@@ -338,7 +350,15 @@ void Renderer::on_events(const sim::State& s) {
 }
 
 void Renderer::sample_movement(const sim::State& s) {
-    if (s.tick == last_tick_) return;
+    // Once per sim tick normally; EVERY displayed frame in F9 native-cadence
+    // mode (set_native_cadence). In F9 ONLY the walk leg phase advances per
+    // frame (the sim's per-frame movement clock — otherwise the walk cycle
+    // looks frozen at 20 Hz under a 180 fps render). The tick-cadenced
+    // bookkeeping below (fidget/panic, carry arc, displaced) stays on the 20 Hz
+    // grid via the `new_tick` gate — advancing it per frame plays those ~9x too
+    // fast (the reported cornerhead-fidget-too-fast bug).
+    const bool new_tick = s.tick != last_tick_;
+    if (!native_cadence_ && !new_tick) return;
     // Walk state comes from the sim's PlayerWalking events, NOT from the
     // position delta: the original picks walk-vs-stand off the dispatched
     // godir (+46) and advances the 16.16 leg phase by the tick's speed budget
@@ -359,6 +379,10 @@ void Renderer::sample_movement(const sim::State& s) {
         const sim::Player& p = s.players[i];
         moving_[i] = p.present && p.alive && walk_px[i] > 0;
         if (moving_[i]) walk_phase_[i] += static_cast<std::uint32_t>(walk_px[i]);
+        // F9 mid-tick frame: walk leg phase (above) advanced; skip the once-per-
+        // tick fidget/carry/displaced bookkeeping so those keep their 20 Hz
+        // authored speed instead of running per frame.
+        if (!new_tick) continue;
         // Displacement is still tracked separately: the cornerhead fidget
         // below cares about standing STILL while fully enclosed (its entry,
         // sub_41F29B 23006-23013, checks only enclosure + state 0 — held keys
@@ -410,6 +434,10 @@ void Renderer::sample_movement(const sim::State& s) {
             carry_ticks_[i] = carrying_prev_[i] ? std::min(carry_ticks_[i] + 1, 3) : 0;
         carrying_prev_[i] = carrying_now;
     }
+    // F9 mid-tick frame: nothing tick-cadenced to advance; leave last_tick_ so
+    // the next real tick is still detected. (Deterministic path always has
+    // new_tick == true here.)
+    if (!new_tick) return;
     update_gold_sparkles(s);
     last_tick_ = s.tick;
 }
@@ -805,7 +833,7 @@ void Renderer::draw_world(const sim::State& s) {
         // hit a multiple of the sequence length (the reported "walk anim
         // stops after some skates" — e.g. 10 px/tick vs a 10-frame WALK.ANI).
         // docs/re/facts.md "Walk leg-cycle pacing".
-        std::size_t ph = moving_[i] ? walk_phase_[i] / 3 : 0;
+        std::size_t ph = moving_[i] ? walk_phase_[i] / (native_cadence_ ? 48u : 3u) : 0;
         // Boxed-in idle: replace the pose with the current "cornerhead" fidget
         // (direction-independent). sample_movement already rolled the variant/
         // duration this tick; the phase just rides the sim tick so the frames
@@ -848,7 +876,7 @@ void Renderer::draw_world(const sim::State& s) {
                 a = c;
                 // Same +48/3 pacing as walk/stand above — the original's
                 // carry poses share the one counter and the one /3 site.
-                ph = moving_[i] ? walk_phase_[i] / 3 : 0;
+                ph = moving_[i] ? walk_phase_[i] / (native_cadence_ ? 48u : 3u) : 0;
             }
             // The "picking up" transitional pose (PUP*.ANI, sub_41F29B
             // action-state 4) wins over the steady carry pose while its
@@ -866,7 +894,7 @@ void Renderer::draw_world(const sim::State& s) {
                 // pickup block computed. Only pickup_pose_'s countdown (the
                 // state's exit timer, set from the sequence length) survives.
                 // Same +48/3 walk leg-cycle as the walk/stand/carry poses above.
-                ph = moving_[i] ? walk_phase_[i] / 3 : 0;
+                ph = moving_[i] ? walk_phase_[i] / (native_cadence_ ? 48u : 3u) : 0;
             }
         }
         // Warp/teleport pose wins over everything: while warping the player is

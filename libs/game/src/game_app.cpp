@@ -378,6 +378,12 @@ bool GameApp::init() {
         // so it round-trips like every other toggle; absent key -> windowed,
         // matching the original's only mode.
         fullscreen_ = loaded_opts.fullscreen.value_or(false);
+        // PORT-ONLY "Video Settings" keys (install.hpp), faithful defaults: vsync
+        // ON (uncap off), native cadence OFF (deterministic), fps readout hidden.
+        // vsync ON == uncapped OFF, so the internal uncap flag is its inverse.
+        uncap_fps_ = !loaded_opts.vsync.value_or(true);
+        native_cadence_ = loaded_opts.native_cadence.value_or(false);
+        show_fps_ = loaded_opts.show_fps.value_or(false);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "%s\n", e.what());
         return false;
@@ -459,7 +465,9 @@ bool GameApp::init() {
     // present to the display's refresh is the faithful fix: it makes "one
     // step per displayed frame" true here too, the same relationship the
     // original had, without guessing a magic delay.
-    SDL_SetRenderVSync(ren, 1);
+    // vsync ON by default; OFF when the Video Settings "vsync" toggle (uncap_fps_)
+    // is set, so the render loop can free-run to the sub-frame rate (~180 fps).
+    SDL_SetRenderVSync(ren, uncap_fps_ ? 0 : 1);
 
     // FONT6, loaded standalone BEFORE the boot LOADING dialogs — matching the
     // real init order (docs/re/frontend-flow.md "FONT6 timing", CONFIRMED):
@@ -1237,6 +1245,84 @@ AppInput GameApp::present_debug_info_modal() {
         draw_dialog_text(sdl_renderer_.get(), front_font_,
                          assets_.getstring(401, "Press [Enter] or [Esc] to continue"),
                          win.x + 24.0f, ty, 255, 255, 255);
+        SDL_RenderPresent(sdl_renderer_.get());
+        SDL_Delay(2);
+    }
+}
+
+void GameApp::present_video_settings() {
+    // PORT-ONLY screen (NOT RE'd) — the video/cadence toggles that otherwise
+    // only live on the F7/F8/F9 keys (show_fps_/uncap_fps_/native_cadence_),
+    // surfaced as a small panel and persisted via the Video Settings keys
+    // (install.hpp). Kept SEPARATE from the RE'd Options screen so its exact 18
+    // rows stay faithful (no invented rows there — the deliberate design choice
+    // for these modern-only settings). Same WINZ-panel modal shape as the
+    // Alt+D debug window above; Up/Down select, Enter/Space/Left/Right toggle,
+    // Esc closes. Toggles apply live and mark options_dirty_ so flush_options
+    // round-trips them.
+    int row = 0;
+    constexpr int kRows = 3;
+    while (true) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_EVENT_QUIT) return;
+            if (ev.type != SDL_EVENT_KEY_DOWN || ev.key.repeat) continue;
+            audio_.play(20);  // nav blip
+            switch (ev.key.key) {
+                case SDLK_UP: row = (row + kRows - 1) % kRows; break;
+                case SDLK_DOWN: row = (row + 1) % kRows; break;
+                case SDLK_LEFT:
+                case SDLK_RIGHT:
+                case SDLK_RETURN:
+                case SDLK_KP_ENTER:
+                case SDLK_SPACE:
+                    if (row == 0) {
+                        uncap_fps_ = !uncap_fps_;  // "VSync" On == uncap OFF
+                        SDL_SetRenderVSync(sdl_renderer_.get(), uncap_fps_ ? 0 : 1);
+                    } else if (row == 1) {
+                        native_cadence_ = !native_cadence_;
+                    } else {
+                        show_fps_ = !show_fps_;
+                    }
+                    options_dirty_ = true;
+                    break;
+                case SDLK_ESCAPE:
+                    return;
+                default:
+                    break;
+            }
+        }
+        audio_.update_music();
+        SDL_SetRenderDrawColor(sdl_renderer_.get(), 0, 0, 0, 255);
+        SDL_RenderClear(sdl_renderer_.get());
+        const Sprite& bg = assets_.frontend_pcx("MAINMENU");
+        if (bg.tex) {
+            SDL_FRect d{0, 0, static_cast<float>(bg.w), static_cast<float>(bg.h)};
+            SDL_RenderTexture(sdl_renderer_.get(), bg.tex, nullptr, &d);
+        }
+        const DialogRect win{(kScreenW - 380.0f) / 2.0f, 140.0f, 380.0f, 190.0f};
+        draw_dialog_chrome(sdl_renderer_.get(), win, &assets_.frontend_pcx("WINZ"));
+        const float lh = static_cast<float>(front_font_.line_height());
+        draw_dialog_text(sdl_renderer_.get(), front_font_, "VIDEO SETTINGS (port)", win.x + 24.0f,
+                         win.y + 16.0f, 255, 255, 255);
+        const char* labels[kRows] = {"VSync", "Native cadence", "Show FPS"};
+        const bool vals[kRows] = {!uncap_fps_, native_cadence_, show_fps_};
+        float ry = win.y + 16.0f + 2.0f * lh;
+        for (int i = 0; i < kRows; ++i) {
+            const bool sel = (i == row);
+            const std::string shown = std::string(sel ? "> " : "  ") + labels[i] + ":  " +
+                                      (vals[i] ? "On" : "Off");
+            // Selected row yellow, others a dim white — same read-at-a-glance
+            // convention as the fps overlay's green/white.
+            draw_dialog_text(sdl_renderer_.get(), front_font_, shown, win.x + 24.0f, ry,
+                             sel ? 255 : 200, sel ? 220 : 200, sel ? 80 : 200);
+            ry += lh + 6.0f;
+        }
+        // Centred so it can't spill past the panel edge (the reported overflow).
+        const std::string hint = "Enter toggle    Esc close";
+        draw_dialog_text(sdl_renderer_.get(), front_font_, hint,
+                         win.x + (win.w - static_cast<float>(front_font_.measure(hint))) / 2.0f,
+                         win.y + win.h - 16.0f - lh, 255, 255, 255);
         SDL_RenderPresent(sdl_renderer_.get());
         SDL_Delay(2);
     }
@@ -2321,6 +2407,15 @@ AppInput GameApp::present_menu() {
                 if (synth.key.key != SDLK_UNKNOWN) SDL_PushEvent(&synth);
             }
             if (ev.type != SDL_EVENT_KEY_DOWN) continue;
+
+            // F10 opens the PORT-ONLY Video Settings panel (see
+            // present_video_settings). Not an RE'd key — a port entry point that
+            // keeps the modern video/cadence toggles off the faithful Options
+            // screen. Ignored while the quit-confirm modal is up.
+            if (!quit_confirm && ev.key.key == SDLK_F10) {
+                present_video_settings();
+                continue;
+            }
 
             if (quit_confirm) {
                 // sub_41456C's key loop: any real key blips (20); Yes accepts
@@ -3782,6 +3877,37 @@ void GameApp::draw_player_row(const sim::State& s) {
     }
 }
 
+void GameApp::draw_fps_overlay(int fps) {
+    if (!show_fps_ || !front_font_.loaded()) return;
+    // Three compact lines hard in the top-right corner, stacked: fps, then the
+    // cadence state, then the vsync state. Right-aligned and drawn at a reduced
+    // SCALE via FontTextures::draw's `scale` (dst-rect only — NEVER
+    // SDL_SetRenderScale, which perturbed the whole render transform). Small
+    // enough that all three sit ABOVE the match clock rather than over it. GREEN
+    // marks the native-feel state of each lever; a manual 1-px black outline
+    // keeps them legible over the field.
+    constexpr float kS = 0.7f;
+    const float right = static_cast<float>(kScreenW) - 3.0f;
+    const float lh = static_cast<float>(front_font_.line_height()) * kS;
+    auto line = [&](const std::string& s, float y, bool hot) {
+        const float x = right - static_cast<float>(front_font_.measure(s)) * kS;
+        front_font_.draw(sdl_renderer_.get(), s, x - 1, y, 0, 0, 0, kS);
+        front_font_.draw(sdl_renderer_.get(), s, x + 1, y, 0, 0, 0, kS);
+        front_font_.draw(sdl_renderer_.get(), s, x, y - 1, 0, 0, 0, kS);
+        front_font_.draw(sdl_renderer_.get(), s, x, y + 1, 0, 0, 0, kS);
+        front_font_.draw(sdl_renderer_.get(), s, x, y, hot ? 120 : kDialogInkR, hot ? 240 : kDialogInkG,
+                         hot ? 120 : kDialogInkB, kS);
+    };
+    char buf[24];
+    std::snprintf(buf, sizeof(buf), "%d FPS", fps);
+    float y = 2.0f;
+    line(buf, y, uncap_fps_);
+    y += lh;
+    line(native_cadence_ ? "NATIVE" : "20HZ", y, native_cadence_);
+    y += lh;
+    line(uncap_fps_ ? "UNCAP" : "VSYNC", y, uncap_fps_);
+}
+
 AppInput GameApp::run_match() {
     start_match(next_seed_++);
     const std::uint64_t tick_ns = 1'000'000'000ull / sim::kTicksPerSecond;
@@ -3823,6 +3949,12 @@ AppInput GameApp::run_match() {
                     static_cast<std::uint64_t>(mode->refresh_rate_numerator);
     }
     std::uint64_t pace_target_ns = SDL_GetTicksNS() + period_ns;
+    // F8 FPS-indicator state: count presented frames and refresh the shown
+    // figure ~4x/second (a 250 ms window) so the number is readable, not a
+    // blur. Purely for the top-right overlay; nothing gameplay reads it.
+    std::uint64_t fps_frames = 0;
+    std::uint64_t fps_window_start_ns = SDL_GetTicksNS();
+    int shown_fps = 0;
     // Per-player "action key seen down at a frame sample since the last
     // consumed tick" — the frame-cadence tap capture; see the sampling
     // comment inside the loop. Only action1/action2 are ever set.
@@ -3830,6 +3962,33 @@ AppInput GameApp::run_match() {
         bool action1 = false, action2 = false;
     };
     std::array<TapLatch, sim::kMaxPlayers> tap_latch{};
+    // Round-end / linger bookkeeping for ONE advanced 50 ms tick. Called from
+    // both the fixed-tick catch-up loop and the F9 native-cadence path (once per
+    // 50 ms systems pass). Returns true when the post-round linger has elapsed
+    // and run_match should hand back to the Results flow.
+    auto advance_round_end = [&]() -> bool {
+        const sim::State& s = sim_.state();
+        // Campaign hazard-clear grace timer (docs/re/campaign.md "Round pacing"
+        // clause 3, sub_4016DA's dword_4646C0): fires once when every hazard has
+        // been dead kHazardClearTicks ticks — an independent early-out.
+        if (over_ticks < 0 && campaign_active_ &&
+            s.hazard_clear_timer == sim::kHazardClearTicks) {
+            over_ticks = 3 * sim::kTicksPerSecond;
+        }
+        // Team-aware round-over: "one SIDE left" (docs/re/ai.md TEAM follow-up);
+        // sides_remaining() degenerates to alive_count() in a solo match.
+        if (over_ticks < 0 && (sim::sides_remaining(s) <= 1 || s.ticks_left == 0)) {
+            over_ticks = 3 * sim::kTicksPerSecond;
+            if (s.ticks_left == 0) {
+                std::printf("time up — draw!\n");
+            } else {
+                for (int i = 0; i < sim::kMaxPlayers; ++i)
+                    if (s.players[i].present && s.players[i].alive)
+                        std::printf("player %d wins!\n", i);
+            }
+        }
+        return over_ticks > 0 && --over_ticks == 0;
+    };
     while (true) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -3929,8 +4088,49 @@ AppInput GameApp::run_match() {
         }
 
         std::uint64_t now = SDL_GetTicksNS();
-        acc += now - last;
+        const std::uint64_t delta_ns = now - last;
+        acc += delta_ns;
         last = now;
+        // One loop iteration == one SDL_RenderPresent below; tally it and
+        // recompute the shown rate once the 250 ms window elapses.
+        ++fps_frames;
+        if (const std::uint64_t span = now - fps_window_start_ns; span >= 250'000'000ull) {
+            shown_fps = static_cast<int>(fps_frames * 1'000'000'000ull / span);
+            fps_frames = 0;
+            fps_window_start_ns = now;
+        }
+        if (native_cadence_) {
+            // F9 native-cadence path: advance the sim ONE displayed frame on the
+            // measured wall-clock delta. Simulation::frame runs the movement/AI
+            // pass at frame rate and drains the 50 ms systems pass off its own
+            // accumulator, so this is the original's per-frame gameplay driver
+            // (sub_42A191) — low input latency, fps-scaled granularity — but
+            // NON-DETERMINISTIC (real delta). Consume the action-key taps this
+            // frame; run the round-end bookkeeping once per 50 ms tick advanced.
+            std::int32_t delta_ms = static_cast<std::int32_t>(delta_ns / 1'000'000ull);
+            if (delta_ms < 1) delta_ms = 1;
+            if (delta_ms > 4 * sim::kMsPerTick) delta_ms = 4 * sim::kMsPerTick;
+            sim::TickInputs in = frame_in;
+            for (int i = 0; i < sim::kMaxPlayers; ++i) {
+                in.players[i].action1 = in.players[i].action1 || tap_latch[i].action1;
+                in.players[i].action2 = in.players[i].action2 || tap_latch[i].action2;
+                tap_latch[i].action1 = false;
+                tap_latch[i].action2 = false;
+            }
+            const std::uint64_t tick_before = sim_.state().tick;
+            sim_.frame(in, delta_ms);
+            sounds_.on_tick(sim_.state());
+            // Pose countdowns age once per SIM TICK, not per displayed frame:
+            // pass whether this frame actually crossed a tick (else kick/punch/
+            // pickup poses play ~9x too fast in native cadence).
+            // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+            renderer_->on_events(sim_.state(), sim_.state().tick != tick_before);
+            renderer_->advance_tick(sim_.state());  // NOLINT(bugprone-unchecked-optional-access)
+            tally_kills(sim_.state().events, kill_count_);
+            for (std::uint64_t t = tick_before; t < sim_.state().tick; ++t)
+                if (advance_round_end()) return AppInput::MatchOver;
+            acc = 0;  // the fixed-tick accumulator is dormant on this path
+        } else {
         // Long-stall guard (spiral-of-death / teleport clamp). A window drag,
         // alt-tab, asset stall, or a debugger break can hand us a multi-hundred-
         // ms delta; without a cap the `while` below fires that many catch-up
@@ -3974,53 +4174,9 @@ AppInput GameApp::run_match() {
             // doc comment); reset only in reset_match_scores().
             tally_kills(sim_.state().events, kill_count_);
 
-            const sim::State& s = sim_.state();
-            // Campaign hazard-clear grace timer (docs/re/campaign.md "Round
-            // pacing" clause 3, sub_4016DA's dword_4646C0): once every
-            // rover/ghost has been dead for kHazardClearTicks ticks, the
-            // ORIGINAL flags "stage clear, pending" — reached even if a
-            // human survivor is ALSO already about to end the round the
-            // normal way (clause 2 below), so this is an independent, not
-            // additional, early-out. Edge-detected on the STATE field itself
-            // (RoverSystem is a private stack object of simulation.cpp) —
-            // fires exactly once, the tick the timer reaches the threshold.
-            if (over_ticks < 0 && campaign_active_ &&
-                s.hazard_clear_timer == sim::kHazardClearTicks) {
-                over_ticks = 3 * sim::kTicksPerSecond;
-            }
-            // Team-aware round-over: "one SIDE left", not "one player left"
-            // (docs/re/ai.md TEAM follow-up). sides_remaining() degenerates to
-            // alive_count() when every team byte is 0 (the default), so a solo
-            // match's timing is unchanged. VERIFIED side-aware against the native
-            // (2026-07-22): the loop-exit `sub_421947() > 1` returns dword_4621D8
-            // = dword_4621E4, and sub_41F29B increments dword_4621E4 in team mode
-            // (dword_464964) only ONCE per team — guarded by the dword_4621B4
-            // [team+84] seen-flag (batch_0x41F29B.cpp:224-236) — over the
-            // non-eliminated slots (a life-less dead player returns early at :199
-            // and is not counted). So the original's round-exit counts distinct
-            // surviving TEAMS, exactly like sides_remaining(); the earlier
-            // "player-count" suspicion (it looked distinct from the side-count
-            // dword_4621DC) was a misread — both counters are team-aware, they
-            // differ only in alive precision (+0 respawnable vs +2 fully-settled).
-            if (over_ticks < 0 && (sim::sides_remaining(s) <= 1 || s.ticks_left == 0)) {
-                // Linger a few seconds on the final frame, then hand back to the
-                // flow so the Results screen can come up.
-                over_ticks = 3 * sim::kTicksPerSecond;
-                if (s.ticks_left == 0) {
-                    std::printf("time up — draw!\n");
-                } else {
-                    // The "we have a winner" voice group (2000) fires under the
-                    // RESULTS scoreboard itself once v73 is computed (§1), NOT
-                    // here during the match's own end-of-round linger — moved to
-                    // run_app's Results handler (present_scoreboard/victory_screen
-                    // call site) so it plays under the right screen.
-                    for (int i = 0; i < sim::kMaxPlayers; ++i)
-                        if (s.players[i].present && s.players[i].alive)
-                            std::printf("player %d wins!\n", i);
-                }
-            }
-            if (over_ticks > 0 && --over_ticks == 0) return AppInput::MatchOver;
+            if (advance_round_end()) return AppInput::MatchOver;
         }
+        }  // end else: the deterministic fixed-tick accumulator path
 
         audio_.update_music();
         // Gold Bomberman twinkle (docs/re/goldman-roulette.md §6): tell the
@@ -4029,13 +4185,28 @@ AppInput GameApp::run_match() {
         // pair and keeps the renderer decoupled from GameApp's own state.
         // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — emplaced in init()
         renderer_->set_gold_player(gold_player_, is_team_mode());
+        // Tell the renderer which animation clock to use (F9): per-frame walk/
+        // fidget phase advance in native cadence, once-per-tick otherwise.
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — emplaced in init()
+        renderer_->set_native_cadence(native_cadence_);
+        // F9: glide fraction for the 50 ms-stepped entities (flying/sliding
+        // bombs, rovers) = how far into the current 50 ms tick this frame falls.
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — emplaced in init()
+        renderer_->set_entity_interp(
+            native_cadence_ ? static_cast<float>(sim_.systems_accum_ms()) /
+                                  static_cast<float>(sim::kMsPerTick)
+                            : 1.0f);
         // Inter-tick interpolation fraction (renderer.hpp's draw_frame doc):
         // acc < tick_ns after the catch-up loop, so this is in [0,1) — how far
         // into the current 50 ms tick this displayed frame falls. The original
         // needed no such blend because its gameplay driver itself ran per
         // displayed frame on the ms delta (sub_42A191); our fixed 20 Hz sim
         // recovers that on-screen fluidity here, cosmetically.
-        const float interp_alpha = static_cast<float>(acc) / static_cast<float>(tick_ns);
+        // Native-cadence mode renders the sim's live state directly (alpha=1 =>
+        // player_interp/interp_pos return the current position, no lerp): the
+        // sim already ran at frame rate this frame, so there is nothing to blend.
+        const float interp_alpha =
+            native_cadence_ ? 1.0f : static_cast<float>(acc) / static_cast<float>(tick_ns);
         // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — emplaced in init()
         renderer_->draw_frame(sim_.state(), interp_alpha);
         // The player-row HUD strip (docs/re/in-match-shell.md "The player
@@ -4045,17 +4216,26 @@ AppInput GameApp::run_match() {
         // it every tick, after the field/world but the clock/hurry HUD is
         // logically part of the same pass).
         draw_player_row(sim_.state());
+        draw_fps_overlay(shown_fps);
         SDL_RenderPresent(sdl_renderer_.get());
         // Refresh-boundary pacer — see the pacing comment at the top of this
         // function. No-op when present already blocked past the target;
         // supplies the missing block (and re-phases the target) when it
         // didn't.
+        // Pace target: the refresh period by default, or the sim's sub-frame
+        // period when F8's uncapped mode is armed (see uncap_fps_). At the
+        // sub-frame rate every canonical frame player_interp can distinguish
+        // reaches the screen — capping any higher would only re-show sub-frames
+        // (there are just kSubFrames per tick), so this is the useful ceiling,
+        // not a hard free-run. The else-branch resync makes a mid-match toggle
+        // self-correct within a frame.
+        const std::uint64_t pace_period_ns = uncap_fps_ ? tick_ns / sim::kSubFrames : period_ns;
         std::uint64_t after_present_ns = SDL_GetTicksNS();
         if (after_present_ns < pace_target_ns) {
             SDL_DelayNS(pace_target_ns - after_present_ns);
-            pace_target_ns += period_ns;
+            pace_target_ns += pace_period_ns;
         } else {
-            pace_target_ns = after_present_ns + period_ns;
+            pace_target_ns = after_present_ns + pace_period_ns;
         }
     }
 }
@@ -4427,6 +4607,34 @@ bool GameApp::handle_global_event(const SDL_Event& ev) {
         toggle_hd_artwork();
         return false;  // presentation shortcut; never leak Tab into a screen
     }
+    if (ev.key.key == SDLK_F8) {
+        // Uncapped-framerate toggle (see uncap_fps_'s doc): flip the flag and
+        // the renderer's vsync in lockstep. OFF = vsync on (present blocks on
+        // vblank, refresh-boundary pacer caps at 60); ON = vsync off (present
+        // returns immediately, the sub-frame pacer free-runs to ~180). The
+        // run_match pacer reads uncap_fps_ every iteration, so this takes
+        // effect on the next frame with no restart.
+        uncap_fps_ = !uncap_fps_;
+        SDL_SetRenderVSync(sdl_renderer_.get(), uncap_fps_ ? 0 : 1);
+        std::fprintf(stderr, "framerate: %s\n", uncap_fps_ ? "uncapped (~180 fps, native feel)"
+                                                           : "vsync (60 fps, smooth)");
+        return false;  // presentation shortcut; never leak F8 into a screen
+    }
+    if (ev.key.key == SDLK_F7) {
+        show_fps_ = !show_fps_;
+        std::fprintf(stderr, "fps indicator: %s\n", show_fps_ ? "on" : "off");
+        return false;  // presentation shortcut; never leak F7 into a screen
+    }
+    if (ev.key.key == SDLK_F9) {
+        // Native-cadence toggle (see native_cadence_): sim runs per displayed
+        // frame on the real wall-clock delta, drawn without interpolation. Takes
+        // effect on the next frame in run_match (which reads native_cadence_).
+        native_cadence_ = !native_cadence_;
+        std::fprintf(stderr, "cadence: %s\n",
+                     native_cadence_ ? "native per-frame wall-clock (non-deterministic)"
+                                     : "fixed 20 Hz + interpolation (deterministic)");
+        return false;  // presentation shortcut; never leak F9 into a screen
+    }
     bool alt_enter = ev.key.key == SDLK_RETURN && (ev.key.mod & SDL_KMOD_ALT) != 0;
     bool f11 = ev.key.key == SDLK_F11;
     if (!alt_enter && !f11) return true;  // not ours: keep the event for the caller's own loop
@@ -4485,6 +4693,11 @@ void GameApp::flush_options() {
     // "fullscreen=" — PORT-ONLY key (see init()'s and toggle_fullscreen()'s
     // comments), always mirrored alongside the RE'd keys above.
     to_write.fullscreen = fullscreen_;
+    // PORT-ONLY Video Settings keys (install.hpp). vsync is the inverse of the
+    // internal uncapped-fps flag.
+    to_write.vsync = !uncap_fps_;
+    to_write.native_cadence = native_cadence_;
+    to_write.show_fps = show_fps_;
     // keydef=: always write the live KeyboardMapper bindings (both sets, all
     // 6 UI-exposed actions) so a rebind through the remap screen survives a
     // restart — translated back into the ORIGINAL's DOS/AT scancode space
