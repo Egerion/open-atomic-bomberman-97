@@ -23,4 +23,4 @@ target_include_directories(bomber_sim
   PRIVATE src
 )
 target_compile_features(bomber_sim PUBLIC cxx_std_20)
-target_link_libraries(bomber_sim PRIVATE bomber::warnings)
+target_link_libraries(bomber_sim PUBLIC bomber::core PRIVATE bomber::warnings)

@@ -2,23 +2,28 @@
 
 #include <cstdint>
 
-// Field geometry and timing constants confirmed against BM95.EXE
-// (docs/re/facts.md): 15x11 grid of 40x36-pixel tiles, 20 Hz nominal rate.
+#include "bomber/core/geometry.hpp"
+#include "bomber/core/limits.hpp"
+
+// Timing/cadence constants confirmed against BM95.EXE (docs/re/facts.md).
+// The field geometry, the fixed-point pixel unit, and the slot/rate limits now
+// live in bomber::core (ADR-0008) and are re-exported here, so every existing
+// `sim::Fixed` / `sim::kScale` / `sim::kGridWidth` … call site keeps resolving
+// unchanged — a using-decl names the SAME constexpr objects, so values (and the
+// golden) are byte-identical.
 
 namespace bomber::sim {
 
-// Fixed-point unit: 1/100 pixel, matching VALUELST speed units.
-using Fixed = std::int32_t;
-
-inline constexpr int kTicksPerSecond = 20;
-inline constexpr int kMaxPlayers = 10;
-inline constexpr int kGridWidth = 15;
-inline constexpr int kGridHeight = 11;
-inline constexpr int kTileW = 40;  // pixels
-inline constexpr int kTileH = 36;
-inline constexpr Fixed kScale = 100;
-inline constexpr Fixed kTileWF = kTileW * kScale;
-inline constexpr Fixed kTileHF = kTileH * kScale;
+using core::Fixed;
+using core::kGridHeight;
+using core::kGridWidth;
+using core::kMaxPlayers;
+using core::kScale;
+using core::kTicksPerSecond;
+using core::kTileH;
+using core::kTileHF;
+using core::kTileW;
+using core::kTileWF;
 
 // [0x46494C] = 1000/getvalue(30): the original's 50 ms frame quantum, the
 // divisor of every per-frame budget accrual and the step of every anim/state

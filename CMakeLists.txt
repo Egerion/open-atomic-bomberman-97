@@ -25,6 +25,7 @@ else()
 endif()
 
 # Headless components (no SDL): asset loaders, the deterministic sim, glue.
+add_subdirectory(libs/core)  # SDL-free shared vocabulary (ADR-0008); no deps, must precede sim
 add_subdirectory(libs/assets)
 add_subdirectory(libs/sim)
 add_subdirectory(libs/match)
