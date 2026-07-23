@@ -461,9 +461,6 @@ private:
     // (selected_level_) + win target (win_target_), Escape backs to present_setup.
     // Returns Advance to start the match, Back to the player screen, Quit on close.
     AppInput present_map_select();
-    // A random GLUE<n> backdrop name (sub_4148E5: getvalue(16) count, rand()%%n).
-    // Shared by both pre-match screens; uses the presentation LCG, not State::rng.
-    std::string pick_glue();
     // Advance a slot's input type one step in the setup cycle (sub_421E80):
     // OFF -> COMPUTER -> KEYBOARD sub 0 -> KEYBOARD sub 1 -> JOY0..JOY<n-1> ->
     // OFF, where n = gamepads_.count() (docs/re/setup-screens.md). Delegates to

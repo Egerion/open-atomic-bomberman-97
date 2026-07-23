@@ -17,6 +17,7 @@
 #include "bomber/game/bmscreen.hpp"
 #include "bomber/game/dialog_chrome.hpp"
 #include "bomber/game/dos_scancode.hpp"
+#include "bomber/game/frontend_util.hpp"
 #include "bomber/game/hud_format.hpp"
 #include "bomber/game/screens/debug_info_screen.hpp"
 #include "bomber/game/screens/help_screens.hpp"
@@ -1147,7 +1148,7 @@ AppInput GameApp::present_options_screen() {
     // The GLUE pick doubles as the backdrop the two modal sub-screens
     // restore each frame (sub_415CA4's saved-backdrop memcpy holds this
     // same picture) — keep the name for them.
-    const std::string glue = pick_glue();
+    const std::string glue = pick_glue(setup_lcg_, values_);
     opt.enter(options_, glue);
     AppInput result = AppInput::Advance;
     while (!opt.done()) {
@@ -1458,7 +1459,7 @@ void GameApp::present_editor() {
     // (there is no menu row for it), so it simply returns to present_menu's
     // own loop when the chooser is dismissed.
     EditorChooserScreen chooser(assets_, front_font_);
-    chooser.enter(pick_glue());
+    chooser.enter(pick_glue(setup_lcg_, values_));
 
     while (true) {
         EditorChooserResult action = EditorChooserResult::None;
@@ -1502,7 +1503,7 @@ void GameApp::present_editor() {
         } else if (action == EditorChooserResult::EditExisting) {
             // sub_407582: the *.SCH file picker over DATA/SCHEMES.
             SchemeFilePicker picker(assets_, front_font_);
-            picker.enter(opts_.game_dir / "DATA" / "SCHEMES", pick_glue());
+            picker.enter(opts_.game_dir / "DATA" / "SCHEMES", pick_glue(setup_lcg_, values_));
             while (!picker.done()) {
                 SDL_Event pev;
                 while (SDL_PollEvent(&pev)) {
@@ -1548,7 +1549,7 @@ void GameApp::present_editor() {
         }
 
         EditorScreen editor(assets_, front_font_);
-        editor.enter(initial, pick_glue(), &default_starts);
+        editor.enter(initial, pick_glue(setup_lcg_, values_), &default_starts);
         // The 'N'/'n' scheme-name prompt (§5) needs real text input (letters
         // beyond the raw keycode switch below); start it for the whole
         // editor session — harmless while the prompt is closed since
@@ -1670,7 +1671,7 @@ void GameApp::present_campaign_picker() {
     // like present_editor's chooser/picker loops — no AppState/AppInput slot,
     // since there is no menu row for this screen either.
     CampaignFilePicker picker(assets_, front_font_);
-    picker.enter(opts_.game_dir, pick_glue());
+    picker.enter(opts_.game_dir, pick_glue(setup_lcg_, values_));
     while (!picker.done()) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -2780,13 +2781,10 @@ AppInput GameApp::present_scoreboard() {
 // A random GLUE<n> backdrop (sub_4148E5 @0x4148E5): getvalue(16) = glue count,
 // rand() % count, load GLUE<n>.PCX. Both pre-match screens share it. The pick is
 // a presentation LCG (setup_lcg_), never State::rng.
-std::string GameApp::pick_glue() {
-    setup_lcg_ = setup_lcg_ * 1664525u + 1013904223u;
-    int glue_n = static_cast<int>(values_.column_or(16, 0, 7));  // getvalue(16)
-    if (glue_n < 1) glue_n = 1;
-    return "GLUE" +
-           std::to_string(static_cast<int>((setup_lcg_ >> 16) % static_cast<unsigned>(glue_n)));
-}
+// pick_glue moved to a shared free function in bomber/game/frontend_util.hpp so
+// every pre-match screen (and the screens being lifted out of this file) share
+// the one presentation-LCG advance — see that header. Call sites below pass
+// setup_lcg_ + values_ explicitly.
 
 // The Goldman Roulette wheel (docs/re/goldman-roulette.md), sub_4034BC. Run
 // from run_app's Menu/StartMatch handler, BEFORE present_setup — the exact
@@ -2901,7 +2899,7 @@ AppInput GameApp::present_setup() {
     // red (render_colour, docs/re/player-colour.md), and (b)
     // sides_remaining() read <=1 from tick 0, clinching the round instantly.
     reset_setup_teams(setup_team_);
-    const std::string glue = pick_glue();
+    const std::string glue = pick_glue(setup_lcg_, values_);
     // Layout (VALUELST X,Y,YS,colour -> consecutive getvalue ids): header 705,
     // list 710, joystick pane heading 715, joystick pane list 720.
     const float hx = static_cast<float>(values_.column_or(705, 0, 40));
@@ -3298,7 +3296,7 @@ const char* GameApp::level_fallback(int idx) {
 // -> dword_464A7C) and starts; Escape backs to the player screen. Presentation
 // only — the committed level drives start_match's stage choice.
 AppInput GameApp::present_map_select() {
-    const std::string glue = pick_glue();
+    const std::string glue = pick_glue(setup_lcg_, values_);
     const int level_count = static_cast<int>(values_.column_or(35, 0, 11));  // getvalue(35)
     const float lx = static_cast<float>(values_.column_or(735, 0, 55));
     const float ly = static_cast<float>(values_.column_or(735, 1, 170));
