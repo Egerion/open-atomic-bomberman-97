@@ -12,15 +12,15 @@
 #include "bomber/sim/simulation.hpp"  // sim::State + sim::winning_side
 
 // The match-outcome predicates, promoted VERBATIM out of GameApp into free
-// functions (ADR-0009 §10). They are shared by run_app, run_match, AND the
-// RESULTS scoreboard — so once present_scoreboard moves into ScoreboardScreen
-// (which holds no GameApp&), the only way the extracted screen can still reach
-// the SAME clinch/outcome logic run_app uses is if that logic is a free
-// function taking the exact members it reads/writes as parameters (const& for
-// reads; a non-const& for reset_match_scores's writes). GameApp keeps thin
-// 1-line forwarders (game_app.cpp) so its own callers — run_app / run_match /
-// draw_player_row, none of which are extracted yet — stay byte-identical, while
-// ScoreboardScreen calls these directly. The full RE citations live here, on
+// functions (ADR-0009 §10). They are shared by run_app, the RESULTS scoreboard,
+// AND the match runtime — so a screen/runner that holds no GameApp&
+// (ScoreboardScreen, MatchRunner) can still reach the SAME clinch/outcome logic
+// run_app uses, as long as that logic is a free function taking the exact members
+// it reads/writes as parameters (const& for reads; a non-const& for
+// reset_match_scores's writes). ScoreboardScreen and MatchRunner call these
+// directly; GameApp keeps thin 1-line forwarders (game_app.cpp) for its own last
+// remaining caller, run_app, so it stays byte-identical (run_match /
+// draw_player_row moved into MatchRunner). The full RE citations live here, on
 // the code they describe; the forwarder declarations in game_app.hpp just point
 // back to this header.
 
