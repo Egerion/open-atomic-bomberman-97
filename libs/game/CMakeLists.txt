@@ -29,5 +29,5 @@ target_include_directories(bomber_game_core PUBLIC include)
 target_compile_features(bomber_game_core PUBLIC cxx_std_20)
 target_link_libraries(bomber_game_core
   PUBLIC bomber::assets bomber::sim bomber::match SDL3::SDL3
-  PRIVATE bomber::warnings
+  PRIVATE bomber::warnings bomber::platform
 )

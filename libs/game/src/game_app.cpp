@@ -19,6 +19,7 @@
 #include "bomber/game/dos_scancode.hpp"
 #include "bomber/game/sprites.hpp"
 #include "bomber/match/match_factory.hpp"
+#include "bomber/platform/frame_clock.hpp"
 
 namespace bomber::game {
 
@@ -1043,8 +1044,7 @@ AppInput GameApp::present_screen(const ScreenDef& def) {
     // Refresh-boundary pacing (see refresh_period_ns): even a static screen
     // spins this loop uncapped on Windows without it — the same DWM
     // non-blocking present as the animated loops.
-    const std::uint64_t period_ns = refresh_period_ns();
-    std::uint64_t pace_target_ns = SDL_GetTicksNS() + period_ns;
+    platform::FrameClock frame_clock(window_.get());
     while (waiting) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -1082,7 +1082,7 @@ AppInput GameApp::present_screen(const ScreenDef& def) {
         SDL_RenderClear(sdl_renderer_.get());
         screen_->draw(sdl_renderer_.get());  // NOLINT(bugprone-unchecked-optional-access)
         SDL_RenderPresent(sdl_renderer_.get());
-        pace_to_refresh(pace_target_ns, period_ns);
+        frame_clock.pace();
     }
 
     // No transition out: sub_42A088 CUTS between screens — it sets the palette
@@ -2234,28 +2234,6 @@ bool GameApp::auto_advance_results() const {
     return true;  // all-AI roster
 }
 
-std::uint64_t GameApp::refresh_period_ns() const {
-    std::uint64_t period_ns = 1'000'000'000ull / 60;
-    if (const SDL_DisplayMode* mode =
-            SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window_.get()));
-        mode && mode->refresh_rate_numerator > 0 && mode->refresh_rate_denominator > 0) {
-        period_ns = 1'000'000'000ull * mode->refresh_rate_denominator /
-                    static_cast<std::uint64_t>(mode->refresh_rate_numerator);
-    }
-    return period_ns;
-}
-
-void GameApp::pace_to_refresh(std::uint64_t& pace_target_ns, std::uint64_t period_ns) const {
-    const std::uint64_t after_present_ns = SDL_GetTicksNS();
-    if (after_present_ns < pace_target_ns) {
-        SDL_DelayNS(pace_target_ns - after_present_ns);
-        pace_target_ns += period_ns;
-    } else {
-        // Present blocked past the target (or we fell behind): re-phase.
-        pace_target_ns = after_present_ns + period_ns;
-    }
-}
-
 AppInput GameApp::run_boot_attract() {
     // The boot presentation (sub_42B060 @0x42B060) — STRAIGHT-LINE, no loop.
     // The original's exact order:
@@ -2369,8 +2347,7 @@ AppInput GameApp::present_menu() {
     // SDL_Delay(2) this replaced let the loop free-run at 300-500 Hz on
     // Windows (present does not block), so the `frame`-driven trigger cursor
     // animated far too fast. Pace to one animation step per real refresh.
-    const std::uint64_t period_ns = refresh_period_ns();
-    std::uint64_t pace_target_ns = SDL_GetTicksNS() + period_ns;
+    platform::FrameClock frame_clock(window_.get());
     while (true) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -2722,7 +2699,7 @@ AppInput GameApp::present_menu() {
                                 prompt, "", yes_label, no_label, 164, 0, 0);
         }
         SDL_RenderPresent(sdl_renderer_.get());
-        pace_to_refresh(pace_target_ns, period_ns);
+        frame_clock.pace();
     }
 }
 
@@ -3043,8 +3020,7 @@ AppInput GameApp::present_goldman_wheel() {
     // Refresh-boundary pacing (see refresh_period_ns): the wheel advances one
     // spin step per wheel.tick(), so a blind SDL_Delay(2) free-running at
     // 300-500 Hz on Windows spun it far too fast. Pace to the real refresh.
-    const std::uint64_t period_ns = refresh_period_ns();
-    std::uint64_t pace_target_ns = SDL_GetTicksNS() + period_ns;
+    platform::FrameClock frame_clock(window_.get());
     while (!wheel.done()) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -3068,7 +3044,7 @@ AppInput GameApp::present_goldman_wheel() {
         SDL_RenderClear(sdl_renderer_.get());
         wheel.draw(sdl_renderer_.get(), cx, cy, rx, ry, freq_x, freq_y);
         SDL_RenderPresent(sdl_renderer_.get());
-        pace_to_refresh(pace_target_ns, period_ns);
+        frame_clock.pace();
     }
 
     if (wheel.aborted()) {

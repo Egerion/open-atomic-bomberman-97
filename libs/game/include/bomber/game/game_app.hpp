@@ -142,16 +142,10 @@ private:
     // AppInput that ended it (Advance on key/timeout, Back on Escape, Quit on
     // window close).
     AppInput present_screen(const ScreenDef& def);
-    // Refresh-boundary frame pacer (see run_match's pacing comment for the
-    // full rationale). SDL_RenderPresent does NOT reliably block in Windows
-    // windowed mode — the DWM flip queue returns presents in bursts — so an
-    // animated front-end loop on a blind SDL_Delay(2) free-runs at 300-500 Hz
-    // and its cursor/wheel animates far too fast. refresh_period_ns() returns
-    // the window display's refresh period (60 Hz fallback); pace_to_refresh()
-    // sleeps until the next boundary after a present and keeps the target
-    // phase-locked to the real vblank train, exactly as run_match does.
-    std::uint64_t refresh_period_ns() const;
-    void pace_to_refresh(std::uint64_t& pace_target_ns, std::uint64_t period_ns) const;
+    // Front-end frame pacing now lives in bomber::platform::FrameClock
+    // (engine-base layer, ADR-0008); the menu/setup/Goldman loops own one and
+    // call pace(). run_match keeps its own inline pacer (coupled to the F9
+    // cadence toggle) until a later stage migrates it too.
     // Runs a `.BM` text-screen (Credits / Options / Network / Controllers help)
     // to completion via the BmScreen viewer: draws MAINMENU as the backdrop with
     // the parsed .BM text+images over it, scrolls on the arrow/page keys, and
