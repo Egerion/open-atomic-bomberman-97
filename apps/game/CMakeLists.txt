@@ -1,11 +1,26 @@
 add_executable(bomber_game main.cpp)
+
+# Ship the game as OPEN-BM95.exe. The CMake TARGET stays `bomber_game`, so every
+# preset, build command, and $<TARGET_FILE:bomber_game> reference is unchanged —
+# only the on-disk output file is renamed.
+set_target_properties(bomber_game PROPERTIES OUTPUT_NAME "OPEN-BM95")
+
 target_link_libraries(bomber_game PRIVATE bomber::game bomber::warnings)
 
-# Windows: copy SDL3.dll (and any other runtime DLLs) next to the exe,
-# otherwise it dies with STATUS_DLL_NOT_FOUND outside the IDE.
 if(WIN32)
+  # Application icon: compile the Windows resource script, which points at our
+  # own clean-room bomb glyph (assets/icon/openbm95.ico). Windows-only; the
+  # original BM95.ICO is copyrighted and never bundled.
+  target_sources(bomber_game PRIVATE app.rc)
+
+  # Copy any runtime DLLs next to the exe (e.g. a dynamically-linked SDL3.dll
+  # from the vcpkg preset). With the FetchContent preset SDL3 is linked
+  # statically, so TARGET_RUNTIME_DLLS is empty and this is a no-op: the
+  # $<IF:...> swaps in `cmake -E true` so `copy_if_different` never runs with an
+  # empty source list (which would otherwise error the build).
   add_custom_command(TARGET bomber_game POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    COMMAND ${CMAKE_COMMAND} -E
+            $<IF:$<BOOL:$<TARGET_RUNTIME_DLLS:bomber_game>>,copy_if_different,true>
             $<TARGET_RUNTIME_DLLS:bomber_game> $<TARGET_FILE_DIR:bomber_game>
     COMMAND_EXPAND_LISTS)
 endif()

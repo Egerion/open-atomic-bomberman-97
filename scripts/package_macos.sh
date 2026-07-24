@@ -41,7 +41,7 @@ cmake -S "$ROOT" -B "$BUILD" \
 echo ">> Building bomber_game…"
 cmake --build "$BUILD" --target bomber_game -j
 
-BIN="$BUILD/bomber_game"
+BIN="$BUILD/OPEN-BM95"
 [ -x "$BIN" ] || { echo "error: build did not produce $BIN" >&2; exit 1; }
 
 echo ">> Assembling $APP…"
