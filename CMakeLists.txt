@@ -13,6 +13,10 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
 option(BOMBER_BUILD_VIEWER "Build the SDL3 apps (game + asset viewer)" ON)
 option(BOMBER_FETCH_SDL3 "Download and build SDL3 via FetchContent instead of find_package/vcpkg" OFF)
+# Online lobby control plane (ADR-0011): pulls IXWebSocket (WS/TLS) into
+# libs/net. OFF by default so the headless CI gate + pure sim/net builds need no
+# TLS backend; the GUI presets (windows-fetch/msvc, linux, macos) turn it ON.
+option(BOMBER_ENABLE_LOBBY "Build the online lobby client (WebSocket/TLS via IXWebSocket)" OFF)
 
 # Shared warning flags (bomber::warnings), linked PRIVATE by every target.
 add_library(bomber_warnings INTERFACE)
@@ -29,7 +33,12 @@ add_subdirectory(libs/core)  # SDL-free shared vocabulary (ADR-0008); no deps, m
 add_subdirectory(libs/assets)
 add_subdirectory(libs/sim)
 add_subdirectory(libs/match)
-add_subdirectory(libs/net)   # netplay: deterministic-lockstep input codec + (later) UDP transport (ADR-0010); SDL-free, depends on sim
+# The lobby client's WS/TLS dependency (ixwebsocket target) — provided before
+# libs/net consumes it, mirroring how cmake/BomberSDL3.cmake precedes libs/game.
+if(BOMBER_ENABLE_LOBBY)
+  include(cmake/BomberIXWebSocket.cmake)
+endif()
+add_subdirectory(libs/net)   # netplay: deterministic-lockstep input codec + UDP transport (ADR-0010) + online lobby client (ADR-0011); SDL-free, depends on sim
 add_subdirectory(apps/abtool)
 
 enable_testing()

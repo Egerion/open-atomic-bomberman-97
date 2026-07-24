@@ -7,7 +7,10 @@
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
       "binaryDir": "${sourceDir}/build/windows-msvc",
-      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "BOMBER_ENABLE_LOBBY": "ON"
+      }
     },
     {
       "name": "windows-fetch",
@@ -16,7 +19,8 @@
       "architecture": "x64",
       "binaryDir": "${sourceDir}/build/windows-fetch",
       "cacheVariables": {
-        "BOMBER_FETCH_SDL3": "ON"
+        "BOMBER_FETCH_SDL3": "ON",
+        "BOMBER_ENABLE_LOBBY": "ON"
       }
     },
     {
@@ -25,7 +29,8 @@
       "binaryDir": "${sourceDir}/build/linux",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "BOMBER_FETCH_SDL3": "ON"
+        "BOMBER_FETCH_SDL3": "ON",
+        "BOMBER_ENABLE_LOBBY": "ON"
       }
     },
     {
@@ -34,7 +39,8 @@
       "binaryDir": "${sourceDir}/build/macos",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "BOMBER_FETCH_SDL3": "ON"
+        "BOMBER_FETCH_SDL3": "ON",
+        "BOMBER_ENABLE_LOBBY": "ON"
       }
     },
     {

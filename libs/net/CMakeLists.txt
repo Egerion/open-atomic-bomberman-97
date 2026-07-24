@@ -24,3 +24,13 @@ target_link_libraries(bomber_net PUBLIC bomber::sim PRIVATE bomber::warnings)
 if(WIN32)
   target_link_libraries(bomber_net PRIVATE ws2_32)
 endif()
+
+# Online lobby control plane (ADR-0011): the WebSocket/TLS LobbyClient. Compiled
+# only when BOMBER_ENABLE_LOBBY (the GUI presets); the headless gate skips it so
+# the deterministic netcode above needs no TLS backend. ixwebsocket is provided
+# by cmake/BomberIXWebSocket.cmake, included at the top level before this dir.
+if(BOMBER_ENABLE_LOBBY)
+  target_sources(bomber_net PRIVATE src/lobby_client.cpp)
+  target_link_libraries(bomber_net PUBLIC ixwebsocket)
+  target_compile_definitions(bomber_net PUBLIC BOMBER_HAS_LOBBY=1)
+endif()
