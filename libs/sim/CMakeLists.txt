@@ -14,6 +14,9 @@ add_library(bomber_sim STATIC
   src/systems/tile_regen.cpp
   src/systems/stage_actors.cpp
   src/systems/ai.cpp
+  src/systems/ai_grids.cpp
+  src/systems/ai_pathfind.cpp
+  src/systems/ai_behaviours.cpp
   src/systems/rovers.cpp
 )
 add_library(bomber::sim ALIAS bomber_sim)
