@@ -28,7 +28,6 @@
 #include "bomber/game/screen.hpp"
 #include "bomber/game/screen_context.hpp"
 #include "bomber/game/screens/campaign_state.hpp"
-#include "bomber/game/screens/editor_state.hpp"
 #include "bomber/game/screens/map_select_state.hpp"
 #include "bomber/game/screens/match_backdrop.hpp"
 #include "bomber/game/screens/match_runner_state.hpp"
@@ -177,11 +176,6 @@ private:
     // options_state.hpp). Built fresh on demand like sctx(), so the runner
     // classes need no GameApp&.
     OptionsEditState options_state();
-    // The scheme editor's shared-state seam (ADR-0009 §9): the non-service
-    // members present_editor reads/writes (setup_lcg_/scheme_/opts_.game_dir/
-    // opts_.scheme — see editor_state.hpp), bundled by reference so EditorRunner
-    // needs no GameApp&. Built fresh on demand like sctx()/options_state().
-    EditorEditState editor_state();
     // The main menu's shared-state seam (ADR-0009 §6): the non-service members
     // present_menu + roll_attract_match read/write (menu_index_/the attract
     // roster+level+LCG/the F10 video toggles/the four editor members — see

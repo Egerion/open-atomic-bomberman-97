@@ -833,13 +833,6 @@ OptionsEditState GameApp::options_state() {
                             team_play_,     conveyor_speed_index_};
 }
 
-EditorEditState GameApp::editor_state() {
-    // The scheme editor's shared-state seam (ADR-0009 §9): the non-service
-    // members present_editor reads/writes, bundled by reference so the
-    // EditorRunner needs no GameApp&. Built fresh on demand, same as sctx().
-    return EditorEditState{setup_lcg_, scheme_, opts_.game_dir, opts_.scheme};
-}
-
 MenuState GameApp::menu_state() {
     // The main menu's shared-state seam (ADR-0009 §6): the non-service members
     // present_menu + roll_attract_match read/write (the cursor + idle clock +
