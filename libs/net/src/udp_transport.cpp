@@ -78,6 +78,27 @@ bool resolve_ipv4(const std::string& host, std::uint16_t port, sockaddr_in* out)
 
 }  // namespace
 
+std::string local_ip_toward(const std::string& host, std::uint16_t port) {
+    ensure_started();
+    sockaddr_in dst{};
+    if (!resolve_ipv4(host, port, &dst)) return {};
+    const sock_t s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s == kInvalid) return {};
+    std::string result;
+    // UDP connect() transmits nothing — it just binds the route, after which
+    // getsockname() reports the interface address that would carry the traffic.
+    if (connect(s, reinterpret_cast<const sockaddr*>(&dst), sizeof(dst)) == 0) {
+        sockaddr_in local{};
+        socklen_t len = sizeof(local);
+        if (getsockname(s, reinterpret_cast<sockaddr*>(&local), &len) == 0) {
+            char ip[INET_ADDRSTRLEN] = {};
+            if (inet_ntop(AF_INET, &local.sin_addr, ip, sizeof(ip)) != nullptr) result = ip;
+        }
+    }
+    close_sock(s);
+    return result;
+}
+
 UdpTransport::~UdpTransport() { close_fd(); }
 
 void UdpTransport::close_fd() {

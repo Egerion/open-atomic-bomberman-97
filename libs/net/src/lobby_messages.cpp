@@ -121,6 +121,48 @@ LobbyServerMessage parse_server_message(const std::string& text) {
     return m;
 }
 
+std::string encode_stun_probe(const std::string& nonce) {
+    json j;
+    j["type"] = "StunProbe";
+    j["nonce"] = nonce;
+    return j.dump();
+}
+
+bool parse_stun_reply(const std::string& text, std::string* nonce, std::string* your_addr) {
+    json j;
+    try {
+        j = json::parse(text);
+    } catch (...) {
+        return false;
+    }
+    if (!j.is_object() || j.value("type", std::string()) != "StunReply") return false;
+    const std::string addr = j.value("your_addr", std::string());
+    if (addr.empty()) return false;
+    if (nonce) *nonce = j.value("nonce", std::string());
+    if (your_addr) *your_addr = addr;
+    return true;
+}
+
+bool split_host_port(const std::string& addr, std::string* host, std::uint16_t* port) {
+    // Bracketed IPv6 ("[::1]:52001") keeps its colons inside the brackets, so
+    // split on the LAST colon and strip the brackets.
+    const std::size_t colon = addr.rfind(':');
+    if (colon == std::string::npos || colon + 1 >= addr.size()) return false;
+    std::string h = addr.substr(0, colon);
+    if (h.size() >= 2 && h.front() == '[' && h.back() == ']') h = h.substr(1, h.size() - 2);
+    if (h.empty()) return false;
+    unsigned long p = 0;
+    for (char c : addr.substr(colon + 1)) {
+        if (c < '0' || c > '9') return false;
+        p = p * 10 + static_cast<unsigned long>(c - '0');
+        if (p > 65535) return false;
+    }
+    if (p == 0) return false;
+    if (host) *host = h;
+    if (port) *port = static_cast<std::uint16_t>(p);
+    return true;
+}
+
 std::string encode_create_lobby(const std::string& visibility, const std::string& name,
                                 int max_seats, std::uint32_t build_hash, const std::string& player) {
     json j;

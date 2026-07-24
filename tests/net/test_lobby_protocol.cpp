@@ -135,3 +135,41 @@ TEST_CASE("parse_server_message decodes every server frame") {
     CHECK(parse_server_message(R"({"type":"Nonsense"})").type == LobbyMsgType::Unknown);
     CHECK(parse_server_message("[]").type == LobbyMsgType::Unknown);
 }
+
+TEST_CASE("STUN probe/reply match PROTOCOL.md §2") {
+    const json p = json::parse(encode_stun_probe("tok-1"));
+    CHECK(p["type"] == "StunProbe");
+    CHECK(p["nonce"] == "tok-1");  // opaque STRING, not a number
+
+    std::string nonce;
+    std::string addr;
+    REQUIRE(parse_stun_reply(R"({"type":"StunReply","nonce":"tok-1","your_addr":"81.2.3.4:52001"})",
+                             &nonce, &addr));
+    CHECK(nonce == "tok-1");
+    CHECK(addr == "81.2.3.4:52001");
+
+    // Anything that is not a well-formed StunReply is rejected, never thrown on.
+    CHECK_FALSE(parse_stun_reply("garbage", &nonce, &addr));
+    CHECK_FALSE(parse_stun_reply(R"({"type":"StunProbe","nonce":"x"})", &nonce, &addr));
+    CHECK_FALSE(parse_stun_reply(R"({"type":"StunReply","nonce":"x"})", &nonce, &addr));
+}
+
+TEST_CASE("split_host_port handles IPv4, bracketed IPv6, and junk") {
+    std::string host;
+    std::uint16_t port = 0;
+
+    REQUIRE(split_host_port("81.2.3.4:52001", &host, &port));
+    CHECK(host == "81.2.3.4");
+    CHECK(port == 52001);
+
+    REQUIRE(split_host_port("[::1]:52001", &host, &port));
+    CHECK(host == "::1");
+    CHECK(port == 52001);
+
+    CHECK_FALSE(split_host_port("no-colon", &host, &port));
+    CHECK_FALSE(split_host_port("1.2.3.4:", &host, &port));
+    CHECK_FALSE(split_host_port(":52001", &host, &port));
+    CHECK_FALSE(split_host_port("1.2.3.4:0", &host, &port));       // port 0 is not usable
+    CHECK_FALSE(split_host_port("1.2.3.4:70000", &host, &port));   // out of range
+    CHECK_FALSE(split_host_port("1.2.3.4:52a01", &host, &port));   // non-numeric
+}

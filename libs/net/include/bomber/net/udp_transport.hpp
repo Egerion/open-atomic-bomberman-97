@@ -17,6 +17,14 @@
 
 namespace bomber::net {
 
+// The local IPv4 address this machine would use to REACH `host` — the "host"
+// (LAN) candidate of the rendezvous candidate set (ADR-0011 §3). Found by
+// pointing a throwaway UDP socket at the destination and reading back
+// getsockname(); UDP connect() sends nothing, it only fixes the route, so this
+// costs no traffic and needs no interface-enumeration API. Returns "" on
+// failure (the caller then simply offers no host candidate).
+std::string local_ip_toward(const std::string& host, std::uint16_t port);
+
 class UdpTransport : public Transport {
 public:
     UdpTransport() = default;

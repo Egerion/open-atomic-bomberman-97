@@ -92,6 +92,20 @@ struct LobbyServerMessage {
 // back as type == Unknown (server frames are treated as untrusted input).
 LobbyServerMessage parse_server_message(const std::string& json);
 
+// --- STUN discovery datagrams (PROTOCOL.md §2, UDP not WebSocket) -----------
+
+// {"type":"StunProbe","nonce":"<opaque>"} — `nonce` is an opaque STRING the
+// server echoes verbatim (a string, not a number, to dodge JSON precision).
+std::string encode_stun_probe(const std::string& nonce);
+
+// Parse {"type":"StunReply","nonce":"…","your_addr":"81.2.3.4:52001"}. Returns
+// false for anything else (untrusted input; never throws).
+bool parse_stun_reply(const std::string& json, std::string* nonce, std::string* your_addr);
+
+// Split "ip:port" into its parts, accepting the bracketed IPv6 form
+// ("[::1]:52001" → "::1", 52001). Returns false on a malformed address.
+bool split_host_port(const std::string& addr, std::string* host, std::uint16_t* port);
+
 // Format a uint32 build/config hash as the wire hex string "0x%08X"
 // (PROTOCOL.md §1: build_hash is a hex STRING).
 std::string hex_hash(std::uint32_t v);

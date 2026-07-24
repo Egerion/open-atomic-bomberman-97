@@ -43,4 +43,21 @@ target_link_libraries(bomber_net_rendezvous_tests PRIVATE bomber::net)
 if(BOMBER_ENABLE_LOBBY)
   bomber_add_test(bomber_net_lobby_protocol_tests net_lobby_protocol test_lobby_protocol.cpp)
   target_link_libraries(bomber_net_lobby_protocol_tests PRIVATE bomber::net)
+
+  # StunClient: reflexive-address discovery against a fake echo server built from
+  # a second UdpTransport (no Go binary needed). Soft-skips without sockets.
+  bomber_add_test(bomber_net_stun_tests net_stun test_stun_client.cpp)
+  target_link_libraries(bomber_net_stun_tests PRIVATE bomber::net)
+
+  # LobbyFlow: the pre-match state machine driven by synthetic server frames,
+  # ending with two flows punching each other for real over localhost.
+  bomber_add_test(bomber_net_lobby_flow_tests net_lobby_flow test_lobby_flow.cpp)
+  target_link_libraries(bomber_net_lobby_flow_tests PRIVATE bomber::net)
+
+  # LIVE interop against the real Go matchmaker — the only check that proves both
+  # independently-written sides of PROTOCOL.md agree on the wire. OPT-IN: skips
+  # unless BOMBER_MATCHMAKER_URL points at a running server, so the pre-push gate
+  # is unaffected.
+  bomber_add_test(bomber_net_lobby_live_tests net_lobby_live test_lobby_live.cpp)
+  target_link_libraries(bomber_net_lobby_live_tests PRIVATE bomber::net)
 endif()
