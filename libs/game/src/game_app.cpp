@@ -37,6 +37,8 @@
 #include "bomber/game/screens/video_settings_screen.hpp"
 #include "bomber/game/sprites.hpp"
 #include "bomber/match/match_factory.hpp"
+#include "bomber/net/lockstep_session.hpp"  // net::LockstepSession (run_netplay)
+#include "bomber/net/udp_transport.hpp"     // net::UdpTransport (run_netplay)
 #include "bomber/platform/frame_clock.hpp"
 
 namespace bomber::game {
@@ -886,6 +888,115 @@ int GameApp::run_demo() {
         std::printf("demo: %d ticks, alive %d, screenshot %s\n", opts_.demo_ticks,
                     sim::alive_count(sim_.state()), opts_.demo_out.string().c_str());
     return ok ? 0 : 1;
+}
+
+int GameApp::run_netplay() {
+    // Netplay increment 5b (ADR-0010 §3.3 step 5): ONE 2-player UDP lockstep
+    // match, run in place of the front-end. The engine (libs/net) is already
+    // headless-tested; this is the GUI wiring — CANNOT be runtime-tested here
+    // (no display, no second instance), validated live like the F9 cadence.
+    const bool host = opts_.net_role == 1;
+    const int local_seat = host ? 0 : 1;
+    // Seat bitmask (bit s == seat s, matching LockstepSession::fill_seats):
+    // host owns seat 0, guest seat 1; both human seats exchange over the wire.
+    const std::uint16_t local_seats = host ? 0b01u : 0b10u;
+    constexpr std::uint16_t kAllSeats = 0b11u;
+
+    // Real UDP link (raw sockets, SDL-free). BOTH peers bind a KNOWN local port
+    // and set_peer() to the other's known port: UdpTransport::poll() does not
+    // learn the sender address (recvfrom with a null src) and set_peer is a fixed
+    // target, so a fixed-target host cannot reach an ephemeral guest. Requiring a
+    // fixed port on each side (via the args) is the only symmetric MVP that works
+    // with this dumb, discovery-less wire — see main.cpp's --host/--join usage.
+    net::UdpTransport transport;
+    if (!transport.bind(opts_.net_local_port)) {
+        std::fprintf(stderr, "netplay: bind failed (local port %u)\n",
+                     static_cast<unsigned>(opts_.net_local_port));
+        return 1;
+    }
+    if (!transport.set_peer(opts_.net_peer_host, opts_.net_peer_port)) {
+        std::fprintf(stderr, "netplay: cannot resolve peer %s:%u\n", opts_.net_peer_host.c_str(),
+                     static_cast<unsigned>(opts_.net_peer_port));
+        return 1;
+    }
+    std::printf("netplay: %s  bound_port=%u  peer=%s:%u  seed=0x%08X  seat=%d\n",
+                host ? "HOST" : "GUEST", static_cast<unsigned>(transport.local_port()),
+                opts_.net_peer_host.c_str(), static_cast<unsigned>(opts_.net_peer_port),
+                static_cast<unsigned>(opts_.net_seed), local_seat);
+
+    // CANONICAL 2-human MatchConfig — byte-identical on both peers regardless of
+    // each machine's options.ini / level pick. Deterministic lockstep needs an
+    // identical seed AND identical config (ADR-0010 seed/roster parity), so
+    // netplay deliberately IGNORES the live per-machine options_/selected_level_/
+    // team_play_/gold state and builds only from the shared seed + the default
+    // scheme_ + the install VALUELST (values_ — the same 1997 file on both
+    // installs). Mirrors start_match's config build, minus every per-machine
+    // overlay; random_start off so the spawn assignment is fixed too.
+    sim::MatchConfig cfg = match::build_match_config(scheme_, 2, opts_.net_seed, &values_,
+                                                     /*random_start=*/false);
+    for (int i = 0; i < sim::kMaxPlayers; ++i) {
+        cfg.active[i] = i < 2;  // seats 0,1 are the two humans; the rest OFF
+        cfg.ai[i] = false;      // both driven by wire input, never the AISystem
+        cfg.team[i] = 0;        // solo (no team mode)
+    }
+    // Fixed stage from the SHARED seed (both peers resolve the same built-in via
+    // the default registry — not ctx assets.levels(), whose custom maps could
+    // differ per machine), then overlay its EXTRA<n>.RES actors: hashed setup
+    // inputs like the cell grid, deterministic given the same seed + install.
+    const int stage = match::pick_stage(base_tuning_, opts_.net_seed);
+    cfg.tuning.level_index = stage;
+    const auto actors =
+        assets::extra::load_for_board(opts_.game_dir, stage, sim::kGridWidth, sim::kGridHeight);
+    match::apply_actors(cfg, actors, opts_.net_seed);
+    sim_ = sim::Simulation(cfg);
+
+    // Presentation setup — mirrors MatchRunner::start_match's tail (which run()
+    // SKIPS for a netplay match, since we seed sim_ canonically here): stage art
+    // + a live music track + a fresh renderer/HUD + sound state. disable_game_
+    // music is presentation-only (never sim), so netplay just keeps music on.
+    if (assets_.load_stage(stage)) {
+        seqs_.resolve_stage(assets_, stage);
+        int stage_music = 1100 + stage;
+        if (!audio_.has_track(stage_music)) stage_music = 1120;  // GENERIC.RSS fallback (sub_4293E5)
+        audio_.start_music(stage_music);
+    }
+    renderer_->reset_match(/*untimed=*/false);  // NOLINT(bugprone-unchecked-optional-access)
+    sounds_.reset();
+
+    // Local roster for MatchRunner::collect_inputs (the ONLY thing setup_type_/
+    // setup_sub_ drive on this path — the match roster itself comes from cfg
+    // above): the LOCAL seat reads keyboard key-set 0 (the arrow keys), so the
+    // single human at this machine plays with arrows regardless of which seat
+    // they own. The REMOTE seat is left OFF (neutral) — the lockstep session
+    // overwrites it from the wire before every tick(), so its collect_inputs
+    // value is never used. Cleaner than mapping it to the other key-set.
+    setup_type_.fill(static_cast<int>(SlotInputType::Off));
+    setup_sub_.fill(0);
+    setup_team_.fill(0);
+    win_count_.fill(0);
+    kill_count_.fill(0);
+    setup_type_[local_seat] = static_cast<int>(SlotInputType::Keyboard);
+    setup_sub_[local_seat] = 0;
+
+    // Drive the SAME MatchRunner as a local match (reusing all its render /
+    // present / pacing / round-end): the seam's net_session routes each fixed
+    // tick through the lockstep session. ONE match then exit — no lobby / round
+    // rotation yet. input_delay=4 ticks (200 ms of latency headroom) hides a
+    // typical LAN/localhost round-trip without stalling.
+    net::LockstepSession session(sim_, local_seats, kAllSeats, /*input_delay=*/4, transport);
+    MatchRunnerState mrs = match_runner_state();
+    mrs.net_session = &session;
+    mrs.net_local_seats = local_seats;
+    const AppInput result = MatchRunner(sctx(), mrs).run();
+
+    if (session.desynced())
+        std::fprintf(stderr, "netplay: DESYNC at tick %u — peers diverged (config/seed mismatch?)\n",
+                     session.desync_tick());
+    else
+        std::printf("netplay: match ended (%s) at tick %u\n",
+                    result == AppInput::Quit ? "window closed" : "round over",
+                    static_cast<unsigned>(session.confirmed_tick()));
+    return 0;
 }
 
 ScreenContext GameApp::sctx() {
@@ -1800,6 +1911,14 @@ int GameApp::run() {
         }
         start_match(0xB0BB1E5);
         int rc = run_demo();
+        flush_options();
+        return rc;
+    }
+    // Netplay (increment 5b): --host/--join run ONE 2-player UDP match instead
+    // of the front-end. Checked after the headless capture paths (they never set
+    // net_role) and before run_app.
+    if (opts_.net_role != 0) {
+        int rc = run_netplay();
         flush_options();
         return rc;
     }

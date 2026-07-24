@@ -84,6 +84,16 @@ public:
         // pixel comparison against the native oracle's --boot-shot menu render.
         std::filesystem::path menu_shot_out;
         int bm_shot_scroll = 0;                  // lines scrolled down before capture
+        // Netplay (increment 5b, ADR-0010 §3.3 step 5): when net_role != 0, run()
+        // runs ONE networked 2-player UDP match (run_netplay) instead of the
+        // front-end. Both peers pass each other's host:port explicitly (no
+        // discovery/handshake in this MVP) and the SAME seed, which — with the
+        // canonical config run_netplay builds — gives byte-identical arenas.
+        int net_role = 0;                  // 0 = none, 1 = host (seat 0), 2 = guest (seat 1)
+        std::uint16_t net_local_port = 0;  // UDP port to bind (host); guest binds ephemeral
+        std::string net_peer_host;         // the OTHER peer's host (dotted IPv4 or name)
+        std::uint16_t net_peer_port = 0;   // the OTHER peer's UDP port
+        std::uint32_t net_seed = 0x1234u;  // shared match seed (must match on both peers)
     };
 
     explicit GameApp(Options opts) : opts_(std::move(opts)) {}
@@ -160,6 +170,15 @@ private:
     void flush_options();
     void start_match(std::uint32_t seed);
     int run_demo();
+    // Netplay entry (increment 5b, ADR-0010 §3.3 step 5): runs ONE 2-player UDP
+    // lockstep match in place of the front-end when opts_.net_role != 0. Builds a
+    // CANONICAL MatchConfig (shared seed + default scheme + install VALUELST only
+    // — never the per-machine options_/level/team/gold state) so both peers seed
+    // sim_ byte-identically, seeds sim_, sets up stage art/audio, then drives the
+    // SAME MatchRunner::run() through a net::LockstepSession (seam net_session).
+    // Returns a process exit code. GOLDEN-SAFE: only reachable via net_role, which
+    // no test/golden/demo path sets.
+    int run_netplay();
     // --bm-shot capture: draw one `.BM` screen over MAINMENU and SaveBMP it.
     int run_bm_shot();
     int run_menu_shot();

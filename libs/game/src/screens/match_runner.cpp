@@ -18,6 +18,7 @@
 #include "bomber/game/screens/campaign_screens.hpp"  // HelpBrowserModal (the in-round F1)
 #include "bomber/game/sprites.hpp"                // Sprite (player-row "xxx" marker)
 #include "bomber/match/match_factory.hpp"         // build_match_config / pick_stage / apply_actors
+#include "bomber/net/lockstep_session.hpp"        // net::LockstepSession (netplay drive, seam is fwd-only)
 
 namespace bomber::game {
 
@@ -319,7 +320,15 @@ void MatchRunner::draw_fps_overlay(int fps) {
 }
 
 AppInput MatchRunner::run() {
-    start_match(state_.next_seed++);
+    // A NETPLAY match (increment 5b) is seeded canonically by
+    // GameApp::run_netplay BEFORE run() — both peers build a byte-identical
+    // MatchConfig from the shared seed, independent of each machine's
+    // options.ini/level pick, so re-running start_match here (which reads the
+    // per-machine roster/options/level) would clobber that parity. A normal
+    // match still (re)builds + seeds the sim here every round, as before.
+    // GOLDEN-SAFE: net_session is null on every non-netplay path, so this
+    // guard is transparent to the golden/demo/normal-match callers.
+    if (!state_.net_session) start_match(state_.next_seed++);
     const std::uint64_t tick_ns = 1'000'000'000ull / sim::kTicksPerSecond;
     std::uint64_t last = SDL_GetTicksNS();
     std::uint64_t acc = 0;
@@ -509,7 +518,12 @@ AppInput MatchRunner::run() {
             fps_frames = 0;
             fps_window_start_ns = now;
         }
-        if (state_.native_cadence) {
+        // Netplay MUST use the deterministic fixed-tick path: Simulation::frame()
+        // (the F9 native-cadence driver) advances on the real wall-clock delta,
+        // which differs per machine and would instantly desync the peers. So the
+        // net_session gate forces the else branch below regardless of the live F9
+        // lever (a normal match is unchanged — net_session is null).
+        if (state_.native_cadence && !state_.net_session) {
             // F9 native-cadence path: advance the sim ONE displayed frame on the
             // measured wall-clock delta. Simulation::frame runs the movement/AI
             // pass at frame rate and drains the 50 ms systems pass off its own
@@ -554,20 +568,43 @@ AppInput MatchRunner::run() {
         constexpr std::uint64_t kMaxCatchupTicks = 4;
         if (acc > kMaxCatchupTicks * tick_ns) acc = kMaxCatchupTicks * tick_ns;
         while (acc >= tick_ns) {
-            acc -= tick_ns;
             // Consume the frame-sampled latch on the FIRST tick of a catch-up
             // burst only (a later tick in the same burst re-reads the live
             // state, matching the original's one-edge-check-per-update under
             // a slow frame — its clamped ms delta produces exactly one
             // sub_41E61E read per displayed frame too).
+            //
+            // Build this tick's input from the frame sample + the latched taps,
+            // but do NOT clear the latch or consume `acc` yet: on the NETPLAY
+            // path advance() can STALL (the peer's input for this tick has not
+            // arrived), and both the latch and the accumulator must survive that
+            // so the match visibly pauses waiting for the peer and resumes with
+            // nothing dropped. On the LOCAL path a tick never stalls, so moving
+            // the latch-clear + `acc -= tick_ns` to AFTER the tick is
+            // behaviourally identical to the old consume-then-tick order —
+            // nothing reads the latch or `acc` between here and there.
             sim::TickInputs in = frame_in;
             for (int i = 0; i < sim::kMaxPlayers; ++i) {
                 in.players[i].action1 = in.players[i].action1 || tap_latch[i].action1;
                 in.players[i].action2 = in.players[i].action2 || tap_latch[i].action2;
+            }
+            // Netplay drives the SAME borrowed sim through the lockstep session
+            // (deterministic tick() only — never frame()): advance() sends our
+            // seats, applies the peer's off the wire, and ticks ONCE when the
+            // confirmed tick's every seat is known, else returns false (stall).
+            // A local match ticks directly, exactly as before.
+            if (state_.net_session) {
+                if (!state_.net_session->advance(in)) break;  // stall: hold the latch + acc, retry next frame
+            } else {
+                state_.sim.tick(in);
+            }
+            // The tick actually happened — NOW consume the taps and one tick's
+            // worth of the accumulator, then run the per-tick bookkeeping.
+            for (int i = 0; i < sim::kMaxPlayers; ++i) {
                 tap_latch[i].action1 = false;
                 tap_latch[i].action2 = false;
             }
-            state_.sim.tick(in);
+            acc -= tick_ns;
             ctx_.sounds.on_tick(state_.sim.state());
             state_.renderer.on_events(state_.sim.state());  // NOLINT(bugprone-unchecked-optional-access)
             // Roll the renderer's inter-tick snapshots forward for THIS tick,
@@ -617,8 +654,14 @@ AppInput MatchRunner::run() {
         // Native-cadence mode renders the sim's live state directly (alpha=1 =>
         // player_interp/interp_pos return the current position, no lerp): the
         // sim already ran at frame rate this frame, so there is nothing to blend.
-        const float interp_alpha =
+        float interp_alpha =
             state_.native_cadence ? 1.0f : static_cast<float>(acc) / static_cast<float>(tick_ns);
+        // A NETPLAY stall breaks the catch-up loop early with acc still >=
+        // tick_ns (the sim is frozen waiting for the peer), which would push
+        // alpha past 1 and EXTRAPOLATE entities forward during the pause; clamp
+        // so the last simulated pose is held instead. No-op on every other path
+        // (the loop always drains acc below tick_ns there, so alpha < 1 already).
+        if (interp_alpha > 1.0f) interp_alpha = 1.0f;
         // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — emplaced in init()
         state_.renderer.draw_frame(state_.sim.state(), interp_alpha);
         // The player-row HUD strip (docs/re/in-match-shell.md "The player

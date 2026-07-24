@@ -28,10 +28,23 @@
 //     renders NAME.BM (e.g. CREDITS) over the MAINMENU backdrop, scrolled
 //     `scroll` lines down, and saves it as a BMP. The front-end analogue of
 //     --demo for eyeballing / regression-checking the credits & help layout.
+//
+//   bomber_game --host <localPort> <peerHost> <peerPort> [--seed <n>] [game_dir] [scheme.sch]
+//   bomber_game --join <localPort> <peerHost> <peerPort> [--seed <n>] [game_dir] [scheme.sch]
+//     Netplay (ADR-0010 §3.3 step 5): run ONE 2-player UDP deterministic-
+//     lockstep match instead of the front-end. --host drives seat 0, --join
+//     seat 1; the local player uses the arrow keys + Right Ctrl either way.
+//     There is no discovery/handshake yet, so BOTH peers bind a FIXED local
+//     port and name each OTHER's host:port, and BOTH pass the SAME --seed
+//     (decimal or 0x-hex, default 0x1234) so their arenas are byte-identical.
+//     Two instances on one machine:
+//       bomber_game --host 8000 127.0.0.1 8001 --seed 0x1234
+//       bomber_game --join 8001 127.0.0.1 8000 --seed 0x1234
 
 #include <SDL3/SDL_main.h>
 
 #include <cctype>
+#include <cstdint>
 #include <cstdlib>
 #include <string>
 #include <utility>
@@ -91,6 +104,19 @@ int main(int argc, char** argv) {
             opts.menu_shot_out = argv[++i];
         } else if (a == "--match") {
             opts.boot_match = true;  // skip the front-end, boot straight into a match
+        } else if ((a == "--host" || a == "--join") && i + 3 < argc) {
+            // --host/--join <localPort> <peerHost> <peerPort>: run ONE 2-player
+            // UDP netplay match (host = seat 0, join = seat 1). Both peers bind
+            // their fixed local port and point at the other's host:port (no
+            // discovery). Same --seed on both -> identical arena.
+            opts.net_role = (a == "--host") ? 1 : 2;
+            opts.net_local_port = static_cast<std::uint16_t>(std::atoi(argv[++i]));
+            opts.net_peer_host = argv[++i];
+            opts.net_peer_port = static_cast<std::uint16_t>(std::atoi(argv[++i]));
+        } else if (a == "--seed" && i + 1 < argc) {
+            // --seed <n>: shared netplay match seed (decimal or 0x-hex). BOTH
+            // peers must pass the SAME value for byte-identical arenas.
+            opts.net_seed = static_cast<std::uint32_t>(std::strtoul(argv[++i], nullptr, 0));
         } else {
             rest.push_back(a);
         }
