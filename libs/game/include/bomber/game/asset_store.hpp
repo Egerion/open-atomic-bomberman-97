@@ -171,6 +171,16 @@ public:
     void set_hd_enabled(bool enabled) { hd_enabled_ = enabled; }
     bool hd_enabled() const { return hd_enabled_; }
 
+    // Builds the per-player HD sprite sets on demand, ONCE. build_player_sets
+    // deliberately skips the (16x-heavier) per-player HD recolor at boot because
+    // HD artwork starts off — this fills those sets in the first time HD is
+    // switched on (Tab), recolouring each base set's retained HD source frames
+    // per player and freeing that source afterwards. Returns true if it built
+    // this call (so the caller re-resolves the SequenceSet to pick up the new
+    // tex_hd), false if the sets already existed (idempotent no-op). Presentation
+    // only; never touches simulation state.
+    bool ensure_player_hd_sets();
+
     SDL_Texture* field() const {
         return hd_enabled_ && field_hd_ ? field_hd_.get() : field_.get();
     }
@@ -262,6 +272,15 @@ public:
     }
 
 private:
+    // Frees the recolour-source CPU pixels of the player-coloured BASE sets
+    // (walk/stand/kick/bombs/duds/flame/trigbomb + corner/bwalk/punch/pickup/
+    // xplode). Classic pixels are dropped once build_player_sets has consumed
+    // them for every player; the HD source frames are dropped once the per-player
+    // HD sets exist (ensure_player_hd_sets). Keeps each frame's w/h + GPU
+    // textures, so base sprites still render and resolve. Presentation only.
+    void drop_player_base_classic_cpu();
+    void drop_player_base_hd_cpu();
+
     // bugprone-return-const-ref-from-parameter (NOLINT below) — private helper,
     // every call site (above) passes a member AniTextures_ with `this`'s
     // lifetime, never a temporary, so `base` never dangles in practice.
@@ -381,6 +400,10 @@ private:
     mutable std::map<std::string, Sprite> front_pcx_hd_;
     mutable std::vector<sdl::TexturePtr> front_textures_hd_;
     bool hd_enabled_ = false;
+    // True once the per-player HD sprite sets have been built (either eagerly by
+    // build_player_sets when HD was already on, or lazily by ensure_player_hd_sets
+    // on the first Tab). Guards the one-time lazy build.
+    bool player_hd_built_ = false;
 };
 
 }  // namespace bomber::game

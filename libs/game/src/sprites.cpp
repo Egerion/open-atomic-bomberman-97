@@ -134,7 +134,7 @@ void AniTextures::load(SDL_Renderer* ren, const std::filesystem::path& path,
 }
 
 AniTextures AniTextures::recolored(SDL_Renderer* ren, const std::int32_t rgb[3],
-                                   const assets::colorpal::Palette* snap) const {
+                                   const assets::colorpal::Palette* snap, bool with_hd) const {
     AniTextures out;
     out.data_ = data_;
     out.textures_.assign(out.data_.frames.size(), nullptr);
@@ -144,16 +144,19 @@ AniTextures AniTextures::recolored(SDL_Renderer* ren, const std::int32_t rgb[3],
         f.image = recolor_image(std::move(f.image), rgb);
         out.textures_[i] = make_texture(ren, f.image, SDL_SCALEMODE_NEAREST, snap);
     }
-    // Recolour the retained HD frames too (never paletted -> green-excess), so
-    // the per-player HD sprite sets exist. LINEAR + un-snapped, like load_hd_overlay.
-    if (!hd_images_.empty()) {
-        out.hd_images_ = hd_images_;
-        out.hd_textures_.assign(out.hd_images_.size(), nullptr);
-        for (std::size_t i = 0; i < out.hd_images_.size(); ++i) {
-            if (out.hd_images_[i].empty()) continue;
-            out.hd_images_[i] = recolor_image(std::move(out.hd_images_[i]), rgb);
-            out.hd_textures_[i] =
-                make_texture(ren, out.hd_images_[i], SDL_SCALEMODE_LINEAR, nullptr);
+    out.drop_classic_cpu();  // textures uploaded; free this set's classic CPU pixels
+    // Recolour the base's retained HD frames too (never paletted -> green-excess),
+    // so the per-player HD sprite sets exist. LINEAR + un-snapped, like
+    // load_hd_overlay. Gated on with_hd: skipped when HD artwork is off (the boot
+    // default) — build_recolored_hd() rebuilds these on the first Tab instead. The
+    // recolour source (base hd_images_) is copied per frame and left intact; the
+    // per-player set keeps only its uploaded HD textures, never a CPU copy.
+    if (with_hd && !hd_images_.empty()) {
+        out.hd_textures_.assign(hd_images_.size(), nullptr);
+        for (std::size_t i = 0; i < hd_images_.size(); ++i) {
+            if (hd_images_[i].empty()) continue;
+            assets::Image img = recolor_image(hd_images_[i], rgb);
+            out.hd_textures_[i] = make_texture(ren, img, SDL_SCALEMODE_LINEAR, nullptr);
         }
     }
     return out;
@@ -161,7 +164,7 @@ AniTextures AniTextures::recolored(SDL_Renderer* ren, const std::int32_t rgb[3],
 
 AniTextures AniTextures::recolored(SDL_Renderer* ren, const std::array<std::uint8_t, 256>& rmp,
                                    const std::array<std::uint8_t, 3>& tail_rgb,
-                                   const assets::colorpal::Palette* snap) const {
+                                   const assets::colorpal::Palette* snap, bool with_hd) const {
     // Per-frame dispatch. All player art in this install is 16bpp type 4 (a CIMG
     // survey returns 100% type-4), which the native recolours the SAME way as
     // paletted art: snap each pixel to a master index, remap it through the
@@ -189,21 +192,56 @@ AniTextures AniTextures::recolored(SDL_Renderer* ren, const std::array<std::uint
         // paletted/fallback outputs.
         out.textures_[i] = make_texture(ren, f.image, SDL_SCALEMODE_NEAREST, snap);
     }
+    out.drop_classic_cpu();  // textures uploaded; free this set's classic CPU pixels
     // HD frames are re-encoded as type-4 truecolour (never paletted), so the
     // index remap can't touch them: use the same green-excess tail recolour the
-    // non-paletted classic frames take, then upload LINEAR/un-snapped.
-    if (!hd_images_.empty()) {
-        out.hd_images_ = hd_images_;
-        out.hd_textures_.assign(out.hd_images_.size(), nullptr);
-        for (std::size_t i = 0; i < out.hd_images_.size(); ++i) {
-            if (out.hd_images_[i].empty()) continue;
-            out.hd_images_[i] = recolor_image(std::move(out.hd_images_[i]), tail);
-            out.hd_textures_[i] =
-                make_texture(ren, out.hd_images_[i], SDL_SCALEMODE_LINEAR, nullptr);
+    // non-paletted classic frames take, then upload LINEAR/un-snapped. Gated on
+    // with_hd (see the sibling overload): the boot recolor skips this and Tab
+    // builds it lazily via build_recolored_hd(). Source pixels (base hd_images_)
+    // are copied per frame and left intact; no per-player HD CPU copy is kept.
+    if (with_hd && !hd_images_.empty()) {
+        out.hd_textures_.assign(hd_images_.size(), nullptr);
+        for (std::size_t i = 0; i < hd_images_.size(); ++i) {
+            if (hd_images_[i].empty()) continue;
+            assets::Image img = recolor_image(hd_images_[i], tail);
+            out.hd_textures_[i] = make_texture(ren, img, SDL_SCALEMODE_LINEAR, nullptr);
         }
     }
     return out;
 }
+
+void AniTextures::build_recolored_hd(SDL_Renderer* ren, const AniTextures& src,
+                                     const std::int32_t rgb[3]) {
+    // Fresh HD set (a classic-built per-player set has none yet). Recolour the
+    // base's retained HD source frames (truecolour type-4 -> green-excess tail),
+    // upload LINEAR/un-snapped exactly like recolored()'s HD block. src.hd_images_
+    // is the shared base source: copied per frame, never mutated or retained here.
+    for (auto* t : hd_textures_)
+        if (t) SDL_DestroyTexture(t);
+    hd_textures_.clear();
+    hd_images_ = {};
+    if (src.hd_images_.empty()) return;
+    hd_textures_.assign(src.hd_images_.size(), nullptr);
+    for (std::size_t i = 0; i < src.hd_images_.size(); ++i) {
+        if (src.hd_images_[i].empty()) continue;
+        assets::Image img = recolor_image(src.hd_images_[i], rgb);
+        hd_textures_[i] = make_texture(ren, img, SDL_SCALEMODE_LINEAR, nullptr);
+    }
+}
+
+void AniTextures::drop_classic_cpu() {
+    // Free the classic frames' pixel vectors (rgba/indices/palette) but KEEP each
+    // frame's width/height — resolve_sequence()/collect_death_anims() read those
+    // to anchor sprites, and Image::empty() keys off w/h (so `loaded()` and the
+    // empty-frame guards stay correct). `= {}` releases the buffers' capacity.
+    for (auto& f : data_.frames) {
+        f.image.rgba = {};
+        f.image.indices = {};
+        f.image.palette = {};
+    }
+}
+
+void AniTextures::drop_hd_cpu() { hd_images_ = {}; }
 
 void AniTextures::reset() {
     for (auto* t : textures_)

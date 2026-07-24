@@ -399,6 +399,17 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir,
             hd_ov(punch_[f], "PUNBOMB" + std::to_string(f + 1) + ".ANI");
         for (int f = 0; f < kPupFiles; ++f)
             hd_ov(pickup_[f], "PUP" + std::to_string(f + 1) + ".ANI");
+
+        // The shared, never-recoloured sets now have all their GPU textures
+        // (classic + any HD overlay) — free their CPU pixel buffers. Unlike the
+        // player-coloured sets above, these are never a recolour source, so both
+        // the classic AND HD source pixels are dead weight after upload.
+        // (tiles_/xbrick_ are per-stage: dropped in load_stage after each load.)
+        for (AniTextures* t : {&kfont_, &hurry_, &shadow_, &powers_, &conveyor_, &extras_,
+                               &aliens1_, &misc_, &edit_, &ring_}) {
+            t->drop_classic_cpu();
+            t->drop_hd_cpu();
+        }
     } catch (const std::exception& e) {
         std::fprintf(stderr, "asset load failed: %s\n", e.what());
         return false;
@@ -410,6 +421,12 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir,
 
 void AssetStore::build_player_sets(const std::int32_t colors[][3],
                                    const std::function<void(float)>& progress) {
+    // Build the per-player HD sets here only when HD artwork is already on (it is
+    // off by default at boot — hd_enabled_ starts false). Skipping HD avoids
+    // retaining ten 16x-heavier HD sprite sets that the classic renderer never
+    // samples; ensure_player_hd_sets() fills them lazily on the first Tab. When
+    // HD IS on, build them now and mark them built (below).
+    const bool with_hd = hd_enabled_;
     for (int p = 0; p < kLocalPlayers; ++p) {
         // Report BEFORE each slot's recolor so the boot LOADING dialog repaints
         // + pumps the window between players (this pass recolors ~15 ANI groups
@@ -428,8 +445,8 @@ void AssetStore::build_player_sets(const std::int32_t colors[][3],
             // in-match master-palette snap runs AFTER the recolor (colorpal.hpp)
             // so the player sprites are constrained to the shared match palette
             // like every other cel.
-            return use_rmp ? src.recolored(ren_, rmp_[p], rmp_rgb_[p], &colorpal_)
-                           : src.recolored(ren_, colors[p], &colorpal_);
+            return use_rmp ? src.recolored(ren_, rmp_[p], rmp_rgb_[p], &colorpal_, with_hd)
+                           : src.recolored(ren_, colors[p], &colorpal_, with_hd);
         };
 
         walk_c_[p] = recolor(walk_);
@@ -455,7 +472,85 @@ void AssetStore::build_player_sets(const std::int32_t colors[][3],
             xplode_c_[p].push_back(std::move(colored));
         }
     }
+    player_hd_built_ = with_hd;
+    // The player-coloured base sets were the recolour source; their classic CPU
+    // pixels are now dead (every per-player set is uploaded). Free them — the
+    // base GPU textures + per-frame w/h remain so base sprites still render. The
+    // base HD source frames stay retained for the lazy per-player HD build unless
+    // HD was built eagerly just now, in which case they too are done.
+    drop_player_base_classic_cpu();
+    if (with_hd) drop_player_base_hd_cpu();
     if (progress) progress(1.0f);
+}
+
+void AssetStore::drop_player_base_classic_cpu() {
+    auto d = [](AniTextures& t) { t.drop_classic_cpu(); };
+    d(walk_);
+    d(stand_);
+    d(kick_);
+    d(bombs_);
+    d(duds_);
+    d(flame_);
+    d(trigbomb_);
+    for (auto& t : corner_) d(t);
+    for (auto& t : bwalk_) d(t);
+    for (auto& t : punch_) d(t);
+    for (auto& t : pickup_) d(t);
+    for (auto& t : xplode_) d(t);
+}
+
+void AssetStore::drop_player_base_hd_cpu() {
+    auto d = [](AniTextures& t) { t.drop_hd_cpu(); };
+    d(walk_);
+    d(stand_);
+    d(kick_);
+    d(bombs_);
+    d(duds_);
+    d(flame_);
+    d(trigbomb_);
+    for (auto& t : corner_) d(t);
+    for (auto& t : bwalk_) d(t);
+    for (auto& t : punch_) d(t);
+    for (auto& t : pickup_) d(t);
+    for (auto& t : xplode_) d(t);
+}
+
+bool AssetStore::ensure_player_hd_sets() {
+    if (player_hd_built_) return false;
+    player_hd_built_ = true;
+    for (int p = 0; p < kLocalPlayers; ++p) {
+        // HD frames always take the green-excess tail recolour (truecolour
+        // type-4, never paletted). rmp_rgb_[p] is that tail for BOTH the .RMP and
+        // the VALUELST-fallback slots (set_color_fallbacks seeds it from
+        // color_rgb where a .RMP was absent), so it reproduces exactly what
+        // recolored()'s HD block would have used for either branch.
+        const std::int32_t tail[3] = {rmp_rgb_[p][0], rmp_rgb_[p][1], rmp_rgb_[p][2]};
+        auto hd = [&](AniTextures& dst, const AniTextures& src) {
+            if (src.loaded() && dst.loaded()) dst.build_recolored_hd(ren_, src, tail);
+        };
+        hd(walk_c_[p], walk_);
+        hd(stand_c_[p], stand_);
+        hd(kick_c_[p], kick_);
+        for (int f = 0; f < kCornerFiles; ++f) hd(corner_c_[f][p], corner_[f]);
+        for (int f = 0; f < kBwalkFiles; ++f) hd(bwalk_c_[f][p], bwalk_[f]);
+        for (int f = 0; f < kPunchFiles; ++f) hd(punch_c_[f][p], punch_[f]);
+        for (int f = 0; f < kPupFiles; ++f) hd(pickup_c_[f][p], pickup_[f]);
+        hd(bombs_c_[p], bombs_);
+        hd(duds_c_[p], duds_);
+        hd(trigbomb_c_[p], trigbomb_);
+        hd(flame_c_[p], flame_);
+        // Death pools: give each recoloured XPLODE set its HD textures, then
+        // re-collect deaths_c_[p] so its Anim Sprites carry the new tex_hd (the
+        // classic textures are unchanged, so the classic look is identical).
+        deaths_c_[p].clear();
+        for (std::size_t s = 0; s < xplode_c_[p].size(); ++s) {
+            if (s < xplode_.size()) xplode_c_[p][s].build_recolored_hd(ren_, xplode_[s], tail);
+            collect_death_anims(xplode_c_[p][s], deaths_c_[p]);
+        }
+    }
+    // The base HD source frames existed only to feed this build — release them.
+    drop_player_base_hd_cpu();
+    return true;
 }
 
 void AssetStore::set_color_fallbacks(const std::int32_t colors[][3], int n) {
@@ -532,6 +627,13 @@ bool AssetStore::load_stage(int stage) {
                 }
             }
         }
+        // Per-stage tiles/bricks are shared (never recoloured); their GPU
+        // textures now exist, so free the CPU pixels (classic + HD source).
+        // resolve_stage reads only w/h from these, which drop_classic_cpu keeps.
+        tiles_.drop_classic_cpu();
+        tiles_.drop_hd_cpu();
+        xbrick_.drop_classic_cpu();
+        xbrick_.drop_hd_cpu();
     } catch (const std::exception& e) {
         std::fprintf(stderr, "stage %d load failed: %s\n", stage, e.what());
         return false;
@@ -565,6 +667,7 @@ const AssetStore::StagePreview& AssetStore::stage_preview(int stage) const {
         const std::string n = std::to_string(stage);
         sp.solid = resolve_sequence(tiles, "tile " + n + " solid");
         sp.brick = resolve_sequence(tiles, "tile " + n + " brick");
+        tiles.drop_classic_cpu();  // sequences resolved; only w/h + textures needed now
         stage_preview_tiles_.emplace(stage, std::move(tiles));
     } catch (const std::exception& e) {
         std::fprintf(stderr, "stage %d preview tiles load failed: %s\n", stage, e.what());

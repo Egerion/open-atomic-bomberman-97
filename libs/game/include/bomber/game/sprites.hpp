@@ -128,8 +128,14 @@ public:
     // `.RMP` file. `snap` (colorpal.hpp) quantizes AFTER the recolor — the
     // original snaps the final displayed colour, so the recoloured result is
     // constrained to the shared match palette exactly like every other cel.
+    // `with_hd` gates the (16x-heavier) per-player HD texture build: pass false
+    // when HD artwork is off (the default at boot) so the recolor pays nothing
+    // for HD; the per-player HD sets are then built lazily on the first Tab via
+    // build_recolored_hd(). The returned set's CPU pixel buffers are freed after
+    // upload (only its GPU textures + per-frame w/h are retained).
     AniTextures recolored(SDL_Renderer* ren, const std::int32_t rgb[3],
-                          const assets::colorpal::Palette* snap = nullptr) const;
+                          const assets::colorpal::Palette* snap = nullptr,
+                          bool with_hd = true) const;
 
     // A copy with the AUTHENTIC `.RMP` index-remap applied to every PALETTED
     // frame (the original blit's per-colour table, docs/re/player-colour.md).
@@ -137,10 +143,34 @@ public:
     // frames (most of this install — 2299 of 2327) instead get the truecolour
     // green-excess recolour targeting the same tail colour, so the whole set
     // resolves to one colour rather than silently staying green. `snap` snaps
-    // AFTER recolor (see the sibling overload).
+    // AFTER recolor (see the sibling overload). `with_hd` gates the per-player
+    // HD build exactly like the sibling overload.
     AniTextures recolored(SDL_Renderer* ren, const std::array<std::uint8_t, 256>& rmp,
                           const std::array<std::uint8_t, 3>& tail_rgb,
-                          const assets::colorpal::Palette* snap = nullptr) const;
+                          const assets::colorpal::Palette* snap = nullptr,
+                          bool with_hd = true) const;
+
+    // Builds THIS (already classic-recoloured) set's HD override textures from a
+    // base set's retained HD source frames `src`, recoloured to `rgb` (the
+    // green-excess tail — HD frames are truecolour type-4, never paletted, so
+    // they always take recolor_image, matching recolored()'s HD block). Used to
+    // build the per-player HD sets lazily when HD artwork is switched on at
+    // runtime (Tab), after the boot-time recolor skipped HD to save memory. The
+    // recolour SOURCE pixels (src.hd_images_) stay on the base set; this set does
+    // not retain any HD CPU buffer (only the uploaded hd_textures_).
+    void build_recolored_hd(SDL_Renderer* ren, const AniTextures& src,
+                            const std::int32_t rgb[3]);
+
+    // Presentation memory reclaim (post-upload): once every frame is a GPU
+    // texture the CPU-side pixel buffers are dead weight — the renderer samples
+    // the textures and resolve_sequence/collect_death_anims read only each
+    // frame's w/h. drop_classic_cpu() frees the classic frames' rgba/indices/
+    // palette (KEEPING w/h so the sequence resolvers still anchor); drop_hd_cpu()
+    // frees the HD recolour-source frames. Call ONLY after the textures exist and
+    // the set will not be recoloured again (recolored()/build_recolored_hd()
+    // consume the source pixels, so drop AFTER them).
+    void drop_classic_cpu();
+    void drop_hd_cpu();
 
     void reset();
 
