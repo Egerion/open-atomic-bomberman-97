@@ -106,6 +106,13 @@ target_link_libraries(bomber_match_tests PRIVATE bomber::match doctest::doctest 
 target_include_directories(bomber_match_tests PRIVATE .)
 add_test(NAME match COMMAND bomber_match_tests)
 
+# LevelRegistry (bomber::match, header-only): pins the built-in rotation +
+# asset base names byte-identical and the one-edit custom-level extensibility.
+add_executable(bomber_level_registry_tests test_level_registry.cpp)
+target_link_libraries(bomber_level_registry_tests PRIVATE bomber::match doctest::doctest bomber::warnings)
+target_include_directories(bomber_level_registry_tests PRIVATE .)
+add_test(NAME level_registry COMMAND bomber_level_registry_tests)
+
 # options.ini parser lives in bomber::assets (SDL-free), like bmtext.
 add_executable(bomber_options_tests test_options.cpp)
 target_link_libraries(bomber_options_tests PRIVATE bomber::assets doctest::doctest bomber::warnings)

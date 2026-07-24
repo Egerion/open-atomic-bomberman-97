@@ -4,7 +4,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <iterator>
 #include <string>
 #include <vector>
 
@@ -13,26 +12,20 @@
 #include "bomber/game/frontend_util.hpp"  // pick_glue
 #include "bomber/game/hud_format.hpp"     // fmt_s / fmt_us
 #include "bomber/game/sprites.hpp"        // Sprite, Anim, resolve_sequence
+#include "bomber/match/level_registry.hpp"  // LevelRegistry / LevelDef
 #include "bomber/sim/constants.hpp"       // sim::kTileW / kTileH
 
 namespace bomber::game {
 
-// The 11 built-in level names (VALUELST 450-460 / getvalue(150+n)); RANDOM is
-// getstring(149). These GENERIC fallbacks are ours — the real names live in the
-// user's MESSAGES.TXT and load at runtime via getstring, never committed.
-static const char* level_fallback(int idx) {
-    static const char* kNames[] = {"NEW TRADITIONALIST",
-                                   "CLASSIC GREEN ACRES",
-                                   "HOCKEY RINK",
-                                   "ANCIENT EGYPT",
-                                   "COAL MINE",
-                                   "BEACH",
-                                   "ALIENS",
-                                   "HAUNTED HOUSE",
-                                   "UNDER THE OCEAN",
-                                   "DEEP FOREST GREEN",
-                                   "INNER CITY TRASH"};
-    return (idx >= 0 && idx < static_cast<int>(std::size(kNames))) ? kNames[idx] : "LEVEL";
+// The generic level-name fallback (RANDOM is getstring(149)). The level list,
+// count, and per-level fallback names all come from the level registry now
+// (ctx_.assets.levels(), seeded with the 11 built-ins named VALUELST 450-460 /
+// getstring(150+n)); a name still comes from the user's MESSAGES.TXT at runtime
+// via getstring and is never committed. Sourcing from the registry means a
+// custom map added there shows up here with no edit to this screen.
+static const char* level_fallback(const match::LevelRegistry& levels, int idx) {
+    const match::LevelDef* def = levels.find(idx);
+    return def ? def->name_fallback.c_str() : "LEVEL";
 }
 
 // The LEVEL & ROUNDS screen (sub_406DDE @0x406DDE, the VALUELST "OPTIONS SCREEN"
@@ -46,7 +39,10 @@ static const char* level_fallback(int idx) {
 // only — the committed level drives start_match's stage choice.
 AppInput MapSelectScreen::run() {
     const std::string glue = pick_glue(state_.setup_lcg, ctx_.values);
-    const int level_count = static_cast<int>(ctx_.values.column_or(35, 0, 11));  // getvalue(35)
+    // Level count from the registry. For the stock 11 built-ins this equals the
+    // original getvalue(35)=11, so the cycle bounds and RANDOM per-cell pick are
+    // unchanged; a registered custom map extends the cycle with no edit here.
+    const int level_count = static_cast<int>(ctx_.assets.levels().all().size());
     const float lx = static_cast<float>(ctx_.values.column_or(735, 0, 55));
     const float ly = static_cast<float>(ctx_.values.column_or(735, 1, 170));
     const float lys = static_cast<float>(ctx_.values.column_or(735, 2, 24));
@@ -188,7 +184,8 @@ AppInput MapSelectScreen::run() {
         // highlight and the grey key legend were invented.
         const std::string level_name =
             level < 0 ? ctx_.assets.getstring(149, "Random Each Game")
-                      : ctx_.assets.getstring(150 + level, level_fallback(level));
+                      : ctx_.assets.getstring(150 + level,
+                                              level_fallback(ctx_.assets.levels(), level));
         const std::string level_line = fmt_s(ctx_.assets.getstring(210, "%s"), level_name);
         ctx_.front_font.draw_outlined(ctx_.sdl, level_line, lx, ly, 240, 248, 252, 0, 0, 0,
                                   lw);

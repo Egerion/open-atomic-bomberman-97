@@ -16,6 +16,7 @@
 #include "bomber/assets/rmp.hpp"
 #include "bomber/game/sdl.hpp"
 #include "bomber/game/sprites.hpp"
+#include "bomber/match/level_registry.hpp"
 #include "bomber/sim/constants.hpp"
 
 // Owns every texture the game renders: the shared ANIs, per-player recolored
@@ -64,8 +65,17 @@ public:
     // number of rows in `colors` (== 10). Presentation-only.
     void set_color_fallbacks(const std::int32_t colors[][3], int n);
 
-    // Loads the per-stage art (FIELDn.PCX + TILESn.ANI + XBRICKn.ANI).
+    // Loads the per-stage art for `stage`, resolving the field/tiles/xbrick
+    // base names from the level registry (built-ins -> FIELDn/TILESn/XBRICKn,
+    // byte-identical to the old hardcoded concat; custom levels -> their own
+    // LevelDef bases).
     bool load_stage(int stage);
+
+    // The level catalogue (bomber::match, SDL-free). Defaults to the 11
+    // built-ins; adding a custom map is a single `assets.levels().add({...})`
+    // that load_stage/stage_preview and the LEVEL & ROUNDS screen all read.
+    match::LevelRegistry& levels() { return levels_; }
+    const match::LevelRegistry& levels() const { return levels_; }
 
     // Stage-independent sets.
     const AniTextures& tiles() const { return tiles_; }
@@ -272,6 +282,12 @@ private:
 
     SDL_Renderer* ren_ = nullptr;
     std::filesystem::path game_dir_;
+
+    // The level catalogue load_stage/stage_preview resolve asset paths from.
+    // Seeded with the 11 built-ins whose LevelDef bases are exactly
+    // FIELDn/TILESn/XBRICKn, so the resolved paths match the old hardcoded
+    // concatenation byte-for-byte; a custom level added via levels() extends it.
+    match::LevelRegistry levels_ = match::LevelRegistry::with_builtins();
 
     // The in-match shared-palette snap (colorpal.hpp), loaded once from the
     // install root. Inert (ok()==false) when COLOR.PAL is absent, so the game
