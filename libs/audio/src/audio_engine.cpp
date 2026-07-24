@@ -15,8 +15,25 @@ std::string to_upper(std::string s) {
 
 }  // namespace
 
+AudioEngine::~AudioEngine() {
+    // RAII teardown for the raw SDL handles init() opened. Destroying a stream
+    // created by SDL_OpenAudioDeviceStream also closes the logical device opened
+    // alongside it (SDL_audio.h), so no separate SDL_CloseAudioDevice is needed.
+    // A partial init leaves the not-yet-opened slots null (streams_ is value-
+    // initialized, music_stream_ starts null), so skipping nulls destroys
+    // exactly what was created before any mid-init failure — each stream once.
+    for (SDL_AudioStream* stream : streams_)
+        if (stream) SDL_DestroyAudioStream(stream);
+    if (music_stream_) SDL_DestroyAudioStream(music_stream_);
+    // Balance init()'s SDL_InitSubSystem. It is refcounted, so audio only truly
+    // shuts down once every owner has quit; guard on audio_inited_ so we undo
+    // solely a bring-up this instance performed.
+    if (audio_inited_) SDL_QuitSubSystem(SDL_INIT_AUDIO);
+}
+
 bool AudioEngine::init(const std::filesystem::path& game_dir) {
     if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) return false;
+    audio_inited_ = true;
     SDL_AudioSpec spec{SDL_AUDIO_S16LE, assets::rss::Sound::kChannels,
                        assets::rss::Sound::kSampleRate};
     for (int i = 0; i < kStreams; ++i) {

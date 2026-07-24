@@ -18,6 +18,18 @@ namespace bomber::game {
 
 class AudioEngine {
 public:
+    AudioEngine() = default;
+
+    // Raw-owning: an SDL audio-subsystem refcount plus kStreams + 1
+    // SDL_AudioStreams (each opened alongside its own logical device). The
+    // destructor is the only place these are released, so the type is
+    // non-copyable (a copy would double-free the shared handles). Nothing moves
+    // it either — it is a GameApp value member, referenced everywhere else — so
+    // the move operations stay implicitly suppressed rather than = default'd.
+    ~AudioEngine();
+    AudioEngine(const AudioEngine&) = delete;
+    AudioEngine& operator=(const AudioEngine&) = delete;
+
     // Opens the device streams and indexes SOUNDLST. False = stay silent.
     bool init(const std::filesystem::path& game_dir);
 
@@ -83,6 +95,9 @@ private:
     std::filesystem::path sound_dir_;
     std::uint32_t counter_ = 0;
     std::uint32_t lcg_ = 0x1234ABCD;
+    // True once this instance's init() succeeded at SDL_InitSubSystem(AUDIO), so
+    // the destructor undoes only a subsystem bring-up we actually own.
+    bool audio_inited_ = false;
     bool ok_ = false;
 };
 
