@@ -360,6 +360,30 @@ convention `sub_4056CA` gates the same way, so a wall-covered actor tile
 `sub_4056CA`'s own gate still wants a binary read; the powerup-drawer analogue
 is strong circumstantial evidence and matches live observation.
 
+**GEOMETRY UPDATE 2026-07-24 — the per-tile inference above does NOT explain the
+COAL warphole report; it may be an ARM-time global render gate instead. See
+`docs/re/audit/enclosure-warphole-close.md`.** A fresh live report ("on COAL the
+warpholes really disappear when the walls START closing") was checked against the
+actual `EXTRA4.RES` layout. COAL's four warpholes sit at (2,2),(12,2),(12,8),(2,8)
+— the corners of the depth-2 box, i.e. **all on ring 2**, which the clockwise
+spiral closes THIRD (drop events 96/106/113/124, ~24-31 s after the first drop),
+NOT on the outer ring it closes first. At the DEFAULT `enclosement_depth = 1` the
+walls close only rings 0-1 (events 0-95) and **never reach ring 2 at all**, so the
+current `cells != Blank` gate keeps those warpholes visible for the whole match.
+Under no depth does the tile-by-tile gate hide them "at close-start". The fixed
+trampolines (`EXTRA9`) sit on the SAME ring-2 corners and every conveyor tile
+(`EXTRA10`) is also on ring 2, so the pattern is shared — the earlier "outer-ring
+trampoline" report was almost certainly a random `-T,H,H` placement, which does
+NOT discriminate the two hypotheses. If the COAL observation is accurate the
+original hides actors on a GLOBAL trigger at/near arm (render-only — Finding 0
+still holds, no registry write), which the powerup-drawer per-tile analogy does
+not capture: powerups gate on their OWN cell-state grid, whereas actors have no
+per-tile "revealed" state. **This is NOT yet resolved — the decisive read is
+`sub_4056CA`'s draw gate (per-actor `sub_425FB9` solid test vs. a global armed/
+hurry-clock early-out); a disambiguating live test (a centre warphole at (7,5) =
+ring 5, covered dead last) is specified in the audit file. No code change made
+pending that trace.**
+
 **Port.** The gameplay-side behaviour was already correct by construction: a
 solid tile is impassable, so a covered conveyor/trampoline/dirarrow can never
 re-trigger (nothing can stand or slide onto it), and a covered warphole cannot
