@@ -73,11 +73,23 @@ void BombSystem::place(Player& p, std::uint8_t owner, int tx, int ty, int fuse_s
 
 void BombSystem::drop(Player& p, std::uint8_t owner) {
     int tx = p.tile_x(), ty = p.tile_y();
+    // Only ONE of the three "can't place here" outcomes is audible in the
+    // original: a WARPHOLE drop (below). A blocked/occupied tile or a spent
+    // bomb allotment short-circuits placement SILENTLY in sub_41F29B — no
+    // sub_427961(40) is attached to those guards — so the port plays no deny
+    // SFX for them either, for humans OR AI. (Audited 2026-07-24 after a report
+    // that the deny sound "only fires for humans": it doesn't — see below.)
     if (!grid::tile_open(s_, tx, ty) || grid::bomb_at(s_, tx, ty)) return;
     if (p.bombs_placed >= p.max_bombs) return;
     // No bombs on a WARPHOLE (sub_41F29B drop block ~23354: an actor of type 1
     // under the player short-circuits the placement; sound 40 plays unless the
-    // drop was disease-forced). facts.md "Core-feel audit" §3.
+    // drop was disease-forced). facts.md "Core-feel audit" §3. DropRefused
+    // carries `owner` and is emitted for ANY player: sub_41F29B is the shared
+    // human+AI input processor (fact #6 — only its reversed-controls flip is
+    // human-gated) and sub_427961(40) is a GLOBAL SFX, so an AI warphole drop
+    // plays 40/41 too. An AI simply reaches this branch rarely — its drop
+    // behaviours pre-check the tile (sub_423188) and slots (sub_4245DA) before
+    // pressing bomb (a decision-side avoidance, NOT a per-listener gate).
     if (grid::in_grid(tx, ty) && s_.actor_type[ty][tx] == ActorType::Warphole) {
         if (!p.sick(Disease::Diarrhea) && !p.sick(Disease::Super))
             s_.events.push_back({Event::Type::DropRefused, static_cast<std::int8_t>(owner),
