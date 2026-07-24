@@ -241,7 +241,7 @@ private:
     // definitions across translation units (an ODR violation). Nothing outside
     // the guarded call site in game_app.cpp references these, so a lobby-off
     // build simply never emits or needs them.
-    AppInput present_net_online(bool host, bool browse = false);
+    AppInput present_net_online(bool host, bool browse = false, bool is_public = false);
     // Matchmaker endpoint resolution, in the documented precedence order:
     // --matchmaker / --matchmaker-stun CLI flags, then BOMBER_MATCHMAKER_URL /
     // BOMBER_MATCHMAKER_STUN_HOST / BOMBER_MATCHMAKER_STUN_PORT, then the

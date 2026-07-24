@@ -36,10 +36,9 @@
 // caller, and an SDL_QUIT is surfaced (never swallowed) so GameApp can
 // propagate a hard quit. GameApp owns the transport and runs the match.
 //
-// NOT built here: HOSTING a PUBLIC lobby. LobbyFlow::host_lobby already takes
-// the is_public flag and the server lists what it is given; the browser can only
-// show lobbies some client created public, so the remaining seam is one more
-// kRows entry driving run_online with is_public=true.
+// A lobby is PRIVATE (share the code) or PUBLIC (also listed for anyone to
+// browse) — the same waiting room either way, since the visibility only changes
+// what the server advertises.
 
 namespace bomber::net {
 class UdpTransport;  // borrowed by reference; the .cpp includes the real header
@@ -52,6 +51,7 @@ enum class LobbyMenuChoice : std::uint8_t {
     Cancel,        // Esc / Done -> back to the main menu
     WindowClosed,  // SDL_QUIT -> GameApp propagates AppInput::Quit
     HostOnline,    // HOST PRIVATE GAME: create a lobby, show its code
+    HostPublic,    // HOST PUBLIC GAME: same, but listed for anyone to browse
     JoinOnline,    // JOIN BY CODE: the 6-char code modal, then the waiting room
     HostDirect,    // HOST LAN GAME: the ADR-0010 direct-UDP host (no server)
     JoinDirect,    // JOIN BY IP ADDRESS: the ADR-0010 direct-UDP join
@@ -104,8 +104,10 @@ public:
     // the player leaves, or the flow fails. `transport` MUST already be bound:
     // LobbyFlow reuses that one socket for STUN, the punch and the match, so the
     // NAT binding the peers punched is the one gameplay flows through.
+    // `is_public` applies only when hosting: the lobby is then advertised in the
+    // public list as well as reachable by its code.
     LobbyRoomResult run_online(const OnlineConfig& cfg, net::UdpTransport& transport, bool host,
-                               const std::string& code);
+                               const std::string& code, bool is_public = false);
 
     // The PUBLIC GAMES browser (ADR-0011 Phase 3). Asks the matchmaker for the
     // open public lobbies (LobbyFlow::browse_public), lists them, and returns

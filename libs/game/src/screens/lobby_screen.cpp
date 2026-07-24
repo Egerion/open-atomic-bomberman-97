@@ -50,6 +50,7 @@ struct MenuRow {
 // hidden behind the online ones.
 constexpr MenuRow kRows[] = {
     {"HOST PRIVATE GAME", LobbyMenuChoice::HostOnline, true},
+    {"HOST PUBLIC GAME", LobbyMenuChoice::HostPublic, true},
     {"JOIN BY CODE", LobbyMenuChoice::JoinOnline, true},
     {"BROWSE PUBLIC GAMES", LobbyMenuChoice::BrowsePublic, true},
     {"HOST LAN GAME", LobbyMenuChoice::HostDirect, false},
@@ -355,7 +356,7 @@ void draw_browser(ScreenContext& ctx, const std::vector<net::PublicLobby>& list,
 }  // namespace
 
 LobbyRoomResult LobbyScreen::run_online(const OnlineConfig& ocfg, net::UdpTransport& transport,
-                                        bool host, const std::string& code) {
+                                        bool host, const std::string& code, bool is_public) {
     LobbyRoomResult result;
 
     net::LobbyFlow::Config cfg;
@@ -368,7 +369,7 @@ LobbyRoomResult LobbyScreen::run_online(const OnlineConfig& ocfg, net::UdpTransp
     net::LobbyClient client;
     net::LobbyFlow flow(cfg, transport, client);
     if (host)
-        flow.host_lobby(ocfg.player_name, /*is_public=*/false, /*max_seats=*/2);
+        flow.host_lobby(ocfg.player_name, is_public, /*max_seats=*/2);
     else
         flow.join_lobby(code);
 

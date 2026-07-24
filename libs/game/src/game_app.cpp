@@ -1095,6 +1095,10 @@ AppInput GameApp::present_net_host() {
         case LobbyMenuChoice::JoinDirect: return present_net_join();
 #if defined(BOMBER_HAS_LOBBY)
         case LobbyMenuChoice::HostOnline: return present_net_online(/*host=*/true);
+        case LobbyMenuChoice::HostPublic:
+            // Same room and same flow — the visibility only changes what the
+            // server advertises, so a public lobby is still joinable by code.
+            return present_net_online(/*host=*/true, /*browse=*/false, /*is_public=*/true);
         case LobbyMenuChoice::JoinOnline: return present_net_online(/*host=*/false);
         case LobbyMenuChoice::BrowsePublic:
             // The browser hands back a code, so this is the JOIN arm with the
@@ -1103,6 +1107,7 @@ AppInput GameApp::present_net_host() {
 #else
         // Never listed without the lobby — fall through to the cancel arm.
         case LobbyMenuChoice::HostOnline:
+        case LobbyMenuChoice::HostPublic:
         case LobbyMenuChoice::JoinOnline:
         case LobbyMenuChoice::BrowsePublic:
 #endif
@@ -1146,8 +1151,8 @@ std::uint16_t GameApp::matchmaker_stun_port() const {
     return (p > 0 && p <= 65535) ? static_cast<std::uint16_t>(p) : kDefaultStunPort;
 }
 
-AppInput GameApp::present_net_online(bool host, bool browse) {
-    // HOST PRIVATE GAME / JOIN BY CODE / BROWSE PUBLIC GAMES: the ADR-0011 online
+AppInput GameApp::present_net_online(bool host, bool browse, bool is_public) {
+    // HOST PRIVATE/PUBLIC GAME / JOIN BY CODE / BROWSE PUBLIC GAMES: the ADR-0011 online
     // path. A guest first names the lobby it wants — typing the 6-char code, or
     // picking a row in the public browser, which yields the very same code — then
     // both sides bind ONE socket, sit in the waiting room, and, once the server's
@@ -1193,7 +1198,7 @@ AppInput GameApp::present_net_online(bool host, bool browse) {
         return AppInput::Advance;
     }
 
-    const LobbyRoomResult r = screen.run_online(ocfg, transport, host, code);
+    const LobbyRoomResult r = screen.run_online(ocfg, transport, host, code, is_public);
     if (r.window_closed) return AppInput::Quit;
     if (r.ready) return run_netplay_match_seats(transport, r.local_seats_mask, r.seed);
     return AppInput::Advance;  // left the lobby / failed → back to the menu

@@ -121,55 +121,52 @@ private:
     // itself, or in a 2P lobby) the other occupied seat.
     int peer_seat() const;
 
+    // Members are grouped by ALIGNMENT, not by topic (the topics are called out
+    // in the comments instead): pointer-sized first, then 4-byte, then the
+    // 1-byte flags. Interleaving them by topic cost ~35 bytes of padding, which
+    // clang-analyzer-optin.performance.Padding rightly flags.
+
+    // --- pointer-aligned ---
     Config cfg_;
     UdpTransport& transport_;
     LobbyClient& client_;
-
-    Phase phase_ = Phase::Idle;
     std::string error_;
-
-    // queued intent until the socket is open
-    Pending pending_ = Pending::None;
-    std::string pending_name_;
-    bool pending_public_ = false;
-    int pending_max_seats_ = 2;
+    std::string pending_name_;  // queued intent until the socket is open
     std::string pending_code_;
-
-    // lobby identity
-    std::string code_;
+    std::string code_;  // lobby identity
     std::string lobby_id_;
     std::string host_token_;
-    int my_seat_ = -1;
-    int host_seat_ = 0;
     std::vector<RosterEntry> roster_;
-
-    // candidates
-    std::unique_ptr<StunClient> stun_;
-    bool candidates_sent_ = false;
+    std::unique_ptr<StunClient> stun_;                        // candidates
     std::vector<LobbyCandidate> local_candidates_;
-    // peer candidates by seat (index = seat)
-    std::vector<std::vector<LobbyCandidate>> peer_candidates_;
-
-    std::int64_t last_heartbeat_ms_ = -1;
-
+    std::vector<std::vector<LobbyCandidate>> peer_candidates_;  // by seat (index = seat)
     // Public browsing (Phase 3): the last PublicList answer. Kept beside the
     // lobby state rather than in a separate object because it rides the same
     // control connection and the same poll pump.
     std::vector<PublicLobby> public_lobbies_;
-    unsigned public_list_revision_ = 0;
-
     MatchStart match_start_;
     std::unique_ptr<Rendezvous> punch_;
-
     // Relay fallback (Phase 2). Requested only after the punch gives up; once
     // the allocation arrives the wrapper becomes the match transport.
-    bool relay_requested_ = false;
     std::unique_ptr<RelayedTransport> relay_;
-
     // The >2-seat star (Phase 4): built on the HUB only, from the punched
     // address of every guest. Guests need nothing extra — their socket is
     // set_peer'd to the hub and the hub reflects the other seats' frames.
     std::unique_ptr<StarHubTransport> star_;
+    std::int64_t last_heartbeat_ms_ = -1;
+
+    // --- 4-byte ---
+    int pending_max_seats_ = 2;
+    int my_seat_ = -1;
+    int host_seat_ = 0;
+    unsigned public_list_revision_ = 0;
+
+    // --- 1-byte ---
+    Phase phase_ = Phase::Idle;
+    Pending pending_ = Pending::None;
+    bool pending_public_ = false;
+    bool candidates_sent_ = false;
+    bool relay_requested_ = false;
 };
 
 }  // namespace bomber::net
