@@ -230,6 +230,9 @@ private:
     // The online lobby leaf (ADR-0011 Phase 1d): resolve the matchmaker URL, bind
     // the one socket LobbyFlow reuses for STUN/punch/match, run the waiting room,
     // and on Phase::Ready run the match with the SERVER's seed + seat mask.
+    // `browse` (Phase 3) only changes where a GUEST's lobby code comes from — the
+    // PUBLIC GAMES browser instead of the typed-code prompt; the waiting room and
+    // the match hand-off below it are the same code either way.
     //
     // DECLARED unconditionally but DEFINED only under BOMBER_HAS_LOBBY: that
     // define is PUBLIC on bomber::net, which libs/game links PRIVATEly, so it is
@@ -238,7 +241,7 @@ private:
     // definitions across translation units (an ODR violation). Nothing outside
     // the guarded call site in game_app.cpp references these, so a lobby-off
     // build simply never emits or needs them.
-    AppInput present_net_online(bool host);
+    AppInput present_net_online(bool host, bool browse = false);
     // Matchmaker endpoint resolution, in the documented precedence order:
     // --matchmaker / --matchmaker-stun CLI flags, then BOMBER_MATCHMAKER_URL /
     // BOMBER_MATCHMAKER_STUN_HOST / BOMBER_MATCHMAKER_STUN_PORT, then the

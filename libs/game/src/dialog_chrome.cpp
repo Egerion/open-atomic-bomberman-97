@@ -18,7 +18,9 @@ namespace {
 //   dword_45C478 = 21140 -> LUT idx 178 -> (168,168,164)  button label ink
 constexpr Uint8 kBevelLightR = 108, kBevelLightG = 116, kBevelLightB = 128;  // dword_45C470
 constexpr Uint8 kBevelDarkR = 60, kBevelDarkG = 68, kBevelDarkB = 56;        // dword_45C474
-constexpr Uint8 kButtonInkR = 168, kButtonInkG = 168, kButtonInkB = 164;     // dword_45C478
+// dword_45C478 — the one exported in the header (screens dim un-actionable text
+// with it), aliased here so the chrome keeps reading in its own vocabulary.
+constexpr Uint8 kButtonInkR = kDialogDimR, kButtonInkG = kDialogDimG, kButtonInkB = kDialogDimB;
 
 // Button face — the window base coat (idx 205) run through sub_442C28's
 // whole-bitmap brightness wash (byte_475390 lighten-ramp entry 0x93 = step

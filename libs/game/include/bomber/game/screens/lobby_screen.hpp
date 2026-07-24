@@ -5,10 +5,11 @@
 
 #include "bomber/game/screen_context.hpp"
 
-// The ONLINE LOBBY front-end (ADR-0011 Phase 1d) — the SDL3 screens over
-// bomber::net's finished LobbyFlow state machine. Three screens, all composed
-// from the ALREADY-REVERSE-ENGINEERED chrome primitives in dialog_chrome.hpp
-// (no new UI chrome is invented here — the project's standing rule):
+// The ONLINE LOBBY front-end (ADR-0011 Phase 1d + the Phase 3 browser) — the
+// SDL3 screens over bomber::net's finished LobbyFlow state machine. Four
+// screens, all composed from the ALREADY-REVERSE-ENGINEERED chrome primitives in
+// dialog_chrome.hpp (no new UI chrome is invented here — the project's standing
+// rule):
 //
 //   run_menu()       the NETWORK GAME entry list — the generic bevel list
 //                    dialog sub_42DBCC (draw_list_dialog) over the MAINMENU
@@ -17,6 +18,12 @@
 //                    (draw_text_entry_dialog) at the SAME y=180 anchor the
 //                    editor's save-as prompt and NetplayConnectScreen::run_join
 //                    use. Filters to Crockford base-32, uppercases as typed.
+//   run_public_browser() the PUBLIC GAMES list (Phase 3) — the SAME list dialog
+//                    again, one item row per open public lobby (name, occupancy,
+//                    code) with the sub_42DBCC widget's own scroll/nav model;
+//                    the searching / empty / failed states reuse the sub_414340
+//                    acknowledge modal. Returns a CODE, exactly like
+//                    run_code_entry, so the pick lands in the same waiting room.
 //   run_online()     the WAITING ROOM — the same list dialog, its pinned centred
 //                    title strip carrying the lobby CODE (the string the host
 //                    reads out) and one item row per roster seat; the transient
@@ -29,9 +36,10 @@
 // caller, and an SDL_QUIT is surfaced (never swallowed) so GameApp can
 // propagate a hard quit. GameApp owns the transport and runs the match.
 //
-// NOT built here: the PUBLIC LOBBY BROWSER (ADR-0011 Phase 3). The server and
-// LobbyClient already speak it (encode_list_public / LobbyMsgType::PublicList);
-// the GUI seam is LobbyMenuChoice::BrowsePublic below plus one kRows entry.
+// NOT built here: HOSTING a PUBLIC lobby. LobbyFlow::host_lobby already takes
+// the is_public flag and the server lists what it is given; the browser can only
+// show lobbies some client created public, so the remaining seam is one more
+// kRows entry driving run_online with is_public=true.
 
 namespace bomber::net {
 class UdpTransport;  // borrowed by reference; the .cpp includes the real header
@@ -47,7 +55,7 @@ enum class LobbyMenuChoice : std::uint8_t {
     JoinOnline,    // JOIN BY CODE: the 6-char code modal, then the waiting room
     HostDirect,    // HOST LAN GAME: the ADR-0010 direct-UDP host (no server)
     JoinDirect,    // JOIN BY IP ADDRESS: the ADR-0010 direct-UDP join
-    // BrowsePublic — Phase 3. See the file header.
+    BrowsePublic,  // BROWSE PUBLIC GAMES: the Phase 3 list, then the same join
 };
 
 // The waiting room's outcome. `ready` means LobbyFlow reached Phase::Ready, so
@@ -98,6 +106,19 @@ public:
     // NAT binding the peers punched is the one gameplay flows through.
     LobbyRoomResult run_online(const OnlineConfig& cfg, net::UdpTransport& transport, bool host,
                                const std::string& code);
+
+    // The PUBLIC GAMES browser (ADR-0011 Phase 3). Asks the matchmaker for the
+    // open public lobbies (LobbyFlow::browse_public), lists them, and returns
+    // true with `code` set to the picked row's code — the SAME contract
+    // run_code_entry has, so the caller falls into the identical run_online()
+    // waiting room instead of a second copy of it. False on Esc (or on a window
+    // close, which also sets `window_closed`).
+    //
+    // `transport` must be bound like run_online's, but it is a BROWSING socket:
+    // LobbyFlow owns one either way, and browsing never punches, so the caller
+    // opens a fresh socket for the match it goes on to join.
+    bool run_public_browser(const OnlineConfig& cfg, net::UdpTransport& transport,
+                            std::string& code, bool& window_closed);
 
 private:
     // The shared MAINMENU backdrop every front-end modal sits over (identical to
