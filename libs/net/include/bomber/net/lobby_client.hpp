@@ -1,8 +1,12 @@
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
+
+#include "bomber/net/lobby_messages.hpp"
 
 // The online lobby CONTROL plane (ADR-0011 / docs/online-multiplayer-design.md
 // §1): a thin WebSocket/TLS client to the matchmaking server. It carries ONLY
@@ -44,6 +48,28 @@ public:
 
     bool is_open() const;
     std::string last_error() const;
+
+    // --- Typed control-plane helpers (PROTOCOL.md §3) ---
+    // Thin wrappers that encode + send() one frame. build_hash is the local
+    // bomber::net::build_hash() the server checks for compatibility.
+    void create_lobby(const std::string& visibility, const std::string& name, int max_seats,
+                      std::uint32_t build_hash, const std::string& player);
+    void join_by_code(const std::string& code, std::uint32_t build_hash,
+                      const std::string& player);
+    void list_public(std::uint32_t build_hash);
+    void set_ready(bool ready);
+    void heartbeat();
+    void send_candidates(const std::string& lobby_id, int seat,
+                         const std::vector<LobbyCandidate>& list);
+    void start_match(const std::string& lobby_id, const std::string& host_token, int input_delay,
+                     std::uint32_t match_config_digest);
+    void reanchor(const std::string& code, const std::string& roster_digest);
+    void match_over(const std::string& lobby_id);
+
+    // Drain inbound frames PARSED to typed messages (PROTOCOL.md §4), on the game
+    // thread. The lobby screen dispatches on LobbyServerMessage::type.
+    using ServerMessageHandler = std::function<void(const LobbyServerMessage&)>;
+    void poll_messages(const ServerMessageHandler& handler);
 
 private:
     struct Impl;

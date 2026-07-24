@@ -1,0 +1,137 @@
+// bomber::net lobby control-plane protocol tests (ADR-0011): the C++ encoders +
+// parser must match the FROZEN wire contract in services/matchmaker/PROTOCOL.md
+// byte-for-byte. Pure JSON round-trips — no sockets, no server. Built only under
+// BOMBER_ENABLE_LOBBY (needs nlohmann/json), so it runs in the GUI presets.
+
+#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <doctest/doctest.h>
+
+#include <nlohmann/json.hpp>
+
+#include "bomber/net/lobby_messages.hpp"
+
+using namespace bomber::net;  // NOLINT(google-build-using-namespace) — test-local
+using json = nlohmann::json;
+
+TEST_CASE("hex_hash formats build_hash as the 0x wire form") {
+    CHECK(hex_hash(0xA1B2C3D4u) == "0xA1B2C3D4");
+    CHECK(hex_hash(0u) == "0x00000000");
+    CHECK(hex_hash(0xC0FFEE01u) == "0xC0FFEE01");
+}
+
+TEST_CASE("client->server encoders produce PROTOCOL.md-shaped frames") {
+    const json c = json::parse(encode_create_lobby("private", "Ege's game", 4, 0xA1B2C3D4u, "Ege"));
+    CHECK(c["type"] == "CreateLobby");
+    CHECK(c["visibility"] == "private");
+    CHECK(c["name"] == "Ege's game");
+    CHECK(c["max_seats"] == 4);
+    CHECK(c["build_hash"] == "0xA1B2C3D4");
+    CHECK(c["player"] == "Ege");
+
+    const json jn = json::parse(encode_join_by_code("K7Q2MP", 0xA1B2C3D4u, "Ada"));
+    CHECK(jn["type"] == "JoinByCode");
+    CHECK(jn["code"] == "K7Q2MP");
+    CHECK(jn["build_hash"] == "0xA1B2C3D4");
+
+    const json sr = json::parse(encode_set_ready(true));
+    CHECK(sr["type"] == "SetReady");
+    CHECK(sr["ready"] == true);
+
+    const json hb = json::parse(encode_heartbeat());
+    CHECK(hb["type"] == "Heartbeat");
+
+    const json sm = json::parse(encode_start_match("L1", "TOK", 2, 0xC0FFEE01u));
+    CHECK(sm["type"] == "StartMatch");
+    CHECK(sm["lobby_id"] == "L1");
+    CHECK(sm["host_token"] == "TOK");
+    CHECK(sm["input_delay"] == 2);
+    CHECK(sm["match_config_digest"] == "0xC0FFEE01");
+
+    const std::vector<LobbyCandidate> cands = {{"host", "192.168.1.9:41234", ""},
+                                               {"relay", "relay.example:3478", "a1"}};
+    const json cj = json::parse(encode_candidates("L1", 1, cands));
+    CHECK(cj["type"] == "Candidates");
+    CHECK(cj["seat"] == 1);
+    REQUIRE(cj["list"].size() == 2);
+    CHECK(cj["list"][0]["kind"] == "host");
+    CHECK_FALSE(cj["list"][0].contains("alloc"));  // empty alloc is omitted
+    CHECK(cj["list"][1]["alloc"] == "a1");
+
+    const json ra = json::parse(encode_reanchor("K7Q2MP", "deadbeef"));
+    CHECK(ra["type"] == "ReanchorLobby");
+    CHECK(ra["roster_digest"] == "deadbeef");
+
+    const json mo = json::parse(encode_match_over("L1"));
+    CHECK(mo["type"] == "MatchOver");
+}
+
+TEST_CASE("parse_server_message decodes every server frame") {
+    {
+        const auto m = parse_server_message(
+            R"({"type":"LobbyCreated","code":"K7Q2MP","lobby_id":"L","host_token":"T","your_seat":0})");
+        CHECK(m.type == LobbyMsgType::LobbyCreated);
+        CHECK(m.code == "K7Q2MP");
+        CHECK(m.lobby_id == "L");
+        CHECK(m.host_token == "T");
+        CHECK(m.your_seat == 0);
+    }
+    {
+        const auto m = parse_server_message(
+            R"({"type":"JoinAccepted","lobby_id":"L","your_seat":1,)"
+            R"("roster":[{"seat":0,"name":"Ege","ready":false,"is_host":true},)"
+            R"({"seat":1,"name":"Ada","ready":true,"is_host":false}],"host_candidates":[]})");
+        CHECK(m.type == LobbyMsgType::JoinAccepted);
+        CHECK(m.your_seat == 1);
+        REQUIRE(m.roster.size() == 2);
+        CHECK(m.roster[0].name == "Ege");
+        CHECK(m.roster[0].is_host);
+        CHECK(m.roster[1].seat == 1);
+        CHECK(m.roster[1].ready);
+    }
+    {
+        const auto m = parse_server_message(
+            R"({"type":"StartMatch","seed":1592371220,"seat_assign":[0,1],)"
+            R"("match_config_digest":"0xC0FFEE01","input_delay":2,)"
+            R"("topology":{"hub_seat":0},"local_seats_mask":2})");
+        CHECK(m.type == LobbyMsgType::StartMatch);
+        CHECK(m.seed == 1592371220u);
+        REQUIRE(m.seat_assign.size() == 2);
+        CHECK(m.seat_assign[1] == 1);
+        CHECK(m.input_delay == 2);
+        CHECK(m.hub_seat == 0);
+        CHECK(m.local_seats_mask == 2);
+    }
+    {
+        const auto m = parse_server_message(R"({"type":"JoinRejected","reason":"build_mismatch"})");
+        CHECK(m.type == LobbyMsgType::JoinRejected);
+        CHECK(m.reason == "build_mismatch");
+    }
+    {
+        const auto m = parse_server_message(
+            R"({"type":"PeerCandidates","seat":0,"list":[{"kind":"host","addr":"192.168.1.9:41234"}]})");
+        CHECK(m.type == LobbyMsgType::PeerCandidates);
+        CHECK(m.candidates_seat == 0);
+        REQUIRE(m.candidates.size() == 1);
+        CHECK(m.candidates[0].kind == "host");
+        CHECK(m.candidates[0].addr == "192.168.1.9:41234");
+    }
+    {
+        const auto m = parse_server_message(
+            R"({"type":"PublicList","lobbies":[{"code":"K7Q2MP","name":"g","players":2,"max":4,"build_ok":true}]})");
+        CHECK(m.type == LobbyMsgType::PublicList);
+        REQUIRE(m.lobbies.size() == 1);
+        CHECK(m.lobbies[0].code == "K7Q2MP");
+        CHECK(m.lobbies[0].players == 2);
+        CHECK(m.lobbies[0].build_ok);
+    }
+    {
+        const auto m = parse_server_message(R"({"type":"Error","code":"not_host","message":"nope"})");
+        CHECK(m.type == LobbyMsgType::Error);
+        CHECK(m.error_code == "not_host");
+        CHECK(m.error_message == "nope");
+    }
+    // Malformed / unknown → Unknown (never throws, never acted on).
+    CHECK(parse_server_message("not json").type == LobbyMsgType::Unknown);
+    CHECK(parse_server_message(R"({"type":"Nonsense"})").type == LobbyMsgType::Unknown);
+    CHECK(parse_server_message("[]").type == LobbyMsgType::Unknown);
+}

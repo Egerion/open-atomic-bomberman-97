@@ -36,3 +36,11 @@ target_link_libraries(bomber_net_build_hash_tests PRIVATE bomber::net)
 # datagram over it (ADR-0011 §3). Soft-skips without sockets.
 bomber_add_test(bomber_net_rendezvous_tests net_rendezvous test_rendezvous.cpp)
 target_link_libraries(bomber_net_rendezvous_tests PRIVATE bomber::net)
+
+# Lobby control-plane protocol: the C++ encoders/parser vs the FROZEN
+# services/matchmaker/PROTOCOL.md. Needs nlohmann/json, so it is built only under
+# BOMBER_ENABLE_LOBBY (the GUI presets) — pure JSON, no sockets.
+if(BOMBER_ENABLE_LOBBY)
+  bomber_add_test(bomber_net_lobby_protocol_tests net_lobby_protocol test_lobby_protocol.cpp)
+  target_link_libraries(bomber_net_lobby_protocol_tests PRIVATE bomber::net)
+endif()

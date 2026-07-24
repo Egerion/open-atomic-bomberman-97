@@ -32,7 +32,7 @@ endif()
 # the deterministic netcode above needs no TLS backend. ixwebsocket is provided
 # by cmake/BomberIXWebSocket.cmake, included at the top level before this dir.
 if(BOMBER_ENABLE_LOBBY)
-  target_sources(bomber_net PRIVATE src/lobby_client.cpp)
-  target_link_libraries(bomber_net PUBLIC ixwebsocket)
+  target_sources(bomber_net PRIVATE src/lobby_client.cpp src/lobby_messages.cpp)
+  target_link_libraries(bomber_net PUBLIC ixwebsocket nlohmann_json::nlohmann_json)
   target_compile_definitions(bomber_net PUBLIC BOMBER_HAS_LOBBY=1)
 endif()

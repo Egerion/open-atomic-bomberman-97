@@ -59,6 +59,16 @@ FetchContent_Declare(ixwebsocket
   GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(ixwebsocket)
 
+# --- nlohmann/json (lobby control-plane JSON) -------------------------------
+# Header-only; parses/encodes the matchmaker's JSON frames
+# (services/matchmaker/PROTOCOL.md). Provides nlohmann_json::nlohmann_json.
+set(JSON_BuildTests OFF CACHE INTERNAL "")
+FetchContent_Declare(nlohmann_json
+  GIT_REPOSITORY https://github.com/nlohmann/json.git
+  GIT_TAG v3.11.3
+  GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(nlohmann_json)
+
 # Third-party headers shouldn't face our /W4. Marking the include dirs SYSTEM
 # keeps lobby_client.cpp's own diagnostics while silencing the dependency's.
 foreach(_dep_target ixwebsocket mbedtls mbedx509 mbedcrypto)

@@ -104,4 +104,52 @@ std::string LobbyClient::last_error() const {
     return impl_->last_error;
 }
 
+// --- Typed control-plane helpers -------------------------------------------
+
+void LobbyClient::create_lobby(const std::string& visibility, const std::string& name,
+                               int max_seats, std::uint32_t build_hash, const std::string& player) {
+    send(encode_create_lobby(visibility, name, max_seats, build_hash, player));
+}
+
+void LobbyClient::join_by_code(const std::string& code, std::uint32_t build_hash,
+                               const std::string& player) {
+    send(encode_join_by_code(code, build_hash, player));
+}
+
+void LobbyClient::list_public(std::uint32_t build_hash) {
+    send(encode_list_public(build_hash));
+}
+
+void LobbyClient::set_ready(bool ready) {
+    send(encode_set_ready(ready));
+}
+
+void LobbyClient::heartbeat() {
+    send(encode_heartbeat());
+}
+
+void LobbyClient::send_candidates(const std::string& lobby_id, int seat,
+                                  const std::vector<LobbyCandidate>& list) {
+    send(encode_candidates(lobby_id, seat, list));
+}
+
+void LobbyClient::start_match(const std::string& lobby_id, const std::string& host_token,
+                              int input_delay, std::uint32_t match_config_digest) {
+    send(encode_start_match(lobby_id, host_token, input_delay, match_config_digest));
+}
+
+void LobbyClient::reanchor(const std::string& code, const std::string& roster_digest) {
+    send(encode_reanchor(code, roster_digest));
+}
+
+void LobbyClient::match_over(const std::string& lobby_id) {
+    send(encode_match_over(lobby_id));
+}
+
+void LobbyClient::poll_messages(const ServerMessageHandler& handler) {
+    poll([&handler](const std::string& frame) {
+        if (handler) handler(parse_server_message(frame));
+    });
+}
+
 }  // namespace bomber::net
