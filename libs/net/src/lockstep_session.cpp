@@ -11,9 +11,9 @@ namespace {
 constexpr std::uint32_t kHashWindow = 256;  // keep this many recent hashes for late peer compares
 }  // namespace
 
-LockstepSession::LockstepSession(const sim::MatchConfig& config, std::uint16_t local_seats,
+LockstepSession::LockstepSession(sim::Simulation& sim, std::uint16_t local_seats,
                                  std::uint16_t all_seats, int input_delay, Transport& transport)
-    : sim_(config),
+    : sim_(&sim),
       transport_(&transport),
       local_seats_(local_seats),
       all_seats_(all_seats),
@@ -109,8 +109,8 @@ bool LockstepSession::advance(const sim::TickInputs& local_input) {
     const auto hit = have_.find(tick_);
     if (hit == have_.end() || hit->second != all_seats_) return false;  // stall: remote input missing
 
-    sim_.tick(inputs_[tick_]);
-    const std::uint64_t h = sim_.hash();
+    sim_->tick(inputs_[tick_]);
+    const std::uint64_t h = sim_->hash();
     hash_[tick_] = h;
 
     const std::vector<std::uint8_t> hp = encode_hash(tick_, h);

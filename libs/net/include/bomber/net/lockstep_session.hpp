@@ -30,13 +30,15 @@ namespace bomber::net {
 
 class LockstepSession {
 public:
-    // `config` seeds the Simulation — the host advertises it and BOTH peers pass
-    // a byte-identical copy (ADR-0010: seed/roster parity). `local_seats` is the
-    // bitmask of human seats THIS peer owns; `all_seats` every human seat in the
-    // match (so remote = all_seats & ~local_seats). `input_delay` ticks of delay
-    // — pick it >= the expected one-way latency in ticks to avoid stalls.
-    LockstepSession(const sim::MatchConfig& config, std::uint16_t local_seats,
-                    std::uint16_t all_seats, int input_delay, Transport& transport);
+    // `sim` is BORROWED (not owned) and must outlive the session — the caller
+    // seeds it from an identical MatchConfig on both peers (ADR-0010: seed/roster
+    // parity) and, in the game, is the same Simulation the renderer draws, so a
+    // netplay match needs no separate copy. `local_seats` is the bitmask of human
+    // seats THIS peer owns; `all_seats` every human seat in the match (so remote
+    // = all_seats & ~local_seats). `input_delay` ticks of delay — pick it >= the
+    // expected one-way latency in ticks to avoid stalls.
+    LockstepSession(sim::Simulation& sim, std::uint16_t local_seats, std::uint16_t all_seats,
+                    int input_delay, Transport& transport);
 
     // Provide the local player's input for the next un-produced input frame
     // (applied `input_delay` ticks ahead) and try to advance ONE confirmed tick.
@@ -50,8 +52,8 @@ public:
     // needs its local input to line up deterministically with a tick (tests, or
     // a replay recorder) can key on this; a real game just passes "input now".
     std::uint32_t input_tick() const { return input_tick_; }
-    const sim::Simulation& sim() const { return sim_; }
-    std::uint64_t hash() const { return sim_.hash(); }
+    const sim::Simulation& sim() const { return *sim_; }
+    std::uint64_t hash() const { return sim_->hash(); }
 
     // Latched true the first time a peer's reported hash disagreed with ours.
     bool desynced() const { return desynced_; }
@@ -63,7 +65,7 @@ private:
     void note_peer_hash(std::uint32_t tick, std::uint64_t peer_hash);
     void prune();
 
-    sim::Simulation sim_;
+    sim::Simulation* sim_;  // BORROWED — the caller owns and seeds it
     Transport* transport_;
     std::uint16_t local_seats_;
     std::uint16_t all_seats_;

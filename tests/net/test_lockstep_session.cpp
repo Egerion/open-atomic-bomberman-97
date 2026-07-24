@@ -59,8 +59,10 @@ TEST_CASE("input-delay lockstep: two peers over a latent link stay in perfect sy
     net::LoopbackLink link(/*latency=*/3);
     net::LoopbackTransport ta(link, 0);
     net::LoopbackTransport tb(link, 1);
-    net::LockstepSession a(open_config(), kSeat0, kBoth, /*input_delay=*/4, ta);
-    net::LockstepSession b(open_config(), kSeat1, kBoth, /*input_delay=*/4, tb);
+    sim::Simulation sa(open_config());
+    sim::Simulation sb(open_config());
+    net::LockstepSession a(sa, kSeat0, kBoth, /*input_delay=*/4, ta);
+    net::LockstepSession b(sb, kSeat1, kBoth, /*input_delay=*/4, tb);
 
     constexpr int kTarget = 600;         // 30 s at 20 Hz
     constexpr int kMaxRounds = kTarget * 4;  // headroom; a stall-free run needs ~kTarget
@@ -94,8 +96,10 @@ TEST_CASE("input redundancy survives packet loss: peers stay in sync over a loss
     net::LoopbackLink link(/*latency=*/2, /*drop_every=*/3);
     net::LoopbackTransport ta(link, 0);
     net::LoopbackTransport tb(link, 1);
-    net::LockstepSession a(open_config(), kSeat0, kBoth, /*input_delay=*/6, ta);
-    net::LockstepSession b(open_config(), kSeat1, kBoth, /*input_delay=*/6, tb);
+    sim::Simulation sa(open_config());
+    sim::Simulation sb(open_config());
+    net::LockstepSession a(sa, kSeat0, kBoth, /*input_delay=*/6, ta);
+    net::LockstepSession b(sb, kSeat1, kBoth, /*input_delay=*/6, tb);
 
     constexpr int kTarget = 300;
     constexpr int kMaxRounds = kTarget * 8;  // generous: loss makes some rounds stall then catch up
@@ -122,8 +126,10 @@ TEST_CASE("the hash exchange catches a divergence (mismatched seeds)") {
     net::LoopbackLink link(/*latency=*/0);
     net::LoopbackTransport ta(link, 0);
     net::LoopbackTransport tb(link, 1);
-    net::LockstepSession a(cfg_a, kSeat0, kBoth, /*input_delay=*/2, ta);
-    net::LockstepSession b(cfg_b, kSeat1, kBoth, /*input_delay=*/2, tb);
+    sim::Simulation sa(cfg_a);
+    sim::Simulation sb(cfg_b);
+    net::LockstepSession a(sa, kSeat0, kBoth, /*input_delay=*/2, ta);
+    net::LockstepSession b(sb, kSeat1, kBoth, /*input_delay=*/2, tb);
 
     for (int i = 0; i < 100; ++i) pump(a, b, link);
 

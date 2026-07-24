@@ -87,8 +87,10 @@ TEST_CASE("lockstep over real UDP (localhost): two peers stay in perfect sync") 
         return;
     }
 
-    net::LockstepSession a(open_config(), kSeat0, kBoth, /*input_delay=*/3, ta);
-    net::LockstepSession b(open_config(), kSeat1, kBoth, /*input_delay=*/3, tb);
+    sim::Simulation sa(open_config());
+    sim::Simulation sb(open_config());
+    net::LockstepSession a(sa, kSeat0, kBoth, /*input_delay=*/3, ta);
+    net::LockstepSession b(sb, kSeat1, kBoth, /*input_delay=*/3, tb);
 
     constexpr int kTarget = 120;  // 6 s of gameplay over the loopback network
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
