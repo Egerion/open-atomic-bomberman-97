@@ -84,27 +84,32 @@ window-manager dialog box, not a full-screen `sub_42A088` image. Neither
 started later inside `sub_42B060` — see "Top-level flow" below), so the two
 LOADING dialogs run in silence.
 
-**Port status: DONE, re-skinned 2026-07-10 (WINZ pass).**
-`GameApp::init` (`game_app.cpp`) flashes a small dialog
-(`draw_boot_loading_dialog`) at the same two points in the same order: once
-captioned "Loading data..." immediately before `assets_.load()`, and once
-captioned `getstring(200)` ("Loading sound...", read from the now-loaded
-MESSAGES.TXT) immediately before `audio_.init()`. Both flashes render
-through the RE-PINNED chrome (below): the WINZ.PCX 9-patch window (WINZ is
-loaded standalone before the first flash via
-`AssetStore::load_frontend_winz`, mirroring `sub_414DF4`'s own "winz.plt"
-load) with the real FONT6 glyph textures — FONT6 is loaded standalone
-before the first flash, matching the CONFIRMED init order (`sub_41095A`
-pins FONT6 via `sub_414DF4` before it calls either loading dialog; see
-"FONT6 timing" below).
-**Documented simplification (unchanged):** our loaders have no per-file/
-per-byte progress callback (`AssetStore::load` is one monolithic try-block)
-and complete in well under a second on modern hardware, so each flash
-presents the bar already full (100%) for one rendered frame rather than
-animating a real or synthetic percent — inventing progress data we don't
-have would be less faithful than a same-order same-caption flash. Skipped in
-`--demo` mode (matching that `audio_.init` is also skipped there). No PCX
-asset dependency, no `libs/sim` involvement.
+**Port status: DONE, re-skinned 2026-07-10 (WINZ pass); ANIMATED + made
+responsive 2026-07-24.** `GameApp::init` (`game_app.cpp`) shows the dialog
+(`draw_boot_loading_dialog`, driven through `GameApp::draw_boot_loading`) at
+the same two points in the same order: captioned "Loading data..." across the
+asset load, and captioned `getstring(200)` ("Loading sound...", read from the
+now-loaded MESSAGES.TXT) across `audio_.init()`. Both render through the
+RE-PINNED chrome (below): the WINZ.PCX 9-patch window (WINZ is loaded
+standalone before the first flash via `AssetStore::load_frontend_winz`,
+mirroring `sub_414DF4`'s own "winz.plt" load) with the real FONT6 glyph
+textures — FONT6 is loaded standalone before the first flash, matching the
+CONFIRMED init order (`sub_41095A` pins FONT6 via `sub_414DF4` before it calls
+either loading dialog; see "FONT6 timing" below).
+**The bar now ANIMATES for real (was: presented already-complete at 100%).**
+A per-asset progress callback is threaded through `AssetStore::load` (per
+ANI/PCX group), `AssetStore::build_player_sets` (per player — the port's
+recolor pass has no original dialog, so it rides the tail of the "Loading
+data..." bar), and `AudioEngine::init` (coarse steps mirroring `sub_4287B9`'s
+5/20/40/60/80/100). `draw_boot_loading` PUMPS the SDL event queue and repaints
+between chunks, so the fraction climbs 0 → 100 and the window never goes "not
+responding" during the (multi-second on a DATA_HD install) synchronous decode
+— fixing the reported "freeze + bar starts at 100%". The recolor moved AHEAD
+of the sound flash (audio init now runs last, in `GameApp::load_sound`) so ALL
+sprite data is decoded AND recolored before "Loading sound..." — faithful to
+`sub_41D695` fully preceding `sub_42896E`. Skipped in `--demo`/`--*-shot` modes
+(scripted captures, nothing to keep responsive; the load still runs, silently).
+No PCX asset dependency, no `libs/sim` involvement.
 
 ### The `sub_43C734` dialog-chrome primitive — PINNED (2026-07-09, REVISED 2026-07-10: base coat only, WINZ skin on top)
 
@@ -390,15 +395,20 @@ re-decoded through COLOR.PAL):
   **(168,168,164)**; unfilled remainder `x=3·pct+31, width=3·(100−pct)`,
   same rect, black.
 
-**Port status: re-skinned 2026-07-10** (`draw_boot_loading_dialog`,
-`libs/game/src/game_app.cpp` + `draw_dialog_chrome`/`draw_dialog_text`,
-`libs/game/src/dialog_chrome.cpp`) — WINZ.PCX 9-patch window (loaded
-standalone before the first flash via `AssetStore::load_frontend_winz`,
-mirroring `sub_414DF4`'s own winz.plt load), caption/readout as outlined
-text in the LUT-true inks, white bar frame, bar in (168,168,164)/black,
-all via FONT6 (see the timing trace below), keeping the already-documented
-"presented already-complete" percent simplification (no per-byte load
-callback) and the boot order unchanged.
+**Port status: re-skinned 2026-07-10, ANIMATED 2026-07-24**
+(`draw_boot_loading_dialog`, `libs/game/src/game_app.cpp` +
+`draw_dialog_chrome`/`draw_dialog_text`, `libs/game/src/dialog_chrome.cpp`) —
+WINZ.PCX 9-patch window (loaded standalone before the first flash via
+`AssetStore::load_frontend_winz`, mirroring `sub_414DF4`'s own winz.plt load),
+caption/readout as outlined text in the LUT-true inks, white bar frame,
+two-tone bar in (168,168,164)/black, all via FONT6 (see the timing trace
+below). The `fraction` parameter is now driven by a real per-asset progress
+callback (see the boot LOADING dialog section's Port status above), so the
+filled segment is `300*fraction` and the `%d` readout is `round(fraction*100)`
+— the bar walks 0 → 100 with the window pumped between repaints, RESTORING
+`sub_412E33`'s live readout in place of the earlier "presented
+already-complete 100%" simplification (which, un-pumped, read as a frozen full
+bar on a slow/DATA_HD install).
 
 ### FONT6 timing — CONFIRMED ready before BOTH loading-dialog flashes
 

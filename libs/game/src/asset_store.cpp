@@ -1,5 +1,6 @@
 #include "bomber/game/asset_store.hpp"
 
+#include <algorithm>  // std::min (boot-loading progress clamp)
 #include <cstdio>
 #include <exception>
 #include <string>
@@ -37,10 +38,28 @@ const Sprite& AssetStore::load_frontend_winz(SDL_Renderer* ren, const fs::path& 
     return frontend_pcx("WINZ");
 }
 
-bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
+bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir,
+                      const std::function<void(float)>& progress) {
     ren_ = ren;
     auto ani_dir = game_dir / "DATA" / "ANI";
     auto res_dir = game_dir / "DATA" / "RES";
+    // Boot LOADING progress: tick() bumps a step counter and reports 0 -> 1 so
+    // GameApp::draw_boot_loading can pump the window + animate the "Loading
+    // data..." bar between chunks (the port's stand-in for the original's
+    // sub_412E33(100*read/total) per-MASTER.ALI-entry readout). The denominator
+    // is the count of tick() points below; the trailing DATA_HD overlay block's
+    // 34 ticks (one inside hd_ov per call) are counted only when DATA_HD exists,
+    // so a classic install fills the bar exactly as XPLODE finishes rather than
+    // stalling short. std::min clamps any drift; overshoot on a missing-file
+    // path just fills a touch faster (never past 100%).
+    const bool has_hd = fs::exists(game_dir / "DATA_HD");
+    const int approx_steps = has_hd ? 121 : 87;
+    int done_steps = 0;
+    auto tick = [&] {
+        if (progress)
+            progress(std::min(1.0f, static_cast<float>(++done_steps) /
+                                        static_cast<float>(approx_steps)));
+    };
     // The in-match master-palette snap (colorpal.hpp): COLOR.PAL lives in the
     // install ROOT. Optional — a missing/short file leaves colorpal_ inert and
     // the game renders the raw per-asset decode (the pre-2026-07-13 look).
@@ -50,6 +69,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
         std::fprintf(stderr, "COLOR.PAL unavailable (%s); classic colour snap disabled\n",
                      e.what());
     }
+    tick();  // colorpal
     try {
         // The in-match master-palette snap (colorpal.hpp) is applied to EVERY
         // match-drawn asset — the original renders the whole match on one
@@ -72,6 +92,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
         walk_.load(ren, ani_dir / "WALK.ANI", snap);
         kick_.load(ren, ani_dir / "KICK.ANI", snap);
         shadow_.load(ren, ani_dir / "SHADOW.ANI", snap);
+        tick();  // core match ANIs (kfont..shadow)
 
         // Animated floor-powerup art (POWERS.ANI, seq "power <name>"). Shared and
         // NOT player-coloured, loaded once. Cosmetic: a missing/broken file must
@@ -82,6 +103,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
         } catch (const std::exception& e) {
             std::fprintf(stderr, "POWERS.ANI load failed: %s\n", e.what());
         }
+        tick();  // POWERS.ANI
 
         // Stage-actor floor art (docs/re/stage-actors.md), shared/uncoloured.
         // CONVEYOR.ANI = "extra conveyor <dir>"; EXTRAS.ANI = "extra trampoline",
@@ -93,12 +115,14 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
         } catch (const std::exception& e) {
             std::fprintf(stderr, "CONVEYOR.ANI load failed: %s\n", e.what());
         }
+        tick();  // CONVEYOR.ANI
         try {
             auto p = ani_dir / "EXTRAS.ANI";
             if (fs::exists(p)) extras_.load(ren, p, snap);
         } catch (const std::exception& e) {
             std::fprintf(stderr, "EXTRAS.ANI load failed: %s\n", e.what());
         }
+        tick();  // EXTRAS.ANI
 
         // Campaign rover/ghost hazard art (ALIENS1.ANI, seq "ghost <dir>"/
         // "rover <dir>"). Shared/uncoloured — the sequence names carry no
@@ -111,6 +135,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
         } catch (const std::exception& e) {
             std::fprintf(stderr, "ALIENS1.ANI load failed: %s\n", e.what());
         }
+        tick();  // ALIENS1.ANI
 
         // Trigger-bomb art, recoloured per owner like the regular bomb.
         // TRIGANIM.ANI, not TRIGBOMB.ANI — see trigbomb_'s doc comment
@@ -122,6 +147,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
         } catch (const std::exception& e) {
             std::fprintf(stderr, "TRIGANIM.ANI load failed: %s\n", e.what());
         }
+        tick();  // TRIGANIM.ANI
 
         // HEADWIPE.ANI is deliberately NOT loaded: it is absent from
         // MASTER.ALI, so the original engine never loads it — dead art, like
@@ -139,6 +165,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
         } catch (const std::exception& e) {
             std::fprintf(stderr, "MISC.ANI load failed: %s\n", e.what());
         }
+        tick();  // MISC.ANI
 
         // EDIT.ANI: the scheme editor's schematic "tile -1 blank/brick/solid"
         // tiles (the '0'-key tileset toggle's -1 state — see edit()'s doc
@@ -150,6 +177,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
         } catch (const std::exception& e) {
             std::fprintf(stderr, "EDIT.ANI load failed: %s\n", e.what());
         }
+        tick();  // EDIT.ANI
 
         // Goldman wheel pointer ("ring" seq, docs/re/goldman-roulette.md §3/§7):
         // RESOLVED — MISC.ANI owns "ring" (see the misc_ load above), so it
@@ -176,6 +204,8 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
             }
         }
 
+        tick();  // ring probe
+
         // Front-end bitmap font for the .BM help/credits screens AND the dialog
         // chrome (sub_43C734 family). GameApp::init now calls
         // load_frontend_font() standalone before this, matching sub_41095A's
@@ -183,6 +213,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
         // this call stays so load() alone (e.g. tools that skip the early call)
         // still gets the font. (docs/formats/fon.md.)
         load_frontend_font(game_dir);
+        tick();  // FONT6.FON
 
         // The MESSAGES.TXT string table (getstring / sub_4124A4): the setup and
         // net-game screens format their labels from it. Install ROOT, like the
@@ -193,6 +224,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
         } catch (const std::exception& e) {
             std::fprintf(stderr, "MESSAGES.TXT load failed: %s\n", e.what());
         }
+        tick();  // MESSAGES.TXT
 
         // The ten player-colour remap tables 0.RMP..9.RMP (install ROOT), the
         // authentic per-colour index remap the original blit applies to the
@@ -216,6 +248,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
                 std::fprintf(stderr, "%d.RMP load failed (%s); using fallback recolour\n", i,
                              e.what());
             }
+            tick();  // i.RMP
         }
 
         // Idle "cornerhead" fidgets (CORNER0..7.ANI). Cosmetic and optional:
@@ -229,6 +262,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
                 std::fprintf(stderr, "cornerhead load failed (%s): %s\n", p.string().c_str(),
                              e.what());
             }
+            tick();  // CORNER<i>.ANI
         }
 
         // "Carrying a bomb" poses (BWALK1..4.ANI, one direction per file). Like
@@ -243,6 +277,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
                 std::fprintf(stderr, "carry-bomb load failed (%s): %s\n", p.string().c_str(),
                              e.what());
             }
+            tick();  // BWALK<i>.ANI
         }
 
         // Punch action pose (PUNBOMB1..4.ANI, seq "punch <dir>"). CORRECTED
@@ -258,6 +293,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
                 std::fprintf(stderr, "punch-pose load failed (%s): %s\n", p.string().c_str(),
                              e.what());
             }
+            tick();  // PUNBOMB<i>.ANI
         }
 
         // "Picking up a bomb" transitional pose (PUP1..4.ANI, seq "pickup
@@ -272,6 +308,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
                 std::fprintf(stderr, "pickup-pose load failed (%s): %s\n", p.string().c_str(),
                              e.what());
             }
+            tick();  // PUP<i>.ANI
         }
 
         static constexpr const char* kPowFiles[] = {
@@ -299,10 +336,12 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
                                  e.what());
                 }
             }
+            tick();  // POW<i> icon (+ optional HD)
         }
 
         // Death animations: every 'die green N' sequence across XPLODE*.ANI.
         for (int i = 1; i <= 32; ++i) {
+            tick();  // XPLODE<i>.ANI (+ optional HD) — counts all 32 slots
             auto p = ani_dir / ("XPLODE" + std::to_string(i) + ".ANI");
             if (!fs::exists(p)) continue;
             AniTextures ani;
@@ -329,6 +368,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
         // (run afterwards) propagates the HD frames into the coloured sets too.
         const auto hd_ani = game_dir / "DATA_HD" / "ANI";
         auto hd_ov = [&](AniTextures& t, const std::string& file) {
+            tick();  // one per HD-overlay attempt (34 total; counted only when has_hd)
             auto p = hd_ani / file;
             if (!fs::exists(p)) return;
             try {
@@ -363,12 +403,19 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir) {
         std::fprintf(stderr, "asset load failed: %s\n", e.what());
         return false;
     }
+    if (progress) progress(1.0f);  // snap to full regardless of which optional files were absent
     game_dir_ = game_dir;
     return true;
 }
 
-void AssetStore::build_player_sets(const std::int32_t colors[][3]) {
+void AssetStore::build_player_sets(const std::int32_t colors[][3],
+                                   const std::function<void(float)>& progress) {
     for (int p = 0; p < kLocalPlayers; ++p) {
+        // Report BEFORE each slot's recolor so the boot LOADING dialog repaints
+        // + pumps the window between players (this pass recolors ~15 ANI groups
+        // x kLocalPlayers, each a per-pixel remap + GPU upload — heavy enough to
+        // hang the window if left un-pumped).
+        if (progress) progress(static_cast<float>(p) / static_cast<float>(kLocalPlayers));
         // Player slot p's intrinsic colour index is p itself (slot 0 = white /
         // 0.RMP, slot 1 = black / 1.RMP; docs/re/setup-screens.md — colour is
         // keyed by slot index, there is no picker). Prefer the authentic p.RMP
@@ -408,6 +455,7 @@ void AssetStore::build_player_sets(const std::int32_t colors[][3]) {
             xplode_c_[p].push_back(std::move(colored));
         }
     }
+    if (progress) progress(1.0f);
 }
 
 void AssetStore::set_color_fallbacks(const std::int32_t colors[][3], int n) {
