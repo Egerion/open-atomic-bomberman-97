@@ -8,6 +8,13 @@ deterministic fixed-timestep lockstep *precisely so this door stays open*; this
 file distils what the existing RE reveals about the original's net model, what
 the port has today, and what a modern online mode would take.
 
+> **Deep-dive companion:** `docs/re/audit/multiplayer-deep.md` (2026-07-24)
+> extends this doc with the four things left thin here — the **max player/machine
+> count** (the 10-slot roster + type-4 remote seats, the `0x430C00` 5-slot
+> packet-queue clue), the **full network screen map** ("the extra pages":
+> `sub_42B0CE`/`sub_42B47D` + the `sub_40798B`/`sub_407F4F` config sub-screens),
+> a **deeper mechanics diff**, and a **port-MVP-vs-original gap table**.
+
 Sources: `docs/re/` (`facts.md`, `coverage-audit.md`, `dark-matter.md`,
 `frontend-flow.md`, `setup-screens.md`, `campaign.md`, `goldman-roulette.md`,
 `enclosure.md`, `audit/*`), the port's own net-aware code (`libs/`, `apps/`),
