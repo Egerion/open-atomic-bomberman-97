@@ -62,7 +62,10 @@ public:
 
 private:
     void need(std::size_t n) const {
-        if (pos_ + n > data_.size()) throw std::out_of_range("BinaryReader: read past end");
+        // `pos_ + n` can wrap for a pathological n; compare against remaining()
+        // instead (== size - pos_, with the pos_ <= size_ invariant always
+        // held). Identical to `pos_ + n > size` for every in-range read.
+        if (n > remaining()) throw std::out_of_range("BinaryReader: read past end");
     }
 
     std::span<const std::uint8_t> data_;

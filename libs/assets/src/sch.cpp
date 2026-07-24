@@ -40,7 +40,26 @@ Scheme load(const std::filesystem::path& path) {
 
     Scheme sch;
     std::string raw;
+    int lineno = 0;
+
+    // std::stoi throws std::invalid_argument / std::out_of_range on a
+    // non-numeric or oversized field — both are std::logic_error, which
+    // violates this module's contract. Every sibling text parser (and this
+    // parser's own -R/-S/-P checks below) reports malformed input as
+    // std::runtime_error, and that is what callers catch. Re-tag each numeric
+    // field to a path/line-tagged std::runtime_error; valid fields are
+    // forwarded unchanged, so well-formed files parse byte-identically.
+    auto to_int = [&](const std::string& field) -> int {
+        try {
+            return std::stoi(field);
+        } catch (const std::exception&) {
+            throw std::runtime_error("scheme: bad numeric field '" + field + "' on line " +
+                                     std::to_string(lineno) + ": " + path.string());
+        }
+    };
+
     while (std::getline(f, raw)) {
+        ++lineno;
         std::string line = trim(raw);
         if (line.empty() || line[0] == ';') continue;
         if (line[0] != '-' || line.size() < 2) continue;
@@ -48,9 +67,9 @@ Scheme load(const std::filesystem::path& path) {
         char cmd = line[1];
         std::string rest = line.size() > 3 ? line.substr(3) : std::string();  // after "-X,"
         switch (cmd) {
-            case 'V': sch.version = std::stoi(rest); break;
+            case 'V': sch.version = to_int(rest); break;
             case 'N': sch.name = trim(rest); break;
-            case 'B': sch.brick_density = std::stoi(rest); break;
+            case 'B': sch.brick_density = to_int(rest); break;
             case 'R': {
                 auto parts = split(rest, ',', 2);
                 if (parts.size() != 2) throw std::runtime_error("bad -R line: " + path.string());
@@ -61,10 +80,10 @@ Scheme load(const std::filesystem::path& path) {
                 auto parts = split(rest, ',');
                 if (parts.size() < 3) throw std::runtime_error("bad -S line: " + path.string());
                 Spawn sp;
-                sp.player = std::stoi(parts[0]);
-                sp.x = std::stoi(parts[1]);
-                sp.y = std::stoi(parts[2]);
-                if (parts.size() > 3) sp.extra = std::stoi(parts[3]);
+                sp.player = to_int(parts[0]);
+                sp.x = to_int(parts[1]);
+                sp.y = to_int(parts[2]);
+                if (parts.size() > 3) sp.extra = to_int(parts[3]);
                 sch.spawns.push_back(sp);
                 break;
             }
@@ -72,11 +91,11 @@ Scheme load(const std::filesystem::path& path) {
                 auto parts = split(rest, ',', 6);
                 if (parts.size() < 5) throw std::runtime_error("bad -P line: " + path.string());
                 PowerupRule pr;
-                pr.id = std::stoi(parts[0]);
-                pr.born_with = std::stoi(parts[1]);
-                pr.has_override = std::stoi(parts[2]);
-                pr.override_value = std::stoi(parts[3]);
-                pr.forbidden = std::stoi(parts[4]);
+                pr.id = to_int(parts[0]);
+                pr.born_with = to_int(parts[1]);
+                pr.has_override = to_int(parts[2]);
+                pr.override_value = to_int(parts[3]);
+                pr.forbidden = to_int(parts[4]);
                 if (parts.size() > 5) pr.comment = trim(parts[5]);
                 sch.powerups.push_back(pr);
                 break;

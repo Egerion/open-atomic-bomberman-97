@@ -47,3 +47,8 @@ add_test(NAME campaign COMMAND bomber_campaign_tests)
 add_executable(bomber_sch_write_tests test_sch_write.cpp)
 target_link_libraries(bomber_sch_write_tests PRIVATE bomber::assets doctest::doctest bomber::warnings)
 add_test(NAME sch_write COMMAND bomber_sch_write_tests)
+
+# .SCH loader malformed-input contract (bad numeric field -> std::runtime_error).
+add_executable(bomber_sch_malformed_tests test_sch_malformed.cpp)
+target_link_libraries(bomber_sch_malformed_tests PRIVATE bomber::assets doctest::doctest bomber::warnings)
+add_test(NAME sch_malformed COMMAND bomber_sch_malformed_tests)
