@@ -14,6 +14,15 @@
 #include "bomber/sim/simulation.hpp"       // sim::Simulation
 #include "bomber/sim/tuning.hpp"           // sim::Tuning
 
+// The netplay lockstep session (bomber::net, libs/net) is only ever reached
+// through a POINTER in this seam — forward-declared, never included, so the
+// heavy net/sim-coupled header stays out of every screen TU that pulls the
+// seam in. match_runner.cpp (the sole caller of ->advance()) includes the real
+// header. Default-null below, so every non-netplay caller is byte-identical.
+namespace bomber::net {
+class LockstepSession;
+}  // namespace bomber::net
+
 // Seam 2 (ADR-0009 §"shared front-end state" / §10 MatchRunner): the non-service
 // state the match runtime (run_match + its start_match / collect_inputs /
 // draw_player_row / draw_fps_overlay members) reads/writes, bundled by reference
@@ -68,6 +77,15 @@ struct MatchRunnerState {
     const int& campaign_stage_index;                      // GameApp::campaign_stage_index_
     const std::filesystem::path& game_dir;                // GameApp::opts_.game_dir (EXTRA<n>.RES)
     const bool& demo;                                     // GameApp::opts_.demo (round-start freeze disarm)
+
+    // --- Netplay hook (increment 5b, ADR-0010 §3.3 step 5) ---
+    // When non-null, MatchRunner::run() drives the (borrowed) sim through this
+    // lockstep session instead of ticking it directly, forcing the deterministic
+    // fixed-tick path (never the F9 frame() cadence). GameApp::run_netplay owns
+    // the session + the canonical config; every other caller leaves this null,
+    // so the sim tick/seed path — and the golden hashes — are untouched.
+    net::LockstepSession* net_session = nullptr;
+    std::uint16_t net_local_seats = 0;  // this peer's human-seat bitmask (bit s == seat s)
 };
 
 }  // namespace bomber::game

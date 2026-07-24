@@ -41,5 +41,10 @@ target_include_directories(bomber_game_core PUBLIC include)
 target_compile_features(bomber_game_core PUBLIC cxx_std_20)
 target_link_libraries(bomber_game_core
   PUBLIC bomber::assets bomber::sim bomber::match bomber::audio SDL3::SDL3
-  PRIVATE bomber::warnings bomber::platform
+  # bomber::net: the netplay engine (libs/net) for GameApp::run_netplay +
+  # MatchRunner's lockstep drive. SDL-free, already headless-built; PRIVATE
+  # because no public bomber::game header exposes a net type by value (the
+  # MatchRunnerState seam holds only a forward-declared LockstepSession*). On a
+  # static lib the dep still propagates to apps/game's link line (incl. ws2_32).
+  PRIVATE bomber::warnings bomber::platform bomber::net
 )
