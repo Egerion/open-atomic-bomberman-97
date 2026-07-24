@@ -52,6 +52,6 @@
     { "name": "windows-fetch", "configurePreset": "windows-fetch", "configuration": "Release" },
     { "name": "linux", "configurePreset": "linux" },
     { "name": "macos", "configurePreset": "macos" },
-    { "name": "headless", "configurePreset": "headless" }
+    { "name": "headless", "configurePreset": "headless", "configuration": "Release" }
   ]
 }

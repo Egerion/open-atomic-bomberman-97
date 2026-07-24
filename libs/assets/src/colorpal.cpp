@@ -15,7 +15,7 @@ Palette Palette::load(const std::filesystem::path& path) {
     // Master palette: 256 * 3 six-bit VGA entries, uploaded as `4 * value`
     // (sub_443608), i.e. an 8-bit value with the low two bits zero and a 252
     // ceiling. Clamp defensively though a valid 6-bit entry never exceeds 63.
-    for (std::size_t i = 0; i < 256 * 3; ++i) {
+    for (std::size_t i = 0; i < std::size_t{256} * 3; ++i) {
         const int v = buf[i] * 4;
         p.master_[i] = static_cast<std::uint8_t>(v > 255 ? 255 : v);
     }

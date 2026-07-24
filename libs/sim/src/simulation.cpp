@@ -662,7 +662,7 @@ void field_vs_players(State& s, PowerupSystem& powerups, DiseaseSystem& diseases
     for (int i = 0; i < kMaxPlayers; ++i) resolve_player_field(s, i, powerups, diseases);
 }
 
-enum class TickPhase { Full, Players, Systems };
+enum class TickPhase : std::uint8_t { Full, Players, Systems };
 
 // `phase` splits the tick for the F9 native-cadence mode (game_app.cpp):
 //   Players  = only the per-frame movement/AI pass, run once per DISPLAYED

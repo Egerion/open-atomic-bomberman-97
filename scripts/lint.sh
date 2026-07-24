@@ -26,7 +26,13 @@ if [ -z "${CT:-}" ]; then
   exit 1
 fi
 
+# One -I per libs/*/include (keep in sync with the component list in CLAUDE.md's
+# architecture map). audio/core/platform were split out after this list was first
+# written; without them clang-tidy can't resolve bomber/audio, bomber/core
+# (e.g. geometry.hpp, pulled in by sim/constants.hpp) or bomber/platform, and
+# every dependent TU fails to parse rather than being linted.
 INCLUDES=(-Ilibs/sim/include -Ilibs/sim/src -Ilibs/assets/include \
+          -Ilibs/audio/include -Ilibs/core/include -Ilibs/platform/include \
           -Ilibs/match/include -Ilibs/game/include)
 SDL_INC="build/windows-fetch/_deps/sdl3-src/include"
 if [ -d "$SDL_INC" ]; then

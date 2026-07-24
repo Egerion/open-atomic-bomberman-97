@@ -45,9 +45,14 @@ float text_w(const FontTextures& font, const std::string& s) {
 // cell; else v = extent - i` loops, translated to src/dst rect pairs.
 void tile_patch(SDL_Renderer* ren, SDL_Texture* tex, const SDL_FRect& src, float dx, float dy,
                 float dw, float dh) {
-    for (float ox = 0; ox < dw; ox += src.w) {
+    // Integer tile index (not a float loop counter): ox/oy are derived as
+    // index*cell, mirroring sub_416B43's integer `i`-stepped extent walk and
+    // avoiding accumulated float drift.
+    for (int ix = 0; ix * src.w < dw; ++ix) {
+        const float ox = ix * src.w;
         const float w = std::min(src.w, dw - ox);
-        for (float oy = 0; oy < dh; oy += src.h) {
+        for (int iy = 0; iy * src.h < dh; ++iy) {
+            const float oy = iy * src.h;
             const float h = std::min(src.h, dh - oy);
             SDL_FRect s{src.x, src.y, w, h};
             SDL_FRect d{dx + ox, dy + oy, w, h};
@@ -138,9 +143,9 @@ void draw_dialog_button(SDL_Renderer* ren, const FontTextures& font, float x, fl
     else
         SDL_SetRenderDrawColor(ren, kButtonFaceR, kButtonFaceG, kButtonFaceB, 255);
     SDL_RenderFillRect(ren, &face);
-    for (float inset = 2.0f; inset >= 1.0f; inset -= 1.0f) {
-        const float x0 = x + inset, y0 = y + inset;
-        const float rw = w - 2 * inset, rh = bh - 2 * inset;
+    for (int inset = 2; inset >= 1; --inset) {
+        const float x0 = x + static_cast<float>(inset), y0 = y + static_cast<float>(inset);
+        const float rw = w - static_cast<float>(2 * inset), rh = bh - static_cast<float>(2 * inset);
         if (pressed)
             SDL_SetRenderDrawColor(ren, kBevelDarkR, kBevelDarkG, kBevelDarkB, 255);
         else

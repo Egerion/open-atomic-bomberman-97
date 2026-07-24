@@ -48,7 +48,7 @@ std::string fmt_seq(std::string f, std::initializer_list<std::string> args) {
         if (p == std::string::npos || p + 1 >= f.size()) break;
         const char c = f[p + 1];
         if (c != 'u' && c != 'd' && c != 'i' && c != 's') break;
-        f = f.substr(0, p) + a + f.substr(p + 2);
+        f.replace(p, 2, a);
         pos = p + a.size();
     }
     return f;

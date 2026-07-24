@@ -252,13 +252,17 @@ void BmScreen::on_key(SDL_Keycode key) {
 }
 
 void BmScreen::draw(SDL_Renderer* ren) const {
-    if (!ren) return;
+    // assets_ is set from a reference in every constructor, so it is only null
+    // on a default-constructed-but-unused instance; guarding here (beside the
+    // ren/font_ guards) makes that impossible-in-practice state a clean no-op
+    // and lets the inline-image blit below deref it unconditionally.
+    if (!ren || !assets_) return;
     // The WINZ-9-patch viewer window (see the kWin* block above) — the
     // original repaints it every dirty frame (sub_41726B @ 16423); the old
     // translucent black band was a port stand-in from before the 9-patch
     // primitive existed.
     draw_dialog_chrome(ren, DialogRect{kWinX, kWinY, kWinW, kWinH},
-                       assets_ ? &assets_->frontend_pcx("WINZ") : nullptr);
+                       &assets_->frontend_pcx("WINZ"));
 
     if (!font_ || !font_->loaded()) return;
     const int lh = font_->line_height();

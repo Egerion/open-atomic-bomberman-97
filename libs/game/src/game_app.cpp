@@ -243,7 +243,7 @@ static SDL_Surface* load_window_icon(const std::filesystem::path& ico_path) {
         const int hh = static_cast<int>(u32(off + 8)) / 2;  // DIB height is 2x (XOR bitmap + AND mask)
         if (w <= 0 || hh <= 0 || w > 256 || hh > 256) break;
         const std::size_t pal = off + 40;                                   // 256 BGRA entries
-        const std::size_t xoff = pal + 256 * 4;                             // XOR (colour) bitmap
+        const std::size_t xoff = pal + std::size_t{256} * 4;                // XOR (colour) bitmap
         const int rowb = ((w + 3) / 4) * 4;                                 // 8-bpp row, 4-aligned
         const int maskrow = ((w + 31) / 32) * 4;                            // 1-bpp AND row, 4-aligned
         const std::size_t aoff = xoff + static_cast<std::size_t>(rowb) * hh;  // AND (mask) bitmap
