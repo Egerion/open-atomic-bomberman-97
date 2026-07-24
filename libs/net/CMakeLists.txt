@@ -9,9 +9,16 @@ add_library(bomber_net STATIC
   src/input_codec.cpp
   src/protocol.cpp
   src/lockstep_session.cpp
+  src/udp_transport.cpp
 )
 add_library(bomber::net ALIAS bomber_net)
 
 target_include_directories(bomber_net PUBLIC include)
 target_compile_features(bomber_net PUBLIC cxx_std_20)
 target_link_libraries(bomber_net PUBLIC bomber::sim PRIVATE bomber::warnings)
+
+# UdpTransport uses raw winsock on Windows (BSD sockets need no extra lib on
+# Linux/macOS). PRIVATE on a static lib still propagates to consumers' link line.
+if(WIN32)
+  target_link_libraries(bomber_net PRIVATE ws2_32)
+endif()
