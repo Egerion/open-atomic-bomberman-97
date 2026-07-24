@@ -810,27 +810,32 @@ int GameApp::run_demo() {
 ScreenContext GameApp::sctx() {
     // *screen_ is emplaced in init() before run_app() drives any screen, so it is
     // always engaged here (same invariant as renderer_, see the file-top note).
-    return ScreenContext{assets_,
-                         audio_,
-                         sounds_,
-                         keyboard_,
-                         gamepads_,
-                         front_font_,
-                         cursor_blink_,
-                         *screen_,  // NOLINT(bugprone-unchecked-optional-access)
-                         seqs_,
-                         values_,
-                         sdl_renderer_.get(),
-                         window_.get()};
+    return ScreenContext{.assets = assets_,
+                         .audio = audio_,
+                         .sounds = sounds_,
+                         .keyboard = keyboard_,
+                         .gamepads = gamepads_,
+                         .front_font = front_font_,
+                         .cursor_blink = cursor_blink_,
+                         .asset_screen = *screen_,  // NOLINT(bugprone-unchecked-optional-access)
+                         .seqs = seqs_,
+                         .values = values_,
+                         .sdl = sdl_renderer_.get(),
+                         .window = window_.get()};
 }
 
 OptionsEditState GameApp::options_state() {
     // The Options cluster's shared-state seam (ADR-0009 §4): the non-service
     // members its three runner screens read/write, bundled by reference so the
     // runners need no GameApp&. Built fresh on demand, same as sctx().
-    return OptionsEditState{options_,       options_dirty_, scheme_,
-                            setup_lcg_,     opts_.game_dir,  gold_player_,
-                            team_play_,     conveyor_speed_index_};
+    return OptionsEditState{.options = options_,
+                            .options_dirty = options_dirty_,
+                            .scheme = scheme_,
+                            .setup_lcg = setup_lcg_,
+                            .game_dir = opts_.game_dir,
+                            .gold_player = gold_player_,
+                            .team_play = team_play_,
+                            .conveyor_speed_index = conveyor_speed_index_};
 }
 
 MenuState GameApp::menu_state() {
@@ -840,13 +845,25 @@ MenuState GameApp::menu_state() {
     // video toggles, and the four editor members) — bundled by reference so
     // MenuScreen needs no GameApp&. Built fresh on demand, same as sctx()/
     // options_state()/editor_state(). Field order MUST track MenuState's.
-    return MenuState{menu_index_,     menu_idle_since_ms_, editor_trigger_count_,
-                     attract_,        attract_saved_,      attract_lcg_,
-                     setup_type_,     setup_sub_,          setup_team_,
-                     selected_level_, team_play_,          uncap_fps_,
-                     native_cadence_, show_fps_,           options_dirty_,
-                     setup_lcg_,      scheme_,             opts_.game_dir,
-                     opts_.scheme};
+    return MenuState{.menu_index = menu_index_,
+                     .menu_idle_since_ms = menu_idle_since_ms_,
+                     .editor_trigger_count = editor_trigger_count_,
+                     .attract = attract_,
+                     .attract_saved = attract_saved_,
+                     .attract_lcg = attract_lcg_,
+                     .setup_type = setup_type_,
+                     .setup_sub = setup_sub_,
+                     .setup_team = setup_team_,
+                     .selected_level = selected_level_,
+                     .team_play = team_play_,
+                     .uncap_fps = uncap_fps_,
+                     .native_cadence = native_cadence_,
+                     .show_fps = show_fps_,
+                     .options_dirty = options_dirty_,
+                     .setup_lcg = setup_lcg_,
+                     .scheme = scheme_,
+                     .game_dir = opts_.game_dir,
+                     .scheme_path = opts_.scheme};
 }
 
 MapSelectState GameApp::map_select_state() {
@@ -856,7 +873,11 @@ MapSelectState GameApp::map_select_state() {
     // the pending gold player Escape forfeits) — bundled by reference so
     // MapSelectScreen needs no GameApp&. Built fresh on demand, same as sctx()/
     // menu_state(). Field order MUST track MapSelectState's.
-    return MapSelectState{selected_level_, win_target_, setup_lcg_, options_, gold_player_};
+    return MapSelectState{.selected_level = selected_level_,
+                          .win_target = win_target_,
+                          .setup_lcg = setup_lcg_,
+                          .options = options_,
+                          .gold_player = gold_player_};
 }
 
 SetupState GameApp::setup_state() {
@@ -868,10 +889,16 @@ SetupState GameApp::setup_state() {
     // map_select_state(). Field order MUST track SetupState's. campaign_active_/
     // campaign_stages_/campaign_stage_index_ also feed campaign_state() (passed
     // alongside for the 'C'x5 picker), but the setup body reaches them through here.
-    return SetupState{setup_type_,          setup_sub_,              setup_team_,
-                      setup_lcg_,           campaign_trigger_count_,  team_play_,
-                      gold_player_,         campaign_active_,         campaign_stages_,
-                      campaign_stage_index_};
+    return SetupState{.setup_type = setup_type_,
+                      .setup_sub = setup_sub_,
+                      .setup_team = setup_team_,
+                      .setup_lcg = setup_lcg_,
+                      .campaign_trigger_count = campaign_trigger_count_,
+                      .team_play = team_play_,
+                      .gold_player = gold_player_,
+                      .campaign_active = campaign_active_,
+                      .campaign_stages = campaign_stages_,
+                      .campaign_stage_index = campaign_stage_index_};
 }
 
 MatchBackdrop GameApp::match_backdrop() {
@@ -880,8 +907,8 @@ MatchBackdrop GameApp::match_backdrop() {
     // modal draw as their frozen backdrop, kept SEPARATE from the front-end-
     // service-only ScreenContext. renderer_ is emplaced in init() before run_app
     // drives any screen (same invariant as *screen_ in sctx(), see file-top note).
-    return MatchBackdrop{*renderer_,  // NOLINT(bugprone-unchecked-optional-access)
-                         sim_.state()};
+    return MatchBackdrop{.renderer = *renderer_,  // NOLINT(bugprone-unchecked-optional-access)
+                         .state = sim_.state()};
 }
 
 CampaignState GameApp::campaign_state() {
@@ -890,10 +917,16 @@ CampaignState GameApp::campaign_state() {
     // by reference so CampaignPickerScreen (and the free load_campaign_stage)
     // need no GameApp&. Built fresh on demand, same as sctx()/menu_state().
     // Field order MUST track CampaignState's.
-    return CampaignState{campaign_active_, campaign_stages_, campaign_stage_index_,
-                         campaign_banner_, setup_type_,      setup_sub_,
-                         setup_team_,      setup_lcg_,       scheme_,
-                         opts_.game_dir};
+    return CampaignState{.campaign_active = campaign_active_,
+                         .campaign_stages = campaign_stages_,
+                         .campaign_stage_index = campaign_stage_index_,
+                         .campaign_banner = campaign_banner_,
+                         .setup_type = setup_type_,
+                         .setup_sub = setup_sub_,
+                         .setup_team = setup_team_,
+                         .setup_lcg = setup_lcg_,
+                         .scheme = scheme_,
+                         .game_dir = opts_.game_dir};
 }
 
 ScoreboardState GameApp::scoreboard_state() {
@@ -903,9 +936,17 @@ ScoreboardState GameApp::scoreboard_state() {
     // demo/roster flags auto_advance_results() consults) — bundled by reference/
     // value so ScoreboardScreen needs no GameApp&. Built fresh on demand, same as
     // sctx()/campaign_state(). Field order MUST track ScoreboardState's.
-    return ScoreboardState{sim_.state(), win_count_,  kill_count_,     win_target_,
-                           setup_team_,  team_play_,  setup_type_,     options_,
-                           opts_.demo,   opts_.demo_ticks, opts_.demo_shots};
+    return ScoreboardState{.state = sim_.state(),
+                           .win_count = win_count_,
+                           .kill_count = kill_count_,
+                           .win_target = win_target_,
+                           .setup_team = setup_team_,
+                           .team_play = team_play_,
+                           .setup_type = setup_type_,
+                           .options = options_,
+                           .demo = opts_.demo,
+                           .demo_ticks = opts_.demo_ticks,
+                           .demo_shots = opts_.demo_shots};
 }
 
 GoldmanState GameApp::goldman_state() {
@@ -914,7 +955,9 @@ GoldmanState GameApp::goldman_state() {
     // pending gold-player/prize pair) — bundled by non-const reference so
     // GoldmanWheelScreen needs no GameApp&. Built fresh on demand, same as
     // sctx()/scoreboard_state(). Field order MUST track GoldmanState's.
-    return GoldmanState{goldman_lcg_, gold_player_, gold_prize_};
+    return GoldmanState{.goldman_lcg = goldman_lcg_,
+                        .gold_player = gold_player_,
+                        .gold_prize = gold_prize_};
 }
 
 MatchRunnerState GameApp::match_runner_state() {
@@ -926,31 +969,31 @@ MatchRunnerState GameApp::match_runner_state() {
     // campaign/gold). Bundled by reference so MatchRunner needs no GameApp&; built
     // fresh on demand, same as sctx()/scoreboard_state(). Field order MUST track
     // MatchRunnerState's.
-    return MatchRunnerState{sim_,
-                            *renderer_,  // NOLINT(bugprone-unchecked-optional-access)
-                            next_seed_,
-                            kill_count_,
-                            uncap_fps_,
-                            native_cadence_,
-                            show_fps_,
-                            scheme_,
-                            base_tuning_,
-                            options_,
-                            conveyor_speed_index_,
-                            setup_type_,
-                            setup_sub_,
-                            setup_team_,
-                            win_count_,
-                            team_play_,
-                            campaign_active_,
-                            attract_,
-                            gold_player_,
-                            gold_prize_,
-                            selected_level_,
-                            campaign_stages_,
-                            campaign_stage_index_,
-                            opts_.game_dir,
-                            opts_.demo};
+    return MatchRunnerState{.sim = sim_,
+                            .renderer = *renderer_,  // NOLINT(bugprone-unchecked-optional-access)
+                            .next_seed = next_seed_,
+                            .kill_count = kill_count_,
+                            .uncap_fps = uncap_fps_,
+                            .native_cadence = native_cadence_,
+                            .show_fps = show_fps_,
+                            .scheme = scheme_,
+                            .base_tuning = base_tuning_,
+                            .options = options_,
+                            .conveyor_speed_index = conveyor_speed_index_,
+                            .setup_type = setup_type_,
+                            .setup_sub = setup_sub_,
+                            .setup_team = setup_team_,
+                            .win_count = win_count_,
+                            .team_play = team_play_,
+                            .campaign_active = campaign_active_,
+                            .attract = attract_,
+                            .gold_player = gold_player_,
+                            .gold_prize = gold_prize_,
+                            .selected_level = selected_level_,
+                            .campaign_stages = campaign_stages_,
+                            .campaign_stage_index = campaign_stage_index_,
+                            .game_dir = opts_.game_dir,
+                            .demo = opts_.demo};
 }
 
 AppInput GameApp::present_screen(const ScreenDef& def) {

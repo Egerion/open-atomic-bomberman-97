@@ -207,7 +207,11 @@ AppInput MenuScreen::run() {
             // keeps the modern video/cadence toggles off the faithful Options
             // screen. Ignored while the quit-confirm modal is up.
             if (!quit_confirm && ev.key.key == SDLK_F10) {
-                VideoSettingsScreen(ctx_, {&state_.uncap_fps, &state_.native_cadence, &state_.show_fps, &state_.options_dirty}).run();
+                VideoSettingsScreen(ctx_, {.uncap_fps = &state_.uncap_fps,
+                                           .native_cadence = &state_.native_cadence,
+                                           .show_fps = &state_.show_fps,
+                                           .options_dirty = &state_.options_dirty})
+                    .run();
                 continue;
             }
 
@@ -263,7 +267,11 @@ AppInput MenuScreen::run() {
                 if (++state_.editor_trigger_count > 5) {
                     state_.editor_trigger_count = 0;
                     ctx_.audio.play(10);  // accept sting (SFX 10), §5
-                    EditorRunner(ctx_, EditorEditState{state_.setup_lcg, state_.scheme, state_.game_dir, state_.scheme_path}).run();
+                    EditorRunner(ctx_, EditorEditState{.setup_lcg = state_.setup_lcg,
+                                                       .scheme = state_.scheme,
+                                                       .game_dir = state_.game_dir,
+                                                       .scheme_path = state_.scheme_path})
+                        .run();
                     // Return through the outer loop re-arms v14 -> MENU.RSS
                     // reloads from sample 0 (goto LABEL_2 at 30882).
                     ctx_.audio.start_music(kMenuMusicId);
