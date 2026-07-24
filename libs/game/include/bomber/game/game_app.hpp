@@ -215,8 +215,11 @@ private:
     // same 0b01/0b10 it always did. Still a 2-SEAT match: the RollbackSession is
     // a two-peer construct over one transport, and N>2 needs the host-relay star
     // (ADR-0011 Phase 2).
+    // `is_host` gates the peer-drop handoff: only the hub may schedule a silent
+    // seat's move to the AI (net::DropPolicy), since a guest must never mutate
+    // the hashed State on its own authority.
     AppInput run_netplay_match_seats(net::UdpTransport& transport, std::uint16_t local_seats,
-                                     std::uint32_t seed);
+                                     std::uint32_t seed, bool is_host);
     // Menu row 1 (START NET GAME) now opens the NETWORK GAME menu (LobbyScreen):
     // the online lobby entry points plus the ADR-0010 direct/LAN rows. Menu row 2
     // (JOIN NET GAME -> present_net_join) stays the UNCHANGED direct-IP join, so

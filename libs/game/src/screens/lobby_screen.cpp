@@ -427,6 +427,7 @@ LobbyRoomResult LobbyScreen::run_online(const OnlineConfig& ocfg, net::UdpTransp
             // The transport is punched and connected; the server's authoritative
             // parameters go straight to the match core.
             result.ready = true;
+            result.is_host = flow.is_host();
             result.seed = flow.match_start().seed;
             result.local_seats_mask = flow.match_start().local_seats_mask;
             return result;

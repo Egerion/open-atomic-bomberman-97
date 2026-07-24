@@ -65,6 +65,10 @@ enum class LobbyMenuChoice : std::uint8_t {
 struct LobbyRoomResult {
     bool ready = false;
     bool window_closed = false;
+    // This peer is the hub. Only the hub schedules a dropped seat's handoff to
+    // the AI (net::DropPolicy) — a guest must never mutate the hashed State on
+    // its own authority.
+    bool is_host = false;
     std::uint32_t seed = 0;
     std::uint16_t local_seats_mask = 0;
 };

@@ -933,11 +933,12 @@ AppInput GameApp::run_netplay_match(net::UdpTransport& transport, int role, std:
     // rows): host owns seat 0, guest seat 1. Unchanged behaviour — it just names
     // the mask the core now takes explicitly, so the ONLINE path can supply the
     // server's authoritative one instead (ADR-0011 §1.6).
-    return run_netplay_match_seats(transport, role == 1 ? 0b01u : 0b10u, seed);
+    return run_netplay_match_seats(transport, role == 1 ? 0b01u : 0b10u, seed,
+                                   /*is_host=*/role == 1);
 }
 
 AppInput GameApp::run_netplay_match_seats(net::UdpTransport& transport, std::uint16_t local_seats,
-                                          std::uint32_t seed) {
+                                          std::uint32_t seed, bool is_host) {
     // The match-running CORE shared by the CLI (run_netplay), the direct connect
     // screens, and the online lobby: given an ALREADY-connected transport, the
     // seats THIS peer owns, and the agreed seed, build a byte-identical arena and
@@ -1017,7 +1018,16 @@ AppInput GameApp::run_netplay_match_seats(net::UdpTransport& transport, std::uin
     // and re-simulates on a miss) so the match feels local even over the wire —
     // the input-delay lockstep this replaced added a fixed ~200 ms of lag.
     // max_prediction=8 ticks caps how far the display may run ahead of the peer.
-    net::RollbackSession session(sim_, local_seats, kAllSeats, /*max_prediction=*/8, transport);
+    // Peer-drop policy (ADR-0011 Risks): past a hard silence window a seat is
+    // declared dropped. With the RE'd Options row 12 ON the HOST announces the
+    // handoff and every peer moves that seat to the deterministic AISystem at the
+    // same tick, so the match plays on; with it OFF the drop ends the match
+    // loudly instead of hanging. This is that option's FIRST consumer — it
+    // reached CFG.INI and the Options screen and stopped there until now.
+    // 50 pumps = 2.5 s at 20 Hz.
+    const net::DropPolicy drop{options_.lost_net_revert_ai, is_host, /*timeout_ticks=*/50};
+    net::RollbackSession session(sim_, local_seats, kAllSeats, /*max_prediction=*/8, transport,
+                                 drop);
     MatchRunnerState mrs = match_runner_state();
     mrs.net_session = &session;
     mrs.net_local_seats = local_seats;
@@ -1026,6 +1036,11 @@ AppInput GameApp::run_netplay_match_seats(net::UdpTransport& transport, std::uin
     if (session.desynced())
         std::fprintf(stderr, "netplay: DESYNC at tick %u — peers diverged (config/seed mismatch?)\n",
                      session.desync_tick());
+    else if (session.aborted())
+        // Options row 12 off: a peer went silent and the match ends rather than
+        // handing its seat to the AI. Say so — this is not a normal round end.
+        std::fprintf(stderr, "netplay: a player dropped; match ended (turn on \"Lost net players "
+                             "revert to AIs\" to play on)\n");
     else
         std::printf("netplay: match ended (%s) at tick %u\n",
                     result == AppInput::Quit ? "window closed" : "round over",
@@ -1200,7 +1215,8 @@ AppInput GameApp::present_net_online(bool host, bool browse, bool is_public) {
 
     const LobbyRoomResult r = screen.run_online(ocfg, transport, host, code, is_public);
     if (r.window_closed) return AppInput::Quit;
-    if (r.ready) return run_netplay_match_seats(transport, r.local_seats_mask, r.seed);
+    if (r.ready)
+        return run_netplay_match_seats(transport, r.local_seats_mask, r.seed, r.is_host);
     return AppInput::Advance;  // left the lobby / failed → back to the menu
 }
 #endif  // BOMBER_HAS_LOBBY
