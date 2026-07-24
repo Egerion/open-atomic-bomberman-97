@@ -1,0 +1,8 @@
+// Windows application resource for OPEN-BM95.exe.
+//
+// IDI_ICON1 is the lowest-numbered ICON resource, which Explorer, the taskbar,
+// and Alt-Tab use as the executable's display icon. The path is resolved by
+// rc.exe relative to this .rc file's own directory (apps/game/), i.e. the
+// repo-root assets/icon/. This is our own clean-room bomb glyph; the original
+// BM95.ICO is copyrighted and is never bundled.
+IDI_ICON1 ICON "../../assets/icon/openbm95.ico"

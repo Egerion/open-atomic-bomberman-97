@@ -88,7 +88,7 @@ constants:
 
 ```sh
 cmake --build --preset windows-fetch
-cmake -DBOMBER_GAME_EXE=build/windows-fetch/Release/bomber_game.exe \
+cmake -DBOMBER_GAME_EXE=build/windows-fetch/Release/OPEN-BM95.exe \
       -DBOMBER_SHOTS_DIR=tests/visual \
       -DBOMBER_WORK_DIR=build/windows-fetch/apps/game/visual_shots \
       -DBOMBER_RECAPTURE=1 \
@@ -112,7 +112,7 @@ Use it to find new tick numbers instead of hand-deriving the arithmetic:
 
 ```sh
 BOMBER_DEMO_TRACE=1 BOMBER_GAME_DIR=<install> \
-  build/windows-fetch/Release/bomber_game.exe --demo 200 /tmp/scratch.bmp
+  build/windows-fetch/Release/OPEN-BM95.exe --demo 200 /tmp/scratch.bmp
 ```
 
 Then render a few candidate ticks with `--demo-shots` and look at the BMPs
