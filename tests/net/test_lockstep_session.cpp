@@ -86,6 +86,34 @@ TEST_CASE("input-delay lockstep: two peers over a latent link stay in perfect sy
     CHECK_FALSE(b.desynced());
 }
 
+TEST_CASE("input redundancy survives packet loss: peers stay in sync over a lossy link") {
+    // Drop every 3rd packet from each side AND add latency. Each input datagram
+    // re-carries the whole un-confirmed local-input window, so a dropped packet
+    // is recovered by a later one (delay 6 => a 7-tick window tolerates far more
+    // than the single consecutive drop this link ever produces).
+    net::LoopbackLink link(/*latency=*/2, /*drop_every=*/3);
+    net::LoopbackTransport ta(link, 0);
+    net::LoopbackTransport tb(link, 1);
+    net::LockstepSession a(open_config(), kSeat0, kBoth, /*input_delay=*/6, ta);
+    net::LockstepSession b(open_config(), kSeat1, kBoth, /*input_delay=*/6, tb);
+
+    constexpr int kTarget = 300;
+    constexpr int kMaxRounds = kTarget * 8;  // generous: loss makes some rounds stall then catch up
+    int rounds = 0;
+    while ((static_cast<int>(a.confirmed_tick()) < kTarget ||
+            static_cast<int>(b.confirmed_tick()) < kTarget) &&
+           rounds < kMaxRounds) {
+        pump(a, b, link);
+        ++rounds;
+    }
+
+    CHECK(static_cast<int>(a.confirmed_tick()) >= kTarget);  // no permanent stall despite loss
+    CHECK(static_cast<int>(b.confirmed_tick()) >= kTarget);
+    for (int i = 0; i < 64; ++i) pump(a, b, link);  // flush hashes
+    CHECK_FALSE(a.desynced());
+    CHECK_FALSE(b.desynced());
+}
+
 TEST_CASE("the hash exchange catches a divergence (mismatched seeds)") {
     sim::MatchConfig cfg_a = open_config();
     sim::MatchConfig cfg_b = open_config();

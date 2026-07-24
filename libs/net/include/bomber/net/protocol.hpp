@@ -16,7 +16,7 @@
 
 namespace bomber::net {
 
-enum class MsgType : std::uint8_t { Input = 0, Hash = 1 };
+enum class MsgType : std::uint8_t { Input = 0, Hash = 1, InputRange = 2 };
 
 // A peer's claimed Simulation::hash() at the end of tick `tick_index`. The
 // receiver compares it against its OWN hash for that tick; a mismatch is an
@@ -27,16 +27,36 @@ struct HashFrame {
     std::uint64_t hash = 0;
 };
 
-// One decoded datagram: exactly one of `input` / `hash` is meaningful per `type`.
+// A CONTIGUOUS run of input frames sharing one seat_mask — the redundancy the
+// lockstep session sends every tick so a dropped UDP packet is recovered by the
+// next one (each packet re-carries the whole un-confirmed local-input window).
+// per_tick[i] is tick `first_tick + i`; only `seat_mask` seats are meaningful.
+struct InputRangeFrame {
+    std::uint32_t first_tick = 0;
+    std::uint16_t seat_mask = 0;
+    std::vector<sim::TickInputs> per_tick;
+};
+
+// One decoded datagram: exactly one of `input` / `range` / `hash` is meaningful
+// per `type`.
 struct Message {
     MsgType type = MsgType::Input;
     InputFrame input;
+    InputRangeFrame range;
     HashFrame hash;
 };
 
 // [MsgType::Input][input_codec frame] — the seats in `seat_mask`, stamped `tick`.
 std::vector<std::uint8_t> encode_input(std::uint32_t tick_index, std::uint16_t seat_mask,
                                        const sim::TickInputs& inputs);
+
+// [MsgType::InputRange][first_tick u32-LE][count u8][seat_mask u16-LE]
+//   [count * (one packed byte per set seat)] — `per_tick.size()` consecutive
+// ticks from `first_tick`, each carrying `seat_mask`'s seats. count is capped at
+// 255 (the input-delay window is tiny); an empty range encodes nothing useful
+// and is rejected on decode.
+std::vector<std::uint8_t> encode_input_range(std::uint32_t first_tick, std::uint16_t seat_mask,
+                                             const std::vector<sim::TickInputs>& per_tick);
 
 // [MsgType::Hash][tick u32-LE][hash u64-LE] — 13 bytes.
 std::vector<std::uint8_t> encode_hash(std::uint32_t tick_index, std::uint64_t hash);

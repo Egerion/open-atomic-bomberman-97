@@ -54,12 +54,20 @@ void LockstepSession::receive() {
     while (transport_->poll(&pkt)) {
         Message m;
         if (!decode(pkt.data(), pkt.size(), &m)) continue;  // drop malformed (untrusted)
+        // For inputs, take only the REMOTE seats (ignore any echo of ours) and
+        // only ticks not yet confirmed (a late duplicate of a past tick is inert).
         if (m.type == MsgType::Input) {
-            // Take only the REMOTE seats (ignore any echo of ours), and only for
-            // ticks not yet confirmed (a late duplicate of a past tick is inert).
             const std::uint16_t remote = static_cast<std::uint16_t>(m.input.seat_mask & ~local_seats_);
             if (remote != 0 && m.input.tick_index >= tick_)
                 fill_seats(m.input.tick_index, remote, m.input.inputs);
+        } else if (m.type == MsgType::InputRange) {
+            const std::uint16_t remote = static_cast<std::uint16_t>(m.range.seat_mask & ~local_seats_);
+            if (remote != 0) {
+                for (std::size_t i = 0; i < m.range.per_tick.size(); ++i) {
+                    const std::uint32_t t = m.range.first_tick + static_cast<std::uint32_t>(i);
+                    if (t >= tick_) fill_seats(t, remote, m.range.per_tick[i]);
+                }
+            }
         } else {
             note_peer_hash(m.hash.tick_index, m.hash.hash);
         }
@@ -81,9 +89,19 @@ bool LockstepSession::advance(const sim::TickInputs& local_input) {
     // sent tick).
     if (input_tick_ <= tick_ + static_cast<std::uint32_t>(delay_)) {
         fill_seats(input_tick_, local_seats_, local_input);
-        const std::vector<std::uint8_t> pkt = encode_input(input_tick_, local_seats_, local_input);
-        transport_->send(pkt.data(), pkt.size());
         ++input_tick_;
+    }
+
+    // Re-send the ENTIRE un-confirmed local-input window every tick (redundancy):
+    // a dropped datagram is recovered by any LATER one that still carries the
+    // missing tick, so lockstep survives UDP loss with no acks/resends — as long
+    // as fewer than `delay + 1` consecutive packets are lost.
+    if (input_tick_ > tick_) {
+        std::vector<sim::TickInputs> window;
+        window.reserve(input_tick_ - tick_);
+        for (std::uint32_t t = tick_; t < input_tick_; ++t) window.push_back(inputs_[t]);
+        const std::vector<std::uint8_t> pkt = encode_input_range(tick_, local_seats_, window);
+        transport_->send(pkt.data(), pkt.size());
     }
 
     receive();
