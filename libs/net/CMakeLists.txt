@@ -7,6 +7,8 @@
 
 add_library(bomber_net STATIC
   src/input_codec.cpp
+  src/protocol.cpp
+  src/lockstep_session.cpp
 )
 add_library(bomber::net ALIAS bomber_net)
 
