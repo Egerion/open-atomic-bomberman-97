@@ -1,0 +1,9 @@
+# keep the build context tiny — only Go sources + module files are needed
+.git
+.gitignore
+*_test.go
+*.md
+Dockerfile
+.dockerignore
+fly.toml
+render.yaml

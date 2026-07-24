@@ -1,0 +1,46 @@
+# Fly.io deploy example for the Open Bomberman matchmaker (ADR-0011).
+# `fly launch --no-deploy` to create the app, then `fly deploy`.
+#
+# TLS: Fly terminates HTTPS/WSS at its edge (force_https below) and forwards
+# plain ws:// to the container, so the binary needs no cert — leave TLSCert/Key
+# unset. Clients connect to wss://<app>.fly.dev/ws.
+#
+# UDP (STUN echo): Fly UDP needs a dedicated IPv4 (`fly ips allocate-v4`) and
+# the process must bind the Fly-provided address. Set MATCHMAKER_STUN_ADDR to
+# "fly-global-services:8081" so the datagram source addresses are the real
+# client reflexive addresses. (Phase 2's relay will use the same UDP path.)
+
+app = "open-bomberman-matchmaker"
+primary_region = "ams"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  MATCHMAKER_WS_ADDR = ":8080"
+  MATCHMAKER_STUN_ADDR = "fly-global-services:8081"
+  MATCHMAKER_LOG_LEVEL = "info"
+  MATCHMAKER_HEARTBEAT_INTERVAL = "10s"
+  MATCHMAKER_HEARTBEAT_MISS = "3"
+
+# WebSocket control plane (TLS terminated at the edge).
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/healthz"
+    interval = "15s"
+    timeout = "2s"
+
+# UDP STUN echo. Requires a dedicated IPv4 address on the app.
+[[services]]
+  protocol = "udp"
+  internal_port = 8081
+
+  [[services.ports]]
+    port = 8081
