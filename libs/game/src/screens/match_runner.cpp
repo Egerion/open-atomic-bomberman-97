@@ -140,10 +140,16 @@ void MatchRunner::start_match(std::uint32_t seed) {
     // index directly. Clamp to the valid stage range defensively.
     int stage;
     if (state_.selected_level < 0) {
-        stage = match::pick_stage(state_.base_tuning, seed);
+        // RANDOM: pick from the registry's enabled rotation. ctx_.assets.levels()
+        // defaults to the 11 built-ins, so this is byte-identical to the old
+        // pick_stage(tuning, seed); a registered custom map joins the rotation.
+        stage = match::pick_stage(state_.base_tuning, seed, ctx_.assets.levels());
     } else {
         stage = state_.selected_level;
-        if (stage > 10) stage = 10;
+        // Clamp to a level the registry knows (built-ins 0..10; a registered
+        // custom map extends this). Unknown -> last built-in (10), matching the
+        // old `if (stage > 10) stage = 10` for every reachable built-in index.
+        if (!ctx_.assets.levels().find(stage)) stage = 10;
     }
     // The sim's per-level gates (tile regeneration ids 340-350/695, ice/
     // input-lag ids 450-460 — docs/re/facts.md "Per-level tile regeneration",

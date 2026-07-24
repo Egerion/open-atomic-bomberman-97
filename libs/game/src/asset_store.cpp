@@ -424,6 +424,15 @@ void AssetStore::set_color_fallbacks(const std::int32_t colors[][3], int n) {
 
 bool AssetStore::load_stage(int stage) {
     try {
+        // Asset base names from the level registry (LevelDef): built-ins resolve
+        // to FIELDn/TILESn/XBRICKn, byte-identical to the old hardcoded concat;
+        // a custom level supplies its own bases. The null fallback keeps the
+        // legacy default for any stray index the registry does not know.
+        const match::LevelDef* def = levels_.find(stage);
+        const std::string field_base = def ? def->field_asset : "FIELD" + std::to_string(stage);
+        const std::string tiles_base = def ? def->tiles_asset : "TILES" + std::to_string(stage);
+        const std::string xbrick_base =
+            def ? def->xbrick_asset : "XBRICK" + std::to_string(stage);
         // Classic field: decode the 8-bit PCX, then run the in-match
         // master-palette snap (colorpal.hpp) before upload. Identity for
         // FIELD0/2..10 (authored in the palette); the visible fix is FIELD1's
@@ -431,8 +440,8 @@ bool AssetStore::load_stage(int stage) {
         // (20,40,108)/(4,132,0) pair (pixel-exact vs a live capture). The HD
         // override below is truecolour and is NEVER snapped.
         {
-            assets::Image field_img = assets::pcx::load(
-                game_dir_ / "DATA" / "RES" / ("FIELD" + std::to_string(stage) + ".PCX"));
+            assets::Image field_img =
+                assets::pcx::load(game_dir_ / "DATA" / "RES" / (field_base + ".PCX"));
             colorpal_.remap(field_img);
             field_.reset(make_texture(ren_, field_img));
         }
@@ -440,8 +449,7 @@ bool AssetStore::load_stage(int stage) {
         // field when a modern replacement has not been authored yet, allowing
         // Tab to switch instantly without changing any gameplay data.
         field_hd_.reset();
-        const fs::path hd_field = game_dir_ / "DATA_HD" / "RES" /
-                                  ("FIELD" + std::to_string(stage) + ".PCX");
+        const fs::path hd_field = game_dir_ / "DATA_HD" / "RES" / (field_base + ".PCX");
         if (fs::exists(hd_field)) {
             try {
                 field_hd_.reset(make_texture(ren_, assets::pcx::load(hd_field),
@@ -453,16 +461,13 @@ bool AssetStore::load_stage(int stage) {
         // Tiles + crumbling bricks: type-4 RGB555 cels, snapped to the master
         // palette like the field (a subtle ~2-3% shift — the art is mostly
         // authored in-palette, but the original snaps it and so do we).
-        tiles_.load(ren_, game_dir_ / "DATA" / "ANI" / ("TILES" + std::to_string(stage) + ".ANI"),
-                    &colorpal_);
-        xbrick_.load(ren_,
-                     game_dir_ / "DATA" / "ANI" / ("XBRICK" + std::to_string(stage) + ".ANI"),
-                     &colorpal_);
+        tiles_.load(ren_, game_dir_ / "DATA" / "ANI" / (tiles_base + ".ANI"), &colorpal_);
+        xbrick_.load(ren_, game_dir_ / "DATA" / "ANI" / (xbrick_base + ".ANI"), &colorpal_);
         // Optional HD overlays for the per-stage tiles + crumbling bricks
         // (DATA_HD/ANI/TILES<n>.ANI, XBRICK<n>.ANI). Loaded before resolve_stage
         // resolves the solid/brick/burn sequences, so those Sprites carry tex_hd.
         {
-            auto tp = game_dir_ / "DATA_HD" / "ANI" / ("TILES" + std::to_string(stage) + ".ANI");
+            auto tp = game_dir_ / "DATA_HD" / "ANI" / (tiles_base + ".ANI");
             if (fs::exists(tp)) {
                 try {
                     tiles_.load_hd_overlay(ren_, tp);
@@ -470,7 +475,7 @@ bool AssetStore::load_stage(int stage) {
                     std::fprintf(stderr, "HD TILES%d skipped: %s\n", stage, e.what());
                 }
             }
-            auto xp = game_dir_ / "DATA_HD" / "ANI" / ("XBRICK" + std::to_string(stage) + ".ANI");
+            auto xp = game_dir_ / "DATA_HD" / "ANI" / (xbrick_base + ".ANI");
             if (fs::exists(xp)) {
                 try {
                     xbrick_.load_hd_overlay(ren_, xp);
@@ -498,11 +503,17 @@ const AssetStore::StagePreview& AssetStore::stage_preview(int stage) const {
     // path. So the preview's FIELD1 reads the muted master-palette dither just
     // like an in-match FIELD1, not the raw vivid blue (docs/re/facts.md
     // "In-match colour quantization").
+    // Asset base names from the registry (byte-identical FIELDn/TILESn for the
+    // built-ins). The solid/brick SEQUENCE names below still key off the stage
+    // NUMBER ("tile <n> …") — that is how the ANI names its sequences
+    // internally, independent of the file's base name.
+    const match::LevelDef* def = levels_.find(stage);
+    const std::string field_base = def ? def->field_asset : "FIELD" + std::to_string(stage);
+    const std::string tiles_base = def ? def->tiles_asset : "TILES" + std::to_string(stage);
     StagePreview sp{};
     try {
         AniTextures tiles;
-        tiles.load(ren_, game_dir_ / "DATA" / "ANI" / ("TILES" + std::to_string(stage) + ".ANI"),
-                   &colorpal_);
+        tiles.load(ren_, game_dir_ / "DATA" / "ANI" / (tiles_base + ".ANI"), &colorpal_);
         const std::string n = std::to_string(stage);
         sp.solid = resolve_sequence(tiles, "tile " + n + " solid");
         sp.brick = resolve_sequence(tiles, "tile " + n + " brick");
@@ -511,8 +522,7 @@ const AssetStore::StagePreview& AssetStore::stage_preview(int stage) const {
         std::fprintf(stderr, "stage %d preview tiles load failed: %s\n", stage, e.what());
     }
     try {
-        auto img = assets::pcx::load(game_dir_ / "DATA" / "RES" /
-                                     ("FIELD" + std::to_string(stage) + ".PCX"));
+        auto img = assets::pcx::load(game_dir_ / "DATA" / "RES" / (field_base + ".PCX"));
         sdl::TexturePtr tex{make_texture(ren_, img, SDL_SCALEMODE_NEAREST, &colorpal_)};
         sp.field = tex.get();
         stage_preview_field_.emplace(stage, std::move(tex));

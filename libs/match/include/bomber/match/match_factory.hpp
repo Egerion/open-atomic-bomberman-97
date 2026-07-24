@@ -11,6 +11,7 @@
 #include "bomber/assets/extra.hpp"
 #include "bomber/assets/reslist.hpp"
 #include "bomber/assets/sch.hpp"
+#include "bomber/match/level_registry.hpp"
 #include "bomber/sim/match_config.hpp"
 
 namespace bomber::match {
@@ -221,10 +222,14 @@ inline void apply_actors(sim::MatchConfig& cfg, const std::vector<assets::extra:
 }
 
 // Picks a stage from the enabled rotation (VALUELST 1150..1160), seed-based.
-inline int pick_stage(const sim::Tuning& tuning, std::uint32_t seed) {
-    std::vector<int> allowed;
-    for (int i = 0; i < 11; ++i)
-        if (tuning.level_enabled[i]) allowed.push_back(i);
+// The rotation now comes from a LevelRegistry so custom maps can join it; the
+// registry defaults to the 11 built-ins, so an existing `pick_stage(tuning,
+// seed)` call is byte-identical — enabled_stages() over the built-ins
+// reproduces the old ascending-index `allowed` list exactly, and the
+// `allowed[seed % allowed.size()]` pick is unchanged (empty -> {0}).
+inline int pick_stage(const sim::Tuning& tuning, std::uint32_t seed,
+                      const LevelRegistry& registry = builtin_levels()) {
+    std::vector<int> allowed = registry.enabled_stages(tuning);
     if (allowed.empty()) allowed.push_back(0);
     return allowed[seed % allowed.size()];
 }
