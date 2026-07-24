@@ -48,7 +48,7 @@ public:
     const Candidate* winner() const { return state_ == State::Connected ? &winner_ : nullptr; }
 
 private:
-    enum class State { Punching, Connected, Failed };
+    enum class State : std::uint8_t { Punching, Connected, Failed };
 
     void send_pings(std::int64_t now_ms);
 

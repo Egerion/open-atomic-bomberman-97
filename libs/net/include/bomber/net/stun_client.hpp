@@ -42,7 +42,7 @@ public:
     std::string reflexive_addr() const;
 
 private:
-    enum class State { Probing, Done, Failed };
+    enum class State : std::uint8_t { Probing, Done, Failed };
 
     UdpTransport& transport_;
     std::string server_host_;

@@ -31,7 +31,7 @@ class LobbyClient;
 
 class LobbyFlow {
 public:
-    enum class Phase {
+    enum class Phase : std::uint8_t {
         Idle,        // nothing started yet
         Connecting,  // WebSocket opening; the create/join request is queued
         InLobby,     // in the waiting room: roster live, candidates exchanging
@@ -96,7 +96,7 @@ public:
     bool is_relayed() const { return relay_ != nullptr; }
 
 private:
-    enum class Pending { None, Create, Join };
+    enum class Pending : std::uint8_t { None, Create, Join };
 
     void fail(const std::string& why);
     void begin_candidate_gathering(std::int64_t now_ms);

@@ -38,7 +38,7 @@ struct PublicLobby {
 
 // --- parsed server -> client message ---------------------------------------
 
-enum class LobbyMsgType {
+enum class LobbyMsgType : std::uint8_t {
     Unknown,  // unparsable / unknown "type" (never acted on)
     LobbyCreated,
     JoinAccepted,

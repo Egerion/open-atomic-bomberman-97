@@ -43,6 +43,20 @@ else
   echo "      files will fail to parse." >&2
 fi
 
+# The online lobby's FetchContent deps (ADR-0011, BOMBER_ENABLE_LOBBY): the WS
+# client and the JSON header. Same treatment as SDL3 above — without them
+# libs/net's lobby_client / lobby_messages / lobby_flow / stun_client fail to
+# PARSE, which clang-tidy reports as a failure rather than skipping them.
+for dep_inc in "build/windows-fetch/_deps/ixwebsocket-src" \
+               "build/windows-fetch/_deps/nlohmann_json-src/include"; do
+  if [ -d "$dep_inc" ]; then
+    INCLUDES+=(-I"$dep_inc")
+  else
+    echo "lint: warning: $dep_inc not found — configure the windows-fetch preset" >&2
+    echo "      (it fetches the lobby deps) or libs/net lobby files won't parse." >&2
+  fi
+done
+
 mapfile -t FILES < <(find libs apps -name "*.cpp" | grep -v "/build/")
 echo "lint: checking ${#FILES[@]} files with $(basename "$CT")..."
 # Every file must be CHECKED even after one fails: a bare `xargs "$CT"` stops
