@@ -98,7 +98,7 @@ The sim is deterministic lockstep (`docs/adr/0003`). Rules:
 ```
 cmake --preset windows-fetch && cmake --build --preset windows-fetch   # Windows (no vcpkg)
 ctest --test-dir build/windows-fetch -C Release --output-on-failure
-make play / make viewer / make test / make survey                     # convenience wrapper
+make run / make viewer / make test / make survey / make deploy         # convenience wrapper
 ```
 
 Presets: `windows-msvc` (vcpkg), `windows-fetch` (SDL3 via FetchContent),
