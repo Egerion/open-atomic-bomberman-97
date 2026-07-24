@@ -1,9 +1,43 @@
 # ADR-0011 — Online multiplayer: rollback P2P + a minimal matchmaking service
 
-Status: proposed
+Status: accepted
 Date: 2026-07-24
 Follows: ADR-0010 (netplay: deterministic lockstep over UDP), ADR-0003
 (deterministic fixed-timestep simulation)
+
+## Decisions locked (2026-07-24)
+
+The five maintainer decisions this ADR left open (see Consequences) are now
+settled, plus the two implementation choices they imply:
+
+1. **Signaling transport = WebSocket/TLS.** Firewall/proxy-friendly, ordered +
+   reliable, cross-platform, and works with the free hosting tiers below. The
+   reliable-UDP alternative is dropped. → the C++ client gets a small WS/TLS
+   client dependency (**IXWebSocket**, MIT, TLS, FetchContent — pulled the same
+   way SDL3 is, linked ONLY into `bomber::net`, still SDL-free).
+2. **Host-relay STAR confirmed** for N>2 input distribution (over a full mesh);
+   the sim stays full P2P deterministic. 2P is the degenerate direct star.
+3. **Relay fallback ships in v1** (not deferred) — symmetric-NAT / CGNAT peers
+   must be able to connect. The bandwidth cost is accepted; the server is sized
+   for a modest concurrent-relayed-match budget and the client always prefers a
+   direct punch, relaying only on failure.
+4. **Max seats = 10**, matching the native audit (`docs/re/multiplayer-deep.md`:
+   input-type-4 lets any of the 10 roster slots be remote).
+5. **Host drop = HOST MIGRATION** (not "match ends"). Because the sim is P2P
+   deterministic, every peer already holds the full `State`; the host owns no
+   authoritative game state, only two *roles* — the signaling/lobby anchor and
+   (for N>2) the star input-hub. On host timeout the surviving peers
+   deterministically **re-elect** a new hub (lowest surviving seat index),
+   re-anchor the lobby to the signaling server under the same code, and the sim
+   continues from the last confirmed tick — a hub re-election + signaling
+   re-registration, NOT a state transfer. The migration is scheduled at an
+   agreed tick on every peer (same mechanism as the drop→AI handoff) so it stays
+   deterministic. See "Host migration" under Risks (revised).
+
+**Server implementation = Go**, one static binary doing WebSocket signaling +
+UDP STUN echo + UDP relay together, containerised for a free hosting tier
+(Fly.io / Render). Lives in `services/matchmaker/`, outside the C++/CMake build.
+"Every line written by Claude" is unchanged — the server is Claude-authored Go.
 
 ## Context
 
@@ -196,9 +230,10 @@ online-specific ones:
   Those matches MUST relay, and relayed traffic is continuous per-tick UDP for
   the whole match — bandwidth scales with concurrent relayed matches × seats.
   This caps how many simultaneous relayed games a given box can carry and is the
-  only part that is genuinely "ops, not a static host." Decision to make: is
-  relay in v1, or does v1 ship with "symmetric NAT can't connect (try later /
-  use LAN)" and add relay in a later phase?
+  only part that is genuinely "ops, not a static host." **Decided: relay ships in
+  v1** (decision 3) — the client always prefers a direct punch and relays only on
+  failure, so the bandwidth budget is "concurrent *symmetric-NAT* matches," not
+  all matches.
 - **N-player rollback fan-out.** Rollback re-simulates the whole sim over the
   mispredicted window; snapshot memory is `sizeof(State)` × window, and re-sim
   cost is `window × tick()`. With up to 10 seats every seat is a prediction
@@ -215,8 +250,23 @@ online-specific ones:
   `State`, so all peers compute identical AI inputs and the hash stays equal).
   This revives the RE'd Options **row 12 "Lost net players revert to AI"**
   (`lost_net_revert_ai`, `docs/re/results-and-options.md`) as its first real
-  consumer. Host drop is the hard case — v1 ends the match (host-migration =
-  re-punch to a new hub at an agreed tick, deferred).
+  consumer.
+- **Host migration (decision 5, IN v1).** Host drop is handled, not fatal.
+  The dropped host's *seat* follows the same drop→AI handoff above; separately
+  its two *roles* migrate. Every surviving peer runs the identical deterministic
+  re-election (lowest surviving seat index becomes the new hub) at the agreed
+  migration tick, so all peers pick the same new hub with no vote exchange. The
+  new hub re-registers the lobby with the signaling server (same lobby code,
+  proving continuity via the roster it already holds) so late browsers still
+  resolve the code, and reopens its input-hub fan-out; guests re-`set_peer` to
+  the new hub and, if their old path to it was relayed/needs a fresh punch,
+  re-run `Rendezvous` to it. The sim never pauses beyond the stall the drop
+  already caused — no `State` is transferred because every peer already has it.
+  The one genuinely hard sub-case is the hub dropping *mid-relay* for peers who
+  could only reach the old hub via relay: they must re-punch/re-allocate to the
+  new hub, which can exceed the drop timeout and surface as a brief "migrating…"
+  stall. Acceptable for v1; smoothing it (pre-warming a backup hub path) is a
+  later refinement.
 - **Anti-cheat via `state_hash` is tamper-EVIDENT, not tamper-PROOF.** The hash
   exchange catches a client whose sim diverges (modified rules, desync) within
   one Hash round — good enough to detect a broken/hacked build and abort. It does
@@ -287,8 +337,8 @@ desync abort (already in `RollbackSession`), and the LE-wire reaffirmation.
 - **One new operational dependency.** The project gains a server it must host
   (signaling cheap, relay not free) — the first non-static-hostable piece. A
   self-host / LAN-only path preserves the no-lock-in ethos.
-- **Decisions deferred to the maintainer:** (1) signaling transport (WS/TLS vs
-  reliable-UDP); (2) confirm the host-relay star over a full mesh; (3) relay in
-  v1 or later + its bandwidth budget / who hosts; (4) pin the exact max seat count
-  once the native audit lands; (5) accept "host drop ends the match" for v1
-  (host-migration deferred).
+- **Decisions (settled 2026-07-24, see "Decisions locked" above):** (1) signaling
+  = WebSocket/TLS + IXWebSocket client dep; (2) host-relay star confirmed; (3)
+  relay ships in v1; (4) max seats = 10; (5) host drop = host migration (hub
+  re-election + signaling re-anchor, no state transfer). Server implemented in Go
+  under `services/matchmaker/`, deployed to a free hosting tier.

@@ -283,6 +283,46 @@ timeout. No `State`, no `tick`, no gameplay logic ever lives on the server.
 
 ---
 
+## 8. Host migration (ADR-0011 decision 5, IN v1)
+
+The host owns no `State` — every peer holds the full deterministic sim — so
+migration moves only two *roles*: the **signaling anchor** and (for N>2) the
+**star input-hub**. There is no state transfer.
+
+### 8.1 Detecting host loss
+
+The host's *seat* times out like any peer (§ drop→AI, ADR-0011 Risks): after a
+hard silence window the peer that first notices broadcasts, on the data plane, a
+`HostLost { at_tick: T }` to the surviving hub-reachable peers (for 2P, the lone
+guest simply schedules it locally). `T` is a near-future tick chosen the same way
+the drop→AI handoff picks its tick, so **every** peer acts at the identical tick.
+
+### 8.2 Deterministic re-election
+
+At tick `T`, with no messages exchanged, every surviving peer computes the new
+hub as **the lowest surviving seat index**. Survivorship is derived from the same
+per-seat liveness the drop→AI handoff already tracks, which is identical on every
+peer (it is a function of the shared `State` + the agreed drop schedule). So all
+peers elect the same hub with zero coordination — the election is a pure function
+of shared state, exactly like an AI input.
+
+### 8.3 Re-anchoring + reconnecting
+
+    new hub ──▶ S  ReanchorLobby { code, host_token', roster_digest }
+    S ──▶ new hub  ReanchorAccepted   // same code stays resolvable for browsers
+    guests ──▶ (Rendezvous to new hub: reuse existing punched path if the guest
+               already had a direct pair to it; else §3 punch / §4 relay afresh)
+
+The new hub proves continuity with the `roster_digest` it already holds (the
+server verifies it against the lobby's last known roster). The lobby code is
+preserved so a mid-match `ListPublic`/`JoinByCode` still resolves. `host_token'`
+is a fresh token minted for the new hub.
+
+The hard sub-case (ADR-0011 Risks): a guest that reached the *old* hub only via
+relay must re-punch/re-allocate to the new hub, which can exceed the drop timeout
+and surface as a brief "migrating…" overlay. v1 accepts the stall; a later
+refinement pre-warms a backup-hub path so migration is seamless.
+
 ## 7. What is reused vs new
 
 | reused unchanged (ADR-0010) | new (this design, ADR-0011) |
