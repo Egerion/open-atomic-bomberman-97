@@ -518,10 +518,19 @@ AppInput MenuScreen::run() {
             // (batch_0x411CF8.cpp), and byte_49A390 resolves to LUT offset
             // 0x5000 -> (164,0,0) — a distinct WARNING RED, NOT the white
             // byte_49D38F/kDialogInk (docs/re/frontend-flow.md "byte_49A390").
-            // sub_41456C's a3 slot is the foreground/ink. (This restores the
-            // correct red after a wrong same-day change to white.)
+            // sub_41456C's a3 slot is the foreground/ink.
+            //
+            // The prompt is drawn as this red FILL over a GOLD 1-px outline —
+            // (252,248,88) = byte_49D37A "percent readout yellow" — the
+            // emphasised red/gold look the original's exit pop-up shows in the
+            // reference photo. The RE records sub_41696C's outline colour
+            // (sub_412987's a2/a7) as decompiler-lost ("black per every sibling
+            // call site", docs/re/frontend-flow.md "Escape/Quit-row confirm
+            // dialog"), so this gold is PHOTO-DERIVED pending a binary re-read;
+            // only the quit prompt overrides the default-black outline, since
+            // the photo evidence is for this dialog alone.
             draw_confirm_dialog(ctx_.sdl, ctx_.front_font, &ctx_.assets.frontend_pcx("WINZ"),
-                                prompt, "", yes_label, no_label, 164, 0, 0);
+                                prompt, "", yes_label, no_label, 164, 0, 0, 252, 248, 88);
         }
         SDL_RenderPresent(ctx_.sdl);
         frame_clock.pace();
