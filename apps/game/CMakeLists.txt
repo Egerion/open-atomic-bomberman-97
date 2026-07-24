@@ -1,4 +1,11 @@
-add_executable(bomber_game main.cpp)
+# WIN32 => build as a GUI-subsystem app so launching the game does NOT pop up a
+# console window next to it (the original BM95.EXE is a GUI app too). SDL3's
+# <SDL3/SDL_main.h> (included in main.cpp) supplies the WinMain entry point that
+# forwards to our int main(), so the switch needs no code change. The headless
+# --demo / --bm-shot / visual-golden paths still work: ctest runs them through
+# execute_process, which hands the child inherited stdout pipes, so their output
+# is captured regardless of subsystem. WIN32 is ignored on non-Windows platforms.
+add_executable(bomber_game WIN32 main.cpp)
 
 # Ship the game as OPEN-BM95.exe. The CMake TARGET stays `bomber_game`, so every
 # preset, build command, and $<TARGET_FILE:bomber_game> reference is unchanged —
