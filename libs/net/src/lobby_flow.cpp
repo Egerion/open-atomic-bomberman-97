@@ -27,6 +27,7 @@ int LobbyFlow::rtt_ms() const {
 
 Transport& LobbyFlow::transport() {
     if (relay_) return *relay_;
+    if (star_) return *star_;
     return transport_;
 }
 
@@ -119,28 +120,72 @@ void LobbyFlow::publish_candidates() {
     candidates_sent_ = true;
 }
 
+// Every peer derives every seat's punch nonce the same way from the shared seed,
+// so an inbound ping's nonce identifies WHICH SEAT sent it (Rendezvous's
+// multi-peer attribution) — and each peer still recognises only its own echo.
+std::uint32_t LobbyFlow::seat_nonce(int seat) const {
+    return match_start_.seed ^ (0x9E3779B1u * static_cast<std::uint32_t>(seat + 1));
+}
+
+std::vector<Rendezvous::Candidate> LobbyFlow::candidates_of(int seat) const {
+    std::vector<Rendezvous::Candidate> out;
+    const auto idx = static_cast<std::size_t>(seat);
+    if (seat < 0 || idx >= peer_candidates_.size()) return out;
+    for (const LobbyCandidate& c : peer_candidates_[idx]) {
+        std::string h;
+        std::uint16_t p = 0;
+        if (split_host_port(c.addr, &h, &p)) out.push_back({h, p});
+    }
+    return out;
+}
+
 void LobbyFlow::begin_rendezvous(std::int64_t now_ms) {
-    // Punch toward every OTHER seat's candidates. For 2P that is exactly the one
-    // peer; the N>2 star (guests punch only the hub) lands in Phase 4.
-    std::vector<Rendezvous::Candidate> targets;
-    for (std::size_t seat = 0; seat < peer_candidates_.size(); ++seat) {
-        if (static_cast<int>(seat) == my_seat_) continue;
-        for (const LobbyCandidate& c : peer_candidates_[seat]) {
-            std::string h;
-            std::uint16_t p = 0;
-            if (split_host_port(c.addr, &h, &p)) targets.push_back({h, p});
-        }
-    }
-    if (targets.empty()) {
-        fail("NO PEER ADDRESS - CANNOT CONNECT");
-        return;
-    }
-    // Distinct per-seat nonce so each peer recognises only its OWN ping echoed
-    // back (a shared nonce could latch on the peer's ping before ours got out).
-    const std::uint32_t nonce =
-        match_start_.seed ^ (0x9E3779B1u * static_cast<std::uint32_t>(my_seat_ + 1));
-    punch_ = std::make_unique<Rendezvous>(transport_, std::move(targets), nonce, kPunchTimeoutMs);
     phase_ = Phase::Rendezvous;
+    // Which seats are in this match: the server's assignment when it sent one,
+    // else the roster we already hold.
+    std::vector<int> seats = match_start_.seat_assign;
+    if (seats.empty())
+        for (const RosterEntry& e : roster_) seats.push_back(e.seat);
+
+    const bool am_hub = match_start_.hub_seat == my_seat_;
+    const bool star = seats.size() > 2;
+
+    if (star && am_hub) {
+        // The HUB opens a path to every guest over its ONE socket. A single
+        // multi-peer Rendezvous does them all: separate objects would each poll
+        // the same socket and eat one another's datagrams.
+        std::vector<Rendezvous::PeerSpec> specs;
+        for (int seat : seats) {
+            if (seat == my_seat_) continue;
+            Rendezvous::PeerSpec s;
+            s.seat = seat;
+            s.nonce = seat_nonce(seat);
+            s.candidates = candidates_of(seat);
+            if (s.candidates.empty()) {
+                fail("A PLAYER HAS NO REACHABLE ADDRESS");
+                return;
+            }
+            specs.push_back(std::move(s));
+        }
+        if (specs.empty()) {
+            fail("NO PEER ADDRESS - CANNOT CONNECT");
+            return;
+        }
+        punch_ = std::make_unique<Rendezvous>(transport_, std::move(specs), seat_nonce(my_seat_),
+                                             kPunchTimeoutMs);
+    } else {
+        // A GUEST punches only toward the hub (linear, not quadratic); in a plain
+        // 2-seat lobby that hub IS the other player. The 2-peer form set_peer()s
+        // the winner, which is all a guest needs — the hub reflects everyone else.
+        const int target = star ? match_start_.hub_seat : peer_seat();
+        std::vector<Rendezvous::Candidate> targets = candidates_of(target);
+        if (targets.empty()) {
+            fail("NO PEER ADDRESS - CANNOT CONNECT");
+            return;
+        }
+        punch_ = std::make_unique<Rendezvous>(transport_, std::move(targets),
+                                             seat_nonce(my_seat_), kPunchTimeoutMs);
+    }
     punch_->step(now_ms);
 }
 
@@ -303,10 +348,22 @@ void LobbyFlow::step(std::int64_t now_ms) {
             return;  // fail() may have fired
         }
         punch_->step(now_ms);
-        if (punch_->connected())
+        if (punch_->connected()) {
+            // The hub of a >2-seat match now knows every guest's punched address,
+            // so wrap the socket in the star (fan-out + guest<->guest reflection).
+            // A guest — and either side of a 2-seat match — needs nothing: its
+            // socket is already set_peer'd to the one peer it talks to.
+            if (punch_->winners().size() > 1) {
+                std::vector<StarHubTransport::Guest> guests;
+                guests.reserve(punch_->winners().size());
+                for (const Rendezvous::Winner& w : punch_->winners())
+                    guests.push_back({w.addr.host, w.addr.port});
+                star_ = std::make_unique<StarHubTransport>(transport_, std::move(guests));
+            }
             phase_ = Phase::Ready;
-        else if (punch_->failed())
+        } else if (punch_->failed()) {
             begin_relay_fallback();  // no direct path — go through the server
+        }
     }
     // Phase::Relaying just waits for RelayAllocated (handled above); the poll
     // at the top of this function is what delivers it.

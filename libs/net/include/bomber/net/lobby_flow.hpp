@@ -8,6 +8,7 @@
 #include "bomber/net/lobby_messages.hpp"
 #include "bomber/net/relayed_transport.hpp"
 #include "bomber/net/rendezvous.hpp"
+#include "bomber/net/star_hub_transport.hpp"
 #include "bomber/net/stun_client.hpp"
 #include "bomber/net/udp_transport.hpp"
 
@@ -112,6 +113,10 @@ private:
     void publish_candidates();
     void begin_rendezvous(std::int64_t now_ms);
     void begin_relay_fallback();  // punch failed → ask the server for an allocation
+    // Every peer derives every seat's punch nonce identically from the shared
+    // seed, so an inbound ping's nonce names its sender's seat.
+    std::uint32_t seat_nonce(int seat) const;
+    std::vector<Rendezvous::Candidate> candidates_of(int seat) const;
     // The seat this peer exchanges datagrams with: the star hub, or (as the hub
     // itself, or in a 2P lobby) the other occupied seat.
     int peer_seat() const;
@@ -160,6 +165,11 @@ private:
     // the allocation arrives the wrapper becomes the match transport.
     bool relay_requested_ = false;
     std::unique_ptr<RelayedTransport> relay_;
+
+    // The >2-seat star (Phase 4): built on the HUB only, from the punched
+    // address of every guest. Guests need nothing extra — their socket is
+    // set_peer'd to the hub and the hub reflects the other seats' frames.
+    std::unique_ptr<StarHubTransport> star_;
 };
 
 }  // namespace bomber::net

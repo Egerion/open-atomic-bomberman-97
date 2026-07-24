@@ -42,14 +42,15 @@ LobbyServerMessage join_accepted(int seat) {
     return m;
 }
 
-LobbyServerMessage start_match(std::uint32_t seed, std::uint16_t local_mask) {
+LobbyServerMessage start_match(std::uint32_t seed, std::uint16_t local_mask,
+                               std::vector<int> seats = {0, 1}) {
     LobbyServerMessage m;
     m.type = LobbyMsgType::StartMatch;
     m.seed = seed;
     m.input_delay = 2;
     m.local_seats_mask = local_mask;
     m.hub_seat = 0;
-    m.seat_assign = {0, 1};
+    m.seat_assign = std::move(seats);
     return m;
 }
 
@@ -134,6 +135,79 @@ TEST_CASE("LobbyFlow fails cleanly when START arrives with no peer address") {
     flow.step(0);  // no candidates were ever exchanged
     CHECK(flow.phase() == LobbyFlow::Phase::Failed);
     CHECK_FALSE(flow.error().empty());
+}
+
+TEST_CASE("three LobbyFlows form the star: hub punches both guests, frames reflect") {
+    // Phase 4 end-to-end at the netcode level (ADR-0011 decisions 2+4). The hub
+    // must open a path to EVERY guest over its one socket, then wrap it in the
+    // star so a guest's frame reaches the other guest without them ever talking.
+    UdpTransport th;
+    UdpTransport t1;
+    UdpTransport t2;
+    UdpTransport sink;
+    if (!th.bind(0) || !t1.bind(0) || !t2.bind(0) || !sink.bind(0)) {
+        MESSAGE("UDP sockets unavailable in this environment; skipping");
+        return;
+    }
+    LobbyClient ch;
+    LobbyClient c1;
+    LobbyClient c2;
+    LobbyFlow hub(test_config("HUB", sink.local_port()), th, ch);
+    LobbyFlow g1(test_config("G1", sink.local_port()), t1, c1);
+    LobbyFlow g2(test_config("G2", sink.local_port()), t2, c2);
+
+    hub.handle_server_message(lobby_created("K7Q2MP", 0));
+    g1.handle_server_message(join_accepted(1));
+    g2.handle_server_message(join_accepted(2));
+
+    // The server's candidate fan-out: the hub learns BOTH guests; each guest
+    // learns only the hub (the star is linear, not a mesh).
+    const std::string addr_h = "127.0.0.1:" + std::to_string(th.local_port());
+    hub.handle_server_message(peer_candidates(1, "127.0.0.1:" + std::to_string(t1.local_port())));
+    hub.handle_server_message(peer_candidates(2, "127.0.0.1:" + std::to_string(t2.local_port())));
+    g1.handle_server_message(peer_candidates(0, addr_h));
+    g2.handle_server_message(peer_candidates(0, addr_h));
+
+    // START for a 3-seat match, hub_seat 0, per-recipient seat masks.
+    const std::vector<int> seats = {0, 1, 2};
+    hub.handle_server_message(start_match(0xABCDEFu, 0b001, seats));
+    g1.handle_server_message(start_match(0xABCDEFu, 0b010, seats));
+    g2.handle_server_message(start_match(0xABCDEFu, 0b100, seats));
+
+    std::int64_t now = 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    while ((hub.phase() != LobbyFlow::Phase::Ready || g1.phase() != LobbyFlow::Phase::Ready ||
+            g2.phase() != LobbyFlow::Phase::Ready) &&
+           std::chrono::steady_clock::now() < deadline) {
+        hub.step(now);
+        g1.step(now);
+        g2.step(now);
+        now += 5;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    INFO("hub=" << static_cast<int>(hub.phase()) << " '" << hub.error() << "' g1="
+                << static_cast<int>(g1.phase()) << " '" << g1.error() << "' g2="
+                << static_cast<int>(g2.phase()) << " '" << g2.error() << "'");
+    REQUIRE(hub.phase() == LobbyFlow::Phase::Ready);
+    REQUIRE(g1.phase() == LobbyFlow::Phase::Ready);
+    REQUIRE(g2.phase() == LobbyFlow::Phase::Ready);
+
+    // Guest 1's frame must reach the HUB and be reflected to guest 2 — the whole
+    // point of the star (guests never exchange addresses).
+    const std::vector<std::uint8_t> frame = {1, 2, 3};
+    g1.transport().send(frame.data(), frame.size());
+
+    bool at_hub = false;
+    bool at_g2 = false;
+    std::vector<std::uint8_t> got;
+    const auto d2 = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while ((!at_hub || !at_g2) && std::chrono::steady_clock::now() < d2) {
+        if (!at_hub && hub.transport().poll(&got) && got == frame) at_hub = true;
+        if (!at_g2 && g2.transport().poll(&got) && got == frame) at_g2 = true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    CHECK(at_hub);
+    CHECK(at_g2);
 }
 
 TEST_CASE("two LobbyFlows punch each other and both reach Ready") {
