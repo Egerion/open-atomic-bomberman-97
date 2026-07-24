@@ -150,6 +150,66 @@ TEST_CASE("live: host + join + ready + start against the real matchmaker") {
     MESSAGE("seed=" << a.match_start().seed << " rtt_a=" << a.rtt_ms() << "ms");
 }
 
+TEST_CASE("live: a public lobby shows up in another client's browse") {
+    // Phase 3: a PUBLIC lobby is visible to everyone, so a player can find a
+    // match without being handed a code. Browsing must not commit the browser to
+    // anything — it drops back to Idle so the row can then be joined.
+    const std::string url = env_or("BOMBER_MATCHMAKER_URL", "");
+    if (url.empty()) {
+        MESSAGE("BOMBER_MATCHMAKER_URL unset; skipping the live browse test");
+        return;
+    }
+
+    UdpTransport th;
+    UdpTransport tbrowse;
+    REQUIRE(th.bind(0));
+    REQUIRE(tbrowse.bind(0));
+
+    LobbyFlow::Config cfg;
+    cfg.server_url = url;
+    cfg.stun_host = "127.0.0.1";
+    cfg.stun_port =
+        static_cast<std::uint16_t>(std::atoi(env_or("BOMBER_MATCHMAKER_STUN_PORT", "8081").c_str()));
+    cfg.build_hash = build_hash();
+    LobbyFlow::Config cfg_host = cfg;
+    cfg_host.player_name = "EGE";
+    LobbyFlow::Config cfg_browser = cfg;
+    cfg_browser.player_name = "GUEST";
+
+    LobbyClient ch;
+    LobbyClient cbr;
+    LobbyFlow host(cfg_host, th, ch);
+    LobbyFlow browser(cfg_browser, tbrowse, cbr);
+
+    host.host_lobby("PUBLIC TEST", /*is_public=*/true, /*max_seats=*/4);
+    REQUIRE(pump_until(host, browser, [&] { return host.phase() == LobbyFlow::Phase::InLobby; },
+                       8000));
+    const std::string code = host.code();
+    REQUIRE(code.size() == 6);
+
+    const unsigned before = browser.public_list_revision();
+    browser.browse_public();
+    REQUIRE(pump_until(host, browser,
+                       [&] { return browser.public_list_revision() != before; }, 8000));
+
+    // Browsing is not a commitment — the browser is free to act again.
+    CHECK(browser.phase() == LobbyFlow::Phase::Idle);
+
+    bool found = false;
+    for (const PublicLobby& l : browser.public_lobbies()) {
+        if (l.code == code) {
+            found = true;
+            CHECK(l.name == "PUBLIC TEST");
+            CHECK(l.max == 4);
+            CHECK(l.players >= 1);
+            CHECK(l.build_ok);  // same binary, so the build door is open
+        }
+    }
+    CHECK(found);
+    MESSAGE("public list carried " << browser.public_lobbies().size() << " lobby(ies); ours="
+                                   << code);
+}
+
 TEST_CASE("live: relay fallback carries the match when the punch cannot land") {
     // The Phase 2 proof (ADR-0011 decision 3): force the hole punch to fail —
     // exactly what symmetric NAT / CGNAT does — and check both peers fall back

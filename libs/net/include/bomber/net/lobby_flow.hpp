@@ -69,6 +69,10 @@ public:
     // --- user intents (safe to call any time; ignored when out of phase) ---
     void host_lobby(const std::string& lobby_name, bool is_public, int max_seats);
     void join_lobby(const std::string& code);
+    // Open the control connection (if needed) and ask for the public match list;
+    // the answer lands in public_lobbies() and bumps public_list_revision().
+    // Usable from Idle — browsing does not commit you to a lobby.
+    void browse_public();
     void set_ready(bool ready);
     void start_match();  // host only; the server validates all-ready
 
@@ -95,8 +99,13 @@ public:
     Transport& transport();
     bool is_relayed() const { return relay_ != nullptr; }
 
+    // The most recent public match list, and a counter the browser screen can
+    // watch to know a fresh answer arrived (rather than polling for changes).
+    const std::vector<PublicLobby>& public_lobbies() const { return public_lobbies_; }
+    unsigned public_list_revision() const { return public_list_revision_; }
+
 private:
-    enum class Pending : std::uint8_t { None, Create, Join };
+    enum class Pending : std::uint8_t { None, Create, Join, List };
 
     void fail(const std::string& why);
     void begin_candidate_gathering(std::int64_t now_ms);
@@ -137,6 +146,12 @@ private:
     std::vector<std::vector<LobbyCandidate>> peer_candidates_;
 
     std::int64_t last_heartbeat_ms_ = -1;
+
+    // Public browsing (Phase 3): the last PublicList answer. Kept beside the
+    // lobby state rather than in a separate object because it rides the same
+    // control connection and the same poll pump.
+    std::vector<PublicLobby> public_lobbies_;
+    unsigned public_list_revision_ = 0;
 
     MatchStart match_start_;
     std::unique_ptr<Rendezvous> punch_;

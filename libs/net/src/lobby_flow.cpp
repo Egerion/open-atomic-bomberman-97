@@ -66,6 +66,17 @@ void LobbyFlow::join_lobby(const std::string& code) {
     if (!client_.is_open()) client_.connect(cfg_.server_url);
 }
 
+void LobbyFlow::browse_public() {
+    // Browsing is not a commitment: we ride the control connection up, ask, and
+    // drop back to Idle when the answer lands, so the player can still host or
+    // join by code afterwards.
+    if (phase_ != Phase::Idle && phase_ != Phase::Failed) return;
+    error_.clear();
+    pending_ = Pending::List;
+    phase_ = Phase::Connecting;
+    if (!client_.is_open()) client_.connect(cfg_.server_url);
+}
+
 void LobbyFlow::set_ready(bool ready) {
     if (phase_ != Phase::InLobby) return;
     client_.set_ready(ready);
@@ -244,6 +255,13 @@ void LobbyFlow::handle_server_message(const LobbyServerMessage& msg) {
             break;
 
         case LobbyMsgType::PublicList:
+            public_lobbies_ = msg.lobbies;
+            ++public_list_revision_;
+            // A browse is finished the moment its answer arrives — drop back to
+            // Idle so the player can pick a row (join_lobby) or host instead.
+            if (phase_ == Phase::Connecting) phase_ = Phase::Idle;
+            break;
+
         case LobbyMsgType::HeartbeatAck:
         case LobbyMsgType::Unknown:
             break;
@@ -258,8 +276,10 @@ void LobbyFlow::step(std::int64_t now_ms) {
         if (pending_ == Pending::Create)
             client_.create_lobby(pending_public_ ? "public" : "private", pending_name_,
                                  pending_max_seats_, cfg_.build_hash, cfg_.player_name);
-        else
+        else if (pending_ == Pending::Join)
             client_.join_by_code(pending_code_, cfg_.build_hash, cfg_.player_name);
+        else  // Pending::List — the server flags each row build_ok against ours
+            client_.list_public(cfg_.build_hash);
         pending_ = Pending::None;
     }
 
