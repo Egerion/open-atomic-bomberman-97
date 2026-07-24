@@ -301,13 +301,20 @@ picker** are local-only. (`SFX 40` net non-host feedback, §2.5, is presentation
 
 ### 3.7 "Lost net players revert to AI" (Options row 12, `dword_464928`)
 
-A live toggle (`lost_net_revert_ai=`) with **no consumer in the port** but a real
-one in the original: when a networked human **drops**, their seat is handed to the
-**AISystem** (`+16` flips to the computer type `1`) so the match continues rather
-than stalling on a dead connection. The exact drop-detection + handover site is
-**[NEEDS BINARY]** (likely near the receive pump `sub_40E765` / a per-connection
-timeout in the `0x430C00` queue cluster), but the policy is confirmed by the
-option's existence and label.
+A live toggle (`lost_net_revert_ai=`) with a real consumer in the original: when
+a networked human **drops**, their seat is handed to the **AISystem** (`+16`
+flips to the computer type `1`) so the match continues rather than stalling on a
+dead connection. The exact drop-detection + handover site is **[NEEDS BINARY]**
+(likely near the receive pump `sub_40E765` / a per-connection timeout in the
+`0x430C00` queue cluster), but the policy is confirmed by the option's existence
+and label.
+
+**CONSUMED as of the peer-drop increment** (ADR-0011 Risks, "Dropped/late
+peers"): `net::DropPolicy::revert_to_ai` in `libs/net/rollback_session.hpp`. ON,
+the host broadcasts `MsgType::Drop` and every peer sets `Player::ai` for that
+seat at one agreed tick; OFF, the drop ends the match (`aborted()`). The port's
+timeout and handover point are OUR design (the original's are still [NEEDS
+BINARY]) — only the *policy the toggle selects* is RE-derived.
 
 ### 3.8 Protocol shape — and what the port should reproduce vs replace
 

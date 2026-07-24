@@ -250,7 +250,24 @@ online-specific ones:
   `State`, so all peers compute identical AI inputs and the hash stays equal).
   This revives the RE'd Options **row 12 "Lost net players revert to AI"**
   (`lost_net_revert_ai`, `docs/re/results-and-options.md`) as its first real
-  consumer.
+  consumer. **IMPLEMENTED** (`net::DropPolicy`, `MsgType::Drop`), with two
+  refinements the design sketch above left open:
+  - **T is retroactive, not a future tick.** T is the first tick the host holds
+    no input from S for. A future T would leave every tick between S's last
+    input and T permanently un-CONFIRMABLE (their missing input never arrives),
+    so the frontier — and the stall this bullet exists to cure — would never
+    move. At the first missing tick, a peer that has not yet received the
+    message is by construction still stalled exactly there, so a late copy
+    always lands inside the rollback window and there is no delivery deadline
+    to race; the message is simply re-sent every pump like the input windows.
+  - **T survives rollback because it is a schedule, not a mutation.**
+    `Player::ai` is hashed `State`, and a rollback restores a snapshot from
+    before the handoff. The session therefore keeps the "seat S becomes AI at
+    T" pair outside `State` and re-asserts it at the head of *every*
+    simulation of a tick ≥ T, first pass and re-simulation alike, so the flag
+    is a function of the tick rather than of when the packet arrived.
+  With the option **off**, a drop instead ends the match: the session latches a
+  readable `aborted()` and stops advancing, rather than hanging.
 - **Host migration (decision 5, IN v1).** Host drop is handled, not fatal.
   The dropped host's *seat* follows the same drop→AI handoff above; separately
   its two *roles* migrate. Every surviving peer runs the identical deterministic

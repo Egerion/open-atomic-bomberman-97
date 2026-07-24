@@ -22,6 +22,12 @@ target_link_libraries(bomber_net_udp_tests PRIVATE bomber::net)
 bomber_add_test(bomber_net_rollback_tests net_rollback test_rollback_session.cpp)
 target_link_libraries(bomber_net_rollback_tests PRIVATE bomber::net)
 
+# Peer drop -> AI handoff (ADR-0011 Risks): a silent peer's seat is handed to the
+# deterministic AISystem at one agreed tick on every peer (surviving rollback),
+# or — with Options row 12 off — ends the match loudly instead of hanging.
+bomber_add_test(bomber_net_peer_drop_tests net_peer_drop test_peer_drop.cpp)
+target_link_libraries(bomber_net_peer_drop_tests PRIVATE bomber::net)
+
 # SeedHandshake: the pre-match seed exchange (ADR-0010 §3.3 step 5) over both a
 # headless LoopbackLink and real UDP on localhost (soft-skips without sockets).
 bomber_add_test(bomber_net_handshake_tests net_handshake test_handshake.cpp)

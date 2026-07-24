@@ -28,6 +28,8 @@ std::uint32_t build_hash();
 // (e.g. a new MsgType, a widened field). A sim behaviour change is caught by the
 // reference-scenario hash instead, so it need NOT bump this.
 //   v1 -> v2: added MsgType::Punch (the NAT hole-punch PING/PONG, ADR-0011 §3).
-inline constexpr std::uint32_t kWireProtocolVersion = 2;
+//   v2 -> v3: added MsgType::Drop (the peer-drop -> AI handoff control message,
+//             ADR-0011 Risks "Dropped/late peers").
+inline constexpr std::uint32_t kWireProtocolVersion = 3;
 
 }  // namespace bomber::net

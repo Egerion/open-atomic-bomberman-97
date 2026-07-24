@@ -234,12 +234,15 @@ The front-end keeps the *chrome* of networking, wired to dead ends:
 - **Options net rows are display-only, round-tripped.** `options_screen.hpp`
   keeps every RE'd Options row including the net ones — row 2 **Node Name** (net
   identity string; empty here, "no net-identity concept"), row 12 **Lost net
-  players revert to AI** (a *live* toggle that persists to `options.ini` but has
-  **no consumer** — "no network play"), row 14 **Modem: P/I/B/#**, row 16 **Set
-  Default Network Protocol** (`netprotocol` 0..3). `install.{hpp,cpp}` parse and
-  re-serialize `modemport`/`modemirq`/`modembaud`/`modemdial`/`netprotocol`/
-  `lost_net_revert_ai` typed but **unconsumed** ("Not consumed by this port (no
-  network play); round-tripped typed").
+  players revert to AI**, row 14 **Modem: P/I/B/#**, row 16 **Set Default
+  Network Protocol** (`netprotocol` 0..3). `install.{hpp,cpp}` parse and
+  re-serialize `modemport`/`modemirq`/`modembaud`/`modemdial`/`netprotocol`
+  typed but **unconsumed** ("Not consumed by this port (no network play);
+  round-tripped typed"). Row 12 is the exception and is no longer display-only:
+  it now drives `net::DropPolicy::revert_to_ai` (the peer-drop → AI handoff,
+  ADR-0011 Risks). The value still lives in `assets::Options`; the netplay
+  caller copies it into the session's policy, since `libs/net` depends on
+  `bomber::sim` alone and cannot read CFG.INI.
 - **Debug info** shows `"Network id: %u"` as **0** (`debug_info_screen.cpp`) —
   "no net id".
 

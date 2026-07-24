@@ -502,7 +502,10 @@ existing, already-round-tripped `assets::Options` field
 consumer either way, so they are now LIVE toggles like every other boolean
 row rather than static placeholders — closer to the original (which also has
 no consumer for these beyond the options.ini round-trip) than a hardcoded
-`(N/A)` would have been. Row 17's displayed label is INVERTED versus its
+`(N/A)` would have been. Row 12 has since GAINED a consumer: it selects the
+peer-drop policy in `net::DropPolicy::revert_to_ai` (ADR-0011 Risks,
+"Dropped/late peers") — on, a lost peer's seat goes to the AI; off, the drop
+ends the match. Row 17's displayed label is INVERTED versus its
 backing value (`getstring((dword_464824==0)+25)`, pseudo.c 9280:
 `smallmemory==0` shows "YES", `==1` shows "NO") — ported as-is, not
 normalized, since the original genuinely displays it this way.
