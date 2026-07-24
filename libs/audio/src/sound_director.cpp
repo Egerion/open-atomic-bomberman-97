@@ -121,6 +121,9 @@ void SoundDirector::on_tick(const sim::State& s) {
                 // 40/41 "enrt1"/"enrt2" load contiguously, so the original
                 // random-picks across both. The sim already suppresses the
                 // event for disease-forced auto-drops (silent in the binary).
+                // NOT gated to a human/local player: sub_427961 is a global
+                // SFX and the event carries any owner, so an AI's warphole drop
+                // buzzes too — do not add an `ev.player == 0` check here.
                 audio_.play_one_of({40, 41});
                 break;
             case sim::Event::Type::JellyBounced: audio_.play(135); break;  // "bombboun"
