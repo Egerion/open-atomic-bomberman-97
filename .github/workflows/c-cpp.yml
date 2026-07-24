@@ -22,8 +22,13 @@ jobs:
             os: macos-latest
             preset: macos
             ctest_dir: build/macos
+          # Pinned to windows-2022 (not windows-latest): the windows-fetch preset
+          # uses the "Visual Studio 17 2022" generator, and once GitHub rolls
+          # windows-latest forward to an image without VS 2022 the generator errors
+          # with "could not find any instance of Visual Studio". windows-2022
+          # guarantees the matching toolset.
           - name: Windows (MSVC)
-            os: windows-latest
+            os: windows-2022
             preset: windows-fetch
             ctest_dir: build/windows-fetch
             ctest_config: Release
