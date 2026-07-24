@@ -91,6 +91,8 @@ struct Options {
     // observed.
     std::optional<bool> diseases_destroyable;
     // "lost_net_revert_ai=" — dword_464928, Options row 12. No clamp observed.
+    // CONSUMED by netplay: the caller copies it into
+    // `net::DropPolicy::revert_to_ai` (peer drop -> AI handoff, ADR-0011 Risks).
     std::optional<bool> lost_net_revert_ai;
     // "disable_game_music=" — dword_4648C0, Options row 13. Normalized 0/1.
     std::optional<bool> disable_game_music;

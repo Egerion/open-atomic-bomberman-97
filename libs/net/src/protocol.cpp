@@ -40,6 +40,7 @@ constexpr std::size_t kHashFrameBytes = 1 + 4 + 8;   // tag + tick u32 + hash u6
 constexpr std::size_t kRangeHeaderBytes = 1 + 4 + 1 + 2;  // tag + first_tick u32 + count u8 + mask u16
 constexpr std::size_t kHelloFrameBytes = 1 + 4 + 1;  // tag + seed u32 + is_ack u8
 constexpr std::size_t kPunchFrameBytes = 1 + 4 + 1;  // tag + nonce u32 + is_pong u8
+constexpr std::size_t kDropFrameBytes = 1 + 1 + 4;   // tag + seat u8 + at_tick u32
 
 }  // namespace
 
@@ -73,6 +74,14 @@ std::vector<std::uint8_t> encode_punch(std::uint32_t nonce, bool is_pong) {
     b.push_back(static_cast<std::uint8_t>(MsgType::Punch));
     put_u32_le(b, nonce);
     b.push_back(is_pong ? 1U : 0U);
+    return b;
+}
+
+std::vector<std::uint8_t> encode_drop(std::uint8_t seat, std::uint32_t at_tick) {
+    std::vector<std::uint8_t> b;
+    b.push_back(static_cast<std::uint8_t>(MsgType::Drop));
+    b.push_back(seat);
+    put_u32_le(b, at_tick);
     return b;
 }
 
@@ -119,6 +128,14 @@ bool decode(const std::uint8_t* data, std::size_t size, Message* out) {
         out->type = MsgType::Punch;
         out->punch.nonce = get_u32_le(data + 1);
         out->punch.is_pong = data[1 + 4] != 0;
+        return true;
+    }
+    if (tag == MsgType::Drop) {
+        if (size != kDropFrameBytes) return false;
+        if (data[1] >= sim::kMaxPlayers) return false;  // untrusted: seat must index a real slot
+        out->type = MsgType::Drop;
+        out->drop.seat = data[1];
+        out->drop.at_tick = get_u32_le(data + 2);
         return true;
     }
     if (tag == MsgType::InputRange) {

@@ -16,7 +16,14 @@
 
 namespace bomber::net {
 
-enum class MsgType : std::uint8_t { Input = 0, Hash = 1, InputRange = 2, Hello = 3, Punch = 4 };
+enum class MsgType : std::uint8_t {
+    Input = 0,
+    Hash = 1,
+    InputRange = 2,
+    Hello = 3,
+    Punch = 4,
+    Drop = 5
+};
 
 // A peer's claimed Simulation::hash() at the end of tick `tick_index`. The
 // receiver compares it against its OWN hash for that tick; a mismatch is an
@@ -50,6 +57,24 @@ struct PunchFrame {
     bool is_pong = false;
 };
 
+// The peer-drop control message (ADR-0011 Risks, "Dropped/late peers"): the
+// HOST announces "seat `seat` produced no input from tick `at_tick` on, hand it
+// to the AI". Every peer applies it at that exact tick, so the deterministic
+// AISystem derives identical inputs everywhere and the hash stays equal.
+//
+// `at_tick` is RETROACTIVE — the first tick for which the host holds no input
+// from that seat, which is at or below every peer's `confirmed_tick()`. It is
+// deliberately NOT a tick in the future: ticks between the seat's last input and
+// a future handoff tick could never be CONFIRMED (their missing input never
+// arrives), so the session would keep speculating and never unstall — exactly
+// the hang this message exists to cure. Placing it at the first missing tick
+// means a peer that has not received the message yet is simply still stalled
+// there, so a late arrival always lands inside the rollback window.
+struct DropFrame {
+    std::uint8_t seat = 0;       // the dropped seat index (< sim::kMaxPlayers)
+    std::uint32_t at_tick = 0;   // first tick simulated with that seat on AI
+};
+
 // A CONTIGUOUS run of input frames sharing one seat_mask — the redundancy the
 // lockstep session sends every tick so a dropped UDP packet is recovered by the
 // next one (each packet re-carries the whole un-confirmed local-input window).
@@ -60,8 +85,8 @@ struct InputRangeFrame {
     std::vector<sim::TickInputs> per_tick;
 };
 
-// One decoded datagram: exactly one of `input` / `range` / `hash` / `hello` is
-// meaningful per `type`.
+// One decoded datagram: exactly one of `input` / `range` / `hash` / `hello` /
+// `punch` / `drop` is meaningful per `type`.
 struct Message {
     MsgType type = MsgType::Input;
     InputFrame input;
@@ -69,6 +94,7 @@ struct Message {
     HashFrame hash;
     HelloFrame hello;
     PunchFrame punch;
+    DropFrame drop;
 };
 
 // [MsgType::Input][input_codec frame] — the seats in `seat_mask`, stamped `tick`.
@@ -93,6 +119,10 @@ std::vector<std::uint8_t> encode_hello(std::uint32_t seed, bool is_ack);
 // [MsgType::Punch][nonce u32-LE][is_pong u8] — 6 bytes. A hole-punch PING
 // (is_pong=false) or the PONG echo of one (is_pong=true, same nonce).
 std::vector<std::uint8_t> encode_punch(std::uint32_t nonce, bool is_pong);
+
+// [MsgType::Drop][seat u8][at_tick u32-LE] — 6 bytes. Decode rejects a seat
+// index outside [0, sim::kMaxPlayers).
+std::vector<std::uint8_t> encode_drop(std::uint8_t seat, std::uint32_t at_tick);
 
 // Decode a datagram produced by encode_input/encode_hash. Returns false (leaving
 // *out untouched) on an unknown tag, a short buffer, or a malformed payload.
