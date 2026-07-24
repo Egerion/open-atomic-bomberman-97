@@ -18,6 +18,7 @@ COPY --from=build /out/matchmaker /matchmaker
 
 EXPOSE 8080/tcp
 EXPOSE 8081/udp
+EXPOSE 8082/udp
 
 USER nonroot:nonroot
 ENTRYPOINT ["/matchmaker"]

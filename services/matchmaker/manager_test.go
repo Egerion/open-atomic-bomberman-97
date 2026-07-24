@@ -379,18 +379,8 @@ func TestMatchOverReopensForRematch(t *testing.T) {
 	}
 }
 
-func TestAllocateRelayNotImplemented(t *testing.T) {
-	m := newTestManager(t)
-	host := newFakeConn("host")
-	lc := createLobby(t, m, host, nil)
-	dispatchMap(m, host, map[string]any{
-		"type": TypeAllocateRelay, "lobby_id": lc.LobbyID, "seat": 0,
-	})
-	em := lastTyped[errorMsg](t, host, TypeError)
-	if em.Code != "not_implemented" {
-		t.Fatalf("relay should report not_implemented, got %q", em.Code)
-	}
-}
+// AllocateRelay is now implemented; its control-plane and data-plane coverage
+// lives in relay_test.go.
 
 func TestListPublic(t *testing.T) {
 	m := newTestManager(t)

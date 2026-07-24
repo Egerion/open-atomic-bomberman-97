@@ -98,6 +98,11 @@ type Manager struct {
 	cfg     Config
 	log     *slog.Logger
 	now     func() time.Time // injectable clock (tests)
+
+	// relay is the UDP forwarder's allocation registry (relay.go). The Manager
+	// mints and frees entries; relayServer reads them on the data plane. It has
+	// its own lock and never calls back here, so the order is always mu → relay.
+	relay *relayTable
 }
 
 func NewManager(cfg Config, log *slog.Logger) *Manager {
@@ -107,6 +112,7 @@ func NewManager(cfg Config, log *slog.Logger) *Manager {
 		cfg:     cfg,
 		log:     log,
 		now:     time.Now,
+		relay:   newRelayTable(cfg.RelayIdle, log),
 	}
 }
 
@@ -475,10 +481,39 @@ func (m *Manager) handleMatchOver(c clientConn, raw []byte) {
 	m.log.Info("lobby reopened for rematch", "code", lb.code)
 }
 
+// handleAllocateRelay reserves this seat's slot on the UDP forwarder (§6,
+// relay.go) — the fallback a client asks for once its hole-punch has failed.
 func (m *Manager) handleAllocateRelay(c clientConn, raw []byte) {
-	// Phase 2 (design §4, relay.go). Accepted so clients get a clean answer, not
-	// a silent drop; the forwarder itself is not built yet.
-	m.sendErr(c, "not_implemented", relayNotImplemented)
+	var msg allocateRelayMsg
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		m.sendErr(c, "bad_message", "malformed AllocateRelay")
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	lb, mem := m.lookupLocked(c)
+	if lb == nil {
+		m.sendErr(c, "not_in_lobby", "no lobby seat for this connection")
+		return
+	}
+	// An allocation always belongs to the sender's OWN seat, so a peer cannot
+	// mint or steal another seat's handle. The seat field is therefore only ever
+	// a cross-check; disagreement is a client bug, not something to honour.
+	if msg.Seat != nil && *msg.Seat != mem.seat {
+		m.sendErr(c, "bad_message", "seat does not match this connection's seat")
+		return
+	}
+	allocID, err := m.relay.allocate(lb.code, mem.seat)
+	if err != nil {
+		m.sendErr(c, "internal", "relay allocation failed")
+		return
+	}
+	c.send(relayAllocatedMsg{
+		Type:      TypeRelayAllocated,
+		RelayAddr: m.cfg.relayAdvertise(),
+		AllocID:   allocID,
+	})
+	m.log.Info("relay allocated", "code", lb.code, "seat", mem.seat)
 }
 
 // ---- lifecycle: disconnect + heartbeat reaper -------------------------------
@@ -497,9 +532,11 @@ func (m *Manager) removeConn(c clientConn) {
 		return
 	}
 	delete(lb.members, loc.seat)
+	m.relay.release(loc.code, loc.seat)
 	if len(lb.members) == 0 {
 		lb.state = stateEvicted
 		delete(m.lobbies, lb.code)
+		m.relay.releaseLobby(lb.code)
 		m.log.Info("lobby evicted (empty)", "code", lb.code)
 		return
 	}
@@ -535,6 +572,7 @@ func (m *Manager) reap() {
 			if now.Sub(mem.lastSeen) > deadline {
 				delete(m.byConn, mem.conn.id())
 				delete(lb.members, seat)
+				m.relay.release(code, seat)
 				mem.conn.disconnect("heartbeat timeout")
 				dropped = true
 				m.log.Info("member timed out", "code", code, "seat", seat)
@@ -543,6 +581,7 @@ func (m *Manager) reap() {
 		if len(lb.members) == 0 {
 			lb.state = stateEvicted
 			delete(m.lobbies, code)
+			m.relay.releaseLobby(code)
 			m.log.Info("lobby evicted (all timed out)", "code", code)
 			continue
 		}

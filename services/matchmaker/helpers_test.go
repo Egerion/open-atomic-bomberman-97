@@ -114,6 +114,8 @@ func newTestManager(t *testing.T) *Manager {
 		HeartbeatInterval: time.Second,
 		HeartbeatMiss:     3,
 		LockedGrace:       time.Hour, // keep lobbies in LOCKED during tests
+		RelayAdvertise:    "relay.test:8082",
+		RelayIdle:         time.Minute,
 	}
 	return NewManager(cfg, newLogger("error"))
 }

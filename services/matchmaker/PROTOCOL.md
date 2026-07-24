@@ -1,16 +1,17 @@
-# Matchmaker wire protocol (FROZEN — Phase 1a)
+# Matchmaker wire protocol (FROZEN)
 
 This is the single source of truth the C++ client (IXWebSocket, ADR-0011)
-implements against. It realises `docs/online-multiplayer-design.md` §§1–2 and
-§5.2. Field names and JSON types here are the contract — do not change one side
-without the other.
+implements against. It realises `docs/online-multiplayer-design.md` §§1–2, §4
+and §5.2. Field names and JSON types here are the contract — do not change one
+side without the other.
 
-Two channels:
+Three channels:
 
 | channel | transport | carries |
 |---|---|---|
-| **control** | WebSocket text frames, `ws(s)://<host>:8080/ws` | lobby create/join/list/ready/start/roster/candidates/reanchor |
+| **control** | WebSocket text frames, `ws(s)://<host>:8080/ws` | lobby create/join/list/ready/start/roster/candidates/reanchor/relay allocation |
 | **discovery** | UDP datagrams, `<host>:8081` | STUN reflexive-address echo |
+| **relay** | UDP datagrams, `<host>:8082` | opaque per-tick game traffic, forwarded when the punch failed (§6) |
 
 TLS terminates at the hosting edge (Fly/Render) → clients use `wss://`. The
 binary can also serve `wss://` directly with `-tls-cert`/`-tls-key`.
@@ -141,11 +142,12 @@ ICE: `host` > `reflexive` > `relay`.
 Any member may send it. The lobby returns to `OPEN`, ready flags clear, roster
 is kept, and a RosterUpdate is broadcast. Enables rematch and re-opens joins.
 
-### AllocateRelay → Error (Phase 2 stub — see §6)
+### AllocateRelay → RelayAllocated  (relay fallback — see §6)
 ```json
 {"type":"AllocateRelay","lobby_id":"…","seat":1}
 ```
-Currently answers **Error** `{"code":"not_implemented"}`.
+Sent once the hole-punch has failed. `seat` is **advisory**: the allocation
+always belongs to the sender's own seat. See §6 for the full contract.
 
 ---
 
@@ -219,14 +221,19 @@ optional `rtt_to_host_ms`(int). Roster is always sorted by ascending seat.
 {"type":"ReanchorAccepted","lobby_id":"…","code":"K7Q2MP","host_token":"…"}
 ```
 
+### RelayAllocated
+```json
+{"type":"RelayAllocated","relay_addr":"relay.example:8082","alloc_id":"7f3a…"}
+```
+See §6.
+
 ### Error (out-of-band failures)
 ```json
 {"type":"Error","code":"not_host","message":"only the host with a valid host_token may start"}
 ```
-`code` values in Phase 1a: `bad_json`, `bad_message`, `unknown_type`,
-`already_in_lobby`, `not_in_lobby`, `not_host`, `already_started`,
-`not_enough_players`, `not_all_ready`, `build_mismatch`, `reanchor_rejected`,
-`not_implemented`, `internal`.
+`code` values: `bad_json`, `bad_message`, `unknown_type`, `already_in_lobby`,
+`not_in_lobby`, `not_host`, `already_started`, `not_enough_players`,
+`not_all_ready`, `build_mismatch`, `reanchor_rejected`, `internal`.
 
 ---
 
@@ -248,20 +255,86 @@ The length prefix makes the encoding injective even if a name contains `:`/`;`.
 
 ---
 
-## 6. Phase 2 TODO — relay allocation (NOT frozen yet)
+## 6. Relay fallback (FROZEN)
 
-The UDP relay forwarder (design §4, ADR-0011 decision 3) is deferred. The
-control-plane shapes below are the intended contract; they are **provisional**
-until Phase 2 lands (`relay.go` holds the server-side drop-in seam). Today the
-server accepts `AllocateRelay` and replies `Error{code:"not_implemented"}`.
+The TURN-like UDP forwarder for peers whose hole-punch failed (symmetric NAT /
+CGNAT). Design §4, ADR-0011 decision 3; server side in `relay.go`.
+
+**The server never simulates and never decodes a game datagram.** Everything
+past the fixed header is opaque bytes: the relay forwards, it does not inspect.
+It adds no reliability, no ordering and no rate shaping — the game's own netcode
+is loss-tolerant and this stays a dumb forwarder.
+
+### 6.1 Control plane (WebSocket)
 
 ```
 C→S  {"type":"AllocateRelay","lobby_id":"…","seat":1}
-S→C  {"type":"RelayAllocated","relay_addr":"relay.example:3478","alloc_id":"…"}
+S→C  {"type":"RelayAllocated","relay_addr":"relay.example:8082","alloc_id":"7f3a…"}
 ```
 
-In-match data plane (opaque to the server; it never decodes an Input/Hash
-frame): each relayed datagram is `[alloc_id][opaque libs/net datagram]`; the
-relay looks up `alloc_id` and forwards the opaque bytes to the far seat's
-learned address. This is a `RelayedTransport` swap on the client — the
-`RollbackSession` above it is byte-for-byte identical to the direct-P2P case.
+- `alloc_id` is a 128-bit opaque handle rendered as **32 lowercase hex chars**
+  (same generator as `lobby_id` / `host_token`).
+- **One allocation per (lobby, seat).** Re-allocating for the same seat returns
+  the SAME `alloc_id` — idempotent, and the seat's already-learned address is
+  preserved, so retrying after a lost reply is safe mid-match.
+- `seat` is **advisory**: an allocation always belongs to the SENDER's own seat,
+  so no peer can mint or steal another seat's handle. It may be omitted; if it
+  is present and disagrees with the sender's seat the request is rejected with
+  `Error{code:"bad_message"}`.
+- `relay_addr` is the publicly reachable `host:port` of the UDP relay
+  (server flag `-relay-advertise`, defaulting to the relay listen address —
+  same host/port pattern as the STUN listener).
+- Errors: `not_in_lobby` (no seat for this connection), `bad_message`
+  (undecodable frame or a foreign `seat`), `internal`.
+- Allocations are freed when the member disconnects, when the heartbeat reaper
+  drops it, when the lobby is evicted, or after `-relay-idle` (default 60 s)
+  without traffic from that seat.
+
+### 6.2 Data plane (UDP, `<host>:8082`)
+
+Every datagram, **in both directions**, is:
+
+```
+ offset  size  field
+   0      16   alloc_id   (BINARY — the 32 hex chars decoded)
+  16       1   seat
+  17     ...   opaque payload
+```
+
+The header is therefore **exactly 17 bytes** each way.
+
+| direction | `alloc_id` is… | `seat` is… |
+|---|---|---|
+| client → relay | the **sender's** allocation | the **destination** seat |
+| relay → client | the **receiver's own** allocation | the **sender's** seat |
+
+So a client always prepends its own `alloc_id` + the seat it is writing to, and
+always strips a fixed 17-byte prefix on receipt, reading the seat byte to learn
+who sent it.
+
+On receipt the relay:
+
+1. looks up `alloc_id` → the sending lobby + seat;
+2. **learns/refreshes that sender's public address from the datagram source**
+   (the same trick as the STUN echo — this is what makes the return path work
+   through a NAT that no peer can predict);
+3. finds the destination seat's allocation **in the same lobby** and its learned
+   address;
+4. forwards `[dst's own alloc_id][sender's seat][payload]` to it, payload
+   byte-identical.
+
+**Dropped silently** (untrusted input — the relay never panics, never replies to
+a malformed datagram, and never logs per datagram; drops are counted and
+reported in one aggregated line per interval):
+
+- shorter than 17 bytes;
+- unknown `alloc_id` (including an expired one);
+- destination seat has no allocation in the sender's lobby — a lobby therefore
+  cannot address any other lobby's seat;
+- destination's address not learned yet (it has not sent anything).
+
+Datagrams larger than **2048 bytes** are dropped and counted as oversize — never
+truncated.
+
+On the client this is one `Transport` swap decided by the `Rendezvous` outcome;
+the `RollbackSession` above it is byte-for-byte identical to the direct-P2P case.
