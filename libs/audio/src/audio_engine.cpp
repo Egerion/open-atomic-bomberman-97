@@ -31,7 +31,17 @@ AudioEngine::~AudioEngine() {
     if (audio_inited_) SDL_QuitSubSystem(SDL_INIT_AUDIO);
 }
 
-bool AudioEngine::init(const std::filesystem::path& game_dir) {
+bool AudioEngine::init(const std::filesystem::path& game_dir,
+                       const std::function<void(float)>& progress) {
+    // Coarse boot "Loading sound..." percents (mirrors sub_4287B9's fixed
+    // 5/20/40/60/80/100 steps). The port loads .RSS clips lazily rather than
+    // preloading SOUNDLST groups, so the real work here is the device/stream
+    // bring-up + the SOUNDLST index read — still reported in the same shape so
+    // the second boot flash animates instead of snapping to a full bar.
+    auto step = [&](float f) {
+        if (progress) progress(f);
+    };
+    step(0.05f);
     if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) return false;
     audio_inited_ = true;
     SDL_AudioSpec spec{SDL_AUDIO_S16LE, assets::rss::Sound::kChannels,
@@ -41,12 +51,15 @@ bool AudioEngine::init(const std::filesystem::path& game_dir) {
             SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
         if (!streams_[i]) return false;
         SDL_ResumeAudioStreamDevice(streams_[i]);
+        if (i == kStreams / 2) step(0.40f);  // halfway through the SFX voice pool
     }
+    step(0.60f);
     try {
         names_ = assets::res::load_sounds(game_dir / "DATA" / "RES" / "SOUNDLST.RES");
     } catch (const std::exception&) {
         return false;
     }
+    step(0.80f);
     music_stream_ =
         SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
     if (music_stream_) {
@@ -55,6 +68,7 @@ bool AudioEngine::init(const std::filesystem::path& game_dir) {
     }
     sound_dir_ = game_dir / "DATA" / "SOUND";
     ok_ = true;
+    step(1.0f);
     return true;
 }
 

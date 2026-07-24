@@ -1,14 +1,16 @@
 #include "bomber/game/game_app.hpp"
 
-#include <algorithm>  // std::max_element
+#include <algorithm>  // std::max_element, std::clamp
 #include <array>      // run_match's per-player tap latch
 #include <chrono>     // random_boot_seed
+#include <cmath>      // std::lround (boot loading-bar percent readout)
 #include <cstdint>    // load_window_icon's .ICO byte parsing
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
-#include <iterator>  // std::size
-#include <random>    // random_boot_seed
+#include <functional>  // boot-loading progress callback (AssetStore::load / audio_.init)
+#include <iterator>    // std::size
+#include <random>      // random_boot_seed
 #include <string>
 
 #include "bomber/assets/install.hpp"
@@ -90,6 +92,17 @@ std::uint32_t random_boot_seed() {
                                    // but avoid a literal 0 seed on principle
 }
 
+// The "Loading data..." bar spans TWO port phases that together are the
+// equivalent of the original's single MASTER.ALI read (sub_41D695): the ANI/
+// PCX DECODE (AssetStore::load) and the per-player RECOLOR (build_player_sets
+// — the port bakes recolored sprite sets where the original remapped at blit
+// time, so it is extra "loading data" work with no original dialog of its
+// own). Both feed one continuous 0 -> 1 bar under the same caption; decode
+// owns the first slice, recolor the rest. The split is a rough work estimate,
+// not RE'd — the only contract is the bar stays monotonic and the window is
+// pumped throughout.
+constexpr float kBootDataDecodeShare = 0.55f;
+
 // The boot LOADING dialog — RE-PINNED 2026-07-10 (docs/re/frontend-flow.md
 // "The percent-bar dialog, sub_412E33 (RE-PINNED)"). This is NOT the
 // IPLOGO/HSLOGO/TITLE screen chain (sub_42B060, a separate later step): it
@@ -122,14 +135,18 @@ std::uint32_t random_boot_seed() {
 // unfilled black. All text via sub_41696C = ink over a 4-pass 1-px black
 // outline (draw_dialog_text).
 //
-// Our AssetStore::load() has no per-file progress callback (a monolithic
-// try-block of ANI/PCX loads), and on modern hardware the whole thing is
-// sub-second — so a live animated percent would be fake motion. Faithful
-// simplification (documented per CLAUDE.md's RE workflow, UNCHANGED by this
-// pass): flash the SAME two captions in the SAME order, each fully
-// "complete" (bar full, 100%) for one presented frame, matching the
-// original's caption-then-bar shape without inventing progress data we
-// don't have.
+// The bar ANIMATES for real (2026-07-24): the port now threads a per-asset
+// progress callback through AssetStore::load()/build_player_sets() (the
+// "Loading data..." phase) and AudioEngine::init() (the "Loading sound..."
+// phase), so `fraction` climbs 0 -> 1 as the work happens and the window is
+// pumped between repaints (GameApp::draw_boot_loading). This RESTORES the
+// original's live readout — sub_41D695 calls sub_412E33(100*read/total) once
+// per MASTER.ALI entry, and sub_4287B9 steps a coarse 5/20/40/60/80/100 as it
+// preloads the SOUNDLST groups (docs/re/frontend-flow.md "The percent-bar
+// dialog"). It replaces the earlier "presented already-complete 100%"
+// simplification, which — combined with the un-pumped synchronous load —
+// left the window frozen at a full bar for the whole multi-second decode on a
+// real (esp. DATA_HD) install (the reported "freeze + bar starts at 100%").
 //
 // Font: FONT6 is CONFIRMED ready before BOTH flashes (docs/re/
 // frontend-flow.md "FONT6 timing" — sub_414DF4 pins it via sub_431E9C(6)
@@ -137,7 +154,8 @@ std::uint32_t random_boot_seed() {
 // loaded by sub_414DF4 itself ("winz.plt"), so GameApp::init pre-warms both
 // before the first flash.
 void draw_boot_loading_dialog(SDL_Renderer* ren, const FontTextures& font, const Sprite* winz,
-                              const char* caption) {
+                              const char* caption, float fraction) {
+    fraction = std::clamp(fraction, 0.0f, 1.0f);
     SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
     SDL_RenderClear(ren);
 
@@ -158,16 +176,22 @@ void draw_boot_loading_dialog(SDL_Renderer* ren, const FontTextures& font, const
     SDL_SetRenderDrawColor(ren, kDialogInkR, kDialogInkG, kDialogInkB, 255);
     SDL_RenderRect(ren, &frame);
 
-    // The bar sits at a fixed "complete" 100% (the documented simplification
-    // above) — the filled segment spans the full 300 px track, so the
-    // never-drawn unfilled segment is omitted rather than drawn zero-width.
-    SDL_FRect bar{win.x + 31.0f, win.y + 5.5f * h + 1.0f, 300.0f, h - 1.0f};
+    // Two-tone bar (sub_43D1C0 x2, docs/re/frontend-flow.md "Two-tone bar"):
+    // the filled segment is width = 3*pct (== 300*fraction) in byte_49A624 ->
+    // idx 178 -> (168,168,164); the unfilled remainder 3*(100-pct) is black.
+    // Paint the whole 300-px track black first, then the filled prefix on top.
+    const float track_x = win.x + 31.0f;
+    const float track_y = win.y + 5.5f * h + 1.0f;
+    SDL_FRect track{track_x, track_y, 300.0f, h - 1.0f};
+    SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
+    SDL_RenderFillRect(ren, &track);
+    SDL_FRect bar{track_x, track_y, 300.0f * fraction, h - 1.0f};
     SDL_SetRenderDrawColor(ren, 168, 168, 164, 255);  // byte_49A624 -> idx 178
     SDL_RenderFillRect(ren, &bar);
 
-    // "%d" readout (100, matching the always-complete bar) — yellow
-    // (byte_49D37A -> idx 182), y = 3.5*fontheight, horizontally centered.
-    std::string pct_str = "100";
+    // "%d" readout (0..100, tracking the bar) — yellow (byte_49D37A -> idx
+    // 182), y = 3.5*fontheight, horizontally centered.
+    std::string pct_str = std::to_string(static_cast<int>(std::lround(fraction * 100.0f)));
     float pct_w = font.loaded() ? static_cast<float>(font.measure(pct_str)) : 0.0f;
     draw_dialog_text(ren, font, pct_str, win.x + (win.w - pct_w) / 2, win.y + 3.5f * h, 252, 248,
                      88);
@@ -259,7 +283,16 @@ bool GameApp::init() {
     if (!init_video(ren)) return false;
     if (!load_assets(ren, game)) return false;
 
+    // The "Loading data..." bar continues across build_presentation's
+    // per-player recolor (kBootDataDecodeShare split), so audio init — the
+    // second flash, "Loading sound..." — runs LAST, after ALL sprite data is
+    // decoded AND recolored. This matches the original's order (sub_41D695
+    // "data" fully done before sub_42896E "sound") and keeps the whole heavy
+    // graphics pipeline behind one responsive, animated bar instead of
+    // freezing after the flashes (the recolor used to run un-pumped with no
+    // dialog at all).
     build_presentation(ren);
+    load_sound(game);
     return true;
 }
 
@@ -536,26 +569,25 @@ bool GameApp::load_assets(SDL_Renderer* ren, const fs::path& game) {
     // WINZ.PCX (the blue 9-patch window skin, draw_boot_loading_dialog's
     // comment) is likewise pre-warmed here: sub_414DF4 loads "winz.plt"
     // during graphics init, before either dialog runs.
-    const Sprite& winz = assets_.load_frontend_winz(ren, game);
-    draw_boot_loading_dialog(ren, front_font_, &winz, "Loading data...");
+    assets_.load_frontend_winz(ren, game);
+    draw_boot_loading("Loading data...", 0.0f);
 
-    if (!assets_.load(ren, game)) return false;
+    // Animate the "Loading data..." bar across the (multi-second, on a DATA_HD
+    // install) synchronous decode: AssetStore::load reports 0 -> 1 as each
+    // ANI/PCX group lands, and draw_boot_loading pumps the OS event queue +
+    // repaints between chunks so the window never goes "not responding". The
+    // decode owns the first kBootDataDecodeShare of the bar; the recolor in
+    // build_presentation continues it to 1.0.
+    if (!assets_.load(ren, game, [this](float f) {
+            draw_boot_loading("Loading data...", f * kBootDataDecodeShare);
+        }))
+        return false;
     seqs_.resolve(assets_);
 
     // Initial joystick enumeration (docs/re/setup-screens.md joystick pane,
     // sub_429628). Hotplug events refresh this again in present_setup/run_match
     // so a stick plugged in after boot still shows up without a restart.
     gamepads_.refresh();
-
-    // Second phase of the boot LOADING dialog: "Loading sound..." (getstring
-    // 200), shown before the sound-preload step (sub_42896E/sub_4287B9) — here,
-    // audio_.init(). Skipped in --demo mode, matching that the demo path never
-    // calls audio_.init either.
-    if (!opts_.demo) {
-        draw_boot_loading_dialog(ren, front_font_, &assets_.frontend_pcx("WINZ"),
-                                 assets_.getstring(200, "Loading sound...").c_str());
-        if (!audio_.init(game)) std::fprintf(stderr, "audio unavailable, continuing silent\n");
-    }
     return true;
 }
 
@@ -564,8 +596,15 @@ void GameApp::build_presentation(SDL_Renderer* ren) {
     // Seed setup-screen slot colours from VALUELST for any colour without a .RMP
     // tail (a loaded .RMP keeps its own authoritative tail), then build the
     // per-player recolored sprite sets (authentic .RMP remap where available).
+    // The recolor is the second half of the "Loading data..." work (see
+    // kBootDataDecodeShare): report its 0 -> 1 into the tail of the same bar,
+    // pumping + repainting per player so this heavy step stays responsive too
+    // (it previously ran with no dialog and no event pump at all).
     assets_.set_color_fallbacks(base_tuning_.color_rgb, 10);
-    assets_.build_player_sets(base_tuning_.color_rgb);
+    assets_.build_player_sets(base_tuning_.color_rgb, [this](float f) {
+        draw_boot_loading("Loading data...",
+                          kBootDataDecodeShare + f * (1.0f - kBootDataDecodeShare));
+    });
     seqs_.resolve(assets_);  // re-resolve: player sprite sets exist now
 
     renderer_.emplace(ren, assets_, seqs_, values_);
@@ -575,6 +614,48 @@ void GameApp::build_presentation(SDL_Renderer* ren) {
     // dialogs — matching sub_41095A's real init order. assets_.load() reloads
     // the same FONT6.FON into assets_.frontend_font() (harmless — identical
     // file), so no second build() is needed here.
+}
+
+void GameApp::load_sound(const fs::path& game) {
+    // The second boot LOADING flash: "Loading sound..." (getstring 200, now
+    // that MESSAGES.TXT is loaded), shown before the sound-preload step
+    // (sub_42896E/sub_4287B9) — here, audio_.init(). Skipped in --demo mode,
+    // matching that the demo path never touches audio. Runs LAST (after
+    // build_presentation) so the whole "Loading data..." bar — decode AND
+    // recolor — completes first, faithful to sub_41D695 preceding sub_42896E.
+    // audio_.init reports 0 -> 1 across the audio-device/SOUNDLST bring-up and
+    // draw_boot_loading pumps between repaints, so this flash animates too and
+    // stays responsive.
+    if (opts_.demo) return;
+    const std::string cap = assets_.getstring(200, "Loading sound...");
+    draw_boot_loading(cap.c_str(), 0.0f);
+    if (!audio_.init(game, [this, &cap](float f) { draw_boot_loading(cap.c_str(), f); }))
+        std::fprintf(stderr, "audio unavailable, continuing silent\n");
+}
+
+void GameApp::draw_boot_loading(const char* caption, float fraction) {
+    // Automated capture modes (--demo/--demo-shots/--bm-shot/--menu-shot) run
+    // scripted with no interactive window and hash frames drawn LATER by
+    // run_demo/run_bm_shot/run_menu_shot, so the boot dialog is pure overhead
+    // there (nothing to keep responsive; its vsync-blocked presents would only
+    // slow the capture) and never reaches the hashed output. Skip it — the
+    // progress callbacks then no-op and the load stays silent. Interactive
+    // boots get the animated, pumped dialog below.
+    if (opts_.demo || !opts_.bm_shot_name.empty() || !opts_.menu_shot_out.empty()) return;
+    // Keep the OS message queue drained so the window never enters the "not
+    // responding" state during the (multi-second, on a DATA_HD install)
+    // synchronous asset/sound preload — the port's equivalent of the original
+    // pumping Windows messages between its sub_412E33 percent repaints. The
+    // global SDL_EventFilter (sdl_event_filter, installed in init_video) runs
+    // synchronously inside SDL_PollEvent's pump, so Alt+Enter/F11 fullscreen
+    // still works mid-load; everything else is discarded (boot has no
+    // interactive screen yet — a stray window-close is simply ignored until
+    // the normal event loop starts, which is imminent once loading finishes).
+    SDL_Event ev;
+    while (SDL_PollEvent(&ev)) {
+    }
+    draw_boot_loading_dialog(sdl_renderer_.get(), front_font_, &assets_.frontend_pcx("WINZ"),
+                             caption, fraction);
 }
 
 namespace {

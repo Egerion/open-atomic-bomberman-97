@@ -124,10 +124,19 @@ private:
     // SDL init + window/renderer creation + logical-presentation/vsync setup;
     // hands back the live renderer (used by the two asset steps below).
     bool init_video(SDL_Renderer*& ren);
-    // FONT6 + the boot LOADING dialogs wrapped around assets_.load()/audio init.
+    // FONT6 + the "Loading data..." dialog animated across assets_.load()'s
+    // decode (the recolor half lives in build_presentation; audio in load_sound).
     bool load_assets(SDL_Renderer* ren, const std::filesystem::path& game);
-    // Base tuning + per-player recolor + Renderer/Screen construction.
+    // Base tuning + per-player recolor (the "Loading data..." bar's second
+    // half) + Renderer/Screen construction.
     void build_presentation(SDL_Renderer* ren);
+    // The "Loading sound..." dialog + audio_.init(), run last so all sprite
+    // data is decoded AND recolored first (sub_41D695 before sub_42896E).
+    void load_sound(const std::filesystem::path& game);
+    // Pump the OS event queue (so the window stays responsive) then repaint the
+    // boot LOADING dialog at `fraction` (0..1). The progress callback threaded
+    // through assets_.load()/build_player_sets()/audio_.init() calls this.
+    void draw_boot_loading(const char* caption, float fraction);
     // PORT ENHANCEMENT (not RE'd — the original has no fullscreen concept):
     // the Alt+Enter/F11 fullscreen toggle, wired as a global SDL_EventFilter
     // (installed once in init()) so it works from every one of this file's

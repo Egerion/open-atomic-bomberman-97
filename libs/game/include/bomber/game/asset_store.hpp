@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>  // boot-loading progress callback (load / build_player_sets)
 #include <map>
 #include <string>
 #include <vector>
@@ -29,7 +30,12 @@ namespace bomber::game {
 class AssetStore {
 public:
     // Loads the stage-independent assets. Returns false (and logs) on failure.
-    bool load(SDL_Renderer* ren, const std::filesystem::path& game_dir);
+    // `progress` (optional) is invoked with a monotonic 0 -> 1 fraction as each
+    // ANI/PCX group lands, so the boot LOADING dialog can animate + pump the
+    // window during this multi-second decode; omit it (tools/tests) for a
+    // silent load.
+    bool load(SDL_Renderer* ren, const std::filesystem::path& game_dir,
+              const std::function<void(float)>& progress = {});
 
     // Loads just FONT6.FON standalone, ahead of the full load() pass. RE fact
     // (docs/re/frontend-flow.md "sub_43C734 dialog chrome"): sub_41095A calls
@@ -55,8 +61,11 @@ public:
     // Builds per-player recolored copies of the player-facing sprite sets
     // (walk/stand/bombs/flames/deaths). Prefers each slot's authentic .RMP index
     // remap; `colors` (VALUELST 200..247) is the truecolour fallback for a slot
-    // whose .RMP was missing.
-    void build_player_sets(const std::int32_t colors[][3]);
+    // whose .RMP was missing. `progress` (optional) is invoked with a 0 -> 1
+    // fraction per player so the boot LOADING dialog can keep animating + pumping
+    // through this heavy recolor pass; omit it for a silent build.
+    void build_player_sets(const std::int32_t colors[][3],
+                           const std::function<void(float)>& progress = {});
 
     // Seed the setup-screen slot colours (rmp_rgb_) for every colour whose .RMP
     // was absent, from the VALUELST 200..247 percent table (Tuning::color_rgb),

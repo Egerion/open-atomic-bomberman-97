@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>  // boot "Loading sound..." progress callback
 #include <initializer_list>
 #include <map>
 
@@ -31,7 +32,11 @@ public:
     AudioEngine& operator=(const AudioEngine&) = delete;
 
     // Opens the device streams and indexes SOUNDLST. False = stay silent.
-    bool init(const std::filesystem::path& game_dir);
+    // `progress` (optional) reports a coarse 0 -> 1 fraction across the device/
+    // SOUNDLST bring-up so the boot "Loading sound..." dialog can animate + pump
+    // the window, mirroring sub_4287B9's fixed 5/20/40/60/80/100 percent steps.
+    bool init(const std::filesystem::path& game_dir,
+              const std::function<void(float)>& progress = {});
 
     bool enabled() const { return ok_; }
 
