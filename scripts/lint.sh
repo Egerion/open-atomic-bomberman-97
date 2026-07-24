@@ -33,7 +33,7 @@ fi
 # every dependent TU fails to parse rather than being linted.
 INCLUDES=(-Ilibs/sim/include -Ilibs/sim/src -Ilibs/assets/include \
           -Ilibs/audio/include -Ilibs/core/include -Ilibs/platform/include \
-          -Ilibs/match/include -Ilibs/game/include)
+          -Ilibs/match/include -Ilibs/net/include -Ilibs/game/include)
 SDL_INC="build/windows-fetch/_deps/sdl3-src/include"
 if [ -d "$SDL_INC" ]; then
   INCLUDES+=(-I"$SDL_INC")

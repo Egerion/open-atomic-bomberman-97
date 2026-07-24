@@ -29,6 +29,7 @@ add_subdirectory(libs/core)  # SDL-free shared vocabulary (ADR-0008); no deps, m
 add_subdirectory(libs/assets)
 add_subdirectory(libs/sim)
 add_subdirectory(libs/match)
+add_subdirectory(libs/net)   # netplay: deterministic-lockstep input codec + (later) UDP transport (ADR-0010); SDL-free, depends on sim
 add_subdirectory(apps/abtool)
 
 enable_testing()

@@ -26,6 +26,7 @@ endfunction()
 
 add_subdirectory(sim)
 add_subdirectory(match)
+add_subdirectory(net)
 add_subdirectory(assets)
 add_subdirectory(game)
 
