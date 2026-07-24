@@ -125,9 +125,20 @@ void UdpTransport::send(const std::uint8_t* data, std::size_t size) {
 bool UdpTransport::poll(std::vector<std::uint8_t>* out) {
     if (fd_ < 0) return false;
     char buf[2048];
-    const int n = static_cast<int>(
-        recvfrom(static_cast<sock_t>(fd_), buf, static_cast<int>(sizeof(buf)), 0, nullptr, nullptr));
+    sockaddr_storage from{};
+    socklen_t fromlen = sizeof(from);
+    const int n = static_cast<int>(recvfrom(static_cast<sock_t>(fd_), buf,
+                                            static_cast<int>(sizeof(buf)), 0,
+                                            reinterpret_cast<sockaddr*>(&from), &fromlen));
     if (n <= 0) return false;  // EWOULDBLOCK (nothing waiting) or an error
+    // Learn the peer from the first datagram we receive when none was set: a host
+    // binds a known port and waits, and the guest (which set_peer'd the host)
+    // reveals its own address by connecting — so only the JOINER needs to know an
+    // address, the usual host/join UX.
+    if (peer_len_ == 0 && fromlen > 0 && static_cast<std::size_t>(fromlen) <= sizeof(peer_)) {
+        std::memcpy(peer_, &from, static_cast<std::size_t>(fromlen));
+        peer_len_ = static_cast<unsigned>(fromlen);
+    }
     const auto* p = reinterpret_cast<const std::uint8_t*>(buf);
     out->assign(p, p + n);
     return true;

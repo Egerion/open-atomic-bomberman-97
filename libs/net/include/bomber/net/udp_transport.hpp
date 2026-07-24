@@ -36,7 +36,8 @@ public:
     bool set_peer(const std::string& peer_host, std::uint16_t peer_port);
 
     bool ok() const { return fd_ >= 0; }
-    std::uint16_t local_port() const;  // the actually-bound port (after bind())
+    bool has_peer() const { return peer_len_ != 0; }  // set via set_peer() or learned in poll()
+    std::uint16_t local_port() const;                 // the actually-bound port (after bind())
 
     void send(const std::uint8_t* data, std::size_t size) override;
     bool poll(std::vector<std::uint8_t>* out) override;
