@@ -1096,10 +1096,15 @@ AppInput GameApp::present_net_host() {
 #if defined(BOMBER_HAS_LOBBY)
         case LobbyMenuChoice::HostOnline: return present_net_online(/*host=*/true);
         case LobbyMenuChoice::JoinOnline: return present_net_online(/*host=*/false);
+        case LobbyMenuChoice::BrowsePublic:
+            // The browser hands back a code, so this is the JOIN arm with the
+            // typed-code prompt swapped for a picked row (ADR-0011 Phase 3).
+            return present_net_online(/*host=*/false, /*browse=*/true);
 #else
         // Never listed without the lobby — fall through to the cancel arm.
         case LobbyMenuChoice::HostOnline:
         case LobbyMenuChoice::JoinOnline:
+        case LobbyMenuChoice::BrowsePublic:
 #endif
         case LobbyMenuChoice::Cancel: break;
     }
@@ -1141,15 +1146,39 @@ std::uint16_t GameApp::matchmaker_stun_port() const {
     return (p > 0 && p <= 65535) ? static_cast<std::uint16_t>(p) : kDefaultStunPort;
 }
 
-AppInput GameApp::present_net_online(bool host) {
-    // HOST PRIVATE GAME / JOIN BY CODE: the ADR-0011 online path. A guest first
-    // types the 6-char code; then both sides bind ONE socket, sit in the waiting
-    // room, and — once the server's StartMatch arrives and the peers punch a
-    // direct path — run the match with the SERVER's authoritative seed and seat
-    // mask (never a locally derived host?0:1).
+AppInput GameApp::present_net_online(bool host, bool browse) {
+    // HOST PRIVATE GAME / JOIN BY CODE / BROWSE PUBLIC GAMES: the ADR-0011 online
+    // path. A guest first names the lobby it wants — typing the 6-char code, or
+    // picking a row in the public browser, which yields the very same code — then
+    // both sides bind ONE socket, sit in the waiting room, and, once the server's
+    // StartMatch arrives and the peers punch a direct path, run the match with the
+    // SERVER's authoritative seed and seat mask (never a locally derived
+    // host?0:1). The browser is deliberately just another way to fill in `code`:
+    // everything below it is the unchanged join path.
     LobbyScreen screen(sctx());
+
+    LobbyScreen::OnlineConfig ocfg;
+    ocfg.server_url = matchmaker_url();
+    ocfg.stun_host = matchmaker_stun_host();
+    ocfg.stun_port = matchmaker_stun_port();
+    // The original's "Node Name" (options row 2, sub_40FE34) IS the per-machine
+    // net identity — reuse it when the player has set one.
+    ocfg.player_name = options_.node_name.empty() ? std::string("PLAYER") : options_.node_name;
+
     std::string code;
-    if (!host) {
+    if (browse) {
+        // The browser needs a bound socket of its own (LobbyFlow owns one either
+        // way) but never punches with it, so it is scoped to the browse and
+        // closed before the match socket below is opened.
+        net::UdpTransport browse_transport;
+        if (!browse_transport.bind(0)) {
+            std::fprintf(stderr, "lobby: cannot open a UDP socket\n");
+            return AppInput::Advance;
+        }
+        bool closed = false;
+        if (!screen.run_public_browser(ocfg, browse_transport, code, closed))
+            return closed ? AppInput::Quit : AppInput::Advance;
+    } else if (!host) {
         bool closed = false;
         if (!screen.run_code_entry(code, closed))
             return closed ? AppInput::Quit : AppInput::Advance;
@@ -1163,14 +1192,6 @@ AppInput GameApp::present_net_online(bool host) {
         std::fprintf(stderr, "lobby: cannot open a UDP socket\n");
         return AppInput::Advance;
     }
-
-    LobbyScreen::OnlineConfig ocfg;
-    ocfg.server_url = matchmaker_url();
-    ocfg.stun_host = matchmaker_stun_host();
-    ocfg.stun_port = matchmaker_stun_port();
-    // The original's "Node Name" (options row 2, sub_40FE34) IS the per-machine
-    // net identity — reuse it when the player has set one.
-    ocfg.player_name = options_.node_name.empty() ? std::string("PLAYER") : options_.node_name;
 
     const LobbyRoomResult r = screen.run_online(ocfg, transport, host, code);
     if (r.window_closed) return AppInput::Quit;

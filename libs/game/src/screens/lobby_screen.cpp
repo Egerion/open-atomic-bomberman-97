@@ -51,7 +51,7 @@ struct MenuRow {
 constexpr MenuRow kRows[] = {
     {"HOST PRIVATE GAME", LobbyMenuChoice::HostOnline, true},
     {"JOIN BY CODE", LobbyMenuChoice::JoinOnline, true},
-    // Phase 3 seam: {"PUBLIC GAMES", LobbyMenuChoice::BrowsePublic, true},
+    {"BROWSE PUBLIC GAMES", LobbyMenuChoice::BrowsePublic, true},
     {"HOST LAN GAME", LobbyMenuChoice::HostDirect, false},
     {"JOIN BY IP ADDRESS", LobbyMenuChoice::JoinDirect, false},
 };
@@ -258,6 +258,100 @@ void draw_room(ScreenContext& ctx, const net::LobbyFlow& flow, bool local_ready)
     draw_centred(ctx.sdl, ctx.front_font, hint, lay.win.y + lay.win.h + 10.0f);
 }
 
+// --- the PUBLIC GAMES browser (Phase 3) ------------------------------------
+
+constexpr int kBrowseRows = 10;         // the *.BM help browser's own visible-row count
+constexpr float kColGap = 12.0f;        // gap between two row columns
+constexpr std::size_t kNameChars = 20;  // clamp for the untrusted server-supplied name
+// The incompatible-build marker. A WORD, for the same reason draw_room's
+// HOST/READY/WAITING are words: the original FON fonts carry no tick/cross
+// codepoint, so a symbol would have to be drawn art. Matches the wording
+// LobbyFlow::error() already uses for the refusal ("VERSION MISMATCH ...").
+constexpr char kStaleMark[] = "VERSION";
+
+std::string occupancy(const net::PublicLobby& l) {
+    return std::to_string(l.players) + "/" + std::to_string(l.max);
+}
+
+// The lobby name is another player's typed node name arriving over the wire —
+// untrusted input, same posture as the 1997 files: keep only codes the FON can
+// actually draw and clamp the length, so no single row can widen the window off
+// the 640-px screen.
+std::string display_name(const std::string& raw) {
+    std::string out;
+    for (const char c : raw) {
+        if (out.size() >= kNameChars) break;
+        const unsigned char u = static_cast<unsigned char>(c);
+        if (u >= 32 && u < 127) out += c;
+    }
+    return out.empty() ? std::string("GAME") : out;
+}
+
+// One frame of the browser list: the SAME sub_42DBCC list dialog the NETWORK
+// GAME menu and the *.BM help picker draw, one item row per open public lobby,
+// and the key hints on an outlined text line under the window (draw_room's
+// shape). Columns are laid out from the RIGHT edge of the item area — marker,
+// code, occupancy — so the name takes what is left and a scrollbar (which
+// narrows that area) simply shifts them.
+//
+// A row whose build_ok is false cannot be joined, so it is drawn in the chrome's
+// own grey (kDialogDim*, dword_45C478 — the ink the button labels and the title
+// strip already use) and carries the VERSION marker.
+void draw_browser(ScreenContext& ctx, const std::vector<net::PublicLobby>& list, int sel, int top) {
+    const std::string title = "PUBLIC GAMES";
+    const int count = static_cast<int>(list.size());
+    const int visible = std::min(count, kBrowseRows);
+
+    // Column widths come from the WHOLE list, not just the visible window, so
+    // the columns do not jump around as the list scrolls.
+    float name_w = 0.0f;
+    float occ_w = 0.0f;
+    float code_w = 0.0f;
+    for (const net::PublicLobby& l : list) {
+        name_w = std::max(name_w, static_cast<float>(ctx.front_font.measure(display_name(l.name))));
+        occ_w = std::max(occ_w, static_cast<float>(ctx.front_font.measure(occupancy(l))));
+        code_w = std::max(code_w, static_cast<float>(ctx.front_font.measure(l.code)));
+    }
+    const float mark_w = static_cast<float>(ctx.front_font.measure(kStaleMark));
+    float content_w = name_w + occ_w + code_w + mark_w + 3.0f * kColGap;
+    content_w = std::max(content_w, static_cast<float>(ctx.front_font.measure(title)));
+    content_w = std::max(content_w, kMinListW);
+
+    const ListDialogLayout lay =
+        draw_list_dialog(ctx.sdl, ctx.front_font, title, kListY, content_w, visible, count, top);
+    const float mark_x = lay.item_x + lay.item_w - mark_w;
+    const float code_x = mark_x - kColGap - code_w;
+    const float occ_x = code_x - kColGap - occ_w;
+
+    for (int i = top; i < top + visible; ++i) {
+        const net::PublicLobby& l = list[static_cast<std::size_t>(i)];
+        const int vi = i - top;
+        const float ty = lay.item_y0 + static_cast<float>(vi) * lay.item_h;
+        Uint8 r = l.build_ok ? kDialogInkR : kDialogDimR;
+        Uint8 g = l.build_ok ? kDialogInkG : kDialogDimG;
+        Uint8 b = l.build_ok ? kDialogInkB : kDialogDimB;
+        if (i == sel) {
+            // Inverted-band selection, as everywhere else. On the light band the
+            // readable ink is the dark base coat; a DIMMED variant of it would be
+            // a new colour, so a selected incompatible row leans on its VERSION
+            // marker (and the buzz on Enter) instead of a third ink.
+            draw_list_selection(ctx.sdl, lay, vi);
+            r = kDialogFillR;
+            g = kDialogFillG;
+            b = kDialogFillB;
+        }
+        ctx.front_font.draw(ctx.sdl, display_name(l.name), lay.item_x, ty, r, g, b);
+        const std::string occ = occupancy(l);
+        const float ow = static_cast<float>(ctx.front_font.measure(occ));
+        ctx.front_font.draw(ctx.sdl, occ, occ_x + occ_w - ow, ty, r, g, b);
+        ctx.front_font.draw(ctx.sdl, l.code, code_x, ty, r, g, b);
+        if (!l.build_ok) ctx.front_font.draw(ctx.sdl, kStaleMark, mark_x, ty, r, g, b);
+    }
+
+    draw_centred(ctx.sdl, ctx.front_font, "ENTER = JOIN    R = REFRESH    ESC = BACK",
+                 lay.win.y + lay.win.h + 10.0f);
+}
+
 }  // namespace
 
 LobbyRoomResult LobbyScreen::run_online(const OnlineConfig& ocfg, net::UdpTransport& transport,
@@ -359,6 +453,159 @@ LobbyRoomResult LobbyScreen::run_online(const OnlineConfig& ocfg, net::UdpTransp
                                     host ? "HOSTING A GAME" : "JOINING " + code,
                                     "CONTACTING THE SERVER...", ok_label, kDialogInkR, kDialogInkG,
                                     kDialogInkB);
+        }
+        SDL_RenderPresent(ctx_.sdl);
+        frame_clock.pace();
+    }
+}
+
+bool LobbyScreen::run_public_browser(const OnlineConfig& ocfg, net::UdpTransport& transport,
+                                     std::string& code, bool& window_closed) {
+    net::LobbyFlow::Config cfg;
+    cfg.server_url = ocfg.server_url;
+    cfg.stun_host = ocfg.stun_host;
+    cfg.stun_port = ocfg.stun_port;
+    cfg.player_name = ocfg.player_name;
+    cfg.build_hash = net::build_hash();  // the server flags every row against ours
+
+    net::LobbyClient client;
+    net::LobbyFlow flow(cfg, transport, client);
+    // browse_public() rides the control connection up and drops back to Idle when
+    // the answer lands, so the ONLY reliable "the answer arrived" signal is the
+    // revision counter — phase() is Idle before and after (lobby_flow.hpp).
+    unsigned asked_rev = flow.public_list_revision();
+    flow.browse_public();
+
+    platform::FrameClock frame_clock(ctx_.window);
+    const Sprite* winz = &ctx_.assets.frontend_pcx("WINZ");
+    const std::string ok_label = ctx_.assets.getstring(27, " Ok ");
+    const std::string head = "PUBLIC GAMES";
+    int sel = 0;
+    int top = 0;
+    std::string failure;  // non-empty once Phase::Failed latched -> the ack modal
+
+    while (true) {
+        const std::vector<net::PublicLobby>& list = flow.public_lobbies();
+        int count = static_cast<int>(list.size());
+        bool searching = flow.public_list_revision() == asked_rev;
+
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_EVENT_QUIT) {
+                window_closed = true;
+                return false;
+            }
+            if (ev.type != SDL_EVENT_KEY_DOWN || ev.key.repeat) continue;
+            const SDL_Keycode key = ev.key.key;
+
+            if (!failure.empty()) {
+                // sub_414340's own key loop, exactly as run_online drives it.
+                if (key == SDLK_RETURN || key == SDLK_KP_ENTER || key == SDLK_SPACE ||
+                    key == SDLK_ESCAPE)
+                    return false;
+                ctx_.audio.play(20);
+                continue;
+            }
+            if (key == SDLK_ESCAPE) {
+                ctx_.audio.play(20);
+                return false;  // back to the NETWORK GAME menu, nothing joined
+            }
+            if (key == SDLK_R || key == SDLK_F5) {
+                // Re-ask. Ignored while an answer is still outstanding — the flow
+                // would refuse it anyway (browse_public is Idle/Failed-only).
+                if (!searching) {
+                    asked_rev = flow.public_list_revision();
+                    flow.browse_public();
+                    searching = true;
+                    ctx_.audio.play(20);
+                }
+                continue;
+            }
+            if (searching) continue;  // the transient modal has nothing to steer
+            if (count == 0) {
+                // The answered-but-empty state draws the acknowledge modal, whose
+                // dismiss keys close it (the *.BM browser's empty-glob path does
+                // the same); every other key blips.
+                if (key == SDLK_RETURN || key == SDLK_KP_ENTER || key == SDLK_SPACE) return false;
+                ctx_.audio.play(20);
+                continue;
+            }
+
+            // The sub_42DBCC list widget's own navigation model (bmscreen.cpp's
+            // HelpBrowser): arrows wrap, PageUp/PageDown/Home/End clamp,
+            // Enter/Space picks. No letter-jump here — R is the refresh key.
+            switch (key) {
+                case SDLK_UP:
+                    sel = (sel + count - 1) % count;
+                    ctx_.audio.play(20);
+                    break;
+                case SDLK_DOWN:
+                    sel = (sel + 1) % count;
+                    ctx_.audio.play(20);
+                    break;
+                case SDLK_PAGEUP:
+                    sel = std::max(0, sel - kBrowseRows);
+                    ctx_.audio.play(20);
+                    break;
+                case SDLK_PAGEDOWN:
+                    sel = std::min(count - 1, sel + kBrowseRows);
+                    ctx_.audio.play(20);
+                    break;
+                case SDLK_HOME:
+                    sel = 0;
+                    ctx_.audio.play(20);
+                    break;
+                case SDLK_END:
+                    sel = count - 1;
+                    ctx_.audio.play(20);
+                    break;
+                case SDLK_RETURN:
+                case SDLK_KP_ENTER:
+                case SDLK_SPACE:
+                    if (!list[static_cast<std::size_t>(sel)].build_ok) {
+                        // SFX 40 — the same "you can't do that here" buzz the
+                        // waiting room fires at a non-host pressing Enter. The
+                        // server would refuse this join with VERSION MISMATCH, so
+                        // the row is a dead end by design, not a failure to show.
+                        ctx_.audio.play(40);
+                        break;
+                    }
+                    ctx_.audio.play(10);  // accept sting
+                    code = list[static_cast<std::size_t>(sel)].code;
+                    return true;  // -> the caller's UNCHANGED join path
+                default: break;
+            }
+        }
+
+        flow.step(static_cast<std::int64_t>(SDL_GetTicks()));
+        if (flow.phase() == net::LobbyFlow::Phase::Failed && failure.empty()) {
+            failure = flow.error().empty() ? std::string("CONNECTION FAILED") : flow.error();
+            ctx_.audio.play(20);
+        }
+        // A refresh can shrink the list under the cursor; re-clamp before drawing.
+        count = static_cast<int>(list.size());
+        if (sel >= count) sel = std::max(0, count - 1);
+        if (sel < top) top = sel;
+        if (sel >= top + kBrowseRows) top = sel - kBrowseRows + 1;
+        top = std::min(top, std::max(0, count - kBrowseRows));
+
+        ctx_.audio.update_music();
+        draw_backdrop();
+        if (!failure.empty()) {
+            draw_acknowledge_dialog(ctx_.sdl, ctx_.front_font, winz, "NETWORK ERROR", failure,
+                                    ok_label, kDialogInkR, kDialogInkG, kDialogInkB);
+        } else if (flow.public_list_revision() == asked_rev) {
+            draw_acknowledge_dialog(ctx_.sdl, ctx_.front_font, winz, head, "SEARCHING FOR GAMES...",
+                                    ok_label, kDialogInkR, kDialogInkG, kDialogInkB);
+        } else if (count == 0) {
+            const std::string body = "NO PUBLIC GAMES";
+            draw_acknowledge_dialog(ctx_.sdl, ctx_.front_font, winz, head, body, ok_label,
+                                    kDialogInkR, kDialogInkG, kDialogInkB);
+            const DialogRect win = acknowledge_dialog_rect(ctx_.front_font, head, body);
+            draw_centred(ctx_.sdl, ctx_.front_font, "R = REFRESH    ESC = BACK",
+                         win.y + win.h + 10.0f);
+        } else {
+            draw_browser(ctx_, list, sel, top);
         }
         SDL_RenderPresent(ctx_.sdl);
         frame_clock.pace();

@@ -76,16 +76,19 @@ Player 0: arrows + Right Ctrl/Space (bomb), Right Shift (throw/grab/trigger/punc
 
 ### Online multiplayer
 
-**From the menu:** **Start Network Game** opens the *Network Game* list with four rows:
+**From the menu:** **Start Network Game** opens the *Network Game* list with five rows:
 
 | row | needs a server? | what it does |
 |---|---|---|
 | **Host Private Game** | yes | Creates a lobby and shows a 6-character **code**. Read it out to a friend. |
 | **Join by Code** | yes | Type the host's 6-character code. |
+| **Browse Public Games** | yes | Lists the open **public** lobbies — name, players/seats, code. `Enter` joins, `R` refreshes, `Esc` goes back. Rows whose build does not match yours are greyed and marked `VERSION`; they cannot be joined (the server would refuse). |
 | **Host LAN Game** | no | Hosts on UDP port 8000 and waits (the original direct path). |
 | **Join by IP Address** | no | Enter the host's `IP:port` (default `127.0.0.1:8000`). |
 
-The two **online** rows land in a **waiting room**: the lobby code sits in the window title, the roster lists every seat (name, host marker, ready state), `Space` toggles your ready flag, the host presses `Enter` to start, `Esc` leaves. Once the host starts, the peers punch a direct UDP path (STUN/hole-punch) and the match begins with the **server's** seed and seat assignment. **Join Network Game** (the menu row below) remains the direct `IP:port` join, unchanged.
+The three **online** rows land in the same **waiting room**: the lobby code sits in the window title, the roster lists every seat (name, host marker, ready state), `Space` toggles your ready flag, the host presses `Enter` to start, `Esc` leaves. Once the host starts, the peers punch a direct UDP path (STUN/hole-punch) and the match begins with the **server's** seed and seat assignment. **Join Network Game** (the menu row below) remains the direct `IP:port` join, unchanged.
+
+*Host Private Game* creates a **private** lobby (reachable by code only), so the browser lists only lobbies some client asked the server to make public — hosting a public one from the menu is the one Phase 3 seam still open (`LobbyFlow::host_lobby` already takes the flag).
 
 #### Matchmaker configuration
 

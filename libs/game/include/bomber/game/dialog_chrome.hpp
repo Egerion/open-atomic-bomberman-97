@@ -63,6 +63,12 @@ inline constexpr Uint8 kDialogFillR = 88, kDialogFillG = 84, kDialogFillB = 80;
 // byte_49D38F (LUT offset 0x7FFF) -> idx 72 -> (240,248,252): the general
 // dialog text ink ("white").
 inline constexpr Uint8 kDialogInkR = 240, kDialogInkG = 248, kDialogInkB = 252;
+// dword_45C478 = 21140 -> LUT idx 178 -> (168,168,164): the sub_432298 button
+// LABEL ink, which is also the list dialog's title-strip grey. Exported so a
+// screen can DIM an item it will not let you action (the lobby browser's
+// incompatible-build rows) in a colour the original front end already uses for
+// text — rather than inventing a greyed-out ramp of its own.
+inline constexpr Uint8 kDialogDimR = 168, kDialogDimG = 168, kDialogDimB = 164;
 
 // The window paint: WINZ.PCX 9-patch when `winz` is a loaded sprite
 // (sub_41726B/sub_416B43 — corners pinned, edges/center tiled, 24-px cells,
