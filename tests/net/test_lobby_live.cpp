@@ -149,3 +149,104 @@ TEST_CASE("live: host + join + ready + start against the real matchmaker") {
     CHECK(b.match_start().local_seats_mask == 0b10);
     MESSAGE("seed=" << a.match_start().seed << " rtt_a=" << a.rtt_ms() << "ms");
 }
+
+TEST_CASE("live: relay fallback carries the match when the punch cannot land") {
+    // The Phase 2 proof (ADR-0011 decision 3): force the hole punch to fail —
+    // exactly what symmetric NAT / CGNAT does — and check both peers fall back
+    // through the server's UDP forwarder and can still exchange datagrams.
+    //
+    // The server must advertise a ROUTABLE relay host for a client to use it;
+    // its default (`-relay-addr :8082`) has no host and is rejected here, which
+    // is the same thing its own start-up WARN is about. Run it with
+    // `-relay-advertise 127.0.0.1:8082` for this test.
+    const std::string url = env_or("BOMBER_MATCHMAKER_URL", "");
+    if (url.empty()) {
+        MESSAGE("BOMBER_MATCHMAKER_URL unset; skipping the live relay test");
+        return;
+    }
+    const auto stun_port =
+        static_cast<std::uint16_t>(std::atoi(env_or("BOMBER_MATCHMAKER_STUN_PORT", "8081").c_str()));
+
+    UdpTransport ta;
+    UdpTransport tb;
+    REQUIRE(ta.bind(0));
+    REQUIRE(tb.bind(0));
+
+    LobbyFlow::Config cfg;
+    cfg.server_url = url;
+    cfg.stun_host = "127.0.0.1";
+    cfg.stun_port = stun_port;
+    cfg.build_hash = build_hash();
+    LobbyFlow::Config cfg_a = cfg;
+    cfg_a.player_name = "EGE";
+    LobbyFlow::Config cfg_b = cfg;
+    cfg_b.player_name = "ADA";
+
+    LobbyClient ca;
+    LobbyClient cb;
+    LobbyFlow a(cfg_a, ta, ca);
+    LobbyFlow b(cfg_b, tb, cb);
+
+    a.host_lobby("relay-test", false, 2);
+    REQUIRE(pump_until(a, b, [&] { return a.phase() == LobbyFlow::Phase::InLobby; }, 8000));
+    b.join_lobby(a.code());
+    REQUIRE(pump_until(a, b, [&] { return b.phase() == LobbyFlow::Phase::InLobby; }, 8000));
+    REQUIRE(pump_until(a, b, [&] { return a.roster().size() == 2; }, 8000));
+
+    a.set_ready(true);
+    b.set_ready(true);
+    REQUIRE(pump_until(
+        a, b,
+        [&] {
+            if (a.roster().size() < 2) return false;
+            for (const auto& e : a.roster())
+                if (!e.ready) return false;
+            return true;
+        },
+        8000));
+    // Let the real candidate fan-out settle first, so our sabotage below is not
+    // overwritten by a late PeerCandidates push from the server.
+    pump_until(a, b, [] { return false; }, 1500);
+
+    // Sabotage: replace each peer's view of the other with TEST-NET-1
+    // (192.0.2.0/24, RFC 5737 — guaranteed unroutable), so no candidate pair can
+    // ever complete and the punch must time out.
+    LobbyServerMessage bogus_for_a;
+    bogus_for_a.type = LobbyMsgType::PeerCandidates;
+    bogus_for_a.candidates_seat = 1;
+    bogus_for_a.candidates = {LobbyCandidate{"host", "192.0.2.1:9", ""}};
+    LobbyServerMessage bogus_for_b = bogus_for_a;
+    bogus_for_b.candidates_seat = 0;
+    a.handle_server_message(bogus_for_a);
+    b.handle_server_message(bogus_for_b);
+
+    a.start_match();
+    // Punch timeout (~5 s) + the allocation round trip.
+    const bool both = pump_until(
+        a, b,
+        [&] { return a.phase() == LobbyFlow::Phase::Ready && b.phase() == LobbyFlow::Phase::Ready; },
+        30000);
+    INFO("a=" << static_cast<int>(a.phase()) << " err='" << a.error() << "'  b="
+              << static_cast<int>(b.phase()) << " err='" << b.error() << "'");
+    REQUIRE(both);
+
+    // Both got there through the RELAY, not a direct path.
+    CHECK(a.is_relayed());
+    CHECK(b.is_relayed());
+
+    // And the relayed transport actually carries traffic. The forwarder learns
+    // each peer's address from its first datagram, so both sides send until one
+    // lands (the game's netcode is likewise loss-tolerant).
+    const std::vector<std::uint8_t> payload = {0x42, 0x4F, 0x4D, 0x42};
+    bool delivered = false;
+    std::vector<std::uint8_t> got;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!delivered && std::chrono::steady_clock::now() < deadline) {
+        a.transport().send(payload.data(), payload.size());
+        b.transport().send(payload.data(), payload.size());  // teaches the relay b's address
+        if (b.transport().poll(&got) && got == payload) delivered = true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    CHECK(delivered);
+    MESSAGE("relayed match ready; seed=" << a.match_start().seed);
+}
