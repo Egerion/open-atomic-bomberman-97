@@ -113,6 +113,10 @@ LobbyServerMessage parse_server_message(const std::string& text) {
         m.lobby_id = j.value("lobby_id", std::string());
         m.code = j.value("code", std::string());
         m.host_token = j.value("host_token", std::string());
+    } else if (type == "RelayAllocated") {
+        m.type = LobbyMsgType::RelayAllocated;
+        m.relay_addr = j.value("relay_addr", std::string());
+        m.alloc_id = j.value("alloc_id", std::string());
     } else if (type == "Error") {
         m.type = LobbyMsgType::Error;
         m.error_code = j.value("code", std::string());
@@ -246,6 +250,14 @@ std::string encode_match_over(const std::string& lobby_id) {
     json j;
     j["type"] = "MatchOver";
     j["lobby_id"] = lobby_id;
+    return j.dump();
+}
+
+std::string encode_allocate_relay(const std::string& lobby_id, int seat) {
+    json j;
+    j["type"] = "AllocateRelay";
+    j["lobby_id"] = lobby_id;
+    j["seat"] = seat;
     return j.dump();
 }
 

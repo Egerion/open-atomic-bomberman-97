@@ -14,6 +14,7 @@ add_library(bomber_net STATIC
   src/udp_transport.cpp
   src/build_hash.cpp
   src/rendezvous.cpp
+  src/relayed_transport.cpp
 )
 add_library(bomber::net ALIAS bomber_net)
 

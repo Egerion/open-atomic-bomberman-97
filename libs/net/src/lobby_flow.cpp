@@ -1,5 +1,6 @@
 #include "bomber/net/lobby_flow.hpp"
 
+#include <array>
 #include <utility>
 
 #include "bomber/net/lobby_client.hpp"
@@ -22,6 +23,22 @@ LobbyFlow::~LobbyFlow() = default;
 
 int LobbyFlow::rtt_ms() const {
     return punch_ ? punch_->rtt_ms() : 0;
+}
+
+Transport& LobbyFlow::transport() {
+    if (relay_) return *relay_;
+    return transport_;
+}
+
+int LobbyFlow::peer_seat() const {
+    // Datagrams go to the star hub — unless WE are the hub (or it is a plain 2P
+    // lobby), in which case they go to the other occupied seat.
+    if (match_start_.hub_seat != my_seat_) return match_start_.hub_seat;
+    for (int seat : match_start_.seat_assign)
+        if (seat != my_seat_) return seat;
+    for (const RosterEntry& e : roster_)
+        if (e.seat != my_seat_) return e.seat;
+    return -1;
 }
 
 void LobbyFlow::fail(const std::string& why) {
@@ -116,6 +133,16 @@ void LobbyFlow::begin_rendezvous(std::int64_t now_ms) {
     punch_->step(now_ms);
 }
 
+void LobbyFlow::begin_relay_fallback() {
+    // Symmetric NAT / CGNAT: the port the STUN server saw is not the port used
+    // toward the peer, so no candidate pair can complete. Route through the
+    // server's forwarder instead (ADR-0011 decision 3 — relay ships in v1).
+    if (relay_requested_) return;
+    relay_requested_ = true;
+    phase_ = Phase::Relaying;
+    client_.send(encode_allocate_relay(lobby_id_, my_seat_));
+}
+
 void LobbyFlow::handle_server_message(const LobbyServerMessage& msg) {
     switch (msg.type) {
         case LobbyMsgType::LobbyCreated:
@@ -179,7 +206,12 @@ void LobbyFlow::handle_server_message(const LobbyServerMessage& msg) {
             // Control-plane rejections that are not fatal to the lobby itself
             // (e.g. not_all_ready when the host jumps the gun) surface as text
             // without tearing the room down.
-            if (msg.error_code == "not_all_ready")
+            if (phase_ == Phase::Relaying)
+                // The relay was our last resort (the punch already failed), so a
+                // rejection here — an older server without Phase 2, or an
+                // allocation failure — ends the attempt rather than hanging.
+                fail("RELAY UNAVAILABLE - CANNOT CONNECT");
+            else if (msg.error_code == "not_all_ready")
                 error_ = "ALL PLAYERS MUST BE READY";
             else if (msg.error_code == "not_enough_players")
                 error_ = "NEED AT LEAST TWO PLAYERS";
@@ -188,6 +220,21 @@ void LobbyFlow::handle_server_message(const LobbyServerMessage& msg) {
             else
                 error_ = msg.error_message.empty() ? msg.error_code : msg.error_message;
             break;
+
+        case LobbyMsgType::RelayAllocated: {
+            std::string host;
+            std::uint16_t port = 0;
+            std::array<std::uint8_t, kRelayAllocIdBytes> alloc{};
+            const int dst = peer_seat();
+            if (!split_host_port(msg.relay_addr, &host, &port) ||
+                !parse_alloc_id(msg.alloc_id, &alloc) || dst < 0) {
+                fail("RELAY UNAVAILABLE - CANNOT CONNECT");
+                break;
+            }
+            relay_ = std::make_unique<RelayedTransport>(transport_, host, port, alloc, dst);
+            phase_ = Phase::Ready;  // relayed, but ready to play
+            break;
+        }
 
         case LobbyMsgType::ReanchorAccepted:
             code_ = msg.code;
@@ -239,8 +286,10 @@ void LobbyFlow::step(std::int64_t now_ms) {
         if (punch_->connected())
             phase_ = Phase::Ready;
         else if (punch_->failed())
-            fail("COULD NOT REACH PLAYER - NAT BLOCKED");
+            begin_relay_fallback();  // no direct path — go through the server
     }
+    // Phase::Relaying just waits for RelayAllocated (handled above); the poll
+    // at the top of this function is what delivers it.
 }
 
 }  // namespace bomber::net

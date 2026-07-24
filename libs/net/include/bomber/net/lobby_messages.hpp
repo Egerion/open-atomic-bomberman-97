@@ -49,6 +49,7 @@ enum class LobbyMsgType {
     PeerCandidates,
     StartMatch,
     ReanchorAccepted,
+    RelayAllocated,
     Error,
 };
 
@@ -82,6 +83,10 @@ struct LobbyServerMessage {
     int input_delay = 0;
     int hub_seat = 0;
     std::uint16_t local_seats_mask = 0;
+
+    // RelayAllocated (PROTOCOL.md §6): where to route when the punch failed.
+    std::string relay_addr;  // "host:port" of the UDP forwarder
+    std::string alloc_id;    // 32 hex chars; parse_alloc_id() turns it into bytes
 
     // Error
     std::string error_code;
@@ -125,5 +130,8 @@ std::string encode_start_match(const std::string& lobby_id, const std::string& h
                                int input_delay, std::uint32_t match_config_digest);
 std::string encode_reanchor(const std::string& code, const std::string& roster_digest);
 std::string encode_match_over(const std::string& lobby_id);
+// {"type":"AllocateRelay","lobby_id":"…","seat":n} — asked for only after the
+// punch fails (PROTOCOL.md §6); the reply carries relay_addr + alloc_id.
+std::string encode_allocate_relay(const std::string& lobby_id, int seat);
 
 }  // namespace bomber::net

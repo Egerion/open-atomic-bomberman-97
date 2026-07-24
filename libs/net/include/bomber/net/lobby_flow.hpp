@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "bomber/net/lobby_messages.hpp"
+#include "bomber/net/relayed_transport.hpp"
 #include "bomber/net/rendezvous.hpp"
 #include "bomber/net/stun_client.hpp"
 #include "bomber/net/udp_transport.hpp"
@@ -35,7 +36,8 @@ public:
         Connecting,  // WebSocket opening; the create/join request is queued
         InLobby,     // in the waiting room: roster live, candidates exchanging
         Rendezvous,  // START received; punching a path to the peer
-        Ready,       // punched — match_start() is valid, the transport is connected
+        Relaying,    // the punch failed; falling back through the server's relay
+        Ready,       // connected — match_start() is valid, transport() is usable
         Failed,      // error() explains; the GUI returns to the menu
     };
 
@@ -87,6 +89,12 @@ public:
     // Round-trip time of the punched path in ms (0 until Ready).
     int rtt_ms() const;
 
+    // The transport to hand the RollbackSession once Ready: the bare UDP socket
+    // on a direct path, or the relay wrapper when the punch failed. The session
+    // above is byte-for-byte identical either way (ADR-0011 design §4).
+    Transport& transport();
+    bool is_relayed() const { return relay_ != nullptr; }
+
 private:
     enum class Pending { None, Create, Join };
 
@@ -94,6 +102,10 @@ private:
     void begin_candidate_gathering(std::int64_t now_ms);
     void publish_candidates();
     void begin_rendezvous(std::int64_t now_ms);
+    void begin_relay_fallback();  // punch failed → ask the server for an allocation
+    // The seat this peer exchanges datagrams with: the star hub, or (as the hub
+    // itself, or in a 2P lobby) the other occupied seat.
+    int peer_seat() const;
 
     Config cfg_;
     UdpTransport& transport_;
@@ -128,6 +140,11 @@ private:
 
     MatchStart match_start_;
     std::unique_ptr<Rendezvous> punch_;
+
+    // Relay fallback (Phase 2). Requested only after the punch gives up; once
+    // the allocation arrives the wrapper becomes the match transport.
+    bool relay_requested_ = false;
+    std::unique_ptr<RelayedTransport> relay_;
 };
 
 }  // namespace bomber::net

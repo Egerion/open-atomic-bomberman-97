@@ -37,6 +37,11 @@ target_link_libraries(bomber_net_build_hash_tests PRIVATE bomber::net)
 bomber_add_test(bomber_net_rendezvous_tests net_rendezvous test_rendezvous.cpp)
 target_link_libraries(bomber_net_rendezvous_tests PRIVATE bomber::net)
 
+# RelayedTransport: the TURN-like fallback's client half — the frozen §6 header
+# layout, a round-trip through a fake forwarder, and the drop paths.
+bomber_add_test(bomber_net_relay_tests net_relay test_relayed_transport.cpp)
+target_link_libraries(bomber_net_relay_tests PRIVATE bomber::net)
+
 # Lobby control-plane protocol: the C++ encoders/parser vs the FROZEN
 # services/matchmaker/PROTOCOL.md. Needs nlohmann/json, so it is built only under
 # BOMBER_ENABLE_LOBBY (the GUI presets) — pure JSON, no sockets.
