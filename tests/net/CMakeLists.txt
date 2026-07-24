@@ -21,3 +21,8 @@ target_link_libraries(bomber_net_udp_tests PRIVATE bomber::net)
 # in agreement under latency, and a real divergence is still caught.
 bomber_add_test(bomber_net_rollback_tests net_rollback test_rollback_session.cpp)
 target_link_libraries(bomber_net_rollback_tests PRIVATE bomber::net)
+
+# SeedHandshake: the pre-match seed exchange (ADR-0010 §3.3 step 5) over both a
+# headless LoopbackLink and real UDP on localhost (soft-skips without sockets).
+bomber_add_test(bomber_net_handshake_tests net_handshake test_handshake.cpp)
+target_link_libraries(bomber_net_handshake_tests PRIVATE bomber::net)

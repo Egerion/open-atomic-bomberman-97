@@ -16,7 +16,7 @@
 
 namespace bomber::net {
 
-enum class MsgType : std::uint8_t { Input = 0, Hash = 1, InputRange = 2 };
+enum class MsgType : std::uint8_t { Input = 0, Hash = 1, InputRange = 2, Hello = 3 };
 
 // A peer's claimed Simulation::hash() at the end of tick `tick_index`. The
 // receiver compares it against its OWN hash for that tick; a mismatch is an
@@ -25,6 +25,17 @@ enum class MsgType : std::uint8_t { Input = 0, Hash = 1, InputRange = 2 };
 struct HashFrame {
     std::uint32_t tick_index = 0;
     std::uint64_t hash = 0;
+};
+
+// The pre-match seed handshake (handshake.hpp): the ONE datagram exchanged
+// before any INPUT/HASH flows, so both peers agree on the shared match seed
+// without a --seed on each command line. The HOST announces its seed
+// (is_ack=false); the GUEST replies with an ACK (is_ack=true, seed unused) once
+// it has adopted that seed. Both re-send every pump so a dropped packet
+// self-heals (SeedHandshake).
+struct HelloFrame {
+    std::uint32_t seed = 0;
+    bool is_ack = false;
 };
 
 // A CONTIGUOUS run of input frames sharing one seat_mask — the redundancy the
@@ -37,13 +48,14 @@ struct InputRangeFrame {
     std::vector<sim::TickInputs> per_tick;
 };
 
-// One decoded datagram: exactly one of `input` / `range` / `hash` is meaningful
-// per `type`.
+// One decoded datagram: exactly one of `input` / `range` / `hash` / `hello` is
+// meaningful per `type`.
 struct Message {
     MsgType type = MsgType::Input;
     InputFrame input;
     InputRangeFrame range;
     HashFrame hash;
+    HelloFrame hello;
 };
 
 // [MsgType::Input][input_codec frame] — the seats in `seat_mask`, stamped `tick`.
@@ -60,6 +72,10 @@ std::vector<std::uint8_t> encode_input_range(std::uint32_t first_tick, std::uint
 
 // [MsgType::Hash][tick u32-LE][hash u64-LE] — 13 bytes.
 std::vector<std::uint8_t> encode_hash(std::uint32_t tick_index, std::uint64_t hash);
+
+// [MsgType::Hello][seed u32-LE][is_ack u8] — 6 bytes. The host sends its seed
+// (is_ack=false); the guest replies with is_ack=true (seed field ignored).
+std::vector<std::uint8_t> encode_hello(std::uint32_t seed, bool is_ack);
 
 // Decode a datagram produced by encode_input/encode_hash. Returns false (leaving
 // *out untouched) on an unknown tag, a short buffer, or a malformed payload.

@@ -43,6 +43,14 @@
 // The playable front-end: owns the SDL window, the asset store, the
 // presentation systems, and the match lifecycle around the deterministic sim.
 
+// The netplay transport is only ever named by reference in a couple of method
+// signatures (run_netplay_match + the connect-screen entry points); the heavy
+// socket header stays out of this widely-included header — game_app.cpp pulls
+// in the real bomber/net/udp_transport.hpp.
+namespace bomber::net {
+class UdpTransport;
+}  // namespace bomber::net
+
 namespace bomber::game {
 
 // clang-analyzer-optin.performance.Padding (NOLINT below) — a singleton root
@@ -177,8 +185,27 @@ private:
     // sim_ byte-identically, seeds sim_, sets up stage art/audio, then drives the
     // SAME MatchRunner::run() through a net::LockstepSession (seam net_session).
     // Returns a process exit code. GOLDEN-SAFE: only reachable via net_role, which
-    // no test/golden/demo path sets.
+    // no test/golden/demo path sets. The CLI path carries --seed on both peers,
+    // so it skips the handshake and calls run_netplay_match() directly.
     int run_netplay();
+    // The match-running CORE shared by the CLI (run_netplay) and the menu connect
+    // screens (present_net_host/join): given an ALREADY-connected transport, this
+    // peer's `role` (1 = host/seat 0, 2 = guest/seat 1), and the agreed `seed`, it
+    // builds the CANONICAL config, seeds sim_, sets up stage art/audio, and drives
+    // the SAME MatchRunner through a net::LockstepSession. Returns the MatchRunner
+    // dismissal (AppInput::Quit if the window closed, else the round-end input).
+    // GOLDEN-SAFE like run_netplay: no test/golden/demo path reaches it.
+    AppInput run_netplay_match(net::UdpTransport& transport, int role, std::uint32_t seed);
+    // The two menu-driven netplay leaves (netplay increment 5c, ADR-0010 §3.3
+    // step 5): each opens a UdpTransport, runs NetplayConnectScreen (the seed
+    // handshake + a small connect modal), and — on a completed handshake — calls
+    // run_netplay_match() with the agreed seed. present_net_host binds a fixed
+    // local port and hosts (seat 0); present_net_join prompts for the host
+    // address and joins (seat 1). Return AppInput::Quit if the window closed
+    // during connect or the match, else Advance (both route the leaf back to the
+    // menu via next()).
+    AppInput present_net_host();
+    AppInput present_net_join();
     // --bm-shot capture: draw one `.BM` screen over MAINMENU and SaveBMP it.
     int run_bm_shot();
     int run_menu_shot();

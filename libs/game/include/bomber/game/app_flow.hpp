@@ -47,7 +47,12 @@ enum class AppState : std::uint8_t {
                   // the original has no dedicated row/screen for this either,
                   // INPUT.BM is just one topic in the generic *.BM help
                   // browser (row 5/F1) both games already glob and list
-    Network,      // NETWORK.BM help viewer
+    Network,      // NETWORK.BM help viewer (no longer routed from a menu row —
+                  // rows 1/2 now START/JOIN a netplay game; kept reachable via
+                  // the generic *.BM help browser, and as the flow leaf below)
+    NetHost,      // START NET GAME: host a 2-player UDP lockstep match
+                  // (bind + seed handshake + run_netplay_match; ADR-0010 §3.3)
+    NetJoin,      // JOIN NET GAME: connect to a host (address prompt + handshake)
     Credits,      // CREDITS.BM viewer (text + inline images)
     Quit,         // shut down
 };
@@ -80,6 +85,9 @@ enum class AppState : std::uint8_t {
 //   StartMatch — the menu's Start/Play item was chosen (Menu -> Match).
 //   OpenOptions/OpenControllers/OpenNetwork/OpenCredits — the menu opened a
 //                deep leaf; each routes Menu -> the matching leaf state.
+//   OpenNetHost/OpenNetJoin — the two netplay menu rows (START/JOIN NET GAME):
+//                Menu -> NetHost/NetJoin, the connection screens that run the
+//                seed handshake and then a 2-player UDP lockstep match.
 //   Quit       — hard quit request (window close or the menu's Quit item).
 enum class AppInput : std::uint8_t {
     Advance,
@@ -91,6 +99,8 @@ enum class AppInput : std::uint8_t {
     OpenOptions,
     OpenControllers,
     OpenNetwork,
+    OpenNetHost,
+    OpenNetJoin,
     OpenCredits,
     Quit,
 };
@@ -135,6 +145,8 @@ constexpr AppState next(AppState state, AppInput input) {
                 case AppInput::OpenOptions: return AppState::Options;
                 case AppInput::OpenControllers: return AppState::Controllers;
                 case AppInput::OpenNetwork: return AppState::Network;
+                case AppInput::OpenNetHost: return AppState::NetHost;
+                case AppInput::OpenNetJoin: return AppState::NetJoin;
                 case AppInput::OpenCredits: return AppState::Credits;
                 case AppInput::Back: return AppState::Quit;
                 default: return AppState::Menu;  // Advance/MatchOver: stay put
@@ -160,10 +172,14 @@ constexpr AppState next(AppState state, AppInput input) {
 
         // The .BM leaves all return to the menu on any accept or Back — a
         // dismissable text/help screen has nowhere else to go (sub_42B9CE
-        // re-enters its loop after each sub-screen returns).
+        // re-enters its loop after each sub-screen returns). The two netplay
+        // connection leaves likewise fall back to the menu once the match ends
+        // (or the connect was cancelled/timed out).
         case AppState::Options:
         case AppState::Controllers:
         case AppState::Network:
+        case AppState::NetHost:
+        case AppState::NetJoin:
         case AppState::Credits: return AppState::Menu;
 
         case AppState::Quit: return AppState::Quit;

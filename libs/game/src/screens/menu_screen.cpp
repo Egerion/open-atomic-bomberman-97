@@ -59,11 +59,14 @@ struct MenuItem {
 // (getvalue 700-702) lands on the labels baked into MAINMENU.PCX. Row targets
 // per the CORRECTED dispatch (docs/re/results-and-options.md: v10==3 goes to
 // sub_4080DC = the OPTIONS screen, NOT an editor; v10==1/2 are the START/JOIN
-// NET GAME screens sub_42B0CE/sub_42B47D, netplay-deferred per ADR-0003):
+// NET GAME screens sub_42B0CE/sub_42B47D — now LIVE, our own UDP-lockstep
+// netplay (ADR-0010 §3.3 step 5) rather than the original's IPX/serial link):
 //   0 Play           -> StartMatch   (live)
-//   1 net game A     -> OpenNetwork  (NETWORK.BM help overlay; the real
-//                                     START NET GAME screen = netplay, deferred)
-//   2 net game B     -> OpenNetwork  (ditto for JOIN NET GAME)
+//   1 START NET GAME -> OpenNetHost  (host a 2-player UDP lockstep match:
+//                                     NetplayConnectScreen + seed handshake +
+//                                     run_netplay_match — netplay increment 5c)
+//   2 JOIN NET GAME  -> OpenNetJoin  (connect to a host: address prompt +
+//                                     handshake, then run_netplay_match)
 //   3 Options        -> OpenOptions  (the interactive sub_4080DC screen;
 //                                     F1 on it reaches the help browser)
 //   4 Credits        -> OpenCredits  (live: CREDITS.BM viewer)
@@ -83,8 +86,8 @@ struct MenuItem {
 // seven menu rows to bind it to.
 constexpr MenuItem kMenuItems[] = {
     {AppInput::StartMatch, true},   // 0 Play
-    {AppInput::OpenNetwork, true},  // 1 START NET GAME -> network help
-    {AppInput::OpenNetwork, true},  // 2 JOIN NET GAME -> network help
+    {AppInput::OpenNetHost, true},  // 1 START NET GAME -> host + handshake + match
+    {AppInput::OpenNetJoin, true},  // 2 JOIN NET GAME -> connect + handshake + match
     {AppInput::OpenOptions, true},  // 3 Options (sub_4080DC) — was misbound to row 1
     {AppInput::OpenCredits, true},  // 4 Credits
     {AppInput::Advance, false},     // 5 Help browser (handled inline, entry unused)
