@@ -18,7 +18,7 @@
 #include "bomber/game/screens/campaign_screens.hpp"  // HelpBrowserModal (the in-round F1)
 #include "bomber/game/sprites.hpp"                // Sprite (player-row "xxx" marker)
 #include "bomber/match/match_factory.hpp"         // build_match_config / pick_stage / apply_actors
-#include "bomber/net/lockstep_session.hpp"        // net::LockstepSession (netplay drive, seam is fwd-only)
+#include "bomber/net/rollback_session.hpp"        // net::RollbackSession (netplay drive, seam is fwd-only)
 
 namespace bomber::game {
 
@@ -574,27 +574,25 @@ AppInput MatchRunner::run() {
             // a slow frame — its clamped ms delta produces exactly one
             // sub_41E61E read per displayed frame too).
             //
-            // Build this tick's input from the frame sample + the latched taps,
-            // but do NOT clear the latch or consume `acc` yet: on the NETPLAY
-            // path advance() can STALL (the peer's input for this tick has not
-            // arrived), and both the latch and the accumulator must survive that
-            // so the match visibly pauses waiting for the peer and resumes with
-            // nothing dropped. On the LOCAL path a tick never stalls, so moving
-            // the latch-clear + `acc -= tick_ns` to AFTER the tick is
-            // behaviourally identical to the old consume-then-tick order —
-            // nothing reads the latch or `acc` between here and there.
+            // Build this tick's input from the frame sample + the latched taps.
+            // The latch-clear + `acc -= tick_ns` move to AFTER the tick; on the
+            // LOCAL path this is behaviourally identical to the old consume-then-
+            // tick order (nothing reads the latch or `acc` between here and there).
             sim::TickInputs in = frame_in;
             for (int i = 0; i < sim::kMaxPlayers; ++i) {
                 in.players[i].action1 = in.players[i].action1 || tap_latch[i].action1;
                 in.players[i].action2 = in.players[i].action2 || tap_latch[i].action2;
             }
-            // Netplay drives the SAME borrowed sim through the lockstep session
+            // Netplay drives the SAME borrowed sim through the ROLLBACK session
             // (deterministic tick() only — never frame()): advance() sends our
-            // seats, applies the peer's off the wire, and ticks ONCE when the
-            // confirmed tick's every seat is known, else returns false (stall).
-            // A local match ticks directly, exactly as before.
+            // seats, PREDICTS the peer's still-missing input (repeat-last), ticks
+            // the predicted frame, and transparently rolls back + re-simulates when
+            // the real input arrives and differs. So the local player sees ZERO
+            // input delay and the match runs at real time — no stalling on the
+            // network the way input-delay lockstep did. A local match ticks
+            // directly, exactly as before (net_session is null everywhere else).
             if (state_.net_session) {
-                if (!state_.net_session->advance(in)) break;  // stall: hold the latch + acc, retry next frame
+                state_.net_session->advance(in);
             } else {
                 state_.sim.tick(in);
             }

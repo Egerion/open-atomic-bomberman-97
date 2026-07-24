@@ -20,7 +20,7 @@
 // seam in. match_runner.cpp (the sole caller of ->advance()) includes the real
 // header. Default-null below, so every non-netplay caller is byte-identical.
 namespace bomber::net {
-class LockstepSession;
+class RollbackSession;
 }  // namespace bomber::net
 
 // Seam 2 (ADR-0009 §"shared front-end state" / §10 MatchRunner): the non-service
@@ -84,7 +84,7 @@ struct MatchRunnerState {
     // fixed-tick path (never the F9 frame() cadence). GameApp::run_netplay owns
     // the session + the canonical config; every other caller leaves this null,
     // so the sim tick/seed path — and the golden hashes — are untouched.
-    net::LockstepSession* net_session = nullptr;
+    net::RollbackSession* net_session = nullptr;
     std::uint16_t net_local_seats = 0;  // this peer's human-seat bitmask (bit s == seat s)
 };
 

@@ -38,7 +38,7 @@
 #include "bomber/game/screens/video_settings_screen.hpp"
 #include "bomber/game/sprites.hpp"
 #include "bomber/match/match_factory.hpp"
-#include "bomber/net/lockstep_session.hpp"  // net::LockstepSession (run_netplay_match)
+#include "bomber/net/rollback_session.hpp"  // net::RollbackSession (run_netplay_match)
 #include "bomber/net/udp_transport.hpp"     // net::UdpTransport (run_netplay_match)
 #include "bomber/platform/frame_clock.hpp"
 
@@ -995,10 +995,12 @@ AppInput GameApp::run_netplay_match(net::UdpTransport& transport, int role, std:
 
     // Drive the SAME MatchRunner as a local match (reusing all its render /
     // present / pacing / round-end): the seam's net_session routes each fixed
-    // tick through the lockstep session. ONE match then exit — no lobby / round
-    // rotation yet. input_delay=4 ticks (200 ms of latency headroom) hides a
-    // typical LAN/localhost round-trip without stalling.
-    net::LockstepSession session(sim_, local_seats, kAllSeats, /*input_delay=*/4, transport);
+    // tick through the ROLLBACK session. ONE match then exit — no lobby / round
+    // rotation yet. Rollback gives ZERO input delay (it predicts the peer's input
+    // and re-simulates on a miss) so the match feels local even over the wire —
+    // the input-delay lockstep this replaced added a fixed ~200 ms of lag.
+    // max_prediction=8 ticks caps how far the display may run ahead of the peer.
+    net::RollbackSession session(sim_, local_seats, kAllSeats, /*max_prediction=*/8, transport);
     MatchRunnerState mrs = match_runner_state();
     mrs.net_session = &session;
     mrs.net_local_seats = local_seats;
