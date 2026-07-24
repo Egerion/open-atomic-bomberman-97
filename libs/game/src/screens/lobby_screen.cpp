@@ -1,0 +1,370 @@
+#include "bomber/game/screens/lobby_screen.hpp"
+
+#include <SDL3/SDL.h>
+
+#include <algorithm>
+#include <cctype>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <string>
+#include <vector>
+
+#include "bomber/game/dialog_chrome.hpp"  // the pinned chrome primitives
+#include "bomber/game/sprites.hpp"        // Sprite
+#include "bomber/platform/frame_clock.hpp"
+
+#if defined(BOMBER_HAS_LOBBY)
+#include "bomber/net/build_hash.hpp"    // net::build_hash()
+#include "bomber/net/lobby_client.hpp"  // net::LobbyClient
+#include "bomber/net/lobby_flow.hpp"    // net::LobbyFlow
+#include "bomber/net/udp_transport.hpp"  // net::UdpTransport
+#endif
+
+namespace bomber::game {
+
+namespace {
+
+// Presentation-only tunables (the original has no online lobby — ADR-0011 is
+// our port's own path; see docs/re/audit/multiplayer-deep.md §2.5, which records
+// that NO "waiting for players" screen has been located in the binary).
+constexpr float kListY = 110.0f;        // list-dialog window top (the help browser uses 100)
+constexpr float kJoinPromptY = 180.0f;  // sub_4028D2's CONFIRMED save-as prompt anchor
+constexpr std::size_t kCodeLen = 6;     // lobby codes are 6 Crockford base-32 chars
+constexpr float kMinListW = 260.0f;     // keeps a 1-row list from collapsing
+
+// Crockford base-32: the digits plus the letters MINUS I, L, O and U — dropped
+// so a code read out loud cannot be misheard (ADR-0011 lobby codes).
+constexpr char kCrockford[] = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+// Field order is pointer-first to keep the struct padding-free (.clang-tidy's
+// clang-analyzer-optin.performance.Padding).
+struct MenuRow {
+    const char* label;
+    LobbyMenuChoice choice;
+    bool online;  // needs the matchmaker (hidden on a lobby-off build)
+};
+
+// The NETWORK GAME rows. The two direct rows are the ADR-0010 path that needs no
+// server at all and must keep working — hence their own rows rather than a mode
+// hidden behind the online ones.
+constexpr MenuRow kRows[] = {
+    {"HOST PRIVATE GAME", LobbyMenuChoice::HostOnline, true},
+    {"JOIN BY CODE", LobbyMenuChoice::JoinOnline, true},
+    // Phase 3 seam: {"PUBLIC GAMES", LobbyMenuChoice::BrowsePublic, true},
+    {"HOST LAN GAME", LobbyMenuChoice::HostDirect, false},
+    {"JOIN BY IP ADDRESS", LobbyMenuChoice::JoinDirect, false},
+};
+
+}  // namespace
+
+void LobbyScreen::draw_backdrop() {
+    SDL_SetRenderDrawColor(ctx_.sdl, 0, 0, 0, 255);
+    SDL_RenderClear(ctx_.sdl);
+    const Sprite& bg = ctx_.assets.frontend_pcx("MAINMENU");
+    if (bg.tex) {
+        SDL_FRect d{0, 0, static_cast<float>(bg.w), static_cast<float>(bg.h)};
+        SDL_RenderTexture(ctx_.sdl, bg.tex, nullptr, &d);
+    }
+}
+
+LobbyMenuChoice LobbyScreen::run_menu(bool online_available) {
+    // The generic bevel list dialog (sub_42DBCC) over the MAINMENU backdrop —
+    // the SAME primitive and navigation model the *.BM help browser's picker
+    // uses (bmscreen.cpp): up/down wrap the highlight, Enter selects, Esc backs
+    // out. The original's own net rows play SFX 20 on any key (setup-screens.md
+    // "Screen A"/"Screen B"), which is what the nav blip here mirrors.
+    std::vector<const MenuRow*> rows;
+    for (const MenuRow& r : kRows)
+        if (online_available || !r.online) rows.push_back(&r);
+    if (rows.empty()) return LobbyMenuChoice::Cancel;
+
+    const int count = static_cast<int>(rows.size());
+    int sel = 0;
+    platform::FrameClock frame_clock(ctx_.window);
+    const std::string title = "NETWORK GAME";
+
+    float content_w = static_cast<float>(ctx_.front_font.measure(title));
+    for (const MenuRow* r : rows)
+        content_w = std::max(content_w, static_cast<float>(ctx_.front_font.measure(r->label)));
+    content_w = std::max(content_w, kMinListW);
+
+    while (true) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_EVENT_QUIT) return LobbyMenuChoice::WindowClosed;
+            if (ev.type != SDL_EVENT_KEY_DOWN || ev.key.repeat) continue;
+            if (ev.key.key == SDLK_UP) {
+                sel = (sel + count - 1) % count;
+                ctx_.audio.play(20);
+            } else if (ev.key.key == SDLK_DOWN) {
+                sel = (sel + 1) % count;
+                ctx_.audio.play(20);
+            } else if (ev.key.key == SDLK_RETURN || ev.key.key == SDLK_KP_ENTER) {
+                ctx_.audio.play(10);  // accept sting
+                return rows[static_cast<std::size_t>(sel)]->choice;
+            } else if (ev.key.key == SDLK_ESCAPE) {
+                ctx_.audio.play(20);
+                return LobbyMenuChoice::Cancel;
+            }
+        }
+
+        ctx_.audio.update_music();
+        draw_backdrop();
+        const ListDialogLayout lay = draw_list_dialog(ctx_.sdl, ctx_.front_font, title, kListY,
+                                                      content_w, count, count, 0);
+        for (int i = 0; i < count; ++i) {
+            const float ty = lay.item_y0 + static_cast<float>(i) * lay.item_h;
+            const std::string label = rows[static_cast<std::size_t>(i)]->label;
+            if (i == sel) {
+                // Inverted-band selection: dark base-coat ink over the light band.
+                draw_list_selection(ctx_.sdl, lay, i);
+                ctx_.front_font.draw(ctx_.sdl, label, lay.item_x, ty, kDialogFillR, kDialogFillG,
+                                     kDialogFillB);
+            } else {
+                ctx_.front_font.draw(ctx_.sdl, label, lay.item_x, ty, kDialogInkR, kDialogInkG,
+                                     kDialogInkB);
+            }
+        }
+        SDL_RenderPresent(ctx_.sdl);
+        frame_clock.pace();
+    }
+}
+
+bool LobbyScreen::run_code_entry(std::string& code, bool& window_closed) {
+    // The sub_42E938 text-entry family at the CONFIRMED y=180 anchor — the same
+    // call NetplayConnectScreen::run_join makes for its host:port line. Only
+    // Crockford base-32 characters are accepted (uppercased as typed); anything
+    // else buzzes and re-labels the prompt in place rather than entering a
+    // character the server would reject.
+    std::string entry;
+    std::string label = "JOIN BY CODE:";
+    platform::FrameClock frame_clock(ctx_.window);
+    SDL_StartTextInput(ctx_.window);
+
+    while (true) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_EVENT_QUIT) {
+                SDL_StopTextInput(ctx_.window);
+                window_closed = true;
+                return false;
+            }
+            if (ev.type == SDL_EVENT_TEXT_INPUT) {
+                for (const char* p = ev.text.text; p != nullptr && *p != '\0'; ++p) {
+                    if (entry.size() >= kCodeLen) break;
+                    const char up = static_cast<char>(std::toupper(static_cast<unsigned char>(*p)));
+                    if (std::strchr(kCrockford, up) != nullptr) {
+                        entry += up;
+                    } else {
+                        ctx_.audio.play(20);
+                        label = "CODE IS 0-9 A-Z (NO I L O U)";
+                    }
+                }
+            } else if (ev.type == SDL_EVENT_KEY_DOWN) {
+                if (ev.key.key == SDLK_BACKSPACE) {
+                    if (!entry.empty()) entry.pop_back();
+                } else if (ev.key.key == SDLK_RETURN || ev.key.key == SDLK_KP_ENTER) {
+                    if (entry.size() == kCodeLen) {
+                        ctx_.audio.play(10);
+                        SDL_StopTextInput(ctx_.window);
+                        code = entry;
+                        return true;
+                    }
+                    ctx_.audio.play(20);
+                    label = "ENTER ALL 6 CHARACTERS";
+                } else if (ev.key.key == SDLK_ESCAPE) {
+                    ctx_.audio.play(20);
+                    SDL_StopTextInput(ctx_.window);
+                    return false;
+                }
+            }
+        }
+
+        ctx_.audio.update_music();
+        draw_backdrop();
+        draw_text_entry_dialog(ctx_.sdl, ctx_.front_font, kJoinPromptY, label, entry, "Join",
+                               "Cancel");
+        SDL_RenderPresent(ctx_.sdl);
+        frame_clock.pace();
+    }
+}
+
+#if defined(BOMBER_HAS_LOBBY)
+
+namespace {
+
+constexpr float kScreenW = 640.0f;  // renderer.hpp's kScreenW, what dialog_rect centres against
+constexpr float kNameCol = 26.0f;   // seat-number column width inside a roster row
+
+// Draw one centred line of the pinned outlined dialog text (sub_41696C).
+void draw_centred(SDL_Renderer* ren, const FontTextures& font, const std::string& s, float y) {
+    const float w = static_cast<float>(font.measure(s));
+    draw_dialog_text(ren, font, s, (kScreenW - w) / 2.0f, y, kDialogInkR, kDialogInkG, kDialogInkB);
+}
+
+// The waiting room proper: the lobby CODE in the list dialog's pinned centred
+// title strip (the one string the host reads out to friends, so it goes where
+// the chrome already puts a prominent centred label), one item row per seat, and
+// the key hints on an outlined text line under the window. Every pixel here
+// comes from draw_list_dialog / draw_list_selection / draw_dialog_text — no new
+// chrome. The LOCAL player's row carries the selection band so you can see which
+// seat is yours at a glance.
+void draw_room(ScreenContext& ctx, const net::LobbyFlow& flow, bool local_ready) {
+    const std::vector<net::RosterEntry>& roster = flow.roster();
+    const int rows = std::max(static_cast<int>(roster.size()), 1);
+    const std::string title =
+        "LOBBY CODE   " + (flow.code().empty() ? std::string("------") : flow.code());
+
+    float content_w = static_cast<float>(ctx.front_font.measure(title));
+    for (const net::RosterEntry& e : roster) {
+        // seat column + name + the widest marker pair the row can show
+        const float w = kNameCol + static_cast<float>(ctx.front_font.measure(e.name)) +
+                        static_cast<float>(ctx.front_font.measure("  HOST  WAITING"));
+        content_w = std::max(content_w, w);
+    }
+    content_w = std::max(content_w, kMinListW);
+
+    const ListDialogLayout lay =
+        draw_list_dialog(ctx.sdl, ctx.front_font, title, kListY, content_w, rows, rows, 0);
+
+    for (std::size_t i = 0; i < roster.size(); ++i) {
+        const net::RosterEntry& e = roster[i];
+        const float ty = lay.item_y0 + static_cast<float>(i) * lay.item_h;
+        Uint8 r = kDialogInkR;
+        Uint8 g = kDialogInkG;
+        Uint8 b = kDialogInkB;
+        if (e.seat == flow.my_seat()) {
+            draw_list_selection(ctx.sdl, lay, static_cast<int>(i));
+            r = kDialogFillR;
+            g = kDialogFillG;
+            b = kDialogFillB;
+        }
+        ctx.front_font.draw(ctx.sdl, std::to_string(e.seat + 1), lay.item_x, ty, r, g, b);
+        ctx.front_font.draw(ctx.sdl, e.name, lay.item_x + kNameCol, ty, r, g, b);
+        // Right-aligned status column. Words rather than tick/cross glyphs: the
+        // original FON fonts have no check/cross codepoint, and drawing one would
+        // mean inventing art.
+        const std::string mark =
+            std::string(e.is_host ? "HOST  " : "") + (e.ready ? "READY" : "WAITING");
+        const float mw = static_cast<float>(ctx.front_font.measure(mark));
+        ctx.front_font.draw(ctx.sdl, mark, lay.item_x + lay.item_w - mw, ty, r, g, b);
+    }
+
+    const std::string ready_hint = local_ready ? "SPACE = NOT READY" : "SPACE = READY";
+    const std::string hint =
+        flow.is_host() ? ready_hint + "    ENTER = START    ESC = LEAVE"
+                       : ready_hint + "    ESC = LEAVE    (HOST STARTS THE MATCH)";
+    draw_centred(ctx.sdl, ctx.front_font, hint, lay.win.y + lay.win.h + 10.0f);
+}
+
+}  // namespace
+
+LobbyRoomResult LobbyScreen::run_online(const OnlineConfig& ocfg, net::UdpTransport& transport,
+                                        bool host, const std::string& code) {
+    LobbyRoomResult result;
+
+    net::LobbyFlow::Config cfg;
+    cfg.server_url = ocfg.server_url;
+    cfg.stun_host = ocfg.stun_host;
+    cfg.stun_port = ocfg.stun_port;
+    cfg.player_name = ocfg.player_name;
+    cfg.build_hash = net::build_hash();  // the cross-build door: the server rejects mismatches
+
+    net::LobbyClient client;
+    net::LobbyFlow flow(cfg, transport, client);
+    if (host)
+        flow.host_lobby(ocfg.player_name, /*is_public=*/false, /*max_seats=*/2);
+    else
+        flow.join_lobby(code);
+
+    platform::FrameClock frame_clock(ctx_.window);
+    const Sprite* winz = &ctx_.assets.frontend_pcx("WINZ");
+    const std::string ok_label = ctx_.assets.getstring(27, " Ok ");
+    bool local_ready = false;
+    std::string failure;  // non-empty once Phase::Failed latched -> the ack modal
+
+    while (true) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_EVENT_QUIT) {
+                result.window_closed = true;
+                return result;
+            }
+            if (ev.type != SDL_EVENT_KEY_DOWN || ev.key.repeat) continue;
+
+            if (!failure.empty()) {
+                // sub_414340's own key loop: the nav blip for ANY real key, and
+                // it closes only on Enter / Space / Esc.
+                if (ev.key.key == SDLK_RETURN || ev.key.key == SDLK_KP_ENTER ||
+                    ev.key.key == SDLK_SPACE || ev.key.key == SDLK_ESCAPE)
+                    return result;  // back to the NETWORK GAME menu
+                ctx_.audio.play(20);
+                continue;
+            }
+            if (ev.key.key == SDLK_ESCAPE) {
+                ctx_.audio.play(20);
+                return result;  // leave the lobby (the flow's dtor closes the socket)
+            }
+            // The room's controls are live only while actually IN the room —
+            // during Connecting/Rendezvous there is nothing to toggle.
+            if (flow.phase() != net::LobbyFlow::Phase::InLobby) continue;
+            if (ev.key.key == SDLK_SPACE || ev.key.key == SDLK_R) {
+                local_ready = !local_ready;
+                flow.set_ready(local_ready);
+                ctx_.audio.play(10);
+            } else if (ev.key.key == SDLK_RETURN || ev.key.key == SDLK_KP_ENTER) {
+                if (flow.is_host()) {
+                    flow.start_match();  // the server validates all-ready + build parity
+                    ctx_.audio.play(10);
+                } else {
+                    // SFX 40 — the net non-host "you can't do that here" buzz the
+                    // original fires on its own wait loops (frontend-flow.md §SFX
+                    // 40, quoted in multiplayer-deep.md §2.5).
+                    ctx_.audio.play(40);
+                }
+            }
+        }
+
+        flow.step(static_cast<std::int64_t>(SDL_GetTicks()));
+
+        if (flow.phase() == net::LobbyFlow::Phase::Ready) {
+            // The transport is punched and connected; the server's authoritative
+            // parameters go straight to the match core.
+            result.ready = true;
+            result.seed = flow.match_start().seed;
+            result.local_seats_mask = flow.match_start().local_seats_mask;
+            return result;
+        }
+        if (flow.phase() == net::LobbyFlow::Phase::Failed && failure.empty()) {
+            // LobbyFlow::error() strings are already player-facing ("LOBBY IS
+            // FULL", "VERSION MISMATCH - UPDATE THE GAME", ...).
+            failure = flow.error().empty() ? std::string("CONNECTION FAILED") : flow.error();
+            ctx_.audio.play(20);
+        }
+
+        ctx_.audio.update_music();
+        draw_backdrop();
+        if (!failure.empty()) {
+            draw_acknowledge_dialog(ctx_.sdl, ctx_.front_font, winz, "NETWORK ERROR", failure,
+                                    ok_label, kDialogInkR, kDialogInkG, kDialogInkB);
+        } else if (flow.phase() == net::LobbyFlow::Phase::InLobby) {
+            draw_room(ctx_, flow, local_ready);
+        } else if (flow.phase() == net::LobbyFlow::Phase::Rendezvous) {
+            draw_acknowledge_dialog(ctx_.sdl, ctx_.front_font, winz, "STARTING MATCH",
+                                    "CONNECTING TO PLAYER...", ok_label, kDialogInkR, kDialogInkG,
+                                    kDialogInkB);
+        } else {
+            draw_acknowledge_dialog(ctx_.sdl, ctx_.front_font, winz,
+                                    host ? "HOSTING A GAME" : "JOINING " + code,
+                                    "CONTACTING THE SERVER...", ok_label, kDialogInkR, kDialogInkG,
+                                    kDialogInkB);
+        }
+        SDL_RenderPresent(ctx_.sdl);
+        frame_clock.pace();
+    }
+}
+
+#endif  // BOMBER_HAS_LOBBY
+
+}  // namespace bomber::game
