@@ -334,6 +334,57 @@ either way), and a bomb sharing a tile with a floor powerup is not a
 reachable state under normal placement rules. See `drop_wall`'s comments for
 the full per-branch citation.
 
+### 5.1 Stage actors under a closing wall — a RENDER-only hide, not a registry clear  [render fact INFERRED 2026-07-24; needs binary confirmation of `sub_4056CA`'s gate]
+
+`sub_426818` solidifies the tile with `sub_425E9B(x,y,1)` but its per-drop
+cleanup touches ONLY the player/powerup/bomb/flame state listed in §5 — it
+never writes the stage-actor registry (`dword_45E0A8`). This was re-confirmed
+in the 2026-07-20 audit (`docs/re/audit/enclosure.md`, full `sub_426818`
+trace) and is the same registry the arm branch's `sub_405D0C` was WRONGLY
+thought to clear (Finding 0, §2). So a warphole / trampoline / conveyor /
+dirarrow whose tile the closing wall lands on **stays live in the actor
+registry** — the original does not remove it.
+
+Yet on screen the actor visibly disappears under the wall (two live-play
+reports: an outer-ring trampoline, and warpholes vanishing "as the walls
+close"). The reconciliation is the DRAW layer, not the sim: the actor
+animator `sub_4056CA` is a per-frame floor-layer blit over the SAME background
+surface `sub_425D22` stamps solid/brick tiles into (§renderer facts, "tile
+layer"), so with no gate the actor would composite OVER the wall. Every
+floor-decoration drawer instead gates on the collision grid reading floor —
+CONFIRMED for the sibling powerup drawer `sub_424F89` (`*(_DWORD*)==2 &&
+!sub_425FB9(x,y)`, i.e. skip unless the cell is blank floor; see
+`docs/re/audit/renderer.md` "powerup-token reveal gate"). By that shared
+convention `sub_4056CA` gates the same way, so a wall-covered actor tile
+(collision grid now non-zero) simply isn't drawn. Direct confirmation of
+`sub_4056CA`'s own gate still wants a binary read; the powerup-drawer analogue
+is strong circumstantial evidence and matches live observation.
+
+**Port.** The gameplay-side behaviour was already correct by construction: a
+solid tile is impassable, so a covered conveyor/trampoline/dirarrow can never
+re-trigger (nothing can stand or slide onto it), and a covered warphole cannot
+be used as a SOURCE for the same reason — so NO sim change is warranted (and
+mutating the hashed `State::actor_type` in `drop_wall` would DIVERGE from the
+registry-retaining original, however golden-safe). The only missing piece was
+the render gate: `Renderer::draw_actors` (`libs/game/src/renderer.cpp`) now
+skips a tile whose `cells[y][x] != Cell::Blank`, mirroring `draw_powerups`'
+existing `sub_424F89`-derived gate. Actors are always placed on Blank floor
+(`match::apply_actors`), so this only ever fires on a tile a wall (or, on level
+7, a regenerated brick) has since covered. Render-only ⇒ no `state_hash()`
+impact, golden unchanged.
+
+**Unresolved edge (needs the binary).** A warphole B on an already-covered
+outer tile is still a valid DESTINATION for a partner A on a not-yet-covered
+inner tile (the exit is a static coordinate resolved at setup, `sub_405A81`
+in the original — which likewise still finds the retained B in the registry).
+A player using A would be relocated onto B's now-solid tile (`tick_warp`
+relocates with only an in-grid check, no solid check). Whether the original
+guards this (cancel / stay put / land-in-wall) is unverified — `sub_405A81`
+and the state-6→7 relocation were not read for a solid-destination check.
+Left as-is (the render gate does not address it, and neither does clearing the
+covered tile's own actor entry, since the link is stored at the SOURCE A);
+flagged rather than patched to avoid inventing un-RE'd sim behaviour.
+
 ## 6. Wall-triggered bomb detonation is deferred ONE TICK, not synchronous [CONFIRMED 2026-07-10]
 
 Traced `sub_423209`'s queue end-to-end:

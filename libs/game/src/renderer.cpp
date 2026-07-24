@@ -477,6 +477,28 @@ void Renderer::draw_actors(const sim::State& s) {
         for (int x = 0; x < sim::kGridWidth; ++x) {
             sim::ActorType at = s.actor_type[y][x];
             if (at == sim::ActorType::None) continue;
+            // A floor decoration is only drawn while its tile reads floor.
+            // sub_4056CA is a per-frame floor-layer draw over the BACKGROUND
+            // surface (the same surface sub_425D22 stamps solid/brick tiles
+            // into), so without a gate the actor art composites OVER any wall
+            // sitting on its tile. The HURRY enclosure (sub_426818) solidifies
+            // tiles in a spiral (drop_wall -> Cell::Solid) but never clears the
+            // actor registry (docs/re/audit/enclosure.md — its per-drop cleanup
+            // touches player/powerup/bomb/flame only), so the covered actor
+            // lingers in State exactly as it does in the original; the original
+            // stops SHOWING it because every floor-decoration drawer gates on
+            // the collision grid reading floor. The sibling powerup drawer
+            // sub_424F89's confirmed `!sub_425FB9` gate (== "cell not Blank ⇒
+            // skip", draw_powerups below, re-verified in docs/re/audit/
+            // renderer.md) is that pattern; mirror it here. Actors are always
+            // placed on Blank floor (match_factory apply_actors clears the
+            // cell), so this never hides a live actor — it only stops the
+            // trampoline/warphole/conveyor/arrow art from drawing THROUGH a
+            // closing wall (the two reported bugs). Intentionally a render-only
+            // gate: mutating the hashed s.actor_type here would DIVERGE from the
+            // registry-retaining original (and a solid tile is impassable, so a
+            // covered actor can never re-trigger in the sim anyway).
+            if (s.cells[y][x] != sim::Cell::Blank) continue;
             float sx = tile_screen_x(x) + sim::kTileW / 2.0f;
             float sy = tile_screen_y(y) + sim::kTileH - 1.0f;
             const int g = s.actor_dir[y][x] & 3;
