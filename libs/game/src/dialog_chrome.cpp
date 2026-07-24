@@ -111,16 +111,18 @@ void draw_dialog_chrome(SDL_Renderer* ren, const DialogRect& r, const Sprite* wi
 }
 
 void draw_dialog_text(SDL_Renderer* ren, const FontTextures& font, const std::string& text,
-                      float x, float y, Uint8 r, Uint8 g, Uint8 b) {
-    // sub_41696C: four outline passes in black (byte_495390[0] at every
-    // visible call site), then the ink pass on top. The four pass offsets are
-    // register-lost in the decompile; the four cardinal 1-px offsets are the
-    // only reading that yields the classic 1-px text outline the count
-    // implies.
-    font.draw(ren, text, x - 1, y, 0, 0, 0);
-    font.draw(ren, text, x + 1, y, 0, 0, 0);
-    font.draw(ren, text, x, y - 1, 0, 0, 0);
-    font.draw(ren, text, x, y + 1, 0, 0, 0);
+                      float x, float y, Uint8 r, Uint8 g, Uint8 b, Uint8 outline_r,
+                      Uint8 outline_g, Uint8 outline_b) {
+    // sub_41696C: four 1-px outline passes in the outline ink (sub_41696C's a7
+    // argument — byte_495390[0] = black for every dialog except the quit
+    // prompt, which passes a gold), then the ink pass on top. The four pass
+    // offsets are register-lost in the decompile; the four cardinal 1-px
+    // offsets are the only reading that yields the classic 1-px text outline
+    // the count implies.
+    font.draw(ren, text, x - 1, y, outline_r, outline_g, outline_b);
+    font.draw(ren, text, x + 1, y, outline_r, outline_g, outline_b);
+    font.draw(ren, text, x, y - 1, outline_r, outline_g, outline_b);
+    font.draw(ren, text, x, y + 1, outline_r, outline_g, outline_b);
     font.draw(ren, text, x, y, r, g, b);
 }
 
@@ -315,7 +317,8 @@ void draw_acknowledge_dialog(SDL_Renderer* ren, const FontTextures& font, const 
 void draw_confirm_dialog(SDL_Renderer* ren, const FontTextures& font, const Sprite* winz,
                          const std::string& line1, const std::string& line2,
                          const std::string& yes_label, const std::string& no_label, Uint8 ink_r,
-                         Uint8 ink_g, Uint8 ink_b) {
+                         Uint8 ink_g, Uint8 ink_b, Uint8 outline_r, Uint8 outline_g,
+                         Uint8 outline_b) {
     const float h = line_h(font);
     const float w1 = text_w(font, line1);
     const float w2 = line2.empty() ? 0.0f : text_w(font, line2);
@@ -334,10 +337,10 @@ void draw_confirm_dialog(SDL_Renderer* ren, const FontTextures& font, const Spri
     // (level&rounds audit 2026-07-12; the port's last unexplained constant).
     const float line1_y = win.y + h + 32.0f;
     draw_dialog_text(ren, font, line1, win.x + win.w / 2.0f - (w1 + 2.0f) / 2.0f, line1_y, ink_r,
-                     ink_g, ink_b);
+                     ink_g, ink_b, outline_r, outline_g, outline_b);
     if (!line2.empty())
         draw_dialog_text(ren, font, line2, win.x + win.w / 2.0f - (w2 + 2.0f) / 2.0f,
-                         line1_y + h + 2.0f, ink_r, ink_g, ink_b);
+                         line1_y + h + 2.0f, ink_r, ink_g, ink_b, outline_r, outline_g, outline_b);
 
     const float btn_y = win.y + win.h - 32.0f - h - 6.0f;
     draw_dialog_button(ren, font, win.x + win.w / 2.0f - 80.0f, btn_y, yes_label);

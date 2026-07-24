@@ -464,10 +464,17 @@ how the a3=foreground mapping is confirmed. `byte_49A390` = LUT offset
 0x5000 → idx 248 → **(164,0,0)** under both the master and MAINMENU
 palettes. So "Are you sure you want to exit?" (getstring(10)) renders in
 dark red, window-relative `y = fontheight+32`, horizontally centered,
-via `sub_41696C` = 1-px black 4-way outline under the ink (the outline
+via `sub_41696C` = 1-px 4-way outline under the ink (the outline
 colour rides `sub_412987`'s a2 argument, decompiler-lost — black per every
-sibling call site). The port draws exactly this (`draw_confirm_dialog` ink
-args, `quit_confirm` in `game_app.cpp`). Behaviour (Y/Enter/Space confirm,
+sibling call site). REVISED 2026-07-24 (reference photo): the original's
+exit pop-up actually draws the prompt as the red FILL over a GOLD 1-px
+outline (the game's emphasised red/gold text), so the outline arg is NOT
+black for the quit path — it reads as the LUT-true "percent readout yellow"
+`byte_49D37A` = (252,248,88). This is PHOTO-DERIVED (that a2/a7 outline arg
+is still decompiler-lost); the port passes the gold ONLY for the quit prompt
+(`draw_confirm_dialog`'s outline args in the `quit_confirm` block,
+`menu_screen.cpp`), leaving the editor confirms on the black default.
+Behaviour (Y/Enter/Space confirm,
 N/Escape cancel, the sound path, the 4 s exit delay) is UNCHANGED — this
 pass is chrome-only.
 

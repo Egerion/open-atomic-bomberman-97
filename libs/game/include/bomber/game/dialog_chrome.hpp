@@ -74,10 +74,13 @@ void draw_dialog_chrome(SDL_Renderer* ren, const DialogRect& r, const Sprite* wi
 // sub_41696C — the shared dialog text primitive: the ink glyphs over a
 // 4-pass 1-px outline in the outline ink (sub_41696C draws the string FOUR
 // times in its a7 colour, then once in its a6 colour, into a colour-key-0
-// scratch; every visible call site passes byte_495390[0] = black as a7).
+// scratch). The outline colour is a genuine per-call argument (a7): it
+// defaults to byte_495390[0] = black — what every dialog passes EXCEPT the
+// quit-confirm, whose caller passes a gold (see draw_confirm_dialog).
 // Draws at `x, y` (top-left).
 void draw_dialog_text(SDL_Renderer* ren, const FontTextures& font, const std::string& text,
-                      float x, float y, Uint8 r, Uint8 g, Uint8 b);
+                      float x, float y, Uint8 r, Uint8 g, Uint8 b, Uint8 outline_r = 0,
+                      Uint8 outline_g = 0, Uint8 outline_b = 0);
 
 // sub_432298 — text-derived size (width = measure+16, height = fontheight+6),
 // face = the window base coat washed toward white by sub_442C28's brightness
@@ -172,7 +175,7 @@ void draw_acknowledge_dialog(SDL_Renderer* ren, const FontTextures& font, const 
 // loaded WINZ sprite. The prompt INK is the CALLER's third argument:
 // sub_412987 passes byte_49A390 (LUT offset 0x5000 -> idx 248 -> (164,0,0),
 // a dark red) for the quit prompt; the editor confirms pass the general
-// white — so the ink is a parameter here, always outlined black via
+// white — so the ink is a parameter here, outlined via
 // draw_dialog_text (frontend-flow.md "sub_41696C — outlined dialog text").
 // NOT pinned: which of the two packed lines (`LODWORD`/`HIDWORD` of the
 // `__int64` arg) actually lands on TOP at the pixel level — the decompiler's
@@ -180,10 +183,20 @@ void draw_acknowledge_dialog(SDL_Renderer* ren, const FontTextures& font, const 
 // same way sub_43C734's own X-placement is (see that TODO(RE)); this
 // primitive always draws `line1` first (top) as the more legible ordering,
 // a port convention rather than a confirmed fact.
+//
+// The OUTLINE colour (sub_41696C's a7) is a per-caller argument too. It
+// defaults to black (byte_495390[0]), which is what the editor confirms
+// pass; the main-menu quit prompt overrides it with a GOLD outline,
+// (252,248,88) = byte_49D37A "percent readout yellow", giving the red-fill/
+// gold-border emphasised look the original shows for that one dialog. The
+// RE records sub_412987's outline arg as decompiler-lost ("black per every
+// sibling call site", frontend-flow.md "Escape/Quit-row confirm dialog"),
+// so this gold is PHOTO-DERIVED pending a binary re-read of that a2/a7 slot.
 void draw_confirm_dialog(SDL_Renderer* ren, const FontTextures& font, const Sprite* winz,
                          const std::string& line1, const std::string& line2,
                          const std::string& yes_label, const std::string& no_label, Uint8 ink_r,
-                         Uint8 ink_g, Uint8 ink_b);
+                         Uint8 ink_g, Uint8 ink_b, Uint8 outline_r = 0, Uint8 outline_g = 0,
+                         Uint8 outline_b = 0);
 
 // The sub_42EDE0 family (PARTIALLY pinned, pseudo.c ~32897-32920) — a
 // lighter Yes/No variant used only by the powerup sub-editor's
