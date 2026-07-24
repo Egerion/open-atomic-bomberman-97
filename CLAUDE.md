@@ -13,9 +13,9 @@ headers under `include/bomber/<name>/`. Dependencies point one way only:
 
 ```
 apps/game ─────► libs/game ──► libs/match ──► libs/assets   (SDL-free)
-apps/viewer ───► (SDL3)   │                └► libs/sim      (dependency-free)
+apps/viewer ───► (SDL3)   ├──► libs/net   ──► libs/sim      (dependency-free)
 apps/abtool ──────────────┴──► libs/match, libs/sim, libs/assets
-tests ────────► libs/sim (+ doctest)
+tests ────────► libs/sim, libs/net (+ doctest)
 ```
 
 - **libs/assets** (`bomber::assets`) — parsers for the original formats (ANI,
@@ -29,6 +29,13 @@ tests ────────► libs/sim (+ doctest)
   private; the public API is `bomber/sim/simulation.hpp`.
 - **libs/match** (`bomber::match`) — header-only glue: scheme + VALUELST →
   `MatchConfig`, stage rotation. Keeps assets and sim decoupled.
+- **libs/net** (`bomber::net`) — online multiplayer (ADR-0010). SDL-free,
+  I/O-confined: the per-tick input codec + typed message protocol, the
+  `LockstepSession` (input-delay) and `RollbackSession` (GGPO predict/re-sim)
+  built on an abstract `Transport`, the `UdpTransport` (raw winsock/BSD
+  sockets), and the seed handshake. Consumes `libs/sim`'s value types and
+  `state_hash`; NEVER leaks sockets into `libs/sim` (determinism rule 1). The
+  sim only ever sees a fully-assembled `TickInputs`.
 - **libs/game** (`bomber::game`) — SDL3 presentation: `AssetStore` (textures,
   recoloring), `SequenceSet`, `Renderer`, `AudioEngine`, `SoundDirector`,
   `KeyboardMapper`, `GameApp`. Reads `State` + `events`; never mutates them.

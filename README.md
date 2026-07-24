@@ -1,8 +1,28 @@
 # Open Bomberman
 
-Clean-room, modern C++20 rewrite of **Atomic Bomberman** (Interplay, 1997), using the assets from your own copy of the original game.
+A clean-room, modern **C++20** rewrite of **Atomic Bomberman** (Interplay, 1997) — a deterministic re-implementation that renders the original game with the assets from *your own* copy, and adds **online multiplayer** the 1997 game never shipped in a form that survives modern networks.
 
-Status: playable 2P local build — deterministic sim (movement, bombs, kick/punch/grab/throw, spooger, diseases, HURRY enclosement, head hits), original art/sound/music, random stage rotation. See `docs/RE-NOTES.md`, `docs/re/facts.md` and `docs/adr/` for research notes and decisions, and `CLAUDE.md` for the architecture and project rules.
+![Main menu](docs/screenshots/menu.png)
+
+**Status:** playable. Faithful deterministic sim (movement, bombs, kick/punch/grab/throw, spooger, the nine diseases, HURRY wall-close, conveyors/warpholes/trampolines, head hits), original art/sound/music loaded at runtime, random stage rotation, a scheme editor, and **online 2-player multiplayer over UDP** (deterministic lockstep + GGPO-style rollback netcode) reachable from the menu or the CLI. A larger lobby/internet/N-player online mode is actively being built — see *Roadmap*.
+
+![In a match](docs/screenshots/in-match.png)
+
+> The screenshots show the clean-room engine running with the original game's assets, loaded at runtime from a copy you own — see *Legal*.
+
+## Built entirely with Claude Code — no code typed by hand
+
+This is an experiment in fully AI-authored software. **Every line in this repository — the reverse-engineering notes, the clean-room C++ port, the deterministic simulation, the SDL3 presentation layer, the test suites, the online netcode, and the build system — was written by Claude (Anthropic's coding agent, driven through [Claude Code](https://claude.com/claude-code)) from natural-language direction.** No source was written by hand.
+
+The human's role was product direction and reverse-engineering guidance — "here's what the original does, make ours match", "the enclosure wall renders wrong", "make multiplayer smooth" — plus running the result and validating it in-game. Claude did the RE distillation, the faithful ports of the original's arithmetic, the tests that pin behaviour, and the netcode. The workflow that made it tractable is the same discipline any team would use: a deterministic core with golden-hash tests, reverse-engineering facts written down before they're ported (`docs/re/`), and decisions recorded as ADRs (`docs/adr/`).
+
+## Features
+
+- **Faithful, deterministic gameplay core** — integer-only 20 Hz sim, ported to mirror the original binary's arithmetic (not paraphrased), with golden-hash tests that freeze behaviour against accidental change.
+- **Original assets at runtime** — reads the 1997 ANI/PCX/SCH/RES/RSS formats from your own install; nothing is bundled.
+- **Online multiplayer** — deterministic lockstep **and** GGPO-style rollback over UDP, with per-tick `state_hash` desync detection and packet-loss tolerance; play from the menu (*Start / Join Network Game*) or the command line.
+- **Presentation extras** with no 1997 equivalent — HD art toggle, a native-cadence "creamy" low-latency mode (F9), FPS/vsync toggles — all kept off the faithfully-reproduced Options screen.
+- **Tools** — a headless asset inspector/extractor (`abtool`), an animation viewer (`bomber_viewer`), and a scheme editor.
 
 ## Layout
 
@@ -10,10 +30,13 @@ Status: playable 2P local build — deterministic sim (movement, bombs, kick/pun
 libs/assets   loaders for the original formats (ANI, PCX, SCH, RES, RSS) — SDL-free
 libs/sim      deterministic 20 Hz gameplay core (state + systems) — dependency-free
 libs/match    scheme + VALUELST -> MatchConfig glue (header-only)
+libs/net      online netcode: input codec, lockstep + rollback sessions, UDP transport — SDL-free
 libs/game     SDL3 presentation: asset store, renderer, audio, input, app shell
-apps/         bomber_game, bomber_viewer, abtool (thin mains)
-tests/        doctest suites incl. golden-hash behaviour pins
+apps/         bomber_game (OPEN-BM95), bomber_viewer, abtool (thin mains)
+tests/        doctest suites incl. golden-hash behaviour pins + netcode determinism
 ```
+
+See `CLAUDE.md` for the full architecture and project rules, `docs/re/facts.md` and `docs/adr/` for research notes and decisions.
 
 ## Requirements
 
@@ -38,68 +61,69 @@ cmake --preset headless
 cmake --build --preset headless
 ```
 
-Convenience wrapper: `make play`, `make viewer`, `make test`, `make survey` (Windows needs GNU make: `winget install ezwinports.make`).
+Convenience wrapper: `make run`, `make viewer`, `make test`, `make survey`, `make deploy` (Windows needs GNU make: `winget install ezwinports.make`).
 
 ## Running
 
-`bomber_game` — playable local-multiplayer build:
+`OPEN-BM95` (the game) — playable local + online:
 
 ```
-bomber_game                       # auto-detects the game install, BASIC scheme
-bomber_game <game_dir> <scheme>   # explicit install + scheme
+OPEN-BM95                         # auto-detects the game install, boots to the menu
+OPEN-BM95 <game_dir> <scheme>     # explicit install + scheme
 ```
 
-Player 0: arrows + Right Ctrl/Space (bomb), Right Shift (throw/grab/trigger/punch) · Player 1: WASD + Left Ctrl/E, Left Shift · Esc: quit. When one player remains the match restarts after 3 s. `--demo <ticks> <out.bmp>` renders a scripted match headlessly (CI/verification). Install auto-detection: `BOMBER_GAME_DIR` env var, `gamedir.txt`, or the standard install paths.
+Player 0: arrows + Right Ctrl/Space (bomb), Right Shift (throw/grab/trigger/punch) · Player 1: WASD + Left Ctrl/E, Left Shift · Esc: quit. Install auto-detection: `BOMBER_GAME_DIR` env var, `gamedir.txt`, or the standard install paths.
 
-**Port-only presentation options (Video Settings — F10 from the menu, ADR-0007).** Three modern-only toggles, kept off the RE'd Options screen so it stays a faithful reproduction, and persisted in `options.ini` (`vsync=` / `native_cadence=` / `show_fps=`, alongside `fullscreen=`):
+### Online multiplayer
 
-| Toggle | Live key | Effect | Default |
-|---|---|---|---|
-| VSync | F8 | on = ~60 fps vsync-locked; off = uncapped ~180 fps | on |
-| Native cadence | F9 | drives the sim per displayed frame off the wall clock — the original's low-latency "creamy" feel (non-deterministic live path; tests/oracle are unaffected) | off |
-| Show FPS | F7 | small fps/cadence readout by the match clock | off |
+**From the menu:** launch two copies, one picks **Start Network Game** (hosts on port 8000 and waits), the other picks **Join Network Game** and enters the host's `IP:port` (default `127.0.0.1:8000`). The match starts once both connect; the local player uses the arrow keys + bomb on each side.
 
-Best combined: **F8 + F9** on a high-refresh display reproduces the original's in-match motion 1:1. Other presentation keys: Alt+Enter / F11 fullscreen, Tab HD/classic art. These are all port enhancements with no 1997 equivalent; the deterministic default build behaves exactly as before.
-
-`abtool` — headless asset inspector/extractor:
+**From the CLI** (both peers, same seed → identical arena):
 
 ```
-abtool survey "D:\Program Files (x86)\INTRPLAY\BOMBRMAN"   # parse & validate every asset
-abtool ani DATA\ANI\WALK.ANI out\                          # list + dump frames as BMP
-abtool sch DATA\SCHEMES\BASIC.SCH                          # print arena as ASCII
-abtool simrun DATA\SCHEMES\BASIC.SCH <game_dir> 400        # headless sim demo (ASCII)
-abtool pcx DATA\RES\FIELD0.PCX out\field0.bmp
-abtool rss DATA\SOUND\ZEN1.RSS out\zen1.wav
+OPEN-BM95 --host 8000 127.0.0.1 8001 --seed 0x1234
+OPEN-BM95 --join 8001 127.0.0.1 8000 --seed 0x1234
 ```
 
-`bomber_viewer` — SDL3 animation viewer:
+For play across machines, replace `127.0.0.1` with the other machine's LAN IP (same ports/seed). The peers cross-check `state_hash` every tick and report a desync loudly if their builds or configs differ.
 
-```
-bomber_viewer "D:\...\BOMBRMAN\DATA\ANI"        # Up/Down: file · Left/Right: sequence
-bomber_viewer <game_dir> --selftest [shot_dir]  # headless CI mode (SDL_VIDEODRIVER=dummy ok)
-```
+`abtool` — headless asset inspector/extractor; `bomber_viewer` — SDL3 animation viewer. See their `--help` / the source headers for usage.
 
 ## Tests
 
-`ctest` runs the doctest suites: determinism (10k-tick lockstep), gameplay rules, movement (faithful sub_41EC84 port), diseases, spooger, and the golden-hash pins that freeze sim behaviour against accidental change. Full verification against an original install: `abtool survey` and `bomber_viewer --selftest` — both exit non-zero on any failure.
+`ctest` runs the doctest suites: determinism (10k-tick lockstep), gameplay rules, movement (faithful `sub_41EC84` port), diseases, the netcode (loopback lockstep, rollback, real-UDP round-trip, seed handshake), and the golden-hash pins that freeze sim behaviour. Full verification against an original install: `abtool survey` and `bomber_viewer --selftest`.
 
 ## Git hooks
 
-`lefthook.yml` wires a pre-push gate: full `headless` build + `ctest`, plus a
-repo-wide `clang-tidy` pass (config in `.clang-tidy`). Each clone/worktree
-must enable it once:
+`lefthook.yml` wires a pre-push gate: full `headless` build + `ctest`, plus a repo-wide `clang-tidy` pass (config in `.clang-tidy`). Each clone/worktree must enable it once:
 
 ```
 winget install evilmartians.lefthook   # if not already installed
 lefthook install
 ```
 
-`clang-tidy` itself comes from the "C++ Clang tools for Windows" Visual
-Studio component (or any `clang-tidy` on PATH). Run either check by hand with
-`bash scripts/test.sh` / `bash scripts/lint.sh`, or the whole gate with
-`lefthook run pre-push --force` (the `--force` skips lefthook's "nothing to
-push" short-circuit when HEAD already matches the remote).
+Run either check by hand with `bash scripts/test.sh` / `bash scripts/lint.sh`, or the whole gate with `lefthook run pre-push --force`.
+
+## Roadmap
+
+The online mode is being expanded toward the original's full multiplayer: **>2 players**, a proper **lobby** (short shareable lobby codes for private matches, a public match list, host-starts-while-others-join), **internet play across NATs** (STUN/hole-punching with a relay fallback), and **cross-platform** matches. See `docs/adr/` and `docs/re/multiplayer.md`.
+
+## Contributing
+
+Contributions are welcome — issues and pull requests both. A few house rules keep the project legally clean and the sim trustworthy:
+
+- **Clean-room only.** Base gameplay changes on the reverse-engineering *facts* in `docs/re/` (or add a new, cited fact). Do **not** paste decompiled/disassembled code, and never add original game assets to the repo.
+- **Keep the sim deterministic.** `libs/sim` is integer-only, I/O-free, and pinned by golden-hash tests; a deliberate behaviour change updates the golden constants in the same commit and cites its `facts.md` entry. See the "Determinism contract" in `CLAUDE.md`.
+- **Land with tests** and keep the suite green. Enable the pre-push hook (above) so the build + tests + `clang-tidy` run before you push.
+- Read `CLAUDE.md` — it's the architecture map and the coding standards, and it's the same brief the AI works from.
 
 ## Legal
 
-This project contains no Interplay/Konami code or assets. It is a from-scratch reimplementation based on observing data formats and behaviour. You need to own the original game to use it.
+Open Bomberman is an independent, **clean-room re-implementation**. It is **not** affiliated with, endorsed by, or connected to Interplay Entertainment or Konami.
+
+- **No original code or assets are included.** This repository contains only original source authored by the contributors, written from observing data formats and behaviour. It contains no Interplay/Konami code, artwork, audio, level data, or other assets, and the reverse-engineering working material (the binary, disassembly, decompiler output) is never committed either (see `.gitignore`).
+- **You must own the original game.** The engine loads Atomic Bomberman's data at runtime from *your own* legally-obtained copy; it ships none of it. Without an original install there is nothing to play.
+- **Trademarks.** "Atomic Bomberman" and "Bomberman" and all related names, logos, characters, and artwork are the property of their respective owners (Interplay / Konami). They are used here only nominatively, to describe what this software is compatible with.
+- **License.** The original source and documentation in this repository are released under the MIT License — see [`LICENSE`](LICENSE). That license covers the contributors' code **only**; it grants no rights to any third-party names, trademarks, or assets.
+
+If you are a rights holder and have a concern, please open an issue.
