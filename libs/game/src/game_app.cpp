@@ -1650,7 +1650,16 @@ void GameApp::toggle_fullscreen() {
 }
 
 void GameApp::toggle_hd_artwork() {
-    assets_.set_hd_enabled(!assets_.hd_enabled());
+    const bool enabling = !assets_.hd_enabled();
+    // The per-player HD sprite sets are built lazily the first time HD is turned
+    // on (build_player_sets skips them at boot to save the ~16x-heavier HD
+    // memory while HD is off). ensure_player_hd_sets() builds them once and
+    // reports whether it did; when it did, re-resolve the SequenceSet so the
+    // per-player Sprites pick up their freshly-built tex_hd (the shared sets'
+    // HD was already resolved at boot). resolve() only rebuilds the
+    // stage-independent sequences, leaving the current stage's tiles intact.
+    if (enabling && assets_.ensure_player_hd_sets()) seqs_.resolve(assets_);
+    assets_.set_hd_enabled(enabling);
     SDL_SetWindowTitle(window_.get(), assets_.hd_enabled() ? "Atomic Bomberman [HD]"
                                                            : "Atomic Bomberman [Classic]");
     std::fprintf(stderr, "artwork mode: %s\n", assets_.hd_enabled() ? "HD" : "classic");
