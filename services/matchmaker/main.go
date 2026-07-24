@@ -1,7 +1,8 @@
 // Command matchmaker is Open Bomberman's online-multiplayer signaling / lobby
-// control plane + STUN echo (ADR-0011, design §§1–2, §5.2). Phase 1a: it does
-// NOT simulate and never sees game State — it only brokers lobby state and
-// reflexive addresses. The UDP relay forwarder (Phase 2) is stubbed (relay.go).
+// control plane, STUN echo, and UDP relay forwarder (ADR-0011, design §§1–2,
+// §4, §5.2). It does NOT simulate and never sees game State — it brokers lobby
+// state, echoes reflexive addresses, and forwards OPAQUE relayed datagrams for
+// peers whose hole-punch failed.
 package main
 
 import (
@@ -31,6 +32,21 @@ func main() {
 	}
 	defer func() { _ = stun.Close() }()
 	log.Info("STUN echo listening", "addr", stun.LocalAddr().String())
+
+	relay, err := startRelay(cfg.RelayAddr, mgr.relay, log)
+	if err != nil {
+		log.Error("relay listener failed to bind", "addr", cfg.RelayAddr, "err", err)
+		os.Exit(1)
+	}
+	defer func() { _ = relay.Close() }()
+	log.Info("UDP relay listening", "addr", relay.LocalAddr().String(),
+		"advertise", cfg.relayAdvertise(), "idle", cfg.RelayIdle)
+	if !hasRoutableHost(cfg.relayAdvertise()) {
+		// A wildcard listen address is not something a client can dial; without
+		// -relay-advertise every RelayAllocated would hand out a dead address.
+		log.Warn("advertised relay_addr has no routable host — set -relay-advertise to the public host:port",
+			"advertise", cfg.relayAdvertise())
+	}
 
 	ws := &wsServer{mgr: mgr, log: log}
 	srv := &http.Server{

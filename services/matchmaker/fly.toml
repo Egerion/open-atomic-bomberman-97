@@ -5,10 +5,14 @@
 # plain ws:// to the container, so the binary needs no cert — leave TLSCert/Key
 # unset. Clients connect to wss://<app>.fly.dev/ws.
 #
-# UDP (STUN echo): Fly UDP needs a dedicated IPv4 (`fly ips allocate-v4`) and
-# the process must bind the Fly-provided address. Set MATCHMAKER_STUN_ADDR to
-# "fly-global-services:8081" so the datagram source addresses are the real
-# client reflexive addresses. (Phase 2's relay will use the same UDP path.)
+# UDP (STUN echo + relay): Fly UDP needs a dedicated IPv4 (`fly ips
+# allocate-v4`) and the process must bind the Fly-provided address, so both
+# listeners use "fly-global-services:<port>" and observe real client addresses.
+#
+# MATCHMAKER_RELAY_ADVERTISE is what clients are told to dial for relayed
+# matches — EDIT IT to this app's real hostname. A relayed match routes all
+# per-tick traffic through this machine (README "Relay: bandwidth & cost");
+# check your egress allowance before leaving the relay open to the public.
 
 app = "open-bomberman-matchmaker"
 primary_region = "ams"
@@ -19,6 +23,9 @@ primary_region = "ams"
 [env]
   MATCHMAKER_WS_ADDR = ":8080"
   MATCHMAKER_STUN_ADDR = "fly-global-services:8081"
+  MATCHMAKER_RELAY_ADDR = "fly-global-services:8082"
+  MATCHMAKER_RELAY_ADVERTISE = "open-bomberman-matchmaker.fly.dev:8082"
+  MATCHMAKER_RELAY_IDLE = "60s"
   MATCHMAKER_LOG_LEVEL = "info"
   MATCHMAKER_HEARTBEAT_INTERVAL = "10s"
   MATCHMAKER_HEARTBEAT_MISS = "3"
@@ -44,3 +51,11 @@ primary_region = "ams"
 
   [[services.ports]]
     port = 8081
+
+# UDP relay forwarder (PROTOCOL.md §6). Same dedicated IPv4.
+[[services]]
+  protocol = "udp"
+  internal_port = 8082
+
+  [[services.ports]]
+    port = 8082

@@ -23,9 +23,10 @@ const (
 	TypeStartMatch    = "StartMatch" // request (C->S) and broadcast (S->C) share the name; direction + fields disambiguate
 	TypeReanchorLobby = "ReanchorLobby"
 	TypeMatchOver     = "MatchOver"     // §5.2 rematch trigger
-	TypeAllocateRelay = "AllocateRelay" // Phase 2 (stub — see relay.go)
+	TypeAllocateRelay = "AllocateRelay" // relay fallback (§6, relay.go)
 
 	// server -> client
+	TypeRelayAllocated   = "RelayAllocated"
 	TypeLobbyCreated     = "LobbyCreated"
 	TypeJoinAccepted     = "JoinAccepted"
 	TypeJoinRejected     = "JoinRejected"
@@ -138,7 +139,11 @@ type matchOverMsg struct {
 
 type allocateRelayMsg struct {
 	LobbyID string `json:"lobby_id"`
-	Seat    int    `json:"seat"`
+	// Seat is a POINTER so "omitted" is distinguishable from seat 0. It is
+	// advisory: an allocation always belongs to the SENDER's own seat (a peer
+	// must not be able to mint or steal another seat's handle), so a value that
+	// disagrees with the sender's seat is rejected rather than honoured.
+	Seat *int `json:"seat,omitempty"`
 }
 
 // ---- outbound messages (server -> client) -----------------------------------
@@ -192,6 +197,15 @@ type startMatchMsg struct {
 	InputDelay        int      `json:"input_delay"`
 	Topology          Topology `json:"topology"`
 	LocalSeatsMask    int      `json:"local_seats_mask"`
+}
+
+// relayAllocatedMsg answers AllocateRelay (§6). relay_addr is the publicly
+// reachable host:port of the UDP forwarder; alloc_id is the 32-hex-char form of
+// the 16 binary bytes that prefix every relayed datagram.
+type relayAllocatedMsg struct {
+	Type      string `json:"type"`
+	RelayAddr string `json:"relay_addr"`
+	AllocID   string `json:"alloc_id"`
 }
 
 type reanchorAcceptedMsg struct {
