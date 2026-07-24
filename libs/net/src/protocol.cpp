@@ -38,6 +38,7 @@ std::uint64_t get_u64_le(const std::uint8_t* d) {
 
 constexpr std::size_t kHashFrameBytes = 1 + 4 + 8;   // tag + tick u32 + hash u64
 constexpr std::size_t kRangeHeaderBytes = 1 + 4 + 1 + 2;  // tag + first_tick u32 + count u8 + mask u16
+constexpr std::size_t kHelloFrameBytes = 1 + 4 + 1;  // tag + seed u32 + is_ack u8
 
 }  // namespace
 
@@ -55,6 +56,14 @@ std::vector<std::uint8_t> encode_hash(std::uint32_t tick_index, std::uint64_t ha
     b.push_back(static_cast<std::uint8_t>(MsgType::Hash));
     put_u32_le(b, tick_index);
     put_u64_le(b, hash);
+    return b;
+}
+
+std::vector<std::uint8_t> encode_hello(std::uint32_t seed, bool is_ack) {
+    std::vector<std::uint8_t> b;
+    b.push_back(static_cast<std::uint8_t>(MsgType::Hello));
+    put_u32_le(b, seed);
+    b.push_back(is_ack ? 1U : 0U);
     return b;
 }
 
@@ -87,6 +96,13 @@ bool decode(const std::uint8_t* data, std::size_t size, Message* out) {
         out->type = MsgType::Hash;
         out->hash.tick_index = get_u32_le(data + 1);
         out->hash.hash = get_u64_le(data + 1 + 4);
+        return true;
+    }
+    if (tag == MsgType::Hello) {
+        if (size != kHelloFrameBytes) return false;
+        out->type = MsgType::Hello;
+        out->hello.seed = get_u32_le(data + 1);
+        out->hello.is_ack = data[1 + 4] != 0;
         return true;
     }
     if (tag == MsgType::InputRange) {

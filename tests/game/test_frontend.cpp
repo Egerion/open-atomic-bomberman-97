@@ -80,12 +80,17 @@ TEST_CASE("the menu is a hub: each item routes to its leaf, every leaf returns")
     CHECK(next(AppState::Menu, AppInput::OpenOptions) == AppState::Options);
     CHECK(next(AppState::Menu, AppInput::OpenControllers) == AppState::Controllers);
     CHECK(next(AppState::Menu, AppInput::OpenNetwork) == AppState::Network);
+    // The two netplay rows (START/JOIN NET GAME) route to their connect leaves.
+    CHECK(next(AppState::Menu, AppInput::OpenNetHost) == AppState::NetHost);
+    CHECK(next(AppState::Menu, AppInput::OpenNetJoin) == AppState::NetJoin);
     CHECK(next(AppState::Menu, AppInput::OpenCredits) == AppState::Credits);
 
     // Every leaf returns to the menu on accept AND on Back — a dismissable
-    // screen has nowhere else to go (sub_42B9CE re-enters its loop after each).
+    // screen has nowhere else to go (sub_42B9CE re-enters its loop after each);
+    // the netplay connect leaves fall back the same way once the match ends.
     for (AppState leaf : {AppState::Options, AppState::Controllers, AppState::Network,
-                          AppState::Credits, AppState::Results}) {
+                          AppState::NetHost, AppState::NetJoin, AppState::Credits,
+                          AppState::Results}) {
         CHECK(next(leaf, AppInput::Advance) == AppState::Menu);
         CHECK(next(leaf, AppInput::Back) == AppState::Menu);
     }
@@ -126,7 +131,8 @@ TEST_CASE("Quit short-circuits from every state and is terminal") {
     const AppState all[] = {
         AppState::Boot,    AppState::Logo,    AppState::Title,   AppState::Menu,
         AppState::Match,   AppState::Results, AppState::Options, AppState::Controllers,
-        AppState::Network, AppState::Credits, AppState::Quit,
+        AppState::Network, AppState::NetHost, AppState::NetJoin, AppState::Credits,
+        AppState::Quit,
     };
     for (AppState s : all) {
         CHECK(next(s, AppInput::Quit) == AppState::Quit);

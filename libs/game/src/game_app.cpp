@@ -30,6 +30,7 @@
 #include "bomber/game/screens/map_select_screen.hpp"
 #include "bomber/game/screens/match_runner.hpp"
 #include "bomber/game/screens/menu_screen.hpp"
+#include "bomber/game/screens/netplay_connect_screen.hpp"
 #include "bomber/game/screens/options_screens.hpp"
 #include "bomber/game/screens/results_screens.hpp"
 #include "bomber/game/screens/scheme_filename_prompt.hpp"
@@ -37,8 +38,8 @@
 #include "bomber/game/screens/video_settings_screen.hpp"
 #include "bomber/game/sprites.hpp"
 #include "bomber/match/match_factory.hpp"
-#include "bomber/net/lockstep_session.hpp"  // net::LockstepSession (run_netplay)
-#include "bomber/net/udp_transport.hpp"     // net::UdpTransport (run_netplay)
+#include "bomber/net/lockstep_session.hpp"  // net::LockstepSession (run_netplay_match)
+#include "bomber/net/udp_transport.hpp"     // net::UdpTransport (run_netplay_match)
 #include "bomber/platform/frame_clock.hpp"
 
 namespace bomber::game {
@@ -891,23 +892,21 @@ int GameApp::run_demo() {
 }
 
 int GameApp::run_netplay() {
-    // Netplay increment 5b (ADR-0010 §3.3 step 5): ONE 2-player UDP lockstep
-    // match, run in place of the front-end. The engine (libs/net) is already
-    // headless-tested; this is the GUI wiring — CANNOT be runtime-tested here
-    // (no display, no second instance), validated live like the F9 cadence.
+    // CLI netplay entry (--host/--join, ADR-0010 §3.3 step 5): ONE 2-player UDP
+    // lockstep match run in place of the front-end. The CLI carries --seed on
+    // BOTH peers, so there is no discovery and NO seed handshake here — bind +
+    // set_peer straight from opts_ and hand off to the shared match core
+    // (run_netplay_match). The MENU path (present_net_host/join) runs the
+    // SeedHandshake instead; both funnel into that same core. CANNOT be
+    // runtime-tested here (no display / second instance) — validated live.
     const bool host = opts_.net_role == 1;
     const int local_seat = host ? 0 : 1;
-    // Seat bitmask (bit s == seat s, matching LockstepSession::fill_seats):
-    // host owns seat 0, guest seat 1; both human seats exchange over the wire.
-    const std::uint16_t local_seats = host ? 0b01u : 0b10u;
-    constexpr std::uint16_t kAllSeats = 0b11u;
 
     // Real UDP link (raw sockets, SDL-free). BOTH peers bind a KNOWN local port
-    // and set_peer() to the other's known port: UdpTransport::poll() does not
-    // learn the sender address (recvfrom with a null src) and set_peer is a fixed
-    // target, so a fixed-target host cannot reach an ephemeral guest. Requiring a
-    // fixed port on each side (via the args) is the only symmetric MVP that works
-    // with this dumb, discovery-less wire — see main.cpp's --host/--join usage.
+    // and set_peer() to the other's known port: without a handshake the CLI has
+    // no way to learn the peer, so requiring a fixed port + address on each side
+    // (via the args) is the only symmetric MVP that works with this dumb,
+    // discovery-less wire — see main.cpp's --host/--join usage.
     net::UdpTransport transport;
     if (!transport.bind(opts_.net_local_port)) {
         std::fprintf(stderr, "netplay: bind failed (local port %u)\n",
@@ -924,6 +923,22 @@ int GameApp::run_netplay() {
                 opts_.net_peer_host.c_str(), static_cast<unsigned>(opts_.net_peer_port),
                 static_cast<unsigned>(opts_.net_seed), local_seat);
 
+    run_netplay_match(transport, opts_.net_role, opts_.net_seed);
+    return 0;  // CLI always exits 0 after the single match (window-close included)
+}
+
+AppInput GameApp::run_netplay_match(net::UdpTransport& transport, int role, std::uint32_t seed) {
+    // The match-running CORE shared by the CLI (run_netplay) and the menu connect
+    // screens: given an ALREADY-connected transport, this peer's role, and the
+    // agreed seed, build a byte-identical arena and run ONE 2-player UDP lockstep
+    // match through the SAME MatchRunner a local match uses.
+    const bool host = role == 1;
+    const int local_seat = host ? 0 : 1;
+    // Seat bitmask (bit s == seat s, matching LockstepSession::fill_seats):
+    // host owns seat 0, guest seat 1; both human seats exchange over the wire.
+    const std::uint16_t local_seats = host ? 0b01u : 0b10u;
+    constexpr std::uint16_t kAllSeats = 0b11u;
+
     // CANONICAL 2-human MatchConfig — byte-identical on both peers regardless of
     // each machine's options.ini / level pick. Deterministic lockstep needs an
     // identical seed AND identical config (ADR-0010 seed/roster parity), so
@@ -932,7 +947,7 @@ int GameApp::run_netplay() {
     // scheme_ + the install VALUELST (values_ — the same 1997 file on both
     // installs). Mirrors start_match's config build, minus every per-machine
     // overlay; random_start off so the spawn assignment is fixed too.
-    sim::MatchConfig cfg = match::build_match_config(scheme_, 2, opts_.net_seed, &values_,
+    sim::MatchConfig cfg = match::build_match_config(scheme_, 2, seed, &values_,
                                                      /*random_start=*/false);
     for (int i = 0; i < sim::kMaxPlayers; ++i) {
         cfg.active[i] = i < 2;  // seats 0,1 are the two humans; the rest OFF
@@ -943,11 +958,11 @@ int GameApp::run_netplay() {
     // the default registry — not ctx assets.levels(), whose custom maps could
     // differ per machine), then overlay its EXTRA<n>.RES actors: hashed setup
     // inputs like the cell grid, deterministic given the same seed + install.
-    const int stage = match::pick_stage(base_tuning_, opts_.net_seed);
+    const int stage = match::pick_stage(base_tuning_, seed);
     cfg.tuning.level_index = stage;
     const auto actors =
         assets::extra::load_for_board(opts_.game_dir, stage, sim::kGridWidth, sim::kGridHeight);
-    match::apply_actors(cfg, actors, opts_.net_seed);
+    match::apply_actors(cfg, actors, seed);
     sim_ = sim::Simulation(cfg);
 
     // Presentation setup — mirrors MatchRunner::start_match's tail (which run()
@@ -996,7 +1011,39 @@ int GameApp::run_netplay() {
         std::printf("netplay: match ended (%s) at tick %u\n",
                     result == AppInput::Quit ? "window closed" : "round over",
                     static_cast<unsigned>(session.confirmed_tick()));
-    return 0;
+    return result;
+}
+
+// Default local UDP port for the menu-driven host/join flow (named constant per
+// the task) and the fixed host seed the handshake announces. A per-session
+// RANDOM host seed is a future nicety — a fixed value keeps the arena
+// deterministic and needs no RNG here.
+namespace {
+constexpr std::uint16_t kNetDefaultPort = 8000;
+constexpr std::uint32_t kNetHostSeed = 0x1234u;
+}  // namespace
+
+AppInput GameApp::present_net_host() {
+    // START NET GAME (menu row 1): bind kNetDefaultPort, run the seed handshake
+    // as host, and on a completed handshake run the match as seat 0. Esc/timeout
+    // return to the menu; a window close during connect/match propagates Quit.
+    net::UdpTransport transport;
+    NetplayConnectResult r =
+        NetplayConnectScreen(sctx()).run_host(transport, kNetDefaultPort, kNetHostSeed);
+    if (r.window_closed) return AppInput::Quit;
+    if (r.connected) return run_netplay_match(transport, /*role=*/1, r.seed);
+    return AppInput::Advance;  // cancelled/timed out → back to the menu
+}
+
+AppInput GameApp::present_net_join() {
+    // JOIN NET GAME (menu row 2): prompt for the host address (prefilled
+    // 127.0.0.1:kNetDefaultPort), connect, run the handshake as guest (adopting
+    // the host's seed), then run the match as seat 1.
+    net::UdpTransport transport;
+    NetplayConnectResult r = NetplayConnectScreen(sctx()).run_join(transport, kNetDefaultPort);
+    if (r.window_closed) return AppInput::Quit;
+    if (r.connected) return run_netplay_match(transport, /*role=*/2, r.seed);
+    return AppInput::Advance;
 }
 
 ScreenContext GameApp::sctx() {
@@ -1693,6 +1740,12 @@ int GameApp::run_app() {
             case AppState::Options: ev = present_options_screen(); break;
             case AppState::Controllers: ev = present_bm_screen("INPUT"); break;
             case AppState::Network: ev = present_bm_screen("NETWORK"); break;
+            // The two netplay rows (START/JOIN NET GAME): the connect screens run
+            // the seed handshake then a 2-player UDP lockstep match, returning
+            // Quit (window closed) or Advance (match over / cancelled) — next()
+            // routes both leaves back to the menu (increment 5c, ADR-0010).
+            case AppState::NetHost: ev = present_net_host(); break;
+            case AppState::NetJoin: ev = present_net_join(); break;
             case AppState::Credits: ev = present_bm_screen("CREDITS"); break;
             case AppState::Quit: break;
         }
