@@ -16,3 +16,8 @@ target_link_libraries(bomber_net_session_tests PRIVATE bomber::net)
 # two real UDP sockets (soft-skips if the sandbox forbids sockets).
 bomber_add_test(bomber_net_udp_tests net_udp test_udp_transport.cpp)
 target_link_libraries(bomber_net_udp_tests PRIVATE bomber::net)
+
+# RollbackSession: GGPO-style predict + snapshot + re-sim; confirmed states stay
+# in agreement under latency, and a real divergence is still caught.
+bomber_add_test(bomber_net_rollback_tests net_rollback test_rollback_session.cpp)
+target_link_libraries(bomber_net_rollback_tests PRIVATE bomber::net)
