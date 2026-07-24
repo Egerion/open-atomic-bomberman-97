@@ -13,6 +13,7 @@ add_library(bomber_net STATIC
   src/rollback_session.cpp
   src/udp_transport.cpp
   src/build_hash.cpp
+  src/rendezvous.cpp
 )
 add_library(bomber::net ALIAS bomber_net)
 

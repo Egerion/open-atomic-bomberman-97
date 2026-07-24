@@ -27,6 +27,7 @@ std::uint32_t build_hash();
 // Bump when the wire codec/protocol format changes but sim behaviour does not
 // (e.g. a new MsgType, a widened field). A sim behaviour change is caught by the
 // reference-scenario hash instead, so it need NOT bump this.
-inline constexpr std::uint32_t kWireProtocolVersion = 1;
+//   v1 -> v2: added MsgType::Punch (the NAT hole-punch PING/PONG, ADR-0011 §3).
+inline constexpr std::uint32_t kWireProtocolVersion = 2;
 
 }  // namespace bomber::net

@@ -16,7 +16,7 @@
 
 namespace bomber::net {
 
-enum class MsgType : std::uint8_t { Input = 0, Hash = 1, InputRange = 2, Hello = 3 };
+enum class MsgType : std::uint8_t { Input = 0, Hash = 1, InputRange = 2, Hello = 3, Punch = 4 };
 
 // A peer's claimed Simulation::hash() at the end of tick `tick_index`. The
 // receiver compares it against its OWN hash for that tick; a mismatch is an
@@ -38,6 +38,18 @@ struct HelloFrame {
     bool is_ack = false;
 };
 
+// One NAT hole-punch probe (ADR-0011 §3, docs/online-multiplayer-design.md §3):
+// the Rendezvous sends a PING (is_pong=false) with a fresh `nonce` to each of the
+// peer's candidate addresses; a peer that receives a PING echoes it back as a
+// PONG (is_pong=true, same nonce). The first candidate whose PING→PONG→PING round
+// completes becomes the chosen match path, and its round-trip is the first RTT
+// sample. Rides the SAME UDP socket the match then borrows, so it needs a MsgType
+// tag to sit alongside Input/Hash/Hello.
+struct PunchFrame {
+    std::uint32_t nonce = 0;
+    bool is_pong = false;
+};
+
 // A CONTIGUOUS run of input frames sharing one seat_mask — the redundancy the
 // lockstep session sends every tick so a dropped UDP packet is recovered by the
 // next one (each packet re-carries the whole un-confirmed local-input window).
@@ -56,6 +68,7 @@ struct Message {
     InputRangeFrame range;
     HashFrame hash;
     HelloFrame hello;
+    PunchFrame punch;
 };
 
 // [MsgType::Input][input_codec frame] — the seats in `seat_mask`, stamped `tick`.
@@ -76,6 +89,10 @@ std::vector<std::uint8_t> encode_hash(std::uint32_t tick_index, std::uint64_t ha
 // [MsgType::Hello][seed u32-LE][is_ack u8] — 6 bytes. The host sends its seed
 // (is_ack=false); the guest replies with is_ack=true (seed field ignored).
 std::vector<std::uint8_t> encode_hello(std::uint32_t seed, bool is_ack);
+
+// [MsgType::Punch][nonce u32-LE][is_pong u8] — 6 bytes. A hole-punch PING
+// (is_pong=false) or the PONG echo of one (is_pong=true, same nonce).
+std::vector<std::uint8_t> encode_punch(std::uint32_t nonce, bool is_pong);
 
 // Decode a datagram produced by encode_input/encode_hash. Returns false (leaving
 // *out untouched) on an unknown tag, a short buffer, or a malformed payload.

@@ -57,6 +57,25 @@ void set_nonblocking(sock_t s) {
 void close_sock(sock_t s) { ::close(s); }
 #endif
 
+// Resolve host:port to an IPv4 sockaddr_in — a dotted literal via inet_pton
+// (no DNS), else a hostname via getaddrinfo. Shared by set_peer()/send_to().
+bool resolve_ipv4(const std::string& host, std::uint16_t port, sockaddr_in* out) {
+    sockaddr_in a{};
+    a.sin_family = AF_INET;
+    a.sin_port = htons(port);
+    if (inet_pton(AF_INET, host.c_str(), &a.sin_addr) != 1) {
+        addrinfo hints{};
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_DGRAM;
+        addrinfo* res = nullptr;
+        if (getaddrinfo(host.c_str(), nullptr, &hints, &res) != 0 || res == nullptr) return false;
+        a.sin_addr = reinterpret_cast<const sockaddr_in*>(res->ai_addr)->sin_addr;
+        freeaddrinfo(res);
+    }
+    *out = a;
+    return true;
+}
+
 }  // namespace
 
 UdpTransport::~UdpTransport() { close_fd(); }
@@ -89,19 +108,7 @@ bool UdpTransport::bind(std::uint16_t local_port) {
 
 bool UdpTransport::set_peer(const std::string& peer_host, std::uint16_t peer_port) {
     sockaddr_in peer{};
-    peer.sin_family = AF_INET;
-    peer.sin_port = htons(peer_port);
-    if (inet_pton(AF_INET, peer_host.c_str(), &peer.sin_addr) != 1) {
-        // Not a dotted-IPv4 literal — resolve it as a hostname.
-        addrinfo hints{};
-        hints.ai_family = AF_INET;
-        hints.ai_socktype = SOCK_DGRAM;
-        addrinfo* res = nullptr;
-        if (getaddrinfo(peer_host.c_str(), nullptr, &hints, &res) != 0 || res == nullptr)
-            return false;
-        peer.sin_addr = reinterpret_cast<const sockaddr_in*>(res->ai_addr)->sin_addr;
-        freeaddrinfo(res);
-    }
+    if (!resolve_ipv4(peer_host, peer_port, &peer)) return false;
     std::memcpy(peer_, &peer, sizeof(peer));
     peer_len_ = sizeof(peer);
     return true;
@@ -138,6 +145,44 @@ bool UdpTransport::poll(std::vector<std::uint8_t>* out) {
     if (peer_len_ == 0 && fromlen > 0 && static_cast<std::size_t>(fromlen) <= sizeof(peer_)) {
         std::memcpy(peer_, &from, static_cast<std::size_t>(fromlen));
         peer_len_ = static_cast<unsigned>(fromlen);
+    }
+    const auto* p = reinterpret_cast<const std::uint8_t*>(buf);
+    out->assign(p, p + n);
+    return true;
+}
+
+void UdpTransport::send_to(const std::string& host, std::uint16_t port, const std::uint8_t* data,
+                           std::size_t size) {
+    if (fd_ < 0) return;
+    sockaddr_in dst{};
+    if (!resolve_ipv4(host, port, &dst)) return;
+    sendto(static_cast<sock_t>(fd_), reinterpret_cast<const char*>(data), static_cast<int>(size), 0,
+           reinterpret_cast<const sockaddr*>(&dst), sizeof(dst));
+}
+
+bool UdpTransport::poll_from(std::vector<std::uint8_t>* out, std::string* src_ip,
+                             std::uint16_t* src_port) {
+    if (fd_ < 0) return false;
+    char buf[2048];
+    sockaddr_storage from{};
+    socklen_t fromlen = sizeof(from);
+    const int n = static_cast<int>(recvfrom(static_cast<sock_t>(fd_), buf,
+                                            static_cast<int>(sizeof(buf)), 0,
+                                            reinterpret_cast<sockaddr*>(&from), &fromlen));
+    if (n <= 0) return false;
+    // Report the source (IPv4 only) — but do NOT auto-learn the peer: the punch
+    // decides which candidate wins and set_peer()s it explicitly.
+    if (from.ss_family == AF_INET) {
+        const auto* a = reinterpret_cast<const sockaddr_in*>(&from);
+        if (src_ip) {
+            char ip[INET_ADDRSTRLEN] = {};
+            inet_ntop(AF_INET, &a->sin_addr, ip, sizeof(ip));
+            *src_ip = ip;
+        }
+        if (src_port) *src_port = ntohs(a->sin_port);
+    } else {
+        if (src_ip) src_ip->clear();
+        if (src_port) *src_port = 0;
     }
     const auto* p = reinterpret_cast<const std::uint8_t*>(buf);
     out->assign(p, p + n);

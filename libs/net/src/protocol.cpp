@@ -39,6 +39,7 @@ std::uint64_t get_u64_le(const std::uint8_t* d) {
 constexpr std::size_t kHashFrameBytes = 1 + 4 + 8;   // tag + tick u32 + hash u64
 constexpr std::size_t kRangeHeaderBytes = 1 + 4 + 1 + 2;  // tag + first_tick u32 + count u8 + mask u16
 constexpr std::size_t kHelloFrameBytes = 1 + 4 + 1;  // tag + seed u32 + is_ack u8
+constexpr std::size_t kPunchFrameBytes = 1 + 4 + 1;  // tag + nonce u32 + is_pong u8
 
 }  // namespace
 
@@ -64,6 +65,14 @@ std::vector<std::uint8_t> encode_hello(std::uint32_t seed, bool is_ack) {
     b.push_back(static_cast<std::uint8_t>(MsgType::Hello));
     put_u32_le(b, seed);
     b.push_back(is_ack ? 1U : 0U);
+    return b;
+}
+
+std::vector<std::uint8_t> encode_punch(std::uint32_t nonce, bool is_pong) {
+    std::vector<std::uint8_t> b;
+    b.push_back(static_cast<std::uint8_t>(MsgType::Punch));
+    put_u32_le(b, nonce);
+    b.push_back(is_pong ? 1U : 0U);
     return b;
 }
 
@@ -103,6 +112,13 @@ bool decode(const std::uint8_t* data, std::size_t size, Message* out) {
         out->type = MsgType::Hello;
         out->hello.seed = get_u32_le(data + 1);
         out->hello.is_ack = data[1 + 4] != 0;
+        return true;
+    }
+    if (tag == MsgType::Punch) {
+        if (size != kPunchFrameBytes) return false;
+        out->type = MsgType::Punch;
+        out->punch.nonce = get_u32_le(data + 1);
+        out->punch.is_pong = data[1 + 4] != 0;
         return true;
     }
     if (tag == MsgType::InputRange) {

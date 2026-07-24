@@ -42,6 +42,17 @@ public:
     void send(const std::uint8_t* data, std::size_t size) override;
     bool poll(std::vector<std::uint8_t>* out) override;
 
+    // --- Address-aware I/O for the Rendezvous hole-punch (ADR-0011 §3) ---
+    // The punch must probe SEVERAL candidate addresses (host / reflexive / relay)
+    // and learn WHICH one answered, neither of which the fixed-peer send()/poll()
+    // pair supports. send_to() aims one datagram at an explicit address; poll_from
+    // reports the source ip:port and — unlike poll() — does NOT auto-learn the
+    // peer, so the punch chooses the winner explicitly (then set_peer()s it, after
+    // which the match uses the plain send()/poll() path). IPv4 only.
+    void send_to(const std::string& host, std::uint16_t port, const std::uint8_t* data,
+                 std::size_t size);
+    bool poll_from(std::vector<std::uint8_t>* out, std::string* src_ip, std::uint16_t* src_port);
+
 private:
     void close_fd();
 

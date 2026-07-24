@@ -31,3 +31,8 @@ target_link_libraries(bomber_net_handshake_tests PRIVATE bomber::net)
 # compare before a match — deterministic, stable, and non-degenerate.
 bomber_add_test(bomber_net_build_hash_tests net_build_hash test_build_hash.cpp)
 target_link_libraries(bomber_net_build_hash_tests PRIVATE bomber::net)
+
+# Rendezvous: two peers hole-punch a direct UDP path over localhost, then carry a
+# datagram over it (ADR-0011 §3). Soft-skips without sockets.
+bomber_add_test(bomber_net_rendezvous_tests net_rendezvous test_rendezvous.cpp)
+target_link_libraries(bomber_net_rendezvous_tests PRIVATE bomber::net)
