@@ -26,3 +26,8 @@ target_link_libraries(bomber_net_rollback_tests PRIVATE bomber::net)
 # headless LoopbackLink and real UDP on localhost (soft-skips without sockets).
 bomber_add_test(bomber_net_handshake_tests net_handshake test_handshake.cpp)
 target_link_libraries(bomber_net_handshake_tests PRIVATE bomber::net)
+
+# build_hash: the cross-build compatibility digest (ADR-0011) two online peers
+# compare before a match — deterministic, stable, and non-degenerate.
+bomber_add_test(bomber_net_build_hash_tests net_build_hash test_build_hash.cpp)
+target_link_libraries(bomber_net_build_hash_tests PRIVATE bomber::net)

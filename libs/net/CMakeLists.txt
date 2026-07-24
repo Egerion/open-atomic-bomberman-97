@@ -12,6 +12,7 @@ add_library(bomber_net STATIC
   src/lockstep_session.cpp
   src/rollback_session.cpp
   src/udp_transport.cpp
+  src/build_hash.cpp
 )
 add_library(bomber::net ALIAS bomber_net)
 
