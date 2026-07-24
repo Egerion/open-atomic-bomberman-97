@@ -102,6 +102,16 @@ public:
         std::string net_peer_host;         // the OTHER peer's host (dotted IPv4 or name)
         std::uint16_t net_peer_port = 0;   // the OTHER peer's UDP port
         std::uint32_t net_seed = 0x1234u;  // shared match seed (must match on both peers)
+        // Online lobby endpoints (ADR-0011 Phase 1d). Empty = fall through to the
+        // BOMBER_MATCHMAKER_* env vars, then to the compile-time placeholders in
+        // game_app.cpp — the matchmaker is not deployed yet, so nothing here can
+        // be a real default. `--matchmaker <ws-url>` and `--matchmaker-stun
+        // <host[:port]>` set them; the STUN host defaults to the URL's own host
+        // (the Go server serves the WebSocket and the UDP STUN echo from one box,
+        // PROTOCOL.md §2).
+        std::string matchmaker_url;
+        std::string matchmaker_stun_host;
+        std::uint16_t matchmaker_stun_port = 0;  // 0 = unset
     };
 
     explicit GameApp(Options opts) : opts_(std::move(opts)) {}
@@ -196,16 +206,46 @@ private:
     // dismissal (AppInput::Quit if the window closed, else the round-end input).
     // GOLDEN-SAFE like run_netplay: no test/golden/demo path reaches it.
     AppInput run_netplay_match(net::UdpTransport& transport, int role, std::uint32_t seed);
-    // The two menu-driven netplay leaves (netplay increment 5c, ADR-0010 §3.3
-    // step 5): each opens a UdpTransport, runs NetplayConnectScreen (the seed
-    // handshake + a small connect modal), and — on a completed handshake — calls
-    // run_netplay_match() with the agreed seed. present_net_host binds a fixed
-    // local port and hosts (seat 0); present_net_join prompts for the host
-    // address and joins (seat 1). Return AppInput::Quit if the window closed
-    // during connect or the match, else Advance (both route the leaf back to the
-    // menu via next()).
+    // The REAL core the above delegates to, taking the seat ownership as an
+    // explicit MASK rather than deriving it from a role (ADR-0011 Phase 1d): the
+    // online lobby's server hands each peer an AUTHORITATIVE local_seats_mask +
+    // seed in its StartMatch (design §1.6), so the GUI must be able to pass those
+    // straight through instead of assuming host==seat 0. The role-taking wrapper
+    // above keeps the ADR-0010 CLI/direct paths byte-identical by passing the
+    // same 0b01/0b10 it always did. Still a 2-SEAT match: the RollbackSession is
+    // a two-peer construct over one transport, and N>2 needs the host-relay star
+    // (ADR-0011 Phase 2).
+    AppInput run_netplay_match_seats(net::UdpTransport& transport, std::uint16_t local_seats,
+                                     std::uint32_t seed);
+    // Menu row 1 (START NET GAME) now opens the NETWORK GAME menu (LobbyScreen):
+    // the online lobby entry points plus the ADR-0010 direct/LAN rows. Menu row 2
+    // (JOIN NET GAME -> present_net_join) stays the UNCHANGED direct-IP join, so
+    // the no-server path keeps working exactly as it did.
     AppInput present_net_host();
     AppInput present_net_join();
+    // The ADR-0010 direct-UDP host (bind kNetDefaultPort + the seed handshake) —
+    // the old present_net_host body, now reached from the NETWORK GAME menu's
+    // HOST LAN GAME row.
+    AppInput present_net_direct_host();
+    // The online lobby leaf (ADR-0011 Phase 1d): resolve the matchmaker URL, bind
+    // the one socket LobbyFlow reuses for STUN/punch/match, run the waiting room,
+    // and on Phase::Ready run the match with the SERVER's seed + seat mask.
+    //
+    // DECLARED unconditionally but DEFINED only under BOMBER_HAS_LOBBY: that
+    // define is PUBLIC on bomber::net, which libs/game links PRIVATEly, so it is
+    // visible while compiling bomber_game_core but NOT to apps/game including
+    // this header — guarding the declarations would give GameApp two different
+    // definitions across translation units (an ODR violation). Nothing outside
+    // the guarded call site in game_app.cpp references these, so a lobby-off
+    // build simply never emits or needs them.
+    AppInput present_net_online(bool host);
+    // Matchmaker endpoint resolution, in the documented precedence order:
+    // --matchmaker / --matchmaker-stun CLI flags, then BOMBER_MATCHMAKER_URL /
+    // BOMBER_MATCHMAKER_STUN_HOST / BOMBER_MATCHMAKER_STUN_PORT, then the
+    // compile-time placeholder constants in game_app.cpp.
+    std::string matchmaker_url() const;
+    std::string matchmaker_stun_host() const;
+    std::uint16_t matchmaker_stun_port() const;
     // --bm-shot capture: draw one `.BM` screen over MAINMENU and SaveBMP it.
     int run_bm_shot();
     int run_menu_shot();

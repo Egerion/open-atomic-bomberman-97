@@ -76,7 +76,34 @@ Player 0: arrows + Right Ctrl/Space (bomb), Right Shift (throw/grab/trigger/punc
 
 ### Online multiplayer
 
-**From the menu:** launch two copies, one picks **Start Network Game** (hosts on port 8000 and waits), the other picks **Join Network Game** and enters the host's `IP:port` (default `127.0.0.1:8000`). The match starts once both connect; the local player uses the arrow keys + bomb on each side.
+**From the menu:** **Start Network Game** opens the *Network Game* list with four rows:
+
+| row | needs a server? | what it does |
+|---|---|---|
+| **Host Private Game** | yes | Creates a lobby and shows a 6-character **code**. Read it out to a friend. |
+| **Join by Code** | yes | Type the host's 6-character code. |
+| **Host LAN Game** | no | Hosts on UDP port 8000 and waits (the original direct path). |
+| **Join by IP Address** | no | Enter the host's `IP:port` (default `127.0.0.1:8000`). |
+
+The two **online** rows land in a **waiting room**: the lobby code sits in the window title, the roster lists every seat (name, host marker, ready state), `Space` toggles your ready flag, the host presses `Enter` to start, `Esc` leaves. Once the host starts, the peers punch a direct UDP path (STUN/hole-punch) and the match begins with the **server's** seed and seat assignment. **Join Network Game** (the menu row below) remains the direct `IP:port` join, unchanged.
+
+#### Matchmaker configuration
+
+The online rows need a signaling server (`services/matchmaker`, a small Go binary). **It is not deployed yet**, so the compile-time default is a local one. The URL is resolved in this order — CLI flag, then environment, then the built-in placeholder:
+
+```
+OPEN-BM95 --matchmaker ws://127.0.0.1:8080/ws     # 1. CLI flag
+set BOMBER_MATCHMAKER_URL=ws://127.0.0.1:8080/ws  # 2. environment
+                                                  # 3. kDefaultMatchmakerUrl (game_app.cpp)
+```
+
+The UDP **STUN** echo resolves the same way (`--matchmaker-stun <host[:port]>`, `BOMBER_MATCHMAKER_STUN_HOST` / `BOMBER_MATCHMAKER_STUN_PORT`) and defaults to the matchmaker URL's own host on **port 8081**. To run a server locally:
+
+```
+go build -o mm.exe ./services/matchmaker && ./mm.exe
+```
+
+`ctest -R net_lobby_live` exercises the whole lobby stack against a running server when `BOMBER_MATCHMAKER_URL` is set (it skips otherwise).
 
 **From the CLI** (both peers, same seed → identical arena):
 

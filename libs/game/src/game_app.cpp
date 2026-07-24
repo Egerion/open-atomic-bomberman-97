@@ -30,6 +30,7 @@
 #include "bomber/game/screens/map_select_screen.hpp"
 #include "bomber/game/screens/match_runner.hpp"
 #include "bomber/game/screens/menu_screen.hpp"
+#include "bomber/game/screens/lobby_screen.hpp"
 #include "bomber/game/screens/netplay_connect_screen.hpp"
 #include "bomber/game/screens/options_screens.hpp"
 #include "bomber/game/screens/results_screens.hpp"
@@ -928,15 +929,24 @@ int GameApp::run_netplay() {
 }
 
 AppInput GameApp::run_netplay_match(net::UdpTransport& transport, int role, std::uint32_t seed) {
-    // The match-running CORE shared by the CLI (run_netplay) and the menu connect
-    // screens: given an ALREADY-connected transport, this peer's role, and the
-    // agreed seed, build a byte-identical arena and run ONE 2-player UDP lockstep
-    // match through the SAME MatchRunner a local match uses.
-    const bool host = role == 1;
-    const int local_seat = host ? 0 : 1;
-    // Seat bitmask (bit s == seat s, matching LockstepSession::fill_seats):
-    // host owns seat 0, guest seat 1; both human seats exchange over the wire.
-    const std::uint16_t local_seats = host ? 0b01u : 0b10u;
+    // The ADR-0010 role-derived entry (CLI --host/--join and the direct-IP menu
+    // rows): host owns seat 0, guest seat 1. Unchanged behaviour — it just names
+    // the mask the core now takes explicitly, so the ONLINE path can supply the
+    // server's authoritative one instead (ADR-0011 §1.6).
+    return run_netplay_match_seats(transport, role == 1 ? 0b01u : 0b10u, seed);
+}
+
+AppInput GameApp::run_netplay_match_seats(net::UdpTransport& transport, std::uint16_t local_seats,
+                                          std::uint32_t seed) {
+    // The match-running CORE shared by the CLI (run_netplay), the direct connect
+    // screens, and the online lobby: given an ALREADY-connected transport, the
+    // seats THIS peer owns, and the agreed seed, build a byte-identical arena and
+    // run ONE 2-player UDP match through the SAME MatchRunner a local match uses.
+    //
+    // Seat bitmask (bit s == seat s, matching LockstepSession::fill_seats). Two
+    // seats total: the RollbackSession is a two-peer construct over one
+    // transport, so a 3rd+ player needs the host-relay star (ADR-0011 Phase 2).
+    // The lobby only ever creates max_seats=2 rooms for that reason.
     constexpr std::uint16_t kAllSeats = 0b11u;
 
     // CANONICAL 2-human MatchConfig — byte-identical on both peers regardless of
@@ -990,8 +1000,15 @@ AppInput GameApp::run_netplay_match(net::UdpTransport& transport, int role, std:
     setup_team_.fill(0);
     win_count_.fill(0);
     kill_count_.fill(0);
-    setup_type_[local_seat] = static_cast<int>(SlotInputType::Keyboard);
-    setup_sub_[local_seat] = 0;
+    // Driven off the MASK, not a single seat index: today exactly one bit is set
+    // (2-seat rooms), but reading the mask means a future peer that owns two
+    // seats gets its second one mapped to key-set 1 with no change here.
+    int key_set = 0;
+    for (int s = 0; s < sim::kMaxPlayers; ++s) {
+        if ((local_seats & (1u << s)) == 0u) continue;
+        setup_type_[static_cast<std::size_t>(s)] = static_cast<int>(SlotInputType::Keyboard);
+        setup_sub_[static_cast<std::size_t>(s)] = key_set++;
+    }
 
     // Drive the SAME MatchRunner as a local match (reusing all its render /
     // present / pacing / round-end): the seam's net_session routes each fixed
@@ -1023,12 +1040,77 @@ AppInput GameApp::run_netplay_match(net::UdpTransport& transport, int role, std:
 namespace {
 constexpr std::uint16_t kNetDefaultPort = 8000;
 constexpr std::uint32_t kNetHostSeed = 0x1234u;
+
+#if defined(BOMBER_HAS_LOBBY)
+// PLACEHOLDER — the matchmaker is NOT deployed yet (ADR-0011 Phase 1e). This
+// points at a locally run services/matchmaker:
+//   go build -o mm.exe ./services/matchmaker && ./mm.exe
+// Replace with the real "wss://<host>/ws" once it ships. Overridable at runtime
+// without a rebuild via --matchmaker / BOMBER_MATCHMAKER_URL (see README).
+constexpr char kDefaultMatchmakerUrl[] = "ws://127.0.0.1:8080/ws";
+constexpr std::uint16_t kDefaultStunPort = 8081;  // PROTOCOL.md §2's UDP echo port
+
+std::string env_or_empty(const char* name) {
+#ifdef _MSC_VER
+    char* buf = nullptr;
+    std::size_t len = 0;
+    if (_dupenv_s(&buf, &len, name) == 0 && buf != nullptr) {
+        std::string v(buf);
+        std::free(buf);
+        return v;
+    }
+    return {};
+#else
+    const char* v = std::getenv(name);
+    return v != nullptr ? std::string(v) : std::string();
+#endif
+}
+
+// Pull the host out of "ws://host:port/path" — the matchmaker serves the UDP
+// STUN echo from the SAME box as the WebSocket, so the URL's host is the right
+// default for it. Returns an empty string if the URL has no recognisable host.
+std::string url_host(const std::string& url) {
+    const std::size_t scheme = url.find("://");
+    const std::size_t start = scheme == std::string::npos ? 0 : scheme + 3;
+    const std::size_t end = url.find_first_of(":/", start);
+    return url.substr(start, end == std::string::npos ? std::string::npos : end - start);
+}
+#endif  // BOMBER_HAS_LOBBY
 }  // namespace
 
 AppInput GameApp::present_net_host() {
-    // START NET GAME (menu row 1): bind kNetDefaultPort, run the seed handshake
-    // as host, and on a completed handshake run the match as seat 0. Esc/timeout
-    // return to the menu; a window close during connect/match propagates Quit.
+    // START NET GAME (menu row 1) now opens the NETWORK GAME menu (ADR-0011
+    // Phase 1d): the online lobby entry points plus the ADR-0010 direct/LAN
+    // rows, which need no server and must keep working. Menu row 2 (JOIN NET
+    // GAME -> present_net_join) is deliberately left as the unchanged direct-IP
+    // join. On a lobby-off build the online rows are simply not listed.
+#if defined(BOMBER_HAS_LOBBY)
+    constexpr bool kOnlineAvailable = true;
+#else
+    constexpr bool kOnlineAvailable = false;
+#endif
+    switch (LobbyScreen(sctx()).run_menu(kOnlineAvailable)) {
+        case LobbyMenuChoice::WindowClosed: return AppInput::Quit;
+        case LobbyMenuChoice::HostDirect: return present_net_direct_host();
+        case LobbyMenuChoice::JoinDirect: return present_net_join();
+#if defined(BOMBER_HAS_LOBBY)
+        case LobbyMenuChoice::HostOnline: return present_net_online(/*host=*/true);
+        case LobbyMenuChoice::JoinOnline: return present_net_online(/*host=*/false);
+#else
+        // Never listed without the lobby — fall through to the cancel arm.
+        case LobbyMenuChoice::HostOnline:
+        case LobbyMenuChoice::JoinOnline:
+#endif
+        case LobbyMenuChoice::Cancel: break;
+    }
+    return AppInput::Advance;  // cancelled → back to the main menu
+}
+
+AppInput GameApp::present_net_direct_host() {
+    // HOST LAN GAME: bind kNetDefaultPort, run the seed handshake as host, and on
+    // a completed handshake run the match as seat 0. Esc/timeout return to the
+    // menu; a window close during connect/match propagates Quit. (This is the
+    // ADR-0010 body that used to sit directly on menu row 1.)
     net::UdpTransport transport;
     NetplayConnectResult r =
         NetplayConnectScreen(sctx()).run_host(transport, kNetDefaultPort, kNetHostSeed);
@@ -1036,6 +1118,66 @@ AppInput GameApp::present_net_host() {
     if (r.connected) return run_netplay_match(transport, /*role=*/1, r.seed);
     return AppInput::Advance;  // cancelled/timed out → back to the menu
 }
+
+#if defined(BOMBER_HAS_LOBBY)
+std::string GameApp::matchmaker_url() const {
+    if (!opts_.matchmaker_url.empty()) return opts_.matchmaker_url;  // --matchmaker
+    const std::string env = env_or_empty("BOMBER_MATCHMAKER_URL");
+    return env.empty() ? std::string(kDefaultMatchmakerUrl) : env;
+}
+
+std::string GameApp::matchmaker_stun_host() const {
+    if (!opts_.matchmaker_stun_host.empty()) return opts_.matchmaker_stun_host;
+    const std::string env = env_or_empty("BOMBER_MATCHMAKER_STUN_HOST");
+    return env.empty() ? url_host(matchmaker_url()) : env;
+}
+
+std::uint16_t GameApp::matchmaker_stun_port() const {
+    if (opts_.matchmaker_stun_port != 0) return opts_.matchmaker_stun_port;
+    // Same env name tests/net/test_lobby_live.cpp already uses, so one exported
+    // variable configures both the live test and the game.
+    const std::string env = env_or_empty("BOMBER_MATCHMAKER_STUN_PORT");
+    const long p = env.empty() ? 0 : std::strtol(env.c_str(), nullptr, 10);
+    return (p > 0 && p <= 65535) ? static_cast<std::uint16_t>(p) : kDefaultStunPort;
+}
+
+AppInput GameApp::present_net_online(bool host) {
+    // HOST PRIVATE GAME / JOIN BY CODE: the ADR-0011 online path. A guest first
+    // types the 6-char code; then both sides bind ONE socket, sit in the waiting
+    // room, and — once the server's StartMatch arrives and the peers punch a
+    // direct path — run the match with the SERVER's authoritative seed and seat
+    // mask (never a locally derived host?0:1).
+    LobbyScreen screen(sctx());
+    std::string code;
+    if (!host) {
+        bool closed = false;
+        if (!screen.run_code_entry(code, closed))
+            return closed ? AppInput::Quit : AppInput::Advance;
+    }
+
+    // Bound BEFORE the flow is built: LobbyFlow reuses this exact socket for the
+    // STUN probe, the hole punch and the match, so the NAT binding the peers
+    // punched is the one gameplay flows through (lobby_flow.hpp).
+    net::UdpTransport transport;
+    if (!transport.bind(0)) {
+        std::fprintf(stderr, "lobby: cannot open a UDP socket\n");
+        return AppInput::Advance;
+    }
+
+    LobbyScreen::OnlineConfig ocfg;
+    ocfg.server_url = matchmaker_url();
+    ocfg.stun_host = matchmaker_stun_host();
+    ocfg.stun_port = matchmaker_stun_port();
+    // The original's "Node Name" (options row 2, sub_40FE34) IS the per-machine
+    // net identity — reuse it when the player has set one.
+    ocfg.player_name = options_.node_name.empty() ? std::string("PLAYER") : options_.node_name;
+
+    const LobbyRoomResult r = screen.run_online(ocfg, transport, host, code);
+    if (r.window_closed) return AppInput::Quit;
+    if (r.ready) return run_netplay_match_seats(transport, r.local_seats_mask, r.seed);
+    return AppInput::Advance;  // left the lobby / failed → back to the menu
+}
+#endif  // BOMBER_HAS_LOBBY
 
 AppInput GameApp::present_net_join() {
     // JOIN NET GAME (menu row 2): prompt for the host address (prefilled

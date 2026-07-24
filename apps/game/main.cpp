@@ -40,10 +40,19 @@
 //     Two instances on one machine:
 //       bomber_game --host 8000 127.0.0.1 8001 --seed 0x1234
 //       bomber_game --join 8001 127.0.0.1 8000 --seed 0x1234
+//
+//   bomber_game --matchmaker <ws-url> [--matchmaker-stun <host[:port]>]
+//     Point the ONLINE lobby (menu: Start Network Game -> HOST PRIVATE GAME /
+//     JOIN BY CODE, ADR-0011) at a signaling server, e.g.
+//     "ws://127.0.0.1:8080/ws" for a locally built services/matchmaker. Falls
+//     back to $BOMBER_MATCHMAKER_URL, then to the compile-time placeholder in
+//     game_app.cpp. --matchmaker-stun overrides the UDP STUN echo endpoint,
+//     which otherwise defaults to the URL's host on port 8081.
 
 #include <SDL3/SDL_main.h>
 
 #include <cctype>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <string>
@@ -113,6 +122,24 @@ int main(int argc, char** argv) {
             opts.net_local_port = static_cast<std::uint16_t>(std::atoi(argv[++i]));
             opts.net_peer_host = argv[++i];
             opts.net_peer_port = static_cast<std::uint16_t>(std::atoi(argv[++i]));
+        } else if (a == "--matchmaker" && i + 1 < argc) {
+            // --matchmaker <ws-url>: the online lobby's signaling server
+            // (ADR-0011). Highest-precedence source; then BOMBER_MATCHMAKER_URL,
+            // then the compile-time placeholder in game_app.cpp.
+            opts.matchmaker_url = argv[++i];
+        } else if (a == "--matchmaker-stun" && i + 1 < argc) {
+            // --matchmaker-stun <host[:port]>: the matchmaker's UDP STUN echo
+            // (PROTOCOL.md §2). Defaults to the --matchmaker URL's own host and
+            // port 8081, so it is usually unnecessary.
+            const std::string s = argv[++i];
+            const std::size_t colon = s.rfind(':');
+            if (colon == std::string::npos) {
+                opts.matchmaker_stun_host = s;
+            } else {
+                opts.matchmaker_stun_host = s.substr(0, colon);
+                opts.matchmaker_stun_port =
+                    static_cast<std::uint16_t>(std::atoi(s.c_str() + colon + 1));
+            }
         } else if (a == "--seed" && i + 1 < argc) {
             // --seed <n>: shared netplay match seed (decimal or 0x-hex). BOTH
             // peers must pass the SAME value for byte-identical arenas.
