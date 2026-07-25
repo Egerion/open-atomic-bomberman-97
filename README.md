@@ -150,7 +150,7 @@ set BOMBER_MATCHMAKER_URL=ws://127.0.0.1:8080/ws  # 2. environment
                                                   # 3. the deployed default (game_app.cpp)
 ```
 
-> The signaling connection is currently plain `ws://`, not `wss://`: IXWebSocket v11.4.6's mbedTLS backend does not compile against any single mbedTLS release, so the client is built without TLS for now. It carries no credentials — a lobby code, your chosen display name, and the candidate `ip:port`s peers exchange with each other anyway — but it is readable on the path, so treat a "private" lobby code as semi-public until TLS lands.
+> **The signaling connection is currently plain `ws://`, not `wss://`** — IXWebSocket v11.4.6's mbedTLS backend does not compile against any single mbedTLS release, so the client is built without TLS for now. An earlier version of this note claimed it "carries no credentials"; that was wrong. It carries the lobby **`host_token`**, which is what authorises *start the match*, plus the lobby code and the relay allocation id. Anyone able to observe the path can therefore take host authority over your lobby or hijack a relayed match's return path. Nothing outside the game is at risk — no account, no password — but until TLS lands, treat online play as trusted-network only, and a "private" lobby code as semi-public. Tracked as S1 in [`services/matchmaker/SECURITY.md`](services/matchmaker/SECURITY.md).
 
 The UDP **STUN** echo resolves the same way (`--matchmaker-stun <host[:port]>`, `BOMBER_MATCHMAKER_STUN_HOST` / `BOMBER_MATCHMAKER_STUN_PORT`) and defaults to the matchmaker URL's own host on **port 8081**. To run a server locally:
 
@@ -204,10 +204,13 @@ Still open:
   from two machines.
 - **Host migration** — if the host drops, the match ends rather than re-electing
   a new hub. The design is in ADR-0011 (§ Risks) and the server half is built.
-- **`wss://` for the signaling connection.** It is plain `ws://` today because
-  IXWebSocket v11.4.6's mbedTLS backend does not compile against any single
-  mbedTLS release. No credentials cross it, but a lobby code is readable on the
-  path — treat a "private" code as semi-public until this lands.
+- **`wss://` for the signaling connection** — the most important open item, and
+  a security one. It is plain `ws://` today because IXWebSocket v11.4.6's
+  mbedTLS backend does not compile against any single mbedTLS release, and the
+  `host_token` that authorises starting a match crosses that connection in the
+  clear along with the lobby code and the relay allocation id. Until it lands,
+  online play is trusted-network only. See S1 in
+  [`services/matchmaker/SECURITY.md`](services/matchmaker/SECURITY.md).
 
 **Cross-platform** is structural rather than aspirational: the sim is
 integer-only, the wire is little-endian, and a compile-time `build_hash` is
