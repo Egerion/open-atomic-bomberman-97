@@ -155,7 +155,7 @@ set BOMBER_MATCHMAKER_URL=ws://127.0.0.1:8080/ws  # 2. environment
 The UDP **STUN** echo resolves the same way (`--matchmaker-stun <host[:port]>`, `BOMBER_MATCHMAKER_STUN_HOST` / `BOMBER_MATCHMAKER_STUN_PORT`) and defaults to the matchmaker URL's own host on **port 8081**. To run a server locally:
 
 ```
-go build -o mm.exe ./services/matchmaker && ./mm.exe
+go build -o mm.exe ./services/matchmaker/cmd/matchmaker && ./mm.exe
 ```
 
 `ctest -R net_lobby_live` exercises the whole lobby stack against a running server when `BOMBER_MATCHMAKER_URL` is set (it skips otherwise).
