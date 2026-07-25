@@ -93,17 +93,47 @@ AppInput ScoreboardScreen::run() {
             if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
             if (ev.type == SDL_EVENT_KEY_DOWN) {
                 ctx_.audio.play(20);  // any-key blip then accept sting (sub_42A088)
+                // ONLINE between-rounds (net_round_gate.hpp): the original's
+                // RESULTS wait loop is dismissed by the machine driving the game,
+                // never by a client — a `sub_40C06A() == 1` peer that presses a
+                // key gets the SFX-40 buzz, and the accept set carries a
+                // network-only code (903) the host injects. So a GUEST's key does
+                // not leave, and the HOST's accept commits the next round but
+                // leaves the screen up until the peer holds it (ready(), below).
+                // Escape is exempt on both: abandoning the match stays local.
+                if (state_.net_gate != nullptr && ev.key.key != SDLK_ESCAPE) {
+                    if (state_.net_gate->readonly())
+                        ctx_.audio.play(40);
+                    else
+                        state_.net_gate->accept();
+                    continue;
+                }
                 ctx_.audio.play(10);
                 result = ev.key.key == SDLK_ESCAPE ? AppInput::Back : AppInput::Advance;
                 waiting = false;
             }
         }
-        // sub_42A3F6's RESULTS loop only auto-advances after 6 s for an all-AI/
-        // attract roster; a human match waits for Enter (auto_advance_results()).
-        if (auto_advance_results(state_.demo, state_.demo_ticks, state_.demo_shots,
-                                 state_.setup_type) &&
-            SDL_GetTicks() - start >= kResultsDwellMs)
+        if (state_.net_gate != nullptr) {
+            // The gate owns the ONLY pump of the transport for this screen's
+            // duration (setup_session.hpp obligation 1) — and, as a side effect,
+            // drains the socket of the round that just ended before the next
+            // round's session ever looks at it.
+            state_.net_gate->pump();
+            if (state_.net_gate->ready()) {
+                waiting = false;
+            } else if (state_.net_gate->failed()) {
+                result = AppInput::Back;
+                waiting = false;
+            }
+        } else if (auto_advance_results(state_.demo, state_.demo_ticks, state_.demo_shots,
+                                        state_.setup_type) &&
+                   SDL_GetTicks() - start >= kResultsDwellMs) {
+            // sub_42A3F6's RESULTS loop only auto-advances after 6 s for an
+            // all-AI/attract roster; a human match waits for Enter
+            // (auto_advance_results()). An online match always has a human, and
+            // both peers must leave together — so the dwell never applies there.
             waiting = false;
+        }
         ctx_.audio.update_music();
         SDL_SetRenderDrawColor(ctx_.sdl, 0, 0, 0, 255);
         SDL_RenderClear(ctx_.sdl);

@@ -10,12 +10,14 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 #include "bomber/game/app_flow.hpp"
 #include "bomber/game/dos_scancode.hpp"
 #include "bomber/game/hud_format.hpp"
 #include "bomber/game/input.hpp"
+#include "bomber/game/match_outcome.hpp"
 #include "bomber/game/results.hpp"
 #include "bomber/sim/constants.hpp"
 #include "bomber/sim/event.hpp"
@@ -729,4 +731,69 @@ TEST_CASE("dos_scancode_name follows the original's &0x7F / <0x59 rule") {
     CHECK(dos_scancode_name(kDosKeyNameCount) == nullptr);      // 0x59: first gap
     CHECK(dos_scancode_name(0x80 | 0x59) == nullptr);           // extended fold of the gap
     CHECK(std::string(dos_scancode_name(0x80 | 28)) == "Enter");  // KP Enter aliases Enter
+}
+
+// ---------------------------------------------------------------------------
+// The best-of-N MATCH loop (sub_42A3F6's round-end shell, docs/re/
+// in-match-shell.md): a round that ends without a clinch must start ANOTHER
+// round, not return to the menu. This pins the exact decision run_app's Results
+// handler makes — tally the round win, then ask match_clinch() whether the MATCH
+// is over — because a "2-round match quits after round 1" report is precisely
+// this predicate answering wrong.
+TEST_CASE("best-of-N: an undecided round continues the match; the target ends it") {
+    using bomber::game::match_clinch;
+    using bomber::game::reset_match_scores;
+
+    bomber::sim::State s;
+    s.players[0].present = true;
+    s.players[1].present = true;
+    std::array<int, bomber::sim::kMaxPlayers> win_count{};
+    std::array<int, bomber::sim::kMaxPlayers> kill_count{};
+    std::array<int, bomber::sim::kMaxPlayers> setup_team{};
+    int win_target = 0;
+
+    // The default target comes from VALUELST id 310 ("how many wins to win a
+    // match?"), which this install ships as 2 — so the shipped default match is
+    // best-of-2 and CANNOT be over after one round.
+    bomber::assets::res::ValueList values;
+    values.values[310] = 2;
+    reset_match_scores(win_count, kill_count, win_target, values, std::nullopt);
+    CHECK(win_target == 2);
+    CHECK(win_count[0] == 0);
+
+    auto clinch = [&] {
+        return match_clinch(s, /*team_play=*/false, setup_team, /*win_by_kills=*/false, kill_count,
+                            win_count, win_target);
+    };
+
+    // Round 1: player 0 survives. Tally the win — the match is NOT decided, so
+    // the flow feeds RoundContinue and next() routes Results -> Match.
+    ++win_count[0];
+    CHECK(clinch() == -1);
+    CHECK(next(AppState::Results, AppInput::RoundContinue) == AppState::Match);
+
+    // Round 2: player 0 survives again and reaches the target — NOW the match is
+    // over, VICTORY shows, and a plain Advance routes Results -> Menu.
+    ++win_count[0];
+    CHECK(clinch() == 0);
+    CHECK(next(AppState::Results, AppInput::Advance) == AppState::Menu);
+
+    // A DRAW scores nobody (round_winner() is -1 when the clock expired, so the
+    // handler never increments) — an untallied round still continues the match.
+    std::array<int, bomber::sim::kMaxPlayers> fresh{};
+    win_count = fresh;
+    s.ticks_left = 0;  // time up
+    CHECK(bomber::game::round_winner(s) == -1);
+    CHECK(clinch() == -1);
+
+    // With no VALUELST entry the target falls back to options.ini's
+    // num_to_win_match=, and to 2 when that is absent too; a hand-edited 0 is
+    // clamped up to 1 rather than ending the match before it starts.
+    bomber::assets::res::ValueList empty;
+    reset_match_scores(win_count, kill_count, win_target, empty, 5);
+    CHECK(win_target == 5);
+    reset_match_scores(win_count, kill_count, win_target, empty, std::nullopt);
+    CHECK(win_target == 2);
+    reset_match_scores(win_count, kill_count, win_target, empty, 0);
+    CHECK(win_target == 1);
 }

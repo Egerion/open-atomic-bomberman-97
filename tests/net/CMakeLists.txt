@@ -22,6 +22,13 @@ target_link_libraries(bomber_net_udp_tests PRIVATE bomber::net)
 bomber_add_test(bomber_net_rollback_tests net_rollback test_rollback_session.cpp)
 target_link_libraries(bomber_net_rollback_tests PRIVATE bomber::net)
 
+# Multi-round rotation: the derived per-round seed + tick base an online
+# best-of-N match agrees on with no extra traffic (round_rotation.hpp), and the
+# RollbackSession tick base that keeps a straggler from the previous round out of
+# the next one's tick space.
+bomber_add_test(bomber_net_round_rotation_tests net_round_rotation test_round_rotation.cpp)
+target_link_libraries(bomber_net_round_rotation_tests PRIVATE bomber::net)
+
 # Peer drop -> AI handoff (ADR-0011 Risks): a silent peer's seat is handed to the
 # deterministic AISystem at one agreed tick on every peer (surviving rollback),
 # or — with Options row 12 off — ends the match loudly instead of hanging.

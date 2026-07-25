@@ -18,15 +18,22 @@ bool same_input(const sim::PlayerInput& a, const sim::PlayerInput& b) {
 
 RollbackSession::RollbackSession(sim::Simulation& sim, std::uint16_t local_seats,
                                  std::uint16_t all_seats, int max_prediction, Transport& transport,
-                                 const DropPolicy& drop)
+                                 const DropPolicy& drop, std::uint32_t start_tick)
     : sim_(&sim),
       transport_(&transport),
       local_seats_(local_seats),
       all_seats_(all_seats),
       remote_seats_(static_cast<std::uint16_t>(all_seats & ~local_seats)),
       max_prediction_(max_prediction),
-      drop_(drop) {
+      drop_(drop),
+      tick_(start_tick),
+      confirmed_(start_tick),
+      rollback_to_(start_tick) {
     handoff_.fill(kNoHandoff);
+    // "First tick we hold no input for" starts at the session's own base, not 0 —
+    // otherwise a seat that never speaks would be handed off at tick 0, which is
+    // below this round's confirmed_ and outside its snapshot window.
+    remote_next_.fill(start_tick);
 }
 
 std::uint16_t RollbackSession::seats_awaited(std::uint32_t tick) const {
@@ -271,9 +278,9 @@ void RollbackSession::detect_drops() {
         // yet; this increment covers guest drops only.
         if (!drop_.is_host) continue;
         // The handoff tick is the FIRST tick we hold no input for from this seat
-        // — see DropFrame on why it is retroactive. remote_next_ is 0 for a seat
-        // that never sent anything at all, which correctly hands it over from
-        // tick 0.
+        // — see DropFrame on why it is retroactive. remote_next_ starts at the
+        // session's own base tick, so a seat that never sent anything at all is
+        // correctly handed over from this round's very first tick.
         schedule_handoff(s, remote_next_[si]);
         const std::vector<std::uint8_t> pkt =
             encode_drop(static_cast<std::uint8_t>(s), handoff_[si]);

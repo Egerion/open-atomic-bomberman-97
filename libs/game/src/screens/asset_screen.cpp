@@ -8,7 +8,7 @@
 
 namespace bomber::game {
 
-AppInput present_asset_screen(ScreenContext ctx, const ScreenDef& def) {
+AppInput present_asset_screen(ScreenContext ctx, const ScreenDef& def, NetRoundGate* gate) {
     // Enter the screen (resets its clock/counter; music is NOT touched here —
     // the caller owns the continuous track, sub_42A088 only presents an image).
     ctx.asset_screen.enter(def, SDL_GetTicks());
@@ -33,6 +33,22 @@ AppInput present_asset_screen(ScreenContext ctx, const ScreenDef& def) {
                 continue;
             }
             if (ev.type == SDL_EVENT_KEY_DOWN) {
+                // ONLINE between-rounds (net_round_gate.hpp): a GUEST is the
+                // original's `sub_40C06A() == 1` client — its key never dismisses
+                // the DRAW screen, it just gets the SFX-40 "can't do that here"
+                // buzz (docs/re/in-match-shell.md's DRAW wait loop). Escape still
+                // leaves: abandoning the match is always the local player's own
+                // call. The HOST's accept commits the next round but does NOT end
+                // the screen here — it ends when the peer has the commitment
+                // (gate->ready() below), so both leave together.
+                if (gate != nullptr && ev.key.key != SDLK_ESCAPE) {
+                    ctx.audio.play(20);
+                    if (gate->readonly())
+                        ctx.audio.play(40);
+                    else
+                        gate->accept();
+                    continue;
+                }
                 // Feed every key to the screen: sub_42A088 blips (SFX 20) on any
                 // key and, for the accept keys (Enter/Space/Escape), plays the
                 // accept sting (SFX 10) and finishes. Escape additionally routes
@@ -47,7 +63,19 @@ AppInput present_asset_screen(ScreenContext ctx, const ScreenDef& def) {
         }
         std::uint64_t now = SDL_GetTicks();
         ctx.asset_screen.update(now);
-        if (ctx.asset_screen.done()) waiting = false;
+        // A gated screen's exit is a TWO-PEER event, so the Screen's own
+        // dwell/accept verdict does not apply: only the gate says when to leave.
+        if (gate != nullptr) {
+            gate->pump();
+            if (gate->ready())
+                waiting = false;
+            else if (gate->failed()) {
+                result = AppInput::Back;
+                waiting = false;
+            }
+        } else if (ctx.asset_screen.done()) {
+            waiting = false;
+        }
 
         ctx.audio.update_music();
         SDL_SetRenderDrawColor(ctx.sdl, 0, 0, 0, 255);

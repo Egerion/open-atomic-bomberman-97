@@ -6,9 +6,10 @@
 #include <utility>
 #include <vector>
 
-#include "bomber/game/options_screen.hpp"  // OptionsSnapshot
-#include "bomber/sim/constants.hpp"         // sim::kMaxPlayers
-#include "bomber/sim/state.hpp"             // sim::State
+#include "bomber/game/options_screen.hpp"          // OptionsSnapshot
+#include "bomber/game/screens/net_round_gate.hpp"  // NetRoundGate
+#include "bomber/sim/constants.hpp"                // sim::kMaxPlayers
+#include "bomber/sim/state.hpp"                    // sim::State
 
 // Seam 2 (ADR-0009 §"shared front-end state"): the non-service state the two
 // RESULTS-tier screens (present_scoreboard + present_goldman_wheel, sub_42A3F6)
@@ -49,7 +50,14 @@ namespace bomber::game {
 //    auto_advance_results() consults every frame; taken from GameApp::opts_.
 // Read-only aggregates are const&; the read-only scalars are snapshotted by
 // value (the screen never mutates them and they don't change across its loop).
+//  - net_gate — NULL for local play (the screen behaves exactly as it always
+//    has). Non-null between the rounds of an ONLINE match: the HOST's accept
+//    commits the next round and the GUEST's screen ends when that commitment
+//    arrives, mirroring the original's host-driven RESULTS wait loop (the
+//    network-only 903 accept code + the guest's SFX-40 buzz,
+//    docs/re/in-match-shell.md). Borrowed; owned by the caller's match loop.
 struct ScoreboardState {
+    NetRoundGate* net_gate = nullptr;                       // null = local play
     const sim::State& state;                                // sim_.state()
     const std::array<int, sim::kMaxPlayers>& win_count;     // GameApp::win_count_
     const std::array<int, sim::kMaxPlayers>& kill_count;    // GameApp::kill_count_
