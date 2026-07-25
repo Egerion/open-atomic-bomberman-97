@@ -12,11 +12,14 @@ target_include_directories(bomber_anim_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/ga
 add_test(NAME anim COMMAND bomber_anim_tests)
 
 # Front-end flow core (app_flow.hpp + input.hpp's slot-type cycle): pure
-# next(state,input) plus cycle_slot_input_type. input.hpp pulls in
-# bomber/sim/types.hpp (PlayerInput/TickInputs), so link bomber::sim — a
-# header-only pull here, not a build of the sim library into this SDL-free binary.
+# next(state,input) plus cycle_slot_input_type, and the best-of-N match decision
+# (match_outcome.hpp's round_winner/match_clinch/reset_match_scores). input.hpp
+# pulls in bomber/sim/types.hpp (PlayerInput/TickInputs) and match_outcome.hpp
+# pulls in assets/reslist.hpp's ValueList, so link bomber::sim + bomber::assets —
+# header-only pulls here, not a build of either library into this SDL-free binary.
 add_executable(bomber_frontend_tests test_frontend.cpp)
-target_link_libraries(bomber_frontend_tests PRIVATE bomber::sim doctest::doctest bomber::warnings)
+target_link_libraries(bomber_frontend_tests
+  PRIVATE bomber::assets bomber::sim doctest::doctest bomber::warnings)
 target_include_directories(bomber_frontend_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
 add_test(NAME frontend COMMAND bomber_frontend_tests)
 

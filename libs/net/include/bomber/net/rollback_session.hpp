@@ -89,8 +89,20 @@ public:
     // values are ~8): past it advance() stalls rather than predict unboundedly.
     // `drop` defaults to "detection off" — additive, so nothing changes for a
     // caller that does not opt in.
+    //
+    // `start_tick` is the session's FIRST tick number, 0 for a single-round match
+    // (every pre-existing caller and test). A MULTI-ROUND match builds one session
+    // per round over the SAME socket, and the wire carries no round id: a
+    // straggling INPUT/HASH datagram from round N would land inside round N+1's
+    // tick space and be filed as a future input (apply_remote only rejects ticks
+    // BELOW confirmed_) or compared as a peer hash — a stale-input bug or a
+    // phantom desync. Giving each round a base above anything the previous one
+    // could have used (round_rotation.hpp's round_tick_base) makes those stale
+    // ticks unconditionally < confirmed_, so the existing guards drop them.
+    // Purely a numbering offset: every tick comparison in this class is relative.
     RollbackSession(sim::Simulation& sim, std::uint16_t local_seats, std::uint16_t all_seats,
-                    int max_prediction, Transport& transport, const DropPolicy& drop = {});
+                    int max_prediction, Transport& transport, const DropPolicy& drop = {},
+                    std::uint32_t start_tick = 0);
 
     // Feed the local player's input for the next frame and advance the DISPLAYED
     // (speculative) state by one tick, unless the prediction cap is reached and
@@ -160,7 +172,7 @@ private:
     int max_prediction_;
     DropPolicy drop_;
 
-    std::uint32_t tick_ = 0;        // next speculative tick to simulate
+    std::uint32_t tick_ = 0;        // next speculative tick to simulate (starts at start_tick)
     std::uint32_t confirmed_ = 0;   // highest tick whose inputs are ALL confirmed (+1 = next unconfirmed)
     std::uint32_t rollback_to_ = 0;
     bool rollback_pending_ = false;

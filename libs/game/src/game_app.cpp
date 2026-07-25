@@ -41,7 +41,8 @@
 #include "bomber/game/sprites.hpp"
 #include "bomber/match/match_factory.hpp"
 #include "bomber/net/rollback_session.hpp"  // net::RollbackSession (run_netplay_match)
-#include "bomber/net/setup_session.hpp"     // net::SetupSession (present_net_setup)
+#include "bomber/net/round_rotation.hpp"    // net::round_seed / round_tick_base (round rotation)
+#include "bomber/net/setup_session.hpp"     // net::SetupSession (present_net_setup + rotation)
 #include "bomber/net/udp_transport.hpp"     // net::UdpTransport (run_netplay_match)
 #include "bomber/platform/frame_clock.hpp"
 
@@ -973,12 +974,87 @@ AppInput GameApp::run_netplay_match(net::UdpTransport& transport, int role, std:
                                    /*is_host=*/role == 1, canonical_netplay_config(seed));
 }
 
+namespace {
+
+// THE BETWEEN-ROUNDS GATE for an online match (net_round_gate.hpp), implemented
+// over the SAME net::SetupSession the pre-match setup stage already uses: round
+// N+1's config is just another host confirmation, so the whole rotation needs no
+// new MsgType and no protocol-version bump.
+//
+//   HOST  — pre-builds the next round's config, confirms it the moment the local
+//           player accepts the outcome screen (the original's host-only
+//           screen-advance, docs/re/network-screens.md §7 kind 32), and keeps the
+//           screen up until the guest has acknowledged those exact bytes.
+//   GUEST — never dismisses (`sub_40C06A() == 1`); its screen ends when the
+//           host's confirmation FOR THIS ROUND arrives.
+//
+// "For this round" is checked against net::round_seed(): a round's config carries
+// its own seed, derived identically on both peers from the match seed + the round
+// index, so a blob replayed out of an earlier round can never be mistaken for the
+// next one. That is the whole identity check — the config itself still travels in
+// full, because a guest whose .SCH/EXTRA/VALUELST differ would build a different
+// board from the same seed (setup_session.hpp, "the final may not be approximate").
+//
+// The host also publishes ONE heartbeat preview: SetupSession's guest liveness
+// clock only advances on inbound setup traffic, so without it a host that reads
+// the scoreboard for longer than the session timeout would look, to the guest,
+// exactly like a host that had quit.
+class RoundRotationGate final : public NetRoundGate {
+public:
+    RoundRotationGate(net::SetupSession& session, bool host, sim::MatchConfig next,
+                      std::uint32_t expect_seed)
+        : session_(&session), next_(std::move(next)), expect_seed_(expect_seed), host_(host) {
+        if (host_) session_->publish(net::SetupPreviewFrame{});  // liveness only; never displayed
+    }
+
+    void pump() override { session_->step(static_cast<std::int64_t>(SDL_GetTicks())); }
+    bool readonly() const override { return !host_; }
+
+    void accept() override {
+        if (!host_ || confirmed_) return;
+        session_->confirm(next_);
+        confirmed_ = true;
+    }
+
+    bool ready() const override {
+        if (host_) return confirmed_ && session_->peer_acked();
+        return session_->has_final_config() && session_->final_config().seed == expect_seed_;
+    }
+
+    bool failed() const override { return session_->failed(); }
+
+    // The agreed next-round config: our own bytes on the host, the host's exact
+    // decoded bytes on the guest (match_config_codec.hpp). Only valid once
+    // ready() — the caller checks that first.
+    const sim::MatchConfig& next_config() const { return host_ ? next_ : session_->final_config(); }
+
+private:
+    net::SetupSession* session_;
+    sim::MatchConfig next_;
+    std::uint32_t expect_seed_;
+    bool host_;
+    bool confirmed_ = false;
+};
+
+// After the gate opens, the guest has sent exactly ONE ack and is about to hand
+// the socket to the match session. If that ack was lost the host would sit until
+// its own timeout, so keep pumping briefly — the same 300 ms settle, for the same
+// reason, as present_net_setup's own exit (whose comment carries the full
+// argument for why swallowing a few of the peer's early input datagrams here is
+// harmless: RollbackSession re-sends its whole unconfirmed window every pump).
+constexpr std::uint64_t kRoundHandoffSettleMs = 300;
+
+}  // namespace
+
 AppInput GameApp::run_netplay_match_seats(net::UdpTransport& transport, std::uint16_t local_seats,
                                           bool is_host, const sim::MatchConfig& cfg) {
     // The match-running CORE shared by the CLI (run_netplay), the direct connect
     // screens, and the online lobby: given an ALREADY-connected transport, the
     // seats THIS peer owns, and the AGREED config, build a byte-identical arena
-    // and run ONE UDP match through the SAME MatchRunner a local match uses.
+    // and run the MATCH — a best-of-N sequence of ROUNDS, exactly like the local
+    // Play flow (docs/re/in-match-shell.md "The round-end shell": `sub_42A3F6`
+    // loops back into `sub_410B6E` until somebody clinches) — through the SAME
+    // MatchRunner a local match uses.
     //
     // Seat bitmask (bit s == seat s, matching LockstepSession::fill_seats). Two
     // NETWORK seats: the RollbackSession is a two-peer construct over one
@@ -989,112 +1065,242 @@ AppInput GameApp::run_netplay_match_seats(net::UdpTransport& transport, std::uin
     // the roster can hold up to ten PLAYERS over these two seats.
     constexpr std::uint16_t kAllSeats = 0b11u;
 
-    // The config arrives whole (present_net_setup's confirmation on the host,
-    // SetupSession::final_config()'s exact bytes on the guest, or the canonical
-    // build on the CLI) — grid, actors, warps, spawns, roster, tuning and seed
-    // all included, so nothing here re-derives anything per machine.
-    const int stage = cfg.tuning.level_index;
-    sim_ = sim::Simulation(cfg);
-
-    // Presentation setup — mirrors MatchRunner::start_match's tail (which run()
-    // SKIPS for a netplay match, since we seed sim_ canonically here): stage art
-    // + a live music track + a fresh renderer/HUD + sound state. disable_game_
-    // music is presentation-only (never sim), so netplay just keeps music on.
-    if (assets_.load_stage(stage)) {
-        seqs_.resolve_stage(assets_, stage);
-        int stage_music = 1100 + stage;
-        if (!audio_.has_track(stage_music)) stage_music = 1120;  // GENERIC.RSS fallback (sub_4293E5)
-        audio_.start_music(stage_music);
-    }
-    renderer_->reset_match(/*untimed=*/false);  // NOLINT(bugprone-unchecked-optional-access)
-    sounds_.reset();
-
-    // PRESENTATION roster, derived from the AGREED config so both peers show the
-    // same thing. It drives MatchRunner::collect_inputs (which only ever reads a
-    // KEYBOARD/JOYSTICK slot) and the in-round player-row HUD; the match roster
-    // itself is cfg's own active/ai/team.
-    //   * a LOCAL seat reads keyboard key-set 0 (the arrow keys), so the human at
-    //     this machine plays with arrows regardless of which seat they own;
-    //   * an AI slot is COMPUTER — collect_inputs leaves it neutral and the
-    //     deterministic AISystem drives it identically on both peers;
-    //   * every other active slot is type 4 OTHER, the original's own marker for
-    //     "someone else's player" (docs/re/network-screens.md §7, sub_40D372).
-    //     collect_inputs leaves it neutral too and the rollback session overwrites
-    //     it from the wire before every tick().
-    setup_type_.fill(static_cast<int>(SlotInputType::Off));
-    setup_sub_.fill(0);
-    setup_team_.fill(0);
+    // Fresh MATCH tally (the local path's reset_match_scores, minus its
+    // win_target_ write): win_target_ is the LEVEL & ROUNDS screen's WINS row and
+    // was already agreed during present_net_setup — the host committed its own,
+    // the guest committed the mirrored preview (map_select_screen.cpp) — so
+    // stamping getvalue(310) over it here would silently shorten the match on
+    // both peers. The CLI (--host/--join) has no level screen and keeps whatever
+    // default init() seeded.
     win_count_.fill(0);
     kill_count_.fill(0);
-    // Driven off the MASK, not a single seat index: today exactly one bit is set
-    // (2-seat rooms), but reading the mask means a future peer that owns two
-    // seats gets its second one mapped to key-set 1 with no change here.
-    int key_set = 0;
-    for (int s = 0; s < sim::kMaxPlayers; ++s) {
-        const auto slot = static_cast<std::size_t>(s);
-        if (!cfg.active[slot]) continue;
-        if (cfg.ai[slot])
-            setup_type_[slot] = static_cast<int>(SlotInputType::Computer);
-        else if ((local_seats & (1u << s)) != 0u) {
-            setup_type_[slot] = static_cast<int>(SlotInputType::Keyboard);
-            setup_sub_[slot] = key_set++;
-        } else
-            setup_type_[slot] = static_cast<int>(SlotInputType::Other);
-        // MatchConfig::team[] is the +84 byte shifted up by one (build_config's
-        // "sim team 0 = solo side" note); shift it back for the presentation
-        // roster the HUD/outcome helpers read.
-        setup_team_[slot] = cfg.team[slot] != 0 ? cfg.team[slot] - 1 : 0;
-    }
+
     // is_team_mode()/draw_player_row read the team GATE, not just the per-slot
     // bytes, and the agreed config is the only authority for it online (team play
     // off leaves every cfg.team[] at 0 — build_config's `cfg.team.fill(0)`).
-    // Restored after the match so a following LOCAL game keeps the player's own
+    // Restored after the MATCH so a following LOCAL game keeps the player's own
     // Options setting; team_play_ is a mirror of options_.team_play and never
     // reaches options.ini on its own, so nothing is persisted either way.
     const bool saved_team_play = team_play_;
-    team_play_ = std::any_of(cfg.team.begin(), cfg.team.end(),
-                             [](std::uint8_t t) { return t != 0; });
 
-    // Drive the SAME MatchRunner as a local match (reusing all its render /
-    // present / pacing / round-end): the seam's net_session routes each fixed
-    // tick through the ROLLBACK session. ONE match then exit — no lobby / round
-    // rotation yet. Rollback gives ZERO input delay (it predicts the peer's input
-    // and re-simulates on a miss) so the match feels local even over the wire —
-    // the input-delay lockstep this replaced added a fixed ~200 ms of lag.
-    // max_prediction=8 ticks caps how far the display may run ahead of the peer.
-    // Peer-drop policy (ADR-0011 Risks): past a hard silence window a seat is
-    // declared dropped. With the RE'd Options row 12 ON the HOST announces the
-    // handoff and every peer moves that seat to the deterministic AISystem at the
-    // same tick, so the match plays on; with it OFF the drop ends the match
-    // loudly instead of hanging. This is that option's FIRST consumer — it
-    // reached CFG.INI and the Options screen and stopped there until now.
-    // The window is deliberately LONG (600 pumps = 30 s at 20 Hz): crossing it is
-    // irreversible with row 12 off, and the counter resets on any input, so a
-    // peer that returns inside it costs nothing. An earlier 2.5 s killed a match
-    // whenever someone dragged their window — Windows blocks the message pump for
-    // the whole drag, so the peer just stops existing for as long as the mouse is
-    // held. This must mean "genuinely gone", not "briefly busy".
-    const net::DropPolicy drop{options_.lost_net_revert_ai, is_host, /*timeout_ticks=*/600};
-    net::RollbackSession session(sim_, local_seats, kAllSeats, /*max_prediction=*/8, transport,
-                                 drop);
-    MatchRunnerState mrs = match_runner_state();
-    mrs.net_session = &session;
-    mrs.net_local_seats = local_seats;
-    const AppInput result = MatchRunner(sctx(), mrs).run();
+    // The MATCH seed. Round 0's config carries it and every later round derives
+    // its own from it (net::round_seed) — identically on both peers, with no
+    // traffic — so the two never disagree about which round they are entering.
+    const std::uint32_t match_seed = cfg.seed;
+    sim::MatchConfig round_cfg = cfg;
+
+    AppInput result = AppInput::Advance;
+    for (int round = 0;; ++round) {
+        // The config arrives whole (present_net_setup's confirmation on the host,
+        // SetupSession::final_config()'s exact bytes on the guest, or the
+        // canonical build on the CLI; for round > 0, the same confirm/ack
+        // exchange run by RoundRotationGate below) — grid, actors, warps, spawns,
+        // roster, tuning and seed all included, so nothing here re-derives
+        // anything per machine.
+        const int stage = round_cfg.tuning.level_index;
+        sim_ = sim::Simulation(round_cfg);
+
+        // Presentation setup — mirrors MatchRunner::start_match's tail (which
+        // run() SKIPS for a netplay match, since we seed sim_ from the agreed
+        // config here): stage art + a live music track + a fresh renderer/HUD +
+        // sound state. Re-run every round because a RANDOM level rotates the
+        // stage between rounds exactly as it does locally (the host's
+        // build_config resolves it from that round's seed). disable_game_music is
+        // presentation-only (never sim), so netplay just keeps music on.
+        if (assets_.load_stage(stage)) {
+            seqs_.resolve_stage(assets_, stage);
+            int stage_music = 1100 + stage;
+            if (!audio_.has_track(stage_music))
+                stage_music = 1120;  // GENERIC.RSS fallback (sub_4293E5)
+            audio_.start_music(stage_music);
+        }
+        renderer_->reset_match(/*untimed=*/false);  // NOLINT(bugprone-unchecked-optional-access)
+        sounds_.reset();
+
+        // PRESENTATION roster, derived from the AGREED config so both peers show
+        // the same thing. It drives MatchRunner::collect_inputs (which only ever
+        // reads a KEYBOARD/JOYSTICK slot) and the in-round player-row HUD; the
+        // match roster itself is the config's own active/ai/team.
+        //   * a LOCAL seat reads keyboard key-set 0 (the arrow keys), so the human
+        //     at this machine plays with arrows regardless of which seat they own;
+        //   * an AI slot is COMPUTER — collect_inputs leaves it neutral and the
+        //     deterministic AISystem drives it identically on both peers;
+        //   * every other active slot is type 4 OTHER, the original's own marker
+        //     for "someone else's player" (docs/re/network-screens.md §7,
+        //     sub_40D372). collect_inputs leaves it neutral too and the rollback
+        //     session overwrites it from the wire before every tick().
+        setup_type_.fill(static_cast<int>(SlotInputType::Off));
+        setup_sub_.fill(0);
+        setup_team_.fill(0);
+        // Driven off the MASK, not a single seat index: today exactly one bit is
+        // set (2-seat rooms), but reading the mask means a future peer that owns
+        // two seats gets its second one mapped to key-set 1 with no change here.
+        int key_set = 0;
+        for (int s = 0; s < sim::kMaxPlayers; ++s) {
+            const auto slot = static_cast<std::size_t>(s);
+            if (!round_cfg.active[slot]) continue;
+            if (round_cfg.ai[slot])
+                setup_type_[slot] = static_cast<int>(SlotInputType::Computer);
+            else if ((local_seats & (1u << s)) != 0u) {
+                setup_type_[slot] = static_cast<int>(SlotInputType::Keyboard);
+                setup_sub_[slot] = key_set++;
+            } else
+                setup_type_[slot] = static_cast<int>(SlotInputType::Other);
+            // MatchConfig::team[] is the +84 byte shifted up by one
+            // (build_config's "sim team 0 = solo side" note); shift it back for
+            // the presentation roster the HUD/outcome helpers read.
+            setup_team_[slot] = round_cfg.team[slot] != 0 ? round_cfg.team[slot] - 1 : 0;
+        }
+        team_play_ = std::any_of(round_cfg.team.begin(), round_cfg.team.end(),
+                                 [](std::uint8_t t) { return t != 0; });
+
+        // Drive the SAME MatchRunner as a local match (reusing all its render /
+        // present / pacing / round-end): the seam's net_session routes each fixed
+        // tick through the ROLLBACK session. Rollback gives ZERO input delay (it
+        // predicts the peer's input and re-simulates on a miss) so the match feels
+        // local even over the wire — the input-delay lockstep this replaced added
+        // a fixed ~200 ms of lag. max_prediction=8 ticks caps how far the display
+        // may run ahead of the peer.
+        // Peer-drop policy (ADR-0011 Risks): past a hard silence window a seat is
+        // declared dropped. With the RE'd Options row 12 ON the HOST announces the
+        // handoff and every peer moves that seat to the deterministic AISystem at
+        // the same tick, so the match plays on; with it OFF the drop ends the
+        // match loudly instead of hanging. This is that option's FIRST consumer —
+        // it reached CFG.INI and the Options screen and stopped there until now.
+        // The window is deliberately LONG (600 pumps = 30 s at 20 Hz): crossing it
+        // is irreversible with row 12 off, and the counter resets on any input, so
+        // a peer that returns inside it costs nothing. An earlier 2.5 s killed a
+        // match whenever someone dragged their window — Windows blocks the message
+        // pump for the whole drag, so the peer just stops existing for as long as
+        // the mouse is held. This must mean "genuinely gone", not "briefly busy".
+        //
+        // ONE SESSION PER ROUND, over the same socket — but NOT restarting the
+        // tick count: round N is based at net::round_tick_base(N) so a datagram
+        // straggling out of round N-1 carries a tick below this round's
+        // confirmed_ and is dropped by the session's existing guard, instead of
+        // being filed as a far-future input or compared as a phantom peer hash
+        // (rollback_session.hpp's `start_tick`).
+        const net::DropPolicy drop{options_.lost_net_revert_ai, is_host, /*timeout_ticks=*/600};
+        net::RollbackSession session(sim_, local_seats, kAllSeats, /*max_prediction=*/8, transport,
+                                     drop, net::round_tick_base(round));
+        MatchRunnerState mrs = match_runner_state();
+        mrs.net_session = &session;
+        mrs.net_local_seats = local_seats;
+        result = MatchRunner(sctx(), mrs).run();
+
+        if (session.desynced()) {
+            std::fprintf(stderr,
+                         "netplay: DESYNC at tick %u — peers diverged (config/seed mismatch?)\n",
+                         session.desync_tick());
+            break;
+        }
+        if (session.aborted()) {
+            // Options row 12 off: a peer went silent and the match ends rather
+            // than handing its seat to the AI. Say so — not a normal round end.
+            std::fprintf(stderr,
+                         "netplay: a player dropped; match ended (turn on \"Lost net players "
+                         "revert to AIs\" to play on)\n");
+            break;
+        }
+        if (result != AppInput::MatchOver) break;  // window closed
+        // MatchRunner returns MatchOver for a natural round end AND for the
+        // Ctrl+Q/Esc forfeit, so tell them apart from the state itself: a round
+        // that really ended has one side left or a spent clock (the same
+        // condition its own advance_round_end() waited on).
+        if (sim::sides_remaining(sim_.state()) > 1 && sim_.state().ticks_left > 0) {
+            result = AppInput::Advance;  // forfeited to the menu
+            break;
+        }
+
+        // THE OUTCOME, computed with no traffic at all: both peers ran the same
+        // deterministic sim over the same inputs, so round_winner()/the tally/the
+        // clinch agree by construction — there is nothing here for the host to
+        // announce. (The Goldman wheel and the campaign round-pacing overrides the
+        // LOCAL results tail also runs are both local-only in the original —
+        // `sub_4034BC` is gated `!sub_40C06A()`, docs/re/goldman-roulette.md §2 —
+        // so an online match legitimately skips them.)
+        const int w = round_winner();
+        if (w >= 0) ++win_count_[w];
+        const int clinched = w >= 0 ? match_clinch() : -1;
+        if (clinched >= 0) {
+            // MATCH win — the same clinch tier the local path shows: the RESULTS
+            // scoreboard carrying the "WINS THE MATCH!" line with the 2000 winner
+            // voice under it, then VICTORY<n>/TEAM<n>. Both peers reach this
+            // independently and identically, so neither screen is gated: there is
+            // no next round to agree on, and each player dismisses their own.
+            audio_.start_music(kDrawMusicId);        // 1130 under RESULTS/VICTORY (doc §2)
+            audio_.play_random_in_range(2000, 2299);  // winner voice — clinch only
+            result = present_scoreboard();
+            if (result != AppInput::Quit)
+                result = present_screen(
+                    victory_screen(is_team_mode(), clinched, setup_team_[clinched]));
+            if (result != AppInput::Quit) result = AppInput::Advance;
+            break;
+        }
+
+        // NOT DECIDED — another round. The host builds it (from the SAME screens'
+        // state that produced round 0, so the roster and the level choice carry
+        // over; a RANDOM level rotates because the seed moved) and confirms it
+        // through the gate; the guest takes the host's exact bytes.
+        net::SetupSession rotate(transport, is_host);
+        const std::uint32_t next_seed = net::round_seed(match_seed, round + 1);
+        RoundRotationGate gate(rotate, is_host,
+                               is_host ? MatchRunner(sctx(), match_runner_state())
+                                             .build_config(next_seed)
+                                       : sim::MatchConfig{},
+                               next_seed);
+
+        audio_.start_music(kDrawMusicId);  // 1130 under DRAW *and* RESULTS (doc §2)
+        if (w < 0) {
+            // DRAW is a PREFIX to the tally, not an alternative (raw
+            // 0x42A875-0x42A88B falls through into RESULTS) — so a drawn round
+            // shows DRAW.PCX first here too. It is deliberately NOT gated: no
+            // ticks run under either screen, and the tally behind it IS the
+            // synchronisation point, so the two peers dismissing DRAW at
+            // different moments costs nothing but each waiting on the tally
+            // instead. (The original instead broadcasts a second advance for
+            // this screen — kind 32 payload 904 — which our wire has no need of
+            // once the config exchange is the barrier.)
+            audio_.play_random_in_range(kDrawStingLo, kDrawStingHi);
+            ScreenDef ds = draw_screen();
+            ds.dwell_ms = 0;  // a human is playing by definition online: wait for Enter
+            result = present_asset_screen(sctx(), ds);
+            if (result != AppInput::Advance) {
+                if (result != AppInput::Quit) result = AppInput::Advance;  // Esc: abandon
+                break;
+            }
+        }
+        ScoreboardState sbs = scoreboard_state();
+        sbs.net_gate = &gate;
+        result = ScoreboardScreen(sctx(), sbs).run();
+        if (result == AppInput::Quit) break;
+        if (!gate.ready()) {
+            // Escape (either peer abandoning the match) or the link died under
+            // the screen — either way there is no agreed next round.
+            if (gate.failed())
+                std::fprintf(stderr, "netplay: lost the peer between rounds; match ended\n");
+            result = AppInput::Advance;
+            break;
+        }
+        round_cfg = gate.next_config();
+        std::printf("netplay: round %d over at tick %u; next round seed 0x%08X stage %d\n", round,
+                    static_cast<unsigned>(session.confirmed_tick()),
+                    static_cast<unsigned>(round_cfg.seed), round_cfg.tuning.level_index);
+        // Cover a lost ack before the match session takes the socket back.
+        const std::uint64_t settle_until = SDL_GetTicks() + kRoundHandoffSettleMs;
+        while (SDL_GetTicks() < settle_until) {
+            SDL_Event sev;
+            while (SDL_PollEvent(&sev))
+                if (sev.type == SDL_EVENT_QUIT) {
+                    team_play_ = saved_team_play;
+                    return AppInput::Quit;
+                }
+            gate.pump();
+            SDL_Delay(2);
+        }
+    }
+
     team_play_ = saved_team_play;
-
-    if (session.desynced())
-        std::fprintf(stderr, "netplay: DESYNC at tick %u — peers diverged (config/seed mismatch?)\n",
-                     session.desync_tick());
-    else if (session.aborted())
-        // Options row 12 off: a peer went silent and the match ends rather than
-        // handing its seat to the AI. Say so — this is not a normal round end.
-        std::fprintf(stderr, "netplay: a player dropped; match ended (turn on \"Lost net players "
-                             "revert to AIs\" to play on)\n");
-    else
-        std::printf("netplay: match ended (%s) at tick %u\n",
-                    result == AppInput::Quit ? "window closed" : "round over",
-                    static_cast<unsigned>(session.confirmed_tick()));
     return result;
 }
 
@@ -2116,6 +2322,15 @@ int GameApp::run_app() {
                     ScreenDef ds = draw_screen();
                     if (!auto_advance_results()) ds.dwell_ms = 0;
                     ev = present_screen(ds);
+                    // DRAW FALLS THROUGH INTO THE RESULTS TALLY — it is a PREFIX,
+                    // not an alternative (docs/re/in-match-shell.md "DRAW is a
+                    // prefix to RESULTS", raw 0x42A875-0x42A88B: the DRAW wait
+                    // loop ends with NO jump and execution lands in LABEL_102,
+                    // which loads RESULTS.PCX; the RESULTS-only path is the
+                    // `goto LABEL_102` taken when a survivor EXISTS). So a drawn
+                    // round shows both screens and dismisses both wait loops.
+                    // The port showed DRAW alone until this was pinned.
+                    if (ev != AppInput::Quit && ev != AppInput::Back) ev = present_scoreboard();
                 }
                 // Fold the screen's dismissal into the flow-graph event: an
                 // undecided round's Advance becomes RoundContinue, so

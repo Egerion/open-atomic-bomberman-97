@@ -3,6 +3,7 @@
 #include "bomber/game/app_flow.hpp"
 #include "bomber/game/screen.hpp"
 #include "bomber/game/screen_context.hpp"
+#include "bomber/game/screens/net_round_gate.hpp"
 
 // Runs one asset-driven full-screen image (logo / title / results / draw /
 // victory) to completion via the shared Screen presenter. Extracted verbatim
@@ -13,6 +14,12 @@
 
 namespace bomber::game {
 
-AppInput present_asset_screen(ScreenContext ctx, const ScreenDef& def);
+// `gate` (null on every local path) turns this into an ONLINE between-rounds
+// screen: pumped every frame, dismissed by the HOST's accept and by the guest
+// only when the host's commitment arrives — see net_round_gate.hpp. The dwell
+// auto-advance is suppressed while a gate is present, since the two peers must
+// leave together and only the gate knows when that is.
+AppInput present_asset_screen(ScreenContext ctx, const ScreenDef& def,
+                              NetRoundGate* gate = nullptr);
 
 }  // namespace bomber::game

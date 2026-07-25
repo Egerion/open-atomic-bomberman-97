@@ -232,6 +232,16 @@ private:
     // `is_host` gates the peer-drop handoff: only the hub may schedule a silent
     // seat's move to the AI (net::DropPolicy), since a guest must never mutate
     // the hashed State on its own authority.
+    //
+    // A MATCH, NOT A ROUND. `cfg` seeds round 0; a round that ends without a
+    // clinch runs the outcome screen with a between-rounds gate over it
+    // (screens/net_round_gate.hpp) and starts the next round on the config the
+    // HOST confirms through that gate — the same `sub_42A3F6` best-of-N loop the
+    // local Play flow runs, with the host driving the advance exactly as the
+    // original's network client does (docs/re/in-match-shell.md "The round-end
+    // shell"). Every round's seed and tick base come from net::round_rotation.hpp,
+    // so both peers agree on which round they are in with no extra traffic.
+    // Returns Advance once the match is decided/abandoned, Quit on a window close.
     AppInput run_netplay_match_seats(net::UdpTransport& transport, std::uint16_t local_seats,
                                      bool is_host, const sim::MatchConfig& cfg);
     // THE ONLINE SETUP STAGE (docs/re/network-screens.md §7, ADR-0011): runs

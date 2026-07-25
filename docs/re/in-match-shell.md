@@ -787,6 +787,140 @@ literal immediates in the disassembly, confirmed absent from
 `docs/valuelst-map.md`'s existing tables and re-checked against the raw
 VALUELST.RES text.)
 
+## Round rotation — what carries, what resets, and who drives it online (CONFIRMED 2026-07-25)
+
+Prompted by a live report: *"a match set to 2 rounds cuts straight back to the
+main menu when the first round ends"*, observed ONLINE. This section pins the
+whole round-to-round path end to end. Everything below was read directly out of
+`sub_42A3F6`'s tail and `sub_410B6E`; nothing is inferred from the summaries
+above.
+
+### DRAW is a PREFIX to the RESULTS tally, not an alternative to it
+
+The single most load-bearing correction in this pass. The outcome tier splits on
+`sub_4219B0(...)` (the round-survivor query, pseudo.c 29823):
+
+- **survivor exists → `goto LABEL_102`** (pseudo.c 29824), which is the RESULTS
+  tier's own head (`aResultsPlt` load at 29888). DRAW.PCX is skipped entirely.
+- **no survivor → DRAW.PCX** (`sub_42A088(aDraw, 0)` 29825, sting `sub_427BFB(1700)`
+  29826) and its bespoke wait loop — and when that loop exits it does three
+  teardown calls (`sub_415CE3`/`sub_415C1F`/`sub_4150BD`, 29882-29884) and then
+  **falls straight through into `LABEL_102`** (29885). There is no jump over it.
+
+So a drawn round shows **DRAW and then the cumulative tally**, dismissing two
+wait loops, before the next round starts. This document's earlier "DRAW branch"
+/ "RESULTS branch" wording implied they were alternatives; they are not.
+
+**Port status: FIXED 2026-07-25.** The local Results handler
+(`game_app.cpp` `run_app`) showed DRAW alone and went straight back to Match; it
+now runs `present_scoreboard()` after the DRAW screen. The netplay path does the
+same (`run_netplay_match_seats`).
+
+### Who dismisses the outcome screens — the HOST, never a client
+
+Reading the DRAW wait loop's key chain in full (pseudo.c 29832-29881); the
+RESULTS loop (30051-30105) is the same shape with 903 in place of 904:
+
+| condition | effect |
+|---|---|
+| any real key | nav blip SFX 20 (29835-29836) |
+| `sub_40C06A() == 1 && !sub_40F386()` | the key is **forced to 27** (29837-29838) → the `<= 27` arm sets `dword_464A68 = 2` and leaves: **a client whose net session is dead is kicked to the menu** |
+| `(sub_42247A() \|\| dword_4646B4) && now > t0 + 6000` | the key is forced to 13 — the all-AI/attract auto-advance only |
+| `27` | `dword_464A68 = 2`, abort to the menu |
+| `32` (Space) or **`904`** | straight to `LABEL_98`: accept sting SFX 10, leave the loop — **no dwell gate** |
+| `13` (Enter) | falls PAST the accept arm to the tail, where a client is intercepted (next row) and everyone else is dwell-gated (row after) |
+| `sub_40C06A() == 1` (tail, 29869-29873) | **SFX 40 and `continue`** — a client pressing Enter simply cannot dismiss the screen |
+| tail dwell (29877-29878) | Enter accepts only once `t0 + 1000 * sub_4148AC()` has passed |
+| on accept, `sub_40C06A() == 2` | the HOST broadcasts `sub_40F064(904, ...)` (29875) — kind 32, the code that appears in a guest's own key stream and dismisses its screen |
+
+- **`sub_4148AC` @ 0x4148AC (pseudo.c 17319-17324) is two lines**: `sub_40C06A()`
+  truthy → `getvalue(13)`, else `1`. `DATA/RES/VALUELST.RES` line 66 is `13,3`, so
+  the minimum dwell before Enter works is **1000 ms locally and 3000 ms in a net
+  game** — the "let the other machines catch up" gate.
+- **`sub_40F386` @ 0x40F386 (pseudo.c 13489-13492) returns `dword_4600D4`**, the
+  live net SESSION ID (`dword_46013C >> 16` at 11130, matched against inbound
+  message ids at 11348/11886, zeroed on teardown at 11501/11671). So the
+  "network client forces Esc" note earlier in this document is CONDITIONAL: it
+  fires only once the session is gone, not on every client frame.
+
+### The next round's LEVEL is pushed by the host, every round
+
+`sub_410B6E` @ 0x410B6E is re-entered for every round, and its first act after
+`sub_42A16F(1)` is to resolve the stage into `dword_46499C` — and it splits on
+role (pseudo.c 14727-14769):
+
+- **GUEST (`sub_40C06A() == 1`)**: sets `dword_46499C = -1` and then **BLOCKS in a
+  pump loop until it stops being -1** (14730-14743), with Esc the only way out
+  (`dword_46492C = -1; dword_464A68 = 2`). The value arrives from the wire — the
+  receive-side store is pseudo.c 12780 — so **a guest does not compute the next
+  round's map at all; it waits to be told, on every round.**
+- **HOST or LOCAL**: `dword_464998 < 0` (the LEVEL screen's RANDOM row) → up to
+  **200 tries** of `rand() % max(getvalue(35), 1)`, accepting the first index
+  whose **`getvalue(1150 + index)`** is nonzero (the enabled-rotation allow-list);
+  otherwise `dword_46499C = dword_464998` verbatim (14745-14759). So **a fixed
+  level replays the SAME map every round and RANDOM re-rolls per round.**
+- **HOST additionally** drains 10×100 ms and calls `sub_4101B5` (14760-14769),
+  whose body puts `dword_46499C` on the wire (`LOWORD(a1) = dword_46499C`,
+  pseudo.c 14240) — the send that unblocks every guest's loop above.
+- `dword_46499C` IS the stage index everything else keys off:
+  `"field%u.plt"` (14778) and `"extra%u.res"` (6903).
+
+### Carried vs reset
+
+| | across rounds of one match | source |
+|---|---|---|
+| win count (`sub_421AC8`) / kill count (`sub_421B0F`) | **CARRIED** — the RESULTS tally is cumulative | §1 of `docs/re/results-and-options.md` |
+| player powerup inventory | **RESET** every round to the `getvalue(50+j)` baselines | `sub_4214BC`, per-round init |
+| stage / level | fixed → same map; RANDOM → re-rolled | `sub_410B6E`, above |
+| the Goldman roulette SPIN | **once per match** — it lives at the head of `sub_410F81`, which the loop-back does NOT re-enter (only `sub_410B6E` is called again) | `docs/re/goldman-roulette.md` §2 |
+| the Goldman +1 inventory AWARD | **re-applied every round** (it rides the per-round inventory reset) | `sub_4214BC` |
+| the pending gold player `dword_46492C` | written in the RESULTS tier — **and skipped in a net game** | `sub_4034BC`'s `!sub_40C06A()` gate |
+| the tick counter `dword_464994` | **monotonic across the whole match**, not reset per round | `sub_42A191` |
+| music | the outcome tier's 1130 is replaced by the next round's `1100 + level` track at each `sub_410B6E` | §2 above |
+
+Two smaller confirmations: a round that ends on the CLOCK awards nobody a win
+(both `sub_4219B0` and the tally writer early-out on the timeout, which is why
+a time-up round is a DRAW even with someone still standing — our
+`round_winner()`'s `if (s.ticks_left == 0) return -1;` already matches); and the
+`v76 >= 2` guard on the loop-back counts **SEATED SLOTS**, not players with a
+score, so its message-47 bailout is unreachable in local play.
+
+**[NEEDS BINARY]** — not settled this pass, and not needed by the port as built:
+the exact kind-32 payload the RESULTS loop injects (903) is inferred from the
+DRAW loop's 904 by symmetry rather than read at its own injection site; and the
+host's own teardown broadcast when it Escapes mid-match (kind 37 family) was not
+traced, so our port's guest currently learns of a host forfeit only through the
+peer-drop timeout.
+
+### Port mapping (2026-07-25)
+
+Our wire is stronger than the original's here, so the shape is reproduced rather
+than the messages:
+
+- The original pushes only the **level index** (`sub_4101B5`) per round and lets
+  each machine rebuild the board from it. We push the **whole resolved
+  `sim::MatchConfig`** through the SAME `net::SetupSession` confirm/ack the
+  pre-match setup stage uses — for the reason `setup_session.hpp` already
+  documents (a guest whose `.SCH`/`EXTRA<n>.RES`/VALUELST differ would build a
+  different board from the same index and desync on tick 0). No new MsgType and
+  no protocol-version bump: round N+1's config is just another confirmation.
+- The guest's blocking wait at `sub_410B6E`'s head becomes the **outcome screen's
+  gate** (`libs/game/include/bomber/game/screens/net_round_gate.hpp`): the host's
+  accept confirms the next round, the guest's screen ends when that confirmation
+  arrives. Same host-drives-the-advance shape, one screen earlier.
+- Each round's seed and RollbackSession tick base come from
+  `libs/net/include/bomber/net/round_rotation.hpp` — derived on both peers from
+  the match seed + the round index, never exchanged. The seed doubles as the
+  round's IDENTITY, so a replayed blob from an earlier round cannot be adopted as
+  the next one.
+- The original's 3000 ms networked dwell (`sub_4148AC` above) is deliberately NOT
+  reproduced: it exists because the 1997 broadcast is fire-and-forget, and our
+  confirm/ack barrier is strictly stronger — the host cannot leave the screen
+  until the guest holds the exact bytes.
+- The 1000 ms LOCAL dwell before Enter accepts an outcome screen is a real,
+  cited behaviour our screens do not have. Recorded here as an unported fidelity
+  item, not fixed by this pass.
+
 ## Debug/cheat keys — summary (all CONFIRMED, all facts worth keeping)
 
 | trigger | gate | effect |

@@ -359,7 +359,18 @@ AppInput MapSelectScreen::run() {
             // Read-only: the level/rounds ARE the host's newest preview.
             net_setup_apply_level(net_, level_count, level, wins, net_level_name);
             // The host confirmed: the caller already holds the agreed config.
-            if (net_setup_final(net_)) return AppInput::Advance;
+            if (net_setup_final(net_)) {
+                // COMMIT the mirrored working copies, exactly as the host's own
+                // Enter does above. The WIN TARGET is not part of the confirmed
+                // MatchConfig (it is a front-end match-scope value, the original's
+                // dword_464A7C, broadcast as its own kind-44 message), so without
+                // this the guest ran the host's board with ITS OWN stale target
+                // and the two peers disagreed about when the match was over —
+                // one starting round N+1 while the other showed VICTORY.
+                state_.selected_level = level;
+                state_.win_target = wins;
+                return AppInput::Advance;
+            }
             // Timed out / the host vanished. Back returns to the caller, which
             // reads net_setup_failed() to tell this from an Esc.
             if (net_setup_failed(net_)) return AppInput::Back;
