@@ -4,10 +4,11 @@
 
 #include <array>
 #include <cctype>
+#include <cstddef>
 #include <string>
 
 #include "bomber/game/asset_store.hpp"
-#include "bomber/game/dialog_chrome.hpp"       // draw_acknowledge_dialog
+#include "bomber/game/dialog_chrome.hpp"       // draw_acknowledge_dialog / draw_text_entry_dialog
 #include "bomber/game/editor_screen.hpp"       // SchemeFilePicker
 #include "bomber/game/frontend_util.hpp"       // pick_glue, reload_scheme
 #include "bomber/game/keyremap_screen.hpp"     // KeyRemapScreen, KeySet, kKeyboardSets
@@ -15,6 +16,83 @@
 #include "bomber/game/screens/help_screens.hpp"  // HelpBrowserScreen
 
 namespace bomber::game {
+
+namespace {
+
+// sub_4074DC — Options row 2's node-name line edit (docs/re/results-and-
+// options.md §3 row 2, docs/re/network-screens.md §3): getstring(290) "Enter
+// new node name:" over a 30-char edit field, drawn with the SAME sub_42E938
+// text-entry family every other prompt in the game uses (the editor's
+// density/name/filename prompts, the lobby's JOIN BY CODE). Kept file-local
+// rather than a fourth ...Runner class: it owns no state beyond the string it
+// returns, and only this one call site can reach it. Returns the current name
+// unchanged on Escape/window-close, mirroring SchemeFilenamePrompt's cancel.
+std::string run_node_name_prompt(ScreenContext& ctx, const std::string& current,
+                                 const std::string& backdrop) {
+    const std::string label = ctx.assets.getstring(290, "Enter new node name:");
+    // CONFIRMED field width (§3 row 2): 30 chars — shorter than the 39 the file
+    // itself can hold (assets::kNodeNameMax), which is the original's split too.
+    constexpr std::size_t kFieldMax = 30;
+    std::string entry = current.size() > kFieldMax ? current.substr(0, kFieldMax) : current;
+    std::string result = current;
+    SDL_StartTextInput(ctx.window);
+    bool waiting = true;
+    while (waiting) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_EVENT_QUIT) {
+                waiting = false;  // result stays `current`
+                break;
+            }
+            if (ev.type == SDL_EVENT_TEXT_INPUT) {
+                for (const char* p = ev.text.text; p != nullptr && *p != '\0'; ++p) {
+                    if (entry.size() >= kFieldMax) break;
+                    // Only what the FON can draw and nodename.ini can hold —
+                    // assets::save_node_name would strip anything else anyway,
+                    // so reject it at the keystroke instead of silently later.
+                    const unsigned char u = static_cast<unsigned char>(*p);
+                    if (u >= 32 && u < 127) entry += *p;
+                }
+            } else if (ev.type == SDL_EVENT_KEY_DOWN) {
+                if (ev.key.key == SDLK_BACKSPACE) {
+                    if (!entry.empty()) entry.pop_back();
+                } else if (ev.key.key == SDLK_RETURN || ev.key.key == SDLK_KP_ENTER) {
+                    ctx.audio.play(10);  // accept sting
+                    // An emptied field keeps the old name: the original's node
+                    // name is never blank (an absent file draws a random one),
+                    // and a nameless lobby row is unreadable.
+                    if (!entry.empty()) result = entry;
+                    waiting = false;
+                } else if (ev.key.key == SDLK_ESCAPE) {
+                    ctx.audio.play(20);  // nav blip; cancel keeps the old name
+                    waiting = false;
+                }
+            }
+        }
+        ctx.audio.update_music();
+        SDL_SetRenderDrawColor(ctx.sdl, 0, 0, 0, 255);
+        SDL_RenderClear(ctx.sdl);
+        // The Options screen's own GLUE backdrop under the prompt, exactly like
+        // the two sub-screens above (sub_415CA4's saved-backdrop restore).
+        const Sprite& bg = ctx.assets.frontend_pcx(backdrop);
+        if (bg.tex) {
+            SDL_FRect d{0, 0, static_cast<float>(bg.w), static_cast<float>(bg.h)};
+            SDL_RenderTexture(ctx.sdl, bg.tex, nullptr, &d);
+        }
+        // y = 180: the CONFIRMED sub_42E938 prompt anchor (sub_4028D2's
+        // save-as); sub_4074DC's own y is register-lost in the decompile, so the
+        // port reuses the family's one pinned anchor rather than guessing a new
+        // one. The dialog sizes itself from the MEASURED label/entry, so a long
+        // name widens the box instead of running out of it.
+        draw_text_entry_dialog(ctx.sdl, ctx.front_font, 180.0f, label, entry, "Done", "Cancel");
+        SDL_RenderPresent(ctx.sdl);
+        SDL_Delay(2);
+    }
+    SDL_StopTextInput(ctx.window);
+    return result;
+}
+
+}  // namespace
 
 AppInput OptionsScreenRunner::run() {
     // The interactive Options screen (options_screen.hpp/.cpp): the full
@@ -69,6 +147,11 @@ AppInput OptionsScreenRunner::run() {
             // sub_407582's *.SCH picker the same modal way; a selection
             // updates the snapshot row AND the live scheme_.
             if (opt.open_scheme_picker()) SchemePickerRunner(ctx_, state_).run(opt, glue);
+            // "Node Name" (row 2, §3): sub_4074DC's line edit, pushed the same
+            // modal way. The name is the port's net identity too — GameApp
+            // feeds it to the ADR-0011 lobby as the roster display name.
+            if (opt.open_node_name_prompt())
+                opt.set_node_name(run_node_name_prompt(ctx_, opt.snapshot().node_name, glue));
         }
         ctx_.audio.update_music();
         // cursor1 blink inputs: wall clock (seconds, like the original's

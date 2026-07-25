@@ -24,6 +24,22 @@ std::string trim(std::string s) {
     return s.substr(b, e - b);
 }
 
+// The one shape both nodename.ini ends go through: keep the printable ASCII the
+// FON can actually draw, drop everything else (a stray '\r', the '\n' sub_40C08C
+// strips, any control byte a hand-edit could smuggle in), and truncate to the
+// buffer the original reads into. Applied on BOTH read and write so a value
+// cannot round-trip into something the roster then has to defend against.
+std::string sanitize_node_name(const std::string& raw) {
+    std::string out;
+    for (const char c : raw) {
+        if (out.size() >= kNodeNameMax) break;
+        const unsigned char u = static_cast<unsigned char>(c);
+        if (u >= 32 && u < 127) out += c;
+    }
+    // Leading/trailing blanks would render as an invisible name.
+    return trim(out);
+}
+
 bool iequals(const std::string& a, const char* b) {
     std::size_t i = 0;
     for (; i < a.size() && b[i]; ++i)
@@ -240,6 +256,25 @@ void save_options(const fs::path& path, const Options& opts) {
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     if (!out) throw std::runtime_error("save_options: cannot write " + path.string());
     for (const std::string& line : lines) out << line << "\n";
+}
+
+std::string load_node_name(const fs::path& path) {
+    // sub_40C08C: the FIRST line only, fgets(buf, 40), '\n' stripped.
+    std::ifstream f(path);
+    if (!f) return {};
+    std::string line;
+    if (!std::getline(f, line)) return {};
+    return sanitize_node_name(line);
+}
+
+void save_node_name(const fs::path& path, const std::string& name) {
+    // sub_40C140: fopen("nodename.ini", "wt") + fputs — one line, nothing else.
+    // The shipped file has no trailing newline; a text-mode fputs of a buffer
+    // that never held one wouldn't add it, so neither do we (and load_node_name
+    // reads it back either way).
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out) throw std::runtime_error("save_node_name: cannot write " + path.string());
+    out << sanitize_node_name(name);
 }
 
 }  // namespace bomber::assets

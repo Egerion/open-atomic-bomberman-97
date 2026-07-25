@@ -32,6 +32,10 @@ constexpr float kListY = 110.0f;        // list-dialog window top (the help brow
 constexpr float kJoinPromptY = 180.0f;  // sub_4028D2's CONFIRMED save-as prompt anchor
 constexpr std::size_t kCodeLen = 6;     // lobby codes are 6 Crockford base-32 chars
 constexpr float kMinListW = 260.0f;     // keeps a 1-row list from collapsing
+// Key hints wider than this wrap to another line (pack_hint_lines) instead of
+// widening the window further — the widened window then still sits well inside
+// the 640-px screen. Presentation-only, like everything else in this file.
+constexpr float kHintWrapW = 440.0f;
 
 // Crockford base-32: the digits plus the letters MINUS I, L, O and U — dropped
 // so a code read out loud cannot be misheard (ADR-0011 lobby codes).
@@ -207,15 +211,34 @@ void draw_centred(SDL_Renderer* ren, const FontTextures& font, const std::string
 // The waiting room proper: the lobby CODE in the list dialog's pinned centred
 // title strip (the one string the host reads out to friends, so it goes where
 // the chrome already puts a prominent centred label), one item row per seat, and
-// the key hints on an outlined text line under the window. Every pixel here
-// comes from draw_list_dialog / draw_list_selection / draw_dialog_text — no new
-// chrome. The LOCAL player's row carries the selection band so you can see which
-// seat is yours at a glance.
+// the key hints on outlined text lines in the window's reserved footer. Every
+// pixel here comes from draw_list_dialog / draw_list_selection / draw_dialog_text
+// — no new chrome. The LOCAL player's row carries the selection band so you can
+// see which seat is yours at a glance.
 void draw_room(ScreenContext& ctx, const net::LobbyFlow& flow, bool local_ready) {
     const std::vector<net::RosterEntry>& roster = flow.roster();
     const int rows = std::max(static_cast<int>(roster.size()), 1);
     const std::string title =
         "LOBBY CODE   " + (flow.code().empty() ? std::string("------") : flow.code());
+
+    // The hints are part of the window's content, not something floating under
+    // it: they are packed by MEASURED width and the window is sized to the
+    // widest resulting line, so no hint can land outside the border. The ready
+    // hint's two wordings differ in length, so both are budgeted at the longer
+    // one and pressing SPACE never resizes the dialog.
+    std::vector<std::string> parts{local_ready ? "SPACE = NOT READY" : "SPACE = READY"};
+    std::vector<std::string> budget{"SPACE = NOT READY"};
+    if (flow.is_host()) {
+        parts.emplace_back("ENTER = START");
+        budget.emplace_back("ENTER = START");
+    }
+    parts.emplace_back("ESC = LEAVE");
+    budget.emplace_back("ESC = LEAVE");
+    if (!flow.is_host()) {
+        parts.emplace_back("(HOST STARTS THE MATCH)");
+        budget.emplace_back("(HOST STARTS THE MATCH)");
+    }
+    const HintBlock hints = pack_hint_lines(ctx.front_font, parts, budget, kHintWrapW);
 
     float content_w = static_cast<float>(ctx.front_font.measure(title));
     for (const net::RosterEntry& e : roster) {
@@ -225,9 +248,11 @@ void draw_room(ScreenContext& ctx, const net::LobbyFlow& flow, bool local_ready)
         content_w = std::max(content_w, w);
     }
     content_w = std::max(content_w, kMinListW);
+    content_w = std::max(content_w, hints.width);
 
     const ListDialogLayout lay =
-        draw_list_dialog(ctx.sdl, ctx.front_font, title, kListY, content_w, rows, rows, 0);
+        draw_list_dialog(ctx.sdl, ctx.front_font, title, kListY, content_w, rows, rows, 0,
+                         static_cast<int>(hints.lines.size()));
 
     for (std::size_t i = 0; i < roster.size(); ++i) {
         const net::RosterEntry& e = roster[i];
@@ -252,11 +277,9 @@ void draw_room(ScreenContext& ctx, const net::LobbyFlow& flow, bool local_ready)
         ctx.front_font.draw(ctx.sdl, mark, lay.item_x + lay.item_w - mw, ty, r, g, b);
     }
 
-    const std::string ready_hint = local_ready ? "SPACE = NOT READY" : "SPACE = READY";
-    const std::string hint =
-        flow.is_host() ? ready_hint + "    ENTER = START    ESC = LEAVE"
-                       : ready_hint + "    ESC = LEAVE    (HOST STARTS THE MATCH)";
-    draw_centred(ctx.sdl, ctx.front_font, hint, lay.win.y + lay.win.h + 10.0f);
+    for (std::size_t i = 0; i < hints.lines.size(); ++i)
+        draw_centred(ctx.sdl, ctx.front_font, hints.lines[i],
+                     lay.footer_y0 + static_cast<float>(i) * lay.item_h);
 }
 
 // --- the PUBLIC GAMES browser (Phase 3) ------------------------------------
@@ -290,10 +313,10 @@ std::string display_name(const std::string& raw) {
 
 // One frame of the browser list: the SAME sub_42DBCC list dialog the NETWORK
 // GAME menu and the *.BM help picker draw, one item row per open public lobby,
-// and the key hints on an outlined text line under the window (draw_room's
-// shape). Columns are laid out from the RIGHT edge of the item area — marker,
-// code, occupancy — so the name takes what is left and a scrollbar (which
-// narrows that area) simply shifts them.
+// and the key hints in the window's reserved footer (draw_room's shape).
+// Columns are laid out from the RIGHT edge of the item area — marker, code,
+// occupancy — so the name takes what is left and a scrollbar (which narrows
+// that area) simply shifts them.
 //
 // A row whose build_ok is false cannot be joined, so it is drawn in the chrome's
 // own grey (kDialogDim*, dword_45C478 — the ink the button labels and the title
@@ -314,12 +337,18 @@ void draw_browser(ScreenContext& ctx, const std::vector<net::PublicLobby>& list,
         code_w = std::max(code_w, static_cast<float>(ctx.front_font.measure(l.code)));
     }
     const float mark_w = static_cast<float>(ctx.front_font.measure(kStaleMark));
+    // Same measured-footer contract as draw_room: the hints are window content,
+    // so they can never overflow the border.
+    const HintBlock hints = pack_hint_lines(
+        ctx.front_font, {"ENTER = JOIN", "R = REFRESH", "ESC = BACK"}, {}, kHintWrapW);
     float content_w = name_w + occ_w + code_w + mark_w + 3.0f * kColGap;
     content_w = std::max(content_w, static_cast<float>(ctx.front_font.measure(title)));
     content_w = std::max(content_w, kMinListW);
+    content_w = std::max(content_w, hints.width);
 
     const ListDialogLayout lay =
-        draw_list_dialog(ctx.sdl, ctx.front_font, title, kListY, content_w, visible, count, top);
+        draw_list_dialog(ctx.sdl, ctx.front_font, title, kListY, content_w, visible, count, top,
+                         static_cast<int>(hints.lines.size()));
     const float mark_x = lay.item_x + lay.item_w - mark_w;
     const float code_x = mark_x - kColGap - code_w;
     const float occ_x = code_x - kColGap - occ_w;
@@ -349,8 +378,9 @@ void draw_browser(ScreenContext& ctx, const std::vector<net::PublicLobby>& list,
         if (!l.build_ok) ctx.front_font.draw(ctx.sdl, kStaleMark, mark_x, ty, r, g, b);
     }
 
-    draw_centred(ctx.sdl, ctx.front_font, "ENTER = JOIN    R = REFRESH    ESC = BACK",
-                 lay.win.y + lay.win.h + 10.0f);
+    for (std::size_t i = 0; i < hints.lines.size(); ++i)
+        draw_centred(ctx.sdl, ctx.front_font, hints.lines[i],
+                     lay.footer_y0 + static_cast<float>(i) * lay.item_h);
 }
 
 }  // namespace
@@ -603,9 +633,17 @@ bool LobbyScreen::run_public_browser(const OnlineConfig& ocfg, net::UdpTransport
             const std::string body = "NO PUBLIC GAMES";
             draw_acknowledge_dialog(ctx_.sdl, ctx_.front_font, winz, head, body, ok_label,
                                     kDialogInkR, kDialogInkG, kDialogInkB);
+            // sub_414340's width is PINNED to its own two lines, so this hint
+            // cannot widen the window the way the list dialogs' can — it wraps
+            // to the pinned width instead, which is what keeps it from
+            // stretching past both borders.
             const DialogRect win = acknowledge_dialog_rect(ctx_.front_font, head, body);
-            draw_centred(ctx_.sdl, ctx_.front_font, "R = REFRESH    ESC = BACK",
-                         win.y + win.h + 10.0f);
+            const HintBlock hints =
+                pack_hint_lines(ctx_.front_font, {"R = REFRESH", "ESC = BACK"}, {}, win.w);
+            const float lh = static_cast<float>(ctx_.front_font.line_height());
+            for (std::size_t i = 0; i < hints.lines.size(); ++i)
+                draw_centred(ctx_.sdl, ctx_.front_font, hints.lines[i],
+                             win.y + win.h + 10.0f + static_cast<float>(i) * lh);
         } else {
             draw_browser(ctx_, list, sel, top);
         }

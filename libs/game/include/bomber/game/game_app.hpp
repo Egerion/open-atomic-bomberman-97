@@ -185,8 +185,20 @@ private:
     // option this session has touched back to options.ini, ONLY if something
     // actually changed since load (options_dirty_) and a game_dir is known.
     // Idempotent — safe to call more than once (run() and the destructor both
-    // do, in case a subclass/test skips run()'s normal return path).
+    // do, in case a subclass/test skips run()'s normal return path). Also
+    // flushes nodename.ini (see flush_node_name), so run()'s five exit paths
+    // keep ONE settings-writeback call.
     void flush_options();
+    // The node name's own write-on-exit hook: the original persists it through
+    // a SEPARATE shutdown callback (sub_40C4DB -> sub_40C140) into its own
+    // install-root nodename.ini, not through options.ini's writer
+    // (docs/re/network-screens.md §3 "Session model").
+    void flush_node_name();
+    // The absent-NODENAME.INI fallback (sub_40C74C): a random one of the 49
+    // names at MESSAGES ids 500..548, `getstring(500 + rand() % getvalue(47))`.
+    // Needs the message table, so it runs after load_assets(), not in
+    // load_config() where the file itself is read.
+    void seed_default_node_name();
     void start_match(std::uint32_t seed);
     int run_demo();
     // Netplay entry (increment 5b, ADR-0010 §3.3 step 5): runs ONE 2-player UDP
@@ -717,6 +729,11 @@ private:
     // flush_options() (the write-on-exit hook, §2). Empty when no game_dir
     // was resolvable (init() already failed in that case).
     std::filesystem::path options_path_;
+    // The install-root nodename.ini path (the net identity's OWN file — it is
+    // not one of options.ini's 22 keys), plus the value as it was read at boot
+    // so flush_node_name() can skip a rewrite that would change nothing.
+    std::filesystem::path node_name_path_;
+    std::string node_name_loaded_;
     // PORT ENHANCEMENT — "fullscreen=" (see init()'s window-creation comment
     // and toggle_fullscreen()): not one of the original's confirmed 22
     // options.ini keys, since the 1997 binary has no fullscreen mode at all.

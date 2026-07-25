@@ -288,6 +288,10 @@ bool GameApp::init() {
     SDL_Renderer* ren = nullptr;
     if (!init_video(ren)) return false;
     if (!load_assets(ren, game)) return false;
+    // The node name's random fallback reads MESSAGES.TXT (ids 500..548), which
+    // load_assets() only just parsed — so it cannot live beside the file read
+    // in load_config().
+    seed_default_node_name();
 
     // The "Loading data..." bar continues across build_presentation's
     // per-player recolor (kBootDataDecodeShare split), so audio init — the
@@ -399,10 +403,18 @@ bool GameApp::load_config(const fs::path& game, const fs::path& scheme_path) {
         options_.assign_keyboards = loaded_opts.assign_keyboards.value_or(false);
         options_.lost_net_revert_ai = loaded_opts.lost_net_revert_ai.value_or(false);
         options_.small_memory = loaded_opts.smallmemory.value_or(false);
+        // Row 2's node name has its OWN install-root file, read here the way
+        // sub_40C08C reads it from the boot init sub_40C74C — NOT an options.ini
+        // key (docs/re/results-and-options.md §3 row 2). An absent/empty file
+        // leaves it blank until seed_default_node_name() draws the original's
+        // random fallback, which needs MESSAGES.TXT and so runs after
+        // load_assets().
+        node_name_path_ = game / "nodename.ini";
+        node_name_loaded_ = assets::load_node_name(node_name_path_);
+        options_.node_name = node_name_loaded_;
         // Row 14's four modem fields (display-only; getstring(264) — chrome
         // audit 2026-07-12): straight from options.ini's modem keys, defaults
-        // = the shipped install's values. node_name stays "" (sub_40FE34's
-        // runtime buffer is bss-empty and NOT an options.ini key).
+        // = the shipped install's values.
         options_.modemport = loaded_opts.modemport.value_or(2);
         options_.modemirq = loaded_opts.modemirq.value_or(3);
         options_.modembaud = loaded_opts.modembaud.value_or(19200);
@@ -2227,7 +2239,45 @@ void GameApp::toggle_hd_artwork() {
     std::fprintf(stderr, "artwork mode: %s\n", assets_.hd_enabled() ? "HD" : "classic");
 }
 
+void GameApp::seed_default_node_name() {
+    // sub_40C74C's absent-NODENAME.INI fallback: `getstring(500 + rand() %
+    // getvalue(47))`, getvalue(47) = 49 (MESSAGES ids 500..548). The pick is
+    // presentation-only, so it runs on the shared front-end LCG, never
+    // State::rng (ADR-0004) — one draw, once per install, since flush_node_name
+    // then makes the name permanent exactly like sub_40C140 does.
+    if (!options_.node_name.empty()) return;
+    // The demo/screenshot harness must not draw from a pinned LCG nor rewrite
+    // the install; it never reaches the Options screen or the lobby either.
+    if (opts_.demo) return;
+    const int count = static_cast<int>(values_.at_or(47, 49));
+    setup_lcg_ = setup_lcg_ * 1664525u + 1013904223u;
+    const int pick = count > 0 ? static_cast<int>((setup_lcg_ >> 16) % static_cast<unsigned>(count))
+                               : 0;
+    options_.node_name = assets_.getstring(500 + pick, "Bomberman");
+}
+
+void GameApp::flush_node_name() {
+    // sub_40C140, reached from the shutdown hook sub_40C4DB (docs/re/
+    // network-screens.md §3): the node name is written back on a normal exit, so
+    // an edited name persists and a randomly-assigned one becomes permanent
+    // after the first run. The original rewrites unconditionally; skipping a
+    // write whose bytes would be identical is the same outcome without touching
+    // the user's install on every launch.
+    if (opts_.demo || node_name_path_.empty()) return;
+    if (options_.node_name.empty() || options_.node_name == node_name_loaded_) return;
+    try {
+        assets::save_node_name(node_name_path_, options_.node_name);
+        node_name_loaded_ = options_.node_name;
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "nodename.ini save failed: %s\n", e.what());
+    }
+}
+
 void GameApp::flush_options() {
+    // The net identity lives in its OWN file with its OWN shutdown hook in the
+    // original; flushed here so run()'s five exit paths keep one call, but
+    // ahead of the options_dirty_ gate below, which governs options.ini alone.
+    flush_node_name();
     // Write-on-exit (docs/re/results-and-options.md §2 "Persistence —
     // CONFIRMED via an exit-time write-back": sub_405DE3, the writer, is only
     // ever reached through sub_410EBF's atexit-style hook on a NORMAL app

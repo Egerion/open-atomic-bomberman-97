@@ -1,6 +1,9 @@
 #include "bomber/game/dialog_chrome.hpp"
 
 #include <algorithm>
+#include <cstddef>
+#include <string>
+#include <vector>
 
 #include "bomber/game/renderer.hpp"  // kScreenW/kScreenH
 
@@ -201,16 +204,59 @@ void draw_bevel_rect(SDL_Renderer* ren, float x, float y, float w, float h, bool
     SDL_RenderFillRect(ren, &right);
 }
 
+HintBlock pack_hint_lines(const FontTextures& font, const std::vector<std::string>& parts,
+                          const std::vector<std::string>& budget, float max_w) {
+    // Greedy pack: keep appending parts to the current line while its BUDGETED
+    // width still fits, then break. The budgeted text (the caller's longest
+    // variant of a state-dependent hint) drives both the break decision and the
+    // reported width, so the two states of a toggle share one stable layout.
+    HintBlock block;
+    const bool has_budget = budget.size() == parts.size();
+    std::string line;         // what gets drawn
+    std::string line_budget;  // what it is measured as
+    auto flush = [&] {
+        if (line_budget.empty()) return;
+        block.lines.push_back(line);
+        block.width = std::max(block.width, text_w(font, line_budget));
+        line.clear();
+        line_budget.clear();
+    };
+    for (std::size_t i = 0; i < parts.size(); ++i) {
+        if (parts[i].empty()) continue;
+        const std::string& b = has_budget ? budget[i] : parts[i];
+        std::string candidate = line_budget;
+        if (!candidate.empty()) candidate += kHintGap;
+        candidate += b;
+        if (!line_budget.empty() && text_w(font, candidate) > max_w) {
+            flush();
+            line = parts[i];
+            line_budget = b;
+            continue;
+        }
+        if (!line.empty()) line += kHintGap;
+        line += parts[i];
+        line_budget = std::move(candidate);
+    }
+    flush();
+    return block;
+}
+
 ListDialogLayout draw_list_dialog(SDL_Renderer* ren, const FontTextures& font,
                                   const std::string& title, float y_px, float content_w,
-                                  int visible_rows, int total_rows, int top_row) {
+                                  int visible_rows, int total_rows, int top_row,
+                                  int footer_lines) {
     const float h = line_h(font);
     // Window: title strip (1 line) + a small gap + `visible_rows` item lines
-    // + a "Done" button row. Width = content + side padding (the audit's
-    // "+20" over the widest of title/items; the caller already sized
-    // content_w to the widest column). x is auto-centred.
+    // + the optional PORT-ONLY footer block + a "Done" button row. Width =
+    // content + side padding (the audit's "+20" over the widest of title/items;
+    // the caller already sized content_w to the widest column). x is
+    // auto-centred. footer_lines == 0 (every RE'd caller) leaves the height
+    // formula exactly as it was.
     const float win_w = content_w + 20.0f;
-    const float win_h = (h + 8.0f) + 8.0f + static_cast<float>(visible_rows) * h + (h + 12.0f);
+    const float footer_h =
+        footer_lines > 0 ? 8.0f + static_cast<float>(footer_lines) * h : 0.0f;
+    const float win_h =
+        (h + 8.0f) + 8.0f + static_cast<float>(visible_rows) * h + footer_h + (h + 12.0f);
     const DialogRect win = dialog_rect(y_px, win_h, win_w);
 
     // Raised panel with a 1-px black outer rect (sub_442384 + the bevel).
@@ -235,6 +281,7 @@ ListDialogLayout draw_list_dialog(SDL_Renderer* ren, const FontTextures& font,
     lay.item_y0 = win.y + strip_h + 8.0f;
     lay.item_h = h;
     lay.item_w = win.w - 16.0f - (scrollbar ? 18.0f : 0.0f);
+    lay.footer_y0 = lay.item_y0 + static_cast<float>(visible_rows) * h + 8.0f;
     lay.has_scrollbar = scrollbar;
 
     if (scrollbar) {

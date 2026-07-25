@@ -480,7 +480,7 @@ Port state read from `run_netplay_match` (`game_app.cpp` 930-1015),
 | **Team play in net** | yes (roster `+84` team byte, red/white) | no (`cfg.team[i]=0` forced) | MEDIUM |
 | **AI seats mixed with humans in net** | yes (unclaimed active slots → computer) | no (`cfg.ai[i]=false` forced; only 2 humans) | MEDIUM |
 | **Lost net player → revert to AI** | yes (Options row 12, `dword_464928`) | no (option round-tripped, unconsumed) | MEDIUM |
-| **Node Name (net identity)** | yes — `NODENAME.INI` / a random default from MESSAGES 500..548, edited at Options row 2; **it is the text every lobby row shows** | field parsed, unused; no identity in lobby | **MEDIUM** (the lobby is unreadable without it) |
+| **Node Name (net identity)** | yes — `NODENAME.INI` / a random default from MESSAGES 500..548, edited at Options row 2; **it is the text every lobby row shows** | **done (2026-07-25)** — `assets::load_node_name`/`save_node_name` read/write install-root `nodename.ini`, the MESSAGES 500..548 random default seeds an absent file, Options row 2 edits it through `getstring(290)`'s 30-char prompt, and it is the ADR-0011 lobby's roster display name | done |
 | **Protocol options (IPX/TCP/serial/modem)** | ordinals CONFIRMED **0 cancel / 1 IPX / 2 modem / 3 serial / 4 TCP-IP**; only 1..3 reachable | UDP only | LOW (dead transports; keep UDP) |
 | **Modem / serial-COM config** | yes (`sub_40798B`, `0x445AC6` driver) | no | SKIP (obsolete hardware) |
 | **Seed / config parity** | host authoritative (replicated) | host seed via `SeedHandshake`, canonical cfg both sides | done (port's is cleaner) |
