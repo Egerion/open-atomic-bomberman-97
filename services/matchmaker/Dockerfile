@@ -10,7 +10,8 @@ RUN go mod download
 
 COPY . .
 # CGO off → a fully static binary that runs in a scratch/distroless image.
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/matchmaker .
+# The main package lives in ./cmd/matchmaker; internal/ is pulled in by it.
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/matchmaker ./cmd/matchmaker
 
 # ---- run stage: minimal, non-root -------------------------------------------
 FROM gcr.io/distroless/static-debian12:nonroot

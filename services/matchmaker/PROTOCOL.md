@@ -128,7 +128,10 @@ ICE: `host` > `reflexive` > `relay`.
 ```json
 {"type":"ReanchorLobby","code":"K7Q2MP","roster_digest":"<hex sha-256>"}
 ```
-- Sent by a surviving peer promoted to hub after the host dropped.
+- Sent by a surviving peer promoted to hub after the host dropped. This is host
+  **recovery**, not a host election: it mints a fresh `host_token` and so
+  invalidates the sitting host's, and is therefore refused with
+  `Error{code:"reanchor_rejected"}` while the host seat is still occupied.
 - `roster_digest` proves continuity: it must equal the server's digest of the
   **surviving** roster (see §5). On success the server keeps the same `code`
   resolvable, mints a **fresh host_token**, promotes the sender to host seat, and
@@ -253,7 +256,10 @@ See §6.
 `code` values: `bad_json`, `bad_message`, `unknown_type`, `already_in_lobby`,
 `not_in_lobby`, `not_host`, `already_started`, `not_enough_players`,
 `not_all_ready`, `build_mismatch`, `reanchor_rejected`, `chat_too_long`,
-`chat_invalid`, `internal`.
+`chat_invalid`, `server_full`, `internal`.
+
+`message` is diagnostic text. It never quotes a client string back beyond a
+short, printable, valid-UTF-8 excerpt (§8.1).
 
 ---
 
@@ -335,9 +341,11 @@ who sent it.
 On receipt the relay:
 
 1. looks up `alloc_id` → the sending lobby + seat;
-2. **learns/refreshes that sender's public address from the datagram source**
-   (the same trick as the STUN echo — this is what makes the return path work
-   through a NAT that no peer can predict);
+2. **learns the sender's public address from the datagram source and PINS it**
+   (learning it off the wire is the same trick as the STUN echo, and is what
+   makes the return path work through a NAT no peer can predict; pinning it is
+   what stops anyone who has read an `alloc_id` off the wire from repointing
+   that seat's traffic — see §8.4);
 3. finds the destination seat's allocation **in the same lobby** and its learned
    address;
 4. forwards `[dst's own alloc_id][sender's seat][payload]` to it, payload
@@ -351,7 +359,11 @@ reported in one aggregated line per interval):
 - unknown `alloc_id` (including an expired one);
 - destination seat has no allocation in the sender's lobby — a lobby therefore
   cannot address any other lobby's seat;
-- destination's address not learned yet (it has not sent anything).
+- destination seat **is** the sender's seat (a self-addressed datagram would make
+  the relay a reflector for its own sender);
+- destination's address not learned yet (it has not sent anything);
+- the source does not match the sender seat's pinned address (§8.4);
+- the source is over the per-source ingress rate (§8.2).
 
 Datagrams larger than **2048 bytes** are dropped and counted as oversize — never
 truncated.
@@ -426,8 +438,95 @@ message costs **2000 ms**, and at most **4** may be banked (the bucket starts
 full). A normal exchange never notices it; a flood settles at one line every two
 seconds.
 
-An over-rate message is **dropped whole and logged** (`chat dropped (rate
-limit)`, with the lobby code and seat). It is never queued, never shortened, and
-**no `Error` is sent back** — answering every dropped line would amplify the
-flood it exists to damp. The C++ client runs the identical bucket locally, so a
-well-behaved client refuses (and says so) exactly where the server would drop.
+An over-rate message is **dropped whole and counted** (it appears in the periodic
+`control-plane drops` line, not one log line per drop). It is never queued, never
+shortened, and **no `Error` is sent back** — answering every dropped line would
+amplify the flood it exists to damp. The C++ client runs the identical bucket
+locally, so a well-behaved client refuses (and says so) exactly where the server
+would drop.
+
+---
+
+## 8. Limits (FROZEN)
+
+Every limit a client can observe. All of them sit far above what the client
+actually produces — they exist to bound a hostile caller, not to shape a real
+one. The reasoning behind each is in [`SECURITY.md`](./SECURITY.md).
+
+### 8.1 Frame and field sizes
+
+| what | limit | over it |
+|---|---|---|
+| one inbound WebSocket frame | **8 KiB** | the connection is closed (WebSocket read limit) |
+| `player` | 48 bytes | `Error{code:"bad_message"}` |
+| lobby `name` | 48 bytes | `Error{code:"bad_message"}` |
+| `code` | 16 bytes | `Error{code:"bad_message"}` |
+| `build_hash` | 32 bytes | `Error{code:"bad_message"}` |
+| `host_token` | 64 bytes | `Error{code:"bad_message"}` |
+| `roster_digest`, `match_config_digest` | 96 bytes | `Error{code:"bad_message"}` |
+| `Candidates.list` | 16 entries | `Error{code:"bad_message"}` |
+| a candidate's `kind` / `addr` / `alloc` | 16 / 64 / 64 bytes | `Error{code:"bad_message"}` |
+| `Chat.text` | 120 bytes | `Error{code:"chat_too_long"}` (§7.2) |
+| one STUN datagram | 512 bytes | dropped, no reply |
+| STUN `nonce` | 128 bytes | dropped, no reply |
+| one relayed datagram | 2048 bytes | dropped, never truncated (§6.2) |
+
+**Reject, never repair.** Every one of these refuses the whole frame. Nothing is
+truncated, stripped or substituted. Every text field must also be valid UTF-8
+with no control runes and no U+FFFD; non-ASCII otherwise passes untouched.
+
+`JoinByCode` additionally requires `code` to be exactly 6 Crockford base-32
+symbols after upper-casing; anything else answers `JoinRejected{not_found}`.
+
+### 8.2 Rates
+
+Per **connection**, as token buckets in milliseconds of credit (the same shape as
+the chat bucket, §7.3). An over-rate frame is **dropped silently** — there is no
+`Error`, because answering each one would amplify the flood.
+
+| request | sustained | burst |
+|---|---|---|
+| any inbound frame | 20/s | 40 |
+| `ListPublic` | 2/s | 4 |
+| `Candidates` | 4/s | 8 |
+| `Chat` | 1 per 2 s | 4 |
+| a `JoinByCode` that does **not** seat the sender | 1 per 2 s | 5 |
+
+A `JoinByCode` that succeeds costs no guess credit. Past the guess budget the
+server sends **nothing at all** — not even a `JoinRejected` — because any reply
+tells a code-searcher what its rate limit is.
+
+The UDP listeners are limited per **source address**: 250 datagrams/s (burst 500)
+on the relay, 20/s (burst 40) on the STUN echo. Loopback, private and link-local
+sources are exempt, so LAN and same-host play are never shaped.
+
+### 8.3 Capacity
+
+| what | default | flag |
+|---|---|---|
+| concurrent WebSocket connections | 2000 | `-max-conns` |
+| concurrent connections per client IP | 16 | `-max-conns-per-ip` |
+| live lobbies | 5000 | `-max-lobbies` |
+| rows in one `PublicList` | 200 (sorted by `code`, so the cut is stable) | — |
+| a connection holding **no seat** and sending nothing is closed after | 120 s | `-conn-idle-timeout` |
+
+A connection refused by a cap gets HTTP **503** *before* the WebSocket upgrade.
+A `CreateLobby` past the lobby cap gets `Error{code:"server_full"}`.
+
+A client that idles seatless (browsing, or sitting in a menu) may simply
+reconnect; it may also hold the socket open indefinitely by sending `Heartbeat`,
+which refreshes the idle clock like any other frame.
+
+### 8.4 Relay address pinning
+
+A seat's return path is learned from its **first** datagram and then **pinned**.
+A datagram carrying that seat's `alloc_id` from any other source is dropped while
+the pinned address is still sending; the pin moves only after the pinned address
+has been silent for **5 s**, and at most once per 10 s (3 banked). A genuine NAT
+remap therefore recovers after a ≤5 s gap, which the game's netcode already
+tolerates as loss; a stranger who read an `alloc_id` off the wire cannot steal the
+seat's traffic. See SECURITY.md F1 for what this does and does not close.
+
+### 8.5 Error codes
+
+Added by this section: `server_full` (the lobby cap). The full list is in §4.

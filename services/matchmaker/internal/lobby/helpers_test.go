@@ -1,28 +1,36 @@
-package main
+package lobby
 
 import (
 	"encoding/json"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/egedemirbas/open-bomberman/matchmaker/internal/config"
+	"github.com/egedemirbas/open-bomberman/matchmaker/internal/protocol"
+	"github.com/egedemirbas/open-bomberman/matchmaker/internal/relay"
 )
 
-// fakeConn is an in-memory clientConn that captures every frame the Manager
+// fakeConn is an in-memory ClientConn that captures every frame the Manager
 // sends, so the whole lobby state machine is testable without a network.
 type fakeConn struct {
 	connID string
+	// addr is the peer address the Manager sees. The default is not an address
+	// at all, so per-IP limits stay out of the way of tests that are not about
+	// them; a test that wants the IP-keyed budgets sets a real one.
+	addr   string
 	mu     sync.Mutex
 	sent   [][]byte
 	closed bool
 	reason string
 }
 
-func newFakeConn(id string) *fakeConn { return &fakeConn{connID: id} }
+func newFakeConn(id string) *fakeConn { return &fakeConn{connID: id, addr: "test"} }
 
-func (f *fakeConn) id() string     { return f.connID }
-func (f *fakeConn) remote() string { return "test" }
+func (f *fakeConn) ID() string     { return f.connID }
+func (f *fakeConn) Remote() string { return f.addr }
 
-func (f *fakeConn) send(v any) {
+func (f *fakeConn) Send(v any) {
 	data, err := json.Marshal(v)
 	if err != nil {
 		panic(err)
@@ -32,7 +40,7 @@ func (f *fakeConn) send(v any) {
 	f.sent = append(f.sent, data)
 }
 
-func (f *fakeConn) disconnect(reason string) {
+func (f *fakeConn) Disconnect(reason string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.closed = true
@@ -56,7 +64,7 @@ func (f *fakeConn) rawOfType(typ string) []byte {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for i := len(f.sent) - 1; i >= 0; i-- {
-		var e envelope
+		var e protocol.Envelope
 		if json.Unmarshal(f.sent[i], &e) == nil && e.Type == typ {
 			return f.sent[i]
 		}
@@ -70,7 +78,7 @@ func (f *fakeConn) allOfType(typ string) [][]byte {
 	defer f.mu.Unlock()
 	var out [][]byte
 	for _, b := range f.sent {
-		var e envelope
+		var e protocol.Envelope
 		if json.Unmarshal(b, &e) == nil && e.Type == typ {
 			out = append(out, b)
 		}
@@ -110,27 +118,28 @@ func decode[T any](t *testing.T, raw []byte) T {
 
 func newTestManager(t *testing.T) *Manager {
 	t.Helper()
-	cfg := Config{
+	cfg := config.Config{
 		HeartbeatInterval: time.Second,
 		HeartbeatMiss:     3,
 		LockedGrace:       time.Hour, // keep lobbies in LOCKED during tests
 		RelayAdvertise:    "relay.test:8082",
 		RelayIdle:         time.Minute,
 	}
-	return NewManager(cfg, newLogger("error"))
+	log := config.NewLogger("error")
+	return NewManager(cfg, relay.NewTable(cfg.RelayIdle, log), log)
 }
 
-func dispatchMap(m *Manager, c clientConn, v map[string]any) {
+func dispatchMap(m *Manager, c ClientConn, v map[string]any) {
 	raw, _ := json.Marshal(v)
-	m.dispatch(c, raw)
+	m.Dispatch(c, raw)
 }
 
 // createLobby drives CreateLobby with sensible defaults (overridable) and
 // returns the LobbyCreated reply.
-func createLobby(t *testing.T, m *Manager, c *fakeConn, overrides map[string]any) lobbyCreatedMsg {
+func createLobby(t *testing.T, m *Manager, c *fakeConn, overrides map[string]any) protocol.LobbyCreatedMsg {
 	t.Helper()
 	msg := map[string]any{
-		"type":       TypeCreateLobby,
+		"type":       protocol.TypeCreateLobby,
 		"visibility": "private",
 		"name":       "game",
 		"max_seats":  2,
@@ -141,14 +150,14 @@ func createLobby(t *testing.T, m *Manager, c *fakeConn, overrides map[string]any
 		msg[k] = v
 	}
 	dispatchMap(m, c, msg)
-	return lastTyped[lobbyCreatedMsg](t, c, TypeLobbyCreated)
+	return lastTyped[protocol.LobbyCreatedMsg](t, c, protocol.TypeLobbyCreated)
 }
 
 // join drives JoinByCode and returns the joiner's fakeConn.
 func join(m *Manager, code, player, buildHash string, id string) *fakeConn {
 	c := newFakeConn(id)
 	dispatchMap(m, c, map[string]any{
-		"type":       TypeJoinByCode,
+		"type":       protocol.TypeJoinByCode,
 		"code":       code,
 		"build_hash": buildHash,
 		"player":     player,
@@ -156,6 +165,6 @@ func join(m *Manager, code, player, buildHash string, id string) *fakeConn {
 	return c
 }
 
-func setReady(m *Manager, c clientConn, ready bool) {
-	dispatchMap(m, c, map[string]any{"type": TypeSetReady, "ready": ready})
+func setReady(m *Manager, c ClientConn, ready bool) {
+	dispatchMap(m, c, map[string]any{"type": protocol.TypeSetReady, "ready": ready})
 }

@@ -2,6 +2,10 @@
 .git
 .gitignore
 *_test.go
+# The tests moved under internal/<pkg>/ with the package split, and a bare
+# `*_test.go` does not match across a directory separator — without this the
+# build context quietly re-grew to include every test file.
+**/*_test.go
 *.md
 Dockerfile
 .dockerignore

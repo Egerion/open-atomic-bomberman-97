@@ -1,4 +1,8 @@
-package main
+// Package config resolves the service's runtime configuration from flags with
+// environment fallbacks (flags win), and builds the logger. It is the one place
+// a default lives, so every construction path — main, tests, anything later —
+// sees the same bounds.
+package config
 
 import (
 	"flag"
@@ -24,23 +28,62 @@ type Config struct {
 	LogLevel          string        // debug|info|warn|error
 	TLSCert           string        // optional cert path for standalone wss://
 	TLSKey            string        // optional key path for standalone wss://
+
+	// Capacity caps (SECURITY.md). Everything an unauthenticated stranger can
+	// cause the server to allocate is bounded by one of these; 0 selects the
+	// default, a negative value disables that cap.
+	MaxConns        int           // concurrent WebSocket connections, total
+	MaxConnsPerIP   int           // concurrent WebSocket connections from one client IP
+	MaxLobbies      int           // live lobbies, total
+	ConnIdleTimeout time.Duration // close a connection that holds no seat and says nothing
+	ClientIPHeader  string        // trusted edge header naming the real client IP ("" ⇒ off)
 }
 
-// relayAdvertise is the "host:port" put in RelayAllocated. When -relay-advertise
+// Capacity defaults. Sized so that a legitimate deployment never meets them and
+// a stranger cannot walk past them: the whole free-tier instance is expected to
+// carry tens of concurrent lobbies, not thousands.
+const (
+	kDefaultMaxConns        = 2000
+	kDefaultMaxConnsPerIP   = 16
+	kDefaultMaxLobbies      = 5000
+	kDefaultConnIdleTimeout = 120 * time.Second
+)
+
+// WithDefaults fills in the caps a zero-valued Config leaves unset, so every
+// construction path (main, tests, future callers) gets the same bounds. A
+// NEGATIVE value is preserved and means "disabled" — the escape hatch for an
+// operator who caps elsewhere.
+func (c Config) WithDefaults() Config {
+	if c.MaxConns == 0 {
+		c.MaxConns = kDefaultMaxConns
+	}
+	if c.MaxConnsPerIP == 0 {
+		c.MaxConnsPerIP = kDefaultMaxConnsPerIP
+	}
+	if c.MaxLobbies == 0 {
+		c.MaxLobbies = kDefaultMaxLobbies
+	}
+	if c.ConnIdleTimeout == 0 {
+		c.ConnIdleTimeout = kDefaultConnIdleTimeout
+	}
+	return c
+}
+
+// AdvertisedRelay is the "host:port" put in RelayAllocated. When -relay-advertise
 // is unset we fall back to the configured listen address — the same host/port
 // pattern the STUN listener already uses (same host as the control plane, its
 // own UDP port). A wildcard listen address is not routable, so main.go warns at
 // startup when the fallback has no real host.
-func (c Config) relayAdvertise() string {
+func (c Config) AdvertisedRelay() string {
 	if c.RelayAdvertise != "" {
 		return c.RelayAdvertise
 	}
 	return c.RelayAddr
 }
 
-// hasRoutableHost reports whether an advertised "host:port" names a host a
+// HasRoutableHost reports whether an advertised "host:port" names a host a
 // client could actually reach (i.e. not ":8082", "0.0.0.0:8082" or "[::]:8082").
-func hasRoutableHost(addr string) bool {
+func HasRoutableHost(addr string) bool {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return false
@@ -52,7 +95,7 @@ func hasRoutableHost(addr string) bool {
 	return true
 }
 
-func parseConfig(args []string) Config {
+func Parse(args []string) Config {
 	fs := flag.NewFlagSet("matchmaker", flag.ExitOnError)
 	wsAddr := fs.String("ws-addr", envStr("MATCHMAKER_WS_ADDR", ":8080"), "WebSocket control-plane listen address")
 	stunAddr := fs.String("stun-addr", envStr("MATCHMAKER_STUN_ADDR", ":8081"), "UDP STUN-echo listen address")
@@ -65,6 +108,11 @@ func parseConfig(args []string) Config {
 	logLevel := fs.String("log-level", envStr("MATCHMAKER_LOG_LEVEL", "info"), "log level: debug|info|warn|error")
 	tlsCert := fs.String("tls-cert", envStr("MATCHMAKER_TLS_CERT", ""), "optional TLS cert path for standalone wss:// (else terminate TLS at the edge)")
 	tlsKey := fs.String("tls-key", envStr("MATCHMAKER_TLS_KEY", ""), "optional TLS key path for standalone wss://")
+	maxConns := fs.Int("max-conns", envInt("MATCHMAKER_MAX_CONNS", 0), "max concurrent WebSocket connections (0 ⇒ default, <0 ⇒ unlimited)")
+	maxConnsPerIP := fs.Int("max-conns-per-ip", envInt("MATCHMAKER_MAX_CONNS_PER_IP", 0), "max concurrent WebSocket connections from one client IP (0 ⇒ default, <0 ⇒ unlimited)")
+	maxLobbies := fs.Int("max-lobbies", envInt("MATCHMAKER_MAX_LOBBIES", 0), "max live lobbies (0 ⇒ default, <0 ⇒ unlimited)")
+	connIdle := fs.Duration("conn-idle-timeout", envDur("MATCHMAKER_CONN_IDLE_TIMEOUT", 0), "close a seatless, silent connection after this long (0 ⇒ default, <0 ⇒ never)")
+	clientIPHeader := fs.String("client-ip-header", envStr("MATCHMAKER_CLIENT_IP_HEADER", ""), "trusted edge header carrying the real client IP, e.g. Fly-Client-IP (empty ⇒ use the socket peer)")
 	_ = fs.Parse(args)
 
 	return Config{
@@ -79,10 +127,15 @@ func parseConfig(args []string) Config {
 		LogLevel:          *logLevel,
 		TLSCert:           *tlsCert,
 		TLSKey:            *tlsKey,
-	}
+		MaxConns:          *maxConns,
+		MaxConnsPerIP:     *maxConnsPerIP,
+		MaxLobbies:        *maxLobbies,
+		ConnIdleTimeout:   *connIdle,
+		ClientIPHeader:    *clientIPHeader,
+	}.WithDefaults()
 }
 
-func newLogger(level string) *slog.Logger {
+func NewLogger(level string) *slog.Logger {
 	var lv slog.Level
 	switch strings.ToLower(level) {
 	case "debug":

@@ -1,4 +1,4 @@
-package main
+package lobby
 
 import (
 	"strings"
@@ -67,11 +67,11 @@ func TestLobbyCodesUniqueViaManager(t *testing.T) {
 }
 
 func TestHandlesAreOpaqueAndDistinct(t *testing.T) {
-	a, err := newHandle()
+	a, err := NewHandle()
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := newHandle()
+	b, err := NewHandle()
 	if err != nil {
 		t.Fatal(err)
 	}
