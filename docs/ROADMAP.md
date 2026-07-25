@@ -434,10 +434,10 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       match" `d83cd9a`, merged `96be2e4`; docs/re/frontend-flow.md "Attract
       mode" port status). Menu-idle (30 s, getvalue(92)) live AI-only demo
       match: saved/restored roster+level+team, random 3-10 CPU roster on a
-      random stage, any input aborts, DRAW/RESULTS/VICTORY suppressed. Only
-      remaining front-end exclusion is the Network screen (netplay, deferred
-      per ADR-0003 — a deliberate exclusion, not open work); win_by_kills
-      Options row already live.
+      random stage, any input aborts, DRAW/RESULTS/VICTORY suppressed. The
+      Network screen was the one front-end exclusion here; it has since been
+      reverse-engineered (`docs/re/network-screens.md`) and the online flow
+      built on top of it (ADR-0011). win_by_kills Options row already live.
 - [x] Known fidelity gaps (flame-arm stops, flying-bomb landing on powerups,
       scatter occupancy test) — DONE, landed together in "Merge fidelity
       gaps" (`5370bbf`) with their golden recaptures; see facts.md's
@@ -589,14 +589,19 @@ low-priority residual (in-round debug/cheat keys, #35, developer/QA-only) —
 see that file's "Top open items" list. (Earlier same-day snapshots of this
 paragraph also listed the wall-slam SFX call site and editor chrome polish
 as open; both closed later the same day — see the 2026-07-09 sweep summary
-below.) The sole **deliberate** exclusion is netplay (ADR-0003: the sim
-stays pure so lockstep netplay is possible later, but no netcode is written
-now) — everything else the original binary does has either shipped or has a
+below.) Everything else the original binary does has either shipped or has a
 tracked, pinned follow-up.
-**The pre-push `lefthook` gate is currently NOT installed in this worktree**
-(no `.git/hooks/pre-push`) — re-enable it (`lefthook install`, see README
-"Git hooks") before resuming normal development so the headless build/ctest
-+ clang-tidy gate runs again on push.
+
+**Netplay is no longer the exclusion this paragraph used to describe.** ADR-0003
+kept the sim pure so lockstep would be possible later; later arrived. ADR-0010
+built the in-match netcode (input codec, lockstep + GGPO rollback, UDP
+transport, desync detection) and ADR-0011 the whole online layer above it:
+a Go matchmaking service (`services/matchmaker`, deployed), shareable lobby
+codes, a public match browser, STUN + NAT hole-punching with a relay fallback
+for symmetric NAT, the host-authoritative match setup driven through the game's
+own roster/level screens, round rotation, a peer-drop → AI handoff, and lobby
+chat. What remains open there is tracked in ADR-0011 and the task list — host
+migration, and finishing the >2-peer path — not the whole feature.
 
 Asset pipeline · deterministic sim core · exact movement port (sub_41EC84) ·
 bombs/kick/punch/grab/throw/spooger · 9 diseases (contagion/cure/visual) ·
