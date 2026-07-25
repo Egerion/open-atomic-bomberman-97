@@ -1495,12 +1495,19 @@ constexpr std::uint32_t kNetHostSeed = 0x1234u;
 // also how you point at a local instance:
 //   go build -o mm.exe ./services/matchmaker && ./mm.exe
 //
-// ws:// and not wss:// because the WS client is built WITHOUT TLS for now
-// (IXWebSocket v11.4.6's mbedTLS backend does not compile against any single
-// mbedTLS release — cmake/BomberIXWebSocket.cmake). Signaling carries no
-// credentials, but it IS in the clear; the deployment's force_https is off to
-// match, and the two flip together once the client can speak wss://.
+// wss://, because the signaling DOES carry credentials — the host_token that
+// authorises StartMatch, the lobby code that is the whole authn for a "private"
+// lobby, and the relay alloc_id (SECURITY.md S1). In the clear, a passive
+// observer on the path gets host authority over the lobby, so the default must
+// be the encrypted one. Built with TLS since BOMBER_LOBBY_TLS defaulted ON
+// (cmake/BomberIXWebSocket.cmake); a build without it refuses a wss:// URL
+// outright rather than downgrading, which is why the fallback below is a
+// COMPILE-time choice and not a runtime one.
+#if defined(BOMBER_HAS_LOBBY_TLS)
+constexpr char kDefaultMatchmakerUrl[] = "wss://open-bomberman-matchmaker.fly.dev/ws";
+#else
 constexpr char kDefaultMatchmakerUrl[] = "ws://open-bomberman-matchmaker.fly.dev/ws";
+#endif
 constexpr std::uint16_t kDefaultStunPort = 8081;  // PROTOCOL.md §2's UDP echo port
 // Where the HOW MANY PLAYERS list opens. 2 is the smallest lobby the server
 // accepts and what every online match was pinned to before the host could

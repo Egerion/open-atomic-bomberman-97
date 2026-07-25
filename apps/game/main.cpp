@@ -52,10 +52,11 @@
 //   bomber_game --matchmaker <ws-url> [--matchmaker-stun <host[:port]>]
 //     Point the ONLINE lobby (menu: Start Network Game -> HOST PRIVATE GAME /
 //     JOIN BY CODE, ADR-0011) at a signaling server, e.g.
-//     "ws://127.0.0.1:8080/ws" for a locally built services/matchmaker. Falls
-//     back to $BOMBER_MATCHMAKER_URL, then to the compile-time placeholder in
-//     game_app.cpp. --matchmaker-stun overrides the UDP STUN echo endpoint,
-//     which otherwise defaults to the URL's host on port 8081.
+//     "ws://127.0.0.1:8080/ws" for a locally built services/matchmaker (plain
+//     ws:// because a local instance has no certificate; the deployed default
+//     is wss://). Falls back to $BOMBER_MATCHMAKER_URL, then to the
+//     compile-time default in game_app.cpp. --matchmaker-stun overrides the UDP
+//     STUN echo endpoint, which otherwise defaults to the URL's host port 8081.
 
 #include <SDL3/SDL_main.h>
 
