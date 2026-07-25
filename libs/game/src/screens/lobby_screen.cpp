@@ -201,6 +201,23 @@ namespace {
 
 constexpr float kScreenW = 640.0f;  // renderer.hpp's kScreenW, what dialog_rect centres against
 constexpr float kNameCol = 26.0f;   // seat-number column width inside a roster row
+constexpr std::size_t kNameChars = 20;  // clamp for an untrusted wire-supplied name
+
+// A name that arrived over the wire is another player's typing — untrusted
+// input, treated with the same posture as the 1997 files. Keep only codes the
+// FON can actually draw, and clamp the length so no single row can widen a
+// dialog off the 640-px screen. Used for BOTH the waiting-room roster and the
+// public browser: the roster used to draw the raw bytes, which is the same
+// exposure the browser had already been careful about.
+std::string safe_wire_name(const std::string& raw, const char* fallback) {
+    std::string out;
+    for (const char c : raw) {
+        if (out.size() >= kNameChars) break;
+        const unsigned char u = static_cast<unsigned char>(c);
+        if (u >= 32 && u < 127) out += c;
+    }
+    return out.empty() ? std::string(fallback) : out;
+}
 
 // Draw one centred line of the pinned outlined dialog text (sub_41696C).
 void draw_centred(SDL_Renderer* ren, const FontTextures& font, const std::string& s, float y) {
@@ -243,7 +260,8 @@ void draw_room(ScreenContext& ctx, const net::LobbyFlow& flow, bool local_ready)
     float content_w = static_cast<float>(ctx.front_font.measure(title));
     for (const net::RosterEntry& e : roster) {
         // seat column + name + the widest marker pair the row can show
-        const float w = kNameCol + static_cast<float>(ctx.front_font.measure(e.name)) +
+        const float w = kNameCol +
+                        static_cast<float>(ctx.front_font.measure(safe_wire_name(e.name, "PLAYER"))) +
                         static_cast<float>(ctx.front_font.measure("  HOST  WAITING"));
         content_w = std::max(content_w, w);
     }
@@ -267,7 +285,8 @@ void draw_room(ScreenContext& ctx, const net::LobbyFlow& flow, bool local_ready)
             b = kDialogFillB;
         }
         ctx.front_font.draw(ctx.sdl, std::to_string(e.seat + 1), lay.item_x, ty, r, g, b);
-        ctx.front_font.draw(ctx.sdl, e.name, lay.item_x + kNameCol, ty, r, g, b);
+        ctx.front_font.draw(ctx.sdl, safe_wire_name(e.name, "PLAYER"), lay.item_x + kNameCol, ty, r,
+                            g, b);
         // Right-aligned status column. Words rather than tick/cross glyphs: the
         // original FON fonts have no check/cross codepoint, and drawing one would
         // mean inventing art.
@@ -284,9 +303,8 @@ void draw_room(ScreenContext& ctx, const net::LobbyFlow& flow, bool local_ready)
 
 // --- the PUBLIC GAMES browser (Phase 3) ------------------------------------
 
-constexpr int kBrowseRows = 10;         // the *.BM help browser's own visible-row count
-constexpr float kColGap = 12.0f;        // gap between two row columns
-constexpr std::size_t kNameChars = 20;  // clamp for the untrusted server-supplied name
+constexpr int kBrowseRows = 10;   // the *.BM help browser's own visible-row count
+constexpr float kColGap = 12.0f;  // gap between two row columns
 // The incompatible-build marker. A WORD, for the same reason draw_room's
 // HOST/READY/WAITING are words: the original FON fonts carry no tick/cross
 // codepoint, so a symbol would have to be drawn art. Matches the wording
@@ -297,18 +315,8 @@ std::string occupancy(const net::PublicLobby& l) {
     return std::to_string(l.players) + "/" + std::to_string(l.max);
 }
 
-// The lobby name is another player's typed node name arriving over the wire —
-// untrusted input, same posture as the 1997 files: keep only codes the FON can
-// actually draw and clamp the length, so no single row can widen the window off
-// the 640-px screen.
 std::string display_name(const std::string& raw) {
-    std::string out;
-    for (const char c : raw) {
-        if (out.size() >= kNameChars) break;
-        const unsigned char u = static_cast<unsigned char>(c);
-        if (u >= 32 && u < 127) out += c;
-    }
-    return out.empty() ? std::string("GAME") : out;
+    return safe_wire_name(raw, "GAME");
 }
 
 // One frame of the browser list: the SAME sub_42DBCC list dialog the NETWORK

@@ -5,7 +5,7 @@
 # HOW TO RUN (the .py-as-IDC "Bad or ill-formed preprocessor command" error
 # means IDAPython is not the active engine — fix that first):
 #   1) If the bottom CLI can switch to Python, run there:
-#        exec(open(r'C:\Users\egede\OneDrive\Desktop\decompile_all.py', encoding='utf-8').read())
+#        exec(open(r'<path-to-your-checkout>\docs\re\decompile_all.py', encoding='utf-8').read())
 #   2) If Python isn't offered, run idapyswitch.exe from the IDA folder, pick
 #      your Python 3, restart IDA, then use (1).
 #   File > Script file also works once IDAPython is the registered .py handler.

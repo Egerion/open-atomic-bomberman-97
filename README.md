@@ -65,6 +65,53 @@ cmake --build --preset headless
 
 Convenience wrapper: `make run`, `make viewer`, `make test`, `make survey`, `make deploy` (Windows needs GNU make: `winget install ezwinports.make`).
 
+## First-time setup — pointing the engine at your install
+
+The engine ships no game data: it reads the original ANI/PCX/SCH/RES/RSS files
+at runtime from *your own* Atomic Bomberman installation. So the one thing to
+set up is **where that install lives**.
+
+It is resolved in this order, first hit wins:
+
+1. an explicit path on the command line — `OPEN-BM95 "D:\...\BOMBRMAN"`
+2. the `BOMBER_GAME_DIR` environment variable
+3. **`gamedir.txt`** in the working directory — one line, the path, nothing else
+4. the standard install paths (`C:\Program Files (x86)\INTRPLAY\BOMBRMAN`, the
+   same on `D:`, or a `BOMBRMAN` folder next to the executable)
+
+If your install sits in one of the standard places, you need to do nothing at
+all. Otherwise the easiest thing is `gamedir.txt` in the repo root — it is
+gitignored, so your path never lands in a commit:
+
+```
+echo D:\Games\BOMBRMAN> gamedir.txt
+```
+
+> On Windows, write it as **UTF-8 without a BOM**. PowerShell's
+> `Set-Content -Encoding utf8` prepends a byte-order mark that becomes part of
+> the path and silently sends tools to the wrong directory. `echo … > file` from
+> `cmd`, or any editor's "UTF-8 (no BOM)", is fine.
+
+Verify it end to end — this walks the whole install and reports what it found:
+
+```
+make survey
+```
+
+### make targets, and which one you want
+
+| target | what it does | needs your install path? |
+|---|---|---|
+| `make build` | compiles into `build/<preset>/` — **does not touch your install** | no |
+| `make run` | builds, then runs from the build directory | no (auto-detected) |
+| `make deploy` | builds, then copies `OPEN-BM95.exe` (+ `SDL3.dll`) **into your install** so it runs next to the original assets | yes |
+| `make survey` | validates your install's assets with `abtool` | yes |
+| `make test` | builds headless and runs the test suite | no |
+
+`deploy` and `survey` take the path from `GAME_DIR=<path>` if you pass one, else
+from `gamedir.txt`. With neither they stop and tell you, rather than guessing at
+a directory and writing somewhere surprising.
+
 ## Running
 
 `OPEN-BM95` (the game) — playable local + online:
@@ -74,7 +121,7 @@ OPEN-BM95                         # auto-detects the game install, boots to the 
 OPEN-BM95 <game_dir> <scheme>     # explicit install + scheme
 ```
 
-Player 0: arrows + Right Ctrl/Space (bomb), Right Shift (throw/grab/trigger/punch) · Player 1: WASD + Left Ctrl/E, Left Shift · Esc: quit. Install auto-detection: `BOMBER_GAME_DIR` env var, `gamedir.txt`, or the standard install paths.
+Player 0: arrows + Right Ctrl/Space (bomb), Right Shift (throw/grab/trigger/punch) · Player 1: WASD + Left Ctrl/E, Left Shift · Esc: quit. If it cannot find your install it will say so — see *First-time setup* above.
 
 ### Online multiplayer
 

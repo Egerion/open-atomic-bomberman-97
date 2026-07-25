@@ -7,6 +7,16 @@ out/
 *.user
 CMakeUserPresets.json
 
+# Per-machine setup. gamedir.txt points at YOUR Atomic Bomberman install (see
+# README "Requirements"); the runtime .ini files are written by the game itself.
+gamedir.txt
+options.ini
+nodename.ini
+
+# Claude Code's local scratch: agent worktrees are full checkouts and this tree
+# has reached multiple GB. Never committable.
+.claude/
+
 # Never commit original Atomic Bomberman assets (Interplay/Konami property).
 # The engine reads them from your own game install (see README).
 DATA/

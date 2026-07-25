@@ -34,28 +34,36 @@ fi
 INCLUDES=(-Ilibs/sim/include -Ilibs/sim/src -Ilibs/assets/include \
           -Ilibs/audio/include -Ilibs/core/include -Ilibs/platform/include \
           -Ilibs/match/include -Ilibs/net/include -Ilibs/game/include)
-SDL_INC="build/windows-fetch/_deps/sdl3-src/include"
-if [ -d "$SDL_INC" ]; then
-  INCLUDES+=(-I"$SDL_INC")
-else
-  echo "lint: warning: $SDL_INC not found — build the windows-fetch preset" >&2
-  echo "      at least once so SDL3 headers exist, or libs/game/apps/game*" >&2
-  echo "      files will fail to parse." >&2
-fi
-
-# The online lobby's FetchContent deps (ADR-0011, BOMBER_ENABLE_LOBBY): the WS
-# client and the JSON header. Same treatment as SDL3 above — without them
-# libs/net's lobby_client / lobby_messages / lobby_flow / stun_client fail to
-# PARSE, which clang-tidy reports as a failure rather than skipping them.
-for dep_inc in "build/windows-fetch/_deps/ixwebsocket-src" \
-               "build/windows-fetch/_deps/nlohmann_json-src/include"; do
+# The FetchContent dependency headers (SDL3 for libs/game + apps, and the online
+# lobby's WS/JSON pair for libs/net). These are REQUIRED, not optional: without
+# them the dependent TUs fail to PARSE, and clang-tidy reports a parse failure as
+# a cascade of nonsense diagnostics ("unused variable" on a variable that is
+# plainly used) rather than as "I could not find a header". That misleads badly —
+# it cost an agent a debugging detour — so a missing dir is a hard error with the
+# fix spelled out, never a warning we then bury under bogus findings.
+#
+# Note the hard-coded build/windows-fetch path: if you lint from a git worktree
+# whose build dir is elsewhere, configure that preset there (or point BUILD_DIR
+# at an existing one) instead of letting the run proceed half-blind.
+BUILD_DIR="${BUILD_DIR:-build/windows-fetch}"
+missing=0
+for dep_inc in "$BUILD_DIR/_deps/sdl3-src/include" \
+               "$BUILD_DIR/_deps/ixwebsocket-src" \
+               "$BUILD_DIR/_deps/nlohmann_json-src/include"; do
   if [ -d "$dep_inc" ]; then
     INCLUDES+=(-I"$dep_inc")
   else
-    echo "lint: warning: $dep_inc not found — configure the windows-fetch preset" >&2
-    echo "      (it fetches the lobby deps) or libs/net lobby files won't parse." >&2
+    echo "lint: ERROR: dependency headers not found: $dep_inc" >&2
+    missing=1
   fi
 done
+if [ "$missing" -ne 0 ]; then
+  echo "lint: configure the windows-fetch preset at least once so FetchContent" >&2
+  echo "      has downloaded SDL3 + the lobby deps:" >&2
+  echo "        cmake --preset windows-fetch" >&2
+  echo "      or set BUILD_DIR=<path-to-an-existing-build-dir>." >&2
+  exit 1
+fi
 
 mapfile -t FILES < <(find libs apps -name "*.cpp" | grep -v "/build/")
 echo "lint: checking ${#FILES[@]} files with $(basename "$CT")..."
