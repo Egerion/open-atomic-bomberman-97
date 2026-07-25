@@ -39,38 +39,38 @@ primary_region = "ams"
 # WebSocket control plane (TLS terminated at the edge).
 [http_service]
   internal_port = 8080
-  # NOT force_https YET — and the reason is now purely about older clients, not
-  # about the client being unable to speak TLS. It can: the lobby client builds
-  # against mbedTLS and dials wss:// by default, with certificate and hostname
-  # verification enforced.
+  # SECURITY.md S1, closed. Plaintext signalling is no longer accepted: the edge
+  # 301s http:// to https://, and a ws:// client cannot follow that redirect, so
+  # it fails instead of leaking. That matters because the control plane carries
+  # real credentials — the host_token (which authorises StartMatch), the lobby
+  # code (the entire authn for joining a "private" lobby) and the relay alloc_id
+  # — alongside the roster, display names and candidate ip:ports. In the clear,
+  # a passive observer on the path got host authority over the lobby, not just a
+  # peek at it.
   #
-  # (The note that used to sit here — "IXWebSocket v11.4.6's mbedTLS backend
-  # does not compile against any single mbedTLS release" — was WRONG, and worth
-  # recording as wrong so nobody re-derives it. The fault was ours: IXWebSocket
-  # picks the mbedtls_pk_parse_keyfile signature from a macro it derives by
-  # find_path'ing INSTALLED headers, which a FetchContent build tree does not
-  # have, so 3.x headers were compiled against the 2.x signature. Presetting
-  # that cache variable builds v11.4.6 against mbedTLS 3.6.2 cleanly.)
+  # The fix lives on the CLIENT: it builds against mbedTLS and dials wss:// by
+  # default, with certificate AND hostname verification enforced (proven against
+  # untrusted-root.badssl.com and wrong.host.badssl.com, not just by connecting
+  # successfully — a client with verification disabled also connects).
   #
-  # What force_https still breaks is any exe built before that landed: those
-  # dial ws://, and the edge answers with a 301 they cannot follow. Flip this to
-  # true once the ws:// builds are out of circulation — see SECURITY.md S1 for
-  # the order, and verify with the 301 on http://.../ws rather than with
-  # /healthz, which stays green either way and proves nothing.
+  # (The note that used to sit here — "IXWebSocket v11.4.6's mbedTLS backend does
+  # not compile against any single mbedTLS release" — was WRONG, and is recorded
+  # as wrong so nobody re-derives it. The fault was ours: IXWebSocket picks the
+  # mbedtls_pk_parse_keyfile signature from a macro it derives by find_path'ing
+  # INSTALLED headers, which a FetchContent build tree does not have, so 3.x
+  # headers were compiled against the 2.x signature. Presetting that cache
+  # variable builds v11.4.6 against mbedTLS 3.6.2 cleanly.)
   #
-  # Leaving it false does NOT disable HTTPS — wss:// works today; it only stops
-  # the redirect that would strand old clients.
+  # THIS STRANDS ANY EXE BUILT BEFORE THE wss:// CLIENT LANDED. Those dial ws://
+  # and now get a 301 they cannot follow. Anyone still on an older build needs a
+  # new one; there is no compatibility window by design, because leaving one open
+  # means leaving the credential leak open.
   #
-  # TRADE-OFF, and a SERIOUS one — SECURITY.md S1. Signalling then travels in the
-  # clear, and it does carry credentials: the host_token (which authorises
-  # StartMatch), the lobby code (which is the whole authn for joining a "private"
-  # lobby) and the relay alloc_id all cross the wire readable, alongside the
-  # roster, display names and candidate ip:ports. A passive observer on the path
-  # therefore gets host authority over the lobby, not just a peek at it.
-  #
-  # Flip this back to true the moment the client speaks wss:// — that is the fix,
-  # and it lives on the client side, not here.
-  force_https = false
+  # Verify a flip of this flag with the redirect, NOT with the health check:
+  #   curl -o /dev/null -w '%{http_code}' http://open-bomberman-matchmaker.fly.dev/ws   -> 301
+  #   BOMBER_TLS_LIVE=1 ctest --test-dir build/headless -C Release -R net_lobby_tls
+  # /healthz answers 200 over https either way and proves nothing about this.
+  force_https = true
   auto_stop_machines = false
   auto_start_machines = true
   min_machines_running = 1
