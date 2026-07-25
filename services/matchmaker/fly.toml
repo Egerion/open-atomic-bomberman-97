@@ -60,9 +60,22 @@ primary_region = "ams"
   auto_start_machines = true
   min_machines_running = 1
 
+  # Deliberately /readyz, NOT /healthz. A failing check here gets the machine
+  # restarted, and this app runs on exactly one machine holding every lobby in
+  # RAM — so an automatic restart is not a recovery, it destroys precisely what
+  # it is meant to protect: every match in progress dies. /readyz goes down only
+  # when the process is deliberately draining, so the check still does its real
+  # job (route traffic away during a deploy) while nothing transient can bounce
+  # the machine mid-match.
+  #
+  # /healthz is the liveness view (both UDP read loops + the lobby reaper) and
+  # CAN return 503, unlike the constant "ok" it used to be. It stays available
+  # and worth watching — a genuinely wedged read loop shows up there — it just
+  # does not auto-trigger a restart. The trade-off, stated plainly: a real wedge
+  # now needs a human to notice it.
   [[http_service.checks]]
     method = "GET"
-    path = "/healthz"
+    path = "/readyz"
     interval = "15s"
     timeout = "2s"
 
