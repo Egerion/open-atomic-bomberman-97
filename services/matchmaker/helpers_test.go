@@ -11,16 +11,20 @@ import (
 // sends, so the whole lobby state machine is testable without a network.
 type fakeConn struct {
 	connID string
+	// addr is the peer address the Manager sees. The default is not an address
+	// at all, so per-IP limits stay out of the way of tests that are not about
+	// them; a test that wants the IP-keyed budgets sets a real one.
+	addr   string
 	mu     sync.Mutex
 	sent   [][]byte
 	closed bool
 	reason string
 }
 
-func newFakeConn(id string) *fakeConn { return &fakeConn{connID: id} }
+func newFakeConn(id string) *fakeConn { return &fakeConn{connID: id, addr: "test"} }
 
 func (f *fakeConn) id() string     { return f.connID }
-func (f *fakeConn) remote() string { return "test" }
+func (f *fakeConn) remote() string { return f.addr }
 
 func (f *fakeConn) send(v any) {
 	data, err := json.Marshal(v)

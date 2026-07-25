@@ -29,6 +29,12 @@ primary_region = "ams"
   MATCHMAKER_LOG_LEVEL = "info"
   MATCHMAKER_HEARTBEAT_INTERVAL = "10s"
   MATCHMAKER_HEARTBEAT_MISS = "3"
+  # Fly's edge OVERWRITES this header with the real client address, and every
+  # connection otherwise arrives from a private Fly address — without it the
+  # per-IP connection cap and the per-IP lobby-code-guess budget are both inert
+  # (SECURITY.md "Operator notes"). Never point this at a raw X-Forwarded-For:
+  # the leftmost entry of an appended chain is attacker-controlled.
+  MATCHMAKER_CLIENT_IP_HEADER = "Fly-Client-IP"
 
 # WebSocket control plane (TLS terminated at the edge).
 [http_service]
@@ -40,10 +46,15 @@ primary_region = "ams"
   # and the lobby never connects. Turning it off does NOT disable HTTPS — wss://
   # keeps working for anything that can speak it; it only stops the redirect.
   #
-  # TRADE-OFF, accepted for now: signaling then travels in the clear. It carries
-  # no credentials (lobby code, chosen display name, the candidate ip:ports peers
-  # exchange anyway), but a passive observer on the path could read a code and
-  # join a "private" lobby. Flip this back to true once the client speaks wss://.
+  # TRADE-OFF, and a SERIOUS one — SECURITY.md S1. Signalling then travels in the
+  # clear, and it does carry credentials: the host_token (which authorises
+  # StartMatch), the lobby code (which is the whole authn for joining a "private"
+  # lobby) and the relay alloc_id all cross the wire readable, alongside the
+  # roster, display names and candidate ip:ports. A passive observer on the path
+  # therefore gets host authority over the lobby, not just a peek at it.
+  #
+  # Flip this back to true the moment the client speaks wss:// — that is the fix,
+  # and it lives on the client side, not here.
   force_https = false
   auto_stop_machines = false
   auto_start_machines = true

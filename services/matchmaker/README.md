@@ -51,9 +51,29 @@ gofmt -l .             # (empty == formatted)
 | `-log-level` | `MATCHMAKER_LOG_LEVEL` | `info` | `debug`｜`info`｜`warn`｜`error` |
 | `-tls-cert` | `MATCHMAKER_TLS_CERT` | _(unset)_ | optional cert for standalone `wss://` |
 | `-tls-key` | `MATCHMAKER_TLS_KEY` | _(unset)_ | optional key for standalone `wss://` |
+| `-max-conns` | `MATCHMAKER_MAX_CONNS` | `2000` | concurrent WebSocket connections (`<0` disables) |
+| `-max-conns-per-ip` | `MATCHMAKER_MAX_CONNS_PER_IP` | `16` | concurrent connections from one client IP (`<0` disables) |
+| `-max-lobbies` | `MATCHMAKER_MAX_LOBBIES` | `5000` | live lobbies (`<0` disables) |
+| `-conn-idle-timeout` | `MATCHMAKER_CONN_IDLE_TIMEOUT` | `120s` | close a connection holding no seat that has said nothing (`<0` never) |
+| `-client-ip-header` | `MATCHMAKER_CLIENT_IP_HEADER` | _(unset)_ | trusted edge header carrying the real client IP |
 
 A member that misses `K` heartbeats (`interval × miss`, default 30 s) is dropped
 with a RosterUpdate; a drained lobby is evicted and its code freed.
+
+**`-client-ip-header` matters behind a proxy.** Fly, Render, Cloudflare and any
+reverse proxy make every WebSocket arrive from a *private* address, so the per-IP
+caps see one source for the whole world and are deliberately switched off. Point
+this flag at a header the proxy **overwrites** — `Fly-Client-IP`,
+`CF-Connecting-IP`, an nginx `proxy_set_header X-Real-IP` — and they come back to
+life. Never point it at a raw `X-Forwarded-For` chain: the leftmost entry of an
+appended chain is attacker-controlled. The header is consulted only when the
+direct peer is itself loopback/private, so a directly connected client cannot use
+it to forge its own source. The server warns at startup when it is unset;
+`fly.toml` sets it.
+
+The full set of protocol-visible limits (frame sizes, field ceilings, rates,
+capacity) is [`PROTOCOL.md` §8](./PROTOCOL.md); the reasoning behind each is in
+[`SECURITY.md`](./SECURITY.md).
 
 ## TLS
 
@@ -153,20 +173,40 @@ forwarder.
 
 ## Security / ops notes
 
+**Read [`SECURITY.md`](./SECURITY.md) first** — it is the full review: what was
+checked, what was found, what was fixed and what was accepted, with the residual
+risk of each spelled out. The short version:
+
+- **The deployed control plane is in the clear**, because the client cannot yet
+  speak `wss://` (`fly.toml`, `force_https = false`). That means the `host_token`
+  and the lobby `code` are readable by anyone on the path. This is the most
+  serious open issue and its fix lives on the client side. SECURITY.md S1.
 - **No game data, no PII beyond a chosen display name.** State is soft, in-RAM,
   and evicted on disconnect/timeout — nothing is persisted.
 - **Authn is capability-based:** knowing a 6-char lobby `code` lets you join;
   the opaque `host_token` (128-bit, `crypto/rand`) authorises `StartMatch`.
-  Codes and handles are unguessable and never sequential.
+  Codes and handles are unguessable and never sequential, and a failed
+  `JoinByCode` is rate-limited per connection *and* per source address so the
+  code space cannot be searched.
 - **`build_hash` is the loud cross-platform door** (ADR-0011): a mismatched sim
   build is rejected at join, before anyone waits. The P2P `Hello` re-checks it
   at tick 0 as defence in depth.
 - **Origin is not checked** on the WebSocket upgrade — native clients send none,
   and authn is by code/token, not Origin. Put the service behind the edge TLS
   proxy; do not expose the plain `:8080` port publicly if you can avoid it.
-- **DoS surface:** lobby maps are bounded by live connections and reaped on
-  timeout; slow WebSocket consumers are dropped rather than blocking the server.
-  Rate-limiting / connection caps are a reverse-proxy concern (out of scope here).
+- **DoS surface is bounded in the service, not delegated to a proxy.**
+  Connections, lobbies, per-connection state, request rates, frame sizes and
+  field sizes all have ceilings (PROTOCOL.md §8); UDP-side budgets use a
+  fixed-size table so a forged-source flood cannot make the server allocate.
+  Slow WebSocket consumers are dropped rather than blocking the server.
+- **The relay pins each seat's address.** A datagram carrying a seat's
+  `alloc_id` from any other source is dropped while the real peer is still
+  sending, so an observer who reads a header off the wire cannot steal a seat's
+  return path. SECURITY.md F1 records exactly what that does and does not close.
+- **Refusals are counted, not logged per event.** One periodic line each for
+  `control-plane drops`, `relay stats` and `stun stats` — a log line per hostile
+  packet is itself an amplifier. `rebind_refused` and `join_guess` are the two
+  counters worth alerting on.
 - **Not tamper-proof.** P2P determinism has no referee (ADR-0011 Risks):
   `state_hash` catches a diverging build, not an honest-but-cheating peer.
 
@@ -179,7 +219,8 @@ forwarder.
 | `protocol.go` | wire message types, envelope, `build_hash`/`roster_digest` helpers |
 | `code.go` | Crockford base-32 lobby codes + opaque handles (`crypto/rand`) |
 | `manager.go` | lobby state machine, all control-plane handlers, heartbeat reaper |
-| `wsserver.go` | HTTP/WebSocket adapter (`coder/websocket`) → the Manager |
+| `ratelimit.go` | token buckets, the fixed-size per-source table, client-IP resolution |
+| `wsserver.go` | HTTP/WebSocket adapter (`coder/websocket`) → the Manager, connection admission |
 | `stun.go` | UDP STUN reflexive-address echo |
 | `relay.go` | UDP relay forwarder: allocation table + opaque datagram forwarding |
-| `*_test.go` | code, manager, STUN, relay, and in-process WebSocket tests |
+| `*_test.go` | code, manager, STUN, relay, rate-limit, security and in-process WebSocket tests |

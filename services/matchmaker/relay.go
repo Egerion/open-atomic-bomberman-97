@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/hex"
+	"errors"
 	"log/slog"
 	"net"
 	"sync"
@@ -56,6 +57,29 @@ const (
 	// kRelayMaintainInterval is how often idle allocations are reaped and the
 	// aggregated counters are logged.
 	kRelayMaintainInterval = 10 * time.Second
+
+	// kRelayRebindQuiet is the address-pinning window (SECURITY.md "relay seat
+	// hijack"). Once a seat's address is learned it is PINNED: a datagram
+	// carrying that alloc_id from any other source is dropped, and the pin only
+	// moves after the pinned address itself has been silent this long. A live
+	// seat sends ~20 datagrams/second, so the pin is continuously re-asserted
+	// while the real peer is on the air.
+	kRelayRebindQuiet = 5 * time.Second
+
+	// A genuine NAT rebind is a rare event; a hijack attempt retries. One
+	// accepted move per 10 s with 3 banked keeps the rare case working and
+	// stops the pin from being flapped.
+	kRelayRebindCostMs = 10000
+	kRelayRebindBurst  = 3
+
+	// kRelayIngressSlots / cost / burst gate the UDP listener per source address
+	// BEFORE the allocation table is touched, so a flood cannot contend the
+	// table's mutex with live matches. 250 datagrams/s is an order of magnitude
+	// above a 20 Hz seat (and loopback/private sources are exempt entirely, so
+	// LAN and same-host play are never shaped).
+	kRelayIngressSlots  = 4096
+	kRelayIngressCostMs = 4
+	kRelayIngressBurst  = 500
 )
 
 // allocKey pins an allocation to exactly one (lobby, seat) pair.
@@ -66,25 +90,42 @@ type allocKey struct {
 
 // allocation is one seat's relay reservation.
 type allocation struct {
-	id   [kAllocIDLen]byte
-	key  allocKey
-	addr *net.UDPAddr // learned off the first datagram from this seat; nil until then
-	// lastSeen is refreshed by allocation and by traffic FROM this seat. A seat
-	// that stops sending expires even if a peer keeps aiming at it, so a dead
-	// client cannot pin an entry (every live seat sends ~20 datagrams/second).
+	id  [kAllocIDLen]byte
+	key allocKey
+	// addr is the seat's PINNED return path: learned off its first datagram and
+	// thereafter only moved under the rules in forward(). nil until learned.
+	addr *net.UDPAddr
+	// addrSeen is when a datagram was last accepted FROM the pinned address —
+	// the "is the real peer still on the air?" clock the rebind rule reads. It
+	// is deliberately separate from lastSeen, which also moves on a legitimate
+	// rebind, so a rebind cannot reset its own quiet window.
+	addrSeen time.Time
+	// rebind bounds how often the pin may move, so a stranger who catches one
+	// quiet window cannot then flap the seat.
+	rebind tokenBucket
+	// lastSeen is refreshed by allocation and by ACCEPTED traffic from this
+	// seat. A seat that stops sending expires even if a peer keeps aiming at it,
+	// so a dead client cannot pin an entry (every live seat sends ~20
+	// datagrams/second) — and neither can a stranger who knows the alloc_id.
 	lastSeen time.Time
 }
 
 // relayCounters is one snapshot of the aggregated data-plane tallies.
 type relayCounters struct {
-	forwarded    uint64
-	bytes        uint64
-	short        uint64
-	unknownAlloc uint64
-	unknownDst   uint64
-	noAddr       uint64
-	oversize     uint64
-	writeErr     uint64
+	forwarded       uint64
+	bytes           uint64
+	short           uint64
+	unknownAlloc    uint64
+	unknownDst      uint64
+	noAddr          uint64
+	selfAddressed   uint64
+	rebindRefused   uint64
+	rebindThrottled uint64
+	rebound         uint64
+	oversize        uint64
+	rateLimited     uint64
+	readErr         uint64
+	writeErr        uint64
 }
 
 // relayTable is the allocation registry: minted by the control plane
@@ -98,29 +139,37 @@ type relayTable struct {
 	byID  map[[kAllocIDLen]byte]*allocation
 	byKey map[allocKey]*allocation
 
-	idle time.Duration    // 0 disables idle expiry
-	now  func() time.Time // injectable clock (tests)
-	log  *slog.Logger
+	idle        time.Duration    // 0 disables idle expiry
+	rebindQuiet time.Duration    // pin window; 0 disables pinning (tests only)
+	now         func() time.Time // injectable clock (tests)
+	log         *slog.Logger
 
-	forwarded    atomic.Uint64
-	bytes        atomic.Uint64
-	short        atomic.Uint64
-	unknownAlloc atomic.Uint64
-	unknownDst   atomic.Uint64
-	noAddr       atomic.Uint64
-	oversize     atomic.Uint64
-	writeErr     atomic.Uint64
+	forwarded       atomic.Uint64
+	bytes           atomic.Uint64
+	short           atomic.Uint64
+	unknownAlloc    atomic.Uint64
+	unknownDst      atomic.Uint64
+	noAddr          atomic.Uint64
+	selfAddressed   atomic.Uint64
+	rebindRefused   atomic.Uint64
+	rebindThrottled atomic.Uint64
+	rebound         atomic.Uint64
+	oversize        atomic.Uint64
+	rateLimited     atomic.Uint64
+	readErr         atomic.Uint64
+	writeErr        atomic.Uint64
 
 	lastStats relayCounters // maintain goroutine only
 }
 
 func newRelayTable(idle time.Duration, log *slog.Logger) *relayTable {
 	return &relayTable{
-		byID:  map[[kAllocIDLen]byte]*allocation{},
-		byKey: map[allocKey]*allocation{},
-		idle:  idle,
-		now:   time.Now,
-		log:   log,
+		byID:        map[[kAllocIDLen]byte]*allocation{},
+		byKey:       map[allocKey]*allocation{},
+		idle:        idle,
+		rebindQuiet: kRelayRebindQuiet,
+		now:         time.Now,
+		log:         log,
 	}
 }
 
@@ -148,7 +197,11 @@ func (t *relayTable) allocate(code string, seat int) (string, error) {
 	if err != nil || len(raw) != kAllocIDLen {
 		return "", err
 	}
-	a := &allocation{key: key, lastSeen: t.now()}
+	a := &allocation{
+		key:      key,
+		lastSeen: t.now(),
+		rebind:   newTokenBucket(kRelayRebindCostMs, kRelayRebindBurst),
+	}
 	copy(a.id[:], raw)
 	t.byID[a.id] = a
 	t.byKey[key] = a
@@ -180,13 +233,34 @@ func (t *relayTable) releaseLocked(key allocKey) {
 	}
 }
 
-// forward is the entire data plane: parse the fixed header, learn the sender's
-// public address, and re-address the OPAQUE payload at the destination seat.
-// The payload is never examined.
+// forward is the entire data plane: parse the fixed header, authenticate the
+// sender's address against the seat's pin, and re-address the OPAQUE payload at
+// the destination seat. The payload is never examined.
 //
 // Returns ok=false for every drop path. Callers must stay silent on a drop —
 // this parses untrusted input, so it may never panic and may never log per
 // datagram (the tallies are aggregated by logStats instead).
+//
+// ADDRESS PINNING (SECURITY.md). The alloc_id is the only thing identifying a
+// sender here, and it travels in CLEARTEXT as the first 16 bytes of every
+// relayed datagram — a relayed match is by definition one where the path is
+// hostile, so "on-path observer knows the alloc_id" is inside the threat model,
+// not outside it. Learning the return path unconditionally therefore meant one
+// datagram from anybody who had read a header could repoint a seat's inbound
+// traffic at an address of their choosing. Instead:
+//
+//	first datagram      → learn the address and PIN it
+//	pinned source       → forward, and re-assert the pin
+//	different source, pinned address still live (spoke within rebindQuiet)
+//	                    → DROP; the pin does not move
+//	different source, pinned address quiet ≥ rebindQuiet, budget left
+//	                    → move the pin (a real NAT rebind lands here)
+//
+// A live seat sends ~20 datagrams/second, so the pin is re-asserted
+// continuously while the real peer is on the air and the window in which it can
+// be taken never opens. What this does NOT close is written up in SECURITY.md:
+// an attacker who can also silence the victim (a full on-path MITM, which owns
+// the traffic anyway) can manufacture the quiet window.
 func (t *relayTable) forward(src *net.UDPAddr, pkt []byte) ([]byte, *net.UDPAddr, bool) {
 	if len(pkt) < kRelayHeaderLen {
 		t.short.Add(1)
@@ -205,9 +279,34 @@ func (t *relayTable) forward(src *net.UDPAddr, pkt []byte) ([]byte, *net.UDPAddr
 		t.unknownAlloc.Add(1)
 		return nil, nil, false
 	}
-	// Learn/refresh the sender's public address from the datagram source.
-	from.addr = src
-	from.lastSeen = t.now()
+	// A seat addressing itself has no legitimate meaning and would turn the
+	// forwarder into a 1:1 reflector for its own sender.
+	if dstSeat == from.key.seat {
+		t.selfAddressed.Add(1)
+		return nil, nil, false
+	}
+	now := t.now()
+	switch {
+	case from.addr == nil:
+		from.addr = cloneUDPAddr(src)
+		from.addrSeen = now
+	case sameUDPAddr(from.addr, src):
+		from.addrSeen = now
+	case t.rebindQuiet > 0 && now.Sub(from.addrSeen) < t.rebindQuiet:
+		// The pinned peer is still on the air; this is somebody else holding a
+		// header they read off the wire. Drop it whole — forwarding it would
+		// also inject a stranger's bytes into the victim's match.
+		t.rebindRefused.Add(1)
+		return nil, nil, false
+	case !from.rebind.allow(now):
+		t.rebindThrottled.Add(1)
+		return nil, nil, false
+	default:
+		from.addr = cloneUDPAddr(src)
+		from.addrSeen = now
+		t.rebound.Add(1)
+	}
+	from.lastSeen = now
 
 	to, ok := t.byKey[allocKey{code: from.key.code, seat: dstSeat}]
 	if !ok {
@@ -224,6 +323,28 @@ func (t *relayTable) forward(src *net.UDPAddr, pkt []byte) ([]byte, *net.UDPAddr
 	out[kAllocIDLen] = byte(from.key.seat) // the SENDER's seat
 	copy(out[kRelayHeaderLen:], payload)
 	return out, to.addr, true
+}
+
+// sameUDPAddr compares two UDP endpoints by value. net.UDPAddr is a struct with
+// a slice in it, so == is not usable and IP.Equal is what handles the
+// 4-byte/16-byte representations of the same v4 address.
+func sameUDPAddr(a, b *net.UDPAddr) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Port == b.Port && a.Zone == b.Zone && a.IP.Equal(b.IP)
+}
+
+// cloneUDPAddr copies an address out of the read path. ReadFromUDP hands back a
+// fresh struct per call today, but the pin outlives the datagram and must not
+// depend on that.
+func cloneUDPAddr(a *net.UDPAddr) *net.UDPAddr {
+	if a == nil {
+		return nil
+	}
+	out := &net.UDPAddr{Port: a.Port, Zone: a.Zone}
+	out.IP = append(net.IP(nil), a.IP...)
+	return out
 }
 
 // reapIdle drops allocations with no traffic for the idle window, so the table
@@ -253,14 +374,20 @@ func (t *relayTable) size() int {
 
 func (t *relayTable) snapshot() relayCounters {
 	return relayCounters{
-		forwarded:    t.forwarded.Load(),
-		bytes:        t.bytes.Load(),
-		short:        t.short.Load(),
-		unknownAlloc: t.unknownAlloc.Load(),
-		unknownDst:   t.unknownDst.Load(),
-		noAddr:       t.noAddr.Load(),
-		oversize:     t.oversize.Load(),
-		writeErr:     t.writeErr.Load(),
+		forwarded:       t.forwarded.Load(),
+		bytes:           t.bytes.Load(),
+		short:           t.short.Load(),
+		unknownAlloc:    t.unknownAlloc.Load(),
+		unknownDst:      t.unknownDst.Load(),
+		noAddr:          t.noAddr.Load(),
+		selfAddressed:   t.selfAddressed.Load(),
+		rebindRefused:   t.rebindRefused.Load(),
+		rebindThrottled: t.rebindThrottled.Load(),
+		rebound:         t.rebound.Load(),
+		oversize:        t.oversize.Load(),
+		rateLimited:     t.rateLimited.Load(),
+		readErr:         t.readErr.Load(),
+		writeErr:        t.writeErr.Load(),
 	}
 }
 
@@ -278,12 +405,24 @@ func (t *relayTable) logStats() {
 		t.log.Warn("relay dropped oversized datagrams (not truncated)",
 			"limit_bytes", kRelayMaxDatagram, "dropped", cur.oversize-t.lastStats.oversize)
 	}
+	// A refused rebind is the signature of the seat-hijack attempt (SECURITY.md)
+	// — somebody sending a valid alloc_id from the wrong address while the real
+	// peer is still on the air. Raised to WARN because, unlike the other drops,
+	// it is never something a well-behaved client produces.
+	if cur.rebindRefused > t.lastStats.rebindRefused {
+		t.log.Warn("relay refused address rebinds (pinned peer still live)",
+			"count", cur.rebindRefused-t.lastStats.rebindRefused, "quiet", t.rebindQuiet)
+	}
 	t.log.Info("relay stats",
 		"allocations", t.size(),
 		"forwarded", cur.forwarded, "bytes", cur.bytes,
 		"drop_short", cur.short, "drop_unknown_alloc", cur.unknownAlloc,
 		"drop_unknown_dst", cur.unknownDst, "drop_dst_addr_unknown", cur.noAddr,
-		"drop_oversize", cur.oversize, "drop_write_err", cur.writeErr)
+		"drop_self_addressed", cur.selfAddressed,
+		"drop_rebind_refused", cur.rebindRefused,
+		"drop_rebind_throttled", cur.rebindThrottled, "rebound", cur.rebound,
+		"drop_oversize", cur.oversize, "drop_rate_limited", cur.rateLimited,
+		"read_err", cur.readErr, "drop_write_err", cur.writeErr)
 	t.lastStats = cur
 }
 
@@ -291,6 +430,7 @@ func (t *relayTable) logStats() {
 type relayServer struct {
 	conn      *net.UDPConn
 	table     *relayTable
+	ingress   *ipBuckets // per-source gate in front of the table
 	log       *slog.Logger
 	done      chan struct{}
 	closeOnce sync.Once
@@ -305,7 +445,13 @@ func startRelay(addr string, table *relayTable, log *slog.Logger) (*relayServer,
 	if err != nil {
 		return nil, err
 	}
-	s := &relayServer{conn: conn, table: table, log: log, done: make(chan struct{})}
+	s := &relayServer{
+		conn:    conn,
+		table:   table,
+		ingress: newIPBuckets(kRelayIngressSlots, kRelayIngressCostMs, kRelayIngressBurst),
+		log:     log,
+		done:    make(chan struct{}),
+	}
 	go s.serve()
 	go s.maintain()
 	return s, nil
@@ -315,13 +461,35 @@ func (s *relayServer) serve() {
 	// One byte of slack so an oversized datagram is DETECTED (n > max) instead of
 	// being silently truncated by the kernel copy into an exact-sized buffer.
 	buf := make([]byte, kRelayMaxDatagram+1)
+	errs := 0
 	for {
 		n, src, err := s.conn.ReadFromUDP(buf)
 		if err != nil {
-			return // socket closed on shutdown
+			// ONLY a closed socket ends the loop. Every other error here is
+			// per-datagram and attacker-triggerable: Windows reports an
+			// oversized datagram as WSAEMSGSIZE and an ICMP port-unreachable
+			// from an earlier forward as WSAECONNRESET, rather than truncating
+			// or ignoring the way Linux does. Returning on those made one
+			// datagram enough to take the forwarder down for good — and the
+			// second of those needs no attacker at all, just a peer that quit.
+			if errors.Is(err, net.ErrClosed) || errs >= kUDPMaxConsecutiveErrs {
+				return
+			}
+			errs++
+			s.table.readErr.Add(1)
+			continue
 		}
+		errs = 0
 		if n > kRelayMaxDatagram {
 			s.table.oversize.Add(1)
+			continue
+		}
+		// Gate per source BEFORE the table lock, so a flood cannot contend the
+		// allocation mutex with live matches. Loopback/private sources are
+		// exempt (perIPKey returns ""), so LAN and same-host play are never
+		// shaped — and a public seat's 20 Hz is two orders under the ceiling.
+		if key := perIPKey(src.String()); key != "" && !s.ingress.allow(key) {
+			s.table.rateLimited.Add(1)
 			continue
 		}
 		out, dst, ok := s.table.forward(src, buf[:n])

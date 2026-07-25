@@ -48,11 +48,28 @@ func main() {
 			"advertise", cfg.relayAdvertise())
 	}
 
-	ws := &wsServer{mgr: mgr, log: log}
+	ws := newWSServer(mgr, cfg, log)
 	srv := &http.Server{
-		Addr:              cfg.WSAddr,
-		Handler:           ws.handler(),
+		Addr:    cfg.WSAddr,
+		Handler: ws.handler(),
+		// ReadHeaderTimeout + MaxHeaderBytes bound a slow or bloated upgrade
+		// request; IdleTimeout reclaims keep-alive sockets that never make
+		// another request. Deliberately NO ReadTimeout/WriteTimeout: those are
+		// whole-request deadlines, and a WebSocket request lasts as long as the
+		// lobby does.
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    wsMaxHeaderBytes,
+	}
+	log.Info("control-plane limits",
+		"max_conns", cfg.MaxConns, "max_conns_per_ip", cfg.MaxConnsPerIP,
+		"max_lobbies", cfg.MaxLobbies, "conn_idle_timeout", cfg.ConnIdleTimeout,
+		"client_ip_header", cfg.ClientIPHeader)
+	if cfg.ClientIPHeader == "" {
+		// Behind an edge proxy every connection arrives from a private address,
+		// so perIPKey declines to cap it and -max-conns-per-ip does nothing. Say
+		// so at startup rather than letting an operator assume a live cap.
+		log.Warn("no -client-ip-header set: per-IP limits apply only to directly connected clients")
 	}
 
 	go func() {

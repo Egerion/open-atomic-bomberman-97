@@ -252,6 +252,111 @@ type errorMsg struct {
 // wire budget, and the client's 1997 bitmap font is single-byte anyway.
 const kChatMaxBytes = 120
 
+// Field ceilings for every string a client can put on the control plane
+// (PROTOCOL.md §8). Chat was screened from the start; these close the same gap
+// on the fields that reach OTHER people — `player` lands in the roster and in
+// every relayed Chat frame's `name`, `name` is served to strangers by
+// ListPublic, and a Candidate is fanned out to the whole lobby and kept.
+//
+// Sized off what the client can actually produce, with slack: the 1997 node
+// name is at most 39 bytes (assets::kNodeNameMax) and doubles as the lobby
+// name, a build_hash is "0x" + 8 hex, a handle is 32 hex, a roster digest is 64
+// hex, and an "[ipv6]:port" is at most 47.
+const (
+	kMaxPlayerNameBytes = 48
+	kMaxLobbyNameBytes  = 48
+	kMaxCodeBytes       = 16
+	kMaxBuildHashBytes  = 32
+	kMaxHandleBytes     = 64
+	kMaxDigestBytes     = 96
+
+	// A client publishes two candidates (host + reflexive). The ceiling is what
+	// stops one member from making every peer punch at a thousand addresses of
+	// its choosing, and from parking a large list in the lobby's memory.
+	kMaxCandidates          = 16
+	kMaxCandidateKindBytes  = 16
+	kMaxCandidateAddrBytes  = 64
+	kMaxCandidateAllocBytes = 64
+
+	// kMaxErrorEchoBytes bounds how much of a client's own string an Error may
+	// quote back, so a large "type" cannot be reflected at its full size.
+	kMaxErrorEchoBytes = 40
+
+	// kMaxPublicListRows caps one PublicList answer. ListPublic is the request
+	// where the smallest frame buys the largest reply to an unauthenticated
+	// caller, so the reply is bounded in rows as well as in rate. Rows are
+	// sorted by code, so the cut is stable rather than map-order arbitrary.
+	kMaxPublicListRows = 200
+)
+
+// isLobbyCode reports whether a normalised code is well-formed: exactly 6
+// Crockford base-32 symbols. Screening the shape before the map lookup keeps a
+// long or exotic string out of the lobby key space entirely.
+func isLobbyCode(s string) bool {
+	if len(s) != 6 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if strings.IndexByte(crockford, s[i]) < 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// validateText is the shared screen for every inbound free-text field: bounded,
+// valid UTF-8, no control runes. Empty passes — an unset optional field is not
+// an attack, and only chat (§7) additionally insists on a non-blank body.
+//
+// REJECT, NEVER REPAIR (the rule chat already followed, now applied to names
+// too): a truncated display name would put a different name in the roster than
+// the one the player chose, and every peer would then see the server's edit.
+func validateText(s string, maxBytes int) bool {
+	if len(s) > maxBytes {
+		return false
+	}
+	if !utf8.ValidString(s) {
+		return false
+	}
+	for _, r := range s {
+		if r == utf8.RuneError || unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// validateCandidates screens a Candidates list before it is stored and fanned
+// out. The addresses themselves are NOT resolved or filtered — a peer's own
+// LAN address is legitimate and the server has no way to tell a good one from a
+// bad one — but the list is bounded in every dimension.
+func validateCandidates(list []Candidate) bool {
+	if len(list) > kMaxCandidates {
+		return false
+	}
+	for _, c := range list {
+		if !validateText(c.Kind, kMaxCandidateKindBytes) ||
+			!validateText(c.Addr, kMaxCandidateAddrBytes) ||
+			!validateText(c.Alloc, kMaxCandidateAllocBytes) {
+			return false
+		}
+	}
+	return true
+}
+
+// clipEcho screens a client-supplied string before an Error quotes it back.
+// An unknown "type" from a future client is short printable ASCII and echoes
+// unchanged, which is the whole diagnostic value; anything longer or
+// unprintable is replaced wholesale rather than trimmed, so the reply can be
+// neither an amplifier nor a way to push control bytes into somebody's terminal
+// through the log. Same rule as everywhere else: reject, never repair.
+func clipEcho(s string) string {
+	if !validateText(s, kMaxErrorEchoBytes) {
+		return "(rejected)"
+	}
+	return s
+}
+
 // validateChatText screens one inbound chat body. Chat is the only place a
 // player's own typing reaches OTHER players, so it is validated and REJECTED —
 // never repaired: a truncated or silently stripped line would put words in

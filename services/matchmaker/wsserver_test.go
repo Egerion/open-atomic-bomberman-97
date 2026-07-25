@@ -17,7 +17,7 @@ import (
 func TestWebSocketEndToEnd(t *testing.T) {
 	cfg := Config{HeartbeatInterval: time.Minute, HeartbeatMiss: 3, LockedGrace: time.Hour}
 	mgr := NewManager(cfg, newLogger("error"))
-	ws := &wsServer{mgr: mgr, log: newLogger("error")}
+	ws := newWSServer(mgr, cfg, newLogger("error"))
 	srv := httptest.NewServer(ws.handler())
 	defer srv.Close()
 
@@ -52,7 +52,17 @@ func TestWebSocketEndToEnd(t *testing.T) {
 
 	wsSend(t, ctx, host, map[string]any{"type": TypeSetReady, "ready": true})
 	wsSend(t, ctx, guest, map[string]any{"type": TypeSetReady, "ready": true})
-	// drain roster churn until both ready is reflected is unnecessary; proceed.
+	// Wait for the server to reflect BOTH seats as ready before starting. The
+	// two SetReady frames arrive on different connections, so without this the
+	// host's StartMatch can overtake the guest's SetReady and be refused with
+	// not_all_ready — a flaky test, not a server behaviour.
+	for {
+		var ru rosterUpdateMsg
+		json.Unmarshal(wsReadUntil(t, ctx, host, TypeRosterUpdate), &ru)
+		if len(ru.Roster) == 2 && ru.Roster[0].Ready && ru.Roster[1].Ready {
+			break
+		}
+	}
 
 	wsSend(t, ctx, host, map[string]any{
 		"type": TypeStartMatch, "lobby_id": lc.LobbyID, "host_token": lc.HostToken,
@@ -71,7 +81,7 @@ func TestWebSocketEndToEnd(t *testing.T) {
 func TestWebSocketBuildMismatchOverWire(t *testing.T) {
 	cfg := Config{HeartbeatInterval: time.Minute, HeartbeatMiss: 3, LockedGrace: time.Hour}
 	mgr := NewManager(cfg, newLogger("error"))
-	ws := &wsServer{mgr: mgr, log: newLogger("error")}
+	ws := newWSServer(mgr, cfg, newLogger("error"))
 	srv := httptest.NewServer(ws.handler())
 	defer srv.Close()
 
