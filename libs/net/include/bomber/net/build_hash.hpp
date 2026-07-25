@@ -30,6 +30,9 @@ std::uint32_t build_hash();
 //   v1 -> v2: added MsgType::Punch (the NAT hole-punch PING/PONG, ADR-0011 §3).
 //   v2 -> v3: added MsgType::Drop (the peer-drop -> AI handoff control message,
 //             ADR-0011 Risks "Dropped/late peers").
-inline constexpr std::uint32_t kWireProtocolVersion = 3;
+//   v3 -> v4: added MsgType::SetupPreview / SetupChunk / SetupAck — the
+//             host-authoritative match-setup layer (setup_session.hpp) and its
+//             chunked sim::MatchConfig payload (match_config_codec.hpp).
+inline constexpr std::uint32_t kWireProtocolVersion = 4;
 
 }  // namespace bomber::net

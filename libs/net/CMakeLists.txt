@@ -8,6 +8,8 @@
 add_library(bomber_net STATIC
   src/input_codec.cpp
   src/protocol.cpp
+  src/match_config_codec.cpp
+  src/setup_session.cpp
   src/handshake.cpp
   src/lockstep_session.cpp
   src/rollback_session.cpp
