@@ -77,6 +77,14 @@ public:
         // and the determinism guarantees this depends on.
         std::vector<std::pair<std::string, int>> demo_shots;
         std::filesystem::path demo_shot_dir;
+        // Dev-only capture knobs (--demo-players / --demo-seed), used to render
+        // the README's match animation: fill N COMPUTER slots and/or replace the
+        // fixed demo seed, so a headless run can capture a BUSY all-AI match
+        // instead of the scripted 1-human + 1-AI pair (a human slot stands
+        // still with no keyboard attached). Both default to "as before", and
+        // tests/visual/ passes neither — its pinned frames are untouched.
+        int demo_players = 0;                  // 0 = keep the default roster
+        std::uint32_t demo_seed = 0xB0BB1E5u;  // the historic --demo match seed
         // Dev fast-path: skip the front-end and boot straight into a match
         // (also via env BOMBER_BOOT_MATCH). The spine still exists; this just
         // starts the app in the Match state for quick iteration.

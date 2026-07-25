@@ -2630,7 +2630,14 @@ int GameApp::run() {
             std::error_code ec;
             fs::create_directories(opts_.demo_shot_dir, ec);  // ignore: SDL_SaveBMP reports failure
         }
-        start_match(0xB0BB1E5);
+        // --demo-players N (dev-only, README animation capture): an all-COMPUTER
+        // roster. Absent (0) leaves setup_type_ at its 1-human + 1-AI default, so
+        // the visual goldens keep rendering the exact same scripted match.
+        if (opts_.demo_players > 0)
+            for (int i = 0; i < sim::kMaxPlayers; ++i)
+                setup_type_[i] = static_cast<int>(i < opts_.demo_players ? SlotInputType::Computer
+                                                                         : SlotInputType::Off);
+        start_match(opts_.demo_seed);  // 0xB0BB1E5 unless --demo-seed overrides
         int rc = run_demo();
         flush_options();
         return rc;
