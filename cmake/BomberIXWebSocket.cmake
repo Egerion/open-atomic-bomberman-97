@@ -2,40 +2,57 @@
 # (ADR-0011 / docs/online-multiplayer-design.md §1): a small WebSocket client
 # used only to talk to the matchmaking server before a match. Pulled in via
 # FetchContent the same way SDL3 is (cmake/BomberSDL3.cmake), and ONLY when
-# BOMBER_ENABLE_LOBBY is ON — the headless CI gate builds libs/net without it, so
-# the pure deterministic netcode (codec / sessions / transport) stays
-# dependency-light.
+# BOMBER_ENABLE_LOBBY is ON.
 include(FetchContent)
 
-# --- TLS (wss://) is DEFERRED for v1 ----------------------------------------
-# IXWebSocket v11.4.6's mbedTLS backend (IXSocketMbedTLS.cpp) does not compile
-# against ANY single mbedTLS release: it calls psa_crypto_init() (needs 3.6+) yet
-# also calls mbedtls_pk_parse_keyfile() with the 2.x 3-arg signature (3.x needs
-# 5). So there is no mbedTLS version that satisfies both sites.
+# --- TLS (wss://) -----------------------------------------------------------
+# ON by default: the control plane carries the lobby `host_token`, the credential
+# that authorises StartMatch, so it must not cross the wire readable
+# (services/matchmaker/SECURITY.md S1).
 #
-# v1 therefore runs the lobby over ws:// (plain WebSocket). This leaks nothing
-# sensitive — the signaling carries lobby codes, chosen display names, and the
-# candidate IP:port pairs the peers exchange with each other anyway; no
-# passwords, no game State. It deploys fine behind a raw-TCP endpoint
-# (Fly.io/Render). wss:// is a tracked hardening follow-up: pair a newer
-# IXWebSocket commit with mbedTLS 3.6, add an OpenSSL backend, or terminate TLS
-# at an edge proxy. Flip BOMBER_LOBBY_TLS once that pairing is sorted.
-option(BOMBER_LOBBY_TLS "Build the lobby client with wss:// TLS (unstable — see cmake/BomberIXWebSocket.cmake)" OFF)
+# The backend is mbedTLS, built from source next to IXWebSocket — the only TLS
+# stack that fits this repo's constraints at once: FetchContent-only (no vcpkg,
+# no system packages), statically linked so the shipped exe still has no DLLs
+# beside it, and cross-platform for the linux/macos presets. OpenSSL has no
+# usable FetchContent build (a perl/nasm Configure script, not CMake) and its
+# Windows prebuilts are DLLs; IXWebSocket has no Schannel backend to select.
+#
+# The old "no mbedTLS release compiles" note was wrong, and the bug was OURS.
+# IXSocketMbedTLS.cpp picks the mbedtls_pk_parse_keyfile() arity from
+# IXWEBSOCKET_USE_MBED_TLS_MIN_VERSION_3, which IXWebSocket's CMake derives from
+# `find_path(MBEDTLS_VERSION_GREATER_THAN_3 mbedtls/build_info.h)` — a probe for
+# INSTALLED headers. A FetchContent'd mbedTLS lives in the build tree, so the
+# probe found nothing, the define stayed off, and 3.6 headers got compiled
+# against the 2.x signature; against 2.28 the OTHER call site (psa_crypto_init,
+# 3.6+) then failed instead. Seeding that variable below — rather than patching
+# a dependency — makes v11.4.6 + mbedTLS 3.6 build as its author intended.
+#
+# Trust anchors: on Windows IXWebSocket enumerates the CurrentUser\Root
+# certificate store through wincrypt and feeds it to mbedTLS, so verification
+# follows the machine's own trust decisions. mbedTLS has no system-store hook on
+# Linux/macOS, so lobby_client.cpp points caFile at the platform CA bundle
+# there. Peer verification and hostname checking are always on — see
+# libs/net/src/lobby_client.cpp.
+option(BOMBER_LOBBY_TLS "Build the lobby client with wss:// TLS (mbedTLS)" ON)
 
 if(BOMBER_LOBBY_TLS)
-  # mbedTLS 2.28's CMakeLists declares a pre-3.5 cmake_minimum_required, which
-  # CMake 4.x rejects; this documented escape hatch relaxes the floor only for
-  # the fetched subprojects.
-  set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
   set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
   set(ENABLE_PROGRAMS OFF CACHE BOOL "" FORCE)
   set(MBEDTLS_FATAL_WARNINGS OFF CACHE BOOL "" FORCE)
+  set(USE_STATIC_MBEDTLS_LIBRARY ON CACHE BOOL "" FORCE)   # keeps the exe DLL-free
+  set(USE_SHARED_MBEDTLS_LIBRARY OFF CACHE BOOL "" FORCE)
   FetchContent_Declare(mbedtls
     GIT_REPOSITORY https://github.com/Mbed-TLS/mbedtls.git
     GIT_TAG v3.6.2
     GIT_SHALLOW TRUE)
   FetchContent_MakeAvailable(mbedtls)
+
+  # Hand IXWebSocket's FindMbedTLS.cmake its answers up front: each of its
+  # find_path/find_library calls is a no-op once the matching cache entry
+  # exists, so it never searches the system and never fails. The
+  # MBEDTLS_VERSION_GREATER_THAN_3 line is the fix described above.
   set(MBEDTLS_INCLUDE_DIRS "${mbedtls_SOURCE_DIR}/include" CACHE PATH "" FORCE)
+  set(MBEDTLS_VERSION_GREATER_THAN_3 "${mbedtls_SOURCE_DIR}/include" CACHE PATH "" FORCE)
   set(MBEDTLS_LIBRARY    mbedtls    CACHE FILEPATH "" FORCE)
   set(MBEDX509_LIBRARY   mbedx509   CACHE FILEPATH "" FORCE)
   set(MBEDCRYPTO_LIBRARY mbedcrypto CACHE FILEPATH "" FORCE)
