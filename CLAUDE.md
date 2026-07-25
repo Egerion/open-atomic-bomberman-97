@@ -16,6 +16,9 @@ apps/game ─────► libs/game ──► libs/match ──► libs/asset
 apps/viewer ───► (SDL3)   ├──► libs/net   ──► libs/sim      (dependency-free)
 apps/abtool ──────────────┴──► libs/match, libs/sim, libs/assets
 tests ────────► libs/sim, libs/net (+ doctest)
+
+services/matchmaker (Go, separate build) ◄── libs/net's lobby layer, over the
+                                             wire only — no code shared
 ```
 
 - **libs/assets** (`bomber::assets`) — parsers for the original formats (ANI,
@@ -29,16 +32,31 @@ tests ────────► libs/sim, libs/net (+ doctest)
   private; the public API is `bomber/sim/simulation.hpp`.
 - **libs/match** (`bomber::match`) — header-only glue: scheme + VALUELST →
   `MatchConfig`, stage rotation. Keeps assets and sim decoupled.
-- **libs/net** (`bomber::net`) — online multiplayer (ADR-0010). SDL-free,
-  I/O-confined: the per-tick input codec + typed message protocol, the
-  `LockstepSession` (input-delay) and `RollbackSession` (GGPO predict/re-sim)
-  built on an abstract `Transport`, the `UdpTransport` (raw winsock/BSD
-  sockets), and the seed handshake. Consumes `libs/sim`'s value types and
-  `state_hash`; NEVER leaks sockets into `libs/sim` (determinism rule 1). The
-  sim only ever sees a fully-assembled `TickInputs`.
+- **libs/net** (`bomber::net`) — online multiplayer (ADR-0010 core, ADR-0011
+  lobby). SDL-free and I/O-confined; consumes `libs/sim`'s value types and
+  `state_hash` and NEVER leaks sockets into it (determinism rule 1) — the sim
+  only ever sees a fully-assembled `TickInputs`. Three layers:
+  - *in-match*: the per-tick input codec + typed `protocol` messages, the
+    `LockstepSession` (input-delay) and `RollbackSession` (GGPO predict/re-sim,
+    plus the host-scheduled peer-drop → AI handoff), the `SeedHandshake`.
+  - *transports*, all behind one abstract `Transport` so the session above is
+    identical whichever wins: `UdpTransport` (raw winsock/BSD), `LoopbackLink`
+    (headless tests), `RelayedTransport` (the server-forwarded fallback when a
+    punch fails), `StarHubTransport` (the >2-seat hub's fan-out + reflection).
+  - *pre-match*: `LobbyClient` (WebSocket control plane), `StunClient`,
+    `Rendezvous` (the NAT punch), `SetupSession` (the host's authoritative
+    `MatchConfig` over the wire), and `LobbyFlow`, the state machine that
+    drives all of it. `build_hash` is the cross-build door both peers check.
+    These are behind `BOMBER_ENABLE_LOBBY` (ON in the GUI presets, OFF in
+    `headless`), so the deterministic core still builds with no WS/JSON deps.
 - **libs/game** (`bomber::game`) — SDL3 presentation: `AssetStore` (textures,
   recoloring), `SequenceSet`, `Renderer`, `AudioEngine`, `SoundDirector`,
   `KeyboardMapper`, `GameApp`. Reads `State` + `events`; never mutates them.
+- **services/matchmaker** — a small Go service (NOT part of the C++/CMake
+  build) that introduces peers and relays for the ones whose NAT refuses a
+  direct path. It never simulates and never sees `State`.
+  `services/matchmaker/PROTOCOL.md` is the FROZEN wire contract both sides are
+  written against — change it on one side only and you break a deployed game.
 - **apps/** — thin mains: `bomber_game`, `bomber_viewer`, `abtool`.
 
 When adding a gameplay mechanic: put the rules in an existing system (or a
