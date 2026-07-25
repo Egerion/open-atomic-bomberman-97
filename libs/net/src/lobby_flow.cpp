@@ -15,6 +15,10 @@ constexpr std::int64_t kHeartbeatMs = 5000;
 // How long to wait for the punch before giving up. Relay fallback (Phase 2)
 // takes over from here once it exists.
 constexpr int kPunchTimeoutMs = 5000;
+// How long START waits for the peers' candidates to arrive before declaring them
+// unreachable. Generous: it covers a server round trip plus a STUN probe that is
+// still timing out, and costs nothing when the exchange already completed.
+constexpr std::int64_t kCandidateWaitMs = 6000;
 }  // namespace
 
 LobbyFlow::LobbyFlow(Config cfg, UdpTransport& game_transport, LobbyClient& client)
@@ -130,17 +134,28 @@ void LobbyFlow::begin_candidate_gathering(std::int64_t now_ms) {
     stun_ = std::make_unique<StunClient>(transport_, cfg_.stun_host, cfg_.stun_port,
                                          "seat" + std::to_string(my_seat_) + "-" + lobby_id_);
     candidates_sent_ = false;
+    stun_pending_ = true;
     stun_->step(now_ms);
+    publish_candidates();  // the LAN address goes out NOW, not after STUN resolves
 }
 
 void LobbyFlow::publish_candidates() {
-    if (candidates_sent_) return;
+    // Posted TWICE on purpose: once the moment we know our LAN address, and again
+    // when STUN adds the reflexive one. Waiting for STUN before the first post was
+    // a real bug — the probe can take its full timeout (an unreachable or slow
+    // echo), and nothing stops the host pressing START inside that window, so both
+    // peers would reach the punch holding no address for each other and fail with
+    // "NO PEER ADDRESS". Posting early closes that race; the server keeps the
+    // latest list per seat, so the second post simply supersedes the first.
+    if (candidates_sent_ && !stun_pending_) return;
+    std::vector<LobbyCandidate> list = local_candidates_;
     if (stun_ && stun_->ok())
-        local_candidates_.push_back(LobbyCandidate{"reflexive", stun_->reflexive_addr(), ""});
+        list.push_back(LobbyCandidate{"reflexive", stun_->reflexive_addr(), ""});
     // Even with zero candidates we post: the peer then knows we produced none
     // (and, for a same-machine test, its own poll_from still learns our source).
-    client_.send_candidates(lobby_id_, my_seat_, local_candidates_);
+    client_.send_candidates(lobby_id_, my_seat_, list);
     candidates_sent_ = true;
+    if (stun_ && stun_->done()) stun_pending_ = false;  // nothing further to add
 }
 
 // Every peer derives every seat's punch nonce the same way from the shared seed,
@@ -172,6 +187,24 @@ void LobbyFlow::begin_rendezvous(std::int64_t now_ms) {
 
     const bool am_hub = match_start_.hub_seat == my_seat_;
     const bool star = seats.size() > 2;
+
+    // START does not wait for the candidate exchange, so a peer's addresses may
+    // legitimately still be in flight when it lands — the host can press it the
+    // instant everyone readies, and the fan-out is a full server round trip away.
+    // Missing candidates therefore mean "not yet", not "never": hold in
+    // Rendezvous and let step() retry. Failing on the first pump here is what
+    // made a fast START fail with NO PEER ADDRESS against a remote matchmaker
+    // while working locally, where the exchange completes in microseconds.
+    if (candidate_wait_start_ms_ < 0) candidate_wait_start_ms_ = now_ms;
+    bool have_all = true;
+    for (int seat : seats)
+        if (seat != my_seat_ && (!star || am_hub || seat == match_start_.hub_seat))
+            if (candidates_of(seat).empty()) have_all = false;
+    if (!have_all) {
+        if (now_ms - candidate_wait_start_ms_ < kCandidateWaitMs) return;  // retry next pump
+        fail("NO PEER ADDRESS - CANNOT CONNECT");
+        return;
+    }
 
     if (star && am_hub) {
         // The HUB opens a path to every guest over its ONE socket. A single
@@ -381,17 +414,24 @@ void LobbyFlow::step(std::int64_t now_ms) {
     }
 
     if (phase_ == Phase::InLobby) {
-        // Candidate gathering starts as soon as we know our seat, and publishes
-        // when STUN resolves (or gives up — the LAN candidate still stands).
+        // Candidate gathering starts as soon as we know our seat. The LAN address
+        // is posted immediately; STUN keeps running and re-posts with the
+        // reflexive one when it resolves (or gives up).
         if (!stun_ && !candidates_sent_ && my_seat_ >= 0) begin_candidate_gathering(now_ms);
-        if (stun_ && !candidates_sent_) {
+        if (stun_ && stun_pending_) {
             stun_->step(now_ms);
             if (stun_->done()) publish_candidates();
         }
     } else if (phase_ == Phase::Rendezvous) {
+        // STUN may still be in flight when START lands (the host does not wait for
+        // us). Keep pumping it so our reflexive candidate still reaches the peer.
+        if (stun_ && stun_pending_) {
+            stun_->step(now_ms);
+            if (stun_->done()) publish_candidates();
+        }
         if (!punch_) {
             begin_rendezvous(now_ms);
-            return;  // fail() may have fired
+            return;  // may still be waiting for candidates, or fail() may have fired
         }
         punch_->step(now_ms);
         if (punch_->connected()) {

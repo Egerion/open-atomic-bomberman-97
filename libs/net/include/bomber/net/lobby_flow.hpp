@@ -191,6 +191,9 @@ private:
     // Lobby chat: the recent-message ring plus this peer's own send bucket.
     std::vector<ChatLine> chat_log_;
     std::int64_t last_heartbeat_ms_ = -1;
+    // When START arrived with the peers' candidates not yet in hand (see
+    // begin_rendezvous): the deadline is measured from here, not from the punch.
+    std::int64_t candidate_wait_start_ms_ = -1;
     std::int64_t last_chat_ms_ = -1;  // the bucket's last refill instant
     std::int64_t chat_credit_ms_ = kChatCreditPerMsgMs * kChatBurstMsgs;
 
@@ -206,6 +209,7 @@ private:
     Pending pending_ = Pending::None;
     bool pending_public_ = false;
     bool candidates_sent_ = false;
+    bool stun_pending_ = false;  // a reflexive candidate may still be added
     bool relay_requested_ = false;
 };
 
