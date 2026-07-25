@@ -65,6 +65,14 @@ public:
         std::uint32_t seed = 0;
         int input_delay = 2;
         std::uint16_t local_seats_mask = 0;  // the seats THIS peer owns
+        // Every NETWORK seat in the match, derived from `seat_assign` (the
+        // server's final seat→player binding). This is the `all_seats` a
+        // RollbackSession is built with and the set a SetupSession collects acks
+        // over — so the whole match layer reads its seat topology from the
+        // server's answer instead of a hard-coded 0b11. AI slots are NOT here:
+        // they are simulated identically on every peer from the shared config
+        // and their input never crosses the wire.
+        std::uint16_t all_seats_mask = 0;
         int hub_seat = 0;
         std::vector<int> seat_assign;
     };

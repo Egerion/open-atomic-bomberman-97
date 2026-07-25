@@ -77,6 +77,11 @@ struct LobbyRoomResult {
     bool is_host = false;
     std::uint32_t seed = 0;
     std::uint16_t local_seats_mask = 0;
+    // Every NETWORK seat in the match (LobbyFlow::MatchStart::all_seats_mask,
+    // derived from the server's seat_assign). The caller passes it straight to
+    // the RollbackSession and the SetupSession instead of assuming 0b11, which
+    // is what caps a match at two peers.
+    std::uint16_t all_seats_mask = 0;
 };
 
 class LobbyScreen {
@@ -91,6 +96,19 @@ public:
     // characters; false on Esc (or on a window close, which also sets
     // `window_closed` so the caller can propagate a hard quit).
     bool run_code_entry(std::string& code, bool& window_closed);
+
+    // HOW MANY PLAYERS — the host's lobby size, asked BEFORE the room is created
+    // because `max_seats` is a CreateLobby field the server mints seats from
+    // (PROTOCOL.md §3, clamped to 2..10) and cannot be changed afterwards. The
+    // same sub_42DBCC list dialog run_menu draws, one row per size; `seats`
+    // carries the default in and the choice out. False on Esc (`window_closed`
+    // set on a window close, as everywhere else here).
+    //
+    // These are NETWORK seats — one per machine — not the match's player count:
+    // AI slots are added on the roster screen afterwards and are simulated on
+    // every peer rather than exchanged, so a 2-seat lobby can still be a 10-way
+    // game (net_setup_roster.hpp's "SEAT LOCKING").
+    bool run_seat_count(int& seats, bool& window_closed);
 
     // How to reach the matchmaker. GameApp resolves these (CLI flag -> env var
     // -> compile-time placeholder) and hands the result down.
@@ -121,9 +139,13 @@ public:
     // draft and a scroll position survive the handover.
     //
     // `host` and `code` are display-only here — which transient modal to show
-    // while the connection comes up.
+    // while the connection comes up. `max_seats` is the size the HOST asked for
+    // (run_seat_count): the room then draws an OPEN row for every seat still
+    // unfilled, so the host can see how many of the seats it chose are taken.
+    // 0 = unknown, which is a GUEST — JoinAccepted carries no lobby size
+    // (PROTOCOL.md §4), so a guest simply lists the roster it was given.
     LobbyRoomResult run_online(net::LobbyFlow& flow, ChatOverlay& chat, bool host,
-                               const std::string& code);
+                               const std::string& code, int max_seats = 0);
 
     // The PUBLIC GAMES browser (ADR-0011 Phase 3). Asks the matchmaker for the
     // open public lobbies (LobbyFlow::browse_public), lists them, and returns
