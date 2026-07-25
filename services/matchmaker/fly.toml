@@ -33,7 +33,18 @@ primary_region = "ams"
 # WebSocket control plane (TLS terminated at the edge).
 [http_service]
   internal_port = 8080
-  force_https = true
+  # NOT force_https: the game's WS client is currently built WITHOUT TLS
+  # (IXWebSocket v11.4.6's mbedTLS backend does not compile against any single
+  # mbedTLS release — see cmake/BomberIXWebSocket.cmake), so it dials ws://.
+  # With force_https the edge answers that with a 301 the client cannot follow
+  # and the lobby never connects. Turning it off does NOT disable HTTPS — wss://
+  # keeps working for anything that can speak it; it only stops the redirect.
+  #
+  # TRADE-OFF, accepted for now: signaling then travels in the clear. It carries
+  # no credentials (lobby code, chosen display name, the candidate ip:ports peers
+  # exchange anyway), but a passive observer on the path could read a code and
+  # join a "private" lobby. Flip this back to true once the client speaks wss://.
+  force_https = false
   auto_stop_machines = false
   auto_start_machines = true
   min_machines_running = 1

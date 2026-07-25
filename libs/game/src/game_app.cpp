@@ -1057,12 +1057,18 @@ constexpr std::uint16_t kNetDefaultPort = 8000;
 constexpr std::uint32_t kNetHostSeed = 0x1234u;
 
 #if defined(BOMBER_HAS_LOBBY)
-// PLACEHOLDER — the matchmaker is NOT deployed yet (ADR-0011 Phase 1e). This
-// points at a locally run services/matchmaker:
+// The DEPLOYED matchmaker (services/matchmaker running on Fly.io): the game
+// reaches the public lobby with no flags and no local server. Override at
+// runtime without a rebuild via --matchmaker / BOMBER_MATCHMAKER_URL, which is
+// also how you point at a local instance:
 //   go build -o mm.exe ./services/matchmaker && ./mm.exe
-// Replace with the real "wss://<host>/ws" once it ships. Overridable at runtime
-// without a rebuild via --matchmaker / BOMBER_MATCHMAKER_URL (see README).
-constexpr char kDefaultMatchmakerUrl[] = "ws://127.0.0.1:8080/ws";
+//
+// ws:// and not wss:// because the WS client is built WITHOUT TLS for now
+// (IXWebSocket v11.4.6's mbedTLS backend does not compile against any single
+// mbedTLS release — cmake/BomberIXWebSocket.cmake). Signaling carries no
+// credentials, but it IS in the clear; the deployment's force_https is off to
+// match, and the two flip together once the client can speak wss://.
+constexpr char kDefaultMatchmakerUrl[] = "ws://open-bomberman-matchmaker.fly.dev/ws";
 constexpr std::uint16_t kDefaultStunPort = 8081;  // PROTOCOL.md §2's UDP echo port
 
 std::string env_or_empty(const char* name) {

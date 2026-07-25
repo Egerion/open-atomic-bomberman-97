@@ -76,29 +76,30 @@ Player 0: arrows + Right Ctrl/Space (bomb), Right Shift (throw/grab/trigger/punc
 
 ### Online multiplayer
 
-**From the menu:** **Start Network Game** opens the *Network Game* list with five rows:
+**From the menu:** **Start Network Game** opens the *Network Game* list with six rows:
 
 | row | needs a server? | what it does |
 |---|---|---|
 | **Host Private Game** | yes | Creates a lobby and shows a 6-character **code**. Read it out to a friend. |
+| **Host Public Game** | yes | The same, but also listed for anyone to find under *Browse Public Games*. Still joinable by its code. |
 | **Join by Code** | yes | Type the host's 6-character code. |
 | **Browse Public Games** | yes | Lists the open **public** lobbies — name, players/seats, code. `Enter` joins, `R` refreshes, `Esc` goes back. Rows whose build does not match yours are greyed and marked `VERSION`; they cannot be joined (the server would refuse). |
 | **Host LAN Game** | no | Hosts on UDP port 8000 and waits (the original direct path). |
 | **Join by IP Address** | no | Enter the host's `IP:port` (default `127.0.0.1:8000`). |
 
-The three **online** rows land in the same **waiting room**: the lobby code sits in the window title, the roster lists every seat (name, host marker, ready state), `Space` toggles your ready flag, the host presses `Enter` to start, `Esc` leaves. Once the host starts, the peers punch a direct UDP path (STUN/hole-punch) and the match begins with the **server's** seed and seat assignment. **Join Network Game** (the menu row below) remains the direct `IP:port` join, unchanged.
-
-*Host Private Game* creates a **private** lobby (reachable by code only), so the browser lists only lobbies some client asked the server to make public — hosting a public one from the menu is the one Phase 3 seam still open (`LobbyFlow::host_lobby` already takes the flag).
+The four **online** rows land in the same **waiting room**: the lobby code sits in the window title, the roster lists every seat (name, host marker, ready state), `Space` toggles your ready flag, the host presses `Enter` to start, `Esc` leaves. Once the host starts, the peers punch a direct UDP path (STUN/hole-punch) — or fall back to the server's relay if their NAT refuses — and the match begins with the **server's** seed and seat assignment. **Join Network Game** (the menu row below) remains the direct `IP:port` join, unchanged.
 
 #### Matchmaker configuration
 
-The online rows need a signaling server (`services/matchmaker`, a small Go binary). **It is not deployed yet**, so the compile-time default is a local one. The URL is resolved in this order — CLI flag, then environment, then the built-in placeholder:
+The online rows talk to a signaling server (`services/matchmaker`, a small Go binary) that never simulates the game — it introduces peers and, when their NATs refuse a direct path, relays their packets. **A public instance is deployed**, so the online rows work out of the box. The URL resolves CLI flag → environment → the compile-time default:
 
 ```
-OPEN-BM95 --matchmaker ws://127.0.0.1:8080/ws     # 1. CLI flag
+OPEN-BM95 --matchmaker ws://127.0.0.1:8080/ws     # 1. CLI flag (e.g. your own server)
 set BOMBER_MATCHMAKER_URL=ws://127.0.0.1:8080/ws  # 2. environment
-                                                  # 3. kDefaultMatchmakerUrl (game_app.cpp)
+                                                  # 3. the deployed default (game_app.cpp)
 ```
+
+> The signaling connection is currently plain `ws://`, not `wss://`: IXWebSocket v11.4.6's mbedTLS backend does not compile against any single mbedTLS release, so the client is built without TLS for now. It carries no credentials — a lobby code, your chosen display name, and the candidate `ip:port`s peers exchange with each other anyway — but it is readable on the path, so treat a "private" lobby code as semi-public until TLS lands.
 
 The UDP **STUN** echo resolves the same way (`--matchmaker-stun <host[:port]>`, `BOMBER_MATCHMAKER_STUN_HOST` / `BOMBER_MATCHMAKER_STUN_PORT`) and defaults to the matchmaker URL's own host on **port 8081**. To run a server locally:
 
