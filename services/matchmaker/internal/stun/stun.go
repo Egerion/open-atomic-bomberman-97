@@ -1,20 +1,12 @@
-package main
-
-import (
-	"encoding/json"
-	"errors"
-	"log/slog"
-	"net"
-	"sync"
-	"sync/atomic"
-	"time"
-)
-
-// STUN-style reflexive-address echo (design §2). A client sends StunProbe from
-// the SAME UDP socket it will punch/match on; the server replies with the
-// source ip:port it observed — that socket's public reflexive address as seen
-// from outside the NAT. This is the "learn the address off the wire" trick
-// UdpTransport::poll() already does, promoted to a server.
+// Package stun is the STUN-style reflexive-address echo (design §2,
+// PROTOCOL.md §2). A client sends StunProbe from the SAME UDP socket it will
+// punch/match on; the server replies with the source ip:port it observed — that
+// socket's public reflexive address as seen from outside the NAT. This is the
+// "learn the address off the wire" trick UdpTransport::poll() already does,
+// promoted to a server.
+//
+// It is entirely self-contained: it holds no lobby state and never talks to any
+// other package but ratelimit.
 //
 // Datagram format is one JSON object per UDP packet (documented in PROTOCOL.md
 // so the C++ side matches):
@@ -34,46 +26,59 @@ import (
 // worst case at the small end of that curve, and the per-source gate stops a
 // non-spoofing flood. A ~2x reflector is not a useful one (usable reflectors
 // run 50–500x), so the residual is accepted rather than fixed.
+package stun
+
+import (
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"net"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/egedemirbas/open-bomberman/matchmaker/internal/ratelimit"
+)
 
 const (
-	// kStunMaxDatagram bounds an accepted probe. A real probe is ~70 bytes
+	// MaxDatagram bounds an accepted probe. A real probe is ~70 bytes
 	// ("seat<N>-<32 hex lobby id>"); this is generous headroom that still stops
 	// the reply from being grown by a large echoed nonce.
-	kStunMaxDatagram = 512
+	MaxDatagram = 512
 
-	// kStunMaxNonceBytes bounds the echoed token itself — the only part of the
+	// MaxNonceBytes bounds the echoed token itself — the only part of the
 	// reply an attacker controls.
-	kStunMaxNonceBytes = 128
+	MaxNonceBytes = 128
 
 	// Per-source gate. The C++ StunClient re-probes every 250 ms until it gets
 	// an answer, so 20/s sustained with 40 banked is ~5x what several clients
 	// behind one NAT produce. Loopback/private sources are exempt.
-	kStunIngressSlots  = 4096
-	kStunIngressCostMs = 50
-	kStunIngressBurst  = 40
+	kIngressSlots  = 4096
+	kIngressCostMs = 50
+	kIngressBurst  = 40
 
-	kStunMaintainInterval = 30 * time.Second
+	kMaintainInterval = 30 * time.Second
 
-	// kUDPMaxConsecutiveErrs stops a genuinely broken socket from spinning the
+	// kMaxConsecutiveReadErrs stops a genuinely broken socket from spinning the
 	// read loop hot, without letting one bad datagram end it (see serve).
-	kUDPMaxConsecutiveErrs = 64
+	kMaxConsecutiveReadErrs = 64
 )
 
-type stunProbe struct {
+type Probe struct {
 	Type  string `json:"type"`
 	Nonce string `json:"nonce"`
 }
 
-type stunReply struct {
+type Reply struct {
 	Type     string `json:"type"`
 	Nonce    string `json:"nonce"`
 	YourAddr string `json:"your_addr"`
 }
 
-// stunCounters is one snapshot of the aggregated tallies. Like the relay, this
+// counters is one snapshot of the aggregated tallies. Like the relay, this
 // listener never logs per datagram: a log line per hostile packet would itself
 // be an amplifier.
-type stunCounters struct {
+type counters struct {
 	replied     uint64
 	oversize    uint64
 	malformed   uint64
@@ -83,9 +88,9 @@ type stunCounters struct {
 	writeErr    uint64
 }
 
-type stunServer struct {
+type Server struct {
 	conn    *net.UDPConn
-	ingress *ipBuckets
+	ingress *ratelimit.Table
 	log     *slog.Logger
 	done    chan struct{}
 
@@ -97,11 +102,11 @@ type stunServer struct {
 	readErr     atomic.Uint64
 	writeErr    atomic.Uint64
 
-	lastStats stunCounters // maintain goroutine only
+	lastStats counters // maintain goroutine only
 	closeOnce sync.Once
 }
 
-func startStun(addr string, log *slog.Logger) (*stunServer, error) {
+func Start(addr string, log *slog.Logger) (*Server, error) {
 	udpAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		return nil, err
@@ -110,9 +115,9 @@ func startStun(addr string, log *slog.Logger) (*stunServer, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &stunServer{
+	s := &Server{
 		conn:    conn,
-		ingress: newIPBuckets(kStunIngressSlots, kStunIngressCostMs, kStunIngressBurst),
+		ingress: ratelimit.NewTable(kIngressSlots, kIngressCostMs, kIngressBurst),
 		log:     log,
 		done:    make(chan struct{}),
 	}
@@ -121,10 +126,10 @@ func startStun(addr string, log *slog.Logger) (*stunServer, error) {
 	return s, nil
 }
 
-func (s *stunServer) serve() {
+func (s *Server) serve() {
 	// One byte of slack so an oversized datagram is DETECTED rather than
 	// silently truncated by the kernel copy into an exact-sized buffer.
-	buf := make([]byte, kStunMaxDatagram+1)
+	buf := make([]byte, MaxDatagram+1)
 	errs := 0
 	for {
 		n, src, err := s.conn.ReadFromUDP(buf)
@@ -135,7 +140,7 @@ func (s *stunServer) serve() {
 			// from an earlier reply as WSAECONNRESET, rather than truncating
 			// or ignoring the way Linux does. Returning on those made one
 			// datagram enough to take the listener down for good.
-			if errors.Is(err, net.ErrClosed) || errs >= kUDPMaxConsecutiveErrs {
+			if errors.Is(err, net.ErrClosed) || errs >= kMaxConsecutiveReadErrs {
 				return
 			}
 			errs++
@@ -143,24 +148,24 @@ func (s *stunServer) serve() {
 			continue
 		}
 		errs = 0
-		if n > kStunMaxDatagram {
+		if n > MaxDatagram {
 			s.oversize.Add(1)
 			continue
 		}
-		if key := perIPKey(src.String()); key != "" && !s.ingress.allow(key) {
+		if key := ratelimit.SourceKey(src.String()); key != "" && !s.ingress.Allow(key) {
 			s.rateLimited.Add(1)
 			continue
 		}
-		var p stunProbe
+		var p Probe
 		if err := json.Unmarshal(buf[:n], &p); err != nil || p.Type != "StunProbe" {
 			s.malformed.Add(1)
 			continue
 		}
-		if len(p.Nonce) > kStunMaxNonceBytes {
+		if len(p.Nonce) > MaxNonceBytes {
 			s.longNonce.Add(1)
 			continue
 		}
-		reply, err := json.Marshal(stunReply{Type: "StunReply", Nonce: p.Nonce, YourAddr: src.String()})
+		reply, err := json.Marshal(Reply{Type: "StunReply", Nonce: p.Nonce, YourAddr: src.String()})
 		if err != nil {
 			s.malformed.Add(1)
 			continue
@@ -173,8 +178,8 @@ func (s *stunServer) serve() {
 	}
 }
 
-func (s *stunServer) snapshot() stunCounters {
-	return stunCounters{
+func (s *Server) snapshot() counters {
+	return counters{
 		replied:     s.replied.Load(),
 		oversize:    s.oversize.Load(),
 		malformed:   s.malformed.Load(),
@@ -185,7 +190,7 @@ func (s *stunServer) snapshot() stunCounters {
 	}
 }
 
-func (s *stunServer) logStats() {
+func (s *Server) logStats() {
 	cur := s.snapshot()
 	if cur == s.lastStats {
 		return
@@ -198,8 +203,8 @@ func (s *stunServer) logStats() {
 	s.lastStats = cur
 }
 
-func (s *stunServer) maintain() {
-	tk := time.NewTicker(kStunMaintainInterval)
+func (s *Server) maintain() {
+	tk := time.NewTicker(kMaintainInterval)
 	defer tk.Stop()
 	for {
 		select {
@@ -211,9 +216,9 @@ func (s *stunServer) maintain() {
 	}
 }
 
-func (s *stunServer) LocalAddr() net.Addr { return s.conn.LocalAddr() }
+func (s *Server) LocalAddr() net.Addr { return s.conn.LocalAddr() }
 
-func (s *stunServer) Close() error {
+func (s *Server) Close() error {
 	s.closeOnce.Do(func() { close(s.done) })
 	return s.conn.Close()
 }

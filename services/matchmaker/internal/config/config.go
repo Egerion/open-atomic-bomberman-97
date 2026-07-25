@@ -1,4 +1,8 @@
-package main
+// Package config resolves the service's runtime configuration from flags with
+// environment fallbacks (flags win), and builds the logger. It is the one place
+// a default lives, so every construction path — main, tests, anything later —
+// sees the same bounds.
+package config
 
 import (
 	"flag"
@@ -45,11 +49,11 @@ const (
 	kDefaultConnIdleTimeout = 120 * time.Second
 )
 
-// withDefaults fills in the caps a zero-valued Config leaves unset, so every
+// WithDefaults fills in the caps a zero-valued Config leaves unset, so every
 // construction path (main, tests, future callers) gets the same bounds. A
 // NEGATIVE value is preserved and means "disabled" — the escape hatch for an
 // operator who caps elsewhere.
-func (c Config) withDefaults() Config {
+func (c Config) WithDefaults() Config {
 	if c.MaxConns == 0 {
 		c.MaxConns = kDefaultMaxConns
 	}
@@ -65,21 +69,21 @@ func (c Config) withDefaults() Config {
 	return c
 }
 
-// relayAdvertise is the "host:port" put in RelayAllocated. When -relay-advertise
+// AdvertisedRelay is the "host:port" put in RelayAllocated. When -relay-advertise
 // is unset we fall back to the configured listen address — the same host/port
 // pattern the STUN listener already uses (same host as the control plane, its
 // own UDP port). A wildcard listen address is not routable, so main.go warns at
 // startup when the fallback has no real host.
-func (c Config) relayAdvertise() string {
+func (c Config) AdvertisedRelay() string {
 	if c.RelayAdvertise != "" {
 		return c.RelayAdvertise
 	}
 	return c.RelayAddr
 }
 
-// hasRoutableHost reports whether an advertised "host:port" names a host a
+// HasRoutableHost reports whether an advertised "host:port" names a host a
 // client could actually reach (i.e. not ":8082", "0.0.0.0:8082" or "[::]:8082").
-func hasRoutableHost(addr string) bool {
+func HasRoutableHost(addr string) bool {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return false
@@ -91,7 +95,7 @@ func hasRoutableHost(addr string) bool {
 	return true
 }
 
-func parseConfig(args []string) Config {
+func Parse(args []string) Config {
 	fs := flag.NewFlagSet("matchmaker", flag.ExitOnError)
 	wsAddr := fs.String("ws-addr", envStr("MATCHMAKER_WS_ADDR", ":8080"), "WebSocket control-plane listen address")
 	stunAddr := fs.String("stun-addr", envStr("MATCHMAKER_STUN_ADDR", ":8081"), "UDP STUN-echo listen address")
@@ -128,10 +132,10 @@ func parseConfig(args []string) Config {
 		MaxLobbies:        *maxLobbies,
 		ConnIdleTimeout:   *connIdle,
 		ClientIPHeader:    *clientIPHeader,
-	}.withDefaults()
+	}.WithDefaults()
 }
 
-func newLogger(level string) *slog.Logger {
+func NewLogger(level string) *slog.Logger {
 	var lv slog.Level
 	switch strings.ToLower(level) {
 	case "debug":

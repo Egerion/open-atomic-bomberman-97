@@ -20,7 +20,7 @@ touches it. All match authority is the deterministic P2P sim on the peers.
 
 ```sh
 cd services/matchmaker
-go run .
+go run ./cmd/matchmaker
 # WebSocket control plane on ws://localhost:8080/ws
 # UDP STUN echo on        udp  localhost:8081
 # UDP relay forwarder on  udp  localhost:8082
@@ -212,15 +212,40 @@ risk of each spelled out. The short version:
 
 ## Layout
 
-| file | role |
-|---|---|
-| `main.go` | config wiring, signal-driven graceful shutdown |
-| `config.go` | flags + env, slog logger |
-| `protocol.go` | wire message types, envelope, `build_hash`/`roster_digest` helpers |
-| `code.go` | Crockford base-32 lobby codes + opaque handles (`crypto/rand`) |
-| `manager.go` | lobby state machine, all control-plane handlers, heartbeat reaper |
-| `ratelimit.go` | token buckets, the fixed-size per-source table, client-IP resolution |
-| `wsserver.go` | HTTP/WebSocket adapter (`coder/websocket`) → the Manager, connection admission |
-| `stun.go` | UDP STUN reflexive-address echo |
-| `relay.go` | UDP relay forwarder: allocation table + opaque datagram forwarding |
-| `*_test.go` | code, manager, STUN, relay, rate-limit, security and in-process WebSocket tests |
+Packages are split by **domain**, not by technical layer — the Go convention, and
+the one that keeps the dependency graph readable. There is no `model/`,
+`handler/` or `service/`; there is a lobby, a relay, a STUN echo, and the wire
+contract they all speak.
+
+```
+cmd/matchmaker/     main.go — wiring only: parse config, build the three
+                    listeners and the state they share, shut them down
+internal/
+  config            flags + env + defaults, slog logger
+  protocol          the FROZEN wire types and the screens that decide whether an
+                    inbound field may be acted on. No state, no dependencies.
+  ratelimit         token bucket + the fixed-size per-source table + client-IP
+                    resolution. A mechanism the other packages spend.
+  lobby             the domain core: lobby state machine, every control-plane
+                    handler, per-connection accounting, the reapers. Transport-
+                    agnostic — it pushes frames through a ClientConn seam.
+  wsapi             HTTP/WebSocket adapter (coder/websocket) → the Manager, plus
+                    the connection admission control in front of it
+  stun              the UDP reflexive-address echo, self-contained
+  relay             the UDP forwarder: allocation table, address pinning, listener
+```
+
+Dependencies point one way only:
+
+```
+cmd/matchmaker ──► wsapi ──► lobby ──► relay ──┐
+        │            │         ├──► protocol   ├──► ratelimit
+        └────────────┴─────────┴──► config ◄───┘
+                              stun ────────────┘
+```
+
+`lobby` owns the allocations `relay` stores, and `relay` never calls back — so
+the only lock order that can occur is `Manager.mu → relay.Table.mu`. Tests live
+beside the package they exercise: the address-pinning suite is in `relay`
+(it needs a table, not a lobby), the admission tests are in `wsapi`, and the
+control-plane hardening tests are in `lobby`.

@@ -1,4 +1,19 @@
-package main
+// Package ratelimit holds the admission primitives the three listeners share: a
+// token bucket, and a fixed-size per-source table built on it. It knows nothing
+// about lobbies, datagrams or the wire format — it is a mechanism the other
+// packages spend, not a layer above them. See SECURITY.md.
+//
+// Two shapes, and the difference between them is the whole point:
+//
+//   - Bucket is per-CONNECTION (or per-allocation) state. A WebSocket
+//     connection is a thing the server already accounts for and caps, so a
+//     bucket per connection is bounded by the connection cap.
+//   - Table is per-SOURCE-ADDRESS state for the UDP listeners and for
+//     limits that must survive a reconnect. A source address is attacker-chosen
+//     (and, over UDP, forgeable), so it must NEVER key a growing map: the table
+//     is a FIXED-SIZE array indexed by a hash of the address. Colliding sources
+//     share a budget, which is the price of never letting a stranger allocate.
+package ratelimit
 
 import (
 	"crypto/rand"
@@ -11,21 +26,7 @@ import (
 	"time"
 )
 
-// Rate-limiting and source-identification primitives shared by the three
-// listeners. See SECURITY.md.
-//
-// Two shapes, and the difference between them is the whole point:
-//
-//   - tokenBucket is per-CONNECTION (or per-allocation) state. A WebSocket
-//     connection is a thing the server already accounts for and caps, so a
-//     bucket per connection is bounded by the connection cap.
-//   - ipBuckets is per-SOURCE-ADDRESS state for the UDP listeners and for
-//     limits that must survive a reconnect. A source address is attacker-chosen
-//     (and, over UDP, forgeable), so it must NEVER key a growing map: the table
-//     is a FIXED-SIZE array indexed by a hash of the address. Colliding sources
-//     share a budget, which is the price of never letting a stranger allocate.
-
-// tokenBucket is a token bucket measured in MILLISECONDS of credit: one event
+// Bucket is a token bucket measured in MILLISECONDS of credit: one event
 // costs costMs, credit accrues with elapsed wall time, and at most costMs*burst
 // may be banked. It starts full, so the first burst never waits.
 //
@@ -33,20 +34,20 @@ import (
 // arithmetic is unchanged — including the deliberate loss of sub-millisecond
 // fractions, which can only make a limit stricter than nominal — chat simply no
 // longer keeps its own copy of it.
-type tokenBucket struct {
+type Bucket struct {
 	costMs   int
 	capMs    int
 	creditMs int
 	seen     time.Time
 }
 
-func newTokenBucket(costMs, burst int) tokenBucket {
+func NewBucket(costMs, burst int) Bucket {
 	full := costMs * burst
-	return tokenBucket{costMs: costMs, capMs: full, creditMs: full}
+	return Bucket{costMs: costMs, capMs: full, creditMs: full}
 }
 
-// refill credits the bucket for the time elapsed since it was last consulted.
-func (b *tokenBucket) refill(now time.Time) {
+// Refill credits the bucket for the time elapsed since it was last consulted.
+func (b *Bucket) Refill(now time.Time) {
 	if !b.seen.IsZero() {
 		if elapsed := now.Sub(b.seen); elapsed > 0 {
 			b.creditMs += int(elapsed / time.Millisecond)
@@ -58,10 +59,10 @@ func (b *tokenBucket) refill(now time.Time) {
 	}
 }
 
-// allow refills and spends one event's credit. False means the event must be
+// Allow refills and spends one event's credit. False means the event must be
 // REJECTED — a bucket never queues and never delays.
-func (b *tokenBucket) allow(now time.Time) bool {
-	b.refill(now)
+func (b *Bucket) Allow(now time.Time) bool {
+	b.Refill(now)
 	if b.creditMs < b.costMs {
 		return false
 	}
@@ -69,24 +70,24 @@ func (b *tokenBucket) allow(now time.Time) bool {
 	return true
 }
 
-// peek refills and reports whether one event WOULD be allowed, without spending
+// Peek refills and reports whether one event WOULD be allowed, without spending
 // the credit. Used where the charge depends on the OUTCOME — a JoinByCode that
 // finds nothing costs credit, one that seats the sender does not — so the
 // budget still has to gate the attempt before the outcome is known.
-func (b *tokenBucket) peek(now time.Time) bool {
-	b.refill(now)
+func (b *Bucket) Peek(now time.Time) bool {
+	b.Refill(now)
 	return b.creditMs >= b.costMs
 }
 
-// spend takes one event's credit; pair it with peek.
-func (b *tokenBucket) spend() {
+// Spend takes one event's credit; pair it with Peek.
+func (b *Bucket) Spend() {
 	b.creditMs -= b.costMs
 	if b.creditMs < 0 {
 		b.creditMs = 0
 	}
 }
 
-// ipBuckets is a fixed-size table of token buckets indexed by a KEYED hash of
+// Table is a fixed-size table of token buckets indexed by a KEYED hash of
 // the source address. It never grows, never evicts and never allocates per
 // source, so a flood from a million forged addresses costs exactly the same
 // memory as one client.
@@ -95,22 +96,22 @@ func (b *tokenBucket) spend() {
 // hash lets an attacker who knows the table size choose source addresses that
 // land in a victim's slot and starve it. With a secret seed, which slot a given
 // address maps to is unpredictable from outside.
-type ipBuckets struct {
+type Table struct {
 	mu    sync.Mutex
-	slots []tokenBucket
+	slots []Bucket
 	seed  uint64
 	now   func() time.Time // injectable clock (tests)
 }
 
-func newIPBuckets(slots, costMs, burst int) *ipBuckets {
-	t := &ipBuckets{slots: make([]tokenBucket, slots), seed: randomSeed(), now: time.Now}
+func NewTable(slots, costMs, burst int) *Table {
+	t := &Table{slots: make([]Bucket, slots), seed: randomSeed(), now: time.Now}
 	for i := range t.slots {
-		t.slots[i] = newTokenBucket(costMs, burst)
+		t.slots[i] = NewBucket(costMs, burst)
 	}
 	return t
 }
 
-func (t *ipBuckets) index(key string) int {
+func (t *Table) index(key string) int {
 	h := fnv.New64a()
 	var seed [8]byte
 	binary.LittleEndian.PutUint64(seed[:], t.seed)
@@ -119,20 +120,20 @@ func (t *ipBuckets) index(key string) int {
 	return int(h.Sum64() % uint64(len(t.slots)))
 }
 
-// allow charges one event against the slot this key hashes to.
-func (t *ipBuckets) allow(key string) bool {
+// Allow charges one event against the slot this key hashes to.
+func (t *Table) Allow(key string) bool {
 	idx := t.index(key)
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.slots[idx].allow(t.now())
+	return t.slots[idx].Allow(t.now())
 }
 
-// peek reports whether one event would be allowed, without charging it.
-func (t *ipBuckets) peek(key string) bool {
+// Peek reports whether one event would be allowed, without charging it.
+func (t *Table) Peek(key string) bool {
 	idx := t.index(key)
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.slots[idx].peek(t.now())
+	return t.slots[idx].Peek(t.now())
 }
 
 func randomSeed() uint64 {
@@ -146,7 +147,7 @@ func randomSeed() uint64 {
 }
 
 // hostOf strips the port from a "host:port" (or returns the input unchanged
-// when there is none — a test conn's remote() is not an address).
+// when there is none — a test conn's remote address is not one).
 func hostOf(addr string) string {
 	if h, _, err := net.SplitHostPort(addr); err == nil {
 		return h
@@ -154,7 +155,7 @@ func hostOf(addr string) string {
 	return addr
 }
 
-// perIPKey decides what a per-IP cap should count, given the peer address the
+// SourceKey decides what a per-IP cap should count, given the peer address the
 // listener observed.
 //
 // Returns "" for a peer that is NOT a real client — loopback, private and
@@ -162,11 +163,11 @@ func hostOf(addr string) string {
 // every WebSocket connection arrives from such an address, and capping "per IP"
 // there would squeeze the whole world into one bucket and take the service
 // down. When the edge is trusted to set a client-IP header, -client-ip-header
-// names it and the real address is used instead (see clientIP).
+// names it and the real address is used instead (see ClientIP).
 //
 // A directly exposed server — and both UDP listeners, which no proxy touches —
 // sees public peer addresses, and the cap applies.
-func perIPKey(addr string) string {
+func SourceKey(addr string) string {
 	host := hostOf(addr)
 	ip := net.ParseIP(host)
 	if ip == nil {
@@ -178,7 +179,7 @@ func perIPKey(addr string) string {
 	return ip.String()
 }
 
-// clientIP resolves the address the per-IP caps should count for one HTTP
+// ClientIP resolves the address the per-IP caps should count for one HTTP
 // request. The configured header is consulted ONLY when the direct peer is
 // itself a loopback/private address — i.e. when the request plausibly arrived
 // through the local edge proxy. A directly connected client therefore cannot
@@ -189,8 +190,8 @@ func perIPKey(addr string) string {
 // APPENDS to — a raw X-Forwarded-For chain — has an attacker-controlled
 // leftmost entry; pointing this flag at one is an operator error, and the
 // README says so.
-func clientIP(r *http.Request, header string) string {
-	if header != "" && perIPKey(r.RemoteAddr) == "" {
+func ClientIP(r *http.Request, header string) string {
+	if header != "" && SourceKey(r.RemoteAddr) == "" {
 		if v := r.Header.Get(header); v != "" {
 			if i := strings.IndexByte(v, ','); i >= 0 {
 				v = v[:i]

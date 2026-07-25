@@ -1,4 +1,12 @@
-package main
+// Package protocol is the wire contract: the message types both sides of
+// PROTOCOL.md are written against, and the screens that decide whether an
+// inbound field may be acted on. It holds no state and talks to nothing — the
+// lobby, the relay and the WebSocket adapter all speak through it.
+//
+// The names and JSON tags here are FROZEN. The C++ client (IXWebSocket,
+// ADR-0011) matches them byte for byte; changing one side breaks a deployed
+// game.
+package protocol
 
 import (
 	"crypto/sha256"
@@ -51,9 +59,9 @@ const (
 	ReasonInProgress    = "in_progress"
 )
 
-// envelope peeks the discriminator only. The concrete message unmarshals from
+// Envelope peeks the discriminator only. The concrete message unmarshals from
 // the same flat bytes (fields live alongside "type", never nested).
-type envelope struct {
+type Envelope struct {
 	Type string `json:"type"`
 }
 
@@ -95,7 +103,7 @@ type PublicLobby struct {
 
 // ---- inbound messages (client -> server) ------------------------------------
 
-type createLobbyMsg struct {
+type CreateLobbyMsg struct {
 	Visibility string `json:"visibility"`
 	Name       string `json:"name"`
 	MaxSeats   int    `json:"max_seats"`
@@ -103,27 +111,27 @@ type createLobbyMsg struct {
 	Player     string `json:"player"`
 }
 
-type joinByCodeMsg struct {
+type JoinByCodeMsg struct {
 	Code      string `json:"code"`
 	BuildHash string `json:"build_hash"`
 	Player    string `json:"player"`
 }
 
-type listPublicMsg struct {
+type ListPublicMsg struct {
 	BuildHash string `json:"build_hash"`
 }
 
-type setReadyMsg struct {
+type SetReadyMsg struct {
 	Ready bool `json:"ready"`
 }
 
-type candidatesMsg struct {
+type CandidatesMsg struct {
 	LobbyID string      `json:"lobby_id"`
 	Seat    int         `json:"seat"`
 	List    []Candidate `json:"list"`
 }
 
-type startMatchReqMsg struct {
+type StartMatchReqMsg struct {
 	LobbyID   string `json:"lobby_id"`
 	HostToken string `json:"host_token"`
 	// Optional parity payload the host may supply; the server is config-agnostic
@@ -133,23 +141,23 @@ type startMatchReqMsg struct {
 	MatchConfigDigest string `json:"match_config_digest,omitempty"`
 }
 
-type reanchorLobbyMsg struct {
+type ReanchorLobbyMsg struct {
 	Code         string `json:"code"`
 	RosterDigest string `json:"roster_digest"`
 }
 
-type matchOverMsg struct {
+type MatchOverMsg struct {
 	LobbyID string `json:"lobby_id"`
 }
 
-// chatMsg is the INBOUND half of Chat (§7). It carries the body and nothing
+// ChatMsg is the INBOUND half of Chat (§7). It carries the body and nothing
 // else on purpose: a seat or a name in a client frame is ignored, so no peer can
 // speak as somebody else.
-type chatMsg struct {
+type ChatMsg struct {
 	Text string `json:"text"`
 }
 
-type allocateRelayMsg struct {
+type AllocateRelayMsg struct {
 	LobbyID string `json:"lobby_id"`
 	// Seat is a POINTER so "omitted" is distinguishable from seat 0. It is
 	// advisory: an allocation always belongs to the SENDER's own seat (a peer
@@ -160,7 +168,7 @@ type allocateRelayMsg struct {
 
 // ---- outbound messages (server -> client) -----------------------------------
 
-type lobbyCreatedMsg struct {
+type LobbyCreatedMsg struct {
 	Type      string `json:"type"`
 	Code      string `json:"code"`
 	LobbyID   string `json:"lobby_id"`
@@ -168,7 +176,7 @@ type lobbyCreatedMsg struct {
 	YourSeat  int    `json:"your_seat"`
 }
 
-type joinAcceptedMsg struct {
+type JoinAcceptedMsg struct {
 	Type           string        `json:"type"`
 	LobbyID        string        `json:"lobby_id"`
 	YourSeat       int           `json:"your_seat"`
@@ -176,32 +184,32 @@ type joinAcceptedMsg struct {
 	HostCandidates []Candidate   `json:"host_candidates"`
 }
 
-type joinRejectedMsg struct {
+type JoinRejectedMsg struct {
 	Type   string `json:"type"`
 	Reason string `json:"reason"`
 }
 
-type publicListMsg struct {
+type PublicListMsg struct {
 	Type    string        `json:"type"`
 	Lobbies []PublicLobby `json:"lobbies"`
 }
 
-type rosterUpdateMsg struct {
+type RosterUpdateMsg struct {
 	Type   string        `json:"type"`
 	Roster []RosterEntry `json:"roster"`
 }
 
-type heartbeatAckMsg struct {
+type HeartbeatAckMsg struct {
 	Type string `json:"type"`
 }
 
-type peerCandidatesMsg struct {
+type PeerCandidatesMsg struct {
 	Type string      `json:"type"`
 	Seat int         `json:"seat"`
 	List []Candidate `json:"list"`
 }
 
-type startMatchMsg struct {
+type StartMatchMsg struct {
 	Type              string   `json:"type"`
 	Seed              uint32   `json:"seed"`
 	SeatAssign        []int    `json:"seat_assign"`
@@ -211,36 +219,36 @@ type startMatchMsg struct {
 	LocalSeatsMask    int      `json:"local_seats_mask"`
 }
 
-// relayAllocatedMsg answers AllocateRelay (§6). relay_addr is the publicly
+// RelayAllocatedMsg answers AllocateRelay (§6). relay_addr is the publicly
 // reachable host:port of the UDP forwarder; alloc_id is the 32-hex-char form of
 // the 16 binary bytes that prefix every relayed datagram.
-type relayAllocatedMsg struct {
+type RelayAllocatedMsg struct {
 	Type      string `json:"type"`
 	RelayAddr string `json:"relay_addr"`
 	AllocID   string `json:"alloc_id"`
 }
 
-// chatRelayMsg is the OUTBOUND half of Chat (§7), fanned out to every member of
+// ChatRelayMsg is the OUTBOUND half of Chat (§7), fanned out to every member of
 // the sender's lobby (the sender included, so everyone sees the same order).
 // Seat and name come from the server's own roster — never from the frame that
 // triggered the relay.
-type chatRelayMsg struct {
+type ChatRelayMsg struct {
 	Type string `json:"type"`
 	Seat int    `json:"seat"`
 	Name string `json:"name"`
 	Text string `json:"text"`
 }
 
-type reanchorAcceptedMsg struct {
+type ReanchorAcceptedMsg struct {
 	Type      string `json:"type"`
 	LobbyID   string `json:"lobby_id"`
 	Code      string `json:"code"`
 	HostToken string `json:"host_token"`
 }
 
-// errorMsg is the out-of-band failure channel for malformed input and rejected
+// ErrorMsg is the out-of-band failure channel for malformed input and rejected
 // control actions that are not covered by a dedicated *Rejected reply.
-type errorMsg struct {
+type ErrorMsg struct {
 	Type    string `json:"type"`
 	Code    string `json:"code"`
 	Message string `json:"message"`
@@ -248,9 +256,9 @@ type errorMsg struct {
 
 // ---- helpers ----------------------------------------------------------------
 
-// kChatMaxBytes caps one chat line (PROTOCOL.md §7). Bytes, not runes: it is a
+// ChatMaxBytes caps one chat line (PROTOCOL.md §7). Bytes, not runes: it is a
 // wire budget, and the client's 1997 bitmap font is single-byte anyway.
-const kChatMaxBytes = 120
+const ChatMaxBytes = 120
 
 // Field ceilings for every string a client can put on the control plane
 // (PROTOCOL.md §8). Chat was screened from the start; these close the same gap
@@ -263,55 +271,40 @@ const kChatMaxBytes = 120
 // name, a build_hash is "0x" + 8 hex, a handle is 32 hex, a roster digest is 64
 // hex, and an "[ipv6]:port" is at most 47.
 const (
-	kMaxPlayerNameBytes = 48
-	kMaxLobbyNameBytes  = 48
-	kMaxCodeBytes       = 16
-	kMaxBuildHashBytes  = 32
-	kMaxHandleBytes     = 64
-	kMaxDigestBytes     = 96
+	MaxPlayerNameBytes = 48
+	MaxLobbyNameBytes  = 48
+	MaxCodeBytes       = 16
+	MaxBuildHashBytes  = 32
+	MaxHandleBytes     = 64
+	MaxDigestBytes     = 96
 
 	// A client publishes two candidates (host + reflexive). The ceiling is what
 	// stops one member from making every peer punch at a thousand addresses of
 	// its choosing, and from parking a large list in the lobby's memory.
-	kMaxCandidates          = 16
-	kMaxCandidateKindBytes  = 16
-	kMaxCandidateAddrBytes  = 64
-	kMaxCandidateAllocBytes = 64
+	MaxCandidates          = 16
+	MaxCandidateKindBytes  = 16
+	MaxCandidateAddrBytes  = 64
+	MaxCandidateAllocBytes = 64
 
 	// kMaxErrorEchoBytes bounds how much of a client's own string an Error may
 	// quote back, so a large "type" cannot be reflected at its full size.
 	kMaxErrorEchoBytes = 40
 
-	// kMaxPublicListRows caps one PublicList answer. ListPublic is the request
+	// MaxPublicListRows caps one PublicList answer. ListPublic is the request
 	// where the smallest frame buys the largest reply to an unauthenticated
 	// caller, so the reply is bounded in rows as well as in rate. Rows are
 	// sorted by code, so the cut is stable rather than map-order arbitrary.
-	kMaxPublicListRows = 200
+	MaxPublicListRows = 200
 )
 
-// isLobbyCode reports whether a normalised code is well-formed: exactly 6
-// Crockford base-32 symbols. Screening the shape before the map lookup keeps a
-// long or exotic string out of the lobby key space entirely.
-func isLobbyCode(s string) bool {
-	if len(s) != 6 {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		if strings.IndexByte(crockford, s[i]) < 0 {
-			return false
-		}
-	}
-	return true
-}
-
-// validateText is the shared screen for every inbound free-text field: bounded,
+// ValidateText is the shared screen for every inbound free-text field: bounded,
 // valid UTF-8, no control runes. Empty passes — an unset optional field is not
 // an attack, and only chat (§7) additionally insists on a non-blank body.
 //
 // REJECT, NEVER REPAIR (the rule chat already followed, now applied to names
 // too): a truncated display name would put a different name in the roster than
 // the one the player chose, and every peer would then see the server's edit.
-func validateText(s string, maxBytes int) bool {
+func ValidateText(s string, maxBytes int) bool {
 	if len(s) > maxBytes {
 		return false
 	}
@@ -326,44 +319,44 @@ func validateText(s string, maxBytes int) bool {
 	return true
 }
 
-// validateCandidates screens a Candidates list before it is stored and fanned
+// ValidateCandidates screens a Candidates list before it is stored and fanned
 // out. The addresses themselves are NOT resolved or filtered — a peer's own
 // LAN address is legitimate and the server has no way to tell a good one from a
 // bad one — but the list is bounded in every dimension.
-func validateCandidates(list []Candidate) bool {
-	if len(list) > kMaxCandidates {
+func ValidateCandidates(list []Candidate) bool {
+	if len(list) > MaxCandidates {
 		return false
 	}
 	for _, c := range list {
-		if !validateText(c.Kind, kMaxCandidateKindBytes) ||
-			!validateText(c.Addr, kMaxCandidateAddrBytes) ||
-			!validateText(c.Alloc, kMaxCandidateAllocBytes) {
+		if !ValidateText(c.Kind, MaxCandidateKindBytes) ||
+			!ValidateText(c.Addr, MaxCandidateAddrBytes) ||
+			!ValidateText(c.Alloc, MaxCandidateAllocBytes) {
 			return false
 		}
 	}
 	return true
 }
 
-// clipEcho screens a client-supplied string before an Error quotes it back.
+// ClipEcho screens a client-supplied string before an Error quotes it back.
 // An unknown "type" from a future client is short printable ASCII and echoes
 // unchanged, which is the whole diagnostic value; anything longer or
 // unprintable is replaced wholesale rather than trimmed, so the reply can be
 // neither an amplifier nor a way to push control bytes into somebody's terminal
 // through the log. Same rule as everywhere else: reject, never repair.
-func clipEcho(s string) string {
-	if !validateText(s, kMaxErrorEchoBytes) {
+func ClipEcho(s string) string {
+	if !ValidateText(s, kMaxErrorEchoBytes) {
 		return "(rejected)"
 	}
 	return s
 }
 
-// validateChatText screens one inbound chat body. Chat is the only place a
+// ValidateChatText screens one inbound chat body. Chat is the only place a
 // player's own typing reaches OTHER players, so it is validated and REJECTED —
 // never repaired: a truncated or silently stripped line would put words in
 // somebody's mouth. Returns the Error code to answer with, or "" when the text
 // may be relayed verbatim.
-func validateChatText(s string) string {
-	if len(s) > kChatMaxBytes {
+func ValidateChatText(s string) string {
+	if len(s) > ChatMaxBytes {
 		return "chat_too_long"
 	}
 	// encoding/json already substitutes U+FFFD for invalid UTF-8 as it decodes,
@@ -388,15 +381,15 @@ func validateChatText(s string) string {
 	return ""
 }
 
-// normalizeBuildHash canonicalises a build_hash string ("0xA1B2C3D4") for
+// NormalizeBuildHash canonicalises a build_hash string ("0xA1B2C3D4") for
 // equality checks: trim, lowercase, drop an optional "0x". The wire form stays
 // the human-readable "0x…" string (PROTOCOL.md); only comparison is normalized.
-func normalizeBuildHash(s string) string {
+func NormalizeBuildHash(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	return strings.TrimPrefix(s, "0x")
 }
 
-// rosterDigest is a canonical digest over a roster, used by ReanchorLobby
+// RosterDigest is a canonical digest over a roster, used by ReanchorLobby
 // (design §8.3) to prove lobby continuity when a promoted hub re-anchors. Only
 // the (seat, name) pairs feed it — ready/is_host churn is deliberately excluded
 // so the digest identifies "the same players in the same seats". The C++ client
@@ -406,7 +399,7 @@ func normalizeBuildHash(s string) string {
 //	digest = lowercase-hex SHA-256 of that UTF-8 byte string
 //
 // The length prefix makes it injective regardless of names containing ':' or ';'.
-func rosterDigest(roster []RosterEntry) string {
+func RosterDigest(roster []RosterEntry) string {
 	sorted := append([]RosterEntry(nil), roster...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Seat < sorted[j].Seat })
 	var b strings.Builder

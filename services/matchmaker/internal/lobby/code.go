@@ -1,9 +1,10 @@
-package main
+package lobby
 
 import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
+	"strings"
 )
 
 // crockford is the Crockford base-32 alphabet (RFC-less de-facto standard):
@@ -26,9 +27,25 @@ func newLobbyCode() (string, error) {
 	return string(out), nil
 }
 
-// newHandle returns a 128-bit opaque handle (32 lowercase hex chars) for a
-// lobby_id or host_token — unguessable, from crypto/rand.
-func newHandle() (string, error) {
+// isLobbyCode reports whether a normalised code is well-formed: exactly 6
+// Crockford base-32 symbols. Screening the shape before the map lookup keeps a
+// long or exotic string out of the lobby key space entirely — and it lives next
+// to the generator so the two can never disagree about the alphabet.
+func isLobbyCode(s string) bool {
+	if len(s) != 6 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if strings.IndexByte(crockford, s[i]) < 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// NewHandle returns a 128-bit opaque handle (32 lowercase hex chars) for a
+// lobby_id, a host_token or a connection id — unguessable, from crypto/rand.
+func NewHandle() (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", err

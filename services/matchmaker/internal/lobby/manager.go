@@ -1,4 +1,13 @@
-package main
+// Package lobby is the control plane's domain core: the lobby state machine,
+// every handler behind it, the per-connection accounting, and the heartbeat and
+// idle reapers. It is transport-agnostic — it pushes frames through the
+// ClientConn seam and never touches a socket — which is what lets the whole
+// state machine be tested without a network.
+//
+// It depends on protocol for the wire types, ratelimit for the budgets, config
+// for its caps, and relay for the allocations it mints. Nothing depends on it
+// but the WebSocket adapter and main.
+package lobby
 
 import (
 	"context"
@@ -10,6 +19,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/egedemirbas/open-bomberman/matchmaker/internal/config"
+	"github.com/egedemirbas/open-bomberman/matchmaker/internal/protocol"
+	"github.com/egedemirbas/open-bomberman/matchmaker/internal/ratelimit"
+	"github.com/egedemirbas/open-bomberman/matchmaker/internal/relay"
 )
 
 // kMaxSeats is the roster ceiling (ADR-0011 decision 4: input-type-4 lets any of
@@ -57,7 +71,7 @@ const (
 	kJoinFailIPSlots    = 4096
 
 	// Candidates is the other fan-out request: one frame in, one frame to every
-	// OTHER member out. The list is already size-capped (kMaxCandidates), and
+	// OTHER member out. The list is already size-capped (protocol.MaxCandidates), and
 	// this caps the rate, so the total a member can push through the fan-out is
 	// bounded in both dimensions. The client publishes its list twice per lobby
 	// session (once with the LAN address, once when STUN resolves), so 4/s with
@@ -66,14 +80,14 @@ const (
 	kCandBurst    = 8
 )
 
-// clientConn is the transport-agnostic seam the manager pushes messages through.
-// wsConn (production) adapts a WebSocket; fakeConn (tests) captures frames. This
+// ClientConn is the transport-agnostic seam the manager pushes messages through.
+// wsapi.conn (production) adapts a WebSocket; fakeConn (tests) captures frames. This
 // keeps the whole lobby state machine unit-testable without a network.
-type clientConn interface {
-	id() string     // stable per-connection identity
-	send(v any)     // enqueue one JSON frame (non-blocking; never holds the manager lock)
-	remote() string // peer address, for logging
-	disconnect(reason string)
+type ClientConn interface {
+	ID() string     // stable per-connection identity
+	Send(v any)     // enqueue one JSON frame (non-blocking; never holds the manager lock)
+	Remote() string // peer address, for logging
+	Disconnect(reason string)
 }
 
 // lobbyState is the server-side per-lobby machine (design §5.2).
@@ -102,28 +116,28 @@ func (s lobbyState) String() string {
 }
 
 type member struct {
-	conn       clientConn
+	conn       ClientConn
 	seat       int
 	name       string
 	ready      bool
 	buildHash  string // normalized; must equal the lobby's
 	lastSeen   time.Time
-	candidates []Candidate
+	candidates []protocol.Candidate
 
 	// Chat token bucket (§7). Starts full so a member can speak the moment it
 	// arrives, and never queues or shortens a line — over-rate means DROPPED.
-	chat tokenBucket
+	chat ratelimit.Bucket
 }
 
 // newMember seats a connection with a full chat budget.
-func newMember(c clientConn, seat int, name, buildHash string, now time.Time) *member {
+func newMember(c ClientConn, seat int, name, buildHash string, now time.Time) *member {
 	return &member{
 		conn:      c,
 		seat:      seat,
 		name:      name,
 		buildHash: buildHash,
 		lastSeen:  now,
-		chat:      newTokenBucket(kChatCreditPerMsgMs, kChatBurstMsgs),
+		chat:      ratelimit.NewBucket(kChatCreditPerMsgMs, kChatBurstMsgs),
 	}
 }
 
@@ -132,27 +146,36 @@ func newMember(c clientConn, seat int, name, buildHash string, now time.Time) *m
 // never takes a seat is still bounded and still reaped (a seatless socket used
 // to be free and immortal — see SECURITY.md "idle connections").
 type connState struct {
-	conn      clientConn
+	conn      ClientConn
 	srcKey    string // per-IP limiter key, "" when this peer is not capped
 	firstSeen time.Time
 	lastSeen  time.Time
 
-	msgs     tokenBucket // every inbound frame
-	list     tokenBucket // ListPublic
-	cand     tokenBucket // Candidates (fans out to every other member)
-	joinFail tokenBucket // JoinByCode attempts that did not seat the sender
+	msgs     ratelimit.Bucket // every inbound frame
+	list     ratelimit.Bucket // ListPublic
+	cand     ratelimit.Bucket // Candidates (fans out to every other member)
+	joinFail ratelimit.Bucket // JoinByCode attempts that did not seat the sender
 }
 
-func newConnState(c clientConn, now time.Time) *connState {
+func newConnState(c ClientConn, now time.Time) *connState {
 	return &connState{
 		conn:      c,
 		firstSeen: now,
 		lastSeen:  now,
-		msgs:      newTokenBucket(kMsgCreditMs, kMsgBurst),
-		list:      newTokenBucket(kListCreditMs, kListBurst),
-		cand:      newTokenBucket(kCandCreditMs, kCandBurst),
-		joinFail:  newTokenBucket(kJoinFailCreditMs, kJoinFailBurst),
+		msgs:      ratelimit.NewBucket(kMsgCreditMs, kMsgBurst),
+		list:      ratelimit.NewBucket(kListCreditMs, kListBurst),
+		cand:      ratelimit.NewBucket(kCandCreditMs, kCandBurst),
+		joinFail:  ratelimit.NewBucket(kJoinFailCreditMs, kJoinFailBurst),
 	}
+}
+
+// LobbyCount reports how many lobbies are live. The only window this package
+// opens onto its own state — for start-up assertions and tests, never for a
+// caller to act on.
+func (m *Manager) LobbyCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.lobbies)
 }
 
 // seatless reports whether this connection holds no lobby seat. Used by the
@@ -215,69 +238,71 @@ type connLoc struct {
 type Manager struct {
 	mu      sync.Mutex
 	lobbies map[string]*lobby   // code -> lobby
-	byConn  map[string]*connLoc // conn.id() -> location
+	byConn  map[string]*connLoc // conn.ID() -> location
 	// conns is the per-connection accounting, one entry per open socket whether
-	// or not it holds a seat. Bounded by cfg.MaxConns: wsServer refuses the
-	// upgrade past the cap, and every accepted connection is removed on close.
+	// or not it holds a seat. Bounded by cfg.MaxConns: the WebSocket adapter
+	// refuses the upgrade past the cap, and every accepted connection is removed
+	// on close.
 	conns map[string]*connState
-	cfg   Config
+	cfg   config.Config
 	log   *slog.Logger
 	now   func() time.Time // injectable clock (tests)
 
 	// joinFailIP charges failed JoinByCode attempts per SOURCE ADDRESS as well
 	// as per connection, because the per-connection budget is reset simply by
 	// reconnecting and a code search does not care which socket it runs over.
-	joinFailIP *ipBuckets
+	joinFailIP *ratelimit.Table
 
 	drops     dropCounters // guarded by mu
 	lastDrops dropCounters // reaper goroutine only, under mu
 
-	// relay is the UDP forwarder's allocation registry (relay.go). The Manager
-	// mints and frees entries; relayServer reads them on the data plane. It has
-	// its own lock and never calls back here, so the order is always mu → relay.
-	relay *relayTable
+	// relay is the UDP forwarder's allocation registry. The Manager mints and
+	// frees entries; the relay's own listener reads them on the data plane. It
+	// has its own lock and never calls back here, so the only lock order that
+	// can occur is Manager.mu → relay.Table.mu. Injected rather than
+	// constructed so main can hand the same table to the listener.
+	relay *relay.Table
 }
 
-func NewManager(cfg Config, log *slog.Logger) *Manager {
-	cfg = cfg.withDefaults()
+func NewManager(cfg config.Config, relayTable *relay.Table, log *slog.Logger) *Manager {
 	return &Manager{
 		lobbies:    map[string]*lobby{},
 		byConn:     map[string]*connLoc{},
 		conns:      map[string]*connState{},
-		cfg:        cfg,
+		cfg:        cfg.WithDefaults(),
 		log:        log,
 		now:        time.Now,
-		joinFailIP: newIPBuckets(kJoinFailIPSlots, kJoinFailIPCreditMs, kJoinFailIPBurst),
-		relay:      newRelayTable(cfg.RelayIdle, log),
+		joinFailIP: ratelimit.NewTable(kJoinFailIPSlots, kJoinFailIPCreditMs, kJoinFailIPBurst),
+		relay:      relayTable,
 	}
 }
 
-// addConn registers an accepted socket. srcKey is the per-IP limiter key for
+// AddConn registers an accepted socket. srcKey is the per-IP limiter key for
 // this connection ("" when the peer is not an address a cap should count — see
-// perIPKey), remembered here so the UDP-shaped limits and the control plane
-// agree on who a caller is.
-func (m *Manager) addConn(c clientConn, srcKey string) {
+// ratelimit.SourceKey), remembered here so the UDP-shaped limits and the
+// control plane agree on who a caller is.
+func (m *Manager) AddConn(c ClientConn, srcKey string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	cs := newConnState(c, m.now())
 	cs.srcKey = srcKey
-	m.conns[c.id()] = cs
+	m.conns[c.ID()] = cs
 }
 
 // connStateLocked returns this connection's accounting, creating it if the
 // socket was never registered (the in-process test path; production always goes
-// through addConn/removeConn).
-func (m *Manager) connStateLocked(c clientConn) *connState {
-	if cs, ok := m.conns[c.id()]; ok {
+// through AddConn/RemoveConn).
+func (m *Manager) connStateLocked(c ClientConn) *connState {
+	if cs, ok := m.conns[c.ID()]; ok {
 		return cs
 	}
 	cs := newConnState(c, m.now())
-	cs.srcKey = perIPKey(c.remote())
-	m.conns[c.id()] = cs
+	cs.srcKey = ratelimit.SourceKey(c.Remote())
+	m.conns[c.ID()] = cs
 	return cs
 }
 
-// dispatch is the single entry point for an inbound frame.
+// Dispatch is the single entry point for an inbound frame.
 //
 // Everything here runs BEFORE any handler and applies to a caller that has
 // proved nothing about itself: the global frame bucket bounds parse cost,
@@ -285,12 +310,12 @@ func (m *Manager) connStateLocked(c clientConn) *connState {
 // JSON is even looked at. Over-rate frames are dropped SILENTLY — answering
 // each one with an Error would turn the limiter into the amplifier it exists to
 // prevent (the same reasoning as the chat bucket, PROTOCOL.md §7.3).
-func (m *Manager) dispatch(c clientConn, raw []byte) {
+func (m *Manager) Dispatch(c ClientConn, raw []byte) {
 	m.mu.Lock()
 	cs := m.connStateLocked(c)
 	now := m.now()
 	cs.lastSeen = now
-	allowed := cs.msgs.allow(now)
+	allowed := cs.msgs.Allow(now)
 	if !allowed {
 		m.drops.overRate++
 	}
@@ -299,7 +324,7 @@ func (m *Manager) dispatch(c clientConn, raw []byte) {
 		return
 	}
 
-	var env envelope
+	var env protocol.Envelope
 	if err := json.Unmarshal(raw, &env); err != nil {
 		m.countDrop(func(d *dropCounters) { d.badJSON++ })
 		m.sendErr(c, "bad_json", "message is not valid JSON")
@@ -308,36 +333,36 @@ func (m *Manager) dispatch(c clientConn, raw []byte) {
 	m.touch(c) // any frame refreshes presence
 
 	switch env.Type {
-	case TypeCreateLobby:
+	case protocol.TypeCreateLobby:
 		m.handleCreate(c, raw)
-	case TypeJoinByCode:
+	case protocol.TypeJoinByCode:
 		m.handleJoin(c, raw)
-	case TypeListPublic:
+	case protocol.TypeListPublic:
 		m.handleListPublic(c, raw)
-	case TypeSetReady:
+	case protocol.TypeSetReady:
 		m.handleSetReady(c, raw)
-	case TypeHeartbeat:
-		c.send(heartbeatAckMsg{Type: TypeHeartbeatAck})
-	case TypeCandidates:
+	case protocol.TypeHeartbeat:
+		c.Send(protocol.HeartbeatAckMsg{Type: protocol.TypeHeartbeatAck})
+	case protocol.TypeCandidates:
 		m.handleCandidates(c, raw)
-	case TypeStartMatch:
+	case protocol.TypeStartMatch:
 		m.handleStart(c, raw)
-	case TypeReanchorLobby:
+	case protocol.TypeReanchorLobby:
 		m.handleReanchor(c, raw)
-	case TypeMatchOver:
+	case protocol.TypeMatchOver:
 		m.handleMatchOver(c, raw)
-	case TypeAllocateRelay:
+	case protocol.TypeAllocateRelay:
 		m.handleAllocateRelay(c, raw)
-	case TypeChat:
+	case protocol.TypeChat:
 		m.handleChat(c, raw)
 	default:
 		m.countDrop(func(d *dropCounters) { d.unknownType++ })
-		m.sendErr(c, "unknown_type", "unknown message type: "+clipEcho(env.Type))
+		m.sendErr(c, "unknown_type", "unknown message type: "+protocol.ClipEcho(env.Type))
 	}
 }
 
-func (m *Manager) sendErr(c clientConn, code, msg string) {
-	c.send(errorMsg{Type: TypeError, Code: code, Message: msg})
+func (m *Manager) sendErr(c ClientConn, code, msg string) {
+	c.Send(protocol.ErrorMsg{Type: protocol.TypeError, Code: code, Message: msg})
 }
 
 // countDrop bumps one aggregated tally. Refusals are counted, never logged per
@@ -352,16 +377,16 @@ func (m *Manager) countDrop(bump func(*dropCounters)) {
 // badMessage is the shared answer for a frame the server refuses to act on:
 // counted, and answered with one bounded Error. It never quotes the offending
 // value back.
-func (m *Manager) badMessage(c clientConn, msg string) {
+func (m *Manager) badMessage(c ClientConn, msg string) {
 	m.countDrop(func(d *dropCounters) { d.badMessage++ })
 	m.sendErr(c, "bad_message", msg)
 }
 
 // touch refreshes a connection's presence timestamp (heartbeat liveness).
-func (m *Manager) touch(c clientConn) {
+func (m *Manager) touch(c ClientConn) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if loc, ok := m.byConn[c.id()]; ok {
+	if loc, ok := m.byConn[c.ID()]; ok {
 		if lb, ok := m.lobbies[loc.code]; ok {
 			if mem, ok := lb.members[loc.seat]; ok {
 				mem.lastSeen = m.now()
@@ -372,8 +397,8 @@ func (m *Manager) touch(c clientConn) {
 
 // ---- handlers ---------------------------------------------------------------
 
-func (m *Manager) handleCreate(c clientConn, raw []byte) {
-	var msg createLobbyMsg
+func (m *Manager) handleCreate(c ClientConn, raw []byte) {
+	var msg protocol.CreateLobbyMsg
 	if err := json.Unmarshal(raw, &msg); err != nil {
 		m.badMessage(c, "malformed CreateLobby")
 		return
@@ -382,15 +407,15 @@ func (m *Manager) handleCreate(c clientConn, raw []byte) {
 	// and in every relayed Chat frame's attribution, the second to any stranger
 	// who browses. Screened here, and REJECTED rather than trimmed: a truncated
 	// display name would put a name in the roster that the player never chose.
-	if !validateText(msg.Player, kMaxPlayerNameBytes) {
+	if !protocol.ValidateText(msg.Player, protocol.MaxPlayerNameBytes) {
 		m.badMessage(c, "player name is too long or contains control characters")
 		return
 	}
-	if !validateText(msg.Name, kMaxLobbyNameBytes) {
+	if !protocol.ValidateText(msg.Name, protocol.MaxLobbyNameBytes) {
 		m.badMessage(c, "lobby name is too long or contains control characters")
 		return
 	}
-	if !validateText(msg.BuildHash, kMaxBuildHashBytes) {
+	if !protocol.ValidateText(msg.BuildHash, protocol.MaxBuildHashBytes) {
 		m.badMessage(c, "build_hash is malformed")
 		return
 	}
@@ -402,7 +427,7 @@ func (m *Manager) handleCreate(c clientConn, raw []byte) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.byConn[c.id()]; ok {
+	if _, ok := m.byConn[c.ID()]; ok {
 		m.sendErr(c, "already_in_lobby", "this connection already holds a lobby seat")
 		return
 	}
@@ -419,12 +444,12 @@ func (m *Manager) handleCreate(c clientConn, raw []byte) {
 		m.sendErr(c, "internal", "could not allocate a lobby code")
 		return
 	}
-	id, err := newHandle()
+	id, err := NewHandle()
 	if err != nil {
 		m.sendErr(c, "internal", "handle generation failed")
 		return
 	}
-	token, err := newHandle()
+	token, err := NewHandle()
 	if err != nil {
 		m.sendErr(c, "internal", "handle generation failed")
 		return
@@ -435,7 +460,7 @@ func (m *Manager) handleCreate(c clientConn, raw []byte) {
 		name:       msg.Name,
 		visibility: vis,
 		maxSeats:   maxSeats,
-		buildHash:  normalizeBuildHash(msg.BuildHash),
+		buildHash:  protocol.NormalizeBuildHash(msg.BuildHash),
 		hostToken:  token,
 		hostSeat:   0,
 		state:      stateOpen,
@@ -444,9 +469,9 @@ func (m *Manager) handleCreate(c clientConn, raw []byte) {
 	}
 	lb.members[0] = newMember(c, 0, msg.Player, lb.buildHash, m.now())
 	m.lobbies[code] = lb
-	m.byConn[c.id()] = &connLoc{code: code, seat: 0}
+	m.byConn[c.ID()] = &connLoc{code: code, seat: 0}
 
-	c.send(lobbyCreatedMsg{Type: TypeLobbyCreated, Code: code, LobbyID: id, HostToken: token, YourSeat: 0})
+	c.Send(protocol.LobbyCreatedMsg{Type: protocol.TypeLobbyCreated, Code: code, LobbyID: id, HostToken: token, YourSeat: 0})
 	m.log.Info("lobby created", "code", code, "visibility", vis, "max_seats", maxSeats, "host", msg.Player)
 }
 
@@ -460,21 +485,21 @@ func (m *Manager) handleCreate(c clientConn, raw []byte) {
 // and the source address's, because the first is reset simply by reconnecting.
 // A successful join costs nothing, so a player who mistypes a code or retries a
 // full lobby never notices either one.
-func (m *Manager) handleJoin(c clientConn, raw []byte) {
-	var msg joinByCodeMsg
+func (m *Manager) handleJoin(c ClientConn, raw []byte) {
+	var msg protocol.JoinByCodeMsg
 	if err := json.Unmarshal(raw, &msg); err != nil {
 		m.badMessage(c, "malformed JoinByCode")
 		return
 	}
-	if !validateText(msg.Player, kMaxPlayerNameBytes) {
+	if !protocol.ValidateText(msg.Player, protocol.MaxPlayerNameBytes) {
 		m.badMessage(c, "player name is too long or contains control characters")
 		return
 	}
-	if !validateText(msg.BuildHash, kMaxBuildHashBytes) {
+	if !protocol.ValidateText(msg.BuildHash, protocol.MaxBuildHashBytes) {
 		m.badMessage(c, "build_hash is malformed")
 		return
 	}
-	if !validateText(msg.Code, kMaxCodeBytes) {
+	if !protocol.ValidateText(msg.Code, protocol.MaxCodeBytes) {
 		m.badMessage(c, "code is malformed")
 		return
 	}
@@ -482,7 +507,7 @@ func (m *Manager) handleJoin(c clientConn, raw []byte) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.byConn[c.id()]; ok {
+	if _, ok := m.byConn[c.ID()]; ok {
 		m.sendErr(c, "already_in_lobby", "this connection already holds a lobby seat")
 		return
 	}
@@ -490,83 +515,83 @@ func (m *Manager) handleJoin(c clientConn, raw []byte) {
 	// limiter cannot be probed by watching which requests are answered.
 	cs := m.connStateLocked(c)
 	now := m.now()
-	if !cs.joinFail.peek(now) || (cs.srcKey != "" && !m.joinFailIP.peek(cs.srcKey)) {
+	if !cs.joinFail.Peek(now) || (cs.srcKey != "" && !m.joinFailIP.Peek(cs.srcKey)) {
 		m.drops.joinGuess++
 		return // silent: an answer here would be a free oracle on the rate limit
 	}
 	reject := func(reason string) {
-		cs.joinFail.spend()
+		cs.joinFail.Spend()
 		if cs.srcKey != "" {
-			m.joinFailIP.allow(cs.srcKey)
+			m.joinFailIP.Allow(cs.srcKey)
 		}
-		c.send(joinRejectedMsg{Type: TypeJoinRejected, Reason: reason})
+		c.Send(protocol.JoinRejectedMsg{Type: protocol.TypeJoinRejected, Reason: reason})
 	}
 
 	// A code that is not even the right SHAPE never reaches the lobby map, but
 	// it still costs the caller a guess — it is a guess.
 	if !isLobbyCode(code) {
-		reject(ReasonNotFound)
+		reject(protocol.ReasonNotFound)
 		return
 	}
 	lb, ok := m.lobbies[code]
 	if !ok {
-		reject(ReasonNotFound)
+		reject(protocol.ReasonNotFound)
 		return
 	}
 	if lb.state != stateOpen {
-		reject(ReasonInProgress)
+		reject(protocol.ReasonInProgress)
 		return
 	}
-	if normalizeBuildHash(msg.BuildHash) != lb.buildHash {
+	if protocol.NormalizeBuildHash(msg.BuildHash) != lb.buildHash {
 		// The loud cross-platform door (ADR-0011): turn a mismatched build away
 		// before anyone waits.
-		reject(ReasonBuildMismatch)
+		reject(protocol.ReasonBuildMismatch)
 		return
 	}
 	seat, ok := lb.freeSeat()
 	if !ok {
-		reject(ReasonFull)
+		reject(protocol.ReasonFull)
 		return
 	}
 	lb.members[seat] = newMember(c, seat, msg.Player, lb.buildHash, m.now())
-	m.byConn[c.id()] = &connLoc{code: code, seat: seat}
+	m.byConn[c.ID()] = &connLoc{code: code, seat: seat}
 
-	var hostCand []Candidate
+	var hostCand []protocol.Candidate
 	if h, ok := lb.members[lb.hostSeat]; ok {
 		hostCand = h.candidates
 	}
-	c.send(joinAcceptedMsg{
-		Type:           TypeJoinAccepted,
+	c.Send(protocol.JoinAcceptedMsg{
+		Type:           protocol.TypeJoinAccepted,
 		LobbyID:        lb.id,
 		YourSeat:       seat,
 		Roster:         m.rosterOfLocked(lb),
 		HostCandidates: hostCand,
 	})
-	m.broadcastLocked(lb, rosterUpdateMsg{Type: TypeRosterUpdate, Roster: m.rosterOfLocked(lb)})
+	m.broadcastLocked(lb, protocol.RosterUpdateMsg{Type: protocol.TypeRosterUpdate, Roster: m.rosterOfLocked(lb)})
 	m.log.Info("join accepted", "code", code, "seat", seat, "player", msg.Player)
 }
 
 // handleListPublic answers the public browser. This is the one request where
 // the smallest possible frame buys the largest possible answer from an
 // unauthenticated caller, so it is bounded twice: its own (tighter) token
-// bucket on the rate, and kMaxPublicListRows on the size of one answer.
-func (m *Manager) handleListPublic(c clientConn, raw []byte) {
-	var msg listPublicMsg
+// bucket on the rate, and protocol.MaxPublicListRows on the size of one answer.
+func (m *Manager) handleListPublic(c ClientConn, raw []byte) {
+	var msg protocol.ListPublicMsg
 	_ = json.Unmarshal(raw, &msg) // build_hash filter is optional
-	want := normalizeBuildHash(msg.BuildHash)
+	want := protocol.NormalizeBuildHash(msg.BuildHash)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !m.connStateLocked(c).list.allow(m.now()) {
+	if !m.connStateLocked(c).list.Allow(m.now()) {
 		m.drops.overRate++
 		return // silent, like every other over-rate drop
 	}
-	out := make([]PublicLobby, 0)
+	out := make([]protocol.PublicLobby, 0)
 	for _, lb := range m.lobbies {
 		if lb.visibility != "public" || lb.state != stateOpen {
 			continue
 		}
-		out = append(out, PublicLobby{
+		out = append(out, protocol.PublicLobby{
 			Code:       lb.code,
 			Name:       lb.name,
 			Players:    len(lb.members),
@@ -578,14 +603,14 @@ func (m *Manager) handleListPublic(c clientConn, raw []byte) {
 	// Sort first, THEN cut, so the truncation is a stable prefix rather than an
 	// arbitrary slice of Go's randomised map order.
 	sort.Slice(out, func(i, j int) bool { return out[i].Code < out[j].Code })
-	if len(out) > kMaxPublicListRows {
-		out = out[:kMaxPublicListRows]
+	if len(out) > protocol.MaxPublicListRows {
+		out = out[:protocol.MaxPublicListRows]
 	}
-	c.send(publicListMsg{Type: TypePublicList, Lobbies: out})
+	c.Send(protocol.PublicListMsg{Type: protocol.TypePublicList, Lobbies: out})
 }
 
-func (m *Manager) handleSetReady(c clientConn, raw []byte) {
-	var msg setReadyMsg
+func (m *Manager) handleSetReady(c ClientConn, raw []byte) {
+	var msg protocol.SetReadyMsg
 	if err := json.Unmarshal(raw, &msg); err != nil {
 		m.badMessage(c, "malformed SetReady")
 		return
@@ -605,11 +630,11 @@ func (m *Manager) handleSetReady(c clientConn, raw []byte) {
 		return
 	}
 	mem.ready = msg.Ready
-	m.broadcastLocked(lb, rosterUpdateMsg{Type: TypeRosterUpdate, Roster: m.rosterOfLocked(lb)})
+	m.broadcastLocked(lb, protocol.RosterUpdateMsg{Type: protocol.TypeRosterUpdate, Roster: m.rosterOfLocked(lb)})
 }
 
-func (m *Manager) handleCandidates(c clientConn, raw []byte) {
-	var msg candidatesMsg
+func (m *Manager) handleCandidates(c ClientConn, raw []byte) {
+	var msg protocol.CandidatesMsg
 	if err := json.Unmarshal(raw, &msg); err != nil {
 		m.badMessage(c, "malformed Candidates")
 		return
@@ -618,7 +643,7 @@ func (m *Manager) handleCandidates(c clientConn, raw []byte) {
 	// so an unbounded one is both a memory hold and an amplifier (one frame in,
 	// up to nine out). msg.Seat stays ignored — the list always belongs to the
 	// SENDER's seat, so no member can publish addresses on another's behalf.
-	if !validateCandidates(msg.List) {
+	if !protocol.ValidateCandidates(msg.List) {
 		m.badMessage(c, "candidate list is too long or malformed")
 		return
 	}
@@ -632,7 +657,7 @@ func (m *Manager) handleCandidates(c clientConn, raw []byte) {
 	if lb.state == stateInProgress || lb.state == stateEvicted {
 		return // rendezvous window closed
 	}
-	if !m.connStateLocked(c).cand.allow(m.now()) {
+	if !m.connStateLocked(c).cand.Allow(m.now()) {
 		m.drops.overRate++
 		return // silent, like every other over-rate drop
 	}
@@ -645,21 +670,21 @@ func (m *Manager) handleCandidates(c clientConn, raw []byte) {
 		if seat == mem.seat {
 			continue
 		}
-		other.conn.send(peerCandidatesMsg{Type: TypePeerCandidates, Seat: mem.seat, List: msg.List})
+		other.conn.Send(protocol.PeerCandidatesMsg{Type: protocol.TypePeerCandidates, Seat: mem.seat, List: msg.List})
 		if len(other.candidates) > 0 {
-			c.send(peerCandidatesMsg{Type: TypePeerCandidates, Seat: seat, List: other.candidates})
+			c.Send(protocol.PeerCandidatesMsg{Type: protocol.TypePeerCandidates, Seat: seat, List: other.candidates})
 		}
 	}
 }
 
-func (m *Manager) handleStart(c clientConn, raw []byte) {
-	var msg startMatchReqMsg
+func (m *Manager) handleStart(c ClientConn, raw []byte) {
+	var msg protocol.StartMatchReqMsg
 	if err := json.Unmarshal(raw, &msg); err != nil {
 		m.badMessage(c, "malformed StartMatch")
 		return
 	}
-	if !validateText(msg.HostToken, kMaxHandleBytes) ||
-		!validateText(msg.MatchConfigDigest, kMaxDigestBytes) {
+	if !protocol.ValidateText(msg.HostToken, protocol.MaxHandleBytes) ||
+		!protocol.ValidateText(msg.MatchConfigDigest, protocol.MaxDigestBytes) {
 		// match_config_digest is ECHOED into the broadcast every seat receives,
 		// so it is screened like any other field that reaches other people.
 		m.badMessage(c, "host_token or match_config_digest is malformed")
@@ -716,13 +741,13 @@ func (m *Manager) handleStart(c clientConn, raw []byte) {
 
 	lb.state = stateLocked
 	for seat, mm := range lb.members {
-		mm.conn.send(startMatchMsg{
-			Type:              TypeStartMatch,
+		mm.conn.Send(protocol.StartMatchMsg{
+			Type:              protocol.TypeStartMatch,
 			Seed:              seed,
 			SeatAssign:        seats,
 			MatchConfigDigest: cfgDigest,
 			InputDelay:        inputDelay,
-			Topology:          Topology{HubSeat: lb.hostSeat},
+			Topology:          protocol.Topology{HubSeat: lb.hostSeat},
 			LocalSeatsMask:    1 << uint(seat), // each connection owns exactly its own seat in v1
 		})
 	}
@@ -736,13 +761,13 @@ func (m *Manager) handleStart(c clientConn, raw []byte) {
 	m.scheduleLockedToInProgressLocked(lb)
 }
 
-func (m *Manager) handleReanchor(c clientConn, raw []byte) {
-	var msg reanchorLobbyMsg
+func (m *Manager) handleReanchor(c ClientConn, raw []byte) {
+	var msg protocol.ReanchorLobbyMsg
 	if err := json.Unmarshal(raw, &msg); err != nil {
 		m.badMessage(c, "malformed ReanchorLobby")
 		return
 	}
-	if !validateText(msg.Code, kMaxCodeBytes) || !validateText(msg.RosterDigest, kMaxDigestBytes) {
+	if !protocol.ValidateText(msg.Code, protocol.MaxCodeBytes) || !protocol.ValidateText(msg.RosterDigest, protocol.MaxDigestBytes) {
 		m.badMessage(c, "code or roster_digest is malformed")
 		return
 	}
@@ -755,7 +780,7 @@ func (m *Manager) handleReanchor(c clientConn, raw []byte) {
 		m.sendErr(c, "reanchor_rejected", "lobby code not found")
 		return
 	}
-	loc, ok := m.byConn[c.id()]
+	loc, ok := m.byConn[c.ID()]
 	if !ok || loc.code != code {
 		m.sendErr(c, "reanchor_rejected", "requester is not a member of this lobby")
 		return
@@ -772,23 +797,23 @@ func (m *Manager) handleReanchor(c clientConn, raw []byte) {
 	}
 	// Prove continuity: the promoted hub's roster digest must match the lobby's
 	// surviving roster (design §8.3). Only (seat, name) pairs feed the digest.
-	if !constantTimeEqual(rosterDigest(m.rosterOfLocked(lb)), msg.RosterDigest) {
+	if !constantTimeEqual(protocol.RosterDigest(m.rosterOfLocked(lb)), msg.RosterDigest) {
 		m.sendErr(c, "reanchor_rejected", "roster_digest does not match the surviving roster")
 		return
 	}
-	token, err := newHandle()
+	token, err := NewHandle()
 	if err != nil {
 		m.sendErr(c, "internal", "handle generation failed")
 		return
 	}
 	lb.hostToken = token
 	lb.hostSeat = loc.seat // promote the re-anchoring peer to hub/anchor
-	c.send(reanchorAcceptedMsg{Type: TypeReanchorAccepted, LobbyID: lb.id, Code: lb.code, HostToken: token})
-	m.broadcastLocked(lb, rosterUpdateMsg{Type: TypeRosterUpdate, Roster: m.rosterOfLocked(lb)})
+	c.Send(protocol.ReanchorAcceptedMsg{Type: protocol.TypeReanchorAccepted, LobbyID: lb.id, Code: lb.code, HostToken: token})
+	m.broadcastLocked(lb, protocol.RosterUpdateMsg{Type: protocol.TypeRosterUpdate, Roster: m.rosterOfLocked(lb)})
 	m.log.Info("lobby re-anchored", "code", code, "new_host_seat", loc.seat)
 }
 
-func (m *Manager) handleMatchOver(c clientConn, raw []byte) {
+func (m *Manager) handleMatchOver(c ClientConn, raw []byte) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	lb, _ := m.lookupLocked(c)
@@ -804,14 +829,14 @@ func (m *Manager) handleMatchOver(c clientConn, raw []byte) {
 	for _, mm := range lb.members {
 		mm.ready = false
 	}
-	m.broadcastLocked(lb, rosterUpdateMsg{Type: TypeRosterUpdate, Roster: m.rosterOfLocked(lb)})
+	m.broadcastLocked(lb, protocol.RosterUpdateMsg{Type: protocol.TypeRosterUpdate, Roster: m.rosterOfLocked(lb)})
 	m.log.Info("lobby reopened for rematch", "code", lb.code)
 }
 
 // handleAllocateRelay reserves this seat's slot on the UDP forwarder (§6,
-// relay.go) — the fallback a client asks for once its hole-punch has failed.
-func (m *Manager) handleAllocateRelay(c clientConn, raw []byte) {
-	var msg allocateRelayMsg
+// the relay package) — the fallback a client asks for once its hole-punch has failed.
+func (m *Manager) handleAllocateRelay(c ClientConn, raw []byte) {
+	var msg protocol.AllocateRelayMsg
 	if err := json.Unmarshal(raw, &msg); err != nil {
 		m.badMessage(c, "malformed AllocateRelay")
 		return
@@ -831,14 +856,14 @@ func (m *Manager) handleAllocateRelay(c clientConn, raw []byte) {
 		m.sendErr(c, "bad_message", "seat does not match this connection's seat")
 		return
 	}
-	allocID, err := m.relay.allocate(lb.code, mem.seat)
+	allocID, err := m.relay.Allocate(lb.code, mem.seat)
 	if err != nil {
 		m.sendErr(c, "internal", "relay allocation failed")
 		return
 	}
-	c.send(relayAllocatedMsg{
-		Type:      TypeRelayAllocated,
-		RelayAddr: m.cfg.relayAdvertise(),
+	c.Send(protocol.RelayAllocatedMsg{
+		Type:      protocol.TypeRelayAllocated,
+		RelayAddr: m.cfg.AdvertisedRelay(),
 		AllocID:   allocID,
 	})
 	m.log.Info("relay allocated", "code", lb.code, "seat", mem.seat)
@@ -852,8 +877,8 @@ func (m *Manager) handleAllocateRelay(c clientConn, raw []byte) {
 //
 // The server stays as dumb here as it is everywhere else — it validates, rate
 // limits and forwards; it keeps no history, and it never edits a message.
-func (m *Manager) handleChat(c clientConn, raw []byte) {
-	var msg chatMsg
+func (m *Manager) handleChat(c ClientConn, raw []byte) {
+	var msg protocol.ChatMsg
 	if err := json.Unmarshal(raw, &msg); err != nil {
 		m.badMessage(c, "malformed Chat")
 		return
@@ -862,7 +887,7 @@ func (m *Manager) handleChat(c clientConn, raw []byte) {
 	// rejection is COUNTED rather than logged per line — this path is reachable
 	// by a connection holding no seat at all, so a line each would have handed
 	// an unauthenticated caller a log amplifier.
-	if code := validateChatText(msg.Text); code != "" {
+	if code := protocol.ValidateChatText(msg.Text); code != "" {
 		m.countDrop(func(d *dropCounters) { d.chatInvalid++ })
 		m.sendErr(c, code, "chat message rejected")
 		return
@@ -881,7 +906,7 @@ func (m *Manager) handleChat(c clientConn, raw []byte) {
 	if lb.state == stateEvicted {
 		return
 	}
-	if !mem.chat.allow(m.now()) {
+	if !mem.chat.Allow(m.now()) {
 		// Dropped whole, never trimmed and never queued, and COUNTED so a flood
 		// still shows up in the server's own record — in the periodic aggregate
 		// rather than a line each, which would be its own amplifier. No Error
@@ -892,45 +917,45 @@ func (m *Manager) handleChat(c clientConn, raw []byte) {
 	// Seat and name are the SERVER's, read from the roster — the sender's frame
 	// cannot claim either. Echoed to the sender too, so every member (including
 	// the author) sees one identical, identically-ordered transcript.
-	m.broadcastLocked(lb, chatRelayMsg{Type: TypeChat, Seat: mem.seat, Name: mem.name, Text: msg.Text})
+	m.broadcastLocked(lb, protocol.ChatRelayMsg{Type: protocol.TypeChat, Seat: mem.seat, Name: mem.name, Text: msg.Text})
 }
 
 // ---- lifecycle: disconnect + heartbeat reaper -------------------------------
 
-// removeConn drops a connection's membership and its accounting (called when
+// RemoveConn drops a connection's membership and its accounting (called when
 // its socket closes). Both maps must be cleared here — leaving connState behind
 // would turn the per-connection bookkeeping into the unbounded map it exists to
 // avoid.
-func (m *Manager) removeConn(c clientConn) {
+func (m *Manager) RemoveConn(c ClientConn) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.conns, c.id())
-	loc, ok := m.byConn[c.id()]
+	delete(m.conns, c.ID())
+	loc, ok := m.byConn[c.ID()]
 	if !ok {
 		return
 	}
-	delete(m.byConn, c.id())
+	delete(m.byConn, c.ID())
 	lb, ok := m.lobbies[loc.code]
 	if !ok {
 		return
 	}
 	delete(lb.members, loc.seat)
-	m.relay.release(loc.code, loc.seat)
+	m.relay.Release(loc.code, loc.seat)
 	if len(lb.members) == 0 {
 		lb.state = stateEvicted
 		delete(m.lobbies, lb.code)
-		m.relay.releaseLobby(lb.code)
+		m.relay.ReleaseLobby(lb.code)
 		m.log.Info("lobby evicted (empty)", "code", lb.code)
 		return
 	}
 	// If the host left, hostSeat now dangles; the roster reports no host until a
 	// surviving peer re-anchors (design §8). Broadcast the change either way.
-	m.broadcastLocked(lb, rosterUpdateMsg{Type: TypeRosterUpdate, Roster: m.rosterOfLocked(lb)})
+	m.broadcastLocked(lb, protocol.RosterUpdateMsg{Type: protocol.TypeRosterUpdate, Roster: m.rosterOfLocked(lb)})
 	m.log.Info("member left", "code", lb.code, "seat", loc.seat)
 }
 
-// runReaper periodically evicts stale members/lobbies (design §5.2).
-func (m *Manager) runReaper(ctx context.Context) {
+// RunReaper periodically evicts stale members/lobbies (design §5.2).
+func (m *Manager) RunReaper(ctx context.Context) {
 	t := time.NewTicker(m.cfg.HeartbeatInterval)
 	defer t.Stop()
 	for {
@@ -957,10 +982,10 @@ func (m *Manager) reap() {
 		dropped := false
 		for seat, mem := range lb.members {
 			if now.Sub(mem.lastSeen) > deadline {
-				delete(m.byConn, mem.conn.id())
+				delete(m.byConn, mem.conn.ID())
 				delete(lb.members, seat)
-				m.relay.release(code, seat)
-				mem.conn.disconnect("heartbeat timeout")
+				m.relay.Release(code, seat)
+				mem.conn.Disconnect("heartbeat timeout")
 				dropped = true
 				m.log.Info("member timed out", "code", code, "seat", seat)
 			}
@@ -968,12 +993,12 @@ func (m *Manager) reap() {
 		if len(lb.members) == 0 {
 			lb.state = stateEvicted
 			delete(m.lobbies, code)
-			m.relay.releaseLobby(code)
+			m.relay.ReleaseLobby(code)
 			m.log.Info("lobby evicted (all timed out)", "code", code)
 			continue
 		}
 		if dropped {
-			m.broadcastLocked(lb, rosterUpdateMsg{Type: TypeRosterUpdate, Roster: m.rosterOfLocked(lb)})
+			m.broadcastLocked(lb, protocol.RosterUpdateMsg{Type: protocol.TypeRosterUpdate, Roster: m.rosterOfLocked(lb)})
 		}
 	}
 }
@@ -997,7 +1022,7 @@ func (m *Manager) reapIdleConnsLocked(now time.Time) {
 		}
 		if now.Sub(cs.lastSeen) > m.cfg.ConnIdleTimeout {
 			delete(m.conns, id)
-			cs.conn.disconnect("idle")
+			cs.conn.Disconnect("idle")
 			m.drops.idleConns++
 		}
 	}
@@ -1049,8 +1074,8 @@ func (m *Manager) scheduleLockedToInProgressLocked(lb *lobby) {
 
 // ---- locked helpers ---------------------------------------------------------
 
-func (m *Manager) lookupLocked(c clientConn) (*lobby, *member) {
-	loc, ok := m.byConn[c.id()]
+func (m *Manager) lookupLocked(c ClientConn) (*lobby, *member) {
+	loc, ok := m.byConn[c.ID()]
 	if !ok {
 		return nil, nil
 	}
@@ -1074,19 +1099,19 @@ func (m *Manager) freshCodeLocked() (string, error) {
 	return "", errors.New("could not find a free lobby code after 32 tries")
 }
 
-func (m *Manager) rosterOfLocked(lb *lobby) []RosterEntry {
+func (m *Manager) rosterOfLocked(lb *lobby) []protocol.RosterEntry {
 	seats := sortedSeats(lb)
-	out := make([]RosterEntry, 0, len(seats))
+	out := make([]protocol.RosterEntry, 0, len(seats))
 	for _, s := range seats {
 		mem := lb.members[s]
-		out = append(out, RosterEntry{Seat: s, Name: mem.name, Ready: mem.ready, IsHost: s == lb.hostSeat})
+		out = append(out, protocol.RosterEntry{Seat: s, Name: mem.name, Ready: mem.ready, IsHost: s == lb.hostSeat})
 	}
 	return out
 }
 
 func (m *Manager) broadcastLocked(lb *lobby, v any) {
 	for _, mem := range lb.members {
-		mem.conn.send(v)
+		mem.conn.Send(v)
 	}
 }
 

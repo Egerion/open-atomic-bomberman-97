@@ -1,9 +1,11 @@
-package main
+package lobby
 
 import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/egedemirbas/open-bomberman/matchmaker/internal/protocol"
 )
 
 // Chat (PROTOCOL.md §7) — the PORT-ONLY lobby chat relay. The rules worth
@@ -11,8 +13,8 @@ import (
 // carries a seat/name the sender chose, it is capped in length and in rate, and
 // it is rejected rather than repaired.
 
-func sendChat(m *Manager, c clientConn, text string) {
-	dispatchMap(m, c, map[string]any{"type": TypeChat, "text": text})
+func sendChat(m *Manager, c ClientConn, text string) {
+	dispatchMap(m, c, map[string]any{"type": protocol.TypeChat, "text": text})
 }
 
 func TestChatFansOutToTheWholeLobbyIncludingTheSender(t *testing.T) {
@@ -26,7 +28,7 @@ func TestChatFansOutToTheWholeLobbyIncludingTheSender(t *testing.T) {
 	sendChat(m, guest, "hello there")
 
 	for name, c := range map[string]*fakeConn{"host": host, "guest": guest} {
-		got := lastTyped[chatRelayMsg](t, c, TypeChat)
+		got := lastTyped[protocol.ChatRelayMsg](t, c, protocol.TypeChat)
 		if got.Text != "hello there" {
 			t.Fatalf("%s: text should pass through verbatim, got %q", name, got.Text)
 		}
@@ -48,10 +50,10 @@ func TestChatNeverLeavesTheSendersLobby(t *testing.T) {
 
 	sendChat(m, hostA, "only for lobby A")
 
-	if !hostA.has(TypeChat) {
+	if !hostA.has(protocol.TypeChat) {
 		t.Fatal("the sender's own lobby should receive the message")
 	}
-	if hostB.has(TypeChat) {
+	if hostB.has(protocol.TypeChat) {
 		t.Fatal("a different lobby must never see it")
 	}
 }
@@ -62,10 +64,10 @@ func TestChatFromASeatlessConnectionIsRefused(t *testing.T) {
 
 	sendChat(m, stray, "anybody there")
 
-	if stray.has(TypeChat) {
+	if stray.has(protocol.TypeChat) {
 		t.Fatal("a connection with no seat must not get a relay back")
 	}
-	e := lastTyped[errorMsg](t, stray, TypeError)
+	e := lastTyped[protocol.ErrorMsg](t, stray, protocol.TypeError)
 	if e.Code != "not_in_lobby" {
 		t.Fatalf("expected not_in_lobby, got %q", e.Code)
 	}
@@ -80,10 +82,10 @@ func TestChatSeatAndNameCannotBeSpoofed(t *testing.T) {
 
 	// The guest claims the host's seat and name in its own frame.
 	dispatchMap(m, guest, map[string]any{
-		"type": TypeChat, "seat": 0, "name": "Ege", "text": "trust me",
+		"type": protocol.TypeChat, "seat": 0, "name": "Ege", "text": "trust me",
 	})
 
-	got := lastTyped[chatRelayMsg](t, host, TypeChat)
+	got := lastTyped[protocol.ChatRelayMsg](t, host, protocol.TypeChat)
 	if got.Seat != 1 || got.Name != "Ada" {
 		t.Fatalf("the server's roster must win, got seat=%d name=%q", got.Seat, got.Name)
 	}
@@ -99,7 +101,7 @@ func TestChatRejectsOverLongAndUnprintableText(t *testing.T) {
 		text string
 		code string
 	}{
-		{"too long", strings.Repeat("x", kChatMaxBytes+1), "chat_too_long"},
+		{"too long", strings.Repeat("x", protocol.ChatMaxBytes+1), "chat_too_long"},
 		{"control character", "hello\x07world", "chat_invalid"},
 		{"newline", "line one\nline two", "chat_invalid"},
 		// encoding/json turns the sender's invalid bytes into U+FFFD on the way
@@ -113,10 +115,10 @@ func TestChatRejectsOverLongAndUnprintableText(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			host.reset()
 			sendChat(m, host, tc.text)
-			if host.has(TypeChat) {
+			if host.has(protocol.TypeChat) {
 				t.Fatal("a rejected message must not be relayed at all")
 			}
-			e := lastTyped[errorMsg](t, host, TypeError)
+			e := lastTyped[protocol.ErrorMsg](t, host, protocol.TypeError)
 			if e.Code != tc.code {
 				t.Fatalf("expected %q, got %q", tc.code, e.Code)
 			}
@@ -126,14 +128,14 @@ func TestChatRejectsOverLongAndUnprintableText(t *testing.T) {
 	// The boundary itself is legal, and non-ASCII is the client's problem to
 	// render, not the relay's to censor.
 	host.reset()
-	exact := strings.Repeat("y", kChatMaxBytes)
+	exact := strings.Repeat("y", protocol.ChatMaxBytes)
 	sendChat(m, host, exact)
-	if got := lastTyped[chatRelayMsg](t, host, TypeChat); got.Text != exact {
-		t.Fatalf("a message of exactly kChatMaxBytes must pass unchanged")
+	if got := lastTyped[protocol.ChatRelayMsg](t, host, protocol.TypeChat); got.Text != exact {
+		t.Fatalf("a message of exactly protocol.ChatMaxBytes must pass unchanged")
 	}
 	host.reset()
 	sendChat(m, host, "merhaba dünya")
-	if got := lastTyped[chatRelayMsg](t, host, TypeChat); got.Text != "merhaba dünya" {
+	if got := lastTyped[protocol.ChatRelayMsg](t, host, protocol.TypeChat); got.Text != "merhaba dünya" {
 		t.Fatalf("non-ASCII must pass through verbatim, got %q", got.Text)
 	}
 }
@@ -152,22 +154,22 @@ func TestChatRateLimitDropsTheFloodAndRecoversWithTime(t *testing.T) {
 	for i := 0; i < kChatBurstMsgs; i++ {
 		sendChat(m, host, "burst")
 	}
-	if got := host.countOfType(TypeChat); got != kChatBurstMsgs {
+	if got := host.countOfType(protocol.TypeChat); got != kChatBurstMsgs {
 		t.Fatalf("the burst allowance should pass: want %d relays, got %d", kChatBurstMsgs, got)
 	}
 	host.reset()
 	sendChat(m, host, "one too many")
-	if host.has(TypeChat) {
+	if host.has(protocol.TypeChat) {
 		t.Fatal("the over-rate message must be dropped")
 	}
-	if host.has(TypeError) {
+	if host.has(protocol.TypeError) {
 		t.Fatal("a dropped message must not be answered (that would amplify a flood)")
 	}
 
 	// One credit's worth of silence buys exactly one more line.
 	now = now.Add(kChatCreditPerMsgMs * time.Millisecond)
 	sendChat(m, host, "after waiting")
-	if got := lastTyped[chatRelayMsg](t, host, TypeChat); got.Text != "after waiting" {
+	if got := lastTyped[protocol.ChatRelayMsg](t, host, protocol.TypeChat); got.Text != "after waiting" {
 		t.Fatalf("the bucket should refill over time, got %q", got.Text)
 	}
 }
@@ -183,12 +185,12 @@ func TestChatKeepsWorkingOnceTheMatchHasStarted(t *testing.T) {
 	setReady(m, host, true)
 	setReady(m, guest, true)
 	dispatchMap(m, host, map[string]any{
-		"type": TypeStartMatch, "lobby_id": lc.LobbyID, "host_token": lc.HostToken,
+		"type": protocol.TypeStartMatch, "lobby_id": lc.LobbyID, "host_token": lc.HostToken,
 	})
 	guest.reset()
 
 	sendChat(m, host, "gl hf")
-	if got := lastTyped[chatRelayMsg](t, guest, TypeChat); got.Text != "gl hf" {
+	if got := lastTyped[protocol.ChatRelayMsg](t, guest, protocol.TypeChat); got.Text != "gl hf" {
 		t.Fatalf("a LOCKED lobby must still carry chat, got %q", got.Text)
 	}
 }
