@@ -262,6 +262,12 @@ cannot spin hot. Regression tests:
 `TestRelayStillForwardsAfterAnOversizedDatagram`,
 `TestStunStillAnswersAfterAnOversizedDatagram`.
 
+The second half of that bug was that a dead read loop was **invisible**: the
+process kept answering the health check while forwarding nothing. Both listeners
+now expose `Alive()`, and it is a liveness component of `/healthz`, so the state
+"still listening on TCP, deaf on UDP" now fails the probe instead of passing it
+(`app.TestLivenessFailsWhenAListenerDies`).
+
 ### F7. `ReanchorLobby` could depose a live host
 
 **Severity: medium. Exploitable by: any member of the lobby, including a stranger who was given the code.**
@@ -352,9 +358,12 @@ standing between a member and the host's authority. Both now use
   `byte & 0x1f` over a 32-symbol alphabet is unbiased because 32 divides 256.
 - **Deeply nested JSON is refused, not fatal.** Go's `encoding/json` caps nesting
   at 10 000 levels, which an 8 KiB frame cannot reach; the reply is `bad_json`.
-- **HTTP surface is two routes.** `/ws` and `/healthz`; everything else, including
-  path traversal, is a `ServeMux` 404. `/healthz` returns `ok` and nothing else —
-  no version, no build, no counts.
+- **HTTP surface is three routes.** `/ws`, `/healthz` (liveness) and `/readyz`
+  (readiness); everything else, including path traversal, is a `ServeMux` 404.
+  Both probes answer `{"status":"up"}`/`{"status":"down"}` and nothing else — no
+  version, no build, no counts, and not even the name of the check that failed
+  (`health.WithDisabledDetails`). Pinned by `handler.TestRouteSetIsClosed` and
+  `handler.TestProbesDiscloseNothingButStatus`.
 - **Binary WebSocket frames are ignored**; the control plane is JSON text only.
 - **Slow consumers are dropped, not waited on** — a full send buffer disconnects
   rather than blocking the Manager.
@@ -453,4 +462,13 @@ could otherwise write to the log at their own chosen rate.
   per-source budgets are live regardless.
 - **Watch the aggregated lines.** `rebind_refused` in `relay stats` is the
   signature of F1 being attempted — no well-behaved client ever produces one.
-  `join_guess` in `control-plane drops` is the signature of F5.
+  `join_guess` in `control-plane drops` is the signature of F5. `refused` in
+  `ws admission` is F3's cap actually firing — a server sitting at its connection
+  ceiling used to look exactly like an idle one from the outside.
+- **`/healthz` can now fail, and a failing liveness probe is an instruction to
+  restart the machine.** It reports three components, each of which is a
+  restart-only failure: the two UDP read loops (F6) and the lobby reaper. It
+  deliberately reports NOTHING about load — capacity, connection count and lobby
+  count are not liveness. `fly.toml`'s check points at `/healthz`; if you would
+  rather a busy-but-working machine never be restarted, point it at `/readyz`
+  instead, which only ever goes down when the process is deliberately draining.

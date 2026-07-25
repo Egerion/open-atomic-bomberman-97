@@ -13,8 +13,15 @@ touches it. All match authority is the deterministic P2P sim on the peers.
 - **Language / runtime:** Go 1.21+ (module `github.com/egedemirbas/open-bomberman/matchmaker`).
 - **WebSocket library:** [`github.com/coder/websocket`](https://github.com/coder/websocket)
   (the maintained successor to `nhooyr.io/websocket`) — MIT, stdlib-only deps.
+- **Logging:** [`go.uber.org/zap`](https://github.com/uber-go/zap), structured,
+  JSON by default (`-log-format console` for a human at a terminal).
+- **Health endpoints:** [`github.com/alexliesenfeld/health`](https://github.com/alexliesenfeld/health).
 - **Wire contract:** [`PROTOCOL.md`](./PROTOCOL.md) (frozen; the C++ client
   matches it byte-for-byte).
+
+Three direct dependencies, none of them a framework. Why the usual suspects
+(DI container, mock generator, a faster JSON codec) are *not* here is written
+down in "Shape of the service" below, so it does not get re-argued.
 
 ## Run locally
 
@@ -24,7 +31,8 @@ go run ./cmd/matchmaker
 # WebSocket control plane on ws://localhost:8080/ws
 # UDP STUN echo on        udp  localhost:8081
 # UDP relay forwarder on  udp  localhost:8082
-# health check            GET  http://localhost:8080/healthz
+# liveness                GET  http://localhost:8080/healthz
+# readiness               GET  http://localhost:8080/readyz
 ```
 
 Test / vet / format:
@@ -49,6 +57,9 @@ gofmt -l .             # (empty == formatted)
 | `-heartbeat-miss` | `MATCHMAKER_HEARTBEAT_MISS` | `3` | missed heartbeats (K) before dropping a member |
 | `-locked-grace` | `MATCHMAKER_LOCKED_GRACE` | `10s` | grace after StartMatch before the lobby goes `IN_PROGRESS` |
 | `-log-level` | `MATCHMAKER_LOG_LEVEL` | `info` | `debug`｜`info`｜`warn`｜`error` |
+| `-log-format` | `MATCHMAKER_LOG_FORMAT` | `json` | `json`｜`console` |
+| `-drain-delay` | `MATCHMAKER_DRAIN_DELAY` | `0` | pause between `/readyz` going down and the listener closing |
+| `-shutdown-timeout` | `MATCHMAKER_SHUTDOWN_TIMEOUT` | `10s` | bound on the whole graceful drain |
 | `-tls-cert` | `MATCHMAKER_TLS_CERT` | _(unset)_ | optional cert for standalone `wss://` |
 | `-tls-key` | `MATCHMAKER_TLS_KEY` | _(unset)_ | optional key for standalone `wss://` |
 | `-max-conns` | `MATCHMAKER_MAX_CONNS` | `2000` | concurrent WebSocket connections (`<0` disables) |
@@ -204,48 +215,142 @@ risk of each spelled out. The short version:
   sending, so an observer who reads a header off the wire cannot steal a seat's
   return path. SECURITY.md F1 records exactly what that does and does not close.
 - **Refusals are counted, not logged per event.** One periodic line each for
-  `control-plane drops`, `relay stats` and `stun stats` — a log line per hostile
-  packet is itself an amplifier. `rebind_refused` and `join_guess` are the two
-  counters worth alerting on.
+  `control-plane drops`, `relay stats`, `stun stats` and `ws admission` — a log
+  line per hostile packet is itself an amplifier. `rebind_refused`, `join_guess`
+  and `refused` are the three counters worth alerting on.
+- **`/healthz` can fail now.** It used to be a constant 200. It reports the two
+  UDP read loops and the lobby reaper, all restart-only failures — but that also
+  means a false positive costs a machine restart and every live lobby on it.
+  `fly.toml`'s check points at `/healthz`; point it at `/readyz` instead if you
+  would rather nothing but a deliberate drain ever mark the machine unhealthy.
 - **Not tamper-proof.** P2P determinism has no referee (ADR-0011 Risks):
   `state_hash` catches a diverging build, not an honest-but-cheating peer.
 
 ## Layout
 
 Packages are split by **domain**, not by technical layer — the Go convention, and
-the one that keeps the dependency graph readable. There is no `model/`,
-`handler/` or `service/`; there is a lobby, a relay, a STUN echo, and the wire
-contract they all speak.
+the one that keeps the dependency graph readable. There is a lobby, a relay, a
+STUN echo, and the wire contract they all speak. The two packages that *are*
+named after a layer, `handler` and `app`, are the process edge rather than a tier
+over the domain: one owns the HTTP route table, the other owns the object graph
+and the shutdown order.
 
 ```
-cmd/matchmaker/     main.go — wiring only: parse config, build the three
-                    listeners and the state they share, shut them down
+cmd/matchmaker/     main.go — the process boundary only: flags, a logger, a
+                    signal-scoped context, an exit code
 internal/
-  config            flags + env + defaults, slog logger
+  config            flags + env + defaults, the zap logger
   protocol          the FROZEN wire types and the screens that decide whether an
                     inbound field may be acted on. No state, no dependencies.
   ratelimit         token bucket + the fixed-size per-source table + client-IP
                     resolution. A mechanism the other packages spend.
-  lobby             the domain core: lobby state machine, every control-plane
-                    handler, per-connection accounting, the reapers. Transport-
-                    agnostic — it pushes frames through a ClientConn seam.
+  lobby             the domain core: lobby state machine (state.go), every
+                    control-plane handler, per-connection accounting, the
+                    reapers. Transport-agnostic — it pushes frames through a
+                    ClientConn seam.
   wsapi             HTTP/WebSocket adapter (coder/websocket) → the Manager, plus
-                    the connection admission control in front of it
+                    the connection admission control in front of it. The /ws
+                    handler only; it has no opinion about the route table.
   stun              the UDP reflexive-address echo, self-contained
   relay             the UDP forwarder: allocation table, address pinning, listener
+  handler           the HTTP surface: /ws, /healthz (liveness), /readyz
+                    (readiness), the drain switch, and a 404 for everything else.
+                    Knows nothing about lobbies — probes arrive as closures.
+  app               composition root + lifecycle: bind, serve, drain in order
 ```
 
 Dependencies point one way only:
 
 ```
-cmd/matchmaker ──► wsapi ──► lobby ──► relay ──┐
-        │            │         ├──► protocol   ├──► ratelimit
-        └────────────┴─────────┴──► config ◄───┘
-                              stun ────────────┘
+cmd/matchmaker ──► app ──► handler
+                    ├────► wsapi ──► lobby ──► relay ──┐
+                    ├────► stun        ├──► protocol   ├──► ratelimit
+                    └───────────────────┴──► config ◄──┘
 ```
 
 `lobby` owns the allocations `relay` stores, and `relay` never calls back — so
 the only lock order that can occur is `Manager.mu → relay.Table.mu`. Tests live
 beside the package they exercise: the address-pinning suite is in `relay`
-(it needs a table, not a lobby), the admission tests are in `wsapi`, and the
-control-plane hardening tests are in `lobby`.
+(it needs a table, not a lobby), the admission tests are in `wsapi`, the
+control-plane hardening tests are in `lobby`, the route table and probe
+semantics are in `handler`, and the startup/drain order is in `app` — which runs
+the whole service on ephemeral ports rather than asserting about main().
+
+## Shape of the service
+
+### Health, and the split that matters
+
+`/healthz` is **liveness**: "is this process broken in a way only a restart
+fixes?" It reports three components, and each one is a failure the service could
+previously suffer while still answering `ok`:
+
+| component | failure it catches |
+|---|---|
+| `stun_listener` | the STUN read loop has stopped (SECURITY.md F6) |
+| `relay_listener` | the relay read loop has stopped — still listening on TCP, deaf on UDP |
+| `lobby_reaper` | no reaper pass in six heartbeat periods: members and lobbies stop being evicted |
+
+It reports **nothing about load**. Capacity, connection count and lobby count are
+not liveness signals, and a failing liveness probe is an instruction to kill the
+machine — reporting "busy" there would restart the server exactly when it is
+working hardest.
+
+`/readyz` is **readiness**: "should the edge send new connections here?" It is
+`up` until the process starts draining, and that is deliberately all it is: with
+one instance, a readiness failure has nowhere to shed load to.
+
+Both bodies are `{"status":"up"}` / `{"status":"down"}` and nothing else.
+
+### Graceful shutdown
+
+`SIGTERM`/`SIGINT` runs one ordered drain (`app.drain`), bounded end to end by
+`-shutdown-timeout`:
+
+1. `/readyz` goes down, so the edge stops routing new connections here;
+2. wait `-drain-delay` (0 by default — with a single instance the pause only
+   lengthens the outage; set it to a couple of health-check intervals if you run
+   more than one);
+3. close the HTTP listener and let in-flight plain requests finish;
+4. close the live WebSocket sessions with a real close frame. This step is
+   separate because a WebSocket is a **hijacked** connection and
+   `http.Server.Shutdown` neither closes nor waits for those;
+5. stop the UDP listeners — each `Close` now returns only once its read loop has
+   actually exited, instead of racing it.
+
+A closed session costs a player nothing: the C++ `LobbyFlow` reconnects lazily on
+the next action.
+
+### What was deliberately NOT adopted
+
+| suggested | verdict | reason |
+|---|---|---|
+| `google/wire` (DI) | **no** | the object graph is nine constructor calls in `app.New`, no cycles, no interfaces to select between. A generated injector would restate it in a second file and add codegen to the build to save nothing. |
+| `gomock` | **no** | the one seam worth faking is `lobby.ClientConn`, and the existing `fakeConn` is a *recorder* — the suites assert on the content of frames the Manager sent, decoded from JSON. gomock expresses "these calls, these arguments, this order", so adopting it would mean rebuilding `fakeConn` on top of `EXPECT().Do(...)` plus a codegen step. Strictly more machinery for a strictly weaker assertion. |
+| `gorilla/websocket` | **no** | `coder/websocket` is context-native, which the adapter depends on throughout (`Read(ctx)`, per-write deadlines, cancel-to-disconnect). gorilla is deadline-based and needs its own writer discipline, so the swap is a rewrite of the connection lifecycle on a **deployed** server, for zero behavioural gain. |
+| `sonic` (JSON) | **no** | this is a control plane, not a data plane: a client sends a heartbeat every 5 s and a handful of one-shot frames, all under 8 KiB. `encoding/json` is not on any hot path here (the hot path is the relay, which never parses anything). Sonic would trade that for a JIT/assembly parser with narrower platform support, applied to **untrusted internet input** against a frozen protocol. |
+| a `model` package | **no** | the shared value types already live in `protocol`, which for this service is not a DTO layer but the frozen contract itself. The only other entity, `lobby`, is guarded by `Manager.mu`; moving it across a package boundary would mean exporting the fields that mutex protects. |
+| a `mapper` package | **no** | the mapping is `rosterOfLocked` and the `PublicLobby` row build — a few lines each, both of which read `lobby` state *while holding the lock*. Extracting them would export the internals for no gain. |
+| a ~10-worker pool with drop-oldest | **no** | see below. |
+
+### Backpressure
+
+There is backpressure; it is just not a worker pool, and the shape it has is
+deliberate.
+
+- **Admission** caps concurrent connections, per-IP connections and lobbies
+  (SECURITY.md F3), *before* the WebSocket upgrade.
+- **Per-connection token buckets** cap inbound frame rate, `ListPublic`,
+  `Candidates`, failed joins and chat (F4/F5).
+- **Per-connection bounded egress**: a 64-slot send buffer, and a consumer that
+  fills it is **disconnected rather than waited on**, so one stuck peer can never
+  block the Manager (F10).
+
+A shared pool of ~10 workers in front of `Manager.Dispatch` would be a
+regression, for two independent reasons. Control-plane frames are **not
+fungible** — dropping the oldest queue entry could drop a `StartMatch` or a
+`JoinByCode` and leave a lobby wedged, which is a correctness bug, not shedding.
+And it would not buy throughput: `Dispatch` takes one global `Manager.mu`, so the
+effective concurrency is already 1 and a queue in front of it adds latency and
+head-of-line blocking without removing the serialisation. If control-plane
+throughput ever becomes the constraint, the fix is to shard the Manager by
+lobby, not to queue in front of the same lock.

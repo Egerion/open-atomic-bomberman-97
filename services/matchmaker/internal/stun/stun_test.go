@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/egedemirbas/open-bomberman/matchmaker/internal/config"
+	"go.uber.org/zap"
 )
 
 func TestStunEcho(t *testing.T) {
-	s, err := Start("127.0.0.1:0", config.NewLogger("error"))
+	s, err := Start("127.0.0.1:0", zap.NewNop())
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestStunEcho(t *testing.T) {
 }
 
 func TestStunIgnoresGarbage(t *testing.T) {
-	s, err := Start("127.0.0.1:0", config.NewLogger("error"))
+	s, err := Start("127.0.0.1:0", zap.NewNop())
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestStunIgnoresGarbage(t *testing.T) {
 // 3 KB packet ended the relay (or an ICMP port-unreachable from a peer that had
 // simply quit, which needs no attacker at all).
 func TestStunStillAnswersAfterAnOversizedDatagram(t *testing.T) {
-	s, err := Start("127.0.0.1:0", config.NewLogger("error"))
+	s, err := Start("127.0.0.1:0", zap.NewNop())
 	if err != nil {
 		t.Fatalf("startStun: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestStunStillAnswersAfterAnOversizedDatagram(t *testing.T) {
 // ---- STUN --------------------------------------------------------------------
 
 func TestStunDropsOversizedProbesAndNonces(t *testing.T) {
-	s, err := Start("127.0.0.1:0", config.NewLogger("error"))
+	s, err := Start("127.0.0.1:0", zap.NewNop())
 	if err != nil {
 		t.Fatalf("startStun: %v", err)
 	}

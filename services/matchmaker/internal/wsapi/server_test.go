@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"go.uber.org/zap"
 
 	"github.com/egedemirbas/open-bomberman/matchmaker/internal/config"
 	"github.com/egedemirbas/open-bomberman/matchmaker/internal/lobby"
@@ -22,12 +23,9 @@ import (
 // protocol.Envelope and the wsConn adapter, not just the Manager.
 func TestWebSocketEndToEnd(t *testing.T) {
 	cfg := config.Config{HeartbeatInterval: time.Minute, HeartbeatMiss: 3, LockedGrace: time.Hour}
-	mgr := lobby.NewManager(cfg, relay.NewTable(time.Minute, config.NewLogger("error")), config.NewLogger("error"))
-	ws := NewServer(mgr, cfg, config.NewLogger("error"))
-	srv := httptest.NewServer(ws.Handler())
-	defer srv.Close()
-
-	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
+	mgr := lobby.NewManager(cfg, relay.NewTable(time.Minute, zap.NewNop()), zap.NewNop())
+	ws := NewServer(mgr, cfg, zap.NewNop())
+	url := newWSTestServer(t, ws)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -86,12 +84,9 @@ func TestWebSocketEndToEnd(t *testing.T) {
 
 func TestWebSocketBuildMismatchOverWire(t *testing.T) {
 	cfg := config.Config{HeartbeatInterval: time.Minute, HeartbeatMiss: 3, LockedGrace: time.Hour}
-	mgr := lobby.NewManager(cfg, relay.NewTable(time.Minute, config.NewLogger("error")), config.NewLogger("error"))
-	ws := NewServer(mgr, cfg, config.NewLogger("error"))
-	srv := httptest.NewServer(ws.Handler())
-	defer srv.Close()
-
-	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
+	mgr := lobby.NewManager(cfg, relay.NewTable(time.Minute, zap.NewNop()), zap.NewNop())
+	ws := NewServer(mgr, cfg, zap.NewNop())
+	url := newWSTestServer(t, ws)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -116,6 +111,17 @@ func TestWebSocketBuildMismatchOverWire(t *testing.T) {
 }
 
 // --- ws test helpers ---------------------------------------------------------
+
+// newWSTestServer serves the upgrade handler on its own and returns the ws:// URL
+// to dial. There is no mux here on purpose: which PATH the handler is mounted at
+// (and that everything else 404s) is the handler package's contract, and is
+// tested there.
+func newWSTestServer(t *testing.T, ws *Server) string {
+	t.Helper()
+	srv := httptest.NewServer(ws)
+	t.Cleanup(srv.Close)
+	return "ws" + strings.TrimPrefix(srv.URL, "http")
+}
 
 func wsDial(t *testing.T, ctx context.Context, url string) *websocket.Conn {
 	t.Helper()
@@ -155,12 +161,9 @@ func wsReadUntil(t *testing.T, ctx context.Context, c *websocket.Conn, typ strin
 
 func TestWebSocketConnectionCapRefusesBeforeTheUpgrade(t *testing.T) {
 	cfg := config.Config{HeartbeatInterval: time.Minute, HeartbeatMiss: 3, LockedGrace: time.Hour, MaxConns: 2}
-	mgr := lobby.NewManager(cfg, relay.NewTable(time.Minute, config.NewLogger("error")), config.NewLogger("error"))
-	ws := NewServer(mgr, cfg, config.NewLogger("error"))
-	srv := httptest.NewServer(ws.Handler())
-	defer srv.Close()
-
-	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
+	mgr := lobby.NewManager(cfg, relay.NewTable(time.Minute, zap.NewNop()), zap.NewNop())
+	ws := NewServer(mgr, cfg, zap.NewNop())
+	url := newWSTestServer(t, ws)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -195,12 +198,9 @@ func TestWebSocketConnectionCapRefusesBeforeTheUpgrade(t *testing.T) {
 
 func TestWebSocketReadLimitClosesAnOversizedFrame(t *testing.T) {
 	cfg := config.Config{HeartbeatInterval: time.Minute, HeartbeatMiss: 3, LockedGrace: time.Hour}
-	mgr := lobby.NewManager(cfg, relay.NewTable(time.Minute, config.NewLogger("error")), config.NewLogger("error"))
-	ws := NewServer(mgr, cfg, config.NewLogger("error"))
-	srv := httptest.NewServer(ws.Handler())
-	defer srv.Close()
-
-	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
+	mgr := lobby.NewManager(cfg, relay.NewTable(time.Minute, zap.NewNop()), zap.NewNop())
+	ws := NewServer(mgr, cfg, zap.NewNop())
+	url := newWSTestServer(t, ws)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

@@ -14,11 +14,12 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/egedemirbas/open-bomberman/matchmaker/internal/config"
 	"github.com/egedemirbas/open-bomberman/matchmaker/internal/protocol"
@@ -88,31 +89,6 @@ type ClientConn interface {
 	Send(v any)     // enqueue one JSON frame (non-blocking; never holds the manager lock)
 	Remote() string // peer address, for logging
 	Disconnect(reason string)
-}
-
-// lobbyState is the server-side per-lobby machine (design §5.2).
-type lobbyState int
-
-const (
-	stateOpen       lobbyState = iota // accepting joins; roster + candidates live
-	stateLocked                       // StartMatch broadcast; no new joins; candidate relay still live for the punch
-	stateInProgress                   // match running; control plane dormant; joins → in_progress
-	stateEvicted                      // freed (empty / all timed out)
-)
-
-func (s lobbyState) String() string {
-	switch s {
-	case stateOpen:
-		return "OPEN"
-	case stateLocked:
-		return "LOCKED"
-	case stateInProgress:
-		return "IN_PROGRESS"
-	case stateEvicted:
-		return "EVICTED"
-	default:
-		return "?"
-	}
 }
 
 type member struct {
@@ -245,8 +221,14 @@ type Manager struct {
 	// on close.
 	conns map[string]*connState
 	cfg   config.Config
-	log   *slog.Logger
+	log   *zap.Logger
 	now   func() time.Time // injectable clock (tests)
+
+	// lastReap is when the reaper goroutine last completed a pass. Read by the
+	// `lobby_reaper` liveness probe (app.livenessProbes): if the reaper dies,
+	// members and lobbies are never evicted again and the process is degraded in
+	// a way only a restart fixes.
+	lastReap time.Time
 
 	// joinFailIP charges failed JoinByCode attempts per SOURCE ADDRESS as well
 	// as per connection, because the per-connection budget is reset simply by
@@ -264,8 +246,8 @@ type Manager struct {
 	relay *relay.Table
 }
 
-func NewManager(cfg config.Config, relayTable *relay.Table, log *slog.Logger) *Manager {
-	return &Manager{
+func NewManager(cfg config.Config, relayTable *relay.Table, log *zap.Logger) *Manager {
+	m := &Manager{
 		lobbies:    map[string]*lobby{},
 		byConn:     map[string]*connLoc{},
 		conns:      map[string]*connState{},
@@ -275,6 +257,17 @@ func NewManager(cfg config.Config, relayTable *relay.Table, log *slog.Logger) *M
 		joinFailIP: ratelimit.NewTable(kJoinFailIPSlots, kJoinFailIPCreditMs, kJoinFailIPBurst),
 		relay:      relayTable,
 	}
+	m.lastReap = m.now()
+	return m
+}
+
+// ReaperAge reports how long it has been since the reaper last completed a pass.
+// The liveness check reads it; a value several heartbeat intervals old means the
+// reaper goroutine is gone and eviction has stopped.
+func (m *Manager) ReaperAge() time.Duration {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.now().Sub(m.lastReap)
 }
 
 // AddConn registers an accepted socket. srcKey is the per-IP limiter key for
@@ -472,7 +465,9 @@ func (m *Manager) handleCreate(c ClientConn, raw []byte) {
 	m.byConn[c.ID()] = &connLoc{code: code, seat: 0}
 
 	c.Send(protocol.LobbyCreatedMsg{Type: protocol.TypeLobbyCreated, Code: code, LobbyID: id, HostToken: token, YourSeat: 0})
-	m.log.Info("lobby created", "code", code, "visibility", vis, "max_seats", maxSeats, "host", msg.Player)
+	m.log.Info("lobby created",
+		zap.String("code", code), zap.String("visibility", vis),
+		zap.Int("max_seats", maxSeats), zap.String("host", msg.Player))
 }
 
 // handleJoin seats a caller that knows a lobby code.
@@ -538,7 +533,7 @@ func (m *Manager) handleJoin(c ClientConn, raw []byte) {
 		reject(protocol.ReasonNotFound)
 		return
 	}
-	if lb.state != stateOpen {
+	if !lb.state.acceptsJoins() {
 		reject(protocol.ReasonInProgress)
 		return
 	}
@@ -568,7 +563,8 @@ func (m *Manager) handleJoin(c ClientConn, raw []byte) {
 		HostCandidates: hostCand,
 	})
 	m.broadcastLocked(lb, protocol.RosterUpdateMsg{Type: protocol.TypeRosterUpdate, Roster: m.rosterOfLocked(lb)})
-	m.log.Info("join accepted", "code", code, "seat", seat, "player", msg.Player)
+	m.log.Info("join accepted",
+		zap.String("code", code), zap.Int("seat", seat), zap.String("player", msg.Player))
 }
 
 // handleListPublic answers the public browser. This is the one request where
@@ -588,7 +584,9 @@ func (m *Manager) handleListPublic(c ClientConn, raw []byte) {
 	}
 	out := make([]protocol.PublicLobby, 0)
 	for _, lb := range m.lobbies {
-		if lb.visibility != "public" || lb.state != stateOpen {
+		// A row a browser cannot act on is noise, so listing follows the same
+		// predicate that decides whether a join would be accepted.
+		if lb.visibility != "public" || !lb.state.acceptsJoins() {
 			continue
 		}
 		out = append(out, protocol.PublicLobby{
@@ -654,7 +652,7 @@ func (m *Manager) handleCandidates(c ClientConn, raw []byte) {
 		m.sendErr(c, "not_in_lobby", "no lobby seat for this connection")
 		return
 	}
-	if lb.state == stateInProgress || lb.state == stateEvicted {
+	if !lb.state.relaysCandidates() {
 		return // rendezvous window closed
 	}
 	if !m.connStateLocked(c).cand.Allow(m.now()) {
@@ -705,7 +703,7 @@ func (m *Manager) handleStart(c ClientConn, raw []byte) {
 		m.sendErr(c, "not_host", "only the host with a valid host_token may start")
 		return
 	}
-	if lb.state != stateOpen {
+	if !lb.state.canStart() {
 		m.sendErr(c, "already_started", "lobby is not open")
 		return
 	}
@@ -751,7 +749,8 @@ func (m *Manager) handleStart(c ClientConn, raw []byte) {
 			LocalSeatsMask:    1 << uint(seat), // each connection owns exactly its own seat in v1
 		})
 	}
-	m.log.Info("match started", "code", lb.code, "seats", seats, "input_delay", inputDelay)
+	m.log.Info("match started",
+		zap.String("code", lb.code), zap.Ints("seats", seats), zap.Int("input_delay", inputDelay))
 
 	// Design §5.2: LOCKED → IN_PROGRESS on "all peers connected | timeout". v1's
 	// control plane has no per-peer "connected" signal, so we implement the
@@ -810,7 +809,7 @@ func (m *Manager) handleReanchor(c ClientConn, raw []byte) {
 	lb.hostSeat = loc.seat // promote the re-anchoring peer to hub/anchor
 	c.Send(protocol.ReanchorAcceptedMsg{Type: protocol.TypeReanchorAccepted, LobbyID: lb.id, Code: lb.code, HostToken: token})
 	m.broadcastLocked(lb, protocol.RosterUpdateMsg{Type: protocol.TypeRosterUpdate, Roster: m.rosterOfLocked(lb)})
-	m.log.Info("lobby re-anchored", "code", code, "new_host_seat", loc.seat)
+	m.log.Info("lobby re-anchored", zap.String("code", code), zap.Int("new_host_seat", loc.seat))
 }
 
 func (m *Manager) handleMatchOver(c ClientConn, raw []byte) {
@@ -821,7 +820,7 @@ func (m *Manager) handleMatchOver(c ClientConn, raw []byte) {
 		m.sendErr(c, "not_in_lobby", "no lobby seat for this connection")
 		return
 	}
-	if lb.state == stateEvicted {
+	if !lb.state.isLive() {
 		return
 	}
 	// §5.2: match over → OPEN (rematch), roster kept, ready flags cleared.
@@ -830,7 +829,7 @@ func (m *Manager) handleMatchOver(c ClientConn, raw []byte) {
 		mm.ready = false
 	}
 	m.broadcastLocked(lb, protocol.RosterUpdateMsg{Type: protocol.TypeRosterUpdate, Roster: m.rosterOfLocked(lb)})
-	m.log.Info("lobby reopened for rematch", "code", lb.code)
+	m.log.Info("lobby reopened for rematch", zap.String("code", lb.code))
 }
 
 // handleAllocateRelay reserves this seat's slot on the UDP forwarder (§6,
@@ -866,7 +865,7 @@ func (m *Manager) handleAllocateRelay(c ClientConn, raw []byte) {
 		RelayAddr: m.cfg.AdvertisedRelay(),
 		AllocID:   allocID,
 	})
-	m.log.Info("relay allocated", "code", lb.code, "seat", mem.seat)
+	m.log.Info("relay allocated", zap.String("code", lb.code), zap.Int("seat", mem.seat))
 }
 
 // handleChat relays one typed line to the sender's own lobby (§7).
@@ -903,7 +902,7 @@ func (m *Manager) handleChat(c ClientConn, raw []byte) {
 		m.sendErr(c, "not_in_lobby", "no lobby seat for this connection")
 		return
 	}
-	if lb.state == stateEvicted {
+	if !lb.state.isLive() {
 		return
 	}
 	if !mem.chat.Allow(m.now()) {
@@ -945,13 +944,13 @@ func (m *Manager) RemoveConn(c ClientConn) {
 		lb.state = stateEvicted
 		delete(m.lobbies, lb.code)
 		m.relay.ReleaseLobby(lb.code)
-		m.log.Info("lobby evicted (empty)", "code", lb.code)
+		m.log.Info("lobby evicted (empty)", zap.String("code", lb.code))
 		return
 	}
 	// If the host left, hostSeat now dangles; the roster reports no host until a
 	// surviving peer re-anchors (design §8). Broadcast the change either way.
 	m.broadcastLocked(lb, protocol.RosterUpdateMsg{Type: protocol.TypeRosterUpdate, Roster: m.rosterOfLocked(lb)})
-	m.log.Info("member left", "code", lb.code, "seat", loc.seat)
+	m.log.Info("member left", zap.String("code", lb.code), zap.Int("seat", loc.seat))
 }
 
 // RunReaper periodically evicts stale members/lobbies (design §5.2).
@@ -975,6 +974,7 @@ func (m *Manager) reap() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := m.now()
+	m.lastReap = now
 	m.reapIdleConnsLocked(now)
 	m.logDropsLocked()
 	deadline := m.cfg.HeartbeatInterval * time.Duration(m.cfg.HeartbeatMiss)
@@ -987,14 +987,14 @@ func (m *Manager) reap() {
 				m.relay.Release(code, seat)
 				mem.conn.Disconnect("heartbeat timeout")
 				dropped = true
-				m.log.Info("member timed out", "code", code, "seat", seat)
+				m.log.Info("member timed out", zap.String("code", code), zap.Int("seat", seat))
 			}
 		}
 		if len(lb.members) == 0 {
 			lb.state = stateEvicted
 			delete(m.lobbies, code)
 			m.relay.ReleaseLobby(code)
-			m.log.Info("lobby evicted (all timed out)", "code", code)
+			m.log.Info("lobby evicted (all timed out)", zap.String("code", code))
 			continue
 		}
 		if dropped {
@@ -1038,12 +1038,12 @@ func (m *Manager) logDropsLocked() {
 		return
 	}
 	m.log.Info("control-plane drops",
-		"bad_json", cur.badJSON, "bad_message", cur.badMessage,
-		"unknown_type", cur.unknownType, "over_rate", cur.overRate,
-		"join_guess", cur.joinGuess, "chat_invalid", cur.chatInvalid,
-		"chat_dropped", cur.chatDropped, "lobby_cap", cur.lobbyCap,
-		"idle_conns", cur.idleConns,
-		"lobbies", len(m.lobbies), "conns", len(m.conns))
+		zap.Uint64("bad_json", cur.badJSON), zap.Uint64("bad_message", cur.badMessage),
+		zap.Uint64("unknown_type", cur.unknownType), zap.Uint64("over_rate", cur.overRate),
+		zap.Uint64("join_guess", cur.joinGuess), zap.Uint64("chat_invalid", cur.chatInvalid),
+		zap.Uint64("chat_dropped", cur.chatDropped), zap.Uint64("lobby_cap", cur.lobbyCap),
+		zap.Uint64("idle_conns", cur.idleConns),
+		zap.Int("lobbies", len(m.lobbies)), zap.Int("conns", len(m.conns)))
 	m.lastDrops = cur
 }
 
@@ -1067,7 +1067,7 @@ func (m *Manager) scheduleLockedToInProgressLocked(lb *lobby) {
 		lb.lockTimerArmed = false
 		if lb.state == stateLocked {
 			lb.state = stateInProgress
-			m.log.Info("lobby in progress", "code", code)
+			m.log.Info("lobby in progress", zap.String("code", code))
 		}
 	})
 }

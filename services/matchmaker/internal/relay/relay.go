@@ -39,11 +39,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
-	"log/slog"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/egedemirbas/open-bomberman/matchmaker/internal/ratelimit"
 )
@@ -154,7 +155,7 @@ type Table struct {
 	idle        time.Duration    // 0 disables idle expiry
 	rebindQuiet time.Duration    // pin window; 0 disables pinning (tests only)
 	now         func() time.Time // injectable clock (tests)
-	log         *slog.Logger
+	log         *zap.Logger
 
 	forwarded       atomic.Uint64
 	bytes           atomic.Uint64
@@ -174,7 +175,7 @@ type Table struct {
 	lastStats Counters // maintain goroutine only
 }
 
-func NewTable(idle time.Duration, log *slog.Logger) *Table {
+func NewTable(idle time.Duration, log *zap.Logger) *Table {
 	return &Table{
 		byID:        map[[AllocIDLen]byte]*allocation{},
 		byKey:       map[allocKey]*allocation{},
@@ -425,7 +426,7 @@ func (t *Table) logStats() {
 	}
 	if cur.Oversize > t.lastStats.Oversize {
 		t.log.Warn("relay dropped oversized datagrams (not truncated)",
-			"limit_bytes", MaxDatagram, "dropped", cur.Oversize-t.lastStats.Oversize)
+			zap.Int("limit_bytes", MaxDatagram), zap.Uint64("dropped", cur.Oversize-t.lastStats.Oversize))
 	}
 	// A refused rebind is the signature of the seat-hijack attempt (SECURITY.md)
 	// — somebody sending a valid alloc_id from the wrong address while the real
@@ -433,18 +434,19 @@ func (t *Table) logStats() {
 	// it is never something a well-behaved client produces.
 	if cur.RebindRefused > t.lastStats.RebindRefused {
 		t.log.Warn("relay refused address rebinds (pinned peer still live)",
-			"count", cur.RebindRefused-t.lastStats.RebindRefused, "quiet", t.rebindQuiet)
+			zap.Uint64("count", cur.RebindRefused-t.lastStats.RebindRefused),
+			zap.Duration("quiet", t.rebindQuiet))
 	}
 	t.log.Info("relay stats",
-		"allocations", t.Size(),
-		"forwarded", cur.Forwarded, "bytes", cur.Bytes,
-		"drop_short", cur.Short, "drop_unknown_alloc", cur.UnknownAlloc,
-		"drop_unknown_dst", cur.UnknownDst, "drop_dst_addr_unknown", cur.NoAddr,
-		"drop_self_addressed", cur.SelfAddressed,
-		"drop_rebind_refused", cur.RebindRefused,
-		"drop_rebind_throttled", cur.RebindThrottled, "rebound", cur.Rebound,
-		"drop_oversize", cur.Oversize, "drop_rate_limited", cur.RateLimited,
-		"read_err", cur.ReadErr, "drop_write_err", cur.WriteErr)
+		zap.Int("allocations", t.Size()),
+		zap.Uint64("forwarded", cur.Forwarded), zap.Uint64("bytes", cur.Bytes),
+		zap.Uint64("drop_short", cur.Short), zap.Uint64("drop_unknown_alloc", cur.UnknownAlloc),
+		zap.Uint64("drop_unknown_dst", cur.UnknownDst), zap.Uint64("drop_dst_addr_unknown", cur.NoAddr),
+		zap.Uint64("drop_self_addressed", cur.SelfAddressed),
+		zap.Uint64("drop_rebind_refused", cur.RebindRefused),
+		zap.Uint64("drop_rebind_throttled", cur.RebindThrottled), zap.Uint64("rebound", cur.Rebound),
+		zap.Uint64("drop_oversize", cur.Oversize), zap.Uint64("drop_rate_limited", cur.RateLimited),
+		zap.Uint64("read_err", cur.ReadErr), zap.Uint64("drop_write_err", cur.WriteErr))
 	t.lastStats = cur
 }
 
@@ -453,12 +455,21 @@ type Server struct {
 	conn      *net.UDPConn
 	table     *Table
 	ingress   *ratelimit.Table // per-source gate in front of the table
-	log       *slog.Logger
+	log       *zap.Logger
 	done      chan struct{}
 	closeOnce sync.Once
+
+	// alive is the liveness signal the health check reads. F6 (SECURITY.md) is
+	// exactly the failure this exists for: before the fix, one datagram could end
+	// the read loop permanently and the process kept answering "ok" while
+	// forwarding nothing. Now the loop's death is observable from outside.
+	alive atomic.Bool
+	// serveDone closes when the read loop has returned, so shutdown can wait for
+	// the forwarder to stop instead of racing it.
+	serveDone chan struct{}
 }
 
-func Start(addr string, table *Table, log *slog.Logger) (*Server, error) {
+func Start(addr string, table *Table, log *zap.Logger) (*Server, error) {
 	udpAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		return nil, err
@@ -468,18 +479,28 @@ func Start(addr string, table *Table, log *slog.Logger) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{
-		conn:    conn,
-		table:   table,
-		ingress: ratelimit.NewTable(kIngressSlots, kIngressCostMs, kIngressBurst),
-		log:     log,
-		done:    make(chan struct{}),
+		conn:      conn,
+		table:     table,
+		ingress:   ratelimit.NewTable(kIngressSlots, kIngressCostMs, kIngressBurst),
+		log:       log,
+		done:      make(chan struct{}),
+		serveDone: make(chan struct{}),
 	}
+	s.alive.Store(true)
 	go s.serve()
 	go s.maintain()
 	return s, nil
 }
 
+// Alive reports whether the forwarder's read loop is still running. False means
+// the process is degraded in a way only a restart fixes — see the `alive` field.
+func (s *Server) Alive() bool { return s.alive.Load() }
+
 func (s *Server) serve() {
+	defer func() {
+		s.alive.Store(false)
+		close(s.serveDone)
+	}()
 	// One byte of slack so an oversized datagram is DETECTED (n > max) instead of
 	// being silently truncated by the kernel copy into an exact-sized buffer.
 	buf := make([]byte, MaxDatagram+1)
@@ -536,7 +557,8 @@ func (s *Server) maintain() {
 			return
 		case <-tk.C:
 			if n := s.table.ReapIdle(); n > 0 {
-				s.log.Info("relay allocations expired (idle)", "count", n, "idle", s.table.idle)
+				s.log.Info("relay allocations expired (idle)",
+					zap.Int("count", n), zap.Duration("idle", s.table.idle))
 			}
 			s.table.logStats()
 		}
@@ -545,7 +567,12 @@ func (s *Server) maintain() {
 
 func (s *Server) LocalAddr() net.Addr { return s.conn.LocalAddr() }
 
+// Close stops the listener. It returns once the read loop has actually exited,
+// so a caller draining the process knows the forwarder is off rather than
+// merely asked to stop.
 func (s *Server) Close() error {
 	s.closeOnce.Do(func() { close(s.done) })
-	return s.conn.Close()
+	err := s.conn.Close()
+	<-s.serveDone
+	return err
 }

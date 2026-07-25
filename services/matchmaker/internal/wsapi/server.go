@@ -3,13 +3,13 @@ package wsapi
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
+	"go.uber.org/zap"
 
 	"github.com/egedemirbas/open-bomberman/matchmaker/internal/config"
 	"github.com/egedemirbas/open-bomberman/matchmaker/internal/lobby"
@@ -33,34 +33,117 @@ const (
 	// kCloseWait bounds the graceful close handshake, which happens on its own
 	// goroutine so it can never block the Manager (see conn.disconnect).
 	kCloseWait = 5 * time.Second
+
+	// kShutdownReason is what a client is told when the process drains. The C++
+	// LobbyFlow reconnects lazily on the next action, so a clean close during a
+	// deploy costs a player nothing.
+	kShutdownReason = "server shutting down"
 )
 
 // Server bridges HTTP/WebSocket to the transport-agnostic Manager, and owns
 // the admission control in front of it: the Manager's per-connection state is
 // only bounded because this refuses to accept an unbounded number of sockets.
+//
+// It is the /ws handler ONLY. The route table, the health endpoints and the
+// drain switch live in the handler package — this type has no opinion about
+// what else the process serves.
 type Server struct {
 	mgr *lobby.Manager
 	cfg config.Config
-	log *slog.Logger
+	log *zap.Logger
 
-	mu      sync.Mutex
-	live    int            // total open connections
-	perIP   map[string]int // client key -> open connections; bounded by `live`
+	mu    sync.Mutex
+	live  int            // total open connections
+	perIP map[string]int // client key -> open connections; bounded by `live`
+	// conns is every open socket, so a drain can close them deliberately instead
+	// of letting the process exit underneath them. http.Server.Shutdown cannot do
+	// it: a WebSocket is a HIJACKED connection and Shutdown neither closes nor
+	// waits for those. Keyed on a pointer this package minted, and bounded by
+	// `live`, so it satisfies the same rules as perIP (SECURITY.md rules 2 and 3).
+	conns map[*conn]struct{}
+
+	draining  bool
+	drained   chan struct{} // closed once draining && live == 0
+	drainOnce sync.Once
+
 	refused atomic.Uint64
 }
 
-func NewServer(mgr *lobby.Manager, cfg config.Config, log *slog.Logger) *Server {
-	return &Server{mgr: mgr, cfg: cfg.WithDefaults(), log: log, perIP: map[string]int{}}
+func NewServer(mgr *lobby.Manager, cfg config.Config, log *zap.Logger) *Server {
+	return &Server{
+		mgr:     mgr,
+		cfg:     cfg.WithDefaults(),
+		log:     log,
+		perIP:   map[string]int{},
+		conns:   map[*conn]struct{}{},
+		drained: make(chan struct{}),
+	}
 }
 
-func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", s.serveWS)
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok\n"))
-	})
-	return mux
+// ServeHTTP handles one WebSocket upgrade. Mount it at /ws.
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.serveWS(w, r) }
+
+// Shutdown closes every open connection with a close frame and waits for them to
+// go away, bounded by ctx.
+//
+// Call it AFTER http.Server.Shutdown has closed the listener: this refuses
+// nothing itself, so a socket accepted in between would be missed and the wait
+// would then run to the ctx deadline instead of finishing early.
+func (s *Server) Shutdown(ctx context.Context) error {
+	s.mu.Lock()
+	s.draining = true
+	open := make([]*conn, 0, len(s.conns))
+	for c := range s.conns {
+		open = append(open, c)
+	}
+	empty := s.live == 0
+	s.mu.Unlock()
+
+	if empty {
+		s.signalDrained()
+	}
+	// Outside the lock on purpose: Disconnect cancels inline and finishes the
+	// close handshake on its own goroutine (SECURITY.md F10), and holding s.mu
+	// across a fan-out is the shape that bug had.
+	for _, c := range open {
+		c.Disconnect(kShutdownReason)
+	}
+
+	select {
+	case <-s.drained:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *Server) signalDrained() { s.drainOnce.Do(func() { close(s.drained) }) }
+
+// RunStats emits ONE aggregated admission line per interval, and only when a
+// tally moved — the same discipline as `relay stats` and `control-plane drops`
+// (SECURITY.md rule 4). Without it the refusal counter is invisible: a service
+// sitting at its connection cap looks exactly like an idle one from the outside.
+func (s *Server) RunStats(ctx context.Context, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	var last uint64
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			cur := s.refused.Load()
+			if cur == last {
+				continue
+			}
+			s.mu.Lock()
+			live, keys := s.live, len(s.perIP)
+			s.mu.Unlock()
+			s.log.Info("ws admission",
+				zap.Uint64("refused", cur), zap.Int("live", live), zap.Int("client_keys", keys))
+			last = cur
+		}
+	}
 }
 
 // reserve takes one connection slot, or reports why it cannot.
@@ -87,16 +170,31 @@ func (s *Server) reserve(key string) bool {
 
 func (s *Server) release(key string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.live--
-	if key == "" {
-		return
+	if key != "" {
+		if n := s.perIP[key] - 1; n > 0 {
+			s.perIP[key] = n
+		} else {
+			delete(s.perIP, key)
+		}
 	}
-	if n := s.perIP[key] - 1; n > 0 {
-		s.perIP[key] = n
-	} else {
-		delete(s.perIP, key)
+	empty := s.draining && s.live == 0
+	s.mu.Unlock()
+	if empty {
+		s.signalDrained() // the last socket left during a drain; unblock Shutdown
 	}
+}
+
+func (s *Server) track(c *conn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.conns[c] = struct{}{}
+}
+
+func (s *Server) untrack(c *conn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.conns, c)
 }
 
 func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
@@ -117,7 +215,7 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 		InsecureSkipVerify: true,
 	})
 	if err != nil {
-		s.log.Debug("ws accept failed", "err", err)
+		s.log.Debug("ws accept failed", zap.Error(err))
 		return
 	}
 	c.SetReadLimit(ReadLimit)
@@ -140,7 +238,9 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 	// the moment it exists, seat or no seat; removed unconditionally on the way
 	// out so neither map outlives the connection.
 	s.mgr.AddConn(wc, key)
+	s.track(wc)
 	defer func() {
+		s.untrack(wc)
 		s.mgr.RemoveConn(wc)
 		wc.Disconnect("connection closed")
 	}()
@@ -171,7 +271,7 @@ type conn struct {
 	addr      string
 	out       chan []byte
 	cancel    context.CancelFunc
-	log       *slog.Logger
+	log       *zap.Logger
 	closeOnce sync.Once
 }
 
@@ -181,7 +281,7 @@ func (w *conn) Remote() string { return w.addr }
 func (w *conn) Send(v any) {
 	data, err := json.Marshal(v)
 	if err != nil {
-		w.log.Error("marshal outbound", "err", err)
+		w.log.Error("marshal outbound", zap.Error(err))
 		return
 	}
 	select {
