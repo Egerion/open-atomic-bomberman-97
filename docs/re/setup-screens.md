@@ -126,7 +126,32 @@ Message IDs the setup screens use (purpose only; text stays in the file):
 | 80  | `sub_42B47D` | the "press a control now" bind prompt (animated, cycles `dword_45BFB4[c&3]`) |
 | 95, 100, 110 | both | bind-confirm / bind-cancel overlays (`sub_414340`) |
 
-## Screen B — controller assignment (`sub_42B47D` @ 0x42B47D)
+## CORRECTION (2026-07-25): both "Screen A"/"Screen B" sections below are WRONG
+
+A raw-byte pass over both network screens replaced them entirely —
+**`docs/re/network-screens.md`** is the definitive spec. What the two sections
+below get wrong:
+
+- **`sub_42B47D` is not controller assignment.** It is the **guest's server
+  browser**: the 10 rows are discovered *servers* (`word_4600D8[10]` +
+  `dword_45FF04[10]` names + `dword_45FF54[10]` client counts), not player
+  slots. **Space/Enter joins the selected server**; there is no bind-detect
+  and no controller anywhere. `sub_40F1BD(i) >= 4` means "that server already
+  has 4 clients", not "a controller index".
+- **`sub_42B0CE` is not an options pane.** Its 4 rows are the **host's
+  connected clients** (`word_45FFA4[4]`), and Enter/Space starts the game.
+- **`unk_4632CC` is not a player-config store.** It is `JOYCAPSA[10]` from
+  `joyGetDevCapsA` (`0x194 = 404 = sizeof(JOYCAPSA)`, `sub_42965C`);
+  `sub_429A61(i)` returns its `szPname`. Neither net screen touches it. The
+  real per-slot store is the 152-byte player record at `dword_461BC4`.
+- **The 4th VALUELST column (753/763/768/778) is the CLIP WIDTH, not a
+  colour** — the same correction this doc already makes for the player-input
+  screen's column 4.
+- **Enter does not leave Screen B** — it joins; only Esc leaves.
+- Net mode polarity: **`dword_460058` is `1 = guest`, `2 = host`**, so
+  `sub_42B0CE` (mode 2) is START/host and `sub_42B47D` (mode 1) is JOIN/guest.
+
+## Screen B — controller assignment (`sub_42B47D` @ 0x42B47D) — SUPERSEDED
 
 The main setup screen: assign each of the 10 player slots to a controller (=
 human) or leave it OFF. Structure per frame:
@@ -162,7 +187,7 @@ assigned controller/type (`sub_40F1BD` returns <4 = a keyboard/joystick index),
 and (for team play) the team. Human = has a controller; the remaining active
 slots the match fills as COMPUTER (the AI's `+16==1` type). OFF = inactive.
 
-## Screen A — game options (`sub_42B0CE` @ 0x42B0CE)
+## Screen A — game options (`sub_42B0CE` @ 0x42B0CE) — SUPERSEDED
 
 Mode 2 (`sub_40C839(2)`), music 1040, random glue backdrop. A **4-item** list
 (`for i in 0..3`, `sub_40F1E9(i)` active? `sub_40F217(i)` value; strings 71
@@ -326,7 +351,7 @@ grey joystick pane, +70 selected-row boost and key-legend line removed).
 | `84` 'T' / `116` 't' | toggle TEAM +84: `sub_422437(v108, sub_4223E7(v108)==0)` |
 | `13` Enter | (< 0x20 branch) leave the screen → proceed to match init |
 | `27` Esc | back out: `dword_46492C=-1`, `dword_464A68=2`, SFX **10** |
-| `32` Space | in NET only (`sub_40C06A()==1`) — bind detect; local = inert |
+| `32` Space | **CORRECTED 2026-07-25: the same as Enter** — key `0x20` jumps to Enter's label (commit/proceed). There is no "bind detect"; the `sub_40C06A()==1` test on that path is the **guest lock-out** (→ SFX 40). See `network-screens.md` §7/§11 |
 | `1` | dev: set all 10 slots to COMPUTER (local only) |
 | `288`/`315` | menu toggles / roulette (`sub_413D45`/`sub_41431C`) |
 | `67` 'C' ×5 (local only) | **CAMPAIGN picker** — 5 consecutive presses (same-key counter `v115`, any other key resets it; `!sub_40C06A()` guard) open the `*.cam` file picker `sub_4015C6` (pseudo.c 15357-15365). Missed by the original "EXHAUSTIVE" pass — full chain in `docs/re/campaign.md` |

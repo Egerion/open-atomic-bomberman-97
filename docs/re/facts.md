@@ -5182,6 +5182,124 @@ t10/t40 (pre-brick) stayed byte-identical.
 RNG-count omission; native-port transliteration of sub_425107/sub_42BE0B made
 the empty hook visible at source level. docs/re/fidelity-audit.md.)
 
+## Network setup screens — CONFIRMED (2026-07-25, `sub_42B0CE`/`sub_42B47D`)
+
+Full spec: `docs/re/network-screens.md`. Raw-byte verified (capstone), because
+Hex-Rays dropped five load-bearing register arguments in these two functions.
+
+**Net role polarity — CORRECTED.** `dword_460058` is **`1 = GUEST`,
+`2 = HOST`**, not the `1 = host, 2 = guest` recorded in `multiplayer.md` §1.1,
+`frontend-flow.md` and `audit/multiplayer-deep.md` §3. Four proofs:
+`sub_40C035` gives *only* mode 2 its own node id as session authority
+(`dword_4600D4 = HIWORD(dword_46013C)`); `sub_40CD1C` stamps mode 2's own id
+but mode 1's *host's* id into the datagram header; `sub_4105D2` has mode 1
+copy the match clock while mode 2 computes and broadcasts it (`sub_40FCA1`);
+and the announce / start / options senders (`sub_40EBC1`, `sub_40ED08`,
+`sub_40FE88`) are gated `== 2` only.
+
+**Screen assignment.** Main-menu row 1 → `sub_42B0CE` @0x42B0CE, head
+`mov eax,2 ; call 0x40C839` = **START NET GAME (host)**; row 2 → `sub_42B47D`
+@0x42B47D, head `mov eax,1` = **JOIN NET GAME (guest)**. VALUELST's own section
+comments agree (765-778 "START NET GAME SCREEN" = the ids `sub_42B0CE` reads;
+750-763 "JOIN NET GAME SCREEN" = `sub_42B47D`'s). This settles the conflict
+`audit/multiplayer-deep.md` §2 flagged: the labels were right, the mode table
+was inverted.
+
+**What the screens list — CORRECTED.** Neither is an options pane and neither
+assigns controllers.
+
+- `sub_42B0CE`'s `for i in 0..3` walks the **host's connected-client table**
+  `word_45FFA4[4]` (node id) / `dword_45FFFC[4]` (41-byte name). Occupied row =
+  `getstring(71)` with `%s` name + `%u` node id; empty row = `getstring(72)`,
+  no args.
+- `sub_42B47D`'s `for i in 0..9` walks the **guest's discovered-server table**
+  `word_4600D8[10]` / `dword_45FF04[10]` (name) / `dword_45FF54[10]` (that
+  server's current client count). Occupied row = `getstring(62)` with **three**
+  args in order `%s` name, `%u` client count, `%u` node id; empty row =
+  `getstring(63)`, no args. `sub_40F1BD(i) >= 4` = "server full"
+  (`getstring(7)`), NOT "a controller index".
+
+**Session caps.** 1 host + **4** guests. `sub_40D175` seats a join request in
+`word_45FFA4[0..3]`; `sub_40ED08` assembles `word_460130[5]` (`[0]` = host);
+`sub_40E765` discards any datagram whose sender is not one of those 5; boot
+(`sub_40C74C`) allocates `sub_418511(1004, 5)` = five per-node dedupe rings.
+Players stay at 10 — a machine uploads every one of its local slots
+individually (`sub_40EE16`, kind 40) from the shared roster screen.
+
+**Timings and geometry.** `getvalue(13) = 3` s is the "minimum seconds to wait
+at screens so other computers can catch up" settle gate (`sub_4148AC` returns
+it in net mode, `1` locally) — the host cannot START until its client set has
+been unchanged that long, and the same gate guards Enter on the shared roster
+and level screens. The host beacons kind 0 at **1 Hz**; START sends kind 14
+**five times, 100 ms apart**, then kind 49. A guest's join retries kind 3 once
+per second for **3000 ms**. Both screens are pixel-identical: title (120, 80,
+clip 400), header (120, 120, clip 250), rows (120, 140 + 20·i, clip 400);
+guest cursor at `sub_413BD6(100, 156 + 20·sel)` — the `+16` half-row offset
+was Hex-Rays-dropped. **The 4th VALUELST column (753/758/763/768/773/778) is
+the CLIP WIDTH, not a colour** — same correction the 2026-07-12 pixel pass made
+for the player-input screen.
+
+**Inks (COLOR.PAL LUT-decoded).** New value: `byte_497F8F` = LUT offset 0x2BFF
+→ index 97 → **(96, 252, 252)**, the title ink on both screens (previously only
+a nearest-search "cyan-ish" estimate in `results-and-options.md`). Rows/header
+use `byte_49D38F` (240,248,252) with a `byte_495390[0]` black outline. All five
+net modals go through `sub_414340(line1, line2, ink=EBX, outline=ECX)` with
+ink `byte_49A390` **(164,0,0)** and outline `byte_49D37A` **(252,248,88)** —
+traced `sub_414340` → `sub_4172BA` → `sub_41696C(a6=ink, a7=outline)`.
+
+**`sub_41696C` signature re-confirmed by raw bytes:** `(EAX surface, EDX text,
+ECX x, EBX max_width, [stack] y, ink, outline)`, matching `frontend-flow.md`.
+
+**`unk_4632CC` is NOT a player-config store — CORRECTED.** `setup-screens.md`
+called it "404 bytes per player × 10". It is the Win32 joystick-capabilities
+array: `sub_42965C` does `joyGetDevCapsA(i, (LPJOYCAPSA)(&unk_4632CC + 404*i),
+0x194u)` and `0x194 = 404 = sizeof(JOYCAPSA)`; `sub_429A61(i)` returns
+`+404*i+4` = `szPname`. Neither net screen touches it.
+
+**Net identity.** `sub_40FE34()` returns `&unk_460140`, the machine's node
+name (≤40 chars), shown on both screens' titles and in every lobby row. Loaded
+from install-root **`NODENAME.INI`** (first line, `sub_40C08C`, from the boot
+init `sub_40C74C`); absent → a random default
+`getstring(500 + rand() % getvalue(47))` with `getvalue(47) = 49`. Written back
+by `sub_40C140` from the shutdown hook `sub_40C4DB` (registered with
+`sub_410EBF`, the same registrar `options.ini`'s `sub_405DE3` uses), so a
+randomly-assigned name becomes permanent after the first run.
+
+**Packet version.** `dword_45BAC4 = 21356` is stamped into every datagram
+header (`sub_40CD1C`) and checked on receive (`sub_40E765`) — the original's
+equivalent of the port's ADR-0011 `build_hash`. Both net screens print it every
+frame via `getstring(55)` at (x=0, y=430, clip 320).
+
+**`netprotocol` ordinals — RESOLVED.** VALUELST 1100-1104 (per-protocol
+retransmit ms, with the file's own comments) and MESSAGES 630-634 agree:
+**0 = none/cancel (200 ms), 1 = IPX (200), 2 = modem (750), 3 = serial (400),
+4 = TCP/IP (400)**. `getvalue(1110) = 4` is the picker's item count
+(`sub_42FEF0(list, count)` iterates `i < count`), so TCP/IP is never drawn, and
+`sub_40C839` accepts only `1..3` anyway — the shipped exe is IPX / modem /
+serial only.
+
+**Entry gate.** `sub_40C839(role)` is the whole net bring-up, not a setter: it
+sets the mode, requires **`CFG.INI` `netonoff` != 0** (else modal 96/340 and an
+immediate bounce back to the menu), picks/validates the protocol, binds the
+transport (`sub_43B81D` fills a 60-byte vtable at 0x4600F0), and runs a
+cancellable connect-wait. A non-zero return aborts the screen before it draws.
+
+**Net game forces `diseases_destroyable` on.** `sub_42B0CE` sets
+`dword_464990 = 1` at entry; both screens save the 8 net-synced option globals
+with `sub_40FF57` and restore them with `sub_40FFBC` on exit, and save/restore
+the 10 slots' input type/sub bytes with `sub_4224E2`/`sub_422552`.
+
+**Where the map and the AI come from in a net game.** Both screens commit into
+`sub_42A3F6()` — the *same* handler main-menu row 0 (PLAY) uses — so a net
+match runs the **shared** local pre-match flow: `sub_410F81` (roster, where CPU
+slots are set; a guest blocks at its head, then uploads its local slots as kind
+40; remote seats become input type **4**) then its tail `sub_406DDE` (level and
+round count). Every edit is `sub_40C06A() != 1` gated, so guests are read-only
+and get the SFX-40 buzz; the host broadcasts level index (kind 43,
+`sub_40FA66`), round count (kind 44, `sub_40FAD5`), team flag (kind 58) and the
+screen advances (kind 32, `sub_40F064(901)`/`(902)`). There is **no** net-only
+map or AI UI.
+
 ## Still guessed — not yet extracted from the binary
 
 | Constant | Current value | Status |
