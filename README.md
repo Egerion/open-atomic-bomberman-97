@@ -2,15 +2,17 @@
 
 A clean-room, modern **C++20** rewrite of **Atomic Bomberman** (Interplay, 1997) — a deterministic re-implementation that renders the original game with the assets from *your own* copy, and adds **online multiplayer** the 1997 game never shipped in a form that survives modern networks.
 
-![Main menu](docs/screenshots/menu.png)
+<p align="center">
+  <img src="docs/screenshots/menu.png" alt="Open Bomberman's main menu" width="640">
+</p>
 
 **Status:** playable. Faithful deterministic sim (movement, bombs, kick/punch/grab/throw, spooger, the nine diseases, HURRY wall-close, conveyors/warpholes/trampolines, head hits), original art/sound/music loaded at runtime, random stage rotation, a scheme editor, and **online 2-player multiplayer over UDP** (deterministic lockstep + GGPO-style rollback netcode) reachable from the menu or the CLI. A larger lobby/internet/N-player online mode is actively being built — see *Roadmap*.
 
-![In a match](docs/screenshots/in-match.png)
+<p align="center">
+  <img src="docs/screenshots/six-player-match.gif" alt="Six computer players fighting through one round" width="640">
+</p>
 
-![Six computer players in one round](docs/screenshots/six-player-match.gif)
-
-> The screenshots and the animation show the clean-room engine running with the original game's assets, loaded at runtime from a copy you own — see *Legal*. The animation is an unedited headless capture of the deterministic sim — six computer players, six seconds of one round, one frame per 20 Hz tick — rendered straight to disk by `--demo-shots` with no display attached.
+> The screenshot and the animation show the clean-room engine running with the original game's assets, loaded at runtime from a copy you own — see *Legal*. The animation is an unedited headless capture of the deterministic sim — six computer players, six seconds of one round, one frame per 20 Hz tick — rendered straight to disk by `--demo-shots` with no display attached.
 
 ## Built entirely with Claude Code — no code typed by hand
 
