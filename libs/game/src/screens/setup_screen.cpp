@@ -251,8 +251,12 @@ AppInput SetupScreen::run() {
             }
             // Keep the setup link alive under the modal: the guest fails after
             // `timeout_ms` of silence, so a host sitting on a start-guard error
-            // must still be re-broadcasting.
+            // must still be re-broadcasting. Same for the lobby link — the
+            // matchmaker reaps a member that stops heart-beating. The chat
+            // OVERLAY is not driven here: it can only be reached from the main
+            // loop, which swallows Enter while it is open, so it cannot be up.
             net_setup_pump(net_);
+            if (chat_ != nullptr) chat_->pump();
             ctx_.audio.update_music();
             draw_frame();
             // Ink = byte_49A390 = DARK RED (164,0,0): the setup start-guard
@@ -307,6 +311,12 @@ AppInput SetupScreen::run() {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
+            // The F2 lobby-chat overlay gets first refusal (chat_overlay.hpp —
+            // PORT-ONLY, not RE'd). While it is open it consumes every key, so
+            // typing a message never also cycles a slot or toggles teams behind
+            // it; while it is closed it takes only F2 and this screen behaves
+            // exactly as it did before chat existed.
+            if (chat_ != nullptr && chat_->handle_event(ev, ctx_)) continue;
             // Hotplug (sub_429628 "joystick present" is polled live in the
             // original; SDL3 gives us an event instead): rescan so the pane
             // and the Right-cycle's joystick count reflect what's plugged in
@@ -479,6 +489,7 @@ AppInput SetupScreen::run() {
                     }
                     if (browser.viewing() && browser.viewer().done()) browser.close_viewer();
                     net_setup_pump(net_);  // the link must not go silent under the browser
+                    if (chat_ != nullptr) chat_->pump();  // nor the lobby's heartbeat
                     ctx_.audio.update_music();
                     draw_frame();
                     browser.draw(ctx_.sdl);
@@ -498,6 +509,7 @@ AppInput SetupScreen::run() {
             net_dirty = false;
         }
         net_setup_pump(net_);
+        if (chat_ != nullptr) chat_->pump();
         if (net_guest) {
             // Read-only: the displayed roster IS the host's newest preview.
             net_setup_apply_roster(net_, state_.setup_type, state_.setup_sub, state_.setup_team,
@@ -519,6 +531,7 @@ AppInput SetupScreen::run() {
         // speaks (§7). Nothing new is drawn: the pinned prompt, the pinned
         // anchor, the real getstring(80).
         if (net_guest && !net_setup_has_preview(net_)) draw_net_wait_prompt(ctx_, net_spin);
+        if (chat_ != nullptr) chat_->draw(ctx_);  // last: the panel sits on top
         SDL_RenderPresent(ctx_.sdl);
         SDL_Delay(2);
     }

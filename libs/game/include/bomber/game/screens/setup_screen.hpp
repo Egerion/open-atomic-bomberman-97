@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bomber/game/app_flow.hpp"  // AppInput
+#include "bomber/game/chat_overlay.hpp"
 #include "bomber/game/screen_context.hpp"
 #include "bomber/game/screens/campaign_state.hpp"
 #include "bomber/game/screens/match_backdrop.hpp"
@@ -35,14 +36,25 @@
 // renders that preview read-only, buzzing SFX 40 at any edit key
 // (`sub_410F81`'s LABEL_159). A default-constructed link (`session == nullptr`)
 // is ordinary local play and every net branch below is inert.
+//
+// A SIXTH seam, and the one thing here that is NOT reverse-engineered: the F2
+// lobby-chat overlay (chat_overlay.hpp), a PORT-ONLY addition the maintainer
+// asked for. An online setup screen is still a lobby state, so the conversation
+// started in the waiting room carries on over this screen. nullptr — every local
+// path — and it is inert.
 
 namespace bomber::game {
 
 class SetupScreen {
 public:
     SetupScreen(ScreenContext ctx, SetupState state, CampaignState campaign, MatchBackdrop backdrop,
-                NetSetupLink net = {})
-        : ctx_(ctx), state_(state), campaign_(campaign), backdrop_(backdrop), net_(net) {}
+                NetSetupLink net = {}, ChatOverlay* chat = nullptr)
+        : ctx_(ctx),
+          state_(state),
+          campaign_(campaign),
+          backdrop_(backdrop),
+          net_(net),
+          chat_(chat) {}
     AppInput run();
 
 private:
@@ -56,6 +68,7 @@ private:
     CampaignState campaign_;
     MatchBackdrop backdrop_;
     NetSetupLink net_;
+    ChatOverlay* chat_ = nullptr;  // BORROWED; owned by GameApp::present_net_online
 };
 
 }  // namespace bomber::game

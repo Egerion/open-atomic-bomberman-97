@@ -62,6 +62,15 @@ LobbyServerMessage peer_candidates(int seat, const std::string& addr) {
     return m;
 }
 
+LobbyServerMessage chat_from(int seat, const std::string& name, const std::string& text) {
+    LobbyServerMessage m;
+    m.type = LobbyMsgType::Chat;
+    m.chat_seat = seat;
+    m.chat_name = name;
+    m.chat_text = text;
+    return m;
+}
+
 LobbyFlow::Config test_config(const std::string& name, std::uint16_t sink_port) {
     LobbyFlow::Config c;
     c.server_url = "ws://127.0.0.1:1/ws";  // never connected in these tests
@@ -100,6 +109,78 @@ TEST_CASE("LobbyFlow tracks lobby identity and roster") {
     CHECK(flow.roster()[1].name == "Ada");
     CHECK(flow.roster()[0].ready);
     CHECK(flow.is_host());  // still seat 0
+}
+
+TEST_CASE("LobbyFlow keeps a bounded ring of sanitised chat and bumps a revision") {
+    // PORT-ONLY lobby chat (PROTOCOL.md §7). Inbound frames are another player's
+    // typing arriving over a socket, so the flow re-sanitises them itself rather
+    // than trusting whatever the server relayed.
+    UdpTransport tp;
+    UdpTransport sink;
+    if (!tp.bind(0) || !sink.bind(0)) {
+        MESSAGE("UDP sockets unavailable in this environment; skipping");
+        return;
+    }
+    LobbyClient client;
+    LobbyFlow flow(test_config("Ege", sink.local_port()), tp, client);
+    flow.handle_server_message(lobby_created("K7Q2MP", 0));
+
+    CHECK(flow.chat_log().empty());
+    const unsigned rev0 = flow.chat_revision();
+
+    flow.handle_server_message(chat_from(1, "Ada", "hello"));
+    REQUIRE(flow.chat_log().size() == 1);
+    CHECK(flow.chat_log()[0].name == "Ada");
+    CHECK(flow.chat_log()[0].text == "hello");
+    CHECK(flow.chat_log()[0].seat == 1);
+    CHECK(flow.chat_revision() == rev0 + 1);
+
+    // Untrusted input: control codes are stripped, a name is clamped, and a
+    // message with nothing drawable left is not a message at all.
+    flow.handle_server_message(chat_from(1, std::string(40, 'N'), "a\x07 b"));
+    REQUIRE(flow.chat_log().size() == 2);
+    CHECK(flow.chat_log()[1].name.size() == kChatMaxNameBytes);
+    CHECK(flow.chat_log()[1].text == "a b");
+
+    const unsigned before_junk = flow.chat_revision();
+    flow.handle_server_message(chat_from(1, "Ada", "\x01\x02"));
+    CHECK(flow.chat_log().size() == 2);              // dropped, not appended
+    CHECK(flow.chat_revision() == before_junk);      // and it did not "arrive"
+
+    // The ring is bounded: the GUI renders a corner panel, not a transcript.
+    for (int i = 0; i < 20; ++i)
+        flow.handle_server_message(chat_from(1, "Ada", "line " + std::to_string(i)));
+    CHECK(flow.chat_log().size() == LobbyFlow::kChatLogLines);
+    CHECK(flow.chat_log().back().text == "line 19");  // newest last
+}
+
+TEST_CASE("LobbyFlow::send_chat refuses empties, seatless peers and floods") {
+    UdpTransport tp;
+    UdpTransport sink;
+    if (!tp.bind(0) || !sink.bind(0)) {
+        MESSAGE("UDP sockets unavailable in this environment; skipping");
+        return;
+    }
+    LobbyClient client;
+    LobbyFlow flow(test_config("Ege", sink.local_port()), tp, client);
+
+    // No seat yet: the server would refuse it, so nothing goes on the wire.
+    CHECK_FALSE(flow.send_chat("hello", 0));
+
+    flow.handle_server_message(lobby_created("K7Q2MP", 0));
+    CHECK_FALSE(flow.send_chat("", 0));         // nothing to say
+    CHECK_FALSE(flow.send_chat("   ", 0));      // ... still nothing
+    CHECK_FALSE(flow.send_chat("\x01", 0));     // nothing drawable survives
+
+    // The token bucket mirrors the server's: the burst goes out, the next one is
+    // refused HERE (so the player learns) instead of being dropped silently at
+    // the far end, and a wait buys exactly one more.
+    std::int64_t now = 0;
+    for (int i = 0; i < LobbyFlow::kChatBurstMsgs; ++i) CHECK(flow.send_chat("burst", now));
+    CHECK_FALSE(flow.send_chat("one too many", now));
+    now += LobbyFlow::kChatCreditPerMsgMs;
+    CHECK(flow.send_chat("after waiting", now));
+    CHECK_FALSE(flow.send_chat("and again", now));
 }
 
 TEST_CASE("LobbyFlow surfaces join rejections as player-facing errors") {

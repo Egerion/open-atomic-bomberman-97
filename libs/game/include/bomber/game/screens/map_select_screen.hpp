@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bomber/game/app_flow.hpp"  // AppInput
+#include "bomber/game/chat_overlay.hpp"
 #include "bomber/game/screen_context.hpp"
 #include "bomber/game/screens/map_select_state.hpp"
 #include "bomber/game/screens/net_setup_link.hpp"
@@ -30,19 +31,26 @@
 // as it cycles them, and a GUEST renders those read-only, buzzing SFX 40 at any
 // edit key (`sub_406DDE`'s LABEL_97). A default-constructed link is ordinary
 // local play and every net branch is inert.
+//
+// A FOURTH seam, and the one thing here that is NOT reverse-engineered: the F2
+// lobby-chat overlay (chat_overlay.hpp), a PORT-ONLY addition the maintainer
+// asked for. An online map screen is still a lobby state, so the conversation
+// started in the waiting room carries on over it. nullptr on every local path.
 
 namespace bomber::game {
 
 class MapSelectScreen {
 public:
-    MapSelectScreen(ScreenContext ctx, MapSelectState state, NetSetupLink net = {})
-        : ctx_(ctx), state_(state), net_(net) {}
+    MapSelectScreen(ScreenContext ctx, MapSelectState state, NetSetupLink net = {},
+                    ChatOverlay* chat = nullptr)
+        : ctx_(ctx), state_(state), net_(net), chat_(chat) {}
     AppInput run();
 
 private:
     ScreenContext ctx_;
     MapSelectState state_;
     NetSetupLink net_;
+    ChatOverlay* chat_ = nullptr;  // BORROWED; owned by GameApp::present_net_online
 };
 
 }  // namespace bomber::game

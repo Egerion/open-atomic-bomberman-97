@@ -65,6 +65,10 @@ public:
                      std::uint32_t match_config_digest);
     void reanchor(const std::string& code, const std::string& roster_digest);
     void match_over(const std::string& lobby_id);
+    // PORT-ONLY lobby chat (PROTOCOL.md §7 — the 1997 game has none). Raw: this
+    // is the transport wrapper, so it validates nothing. Go through
+    // LobbyFlow::send_chat, which sanitises and rate-limits first.
+    void send_chat(const std::string& text);
 
     // Drain inbound frames PARSED to typed messages (PROTOCOL.md §4), on the game
     // thread. The lobby screen dispatches on LobbyServerMessage::type.

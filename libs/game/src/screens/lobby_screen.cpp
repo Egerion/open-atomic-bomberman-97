@@ -355,23 +355,9 @@ void draw_browser(ScreenContext& ctx, const std::vector<net::PublicLobby>& list,
 
 }  // namespace
 
-LobbyRoomResult LobbyScreen::run_online(const OnlineConfig& ocfg, net::UdpTransport& transport,
-                                        bool host, const std::string& code, bool is_public) {
+LobbyRoomResult LobbyScreen::run_online(net::LobbyFlow& flow, ChatOverlay& chat, bool host,
+                                        const std::string& code) {
     LobbyRoomResult result;
-
-    net::LobbyFlow::Config cfg;
-    cfg.server_url = ocfg.server_url;
-    cfg.stun_host = ocfg.stun_host;
-    cfg.stun_port = ocfg.stun_port;
-    cfg.player_name = ocfg.player_name;
-    cfg.build_hash = net::build_hash();  // the cross-build door: the server rejects mismatches
-
-    net::LobbyClient client;
-    net::LobbyFlow flow(cfg, transport, client);
-    if (host)
-        flow.host_lobby(ocfg.player_name, is_public, /*max_seats=*/2);
-    else
-        flow.join_lobby(code);
 
     platform::FrameClock frame_clock(ctx_.window);
     const Sprite* winz = &ctx_.assets.frontend_pcx("WINZ");
@@ -386,6 +372,9 @@ LobbyRoomResult LobbyScreen::run_online(const OnlineConfig& ocfg, net::UdpTransp
                 result.window_closed = true;
                 return result;
             }
+            // The chat overlay gets first refusal (chat_overlay.hpp): while it
+            // is open it eats every key, so typing never also drives the room.
+            if (chat.handle_event(ev, ctx_)) continue;
             if (ev.type != SDL_EVENT_KEY_DOWN || ev.key.repeat) continue;
 
             if (!failure.empty()) {
@@ -456,6 +445,9 @@ LobbyRoomResult LobbyScreen::run_online(const OnlineConfig& ocfg, net::UdpTransp
                                     "CONTACTING THE SERVER...", ok_label, kDialogInkR, kDialogInkG,
                                     kDialogInkB);
         }
+        // Last, so the panel sits over whatever the room drew. No pump() here:
+        // this screen already stepped the flow above, and the overlay shares it.
+        chat.draw(ctx_);
         SDL_RenderPresent(ctx_.sdl);
         frame_clock.pace();
     }

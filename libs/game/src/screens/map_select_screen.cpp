@@ -240,6 +240,10 @@ AppInput MapSelectScreen::run() {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
+            // The F2 lobby-chat overlay gets first refusal (chat_overlay.hpp —
+            // PORT-ONLY, not RE'd). Open, it consumes every key, so typing never
+            // also cycles the level behind it; closed, it takes only F2.
+            if (chat_ != nullptr && chat_->handle_event(ev, ctx_)) continue;
             if (ev.type != SDL_EVENT_KEY_DOWN) continue;
             const SDL_Keycode k = ev.key.key;
             if (k == SDLK_ESCAPE) {
@@ -271,6 +275,7 @@ AppInput MapSelectScreen::run() {
                     }
                     if (browser.viewing() && browser.viewer().done()) browser.close_viewer();
                     net_setup_pump(net_);  // the link must not go silent under the browser
+                    if (chat_ != nullptr) chat_->pump();  // nor the lobby's heartbeat
                     ctx_.audio.update_music();
                     draw_frame();
                     browser.draw(ctx_.sdl);
@@ -355,6 +360,7 @@ AppInput MapSelectScreen::run() {
             net_dirty = false;
         }
         net_setup_pump(net_);
+        if (chat_ != nullptr) chat_->pump();
         if (net_guest) {
             // Read-only: the level/rounds ARE the host's newest preview.
             net_setup_apply_level(net_, level_count, level, wins, net_level_name);
@@ -366,6 +372,7 @@ AppInput MapSelectScreen::run() {
         }
         ctx_.audio.update_music();
         draw_frame();
+        if (chat_ != nullptr) chat_->draw(ctx_);  // last: the panel sits on top
         SDL_RenderPresent(ctx_.sdl);
         SDL_Delay(2);
     }
