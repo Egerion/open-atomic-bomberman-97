@@ -23,6 +23,14 @@
 //     requested tick instead of one final frame. All shots share one run, so
 //     they stay consistent with each other. See tests/visual/README.md.
 //
+//   bomber_game --demo-players <N> / --demo-seed <n>
+//     Dev-only modifiers for the two --demo paths above (used to render the
+//     README's match animation): run the capture with N COMPUTER slots instead
+//     of the default 1 human + 1 AI roster — a human slot just stands still in
+//     a headless run — and/or start the match from a different seed than the
+//     fixed 0xB0BB1E5 (which also re-rolls the level, brick fill and powerups).
+//     tests/visual/ passes NEITHER, so the pinned golden frames are unaffected.
+//
 //   bomber_game --bm-shot <NAME> <out.bmp> [scroll] [game_dir] [scheme.sch]
 //     Headless capture of one `.BM` text screen (the sub_41302D viewer):
 //     renders NAME.BM (e.g. CREDITS) over the MAINMENU backdrop, scrolled
@@ -99,6 +107,10 @@ int main(int argc, char** argv) {
             opts.demo = true;
             opts.demo_shots = parse_demo_shots(argv[++i]);
             opts.demo_shot_dir = argv[++i];
+        } else if (a == "--demo-players" && i + 1 < argc) {
+            opts.demo_players = std::atoi(argv[++i]);
+        } else if (a == "--demo-seed" && i + 1 < argc) {
+            opts.demo_seed = static_cast<std::uint32_t>(std::strtoul(argv[++i], nullptr, 0));
         } else if (a == "--bm-shot" && i + 2 < argc) {
             // --bm-shot <NAME> <out.bmp> [scroll]: capture one .BM text screen.
             opts.demo = true;  // reuse the demo path's audio skip / headless intent

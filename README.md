@@ -8,7 +8,9 @@ A clean-room, modern **C++20** rewrite of **Atomic Bomberman** (Interplay, 1997)
 
 ![In a match](docs/screenshots/in-match.png)
 
-> The screenshots show the clean-room engine running with the original game's assets, loaded at runtime from a copy you own — see *Legal*.
+![Six computer players in one round](docs/screenshots/six-player-match.gif)
+
+> The screenshots and the animation show the clean-room engine running with the original game's assets, loaded at runtime from a copy you own — see *Legal*. The animation is an unedited headless capture of the deterministic sim — six computer players, six seconds of one round, one frame per 20 Hz tick — rendered straight to disk by `--demo-shots` with no display attached.
 
 ## Built entirely with Claude Code — no code typed by hand
 
