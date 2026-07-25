@@ -5,7 +5,8 @@
 #include "bomber/game/app_flow.hpp"  // AppInput
 #include "bomber/game/screen_context.hpp"
 #include "bomber/game/screens/match_runner_state.hpp"
-#include "bomber/sim/simulation.hpp"  // sim::TickInputs / sim::State
+#include "bomber/sim/match_config.hpp"  // sim::MatchConfig (build_config)
+#include "bomber/sim/simulation.hpp"    // sim::TickInputs / sim::State
 
 // The MATCH RUNTIME, extracted VERBATIM from GameApp (ADR-0009 §10) — the
 // deterministic sim's presentation-side driver. run() plays one match to its end:
@@ -41,6 +42,16 @@ public:
     // forwards to it for the --demo path (GameApp::run()); run() calls it itself at
     // the head of every round.
     void start_match(std::uint32_t seed);
+
+    // The CONFIG half of start_match, split out VERBATIM (no statement moved or
+    // reordered — start_match now calls this and then seeds/loads exactly as
+    // before, so the golden hashes are untouched). PUBLIC because the ONLINE
+    // setup stage has to build the very same config the local PLAY path would
+    // build from the very same screens — and then hand it to the peer over the
+    // wire — WITHOUT seeding sim_ or swapping the stage art yet
+    // (GameApp::present_net_setup). Pure with respect to this object: it only
+    // reads state_/ctx_.
+    sim::MatchConfig build_config(std::uint32_t seed) const;
 
 private:
     // Assembles one tick's TickInputs across every roster slot (keyboard sub 0/1,

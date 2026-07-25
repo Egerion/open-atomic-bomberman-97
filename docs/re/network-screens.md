@@ -478,6 +478,28 @@ shared local screens**, not from the network screens. Their net behaviour:
   then sends the role-appropriate leave (`sub_40EC29` kind 1 for mode 2,
   `sub_40EDC9` kind 39 for mode 1).
 
+**Port mapping** (2026-07-25, ADR-0011): the port reproduces this SHAPE, not the
+1997 wire. `GameApp::present_net_setup` runs between the connect step (lobby
+punch or direct seed handshake) and the match, over the same UDP socket, driving
+the ORDINARY `SetupScreen` (`sub_410F81`) and `MapSelectScreen` (`sub_406DDE`)
+with a `NetSetupLink` (`libs/game/include/bomber/game/screens/net_setup_link.hpp`):
+the host publishes a `net::SetupPreviewFrame` after each edit, the guest renders
+it read-only and buzzes SFX 40 at any edit key. Differences, all deliberate:
+
+- **No guest->host slot upload** (kind 40 from `sub_410F81`'s tail). The port is
+  host-drives-everything, so the two wire seats are LOCKED — the local one to
+  KEYBOARD, the remote one to type 4 OTHER (`sub_40D372`'s own marker) — and
+  every other slot cycles OFF <-> COMPUTER. AI slots are how an online match gets
+  more than two players.
+- **No kind-32 screen-advance command** (`sub_40F064(901/902)`). The preview's
+  `rounds` field carries the cue instead: 0 while the host is on the roster
+  screen, the real win target once it reaches LEVEL & ROUNDS.
+- **The confirmed payload is the whole resolved `sim::MatchConfig`**, not the
+  level index + round count the original sends as kinds 43/44 — see
+  `match_config_codec.hpp` for why an index cannot be trusted across two installs.
+- The 8 kind-49 options are not pushed separately; they are already baked into
+  the confirmed config's `Tuning`.
+
 **The 8 options a host pushes** (`sub_40FE88`, kind 49, 8 words in order) are
 exactly the 8 `sub_40FF57`/`sub_40FFBC` save/restore: `dword_46497C`
 (win_by_kills), `dword_464940` (stomped_bombs_detonate), `dword_464930`

@@ -3,6 +3,7 @@
 #include "bomber/game/app_flow.hpp"  // AppInput
 #include "bomber/game/screen_context.hpp"
 #include "bomber/game/screens/map_select_state.hpp"
+#include "bomber/game/screens/net_setup_link.hpp"
 
 // The LEVEL & ROUNDS (map-select) screen (sub_406DDE), extracted VERBATIM from
 // GameApp (ADR-0009 §7): screen 2 of the pre-match flow, a 2-row list on a random
@@ -20,17 +21,28 @@
 //
 // Two seams, both stored BY VALUE: ScreenContext (the shared front-end services)
 // and MapSelectState (the map-select-specific mutable state GameApp still owns).
+//
+// ONLINE (docs/re/network-screens.md §7, net_setup_link.hpp): the third,
+// DEFAULTED seam makes this the net game's map screen too — which is what the
+// original does, since both network screens commit into `sub_42A3F6` and the map
+// for a net match therefore comes from THIS handler, `sub_406DDE`. With a live
+// NetSetupLink the HOST broadcasts the level (kind 43) and round count (kind 44)
+// as it cycles them, and a GUEST renders those read-only, buzzing SFX 40 at any
+// edit key (`sub_406DDE`'s LABEL_97). A default-constructed link is ordinary
+// local play and every net branch is inert.
 
 namespace bomber::game {
 
 class MapSelectScreen {
 public:
-    MapSelectScreen(ScreenContext ctx, MapSelectState state) : ctx_(ctx), state_(state) {}
+    MapSelectScreen(ScreenContext ctx, MapSelectState state, NetSetupLink net = {})
+        : ctx_(ctx), state_(state), net_(net) {}
     AppInput run();
 
 private:
     ScreenContext ctx_;
     MapSelectState state_;
+    NetSetupLink net_;
 };
 
 }  // namespace bomber::game

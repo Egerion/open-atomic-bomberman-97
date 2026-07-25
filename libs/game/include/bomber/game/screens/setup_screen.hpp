@@ -4,6 +4,7 @@
 #include "bomber/game/screen_context.hpp"
 #include "bomber/game/screens/campaign_state.hpp"
 #include "bomber/game/screens/match_backdrop.hpp"
+#include "bomber/game/screens/net_setup_link.hpp"
 #include "bomber/game/screens/setup_state.hpp"
 
 // The PLAYER INPUT TYPE SELECTION screen (sub_410F81), extracted VERBATIM from
@@ -25,13 +26,23 @@
 // and MatchBackdrop are threaded in ONLY so the 'C'×5 trigger can construct the
 // CampaignPickerScreen(ScreenContext, CampaignState, MatchBackdrop) — the setup
 // body itself reads/writes every non-service member through SetupState.
+//
+// ONLINE (docs/re/network-screens.md §7, net_setup_link.hpp): the fifth,
+// DEFAULTED seam turns this same screen into the net game's roster screen — the
+// original does exactly that (both network screens commit into `sub_42A3F6`, so
+// the roster/AI for a net match come from THIS handler, `sub_410F81`). With a
+// live NetSetupLink the HOST publishes a preview after every edit and the GUEST
+// renders that preview read-only, buzzing SFX 40 at any edit key
+// (`sub_410F81`'s LABEL_159). A default-constructed link (`session == nullptr`)
+// is ordinary local play and every net branch below is inert.
 
 namespace bomber::game {
 
 class SetupScreen {
 public:
-    SetupScreen(ScreenContext ctx, SetupState state, CampaignState campaign, MatchBackdrop backdrop)
-        : ctx_(ctx), state_(state), campaign_(campaign), backdrop_(backdrop) {}
+    SetupScreen(ScreenContext ctx, SetupState state, CampaignState campaign, MatchBackdrop backdrop,
+                NetSetupLink net = {})
+        : ctx_(ctx), state_(state), campaign_(campaign), backdrop_(backdrop), net_(net) {}
     AppInput run();
 
 private:
@@ -44,6 +55,7 @@ private:
     SetupState state_;
     CampaignState campaign_;
     MatchBackdrop backdrop_;
+    NetSetupLink net_;
 };
 
 }  // namespace bomber::game

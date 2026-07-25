@@ -38,6 +38,7 @@
 #include "bomber/game/sdl.hpp"
 #include "bomber/game/sequences.hpp"
 #include "bomber/audio/sound_director.hpp"
+#include "bomber/sim/match_config.hpp"
 #include "bomber/sim/simulation.hpp"
 
 // The playable front-end: owns the SDL window, the asset store, the
@@ -189,37 +190,70 @@ private:
     void start_match(std::uint32_t seed);
     int run_demo();
     // Netplay entry (increment 5b, ADR-0010 §3.3 step 5): runs ONE 2-player UDP
-    // lockstep match in place of the front-end when opts_.net_role != 0. Builds a
-    // CANONICAL MatchConfig (shared seed + default scheme + install VALUELST only
-    // — never the per-machine options_/level/team/gold state) so both peers seed
-    // sim_ byte-identically, seeds sim_, sets up stage art/audio, then drives the
-    // SAME MatchRunner::run() through a net::LockstepSession (seam net_session).
+    // lockstep match in place of the front-end when opts_.net_role != 0. Uses the
+    // CANONICAL MatchConfig (canonical_netplay_config below) so both peers seed
+    // sim_ byte-identically with no setup traffic at all, then drives the SAME
+    // MatchRunner::run() through a net::RollbackSession (seam net_session).
     // Returns a process exit code. GOLDEN-SAFE: only reachable via net_role, which
     // no test/golden/demo path sets. The CLI path carries --seed on both peers,
     // so it skips the handshake and calls run_netplay_match() directly.
     int run_netplay();
+    // The CLI's config: byte-identical on both peers from the shared seed alone —
+    // the default scheme_ + the install VALUELST, ignoring every per-machine
+    // options_/selected_level_/team_play_/gold overlay, 2 humans in seats 0/1 and
+    // the stage picked from the seed. It exists ONLY for `--host`/`--join`, which
+    // are scripted, non-interactive entries (ADR-0010 §3.3: no discovery, no
+    // handshake, both peers pass --seed on the command line) with no second
+    // machine to drive a setup screen. Every INTERACTIVE path — the lobby rows and
+    // the direct HOST LAN GAME / JOIN BY IP rows — runs present_net_setup instead
+    // and agrees a real config, which is the whole point of the setup stage.
+    sim::MatchConfig canonical_netplay_config(std::uint32_t seed) const;
     // The match-running CORE shared by the CLI (run_netplay) and the menu connect
-    // screens (present_net_host/join): given an ALREADY-connected transport, this
-    // peer's `role` (1 = host/seat 0, 2 = guest/seat 1), and the agreed `seed`, it
-    // builds the CANONICAL config, seeds sim_, sets up stage art/audio, and drives
-    // the SAME MatchRunner through a net::LockstepSession. Returns the MatchRunner
-    // dismissal (AppInput::Quit if the window closed, else the round-end input).
-    // GOLDEN-SAFE like run_netplay: no test/golden/demo path reaches it.
+    // screens: given an ALREADY-connected transport, this peer's `role` (1 =
+    // host/seat 0, 2 = guest/seat 1), and the agreed `seed`, it runs the canonical
+    // config through run_netplay_match_seats. CLI-only now that the direct-IP rows
+    // agree a config through present_net_setup.
     AppInput run_netplay_match(net::UdpTransport& transport, int role, std::uint32_t seed);
-    // The REAL core the above delegates to, taking the seat ownership as an
-    // explicit MASK rather than deriving it from a role (ADR-0011 Phase 1d): the
-    // online lobby's server hands each peer an AUTHORITATIVE local_seats_mask +
-    // seed in its StartMatch (design §1.6), so the GUI must be able to pass those
-    // straight through instead of assuming host==seat 0. The role-taking wrapper
-    // above keeps the ADR-0010 CLI/direct paths byte-identical by passing the
-    // same 0b01/0b10 it always did. Still a 2-SEAT match: the RollbackSession is
-    // a two-peer construct over one transport, and N>2 needs the host-relay star
-    // (ADR-0011 Phase 2).
+    // The REAL core, taking the seat ownership as an explicit MASK rather than
+    // deriving it from a role (ADR-0011 Phase 1d): the online lobby's server hands
+    // each peer an AUTHORITATIVE local_seats_mask in its StartMatch (design §1.6),
+    // so the GUI passes that straight through instead of assuming host==seat 0.
+    //
+    // `cfg` is THE agreed MatchConfig and is used verbatim — the whole board, the
+    // roster, the stage index, the tuning and the seed. On the host it is what
+    // present_net_setup confirmed; on the guest it is SetupSession::final_config(),
+    // i.e. the host's exact bytes (match_config_codec.hpp). It replaces the
+    // hard-coded canonical config this used to build, which was a determinism
+    // shortcut that cost online play its map choice, its AI slots and its roster.
+    // Still a 2-SEAT match: the RollbackSession is a two-peer construct over one
+    // transport, and N>2 needs the host-relay star (ADR-0011 Phase 2) — AI slots,
+    // which are simulated identically on both peers and never exchanged, are how
+    // an online match gets more than two PLAYERS.
     // `is_host` gates the peer-drop handoff: only the hub may schedule a silent
     // seat's move to the AI (net::DropPolicy), since a guest must never mutate
     // the hashed State on its own authority.
     AppInput run_netplay_match_seats(net::UdpTransport& transport, std::uint16_t local_seats,
-                                     std::uint32_t seed, bool is_host);
+                                     bool is_host, const sim::MatchConfig& cfg);
+    // THE ONLINE SETUP STAGE (docs/re/network-screens.md §7, ADR-0011): runs
+    // between the connect step (lobby punch or direct seed handshake) and the
+    // match, over the SAME transport, so an online game finally gets the real
+    // roster/AI and map screens instead of a hard-coded config.
+    //
+    // HOST — drives the ordinary SetupScreen + MapSelectScreen (the very screens
+    // menu row 0 uses), publishing a preview after each edit; on Enter it builds
+    // the config through MatchRunner::build_config — the SAME build the local
+    // start_match path does from the SAME screens — and confirms it.
+    // GUEST — renders those same two screens READ-ONLY from the preview, buzzing
+    // SFX 40 at any edit key, and adopts the confirmed config.
+    //
+    // Returns Advance with `out_cfg` filled (Phase::Final — BOTH peers hold it),
+    // Back if the stage was left/timed out (the reason is already shown on the
+    // acknowledge modal), or Quit on a window close. STOPS pumping the setup
+    // session before returning: the match session drains the same transport and
+    // whichever polls first eats the datagram (setup_session.hpp obligation 1).
+    AppInput present_net_setup(net::UdpTransport& transport, bool is_host,
+                               std::uint16_t local_seats, std::uint32_t seed,
+                               sim::MatchConfig& out_cfg);
     // Menu row 1 (START NET GAME) now opens the NETWORK GAME menu (LobbyScreen):
     // the online lobby entry points plus the ADR-0010 direct/LAN rows. Menu row 2
     // (JOIN NET GAME -> present_net_join) stays the UNCHANGED direct-IP join, so

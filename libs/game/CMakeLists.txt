@@ -30,6 +30,7 @@ add_library(bomber_game_core STATIC
   src/screens/menu_screen.cpp
   src/screens/netplay_connect_screen.cpp
   src/screens/lobby_screen.cpp
+  src/screens/net_setup_link.cpp
   src/screens/map_select_screen.cpp
   src/screens/campaign_screens.cpp
   src/screens/setup_screen.cpp
