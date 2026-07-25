@@ -45,11 +45,12 @@
     },
     {
       "name": "headless",
-      "displayName": "Headless (no SDL, tools only)",
+      "displayName": "Headless (no SDL, tools + full netcode)",
       "binaryDir": "${sourceDir}/build/headless",
       "cacheVariables": {
         "BOMBER_BUILD_VIEWER": "OFF",
-        "CMAKE_BUILD_TYPE": "Release"
+        "CMAKE_BUILD_TYPE": "Release",
+        "BOMBER_ENABLE_LOBBY": "ON"
       }
     }
   ],
