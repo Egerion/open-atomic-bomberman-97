@@ -192,16 +192,18 @@ Shipped since the netcode core (ADR-0010, ADR-0011): shareable **lobby codes**
 and a **public match list**, **internet play across NATs** (STUN + UDP
 hole-punching, with a server relay for the symmetric-NAT cases a punch cannot
 reach), host-authoritative **match setup** through the game's own screens,
-round rotation, a deterministic **peer-drop → AI handoff**, and lobby chat. The
-matchmaking service that makes it work lives in `services/matchmaker` and is
-deployed; the game reaches it with no configuration.
+**up to ten machines in one lobby** over the host-relay star, round rotation, a
+deterministic **peer-drop → AI handoff**, and lobby chat. The matchmaking
+service that makes it work lives in `services/matchmaker` and is deployed; the
+game reaches it with no configuration.
 
 Still open:
 
-- **More than two peers.** The sim has always taken ten seats and the
-  host-relay star transport is written and tested, but the setup handshake and
-  the seat plumbing are still two-peer. AI slots already give you a full arena
-  from two machines.
+- **The relay is two-player only.** When a hole-punch fails, a 2-seat match
+  falls back to the server's forwarder; a larger one cannot, because
+  `RelayedTransport` addresses a single destination seat and a star needs
+  fan-out plus guest↔guest reflection. A >2-seat lobby whose punch fails says so
+  and returns to the menu rather than half-connecting.
 - **Host migration** — if the host drops, the match ends rather than re-electing
   a new hub. The design is in ADR-0011 (§ Risks) and the server half is built.
 - **`wss://` for the signaling connection** — the most important open item, and

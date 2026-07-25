@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <utility>
 
 #include "bomber/net/lobby_client.hpp"
+#include "bomber/sim/constants.hpp"  // sim::kMaxPlayers
 
 namespace bomber::net {
 
@@ -250,6 +252,15 @@ void LobbyFlow::begin_relay_fallback() {
     // toward the peer, so no candidate pair can complete. Route through the
     // server's forwarder instead (ADR-0011 decision 3 — relay ships in v1).
     if (relay_requested_) return;
+    // ... but ONLY for a 2-seat match. RelayedTransport addresses exactly ONE
+    // destination seat (relayed_transport.hpp) and the star needs fan-out plus
+    // guest↔guest reflection, so a relayed hub would silently deliver a guest's
+    // input to nobody. Say so instead: a half-connected match desyncs on tick 0,
+    // and there is no half-relayed topology to fall back to.
+    if (std::popcount(match_start_.all_seats_mask) > 2) {
+        fail("NO DIRECT PATH - RELAY NEEDS 2 PLAYERS");
+        return;
+    }
     relay_requested_ = true;
     phase_ = Phase::Relaying;
     client_.send(encode_allocate_relay(lobby_id_, my_seat_));
@@ -308,6 +319,20 @@ void LobbyFlow::handle_server_message(const LobbyServerMessage& msg) {
             match_start_.local_seats_mask = msg.local_seats_mask;
             match_start_.hub_seat = msg.hub_seat;
             match_start_.seat_assign = msg.seat_assign;
+            // THE seat topology for everything downstream (session masks, setup
+            // acks), taken from the server's authoritative seat_assign rather
+            // than assumed. Falling back to the roster covers an older server
+            // that omits the field; our own seat is folded in last so this peer
+            // is never missing from the mask it plays in.
+            match_start_.all_seats_mask = 0;
+            for (const int seat : match_start_.seat_assign)
+                if (seat >= 0 && seat < sim::kMaxPlayers)
+                    match_start_.all_seats_mask |= static_cast<std::uint16_t>(1U << seat);
+            if (match_start_.all_seats_mask == 0)
+                for (const RosterEntry& e : roster_)
+                    if (e.seat >= 0 && e.seat < sim::kMaxPlayers)
+                        match_start_.all_seats_mask |= static_cast<std::uint16_t>(1U << e.seat);
+            match_start_.all_seats_mask |= match_start_.local_seats_mask;
             // begin_rendezvous needs a clock; step() picks this up next pump via
             // the Rendezvous-pending flag below.
             phase_ = Phase::Rendezvous;

@@ -43,8 +43,8 @@ void net_setup_pump(const NetSetupLink& l) {
 
 bool net_setup_final(const NetSetupLink& l) {
     // Phase::Final, NOT has_final_config(): the latter is true on the host the
-    // instant it confirms, while Final means BOTH peers hold the same bytes
-    // (setup_session.hpp's first caller obligation).
+    // instant it confirms, while Final means EVERY expected seat has acked the
+    // same bytes — the per-seat mask in setup_session.hpp, not "somebody has it".
     return l.session != nullptr && l.session->phase() == net::SetupSession::Phase::Final;
 }
 

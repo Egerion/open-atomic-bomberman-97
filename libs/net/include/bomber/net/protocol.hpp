@@ -145,13 +145,23 @@ struct SetupChunkFrame {
     std::uint8_t chunk_index = 0;
 };
 
-// "I reassembled and decoded revision `revision`, whose blob checksums to
-// `checksum`." Carrying the checksum (not just the revision) means the host
+// "Seat `seat` reassembled and decoded revision `revision`, whose blob checksums
+// to `checksum`." Carrying the checksum (not just the revision) means the host
 // learns the guest latched the SAME bytes, not merely something with the same
-// label.
+// label; carrying the SEAT is what makes a >2-peer lobby possible at all. Over a
+// StarHubTransport the host's chunks reach every guest, so an unattributed ack
+// would only ever mean "somebody has it" — the host would start the match while
+// another guest was still reassembling. With the seat in the frame the host
+// keeps a per-seat mask and reaches Phase::Final only when every expected guest
+// has acked the CURRENT revision (setup_session.hpp).
+//
+// A machine that owns several seats sends one ack PER SEAT, so the host's mask
+// is satisfied whatever the machine↔seat grouping is — the host never has to
+// know which seats share a machine.
 struct SetupAckFrame {
     std::uint32_t revision = 0;
     std::uint32_t checksum = 0;
+    std::uint8_t seat = 0;  // < sim::kMaxPlayers; bounds-checked on decode
 };
 
 // Bytes of config carried per chunk. 1024 keeps the whole datagram at 1039
@@ -222,8 +232,11 @@ std::vector<std::uint8_t> encode_setup_preview(const SetupPreviewFrame& preview)
 // so a receiver can never be talked into a short or overlapping reassembly.
 std::vector<std::uint8_t> encode_setup_chunk(const SetupChunkFrame& chunk);
 
-// [MsgType::SetupAck][revision u32-LE][checksum u32-LE] — 9 bytes.
-std::vector<std::uint8_t> encode_setup_ack(std::uint32_t revision, std::uint32_t checksum);
+// [MsgType::SetupAck][revision u32-LE][checksum u32-LE][seat u8] — 10 bytes.
+// Decode rejects a seat outside [0, sim::kMaxPlayers), exactly as MsgType::Drop
+// does: the field indexes a per-seat mask, so it is bounds-checked at the wire.
+std::vector<std::uint8_t> encode_setup_ack(std::uint32_t revision, std::uint32_t checksum,
+                                           std::uint8_t seat);
 
 // Decode a datagram produced by encode_input/encode_hash. Returns false (leaving
 // *out untouched) on an unknown tag, a short buffer, or a malformed payload.

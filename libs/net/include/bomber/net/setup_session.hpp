@@ -46,20 +46,25 @@
 // over afterwards — datagrams of other kinds (a trailing hole-punch PONG, say)
 // are decoded and ignored.
 //
-// TWO CALLER OBLIGATIONS, both of them sharp edges:
+// N PEERS, NOT TWO (the former "obligation 2", discharged). The host is handed
+// the mask of every GUEST seat it expects and tracks which of them have
+// acknowledged the CURRENT revision; Phase::Final means EVERY one of them holds
+// the exact bytes, not merely that somebody does. That is what makes this usable
+// over a StarHubTransport (>2 seats, ADR-0011 decisions 2+4), where the host's
+// send() fans out to every guest and each guest answers independently. A guest
+// stamps its ack with its own seat (SetupAckFrame::seat, wire v5) — one ack per
+// seat it owns, so a machine holding several seats needs no special case and the
+// host never has to know the machine↔seat grouping.
 //
-//   1. ONE PUMP AT A TIME. This session and the match session (Lockstep/
-//      Rollback) both drain the same Transport, and whichever polls first
-//      CONSUMES the datagram. Stop pumping this one before you start the match
-//      one; do not overlap them.
+// ONE CALLER OBLIGATION, and it is a sharp edge:
 //
-//   2. TWO PEERS. Like SeedHandshake, this models a single remote peer:
-//      peer_acked() flips on the first matching ack. Over a StarHubTransport
-//      (>2 seats, ADR-0011 decision 4) the host's send() fans out to every
-//      guest but one guest's ack would satisfy the host, so Phase::Final would
-//      no longer mean "everybody has it". A >2-seat lobby needs either one
-//      SetupSession per guest or a seat id in SetupAckFrame plus a per-seat
-//      mask here — neither is built, so do not use this for the star yet.
+//   ONE PUMP AT A TIME. This session and the match session (Lockstep/Rollback)
+//   both drain the same Transport, and whichever polls first CONSUMES the
+//   datagram. Stop pumping this one before you start the match one; do not
+//   overlap them. This holds unchanged with a hub in the middle: the hub's
+//   StarHubTransport reflects a guest's datagram to the other guests INSIDE
+//   poll(), so whichever session is pumping is also the one keeping the star
+//   alive — which is exactly why only one of them may be running.
 //
 // NOT IMPLEMENTED, DELIBERATELY: the original's guest->host slot upload (kind
 // 40 from sub_410F81's tail, "how a machine contributes its local humans/AI to
@@ -89,12 +94,24 @@ public:
     // `t` is BORROWED and must outlive the session (the caller owns the socket
     // and hands the SAME transport on to the match session afterwards).
     //
+    // `local_seats` — the seats THIS machine owns. A GUEST stamps one ack per
+    //     set bit, which is how the host tells whose acknowledgement it just
+    //     read; it must be NON-ZERO on a guest, because a guest with no seats
+    //     can send no ack and the host would simply time out waiting. On the
+    //     host it is only used to keep `guest_seats` honest.
+    // `guest_seats` — HOST only: every seat the host expects an ack FROM, i.e.
+    //     the match's network seats minus its own. Phase::Final is reached only
+    //     once all of them have acked the current revision. An EMPTY mask means
+    //     there is nobody to wait for, so confirm() lands straight in Final.
+    //     Ignored on a guest.
+    //
     // `timeout_ms` guards the two waits that can hang, and ONLY those:
     //   GUEST — no setup datagram at all for this long while in Waiting/Live
     //           (the host re-sends on an interval, so silence means it is gone).
-    //   HOST  — no ack for this long after confirm().
+    //   HOST  — not every expected ack within this long after confirm().
     // Neither the host's editing time nor a peer sitting in Final ever expires.
-    SetupSession(Transport& t, bool is_host, int timeout_ms = 30000);
+    SetupSession(Transport& t, bool is_host, std::uint16_t local_seats, std::uint16_t guest_seats,
+                 int timeout_ms = 30000);
 
     // --- host intents (a guest ignores both: read-only, per sub_40C06A) -------
 
@@ -134,10 +151,17 @@ public:
     bool has_final_config() const { return have_final_; }
     const sim::MatchConfig& final_config() const { return final_; }
 
-    // HOST only: the guest reassembled and decoded OUR exact bytes (the ack
-    // carries the blob checksum, not just the revision). Always false on a
-    // guest, where the equivalent signal is phase() == Final.
-    bool peer_acked() const { return peer_acked_; }
+    // HOST only: EVERY expected guest reassembled and decoded OUR exact bytes
+    // (each ack carries the blob checksum, not just the revision). Always false
+    // on a guest, where the equivalent signal is phase() == Final.
+    bool peer_acked() const { return is_host_ && have_final_ && all_acked(); }
+
+    // HOST only, for a progress display: which guest seats have acknowledged the
+    // current revision, and which are still outstanding. Both are 0 on a guest.
+    std::uint16_t acked_seats() const { return acked_seats_; }
+    std::uint16_t pending_seats() const {
+        return static_cast<std::uint16_t>(guest_seats_ & ~acked_seats_);
+    }
 
 private:
     void drain(std::int64_t now_ms);
@@ -146,8 +170,9 @@ private:
     void on_ack(const SetupAckFrame& a);
     void send_preview();
     void send_config_chunks();
-    void send_ack(std::uint32_t revision, std::uint32_t checksum);
+    void send_acks(std::uint32_t revision, std::uint32_t checksum);
     void reset_reassembly(const SetupChunkFrame& c);
+    bool all_acked() const { return (acked_seats_ & guest_seats_) == guest_seats_; }
 
     // Members are grouped by ALIGNMENT, not by topic (as in LobbyFlow):
     // interleaving them by topic costs padding that
@@ -173,6 +198,9 @@ private:
 
     // --- 2-byte ---
     std::uint16_t rx_have_mask_ = 0;  // bit i = chunk i present
+    std::uint16_t local_seats_;       // guest: the seats each ack is stamped with
+    std::uint16_t guest_seats_;       // host: every seat that must ack
+    std::uint16_t acked_seats_ = 0;   // host: which of them have, for THIS revision
 
     // --- 1-byte ---
     std::uint8_t rx_chunk_count_ = 0;
@@ -180,7 +208,6 @@ private:
     bool is_host_;
     bool have_preview_ = false;
     bool have_final_ = false;
-    bool peer_acked_ = false;
 };
 
 }  // namespace bomber::net

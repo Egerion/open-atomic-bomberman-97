@@ -33,6 +33,11 @@ std::uint32_t build_hash();
 //   v3 -> v4: added MsgType::SetupPreview / SetupChunk / SetupAck — the
 //             host-authoritative match-setup layer (setup_session.hpp) and its
 //             chunked sim::MatchConfig payload (match_config_codec.hpp).
-inline constexpr std::uint32_t kWireProtocolVersion = 4;
+//   v4 -> v5: SetupAck grew a `seat` byte (9 -> 10 bytes). It is what turns the
+//             setup layer from two-peer into N-peer: the host tracks a per-seat
+//             ack mask and only reaches Phase::Final once EVERY guest has
+//             acknowledged the current revision, instead of latching on the
+//             first ack to arrive over the star (setup_session.hpp).
+inline constexpr std::uint32_t kWireProtocolVersion = 5;
 
 }  // namespace bomber::net

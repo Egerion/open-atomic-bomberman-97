@@ -7,24 +7,27 @@
 // revert to AI"; with the option OFF the drop must instead END the match
 // loudly, never hang.
 //
-// No sockets: a small many-endpoint FanoutBus models the star (each peer's
-// datagram reaches every other peer) with per-endpoint latency, so a third peer
-// can simply stop pumping and be genuinely dead.
+// No sockets: the many-endpoint FanoutBus in tests/common/fanout_bus.hpp models
+// the star's effect (each peer's datagram reaches every other peer) with
+// per-endpoint latency, so a third peer can simply stop pumping and be genuinely
+// dead. It lives in tests/common now because the N-peer setup suite needs it too.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <deque>
 #include <vector>
 
 #include "bomber/net/protocol.hpp"
 #include "bomber/net/rollback_session.hpp"
 #include "bomber/net/transport.hpp"
-#include "helpers.hpp"  // bomber::sim::test::open_config
+#include "fanout_bus.hpp"  // bomber::test::FanoutBus / BusTransport
+#include "helpers.hpp"     // bomber::sim::test::open_config
 
 using namespace bomber;  // NOLINT(google-build-using-namespace) — test-local
 using bomber::sim::test::open_config;
+using bomber::test::BusTransport;
+using bomber::test::FanoutBus;
 
 namespace {
 
@@ -32,66 +35,6 @@ constexpr std::uint16_t kSeat0 = 0x1;
 constexpr std::uint16_t kSeat1 = 0x2;
 constexpr std::uint16_t kSeat2 = 0x4;
 constexpr std::uint16_t kAll3 = 0x7;
-
-// A broadcast bus with N endpoints: send() from one endpoint queues the datagram
-// for every OTHER endpoint, deliverable `latency[to]` steps later. The >2-seat
-// topology (StarHubTransport in production) reduced to what the session needs.
-// Latency is per DESTINATION so a test can make one peer speculate (and roll
-// back) heavily while another never mispredicts at all.
-class FanoutBus {
-public:
-    FanoutBus(std::size_t endpoints, int latency)
-        : queues_(endpoints), latency_(endpoints, latency) {}
-    explicit FanoutBus(const std::vector<int>& latency)
-        : queues_(latency.size()), latency_(latency) {}
-
-    void send(std::size_t from, const std::uint8_t* data, std::size_t size) {
-        for (std::size_t to = 0; to < queues_.size(); ++to) {
-            if (to == from) continue;
-            queues_[to].push_back(
-                {step_ + latency_[to], std::vector<std::uint8_t>(data, data + size)});
-        }
-    }
-
-    // Inject a datagram addressed to ONE endpoint (the test playing the part of
-    // a peer whose own session we do not run).
-    void inject(std::size_t to, const std::vector<std::uint8_t>& pkt, int extra_latency = 0) {
-        queues_[to].push_back({step_ + latency_[to] + extra_latency, pkt});
-    }
-
-    bool poll(std::size_t to, std::vector<std::uint8_t>* out) {
-        auto& q = queues_[to];
-        for (auto it = q.begin(); it != q.end(); ++it) {
-            if (it->deliver_at > step_) continue;
-            *out = std::move(it->packet);
-            q.erase(it);
-            return true;
-        }
-        return false;
-    }
-
-    void step() { ++step_; }
-
-private:
-    struct Pending {
-        std::int64_t deliver_at = 0;
-        std::vector<std::uint8_t> packet;
-    };
-    std::vector<std::deque<Pending>> queues_;
-    std::vector<int> latency_;  // indexed by DESTINATION endpoint
-    std::int64_t step_ = 0;
-};
-
-class BusTransport : public net::Transport {
-public:
-    BusTransport(FanoutBus& bus, std::size_t id) : bus_(&bus), id_(id) {}
-    void send(const std::uint8_t* data, std::size_t size) override { bus_->send(id_, data, size); }
-    bool poll(std::vector<std::uint8_t>* out) override { return bus_->poll(id_, out); }
-
-private:
-    FanoutBus* bus_;
-    std::size_t id_;
-};
 
 // Three players in the same open arena helpers.hpp builds for two.
 sim::MatchConfig three_config() {

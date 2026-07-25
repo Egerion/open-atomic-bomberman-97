@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "bomber/net/match_config_codec.hpp"
+#include "bomber/sim/constants.hpp"  // sim::kMaxPlayers
 
 namespace bomber::net {
 
@@ -25,8 +26,17 @@ std::uint32_t blob_digest(const std::uint8_t* d, std::size_t n) {
 
 }  // namespace
 
-SetupSession::SetupSession(Transport& t, bool is_host, int timeout_ms)
-    : transport_(&t), timeout_ms_(timeout_ms), is_host_(is_host) {}
+SetupSession::SetupSession(Transport& t, bool is_host, std::uint16_t local_seats,
+                           std::uint16_t guest_seats, int timeout_ms)
+    : transport_(&t),
+      timeout_ms_(timeout_ms),
+      local_seats_(local_seats),
+      // A seat cannot be both ours and a guest's. Masking here rather than
+      // trusting the caller keeps a mistake from making Final unreachable
+      // forever: our own seat never sends an ack, so waiting for one would hang.
+      guest_seats_(is_host ? static_cast<std::uint16_t>(guest_seats & ~local_seats)
+                           : std::uint16_t{0}),
+      is_host_(is_host) {}
 
 void SetupSession::publish(const SetupPreviewFrame& preview) {
     if (!is_host_ || have_final_) return;  // guests are read-only; confirm() is final
@@ -45,8 +55,11 @@ void SetupSession::confirm(const sim::MatchConfig& cfg) {
     blob_checksum_ = blob_digest(blob_.data(), blob_.size());
     ++revision_;
     have_final_ = true;
-    peer_acked_ = false;
-    phase_ = Phase::Confirming;
+    // A new confirmation invalidates every ack for the old one: the guests must
+    // acknowledge THESE bytes, not the ones they happen to be holding.
+    acked_seats_ = 0;
+    // With no guests to wait for there is nothing to be Confirming about.
+    phase_ = all_acked() ? Phase::Final : Phase::Confirming;
     last_send_ms_ = -1;
     confirm_ms_ = -1;  // armed by the next step(), which knows `now`
 }
@@ -61,7 +74,7 @@ void SetupSession::step(std::int64_t now_ms) {
 
     if (is_host_) {
         if (have_final_) {
-            if (peer_acked_) return;  // both sides hold it — nothing left to send
+            if (all_acked()) return;  // every guest holds it — nothing left to send
             if (last_send_ms_ < 0 || now_ms - last_send_ms_ >= kSetupConfigResendMs) {
                 send_config_chunks();
                 last_send_ms_ = now_ms;
@@ -132,10 +145,12 @@ void SetupSession::on_chunk(const SetupChunkFrame& c, std::int64_t now_ms) {
 
     if (have_final_ && c.revision <= revision_) {
         // Already latched this (or an older) confirmation. The host only keeps
-        // sending because our ack was lost, so re-ack instead of ignoring it —
-        // that is the whole ack-loss recovery.
+        // sending because one of our acks was lost — or because ANOTHER guest is
+        // still missing a chunk, since the star delivers its burst to all of us —
+        // so re-ack instead of ignoring it. That is the whole ack-loss recovery,
+        // and re-acking a revision the host already counted is a no-op there.
         if (c.revision == revision_ && c.checksum == blob_checksum_)
-            send_ack(revision_, blob_checksum_);
+            send_acks(revision_, blob_checksum_);
         return;
     }
     // A NEWER revision supersedes: reassemble it while still holding the old
@@ -173,14 +188,19 @@ void SetupSession::on_chunk(const SetupChunkFrame& c, std::int64_t now_ms) {
     blob_checksum_ = rx_checksum_;
     have_final_ = true;
     phase_ = Phase::Final;
-    send_ack(revision_, blob_checksum_);
+    send_acks(revision_, blob_checksum_);
 }
 
 void SetupSession::on_ack(const SetupAckFrame& a) {
     if (!have_final_) return;
     if (a.revision != revision_ || a.checksum != blob_checksum_) return;  // an older confirmation
-    peer_acked_ = true;
-    phase_ = Phase::Final;
+    const auto bit = static_cast<std::uint16_t>(1U << a.seat);
+    // A seat we are not waiting on: our own echo off the star's reflection, a
+    // spectator, or a peer that is simply not in this match. Never let it stand
+    // in for a seat that still owes us an ack.
+    if ((guest_seats_ & bit) == 0) return;
+    acked_seats_ = static_cast<std::uint16_t>(acked_seats_ | bit);
+    if (all_acked()) phase_ = Phase::Final;  // ... and ONLY then
 }
 
 void SetupSession::send_preview() {
@@ -212,9 +232,18 @@ void SetupSession::send_config_chunks() {
     }
 }
 
-void SetupSession::send_ack(std::uint32_t revision, std::uint32_t checksum) {
-    const std::vector<std::uint8_t> packet = encode_setup_ack(revision, checksum);
-    transport_->send(packet.data(), packet.size());
+void SetupSession::send_acks(std::uint32_t revision, std::uint32_t checksum) {
+    // ONE ACK PER SEAT WE OWN. The host clears a per-seat mask, so a machine
+    // seating two humans must answer for both or the host would wait forever for
+    // the seat that never spoke. Today the matchmaker gives each connection
+    // exactly one seat (PROTOCOL.md §4 StartMatch), so this is a single 10-byte
+    // datagram — but the rule costs nothing and removes the trap.
+    for (int s = 0; s < sim::kMaxPlayers; ++s) {
+        if ((local_seats_ & static_cast<std::uint16_t>(1U << s)) == 0) continue;
+        const std::vector<std::uint8_t> packet =
+            encode_setup_ack(revision, checksum, static_cast<std::uint8_t>(s));
+        transport_->send(packet.data(), packet.size());
+    }
 }
 
 }  // namespace bomber::net

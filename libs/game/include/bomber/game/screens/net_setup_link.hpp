@@ -32,12 +32,13 @@
 // "NOT IMPLEMENTED, DELIBERATELY"), and the seat ownership is already fixed by
 // the lobby/handshake before the setup stage runs. A human slot outside those
 // seats would be simulated from local input on one peer and from nothing on the
-// other — a guaranteed desync — so the two wire seats are LOCKED here (the local
-// one to KEYBOARD, the remote one to type 4 = OTHER, which is exactly what
+// other — a guaranteed desync — so EVERY wire seat is LOCKED here (the ones this
+// machine owns to KEYBOARD, the rest to type 4 = OTHER, which is exactly what
 // `sub_40D372` writes for "someone else's player") and every other slot cycles
-// OFF <-> COMPUTER only. AI slots are simulated identically on both peers from
-// the shared config, so they are the way an online match gets more than two
-// PLAYERS.
+// OFF <-> COMPUTER only. Both fields are MASKS and always were, so a 3-, 6- or
+// 10-seat lobby needs nothing new here — it just arrives with more bits set.
+// AI slots are simulated identically on every peer from the shared config, so
+// they are how a match gets more PLAYERS than it has machines.
 //
 // THE `rounds == 0` SENTINEL. `SetupPreviewFrame` is display-only and lossy by
 // contract (setup_session.hpp), and it carries no "which screen is the host on"
@@ -93,7 +94,7 @@ bool net_setup_has_preview(const NetSetupLink& l);
 // The `rounds != 0` sentinel above: the host has moved on to LEVEL & ROUNDS.
 bool net_setup_on_level_screen(const NetSetupLink& l);
 
-// HOST: force the two wire seats into the only roster shape the seat masks can
+// HOST: force every wire seat into the only roster shape the seat masks can
 // simulate (local -> KEYBOARD with the next key-set, remote -> OTHER), and clear
 // every other slot that holds a human type (which would be untransmittable).
 // Called once before the roster screen opens.

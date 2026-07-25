@@ -26,15 +26,17 @@ inline constexpr bool seat_in_mask(std::uint16_t mask, int slot) {
     return (mask & static_cast<std::uint16_t>(1u << slot)) != 0;
 }
 
-// HOST: force the two wire seats into the only roster shape the seat masks can
-// actually simulate — the local seat to KEYBOARD (with the next key-set) and the
-// remote seat to type 4 OTHER, which is the original's own marker for "someone
-// else's player" (docs/re/network-screens.md §7, sub_40D372's
+// HOST: force every wire seat into the only roster shape the seat masks can
+// actually simulate — each local seat to KEYBOARD (with the next key-set) and
+// each remote seat to type 4 OTHER, which is the original's own marker for
+// "someone else's player" (docs/re/network-screens.md §7, sub_40D372's
 // `sub_421E33(slot, 4, 0)`). Every OTHER slot that still holds a human type from
 // the last local match is cleared to OFF: a human outside the wire seats would
 // be driven from local input on one peer and from nothing on the other, i.e. a
 // guaranteed desync. AI slots are left alone — they are simulated identically on
-// both peers and are how an online match gets more than two players.
+// every peer and are how a match gets more players than it has machines.
+//
+// Bit-by-bit over both masks, so a 10-seat lobby is the same code as a pair.
 inline void seed_net_host_roster(std::uint16_t local_seats, std::uint16_t remote_seats,
                                  std::array<int, sim::kMaxPlayers>& type,
                                  std::array<int, sim::kMaxPlayers>& sub) {

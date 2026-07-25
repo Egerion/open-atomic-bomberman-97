@@ -50,7 +50,8 @@
 // socket header stays out of this widely-included header — game_app.cpp pulls
 // in the real bomber/net/udp_transport.hpp.
 namespace bomber::net {
-class UdpTransport;
+class Transport;     // the abstract seam: a bare socket, the star hub, or the relay
+class UdpTransport;  // the concrete socket the CLI paths bind for themselves
 }  // namespace bomber::net
 
 namespace bomber::game {
@@ -246,10 +247,14 @@ private:
     // i.e. the host's exact bytes (match_config_codec.hpp). It replaces the
     // hard-coded canonical config this used to build, which was a determinism
     // shortcut that cost online play its map choice, its AI slots and its roster.
-    // Still a 2-SEAT match: the RollbackSession is a two-peer construct over one
-    // transport, and N>2 needs the host-relay star (ADR-0011 Phase 2) — AI slots,
-    // which are simulated identically on both peers and never exchanged, are how
-    // an online match gets more than two PLAYERS.
+    //
+    // `all_seats` is EVERY network seat in the match, not a literal 0b11: over a
+    // star (ADR-0011 decisions 2+4) `transport` fans out to every guest and
+    // reflects between them, so the RollbackSession — which already accepts
+    // arbitrary masks — carries as many peers as the lobby seated. The online
+    // path takes it from the server's seat_assign; the CLI/LAN pairs pass 0b11.
+    // AI slots are NOT in the mask: they are simulated identically everywhere
+    // from the shared config and their input never crosses the wire.
     // `is_host` gates the peer-drop handoff: only the hub may schedule a silent
     // seat's move to the AI (net::DropPolicy), since a guest must never mutate
     // the hashed State on its own authority.
@@ -263,8 +268,9 @@ private:
     // shell"). Every round's seed and tick base come from net::round_rotation.hpp,
     // so both peers agree on which round they are in with no extra traffic.
     // Returns Advance once the match is decided/abandoned, Quit on a window close.
-    AppInput run_netplay_match_seats(net::UdpTransport& transport, std::uint16_t local_seats,
-                                     bool is_host, const sim::MatchConfig& cfg);
+    AppInput run_netplay_match_seats(net::Transport& transport, std::uint16_t local_seats,
+                                     std::uint16_t all_seats, bool is_host,
+                                     const sim::MatchConfig& cfg);
     // THE ONLINE SETUP STAGE (docs/re/network-screens.md §7, ADR-0011): runs
     // between the connect step (lobby punch or direct seed handshake) and the
     // match, over the SAME transport, so an online game finally gets the real
@@ -277,19 +283,25 @@ private:
     // GUEST — renders those same two screens READ-ONLY from the preview, buzzing
     // SFX 40 at any edit key, and adopts the confirmed config.
     //
-    // Returns Advance with `out_cfg` filled (Phase::Final — BOTH peers hold it),
+    // Returns Advance with `out_cfg` filled (Phase::Final — EVERY peer holds it),
     // Back if the stage was left/timed out (the reason is already shown on the
     // acknowledge modal), or Quit on a window close. STOPS pumping the setup
     // session before returning: the match session drains the same transport and
-    // whichever polls first eats the datagram (setup_session.hpp obligation 1).
+    // whichever polls first eats the datagram (setup_session.hpp's one
+    // obligation).
     //
     // `chat` is the lobby-chat overlay (PORT-ONLY, chat_overlay.hpp) composited
     // over both screens and pumped by them, so the conversation started in the
     // waiting room carries on here. nullptr on the direct/LAN paths, which have
     // no matchmaker connection to chat over.
-    AppInput present_net_setup(net::UdpTransport& transport, bool is_host,
-                               std::uint16_t local_seats, std::uint32_t seed,
-                               sim::MatchConfig& out_cfg, ChatOverlay* chat = nullptr);
+    // `all_seats` is every network seat, as in run_netplay_match_seats: the host
+    // waits for an ack from EACH of the others before Phase::Final, so a
+    // >2-peer star cannot start the match while somebody is still reassembling
+    // the config (setup_session.hpp).
+    AppInput present_net_setup(net::Transport& transport, bool is_host,
+                               std::uint16_t local_seats, std::uint16_t all_seats,
+                               std::uint32_t seed, sim::MatchConfig& out_cfg,
+                               ChatOverlay* chat = nullptr);
     // Menu row 1 (START NET GAME) now opens the NETWORK GAME menu (LobbyScreen):
     // the online lobby entry points plus the ADR-0010 direct/LAN rows. Menu row 2
     // (JOIN NET GAME -> present_net_join) stays the UNCHANGED direct-IP join, so

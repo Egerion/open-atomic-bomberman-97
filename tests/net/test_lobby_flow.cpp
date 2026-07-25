@@ -213,9 +213,94 @@ TEST_CASE("LobbyFlow fails cleanly when START arrives with no peer address") {
     flow.handle_server_message(lobby_created("K7Q2MP", 0));
     flow.handle_server_message(start_match(0x1234u, 0b01));
     CHECK(flow.phase() == LobbyFlow::Phase::Rendezvous);
+    // NOT on the first pump: START does not wait for the candidate exchange, so
+    // a missing address means "not yet" for kCandidateWaitMs (790d876 — a fast
+    // START against a remote matchmaker used to fail here while passing
+    // locally). It must still give up rather than sit in Rendezvous forever.
     flow.step(0);  // no candidates were ever exchanged
+    CHECK(flow.phase() == LobbyFlow::Phase::Rendezvous);
+    for (std::int64_t now = 0; now <= 8000 && flow.phase() != LobbyFlow::Phase::Failed; now += 500)
+        flow.step(now);
     CHECK(flow.phase() == LobbyFlow::Phase::Failed);
     CHECK_FALSE(flow.error().empty());
+}
+
+TEST_CASE("MatchStart::all_seats_mask is DERIVED from the server's seat_assign") {
+    // The whole match layer's seat topology — the RollbackSession's `all_seats`
+    // and the SetupSession's ack set — comes from this one field. It used to be a
+    // hard-coded 0b11 in GameApp, which is what capped an online game at two
+    // machines however many seats the lobby actually had.
+    UdpTransport tp;
+    UdpTransport sink;
+    if (!tp.bind(0) || !sink.bind(0)) {
+        MESSAGE("UDP sockets unavailable in this environment; skipping");
+        return;
+    }
+
+    SUBCASE("a sparse assignment becomes exactly those bits") {
+        LobbyClient client;
+        LobbyFlow flow(test_config("Ege", sink.local_port()), tp, client);
+        flow.handle_server_message(lobby_created("K7Q2MP", 0));
+        // Seats need not be contiguous: players leaving a lobby free the middle.
+        flow.handle_server_message(start_match(0x1u, 0b000001, {0, 2, 5}));
+        CHECK(flow.match_start().all_seats_mask == 0b100101);
+    }
+
+    SUBCASE("an out-of-range seat is ignored, not shifted into the mask") {
+        LobbyClient client;
+        LobbyFlow flow(test_config("Ege", sink.local_port()), tp, client);
+        flow.handle_server_message(lobby_created("K7Q2MP", 0));
+        // Untrusted: the field is a server-supplied index into a 16-bit mask.
+        flow.handle_server_message(start_match(0x1u, 0b0001, {0, 1, -3, 99}));
+        CHECK(flow.match_start().all_seats_mask == 0b11);
+    }
+
+    SUBCASE("a full ten-seat lobby is nothing special") {
+        LobbyClient client;
+        LobbyFlow flow(test_config("Ege", sink.local_port()), tp, client);
+        flow.handle_server_message(lobby_created("K7Q2MP", 0));
+        flow.handle_server_message(start_match(0x1u, 0b1, {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}));
+        CHECK(flow.match_start().all_seats_mask == 0b1111111111);
+    }
+
+    SUBCASE("no seat_assign falls back to the roster, and our own seat is never missing") {
+        LobbyClient client;
+        LobbyFlow flow(test_config("Ada", sink.local_port()), tp, client);
+        flow.handle_server_message(join_accepted(1));  // roster = seats 0 and 1
+        LobbyServerMessage m = start_match(0x1u, 0b0100, {});
+        flow.handle_server_message(m);
+        // Seats 0+1 from the roster, plus the local mask the server sent us.
+        CHECK(flow.match_start().all_seats_mask == 0b0111);
+    }
+}
+
+TEST_CASE("a >2-seat lobby refuses the relay fallback instead of half-connecting") {
+    // RelayedTransport addresses exactly ONE destination seat, so a relayed star
+    // would deliver a guest's inputs to nobody and desync on tick 0. The punch is
+    // clock-injected, so the 5 s give-up is reached by advancing `now`, not by
+    // waiting.
+    UdpTransport tp;
+    UdpTransport sink;
+    if (!tp.bind(0) || !sink.bind(0)) {
+        MESSAGE("UDP sockets unavailable in this environment; skipping");
+        return;
+    }
+    LobbyClient client;
+    LobbyFlow flow(test_config("Ege", sink.local_port()), tp, client);
+    flow.handle_server_message(lobby_created("K7Q2MP", 0));
+    // Both guests' addresses point at a bound-but-silent socket: reachable, so
+    // the punch starts, and silent, so it gives up.
+    const std::string dead = "127.0.0.1:" + std::to_string(sink.local_port());
+    flow.handle_server_message(peer_candidates(1, dead));
+    flow.handle_server_message(peer_candidates(2, dead));
+    flow.handle_server_message(start_match(0xABCu, 0b001, {0, 1, 2}));
+
+    for (std::int64_t now = 0; now <= 8000 && flow.phase() != LobbyFlow::Phase::Failed; now += 250)
+        flow.step(now);
+
+    CHECK(flow.phase() == LobbyFlow::Phase::Failed);
+    CHECK(flow.error().find("RELAY NEEDS 2 PLAYERS") != std::string::npos);
+    CHECK_FALSE(flow.is_relayed());
 }
 
 TEST_CASE("three LobbyFlows form the star: hub punches both guests, frames reflect") {
@@ -272,6 +357,16 @@ TEST_CASE("three LobbyFlows form the star: hub punches both guests, frames refle
     REQUIRE(hub.phase() == LobbyFlow::Phase::Ready);
     REQUIRE(g1.phase() == LobbyFlow::Phase::Ready);
     REQUIRE(g2.phase() == LobbyFlow::Phase::Ready);
+
+    // All three agree on the SAME seat topology and disagree only about which
+    // seat is theirs — the pair GameApp hands the RollbackSession and the
+    // SetupSession, so a mismatch here would be a tick-0 desync.
+    CHECK(hub.match_start().all_seats_mask == 0b111);
+    CHECK(g1.match_start().all_seats_mask == 0b111);
+    CHECK(g2.match_start().all_seats_mask == 0b111);
+    CHECK(hub.match_start().local_seats_mask == 0b001);
+    CHECK(g1.match_start().local_seats_mask == 0b010);
+    CHECK(g2.match_start().local_seats_mask == 0b100);
 
     // Guest 1's frame must reach the HUB and be reflected to guest 2 — the whole
     // point of the star (guests never exchange addresses).

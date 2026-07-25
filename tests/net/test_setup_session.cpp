@@ -15,20 +15,31 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "bomber/net/match_config_codec.hpp"
 #include "bomber/net/protocol.hpp"
 #include "bomber/net/setup_session.hpp"
+#include "bomber/net/star_hub_transport.hpp"  // the real >2-seat hub, for the last case
 #include "bomber/net/transport.hpp"
+#include "bomber/net/udp_transport.hpp"
+#include "fanout_bus.hpp"  // bomber::test::StarBus / StarTransport (the N-peer cases)
 #include "match_config_compare.hpp"
 
 using namespace bomber;  // NOLINT(google-build-using-namespace) — test-local
 
 namespace {
+
+// The 2-peer pair most cases below run, spelled as the SEAT MASKS the session
+// takes since it went N-peer: the host owns seat 0 and waits on seat 1's ack,
+// the guest owns seat 1 (and, being a guest, waits on nobody).
+constexpr std::uint16_t kHostSeat = 0b01;
+constexpr std::uint16_t kGuestSeat = 0b10;
 
 // A Transport shim that can swallow selected outbound datagrams (a chunk index,
 // an ack) and counts what went past. Lets a test model "this one packet never
@@ -173,17 +184,26 @@ TEST_CASE("the three setup frames round-trip and reject malformed payloads") {
     }
 
     SUBCASE("ack") {
-        const std::vector<std::uint8_t> packet = net::encode_setup_ack(7, 0xFEEDFACEu);
-        CHECK(packet.size() == 9);
+        const std::vector<std::uint8_t> packet = net::encode_setup_ack(7, 0xFEEDFACEu, 3);
+        CHECK(packet.size() == 10);  // wire v5: the seat byte is what makes N peers work
         REQUIRE(net::decode(packet.data(), packet.size(), &m));
         CHECK(m.type == net::MsgType::SetupAck);
         CHECK(m.setup_ack.revision == 7);
         CHECK(m.setup_ack.checksum == 0xFEEDFACEu);
+        CHECK(m.setup_ack.seat == 3);
         for (std::size_t n = 0; n < packet.size(); ++n)
             CHECK_FALSE(net::decode(packet.data(), n, &m));
         std::vector<std::uint8_t> longer = packet;
         longer.push_back(0);
         CHECK_FALSE(net::decode(longer.data(), longer.size(), &m));
+
+        // The seat indexes a per-seat mask, so it is bounds-checked at the wire
+        // exactly as MsgType::Drop's is.
+        for (int seat = sim::kMaxPlayers; seat < 256; ++seat) {
+            std::vector<std::uint8_t> bad = packet;
+            bad[9] = static_cast<std::uint8_t>(seat);
+            CHECK_FALSE(net::decode(bad.data(), bad.size(), &m));
+        }
     }
 }
 
@@ -191,8 +211,8 @@ TEST_CASE("the host's live preview reaches the guest; the guest cannot drive set
     net::LoopbackLink link;
     net::LoopbackTransport ta(link, 0);
     net::LoopbackTransport tb(link, 1);
-    net::SetupSession host(ta, /*is_host=*/true);
-    net::SetupSession guest(tb, /*is_host=*/false);
+    net::SetupSession host(ta, /*is_host=*/true, kHostSeat, kGuestSeat);
+    net::SetupSession guest(tb, /*is_host=*/false, kGuestSeat, 0);
     std::int64_t now = 0;
 
     CHECK(host.phase() == net::SetupSession::Phase::Waiting);
@@ -259,8 +279,8 @@ TEST_CASE("the confirmed config reaches the guest byte-for-byte and is acknowled
     net::LoopbackLink link;
     net::LoopbackTransport ta(link, 0);
     net::LoopbackTransport tb(link, 1);
-    net::SetupSession host(ta, /*is_host=*/true);
-    net::SetupSession guest(tb, /*is_host=*/false);
+    net::SetupSession host(ta, /*is_host=*/true, kHostSeat, kGuestSeat);
+    net::SetupSession guest(tb, /*is_host=*/false, kGuestSeat, 0);
     std::int64_t now = 0;
 
     const sim::MatchConfig cfg = sim::test::distinctive_match_config();
@@ -294,8 +314,8 @@ TEST_CASE("a chunked config converges over a lossy link") {
     net::LoopbackLink link(/*latency=*/1, /*drop_every=*/3);
     net::LoopbackTransport ta(link, 0);
     net::LoopbackTransport tb(link, 1);
-    net::SetupSession host(ta, /*is_host=*/true);
-    net::SetupSession guest(tb, /*is_host=*/false);
+    net::SetupSession host(ta, /*is_host=*/true, kHostSeat, kGuestSeat);
+    net::SetupSession guest(tb, /*is_host=*/false, kGuestSeat, 0);
     std::int64_t now = 0;
 
     host.publish(sample_preview());
@@ -316,8 +336,8 @@ TEST_CASE("a missing chunk never yields a partially applied config") {
     net::LoopbackTransport raw_a(link, 0);
     FilterTransport ta(raw_a);
     net::LoopbackTransport tb(link, 1);
-    net::SetupSession host(ta, /*is_host=*/true);
-    net::SetupSession guest(tb, /*is_host=*/false);
+    net::SetupSession host(ta, /*is_host=*/true, kHostSeat, kGuestSeat);
+    net::SetupSession guest(tb, /*is_host=*/false, kGuestSeat, 0);
     std::int64_t now = 0;
 
     // Chunk 1 is never allowed onto the wire; chunk 0 keeps arriving.
@@ -349,8 +369,8 @@ TEST_CASE("a lost ack is recovered by the guest's re-ack on the next chunk") {
     net::LoopbackTransport ta(link, 0);
     net::LoopbackTransport raw_b(link, 1);
     FilterTransport tb(raw_b);
-    net::SetupSession host(ta, /*is_host=*/true);
-    net::SetupSession guest(tb, /*is_host=*/false);
+    net::SetupSession host(ta, /*is_host=*/true, kHostSeat, kGuestSeat);
+    net::SetupSession guest(tb, /*is_host=*/false, kGuestSeat, 0);
     std::int64_t now = 0;
 
     bool swallow_acks = true;
@@ -374,8 +394,8 @@ TEST_CASE("garbage and foreign datagrams on the shared socket are ignored") {
     net::LoopbackLink link;
     net::LoopbackTransport ta(link, 0);
     net::LoopbackTransport tb(link, 1);
-    net::SetupSession host(ta, /*is_host=*/true);
-    net::SetupSession guest(tb, /*is_host=*/false);
+    net::SetupSession host(ta, /*is_host=*/true, kHostSeat, kGuestSeat);
+    net::SetupSession guest(tb, /*is_host=*/false, kGuestSeat, 0);
     std::int64_t now = 0;
 
     host.publish(sample_preview());
@@ -405,8 +425,8 @@ TEST_CASE("a guest whose host goes silent times out") {
     net::LoopbackLink link;
     net::LoopbackTransport ta(link, 0);
     net::LoopbackTransport tb(link, 1);
-    net::SetupSession host(ta, /*is_host=*/true);  // never publishes anything
-    net::SetupSession guest(tb, /*is_host=*/false, /*timeout_ms=*/500);
+    net::SetupSession host(ta, /*is_host=*/true, kHostSeat, kGuestSeat);  // never publishes
+    net::SetupSession guest(tb, /*is_host=*/false, kGuestSeat, 0, /*timeout_ms=*/500);
     std::int64_t now = 0;
 
     pump(link, host, guest, now, 4);
@@ -423,8 +443,8 @@ TEST_CASE("a host whose guest never acknowledges times out after confirm") {
     net::LoopbackTransport raw_a(link, 0);
     FilterTransport ta(raw_a);
     net::LoopbackTransport tb(link, 1);
-    net::SetupSession host(ta, /*is_host=*/true, /*timeout_ms=*/500);
-    net::SetupSession guest(tb, /*is_host=*/false);
+    net::SetupSession host(ta, /*is_host=*/true, kHostSeat, kGuestSeat, /*timeout_ms=*/500);
+    net::SetupSession guest(tb, /*is_host=*/false, kGuestSeat, 0);
     std::int64_t now = 0;
 
     ta.drop = [](const std::uint8_t* d, std::size_t n) {
@@ -442,8 +462,8 @@ TEST_CASE("re-confirming supersedes the previous config") {
     net::LoopbackLink link;
     net::LoopbackTransport ta(link, 0);
     net::LoopbackTransport tb(link, 1);
-    net::SetupSession host(ta, /*is_host=*/true);
-    net::SetupSession guest(tb, /*is_host=*/false);
+    net::SetupSession host(ta, /*is_host=*/true, kHostSeat, kGuestSeat);
+    net::SetupSession guest(tb, /*is_host=*/false, kGuestSeat, 0);
     std::int64_t now = 0;
 
     sim::MatchConfig first = sim::test::distinctive_match_config();
@@ -461,4 +481,295 @@ TEST_CASE("re-confirming supersedes the previous config") {
     CHECK(guest.final_config().seed == 0x22222222u);
     CHECK(host.peer_acked());
     CHECK(sim::test::match_config_diffs(host.final_config(), guest.final_config()).empty());
+}
+
+// --- MORE THAN TWO PEERS -----------------------------------------------------
+//
+// The whole reason SetupAck grew a seat byte (wire v5). Everything below runs
+// over the StarBus in tests/common/fanout_bus.hpp, which is the PRODUCTION
+// topology, not a broadcast: a guest's datagram reaches only the hub, and the
+// other guests hear it only because the hub reflects it inside its own poll().
+// So these cases also prove the hub keeps the star alive by being pumped —
+// which is exactly what setup_session.hpp's one-pump-at-a-time rule protects.
+
+namespace {
+
+// One SetupSession per endpoint of an N-way star, seat i on endpoint i.
+struct StarPeers {
+    explicit StarPeers(std::size_t n, int timeout_ms = 30000) : bus(n) {
+        transports.reserve(n);
+        for (std::size_t i = 0; i < n; ++i)
+            transports.push_back(std::make_unique<test::StarTransport>(bus, i));
+        const auto all = static_cast<std::uint16_t>((1U << n) - 1U);
+        sessions.reserve(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            const auto mine = static_cast<std::uint16_t>(1U << i);
+            sessions.push_back(std::make_unique<net::SetupSession>(
+                *transports[i], /*is_host=*/i == 0, mine, static_cast<std::uint16_t>(all & ~mine),
+                timeout_ms));
+        }
+    }
+
+    net::SetupSession& host() { return *sessions[0]; }
+    net::SetupSession& peer(std::size_t i) { return *sessions[i]; }
+
+    // Pump every peer, then advance the bus clock. `skip` is the endpoint that is
+    // NOT pumped this round (kNone = pump them all) — a peer that never steps
+    // sends nothing, which is how a guest goes silent for real.
+    void pump(int rounds, std::size_t skip = kNone) {
+        for (int i = 0; i < rounds; ++i) {
+            for (std::size_t p = 0; p < sessions.size(); ++p)
+                if (p != skip) sessions[p]->step(now);
+            bus.step();
+            now += 60;  // the 200/250 ms re-send intervals fire every few rounds
+        }
+    }
+
+    static constexpr std::size_t kNone = static_cast<std::size_t>(-1);
+
+    test::StarBus bus;
+    std::vector<std::unique_ptr<test::StarTransport>> transports;
+    std::vector<std::unique_ptr<net::SetupSession>> sessions;
+    std::int64_t now = 0;
+};
+
+}  // namespace
+
+TEST_CASE("a 4-peer star: the host reaches Final only after EVERY guest has acked") {
+    StarPeers s(4);  // hub + 3 guests, seats 0..3
+    const sim::MatchConfig cfg = sim::test::distinctive_match_config();
+
+    s.host().publish(sample_preview());
+    s.pump(6);
+    for (std::size_t i = 1; i < 4; ++i) {
+        INFO("guest " << i);
+        REQUIRE(s.peer(i).has_preview());  // the hub's fan-out reached all of them
+        CHECK(s.peer(i).preview().level_name == "HAUNTED HOUSE");
+    }
+
+    s.host().confirm(cfg);
+    CHECK(s.host().phase() == net::SetupSession::Phase::Confirming);
+    CHECK(s.host().pending_seats() == 0b1110);
+
+    s.pump(20);
+
+    CHECK(s.host().phase() == net::SetupSession::Phase::Final);
+    CHECK(s.host().peer_acked());
+    CHECK(s.host().acked_seats() == 0b1110);  // each guest answered for its OWN seat
+    CHECK(s.host().pending_seats() == 0);
+    for (std::size_t i = 1; i < 4; ++i) {
+        INFO("guest " << i);
+        REQUIRE(s.peer(i).has_final_config());
+        CHECK(s.peer(i).phase() == net::SetupSession::Phase::Final);
+        CHECK(sim::test::match_config_diffs(cfg, s.peer(i).final_config()).empty());
+    }
+}
+
+TEST_CASE("a 4-peer star: one silent guest keeps the host OUT of Final") {
+    // THE REGRESSION THIS WHOLE CHANGE EXISTS FOR. With an unattributed ack the
+    // host latched Final on the first one to arrive and started the match while a
+    // third peer was still building its board — a guaranteed tick-0 desync.
+    StarPeers s(4, /*timeout_ms=*/100000);  // long enough that the wait is the test
+    s.host().confirm(sim::test::distinctive_match_config());
+
+    // Seat 3 never pumps: it neither receives the chunks nor answers them.
+    s.pump(40, /*skip=*/3);
+
+    CHECK(s.peer(1).phase() == net::SetupSession::Phase::Final);  // the two live guests are done
+    CHECK(s.peer(2).phase() == net::SetupSession::Phase::Final);
+    CHECK(s.host().acked_seats() == 0b0110);
+    CHECK(s.host().pending_seats() == 0b1000);
+    CHECK_FALSE(s.host().peer_acked());
+    CHECK(s.host().phase() == net::SetupSession::Phase::Confirming);  // NOT Final
+
+    // And it converges the moment the straggler comes back — the host is still
+    // re-sending, so no state had to be kept for it.
+    s.pump(20);
+    CHECK(s.host().phase() == net::SetupSession::Phase::Final);
+    CHECK(s.host().pending_seats() == 0);
+}
+
+TEST_CASE("a 4-peer star: a guest that never acks times the host out, it does not hang") {
+    StarPeers s(4, /*timeout_ms=*/1000);  // 60 ms per pump round
+    s.host().confirm(sim::test::distinctive_match_config());
+    s.pump(40, /*skip=*/2);
+
+    CHECK(s.host().phase() == net::SetupSession::Phase::Failed);
+    CHECK(s.host().failed());
+    CHECK_FALSE(s.host().peer_acked());
+    // The guests that DID get it are not punished for the third one's silence:
+    // they hold the config and it is the host's screen that reports the failure.
+    CHECK(s.peer(1).phase() == net::SetupSession::Phase::Final);
+    CHECK(s.peer(3).phase() == net::SetupSession::Phase::Final);
+}
+
+TEST_CASE("a 4-peer star: re-confirming clears every seat's ack, not just one") {
+    StarPeers s(4);
+    sim::MatchConfig first = sim::test::distinctive_match_config();
+    first.seed = 0x11111111u;
+    s.host().confirm(first);
+    s.pump(20);
+    REQUIRE(s.host().peer_acked());
+
+    sim::MatchConfig second = sim::test::distinctive_match_config();
+    second.seed = 0x22222222u;
+    s.host().confirm(second);
+    CHECK(s.host().acked_seats() == 0);  // the old acks say nothing about these bytes
+    CHECK(s.host().phase() == net::SetupSession::Phase::Confirming);
+
+    s.pump(20);
+    CHECK(s.host().peer_acked());
+    for (std::size_t i = 1; i < 4; ++i) {
+        INFO("guest " << i);
+        CHECK(s.peer(i).final_config().seed == 0x22222222u);
+    }
+}
+
+TEST_CASE("an ack from a seat the host is not waiting on cannot stand in for a real one") {
+    // Over a star the hub reflects guest datagrams, so a guest sees the OTHER
+    // guests' acks; and an ack could name a seat that is not in this match at
+    // all. Neither may satisfy the host's mask.
+    net::LoopbackLink link;
+    net::LoopbackTransport ta(link, 0);
+    net::LoopbackTransport tb(link, 1);
+    // The host plays seat 0 and waits on seat 2 only — seat 1 is an AI slot, not
+    // a peer.
+    net::SetupSession host(ta, /*is_host=*/true, 0b001, 0b100);
+    std::int64_t now = 0;
+
+    host.confirm(sim::test::distinctive_match_config());
+    host.step(now);
+    link.step();
+
+    // Forge the right revision and checksum but the wrong seat. The checksum has
+    // to be the real one for the frame to be considered at all, so read it off
+    // the chunk the host just sent.
+    std::vector<std::uint8_t> chunk;
+    REQUIRE(tb.poll(&chunk));
+    net::Message m;
+    REQUIRE(net::decode(chunk.data(), chunk.size(), &m));
+    REQUIRE(m.type == net::MsgType::SetupChunk);
+
+    for (const std::uint8_t seat : {std::uint8_t{0}, std::uint8_t{1}, std::uint8_t{9}}) {
+        const std::vector<std::uint8_t> ack =
+            net::encode_setup_ack(m.setup_chunk.revision, m.setup_chunk.checksum, seat);
+        tb.send(ack.data(), ack.size());
+    }
+    for (int i = 0; i < 6; ++i) {
+        host.step(now);
+        link.step();
+        now += 60;
+    }
+    CHECK_FALSE(host.peer_acked());
+    CHECK(host.phase() == net::SetupSession::Phase::Confirming);
+
+    // The seat it IS waiting on settles it.
+    const std::vector<std::uint8_t> real =
+        net::encode_setup_ack(m.setup_chunk.revision, m.setup_chunk.checksum, 2);
+    tb.send(real.data(), real.size());
+    for (int i = 0; i < 4; ++i) {
+        host.step(now);
+        link.step();
+        now += 60;
+    }
+    CHECK(host.peer_acked());
+    CHECK(host.phase() == net::SetupSession::Phase::Final);
+}
+
+TEST_CASE("a machine holding two seats acks for both") {
+    // The host's mask is per SEAT, so a guest seating two humans must answer for
+    // both or the host would wait out its timeout on the seat that never spoke.
+    net::LoopbackLink link;
+    net::LoopbackTransport ta(link, 0);
+    net::LoopbackTransport tb(link, 1);
+    net::SetupSession host(ta, /*is_host=*/true, 0b0001, 0b0110);
+    net::SetupSession guest(tb, /*is_host=*/false, 0b0110, 0);
+    std::int64_t now = 0;
+
+    host.confirm(sim::test::distinctive_match_config());
+    pump(link, host, guest, now, 16);
+
+    REQUIRE(guest.has_final_config());
+    CHECK(host.acked_seats() == 0b0110);
+    CHECK(host.peer_acked());
+    CHECK(host.phase() == net::SetupSession::Phase::Final);
+}
+
+// The cases above model the star; this one IS it. Three bound UDP sockets, the
+// hub wrapped in the REAL StarHubTransport — the very object LobbyFlow::
+// transport() hands GameApp for a >2-seat match — and the same SetupSession on
+// all three. Everything the modelled cases assert has to hold over the transport
+// that actually ships, including the rule the model exists to dramatise: the
+// star only reflects INSIDE the hub's poll, so the hub's session is what keeps
+// guest↔guest traffic alive while the setup stage owns the socket. Soft-skips
+// where the sandbox forbids sockets, like every other socket case in the suite.
+TEST_CASE("three peers agree the config over the REAL StarHubTransport") {
+    net::UdpTransport th;
+    net::UdpTransport t1;
+    net::UdpTransport t2;
+    if (!th.bind(0) || !t1.bind(0) || !t2.bind(0)) {
+        MESSAGE("UDP sockets unavailable in this environment; skipping");
+        return;
+    }
+    // The punch's outcome, written out by hand: each guest aims at the hub, and
+    // the hub holds both guests' punched addresses.
+    REQUIRE(t1.set_peer("127.0.0.1", th.local_port()));
+    REQUIRE(t2.set_peer("127.0.0.1", th.local_port()));
+    std::vector<net::StarHubTransport::Guest> guests = {{"127.0.0.1", t1.local_port()},
+                                                        {"127.0.0.1", t2.local_port()}};
+    net::StarHubTransport star(th, std::move(guests));
+
+    net::SetupSession host(star, /*is_host=*/true, 0b001, 0b110);
+    net::SetupSession g1(t1, /*is_host=*/false, 0b010, 0);
+    net::SetupSession g2(t2, /*is_host=*/false, 0b100, 0);
+
+    std::int64_t now = 0;
+    const auto pump_all = [&] {
+        host.step(now);
+        g1.step(now);
+        g2.step(now);
+        now += 10;  // the 200/250 ms intervals fire every 20-odd rounds
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    };
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+
+    host.publish(sample_preview());
+    while ((!g1.has_preview() || !g2.has_preview()) && std::chrono::steady_clock::now() < deadline)
+        pump_all();
+    REQUIRE(g1.has_preview());  // the hub's fan-out reached both
+    REQUIRE(g2.has_preview());
+
+    const sim::MatchConfig cfg = sim::test::distinctive_match_config();
+    host.confirm(cfg);
+    CHECK(host.pending_seats() == 0b110);
+    while (host.phase() != net::SetupSession::Phase::Final &&
+           std::chrono::steady_clock::now() < deadline)
+        pump_all();
+
+    REQUIRE(host.phase() == net::SetupSession::Phase::Final);
+    CHECK(host.acked_seats() == 0b110);  // BOTH guests, each for its own seat
+    CHECK(host.pending_seats() == 0);
+    REQUIRE(g1.has_final_config());
+    REQUIRE(g2.has_final_config());
+    CHECK(sim::test::match_config_diffs(cfg, g1.final_config()).empty());
+    CHECK(sim::test::match_config_diffs(cfg, g2.final_config()).empty());
+
+    // And the reflection itself, on the same three sockets: a datagram guest 1
+    // sends reaches guest 2 — which knows no address but the hub's — purely
+    // because the hub was pumped. Only the HOST is stepped here, so nothing but the
+    // hub's own poll can be carrying it, and g2's session is left unpumped so
+    // the bytes are still in the socket when the test reads them.
+    const std::vector<std::uint8_t> marker = {0xFF, 0x11, 0x22};  // decode() rejects it
+    t1.send(marker.data(), marker.size());
+    bool at_g2 = false;
+    std::vector<std::uint8_t> got;
+    const auto reflect_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!at_g2 && std::chrono::steady_clock::now() < reflect_deadline) {
+        host.step(now);
+        now += 10;
+        while (!at_g2 && t2.poll(&got))
+            if (got == marker) at_g2 = true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    CHECK(at_g2);
 }

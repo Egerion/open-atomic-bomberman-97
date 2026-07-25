@@ -115,7 +115,8 @@ AppInput ScoreboardScreen::run() {
         }
         if (state_.net_gate != nullptr) {
             // The gate owns the ONLY pump of the transport for this screen's
-            // duration (setup_session.hpp obligation 1) — and, as a side effect,
+            // duration (setup_session.hpp's one-pump-at-a-time rule) — and, as a
+            // side effect,
             // drains the socket of the round that just ended before the next
             // round's session ever looks at it.
             state_.net_gate->pump();

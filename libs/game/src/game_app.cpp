@@ -43,6 +43,7 @@
 #include "bomber/net/rollback_session.hpp"  // net::RollbackSession (run_netplay_match)
 #include "bomber/net/round_rotation.hpp"    // net::round_seed / round_tick_base (round rotation)
 #include "bomber/net/setup_session.hpp"     // net::SetupSession (present_net_setup + rotation)
+#include "bomber/net/transport.hpp"         // net::Transport (the socket/star/relay seam)
 #include "bomber/net/udp_transport.hpp"     // net::UdpTransport (run_netplay_match)
 #include "bomber/platform/frame_clock.hpp"
 
@@ -990,7 +991,7 @@ AppInput GameApp::run_netplay_match(net::UdpTransport& transport, int role, std:
     // The ADR-0010 role-derived CLI entry (--host/--join): host owns seat 0, guest
     // seat 1, and the config is the canonical one both peers derive from the
     // shared --seed with no setup exchange (see canonical_netplay_config).
-    return run_netplay_match_seats(transport, role == 1 ? 0b01u : 0b10u,
+    return run_netplay_match_seats(transport, role == 1 ? 0b01u : 0b10u, /*all_seats=*/0b11u,
                                    /*is_host=*/role == 1, canonical_netplay_config(seed));
 }
 
@@ -1019,6 +1020,9 @@ namespace {
 // clock only advances on inbound setup traffic, so without it a host that reads
 // the scoreboard for longer than the session timeout would look, to the guest,
 // exactly like a host that had quit.
+// N-PEER NOTE: `ready()` on the host is SetupSession::peer_acked(), which is now
+// "every guest acked", not "somebody did" — so a 3+ peer round gate holds the
+// scoreboard up until the whole table has the next round's bytes.
 class RoundRotationGate final : public NetRoundGate {
 public:
     RoundRotationGate(net::SetupSession& session, bool host, sim::MatchConfig next,
@@ -1066,8 +1070,9 @@ constexpr std::uint64_t kRoundHandoffSettleMs = 300;
 
 }  // namespace
 
-AppInput GameApp::run_netplay_match_seats(net::UdpTransport& transport, std::uint16_t local_seats,
-                                          bool is_host, const sim::MatchConfig& cfg) {
+AppInput GameApp::run_netplay_match_seats(net::Transport& transport, std::uint16_t local_seats,
+                                          std::uint16_t all_seats, bool is_host,
+                                          const sim::MatchConfig& cfg) {
     // The match-running CORE shared by the CLI (run_netplay), the direct connect
     // screens, and the online lobby: given an ALREADY-connected transport, the
     // seats THIS peer owns, and the AGREED config, build a byte-identical arena
@@ -1076,14 +1081,18 @@ AppInput GameApp::run_netplay_match_seats(net::UdpTransport& transport, std::uin
     // loops back into `sub_410B6E` until somebody clinches) — through the SAME
     // MatchRunner a local match uses.
     //
-    // Seat bitmask (bit s == seat s, matching LockstepSession::fill_seats). Two
-    // NETWORK seats: the RollbackSession is a two-peer construct over one
-    // transport, so a 3rd+ PEER needs the host-relay star (ADR-0011 Phase 2), and
-    // the lobby only ever creates max_seats=2 rooms for that reason. AI slots are
-    // NOT in this mask — they are simulated identically on both peers from the
-    // shared config and their input is never exchanged (rollback_session.hpp), so
-    // the roster can hold up to ten PLAYERS over these two seats.
-    constexpr std::uint16_t kAllSeats = 0b11u;
+    // Seat bitmask (bit s == seat s, matching LockstepSession::fill_seats).
+    // `all_seats` is EVERY network seat the caller was given — the server's
+    // seat_assign online, 0b11 for the CLI/LAN pairs — and `transport` is
+    // whatever carries them: a bare socket for a pair, a StarHubTransport on the
+    // hub of a >2-seat match (ADR-0011 decisions 2+4). Neither the session nor
+    // anything below it needs to know which: RollbackSession already accepts
+    // arbitrary masks and the star is a Transport like any other.
+    //
+    // AI slots are NOT in this mask — they are simulated identically on every
+    // peer from the shared config and their input is never exchanged
+    // (rollback_session.hpp), so the roster can still hold ten PLAYERS over
+    // fewer seats.
 
     // Fresh MATCH tally (the local path's reset_match_scores, minus its
     // win_target_ write): win_target_ is the LEVEL & ROUNDS screen's WINS row and
@@ -1201,7 +1210,7 @@ AppInput GameApp::run_netplay_match_seats(net::UdpTransport& transport, std::uin
         // being filed as a far-future input or compared as a phantom peer hash
         // (rollback_session.hpp's `start_tick`).
         const net::DropPolicy drop{options_.lost_net_revert_ai, is_host, /*timeout_ticks=*/600};
-        net::RollbackSession session(sim_, local_seats, kAllSeats, /*max_prediction=*/8, transport,
+        net::RollbackSession session(sim_, local_seats, all_seats, /*max_prediction=*/8, transport,
                                      drop, net::round_tick_base(round));
         MatchRunnerState mrs = match_runner_state();
         mrs.net_session = &session;
@@ -1262,7 +1271,8 @@ AppInput GameApp::run_netplay_match_seats(net::UdpTransport& transport, std::uin
         // state that produced round 0, so the roster and the level choice carry
         // over; a RANDOM level rotates because the seed moved) and confirms it
         // through the gate; the guest takes the host's exact bytes.
-        net::SetupSession rotate(transport, is_host);
+        net::SetupSession rotate(transport, is_host, local_seats,
+                                 static_cast<std::uint16_t>(all_seats & ~local_seats));
         const std::uint32_t next_seed = net::round_seed(match_seed, round + 1);
         RoundRotationGate gate(rotate, is_host,
                                is_host ? MatchRunner(sctx(), match_runner_state())
@@ -1324,9 +1334,10 @@ AppInput GameApp::run_netplay_match_seats(net::UdpTransport& transport, std::uin
     return result;
 }
 
-AppInput GameApp::present_net_setup(net::UdpTransport& transport, bool is_host,
-                                    std::uint16_t local_seats, std::uint32_t seed,
-                                    sim::MatchConfig& out_cfg, ChatOverlay* chat) {
+AppInput GameApp::present_net_setup(net::Transport& transport, bool is_host,
+                                    std::uint16_t local_seats, std::uint16_t all_seats,
+                                    std::uint32_t seed, sim::MatchConfig& out_cfg,
+                                    ChatOverlay* chat) {
     // THE ONLINE SETUP STAGE (docs/re/network-screens.md §7). The original has no
     // net-only setup UI at all: both network screens commit into sub_42A3F6, so a
     // net game's roster/AI and map come from the ORDINARY sub_410F81 / sub_406DDE
@@ -1334,17 +1345,19 @@ AppInput GameApp::present_net_setup(net::UdpTransport& transport, bool is_host,
     // this runs — the same SetupScreen and MapSelectScreen menu row 0 uses, handed
     // a NetSetupLink.
     //
-    // Two seats, and only two: SetupSession::peer_acked() flips on the FIRST
-    // matching ack, so over a >2-peer star Phase::Final would mean "somebody has
-    // it" rather than "everybody" (setup_session.hpp obligation 2). The lobby only
-    // creates max_seats=2 rooms and the direct paths are 1v1, so the invariant
-    // holds; AI slots are how a match gets more than two players.
-    constexpr std::uint16_t kNetSeats = 0b11u;
-    net::SetupSession session(transport, is_host);
+    // AS MANY SEATS AS THE LOBBY SEATED. The host collects a per-seat ack mask
+    // and only reaches Phase::Final once EVERY other seat has acknowledged its
+    // exact bytes (setup_session.hpp), so over a star "the config is agreed"
+    // means the whole table has it — not merely whoever answered first. The wire
+    // seats are locked on the roster screen (net_setup_roster.hpp's SEAT
+    // LOCKING), which already reads both masks bit by bit; AI slots fill the
+    // rest.
+    const auto remote_seats = static_cast<std::uint16_t>(all_seats & ~local_seats);
+    net::SetupSession session(transport, is_host, local_seats, remote_seats);
     NetSetupLink link;
     link.session = &session;
     link.local_seats = local_seats;
-    link.remote_seats = static_cast<std::uint16_t>(kNetSeats & ~local_seats);
+    link.remote_seats = remote_seats;
     link.host = is_host;
 
     if (is_host) {
@@ -1489,6 +1502,10 @@ constexpr std::uint32_t kNetHostSeed = 0x1234u;
 // match, and the two flip together once the client can speak wss://.
 constexpr char kDefaultMatchmakerUrl[] = "ws://open-bomberman-matchmaker.fly.dev/ws";
 constexpr std::uint16_t kDefaultStunPort = 8081;  // PROTOCOL.md §2's UDP echo port
+// Where the HOW MANY PLAYERS list opens. 2 is the smallest lobby the server
+// accepts and what every online match was pinned to before the host could
+// choose, so the default keeps the old behaviour one Enter away.
+constexpr int kDefaultLobbySeats = 2;
 
 std::string env_or_empty(const char* name) {
 #ifdef _MSC_VER
@@ -1570,11 +1587,14 @@ AppInput GameApp::present_net_direct_host() {
     if (r.window_closed) return AppInput::Quit;
     if (!r.connected) return AppInput::Advance;  // cancelled/timed out → back to the menu
     sim::MatchConfig cfg;
-    const AppInput setup =
-        present_net_setup(transport, /*is_host=*/true, /*local_seats=*/0b01u, r.seed, cfg);
+    // A direct/LAN game is a PAIR by construction — one address, one peer — so
+    // its seat topology is the literal 0b11 the online path now derives.
+    const AppInput setup = present_net_setup(transport, /*is_host=*/true, /*local_seats=*/0b01u,
+                                             /*all_seats=*/0b11u, r.seed, cfg);
     if (setup == AppInput::Quit) return AppInput::Quit;
     if (setup != AppInput::Advance) return AppInput::Advance;
-    return run_netplay_match_seats(transport, /*local_seats=*/0b01u, /*is_host=*/true, cfg);
+    return run_netplay_match_seats(transport, /*local_seats=*/0b01u, /*all_seats=*/0b11u,
+                                   /*is_host=*/true, cfg);
 }
 
 #if defined(BOMBER_HAS_LOBBY)
@@ -1618,7 +1638,19 @@ AppInput GameApp::present_net_online(bool host, bool browse, bool is_public) {
     // net identity — reuse it when the player has set one.
     ocfg.player_name = options_.node_name.empty() ? std::string("PLAYER") : options_.node_name;
 
+    // HOW BIG A LOBBY. `max_seats` is a CreateLobby field the server mints seats
+    // from and cannot be changed once the room exists (PROTOCOL.md §3, clamped
+    // to 2..10), so the host is asked BEFORE anything is created. This used to be
+    // a hard-coded 2 — the single reason an online game could never be more than
+    // a pair, since the whole seat topology below flows from the seats the server
+    // hands out. Guests never see this: they take whatever the room has.
+    int max_seats = kDefaultLobbySeats;
     std::string code;
+    if (host) {
+        bool closed = false;
+        if (!screen.run_seat_count(max_seats, closed))
+            return closed ? AppInput::Quit : AppInput::Advance;
+    }
     if (browse) {
         // The browser needs a bound socket of its own (LobbyFlow owns one either
         // way) but never punches with it, so it is scoped to the browse and
@@ -1662,28 +1694,37 @@ AppInput GameApp::present_net_online(bool host, bool browse, bool is_public) {
     net::LobbyFlow flow(lcfg, transport, client);
     ChatOverlay chat(&flow);
     if (host)
-        flow.host_lobby(ocfg.player_name, is_public, /*max_seats=*/2);
+        flow.host_lobby(ocfg.player_name, is_public, max_seats);
     else
         flow.join_lobby(code);
 
-    const LobbyRoomResult r = screen.run_online(flow, chat, host, code);
+    const LobbyRoomResult r = screen.run_online(flow, chat, host, code, host ? max_seats : 0);
     if (r.window_closed) return AppInput::Quit;
     if (!r.ready) return AppInput::Advance;  // left the lobby / failed → back to the menu
 
-    // The punch is done and the socket is connected: run the SHARED roster/map
-    // screens over it (host drives, guest watches) and start the match on the
-    // config both peers agreed. present_net_setup stops pumping its session
+    // THE MATCH TRANSPORT IS THE FLOW'S, NOT THE BARE SOCKET. LobbyFlow::
+    // transport() hands back whatever the connect step actually produced: the
+    // socket itself for a punched pair, the StarHubTransport on the hub of a
+    // >2-seat match (fan-out + guest↔guest reflection), or the RelayedTransport
+    // when the punch failed. Passing `transport` directly — as this did — worked
+    // only for the first of the three.
+    net::Transport& link = flow.transport();
+
+    // The punch is done and the link is connected: run the SHARED roster/map
+    // screens over it (host drives, guests watch) and start the match on the
+    // config every peer agreed. present_net_setup stops pumping its session
     // before returning, so the match session has the transport to itself
-    // (setup_session.hpp obligation 1 — whichever polls first eats the datagram).
+    // (setup_session.hpp's one obligation — whichever polls first eats the
+    // datagram; on the hub that same poll is what keeps the star reflecting).
     sim::MatchConfig cfg;
-    const AppInput setup =
-        present_net_setup(transport, r.is_host, r.local_seats_mask, r.seed, cfg, &chat);
+    const AppInput setup = present_net_setup(link, r.is_host, r.local_seats_mask, r.all_seats_mask,
+                                             r.seed, cfg, &chat);
     // Chat stops at the door of the match: the overlay is a lobby thing, and the
     // WS link closes with `client` when this function returns anyway.
     chat.close();
     if (setup == AppInput::Quit) return AppInput::Quit;
     if (setup != AppInput::Advance) return AppInput::Advance;
-    return run_netplay_match_seats(transport, r.local_seats_mask, r.is_host, cfg);
+    return run_netplay_match_seats(link, r.local_seats_mask, r.all_seats_mask, r.is_host, cfg);
 }
 #endif  // BOMBER_HAS_LOBBY
 
@@ -1697,11 +1738,12 @@ AppInput GameApp::present_net_join() {
     if (r.window_closed) return AppInput::Quit;
     if (!r.connected) return AppInput::Advance;
     sim::MatchConfig cfg;
-    const AppInput setup =
-        present_net_setup(transport, /*is_host=*/false, /*local_seats=*/0b10u, r.seed, cfg);
+    const AppInput setup = present_net_setup(transport, /*is_host=*/false, /*local_seats=*/0b10u,
+                                             /*all_seats=*/0b11u, r.seed, cfg);
     if (setup == AppInput::Quit) return AppInput::Quit;
     if (setup != AppInput::Advance) return AppInput::Advance;
-    return run_netplay_match_seats(transport, /*local_seats=*/0b10u, /*is_host=*/false, cfg);
+    return run_netplay_match_seats(transport, /*local_seats=*/0b10u, /*all_seats=*/0b11u,
+                                   /*is_host=*/false, cfg);
 }
 
 ScreenContext GameApp::sctx() {

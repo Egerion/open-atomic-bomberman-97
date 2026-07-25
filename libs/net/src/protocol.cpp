@@ -41,7 +41,7 @@ constexpr std::size_t kRangeHeaderBytes = 1 + 4 + 1 + 2;  // tag + first_tick u3
 constexpr std::size_t kHelloFrameBytes = 1 + 4 + 1;  // tag + seed u32 + is_ack u8
 constexpr std::size_t kPunchFrameBytes = 1 + 4 + 1;  // tag + nonce u32 + is_pong u8
 constexpr std::size_t kDropFrameBytes = 1 + 1 + 4;   // tag + seat u8 + at_tick u32
-constexpr std::size_t kAckFrameBytes = 1 + 4 + 4;    // tag + revision u32 + checksum u32
+constexpr std::size_t kAckFrameBytes = 1 + 4 + 4 + 1;  // tag + revision + checksum + seat u8
 // tag + revision u32 + level_index u8 + rounds u8 + name_len u8
 constexpr std::size_t kPreviewHeaderBytes = 1 + 4 + 1 + 1 + 1;
 constexpr std::size_t kPreviewRosterBytes = 2 * static_cast<std::size_t>(sim::kMaxPlayers);
@@ -128,11 +128,13 @@ std::vector<std::uint8_t> encode_setup_chunk(const SetupChunkFrame& chunk) {
     return b;
 }
 
-std::vector<std::uint8_t> encode_setup_ack(std::uint32_t revision, std::uint32_t checksum) {
+std::vector<std::uint8_t> encode_setup_ack(std::uint32_t revision, std::uint32_t checksum,
+                                           std::uint8_t seat) {
     std::vector<std::uint8_t> b;
     b.push_back(static_cast<std::uint8_t>(MsgType::SetupAck));
     put_u32_le(b, revision);
     put_u32_le(b, checksum);
+    b.push_back(seat);
     return b;
 }
 
@@ -191,9 +193,11 @@ bool decode(const std::uint8_t* data, std::size_t size, Message* out) {
     }
     if (tag == MsgType::SetupAck) {
         if (size != kAckFrameBytes) return false;
+        if (data[9] >= sim::kMaxPlayers) return false;  // untrusted: seat indexes a per-seat mask
         out->type = MsgType::SetupAck;
         out->setup_ack.revision = get_u32_le(data + 1);
         out->setup_ack.checksum = get_u32_le(data + 1 + 4);
+        out->setup_ack.seat = data[9];
         return true;
     }
     if (tag == MsgType::SetupPreview) {
