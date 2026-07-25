@@ -9,7 +9,8 @@
       "binaryDir": "${sourceDir}/build/windows-msvc",
       "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
       "cacheVariables": {
-        "BOMBER_ENABLE_LOBBY": "ON"
+        "BOMBER_ENABLE_LOBBY": "ON",
+        "BOMBER_LOBBY_TLS": "ON"
       }
     },
     {
@@ -20,7 +21,8 @@
       "binaryDir": "${sourceDir}/build/windows-fetch",
       "cacheVariables": {
         "BOMBER_FETCH_SDL3": "ON",
-        "BOMBER_ENABLE_LOBBY": "ON"
+        "BOMBER_ENABLE_LOBBY": "ON",
+        "BOMBER_LOBBY_TLS": "ON"
       }
     },
     {
@@ -30,7 +32,8 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "BOMBER_FETCH_SDL3": "ON",
-        "BOMBER_ENABLE_LOBBY": "ON"
+        "BOMBER_ENABLE_LOBBY": "ON",
+        "BOMBER_LOBBY_TLS": "ON"
       }
     },
     {
@@ -40,7 +43,8 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "BOMBER_FETCH_SDL3": "ON",
-        "BOMBER_ENABLE_LOBBY": "ON"
+        "BOMBER_ENABLE_LOBBY": "ON",
+        "BOMBER_LOBBY_TLS": "ON"
       }
     },
     {
@@ -50,7 +54,8 @@
       "cacheVariables": {
         "BOMBER_BUILD_VIEWER": "OFF",
         "CMAKE_BUILD_TYPE": "Release",
-        "BOMBER_ENABLE_LOBBY": "ON"
+        "BOMBER_ENABLE_LOBBY": "ON",
+        "BOMBER_LOBBY_TLS": "ON"
       }
     }
   ],
