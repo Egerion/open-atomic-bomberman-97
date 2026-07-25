@@ -28,15 +28,12 @@ something genuinely needs it, this file says so rather than half-building it.
 
 ---
 
-## Serious, and NOT fixed here
+## Serious, and PARTLY fixed (the client half is done; the server half is a deploy)
 
-### S1. The deployed control plane runs in cleartext, so `host_token` is readable
+### S1. The control plane ran in cleartext, so `host_token` was readable
 
-`fly.toml` sets `force_https = false`, and the C++ client dials `ws://` because
-IXWebSocket v11.4.6's mbedTLS backend does not build against any single mbedTLS
-release (`cmake/BomberIXWebSocket.cmake`). The existing comment says the
-signalling "carries no credentials". **That is wrong.** In the clear, on every
-lobby session, go:
+The values that cross the control plane, and what each one grants an observer
+who can read it:
 
 | value | what it grants an observer |
 |---|---|
@@ -45,14 +42,65 @@ lobby session, go:
 | `alloc_id` (in `RelayAllocated` and in `Candidates`) | the relay handle for a seat |
 | `lobby_id`, roster, display names, candidate `ip:port`s | who is playing, from where |
 
-So a passive on-path observer of the *control plane* gets the host's credential
-outright — it does not need the datagram-header trick that F1 below is about.
-This is the single most serious issue in the service and **it cannot be fixed
-inside `services/matchmaker/`**: the fix is to give the client a working TLS
-backend and then flip `force_https = true`. Until then, treat "private" lobbies
-as private-by-obscurity and the host token as public to anyone on the path.
+A passive on-path observer of the *control plane* therefore got the host's
+credential outright — it did not need the datagram-header trick that F1 below is
+about. The earlier claim that the signalling "carries no credentials" was wrong.
 
-The misleading part of the `fly.toml` comment has been corrected in place.
+**Client half — FIXED.** The C++ lobby client now speaks `wss://` by default:
+
+- `BOMBER_LOBBY_TLS` defaults **ON** (`cmake/BomberIXWebSocket.cmake`). The
+  backend is **mbedTLS 3.6.2**, FetchContent'd and statically linked. The old
+  note claiming no mbedTLS release compiles was wrong and the bug was ours — see
+  that file's header comment for the one-line cause and fix.
+- `kDefaultMatchmakerUrl` (`libs/game/src/game_app.cpp`) is
+  `wss://open-bomberman-matchmaker.fly.dev/ws`.
+- Peer verification is **required** and hostname validation is **on**
+  (`libs/net/src/lobby_client.cpp`). Trust anchors come from the Windows
+  `CurrentUser\Root` store; off Windows mbedTLS has no system-store hook, so the
+  platform CA bundle is named explicitly (`SSL_CERT_FILE` first). If no trust
+  store is found, `connect()` **fails** — it never falls back to an unverified
+  session.
+- A build with `-DBOMBER_LOBBY_TLS=OFF` **refuses** a `wss://` URL instead of
+  opening a plaintext socket behind the player's back.
+- `tests/net/test_lobby_tls.cpp` asserts both halves: a verified handshake to the
+  live server, *and* that an untrusted-root certificate and a valid certificate
+  for the wrong hostname are both rejected. Verified 2026-07-25 against the
+  deployment (full host/join/ready/start over `wss://`) and against
+  `untrusted-root.badssl.com` / `wrong.host.badssl.com`, which fail with
+  `X509 - Certificate verification failed`.
+
+**Server half — NOT DONE, and deliberately not done here.** `fly.toml` still has
+`force_https = false`, so the edge still accepts plain `ws://`. That is not a
+leftover: flipping it is what *cuts off* every client built before this change,
+so it must follow the clients, not lead them.
+
+**The flip, in order.** Getting this backwards is a known, already-suffered
+failure mode: with `force_https = true` in front of a plaintext client, the edge
+answers the WebSocket upgrade with a **301 the client cannot follow**, while
+`/healthz` still returns 200 over https — so the deploy looks perfectly healthy
+and every old client silently fails to connect.
+
+1. **Ship the wss:// client first.** No server change is needed for it: the edge
+   already serves TLS on 443 (`force_https` only controls the *redirect* of
+   plaintext requests, it never disabled HTTPS). New and old clients both work
+   during this window, which is the whole point of doing it in this order.
+2. **Wait until the old builds are gone** — however you count that (release
+   announcement, download stats, "everyone I play with has updated"). There is no
+   telemetry, so this is a judgement call, not a metric.
+3. **Then** set `force_https = true` in `fly.toml` and `fly deploy`.
+4. **Verify the upgrade, not `/healthz`.** A green health check proves nothing
+   here. Check that a plaintext upgrade is now redirected and a TLS one still
+   works:
+   ```
+   curl -sS -o /dev/null -w '%{http_code}\n' http://open-bomberman-matchmaker.fly.dev/ws   # expect 301
+   BOMBER_TLS_LIVE=1 ctest --test-dir build/headless -C Release -R net_lobby_tls           # expect pass
+   ```
+   Roll back by setting `force_https = false` and redeploying; nothing else in
+   the service depends on it.
+
+Until step 3 lands, an old client is exactly as exposed as before, so keep
+treating a "private" lobby code as private-by-obscurity for anyone still on a
+pre-TLS build.
 
 ### S2. A seat squatter can block a public lobby indefinitely
 
@@ -89,8 +137,8 @@ The victim goes deaf; the attacker receives everything aimed at them.
 The usual defence — "the handle is 128 bits and only its owner ever sees it" —
 does not hold here. A relayed match is by definition one where the direct path
 failed and traffic is crossing hostile ground, so an observer reading the header
-is inside the threat model, not outside it. (And per S1, on the current
-deployment the `alloc_id` is also readable straight off the control plane.)
+is inside the threat model, not outside it. (And against a client still dialling
+`ws://` — S1 — the `alloc_id` is readable straight off the control plane too.)
 
 **Fix — pin the address, and only move the pin when the pinned peer has gone
 quiet.** `forward` now runs:
@@ -124,9 +172,10 @@ rather than aliasing the receive buffer.
   attack from "one datagram, any time" to "sustained suppression of the victim".
 - **A first-datagram race, in theory.** The pin goes to whoever speaks first. In
   practice an off-path attacker cannot know the `alloc_id` before the first
-  datagram exists, and an on-path one cannot read it before it is sent. Under S1
-  (cleartext control plane) an observer *can* learn the `alloc_id` from
-  `RelayAllocated` and race the real peer's first datagram. Fixing S1 closes this.
+  datagram exists, and an on-path one cannot read it before it is sent. Against a
+  client still on a cleartext control plane (S1) an observer *can* learn the
+  `alloc_id` from `RelayAllocated` and race the real peer's first datagram; a
+  `wss://` client closes that path.
 - **A stranger can still cost a victim a stall.** After a genuine quiet window an
   attacker who wins the rebind pins their own address; the returning peer then
   has to wait out its own quiet window to take it back — and cannot, if the

@@ -4,8 +4,16 @@
 #include <ixwebsocket/IXWebSocket.h>
 
 #include <atomic>
+#include <cctype>
+#include <cstddef>
 #include <deque>
 #include <mutex>
+#include <string>
+
+#if !defined(_WIN32)
+#include <cstdlib>
+#include <fstream>
+#endif
 
 namespace bomber::net {
 namespace {
@@ -16,6 +24,59 @@ std::once_flag g_net_init;
 void ensure_net_system() {
     std::call_once(g_net_init, [] { ix::initNetSystem(); });
 }
+
+// Lower-case the scheme. URI schemes are case-insensitive (RFC 3986 §3.1) but
+// IXWebSocket's are not: it decides TLS with `protocol == "wss"`, so a URL typed
+// as "WSS://…" would take the PLAINTEXT socket path. It would then fail rather
+// than leak (a TLS server does not answer a cleartext upgrade), but the check
+// below must not disagree with the one downstream, so both see the same string.
+std::string normalize_scheme(const std::string& url) {
+    const std::size_t sep = url.find("://");
+    if (sep == std::string::npos) return url;
+    std::string out = url;
+    for (std::size_t i = 0; i < sep; ++i) {
+        out[i] = static_cast<char>(std::tolower(static_cast<unsigned char>(out[i])));
+    }
+    return out;
+}
+
+bool is_secure_url(const std::string& url) {
+    return url.rfind("wss://", 0) == 0;
+}
+
+#if defined(BOMBER_HAS_LOBBY_TLS)
+// Where the trust anchors come from.
+//
+// Windows: IXWebSocket's mbedTLS backend answers caFile=="SYSTEM" by
+// enumerating the CurrentUser\Root certificate store through wincrypt, so we
+// verify against the machine's own trust decisions and inherit whatever the
+// admin (or corporate policy) has put there. Nothing to configure here.
+//
+// Elsewhere mbedTLS has no system-store hook at all — IXWebSocket's
+// loadSystemCertificates() is a bare `return false` off Windows, which would
+// fail EVERY wss:// handshake with an empty reason. So name the platform CA
+// bundle explicitly. SSL_CERT_FILE (the OpenSSL/curl convention) wins, then the
+// usual distro locations; macOS ships the keychain roots at /etc/ssl/cert.pem.
+// An empty result means "no trust store found" and connect() refuses rather
+// than falling back to an unverified session.
+std::string find_ca_bundle() {
+#if defined(_WIN32)
+    return "SYSTEM";
+#else
+    if (const char* env = std::getenv("SSL_CERT_FILE"); env != nullptr && *env != '\0') {
+        return env;
+    }
+    for (const char* path : {"/etc/ssl/certs/ca-certificates.crt",  // Debian/Ubuntu/Alpine
+                             "/etc/pki/tls/certs/ca-bundle.crt",    // Fedora/RHEL
+                             "/etc/ssl/ca-bundle.pem",              // openSUSE
+                             "/etc/ssl/cert.pem",                   // macOS/FreeBSD
+                             "/usr/local/etc/openssl/cert.pem"}) {  // Homebrew
+        if (std::ifstream(path).good()) return path;
+    }
+    return {};
+#endif
+}
+#endif  // BOMBER_HAS_LOBBY_TLS
 
 }  // namespace
 
@@ -65,7 +126,38 @@ bool LobbyClient::connect(const std::string& url) {
     if (url.empty()) {
         return false;
     }
-    impl_->ws.setUrl(url);
+    const std::string dial = normalize_scheme(url);
+    // wss:// vs ws:// is decided by the URL alone: the deployed matchmaker is
+    // reached over TLS, a locally-run one (--matchmaker ws://127.0.0.1:8080/ws)
+    // has no certificate and stays plain. IXWebSocket picks the socket kind off
+    // the scheme; the TLS options below only matter for the secure one.
+    if (is_secure_url(dial)) {
+#if defined(BOMBER_HAS_LOBBY_TLS)
+        const std::string ca = find_ca_bundle();
+        if (ca.empty()) {
+            std::lock_guard<std::mutex> lock(impl_->mu);
+            impl_->last_error = "no certificate store found for TLS";
+            return false;
+        }
+        ix::SocketTLSOptions tls;
+        tls.caFile = ca;
+        // Defaults, restated because they are the security property: peer
+        // verification stays REQUIRED (any caFile other than "NONE") and the
+        // certificate's name is checked against the host we dialled. A client
+        // that skips either is not a TLS client.
+        tls.disable_hostname_validation = false;
+        impl_->ws.setTLSOptions(tls);
+#else
+        // Built without a TLS backend (-DBOMBER_LOBBY_TLS=OFF). Say so instead
+        // of connecting in the clear behind the player's back: a wss:// URL is
+        // a request for confidentiality, and silently downgrading it is worse
+        // than not connecting.
+        std::lock_guard<std::mutex> lock(impl_->mu);
+        impl_->last_error = "this build has no TLS support (wss:// unavailable)";
+        return false;
+#endif
+    }
+    impl_->ws.setUrl(dial);
     // The lobby drives its own lifecycle (a dropped signaling link is a lobby
     // event, not something to silently reconnect under it).
     impl_->ws.disableAutomaticReconnection();

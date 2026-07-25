@@ -88,6 +88,12 @@ if(BOMBER_ENABLE_LOBBY)
   bomber_add_test(bomber_net_lobby_flow_tests net_lobby_flow test_lobby_flow.cpp)
   target_link_libraries(bomber_net_lobby_flow_tests PRIVATE bomber::net)
 
+  # TLS (SECURITY.md S1): the wss:// handshake and, just as importantly, the
+  # rejection of a certificate that does not verify. The downgrade guard runs
+  # offline on every gate; the two network cases are opt-in (BOMBER_TLS_LIVE=1).
+  bomber_add_test(bomber_net_lobby_tls_tests net_lobby_tls test_lobby_tls.cpp)
+  target_link_libraries(bomber_net_lobby_tls_tests PRIVATE bomber::net)
+
   # LIVE interop against the real Go matchmaker — the only check that proves both
   # independently-written sides of PROTOCOL.md agree on the wire. OPT-IN: skips
   # unless BOMBER_MATCHMAKER_URL points at a running server, so the pre-push gate

@@ -158,10 +158,13 @@ The online rows talk to a signaling server (`services/matchmaker`, a small Go bi
 ```
 OPEN-BM95 --matchmaker ws://127.0.0.1:8080/ws     # 1. CLI flag (e.g. your own server)
 set BOMBER_MATCHMAKER_URL=ws://127.0.0.1:8080/ws  # 2. environment
-                                                  # 3. the deployed default (game_app.cpp)
+                                                  # 3. wss://…fly.dev/ws — the deployed
+                                                  #    default (game_app.cpp)
 ```
 
-> **The signaling connection is currently plain `ws://`, not `wss://`** — IXWebSocket v11.4.6's mbedTLS backend does not compile against any single mbedTLS release, so the client is built without TLS for now. An earlier version of this note claimed it "carries no credentials"; that was wrong. It carries the lobby **`host_token`**, which is what authorises *start the match*, plus the lobby code and the relay allocation id. Anyone able to observe the path can therefore take host authority over your lobby or hijack a relayed match's return path. Nothing outside the game is at risk — no account, no password — but until TLS lands, treat online play as trusted-network only, and a "private" lobby code as semi-public. Tracked as S1 in [`services/matchmaker/SECURITY.md`](services/matchmaker/SECURITY.md).
+> **The signaling connection is `wss://`.** It has to be: it carries the lobby **`host_token`**, which is what authorises *start the match*, plus the lobby code and the relay allocation id — an observer on the path who reads them takes host authority over your lobby. (An older note here claimed the signaling "carries no credentials". That was wrong, and it is the reason this is spelled out.) The TLS backend is **mbedTLS**, statically linked, built from source next to IXWebSocket; certificate verification and hostname checking are on and are covered by a test that asserts a bad certificate is *refused*, not just that a good one connects (`tests/net/test_lobby_tls.cpp`, `ctest -R net_lobby_tls` with `BOMBER_TLS_LIVE=1`). A build configured with `-DBOMBER_LOBBY_TLS=OFF` has no TLS backend and **refuses** a `wss://` URL outright rather than downgrading it. Plain `ws://` is still the right scheme for a matchmaker you run yourself on localhost, which has no certificate.
+>
+> Remaining gap: the deployed server still accepts plain `ws://` as well (`force_https = false`), so an *old* client keeps connecting in the clear. See S1 in [`services/matchmaker/SECURITY.md`](services/matchmaker/SECURITY.md) for the flip.
 
 The UDP **STUN** echo resolves the same way (`--matchmaker-stun <host[:port]>`, `BOMBER_MATCHMAKER_STUN_HOST` / `BOMBER_MATCHMAKER_STUN_PORT`) and defaults to the matchmaker URL's own host on **port 8081**. To run a server locally:
 
@@ -217,12 +220,12 @@ Still open:
   and returns to the menu rather than half-connecting.
 - **Host migration** — if the host drops, the match ends rather than re-electing
   a new hub. The design is in ADR-0011 (§ Risks) and the server half is built.
-- **`wss://` for the signaling connection** — the most important open item, and
-  a security one. It is plain `ws://` today because IXWebSocket v11.4.6's
-  mbedTLS backend does not compile against any single mbedTLS release, and the
-  `host_token` that authorises starting a match crosses that connection in the
-  clear along with the lobby code and the relay allocation id. Until it lands,
-  online play is trusted-network only. See S1 in
+- **Cleartext signaling is still *accepted* by the deployment.** The client now
+  speaks `wss://` by default and verifies certificates, but the server has not
+  yet been flipped to `force_https = true`, so an older build still connects in
+  the clear and leaks its `host_token` to the path. The flip is a deploy-time
+  change with a deliberate ordering (update clients first, or they are cut off);
+  it is written out in S1 of
   [`services/matchmaker/SECURITY.md`](services/matchmaker/SECURITY.md).
 
 **Cross-platform** is structural rather than aspirational: the sim is

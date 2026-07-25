@@ -188,10 +188,12 @@ forwarder.
 checked, what was found, what was fixed and what was accepted, with the residual
 risk of each spelled out. The short version:
 
-- **The deployed control plane is in the clear**, because the client cannot yet
-  speak `wss://` (`fly.toml`, `force_https = false`). That means the `host_token`
-  and the lobby `code` are readable by anyone on the path. This is the most
-  serious open issue and its fix lives on the client side. SECURITY.md S1.
+- **The deployed control plane still *accepts* cleartext** (`fly.toml`,
+  `force_https = false`). The game client now speaks `wss://` and verifies
+  certificates, so a current build is protected; a build from before that change
+  still leaks its `host_token` and lobby `code` to anyone on the path. Flipping
+  `force_https` closes the door on those clients — and cuts them off, so it is
+  ordered deliberately. SECURITY.md S1 has the sequence.
 - **No game data, no PII beyond a chosen display name.** State is soft, in-RAM,
   and evicted on disconnect/timeout — nothing is persisted.
 - **Authn is capability-based:** knowing a 6-char lobby `code` lets you join;

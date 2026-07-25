@@ -40,4 +40,9 @@ if(BOMBER_ENABLE_LOBBY)
                                     src/stun_client.cpp src/lobby_flow.cpp)
   target_link_libraries(bomber_net PUBLIC ixwebsocket nlohmann_json::nlohmann_json)
   target_compile_definitions(bomber_net PUBLIC BOMBER_HAS_LOBBY=1)
+  # PUBLIC so callers can pick their default URL scheme: game_app.cpp ships
+  # wss:// only on a build that can actually speak it (cmake/BomberIXWebSocket.cmake).
+  if(BOMBER_LOBBY_TLS)
+    target_compile_definitions(bomber_net PUBLIC BOMBER_HAS_LOBBY_TLS=1)
+  endif()
 endif()
