@@ -210,6 +210,65 @@ TEST_CASE("live: a public lobby shows up in another client's browse") {
                                    << code);
 }
 
+TEST_CASE("live: lobby chat round-trips through the real matchmaker") {
+    // PORT-ONLY lobby chat (PROTOCOL.md §7) against the REAL Go relay — the one
+    // check that proves the two independently-written sides agree on the Chat
+    // frame. NOTE: this needs a server built from THIS tree; the deployed
+    // instance answers `unknown_type` until it is redeployed.
+    const std::string url = env_or("BOMBER_MATCHMAKER_URL", "");
+    if (url.empty()) {
+        MESSAGE("BOMBER_MATCHMAKER_URL unset; skipping the live chat test");
+        return;
+    }
+    const auto stun_port =
+        static_cast<std::uint16_t>(std::atoi(env_or("BOMBER_MATCHMAKER_STUN_PORT", "8081").c_str()));
+
+    UdpTransport ta;
+    UdpTransport tb;
+    REQUIRE(ta.bind(0));
+    REQUIRE(tb.bind(0));
+
+    LobbyFlow::Config cfg;
+    cfg.server_url = url;
+    cfg.stun_host = "127.0.0.1";
+    cfg.stun_port = stun_port;
+    cfg.build_hash = build_hash();
+    LobbyFlow::Config cfg_a = cfg;
+    cfg_a.player_name = "EGE";
+    LobbyFlow::Config cfg_b = cfg;
+    cfg_b.player_name = "ADA";
+
+    LobbyClient ca;
+    LobbyClient cb;
+    LobbyFlow a(cfg_a, ta, ca);
+    LobbyFlow b(cfg_b, tb, cb);
+
+    a.host_lobby("chat-test", /*is_public=*/false, /*max_seats=*/2);
+    REQUIRE(pump_until(a, b, [&] { return a.phase() == LobbyFlow::Phase::InLobby; }, 8000));
+    b.join_lobby(a.code());
+    REQUIRE(pump_until(a, b, [&] { return b.phase() == LobbyFlow::Phase::InLobby; }, 8000));
+    REQUIRE(pump_until(a, b, [&] { return a.roster().size() == 2; }, 8000));
+
+    // The guest speaks; BOTH sides must hear it, the sender included (the
+    // server echoes, so everyone holds one identically-ordered transcript).
+    REQUIRE(b.send_chat("gl hf", now_ms()));
+    REQUIRE(pump_until(
+        a, b, [&] { return !a.chat_log().empty() && !b.chat_log().empty(); }, 8000));
+    CHECK(a.chat_log().back().text == "gl hf");
+    CHECK(b.chat_log().back().text == "gl hf");
+    // Attribution is the SERVER's, off its roster — the guest's own seat 1 and
+    // the node name it joined with.
+    CHECK(a.chat_log().back().seat == 1);
+    CHECK(a.chat_log().back().name == "ADA");
+
+    // And back the other way, so the host's seat/name are checked too.
+    REQUIRE(a.send_chat("have fun", now_ms()));
+    REQUIRE(pump_until(a, b, [&] { return b.chat_log().size() == 2; }, 8000));
+    CHECK(b.chat_log().back().text == "have fun");
+    CHECK(b.chat_log().back().seat == 0);
+    CHECK(b.chat_log().back().name == "EGE");
+}
+
 TEST_CASE("live: relay fallback carries the match when the punch cannot land") {
     // The Phase 2 proof (ADR-0011 decision 3): force the hole punch to fail —
     // exactly what symmetric NAT / CGNAT does — and check both peers fall back

@@ -15,6 +15,17 @@ import (
 // the 10 slots be remote).
 const kMaxSeats = 10
 
+// The chat rate limit (PROTOCOL.md §7), a per-CONNECTION token bucket measured
+// in milliseconds of credit: one message costs kChatCreditPerMsgMs, and at most
+// kChatBurstMsgs of them may be banked. So a normal exchange (a few lines, then
+// a pause) never notices it, while a flood settles at one line every two
+// seconds. The C++ client runs the identical bucket, so a well-behaved client
+// refuses locally exactly where the server would drop.
+const (
+	kChatCreditPerMsgMs = 2000
+	kChatBurstMsgs      = 4
+)
+
 // clientConn is the transport-agnostic seam the manager pushes messages through.
 // wsConn (production) adapts a WebSocket; fakeConn (tests) captures frames. This
 // keeps the whole lobby state machine unit-testable without a network.
@@ -58,6 +69,43 @@ type member struct {
 	buildHash  string // normalized; must equal the lobby's
 	lastSeen   time.Time
 	candidates []Candidate
+
+	// Chat token bucket (§7). Starts full so a member can speak the moment it
+	// arrives; chatSeen is the last refill instant, not the last message.
+	chatCreditMs int
+	chatSeen     time.Time
+}
+
+// newMember seats a connection with a full chat budget.
+func newMember(c clientConn, seat int, name, buildHash string, now time.Time) *member {
+	return &member{
+		conn:         c,
+		seat:         seat,
+		name:         name,
+		buildHash:    buildHash,
+		lastSeen:     now,
+		chatCreditMs: kChatCreditPerMsgMs * kChatBurstMsgs,
+	}
+}
+
+// spendChatCredit refills this member's bucket for the elapsed time and takes
+// one message out of it. False means the line must be DROPPED (§7): the bucket
+// never queues and never shortens a message.
+func (mem *member) spendChatCredit(now time.Time) bool {
+	if !mem.chatSeen.IsZero() {
+		if elapsed := now.Sub(mem.chatSeen); elapsed > 0 {
+			mem.chatCreditMs += int(elapsed / time.Millisecond)
+		}
+	}
+	mem.chatSeen = now
+	if max := kChatCreditPerMsgMs * kChatBurstMsgs; mem.chatCreditMs > max {
+		mem.chatCreditMs = max
+	}
+	if mem.chatCreditMs < kChatCreditPerMsgMs {
+		return false
+	}
+	mem.chatCreditMs -= kChatCreditPerMsgMs
+	return true
 }
 
 type lobby struct {
@@ -146,6 +194,8 @@ func (m *Manager) dispatch(c clientConn, raw []byte) {
 		m.handleMatchOver(c, raw)
 	case TypeAllocateRelay:
 		m.handleAllocateRelay(c, raw)
+	case TypeChat:
+		m.handleChat(c, raw)
 	default:
 		m.sendErr(c, "unknown_type", "unknown message type: "+env.Type)
 	}
@@ -216,7 +266,7 @@ func (m *Manager) handleCreate(c clientConn, raw []byte) {
 		members:    map[int]*member{},
 		createdAt:  m.now(),
 	}
-	lb.members[0] = &member{conn: c, seat: 0, name: msg.Player, buildHash: lb.buildHash, lastSeen: m.now()}
+	lb.members[0] = newMember(c, 0, msg.Player, lb.buildHash, m.now())
 	m.lobbies[code] = lb
 	m.byConn[c.id()] = &connLoc{code: code, seat: 0}
 
@@ -258,7 +308,7 @@ func (m *Manager) handleJoin(c clientConn, raw []byte) {
 		c.send(joinRejectedMsg{Type: TypeJoinRejected, Reason: ReasonFull})
 		return
 	}
-	lb.members[seat] = &member{conn: c, seat: seat, name: msg.Player, buildHash: lb.buildHash, lastSeen: m.now()}
+	lb.members[seat] = newMember(c, seat, msg.Player, lb.buildHash, m.now())
 	m.byConn[c.id()] = &connLoc{code: code, seat: seat}
 
 	var hostCand []Candidate
@@ -514,6 +564,54 @@ func (m *Manager) handleAllocateRelay(c clientConn, raw []byte) {
 		AllocID:   allocID,
 	})
 	m.log.Info("relay allocated", "code", lb.code, "seat", mem.seat)
+}
+
+// handleChat relays one typed line to the sender's own lobby (§7).
+//
+// PORT-ONLY FEATURE: the 1997 game has no chat. It rides this control plane
+// because a lobby exists BEFORE the peers punch a direct path, so the WebSocket
+// is the only link the players share while they are waiting.
+//
+// The server stays as dumb here as it is everywhere else — it validates, rate
+// limits and forwards; it keeps no history, and it never edits a message.
+func (m *Manager) handleChat(c clientConn, raw []byte) {
+	var msg chatMsg
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		m.sendErr(c, "bad_message", "malformed Chat")
+		return
+	}
+	// Screened BEFORE the lock: rejecting junk needs no lobby state.
+	if code := validateChatText(msg.Text); code != "" {
+		m.sendErr(c, code, "chat message rejected")
+		m.log.Warn("chat rejected", "reason", code, "bytes", len(msg.Text), "remote", c.remote())
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	lb, mem := m.lookupLocked(c)
+	if lb == nil {
+		// A connection with no seat has no lobby to speak into. This is THE
+		// containment rule for chat: a message only ever reaches the lobby its
+		// sender actually sits in.
+		m.sendErr(c, "not_in_lobby", "no lobby seat for this connection")
+		return
+	}
+	if lb.state == stateEvicted {
+		return
+	}
+	if !mem.spendChatCredit(m.now()) {
+		// Dropped whole, never trimmed and never queued — and LOGGED, so a
+		// flood shows up in the server's own record instead of vanishing. No
+		// Error goes back: answering every dropped line would just amplify the
+		// flood it is meant to damp.
+		m.log.Warn("chat dropped (rate limit)", "code", lb.code, "seat", mem.seat, "remote", c.remote())
+		return
+	}
+	// Seat and name are the SERVER's, read from the roster — the sender's frame
+	// cannot claim either. Echoed to the sender too, so every member (including
+	// the author) sees one identical, identically-ordered transcript.
+	m.broadcastLocked(lb, chatRelayMsg{Type: TypeChat, Seat: mem.seat, Name: mem.name, Text: msg.Text})
 }
 
 // ---- lifecycle: disconnect + heartbeat reaper -------------------------------

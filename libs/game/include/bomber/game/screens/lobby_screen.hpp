@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 
+#include "bomber/game/chat_overlay.hpp"
 #include "bomber/game/screen_context.hpp"
 
 // The ONLINE LOBBY front-end (ADR-0011 Phase 1d + the Phase 3 browser) — the
@@ -25,6 +26,10 @@
 //                    acknowledge modal. Returns a CODE, exactly like
 //                    run_code_entry, so the pick lands in the same waiting room.
 //   run_online()     the WAITING ROOM — the same list dialog, its pinned centred
+//                    (…plus ONE thing that is NOT RE'd chrome: the F2 lobby-chat
+//                    overlay, which the maintainer asked for and which
+//                    chat_overlay.hpp flags as a port-only addition. It is
+//                    composited over this screen and both setup screens.)
 //                    title strip carrying the lobby CODE (the string the host
 //                    reads out) and one item row per roster seat; the transient
 //                    phases (connecting / punching / failed) reuse the
@@ -42,6 +47,7 @@
 
 namespace bomber::net {
 class UdpTransport;  // borrowed by reference; the .cpp includes the real header
+class LobbyFlow;     // ditto — run_online drives a flow the CALLER owns
 }  // namespace bomber::net
 
 namespace bomber::game {
@@ -90,7 +96,7 @@ public:
     // -> compile-time placeholder) and hands the result down.
     //
     // This header needs NO BOMBER_HAS_LOBBY guard: it names no net type except
-    // the forward-declared UdpTransport, so it parses identically with and
+    // the forward-declared UdpTransport/LobbyFlow, so it parses identically with and
     // without the lobby. Only run_online's DEFINITION is guarded (lobby_screen
     // .cpp) — guarding the declaration would give LobbyScreen two different
     // definitions across translation units, since BOMBER_HAS_LOBBY is visible
@@ -104,14 +110,20 @@ public:
         std::string player_name = "PLAYER";
     };
 
-    // Host (or join `code`) and sit in the waiting room until the match starts,
-    // the player leaves, or the flow fails. `transport` MUST already be bound:
-    // LobbyFlow reuses that one socket for STUN, the punch and the match, so the
-    // NAT binding the peers punched is the one gameplay flows through.
-    // `is_public` applies only when hosting: the lobby is then advertised in the
-    // public list as well as reachable by its code.
-    LobbyRoomResult run_online(const OnlineConfig& cfg, net::UdpTransport& transport, bool host,
-                               const std::string& code, bool is_public = false);
+    // Sit in the waiting room until the match starts, the player leaves, or the
+    // flow fails, pumping `flow` once per frame.
+    //
+    // The CALLER owns `flow` (and the bound socket behind it) and has already
+    // told it to host or join. That ownership moved out of this screen when
+    // chat arrived: the control connection has to OUTLIVE the waiting room, so
+    // the same lobby (and the same conversation) carries on through the online
+    // setup screens. `chat` is the same overlay those screens keep using, so a
+    // draft and a scroll position survive the handover.
+    //
+    // `host` and `code` are display-only here — which transient modal to show
+    // while the connection comes up.
+    LobbyRoomResult run_online(net::LobbyFlow& flow, ChatOverlay& chat, bool host,
+                               const std::string& code);
 
     // The PUBLIC GAMES browser (ADR-0011 Phase 3). Asks the matchmaker for the
     // open public lobbies (LobbyFlow::browse_public), lists them, and returns

@@ -9,7 +9,7 @@ Three channels:
 
 | channel | transport | carries |
 |---|---|---|
-| **control** | WebSocket text frames, `ws(s)://<host>:8080/ws` | lobby create/join/list/ready/start/roster/candidates/reanchor/relay allocation |
+| **control** | WebSocket text frames, `ws(s)://<host>:8080/ws` | lobby create/join/list/ready/start/roster/candidates/reanchor/relay allocation/chat |
 | **discovery** | UDP datagrams, `<host>:8081` | STUN reflexive-address echo |
 | **relay** | UDP datagrams, `<host>:8082` | opaque per-tick game traffic, forwarded when the punch failed (§6) |
 
@@ -142,6 +142,17 @@ ICE: `host` > `reflexive` > `relay`.
 Any member may send it. The lobby returns to `OPEN`, ready flags clear, roster
 is kept, and a RosterUpdate is broadcast. Enables rematch and re-opens joins.
 
+### Chat → Chat (fan-out — see §7)
+```json
+{"type":"Chat","text":"gl hf"}
+```
+- `text` is the whole message. **No other field is read**: a `seat` or `name` in
+  a client frame is ignored, so nobody can speak as another seat.
+- The sender must hold a seat, else **Error** `{"code":"not_in_lobby"}`.
+- Validated, never repaired: over `120` bytes ⇒ **Error** `{"code":"chat_too_long"}`;
+  a control rune, a U+FFFD, or a blank/empty body ⇒ **Error** `{"code":"chat_invalid"}`.
+- Over the rate limit ⇒ **dropped silently and logged** (no reply). See §7.
+
 ### AllocateRelay → RelayAllocated  (relay fallback — see §6)
 ```json
 {"type":"AllocateRelay","lobby_id":"…","seat":1}
@@ -216,6 +227,14 @@ optional `rtt_to_host_ms`(int). Roster is always sorted by ascending seat.
 - `max_prediction` is deliberately NOT sent — it is a local per-peer display
   policy (design §6).
 
+### Chat (relay, one per member — see §7)
+```json
+{"type":"Chat","seat":1,"name":"Ada","text":"gl hf"}
+```
+`seat` and `name` are the SERVER's, read from the roster — never echoed from the
+sender's frame. Sent to every member of the sender's lobby, **the sender
+included**, so all members hold one identically-ordered transcript.
+
 ### ReanchorAccepted
 ```json
 {"type":"ReanchorAccepted","lobby_id":"…","code":"K7Q2MP","host_token":"…"}
@@ -233,7 +252,8 @@ See §6.
 ```
 `code` values: `bad_json`, `bad_message`, `unknown_type`, `already_in_lobby`,
 `not_in_lobby`, `not_host`, `already_started`, `not_enough_players`,
-`not_all_ready`, `build_mismatch`, `reanchor_rejected`, `internal`.
+`not_all_ready`, `build_mismatch`, `reanchor_rejected`, `chat_too_long`,
+`chat_invalid`, `internal`.
 
 ---
 
@@ -338,3 +358,76 @@ truncated.
 
 On the client this is one `Transport` swap decided by the `Rendezvous` outcome;
 the `RollbackSession` above it is byte-for-byte identical to the direct-P2P case.
+
+---
+
+## 7. Lobby chat (FROZEN)
+
+**A PORT-ONLY FEATURE. Atomic Bomberman (1997) has no chat** — no chat window,
+no in-game text entry, and no network message that could carry a line of text
+(`docs/re/network-screens.md`). This exists because the maintainer asked for it,
+and it is called out as an addition everywhere it appears so nobody later
+mistakes it for reverse-engineered behaviour. Server side is `handleChat` in
+`manager.go`; the client's overlay is `libs/game/.../chat_overlay.hpp`.
+
+It rides the **control plane** rather than the game's UDP path because players
+chat *in the lobby* — before any hole punch has happened, when the WebSocket is
+the only link they share. It is therefore available from the moment a seat is
+taken right through the pre-match setup screens; it is not part of the in-match
+data plane and the relay (§6) never carries it.
+
+```
+C→S  {"type":"Chat","text":"gl hf"}
+S→C  {"type":"Chat","seat":1,"name":"Ada","text":"gl hf"}
+```
+
+### 7.1 What the server guarantees
+
+- **Containment.** A message is fanned out to every member of the SENDER's own
+  lobby and to nobody else. A connection holding no seat gets
+  `Error{code:"not_in_lobby"}` and no relay.
+- **Attribution.** `seat` and `name` are read from the server's roster. Fields
+  of those names in a client frame are ignored outright, so a peer cannot speak
+  as another seat.
+- **Echo to the sender.** The author receives its own line back through the same
+  fan-out, so every member holds one identically-ordered transcript and a
+  delivered message is visibly delivered.
+- **No history.** The server stores nothing; a member that joins late sees only
+  what is said after it arrives.
+- **Any live lobby state.** `OPEN`, `LOCKED` and `IN_PROGRESS` all relay — the
+  online roster/level screens run after `StartMatch`, and chat stays live there.
+  An `EVICTED` lobby is already gone.
+
+### 7.2 Validation — reject, never repair
+
+Chat is the one place a player's own typing reaches other people, so a body is
+either relayed **byte-for-byte** or refused. Nothing is truncated, stripped or
+substituted.
+
+| condition | answer |
+|---|---|
+| `len(text)` > **120 bytes** | `Error{code:"chat_too_long"}` |
+| any control rune, or a U+FFFD (see below) | `Error{code:"chat_invalid"}` |
+| empty, or whitespace only | `Error{code:"chat_invalid"}` |
+| otherwise | relayed verbatim |
+
+Non-ASCII passes through untouched: what a client can *draw* is its own
+business, and the relay does not get to decide which alphabets exist. (The
+game's 1997 FON covers printable ASCII, so its own overlay drops the rest at
+BOTH ends — that is a font limit in one client, not a wire rule.) `encoding/json`
+substitutes U+FFFD for invalid UTF-8 while decoding, so a body arriving with one
+is a body that did not survive the trip intact; forwarding it would be passing
+on a silently repaired string, hence the refusal.
+
+### 7.3 Rate limit — drop and log
+
+Per **connection**, a token bucket measured in milliseconds of credit: one
+message costs **2000 ms**, and at most **4** may be banked (the bucket starts
+full). A normal exchange never notices it; a flood settles at one line every two
+seconds.
+
+An over-rate message is **dropped whole and logged** (`chat dropped (rate
+limit)`, with the lobby code and seat). It is never queued, never shortened, and
+**no `Error` is sent back** — answering every dropped line would amplify the
+flood it exists to damp. The C++ client runs the identical bucket locally, so a
+well-behaved client refuses (and says so) exactly where the server would drop.

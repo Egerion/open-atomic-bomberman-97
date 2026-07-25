@@ -13,6 +13,10 @@ add_library(bomber_game_core STATIC
   src/screen.cpp
   src/bmscreen.cpp
   src/dialog_chrome.cpp
+  # The lobby chat overlay (PORT-ONLY, PROTOCOL.md §7). Built unconditionally:
+  # without BOMBER_ENABLE_LOBBY its definitions compile to inert no-ops, so
+  # callers link the same symbols on either kind of build.
+  src/chat_overlay.cpp
   src/options_screen.cpp
   src/keyremap_screen.cpp
   src/goldman_screen.cpp

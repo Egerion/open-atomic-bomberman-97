@@ -46,6 +46,14 @@
 #include "bomber/net/udp_transport.hpp"     // net::UdpTransport (run_netplay_match)
 #include "bomber/platform/frame_clock.hpp"
 
+#if defined(BOMBER_HAS_LOBBY)
+// The lobby control plane, owned by present_net_online so it OUTLIVES the
+// waiting room — the F2 chat overlay keeps using it through the setup screens.
+#include "bomber/net/build_hash.hpp"
+#include "bomber/net/lobby_client.hpp"
+#include "bomber/net/lobby_flow.hpp"
+#endif
+
 namespace bomber::game {
 
 namespace fs = std::filesystem;
@@ -1318,7 +1326,7 @@ AppInput GameApp::run_netplay_match_seats(net::UdpTransport& transport, std::uin
 
 AppInput GameApp::present_net_setup(net::UdpTransport& transport, bool is_host,
                                     std::uint16_t local_seats, std::uint32_t seed,
-                                    sim::MatchConfig& out_cfg) {
+                                    sim::MatchConfig& out_cfg, ChatOverlay* chat) {
     // THE ONLINE SETUP STAGE (docs/re/network-screens.md §7). The original has no
     // net-only setup UI at all: both network screens commit into sub_42A3F6, so a
     // net game's roster/AI and map come from the ORDINARY sub_410F81 / sub_406DDE
@@ -1344,10 +1352,11 @@ AppInput GameApp::present_net_setup(net::UdpTransport& transport, bool is_host,
         // before the host sees the screen (net_setup_link.hpp "SEAT LOCKING").
         net_setup_seed_host_roster(link, setup_type_, setup_sub_);
         const AppInput roster =
-            SetupScreen(sctx(), setup_state(), campaign_state(), match_backdrop(), link).run();
+            SetupScreen(sctx(), setup_state(), campaign_state(), match_backdrop(), link, chat)
+                .run();
         if (roster == AppInput::Quit) return AppInput::Quit;
         if (roster != AppInput::Advance) return AppInput::Back;  // Esc: whole flow aborts (§7)
-        const AppInput level = MapSelectScreen(sctx(), map_select_state(), link).run();
+        const AppInput level = MapSelectScreen(sctx(), map_select_state(), link, chat).run();
         if (level == AppInput::Quit) return AppInput::Quit;
         if (level != AppInput::Advance) return AppInput::Back;
 
@@ -1371,6 +1380,7 @@ AppInput GameApp::present_net_setup(net::UdpTransport& transport, bool is_host,
             SDL_Event ev;
             while (SDL_PollEvent(&ev)) {
                 if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
+                if (chat != nullptr && chat->handle_event(ev, sctx())) continue;
                 if (ev.type == SDL_EVENT_KEY_DOWN && !ev.key.repeat &&
                     ev.key.key == SDLK_ESCAPE) {
                     audio_.play(20);
@@ -1378,6 +1388,7 @@ AppInput GameApp::present_net_setup(net::UdpTransport& transport, bool is_host,
                 }
             }
             net_setup_pump(link);
+            if (chat != nullptr) chat->pump();
             if (net_setup_failed(link))
                 return run_net_notice(sctx(), "NETWORK ERROR", "THE OTHER PLAYER LEFT") ==
                                AppInput::Quit
@@ -1391,6 +1402,7 @@ AppInput GameApp::present_net_setup(net::UdpTransport& transport, bool is_host,
                 SDL_RenderTexture(sdl_renderer_.get(), bg.tex, nullptr, &d);
             }
             draw_net_wait_prompt(sctx(), spin);
+            if (chat != nullptr) chat->draw(sctx());
             SDL_RenderPresent(sdl_renderer_.get());
             frame_clock.pace();
         }
@@ -1406,8 +1418,8 @@ AppInput GameApp::present_net_setup(net::UdpTransport& transport, bool is_host,
     while (true) {
         const AppInput r =
             net_setup_on_level_screen(link)
-                ? MapSelectScreen(sctx(), map_select_state(), link).run()
-                : SetupScreen(sctx(), setup_state(), campaign_state(), match_backdrop(), link)
+                ? MapSelectScreen(sctx(), map_select_state(), link, chat).run()
+                : SetupScreen(sctx(), setup_state(), campaign_state(), match_backdrop(), link, chat)
                       .run();
         if (r == AppInput::Quit) {
             team_play_ = saved_team_play;
@@ -1435,6 +1447,7 @@ AppInput GameApp::present_net_setup(net::UdpTransport& transport, bool is_host,
                         return AppInput::Quit;
                     }
                 net_setup_pump(link);
+                if (chat != nullptr) chat->pump();  // don't go silent on the lobby either
                 SDL_Delay(2);
             }
             break;
@@ -1633,7 +1646,27 @@ AppInput GameApp::present_net_online(bool host, bool browse, bool is_public) {
         return AppInput::Advance;
     }
 
-    const LobbyRoomResult r = screen.run_online(ocfg, transport, host, code, is_public);
+    // The control connection and the flow are owned HERE, not by the waiting
+    // room, because they have to outlive it: the F2 lobby chat (chat_overlay.hpp,
+    // PROTOCOL.md §7) keeps working through the setup screens below, and the
+    // matchmaker reaps a member that stops heart-beating. Both are torn down on
+    // the way out of this function, before the match takes the socket.
+    net::LobbyFlow::Config lcfg;
+    lcfg.server_url = ocfg.server_url;
+    lcfg.stun_host = ocfg.stun_host;
+    lcfg.stun_port = ocfg.stun_port;
+    lcfg.player_name = ocfg.player_name;
+    lcfg.build_hash = net::build_hash();  // the cross-build door: the server rejects mismatches
+
+    net::LobbyClient client;
+    net::LobbyFlow flow(lcfg, transport, client);
+    ChatOverlay chat(&flow);
+    if (host)
+        flow.host_lobby(ocfg.player_name, is_public, /*max_seats=*/2);
+    else
+        flow.join_lobby(code);
+
+    const LobbyRoomResult r = screen.run_online(flow, chat, host, code);
     if (r.window_closed) return AppInput::Quit;
     if (!r.ready) return AppInput::Advance;  // left the lobby / failed → back to the menu
 
@@ -1643,7 +1676,11 @@ AppInput GameApp::present_net_online(bool host, bool browse, bool is_public) {
     // before returning, so the match session has the transport to itself
     // (setup_session.hpp obligation 1 — whichever polls first eats the datagram).
     sim::MatchConfig cfg;
-    const AppInput setup = present_net_setup(transport, r.is_host, r.local_seats_mask, r.seed, cfg);
+    const AppInput setup =
+        present_net_setup(transport, r.is_host, r.local_seats_mask, r.seed, cfg, &chat);
+    // Chat stops at the door of the match: the overlay is a lobby thing, and the
+    // WS link closes with `client` when this function returns anyway.
+    chat.close();
     if (setup == AppInput::Quit) return AppInput::Quit;
     if (setup != AppInput::Advance) return AppInput::Advance;
     return run_netplay_match_seats(transport, r.local_seats_mask, r.is_host, cfg);

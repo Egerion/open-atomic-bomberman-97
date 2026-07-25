@@ -154,6 +154,57 @@ TEST_CASE("STUN probe/reply match PROTOCOL.md §2") {
     CHECK_FALSE(parse_stun_reply(R"({"type":"StunReply","nonce":"x"})", &nonce, &addr));
 }
 
+TEST_CASE("Chat encodes only the body and parses the server's attribution") {
+    // PROTOCOL.md §7. The client frame carries the text and NOTHING else: the
+    // server reads seat and name off its own roster, and sending them would only
+    // tempt a client to lie about who is speaking.
+    const json c = json::parse(encode_chat("gl hf"));
+    CHECK(c["type"] == "Chat");
+    CHECK(c["text"] == "gl hf");
+    CHECK_FALSE(c.contains("seat"));
+    CHECK_FALSE(c.contains("name"));
+
+    const LobbyServerMessage m =
+        parse_server_message(R"({"type":"Chat","seat":1,"name":"Ada","text":"gl hf"})");
+    REQUIRE(m.type == LobbyMsgType::Chat);
+    CHECK(m.chat_seat == 1);
+    CHECK(m.chat_name == "Ada");
+    CHECK(m.chat_text == "gl hf");
+
+    // A frame missing its fields still parses (never throws); the flow's own
+    // sanitising is what decides whether there is a message worth showing.
+    const LobbyServerMessage bare = parse_server_message(R"({"type":"Chat"})");
+    CHECK(bare.type == LobbyMsgType::Chat);
+    CHECK(bare.chat_seat == -1);
+    CHECK(bare.chat_text.empty());
+}
+
+TEST_CASE("sanitize_chat_* reduces untrusted text to what the FON can draw") {
+    // Applied on BOTH sides of the socket: on send so we never ask the server to
+    // relay bytes we could not draw, and on receive because a relayed frame is
+    // still another player's typing.
+    CHECK(sanitize_chat_text("hello") == "hello");
+    CHECK(sanitize_chat_text("  padded  ") == "padded");        // blanks carry nothing
+    CHECK(sanitize_chat_text("tab\there") == "tabhere");        // control codes dropped
+    CHECK(sanitize_chat_text("a\nb") == "ab");                  // no line breaks in one line
+    CHECK(sanitize_chat_text("merhaba d\xC3\xBCnya") == "merhaba dnya");  // FON is ASCII-only
+    CHECK(sanitize_chat_text("").empty());
+    CHECK(sanitize_chat_text("   ").empty());
+    CHECK(sanitize_chat_text("\x01\x02").empty());
+
+    // Clamped to the server's own cap, so a message is never rejected for length
+    // by the far end after we already accepted it locally.
+    const std::string over(kChatMaxBytes + 40, 'x');
+    CHECK(sanitize_chat_text(over).size() == kChatMaxBytes);
+    const std::string exact(kChatMaxBytes, 'y');
+    CHECK(sanitize_chat_text(exact) == exact);
+
+    // Names get the tighter clamp: one long name must not push a whole line of
+    // chat off the panel.
+    CHECK(sanitize_chat_name("Ada") == "Ada");
+    CHECK(sanitize_chat_name(std::string(64, 'N')).size() == kChatMaxNameBytes);
+}
+
 TEST_CASE("split_host_port handles IPv4, bracketed IPv6, and junk") {
     std::string host;
     std::uint16_t port = 0;

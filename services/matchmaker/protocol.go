@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Wire message-type discriminators — the top-level "type" string of every JSON
@@ -24,6 +26,9 @@ const (
 	TypeReanchorLobby = "ReanchorLobby"
 	TypeMatchOver     = "MatchOver"     // §5.2 rematch trigger
 	TypeAllocateRelay = "AllocateRelay" // relay fallback (§6, relay.go)
+	// Chat is BIDIRECTIONAL under one name (like StartMatch): the client frame
+	// carries only "text", the relayed frame adds the SERVER's seat/name. See §7.
+	TypeChat = "Chat"
 
 	// server -> client
 	TypeRelayAllocated   = "RelayAllocated"
@@ -137,6 +142,13 @@ type matchOverMsg struct {
 	LobbyID string `json:"lobby_id"`
 }
 
+// chatMsg is the INBOUND half of Chat (§7). It carries the body and nothing
+// else on purpose: a seat or a name in a client frame is ignored, so no peer can
+// speak as somebody else.
+type chatMsg struct {
+	Text string `json:"text"`
+}
+
 type allocateRelayMsg struct {
 	LobbyID string `json:"lobby_id"`
 	// Seat is a POINTER so "omitted" is distinguishable from seat 0. It is
@@ -208,6 +220,17 @@ type relayAllocatedMsg struct {
 	AllocID   string `json:"alloc_id"`
 }
 
+// chatRelayMsg is the OUTBOUND half of Chat (§7), fanned out to every member of
+// the sender's lobby (the sender included, so everyone sees the same order).
+// Seat and name come from the server's own roster — never from the frame that
+// triggered the relay.
+type chatRelayMsg struct {
+	Type string `json:"type"`
+	Seat int    `json:"seat"`
+	Name string `json:"name"`
+	Text string `json:"text"`
+}
+
 type reanchorAcceptedMsg struct {
 	Type      string `json:"type"`
 	LobbyID   string `json:"lobby_id"`
@@ -224,6 +247,41 @@ type errorMsg struct {
 }
 
 // ---- helpers ----------------------------------------------------------------
+
+// kChatMaxBytes caps one chat line (PROTOCOL.md §7). Bytes, not runes: it is a
+// wire budget, and the client's 1997 bitmap font is single-byte anyway.
+const kChatMaxBytes = 120
+
+// validateChatText screens one inbound chat body. Chat is the only place a
+// player's own typing reaches OTHER players, so it is validated and REJECTED —
+// never repaired: a truncated or silently stripped line would put words in
+// somebody's mouth. Returns the Error code to answer with, or "" when the text
+// may be relayed verbatim.
+func validateChatText(s string) string {
+	if len(s) > kChatMaxBytes {
+		return "chat_too_long"
+	}
+	// encoding/json already substitutes U+FFFD for invalid UTF-8 as it decodes,
+	// so this guard is belt-and-braces — but the SUBSTITUTION is the real case:
+	// a replacement rune means the sender's bytes did not survive the trip, and
+	// forwarding a silently repaired string is exactly what §7 forbids. Both are
+	// therefore refusals, not repairs.
+	if !utf8.ValidString(s) {
+		return "chat_invalid"
+	}
+	for _, r := range s {
+		// Otherwise only control runes are barred. What a given client can DRAW
+		// is its own business (the game's FON covers printable ASCII and drops
+		// the rest); the relay has no business deciding which alphabets exist.
+		if r == utf8.RuneError || unicode.IsControl(r) {
+			return "chat_invalid"
+		}
+	}
+	if strings.TrimSpace(s) == "" {
+		return "chat_invalid"
+	}
+	return ""
+}
 
 // normalizeBuildHash canonicalises a build_hash string ("0xA1B2C3D4") for
 // equality checks: trim, lowercase, drop an optional "0x". The wire form stays

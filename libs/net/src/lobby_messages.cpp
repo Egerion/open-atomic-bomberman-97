@@ -40,7 +40,30 @@ std::vector<LobbyCandidate> parse_candidates(const json& arr) {
     return out;
 }
 
+// The shared reduction behind sanitize_chat_text / sanitize_chat_name: keep the
+// codes the front-end FON can draw, drop everything else, trim the blanks that
+// would only pad the panel, and clamp to `max_bytes`.
+std::string sanitize_printable(const std::string& raw, std::size_t max_bytes) {
+    std::string out;
+    for (const char c : raw) {
+        if (out.size() >= max_bytes) break;
+        const auto u = static_cast<unsigned char>(c);
+        if (u >= 32 && u < 127) out += c;
+    }
+    const std::size_t first = out.find_first_not_of(' ');
+    if (first == std::string::npos) return {};
+    return out.substr(first, out.find_last_not_of(' ') - first + 1);
+}
+
 }  // namespace
+
+std::string sanitize_chat_text(const std::string& raw) {
+    return sanitize_printable(raw, kChatMaxBytes);
+}
+
+std::string sanitize_chat_name(const std::string& raw) {
+    return sanitize_printable(raw, kChatMaxNameBytes);
+}
 
 std::string hex_hash(std::uint32_t v) {
     char buf[11];
@@ -117,6 +140,13 @@ LobbyServerMessage parse_server_message(const std::string& text) {
         m.type = LobbyMsgType::RelayAllocated;
         m.relay_addr = j.value("relay_addr", std::string());
         m.alloc_id = j.value("alloc_id", std::string());
+    } else if (type == "Chat") {
+        // Stored raw here — parse_server_message's job is decoding, not policy.
+        // The sanitisers run where the text is accepted for display (LobbyFlow).
+        m.type = LobbyMsgType::Chat;
+        m.chat_seat = j.value("seat", -1);
+        m.chat_name = j.value("name", std::string());
+        m.chat_text = j.value("text", std::string());
     } else if (type == "Error") {
         m.type = LobbyMsgType::Error;
         m.error_code = j.value("code", std::string());
@@ -258,6 +288,15 @@ std::string encode_allocate_relay(const std::string& lobby_id, int seat) {
     j["type"] = "AllocateRelay";
     j["lobby_id"] = lobby_id;
     j["seat"] = seat;
+    return j.dump();
+}
+
+std::string encode_chat(const std::string& text) {
+    // No seat and no name on purpose (PROTOCOL.md §7): the server reads both off
+    // its own roster, and sending them would only invite a client to lie.
+    json j;
+    j["type"] = "Chat";
+    j["text"] = text;
     return j.dump();
 }
 

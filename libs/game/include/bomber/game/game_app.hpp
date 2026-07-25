@@ -16,6 +16,7 @@
 #include "bomber/audio/audio_engine.hpp"
 #include "bomber/game/bmscreen.hpp"
 #include "bomber/game/campaign_screen.hpp"
+#include "bomber/game/chat_overlay.hpp"
 #include "bomber/game/editor_screen.hpp"
 #include "bomber/game/cursor_indicator.hpp"
 #include "bomber/game/gamepad.hpp"
@@ -281,9 +282,14 @@ private:
     // acknowledge modal), or Quit on a window close. STOPS pumping the setup
     // session before returning: the match session drains the same transport and
     // whichever polls first eats the datagram (setup_session.hpp obligation 1).
+    //
+    // `chat` is the lobby-chat overlay (PORT-ONLY, chat_overlay.hpp) composited
+    // over both screens and pumped by them, so the conversation started in the
+    // waiting room carries on here. nullptr on the direct/LAN paths, which have
+    // no matchmaker connection to chat over.
     AppInput present_net_setup(net::UdpTransport& transport, bool is_host,
                                std::uint16_t local_seats, std::uint32_t seed,
-                               sim::MatchConfig& out_cfg);
+                               sim::MatchConfig& out_cfg, ChatOverlay* chat = nullptr);
     // Menu row 1 (START NET GAME) now opens the NETWORK GAME menu (LobbyScreen):
     // the online lobby entry points plus the ADR-0010 direct/LAN rows. Menu row 2
     // (JOIN NET GAME -> present_net_join) stays the UNCHANGED direct-IP join, so

@@ -1,5 +1,6 @@
 #include "bomber/net/lobby_flow.hpp"
 
+#include <algorithm>
 #include <array>
 #include <utility>
 
@@ -90,6 +91,28 @@ void LobbyFlow::start_match() {
     if (phase_ != Phase::InLobby || !is_host()) return;
     client_.start_match(lobby_id_, host_token_, match_start_.input_delay,
                         /*match_config_digest=*/0);
+}
+
+bool LobbyFlow::send_chat(const std::string& text, std::int64_t now_ms) {
+    // PORT-ONLY (PROTOCOL.md §7). Holding a seat is what makes a message
+    // deliverable at all — the server refuses chat from a seatless connection,
+    // so there is no point putting one on the wire.
+    if (my_seat_ < 0) return false;
+    const std::string clean = sanitize_chat_text(text);
+    if (clean.empty()) return false;
+
+    // The server's own token bucket, run locally: credit accrues with elapsed
+    // time whether or not the last attempt went out. Refusing here beats letting
+    // the server drop the line, because a drop is silent by design (§7.3) and
+    // the player would never learn the message did not land.
+    if (last_chat_ms_ >= 0) chat_credit_ms_ += now_ms - last_chat_ms_;
+    last_chat_ms_ = now_ms;
+    chat_credit_ms_ = std::min(chat_credit_ms_, kChatCreditPerMsgMs * kChatBurstMsgs);
+    if (chat_credit_ms_ < kChatCreditPerMsgMs) return false;
+    chat_credit_ms_ -= kChatCreditPerMsgMs;
+
+    client_.send_chat(clean);
+    return true;  // our own copy arrives with everyone else's, off the server's echo
 }
 
 void LobbyFlow::begin_candidate_gathering(std::int64_t now_ms) {
@@ -307,6 +330,23 @@ void LobbyFlow::handle_server_message(const LobbyServerMessage& msg) {
             if (phase_ == Phase::Connecting) phase_ = Phase::Idle;
             break;
 
+        case LobbyMsgType::Chat: {
+            // Another player's typing, arriving over a socket: untrusted input,
+            // handled like every other frame in this codebase. Both halves are
+            // re-reduced HERE rather than taken on the server's word — a client
+            // must never render bytes merely because something relayed them.
+            ChatLine line;
+            line.seat = msg.chat_seat;
+            line.name = sanitize_chat_name(msg.chat_name);
+            line.text = sanitize_chat_text(msg.chat_text);
+            if (line.text.empty()) break;  // nothing drawable survived: not a message
+            if (line.name.empty()) line.name = "?";
+            chat_log_.push_back(std::move(line));
+            if (chat_log_.size() > kChatLogLines) chat_log_.erase(chat_log_.begin());
+            ++chat_revision_;
+            break;
+        }
+
         case LobbyMsgType::HeartbeatAck:
         case LobbyMsgType::Unknown:
             break;
@@ -330,6 +370,16 @@ void LobbyFlow::step(std::int64_t now_ms) {
 
     client_.poll_messages([this](const LobbyServerMessage& m) { handle_server_message(m); });
 
+    // Presence keep-alive, for every phase that still HOLDS a seat rather than
+    // the waiting room alone. The control link now outlives the punch — the
+    // online setup screens keep pumping this flow so lobby chat stays live
+    // there — and a member that stops speaking is reaped (PROTOCOL.md §3).
+    if (my_seat_ >= 0 && (phase_ == Phase::InLobby || phase_ == Phase::Ready) &&
+        (last_heartbeat_ms_ < 0 || now_ms - last_heartbeat_ms_ >= kHeartbeatMs)) {
+        client_.heartbeat();
+        last_heartbeat_ms_ = now_ms;
+    }
+
     if (phase_ == Phase::InLobby) {
         // Candidate gathering starts as soon as we know our seat, and publishes
         // when STUN resolves (or gives up — the LAN candidate still stands).
@@ -337,10 +387,6 @@ void LobbyFlow::step(std::int64_t now_ms) {
         if (stun_ && !candidates_sent_) {
             stun_->step(now_ms);
             if (stun_->done()) publish_candidates();
-        }
-        if (last_heartbeat_ms_ < 0 || now_ms - last_heartbeat_ms_ >= kHeartbeatMs) {
-            client_.heartbeat();
-            last_heartbeat_ms_ = now_ms;
         }
     } else if (phase_ == Phase::Rendezvous) {
         if (!punch_) {

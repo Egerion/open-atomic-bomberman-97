@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -50,6 +51,7 @@ enum class LobbyMsgType : std::uint8_t {
     StartMatch,
     ReanchorAccepted,
     RelayAllocated,
+    Chat,  // PORT-ONLY lobby chat (PROTOCOL.md §7) — no original counterpart
     Error,
 };
 
@@ -87,6 +89,13 @@ struct LobbyServerMessage {
     // RelayAllocated (PROTOCOL.md §6): where to route when the punch failed.
     std::string relay_addr;  // "host:port" of the UDP forwarder
     std::string alloc_id;    // 32 hex chars; parse_alloc_id() turns it into bytes
+
+    // Chat (PROTOCOL.md §7). The seat and the name are the SERVER's, taken from
+    // its roster — the sender cannot choose either. Still untrusted input: it is
+    // another player's typing, so sanitize_chat_* before rendering a byte of it.
+    std::string chat_name;
+    std::string chat_text;
+    int chat_seat = -1;
 
     // Error
     std::string error_code;
@@ -133,5 +142,36 @@ std::string encode_match_over(const std::string& lobby_id);
 // {"type":"AllocateRelay","lobby_id":"…","seat":n} — asked for only after the
 // punch fails (PROTOCOL.md §6); the reply carries relay_addr + alloc_id.
 std::string encode_allocate_relay(const std::string& lobby_id, int seat);
+
+// --- lobby chat (PROTOCOL.md §7) --------------------------------------------
+//
+// A PORT-ONLY FEATURE: the 1997 game has no chat at all. It rides the control
+// plane because players talk in the LOBBY, before any hole punch exists.
+//
+// {"type":"Chat","text":"…"} — the body and nothing else. A seat or a name in a
+// client frame is ignored by the server, so this carries neither.
+std::string encode_chat(const std::string& text);
+
+// The wire cap on one line, matching the server's (PROTOCOL.md §7.2). The server
+// REJECTS an over-long body rather than trimming it, so a client that wants its
+// message delivered clamps before sending.
+inline constexpr std::size_t kChatMaxBytes = 120;
+// The displayed cap on a speaker's name. The roster carries whatever the peer
+// typed into its options; this is what keeps one long name from pushing a whole
+// line of chat off the panel.
+inline constexpr std::size_t kChatMaxNameBytes = 16;
+
+// Reduce untrusted chat text to what this client can actually put on screen:
+// printable ASCII (the 1997 FON covers nothing else — lobby_screen.cpp's
+// display_name takes the same line with server-supplied lobby names), trimmed of
+// surrounding blanks and clamped to `kChatMaxBytes`. Returns "" when nothing
+// renderable survives, which callers treat as "there is no message here".
+//
+// Applied on BOTH sides of the socket, deliberately: on send so we never ask the
+// server to relay bytes we could not draw ourselves, and on receive because a
+// frame is untrusted input no matter which server relayed it.
+std::string sanitize_chat_text(const std::string& raw);
+// The same reduction at `kChatMaxNameBytes`, for a speaker's name.
+std::string sanitize_chat_name(const std::string& raw);
 
 }  // namespace bomber::net

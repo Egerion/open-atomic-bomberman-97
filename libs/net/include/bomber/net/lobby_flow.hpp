@@ -30,6 +30,15 @@ namespace bomber::net {
 
 class LobbyClient;
 
+// One line of PORT-ONLY lobby chat (PROTOCOL.md §7) as the flow keeps it: the
+// speaker's seat and name plus the body, both already reduced to what the
+// front-end font can draw. NOT an RE'd concept — the 1997 game has no chat.
+struct ChatLine {
+    std::string name;  // the speaker, by the same identity the roster shows
+    std::string text;
+    int seat = -1;  // the server's attribution; -1 only for a malformed frame
+};
+
 class LobbyFlow {
 public:
     enum class Phase : std::uint8_t {
@@ -105,6 +114,32 @@ public:
     const std::vector<PublicLobby>& public_lobbies() const { return public_lobbies_; }
     unsigned public_list_revision() const { return public_list_revision_; }
 
+    // --- PORT-ONLY lobby chat (PROTOCOL.md §7) ---
+    //
+    // NOT a reverse-engineered feature: the 1997 game has no chat. It lives on
+    // the control plane because that is the only link players share while they
+    // are still in the lobby, and it stays usable for as long as this object
+    // does — which is now past the punch, through the online setup screens.
+    //
+    // The chat token bucket, mirrored EXACTLY from the server's so the client
+    // refuses (and can say why) precisely where the server would drop.
+    static constexpr std::int64_t kChatCreditPerMsgMs = 2000;  // what one message costs
+    static constexpr int kChatBurstMsgs = 4;                   // how many may be banked
+    static constexpr std::size_t kChatLogLines = 8;            // the ring the GUI renders
+
+    // Send one line. Returns false — and sends NOTHING — when it is empty after
+    // sanitising, when this peer holds no seat, or when the bucket is dry; the
+    // caller can then keep the draft and say so instead of losing it to a
+    // server-side drop.
+    bool send_chat(const std::string& text, std::int64_t now_ms);
+
+    // The last kChatLogLines messages, oldest first, and a counter that moves
+    // whenever one arrives — the same shape public_lobbies()/
+    // public_list_revision() use, so a screen can spot "something new" without
+    // diffing the ring.
+    const std::vector<ChatLine>& chat_log() const { return chat_log_; }
+    unsigned chat_revision() const { return chat_revision_; }
+
 private:
     enum class Pending : std::uint8_t { None, Create, Join, List };
 
@@ -153,13 +188,18 @@ private:
     // address of every guest. Guests need nothing extra — their socket is
     // set_peer'd to the hub and the hub reflects the other seats' frames.
     std::unique_ptr<StarHubTransport> star_;
+    // Lobby chat: the recent-message ring plus this peer's own send bucket.
+    std::vector<ChatLine> chat_log_;
     std::int64_t last_heartbeat_ms_ = -1;
+    std::int64_t last_chat_ms_ = -1;  // the bucket's last refill instant
+    std::int64_t chat_credit_ms_ = kChatCreditPerMsgMs * kChatBurstMsgs;
 
     // --- 4-byte ---
     int pending_max_seats_ = 2;
     int my_seat_ = -1;
     int host_seat_ = 0;
     unsigned public_list_revision_ = 0;
+    unsigned chat_revision_ = 0;
 
     // --- 1-byte ---
     Phase phase_ = Phase::Idle;

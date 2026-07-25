@@ -146,6 +146,10 @@ void LobbyClient::match_over(const std::string& lobby_id) {
     send(encode_match_over(lobby_id));
 }
 
+void LobbyClient::send_chat(const std::string& text) {
+    send(encode_chat(text));
+}
+
 void LobbyClient::poll_messages(const ServerMessageHandler& handler) {
     poll([&handler](const std::string& frame) {
         if (handler) handler(parse_server_message(frame));
