@@ -283,11 +283,12 @@ private:
     // GUEST — renders those same two screens READ-ONLY from the preview, buzzing
     // SFX 40 at any edit key, and adopts the confirmed config.
     //
-    // Returns Advance with `out_cfg` filled (Phase::Final — BOTH peers hold it),
+    // Returns Advance with `out_cfg` filled (Phase::Final — EVERY peer holds it),
     // Back if the stage was left/timed out (the reason is already shown on the
     // acknowledge modal), or Quit on a window close. STOPS pumping the setup
     // session before returning: the match session drains the same transport and
-    // whichever polls first eats the datagram (setup_session.hpp obligation 1).
+    // whichever polls first eats the datagram (setup_session.hpp's one
+    // obligation).
     //
     // `chat` is the lobby-chat overlay (PORT-ONLY, chat_overlay.hpp) composited
     // over both screens and pumped by them, so the conversation started in the

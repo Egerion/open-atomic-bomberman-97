@@ -15,15 +15,19 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "bomber/net/match_config_codec.hpp"
 #include "bomber/net/protocol.hpp"
 #include "bomber/net/setup_session.hpp"
+#include "bomber/net/star_hub_transport.hpp"  // the real >2-seat hub, for the last case
 #include "bomber/net/transport.hpp"
+#include "bomber/net/udp_transport.hpp"
 #include "fanout_bus.hpp"  // bomber::test::StarBus / StarTransport (the N-peer cases)
 #include "match_config_compare.hpp"
 
@@ -501,8 +505,8 @@ struct StarPeers {
         for (std::size_t i = 0; i < n; ++i) {
             const auto mine = static_cast<std::uint16_t>(1U << i);
             sessions.push_back(std::make_unique<net::SetupSession>(
-                *transports[i], /*is_host=*/i == 0, mine,
-                static_cast<std::uint16_t>(all & ~mine), timeout_ms));
+                *transports[i], /*is_host=*/i == 0, mine, static_cast<std::uint16_t>(all & ~mine),
+                timeout_ms));
         }
     }
 
@@ -689,4 +693,83 @@ TEST_CASE("a machine holding two seats acks for both") {
     CHECK(host.acked_seats() == 0b0110);
     CHECK(host.peer_acked());
     CHECK(host.phase() == net::SetupSession::Phase::Final);
+}
+
+// The cases above model the star; this one IS it. Three bound UDP sockets, the
+// hub wrapped in the REAL StarHubTransport — the very object LobbyFlow::
+// transport() hands GameApp for a >2-seat match — and the same SetupSession on
+// all three. Everything the modelled cases assert has to hold over the transport
+// that actually ships, including the rule the model exists to dramatise: the
+// star only reflects INSIDE the hub's poll, so the hub's session is what keeps
+// guest↔guest traffic alive while the setup stage owns the socket. Soft-skips
+// where the sandbox forbids sockets, like every other socket case in the suite.
+TEST_CASE("three peers agree the config over the REAL StarHubTransport") {
+    net::UdpTransport th;
+    net::UdpTransport t1;
+    net::UdpTransport t2;
+    if (!th.bind(0) || !t1.bind(0) || !t2.bind(0)) {
+        MESSAGE("UDP sockets unavailable in this environment; skipping");
+        return;
+    }
+    // The punch's outcome, written out by hand: each guest aims at the hub, and
+    // the hub holds both guests' punched addresses.
+    REQUIRE(t1.set_peer("127.0.0.1", th.local_port()));
+    REQUIRE(t2.set_peer("127.0.0.1", th.local_port()));
+    std::vector<net::StarHubTransport::Guest> guests = {{"127.0.0.1", t1.local_port()},
+                                                        {"127.0.0.1", t2.local_port()}};
+    net::StarHubTransport star(th, std::move(guests));
+
+    net::SetupSession host(star, /*is_host=*/true, 0b001, 0b110);
+    net::SetupSession g1(t1, /*is_host=*/false, 0b010, 0);
+    net::SetupSession g2(t2, /*is_host=*/false, 0b100, 0);
+
+    std::int64_t now = 0;
+    const auto pump_all = [&] {
+        host.step(now);
+        g1.step(now);
+        g2.step(now);
+        now += 10;  // the 200/250 ms intervals fire every 20-odd rounds
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    };
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+
+    host.publish(sample_preview());
+    while ((!g1.has_preview() || !g2.has_preview()) && std::chrono::steady_clock::now() < deadline)
+        pump_all();
+    REQUIRE(g1.has_preview());  // the hub's fan-out reached both
+    REQUIRE(g2.has_preview());
+
+    const sim::MatchConfig cfg = sim::test::distinctive_match_config();
+    host.confirm(cfg);
+    CHECK(host.pending_seats() == 0b110);
+    while (host.phase() != net::SetupSession::Phase::Final &&
+           std::chrono::steady_clock::now() < deadline)
+        pump_all();
+
+    REQUIRE(host.phase() == net::SetupSession::Phase::Final);
+    CHECK(host.acked_seats() == 0b110);  // BOTH guests, each for its own seat
+    CHECK(host.pending_seats() == 0);
+    REQUIRE(g1.has_final_config());
+    REQUIRE(g2.has_final_config());
+    CHECK(sim::test::match_config_diffs(cfg, g1.final_config()).empty());
+    CHECK(sim::test::match_config_diffs(cfg, g2.final_config()).empty());
+
+    // And the reflection itself, on the same three sockets: a datagram guest 1
+    // sends reaches guest 2 — which knows no address but the hub's — purely
+    // because the hub was pumped. Only the HOST is stepped here, so nothing but the
+    // hub's own poll can be carrying it, and g2's session is left unpumped so
+    // the bytes are still in the socket when the test reads them.
+    const std::vector<std::uint8_t> marker = {0xFF, 0x11, 0x22};  // decode() rejects it
+    t1.send(marker.data(), marker.size());
+    bool at_g2 = false;
+    std::vector<std::uint8_t> got;
+    const auto reflect_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!at_g2 && std::chrono::steady_clock::now() < reflect_deadline) {
+        host.step(now);
+        now += 10;
+        while (!at_g2 && t2.poll(&got))
+            if (got == marker) at_g2 = true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    CHECK(at_g2);
 }

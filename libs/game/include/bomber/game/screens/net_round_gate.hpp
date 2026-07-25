@@ -46,8 +46,9 @@ public:
     NetRoundGate& operator=(const NetRoundGate&) = delete;
 
     // Once per RENDERED FRAME while the screen is up. The screen owns the only
-    // pump of the transport for its whole duration (setup_session.hpp obligation
-    // 1: whichever session polls first eats the datagram), so a screen that
+    // pump of the transport for its whole duration (setup_session.hpp's
+    // one-pump-at-a-time rule: whichever session polls first eats the datagram,
+    // and on a star that same poll is what reflects), so a screen that
     // stops calling this strands the link — and, incidentally, this is what
     // drains the socket of the round that just ended.
     virtual void pump() = 0;
