@@ -6,7 +6,7 @@ A clean-room, modern **C++20** rewrite of **Atomic Bomberman** (Interplay, 1997)
   <img src="docs/screenshots/menu.png" alt="Open Bomberman's main menu" width="640">
 </p>
 
-**Status:** playable. Faithful deterministic sim (movement, bombs, kick/punch/grab/throw, spooger, the nine diseases, HURRY wall-close, conveyors/warpholes/trampolines, head hits), original art/sound/music loaded at runtime, random stage rotation, a scheme editor, and **online 2-player multiplayer over UDP** (deterministic lockstep + GGPO-style rollback netcode) reachable from the menu or the CLI. A larger lobby/internet/N-player online mode is actively being built — see *Roadmap*.
+**Status:** playable. Faithful deterministic sim (movement, bombs, kick/punch/grab/throw, spooger, the nine diseases, HURRY wall-close, conveyors/warpholes/trampolines, head hits), original art/sound/music loaded at runtime, random stage rotation, and a scheme editor — plus **online multiplayer over the internet**: share a 6-character lobby code or list your match publicly, and the peers punch a direct UDP path (falling back to a relay when a NAT refuses one) and play on GGPO-style rollback netcode with no input delay. The host sets the match up in the game's own roster and level screens while guests watch, so map choice and AI slots work online exactly as they do locally. Two peers today; more is in progress — see *Roadmap*.
 
 <p align="center">
   <img src="docs/screenshots/six-player-match.gif" alt="Six computer players fighting through one round" width="640">
@@ -188,7 +188,33 @@ Run either check by hand with `bash scripts/test.sh` / `bash scripts/lint.sh`, o
 
 ## Roadmap
 
-The online mode is being expanded toward the original's full multiplayer: **>2 players**, a proper **lobby** (short shareable lobby codes for private matches, a public match list, host-starts-while-others-join), **internet play across NATs** (STUN/hole-punching with a relay fallback), and **cross-platform** matches. See `docs/adr/` and `docs/re/multiplayer.md`.
+Shipped since the netcode core (ADR-0010, ADR-0011): shareable **lobby codes**
+and a **public match list**, **internet play across NATs** (STUN + UDP
+hole-punching, with a server relay for the symmetric-NAT cases a punch cannot
+reach), host-authoritative **match setup** through the game's own screens,
+round rotation, a deterministic **peer-drop → AI handoff**, and lobby chat. The
+matchmaking service that makes it work lives in `services/matchmaker` and is
+deployed; the game reaches it with no configuration.
+
+Still open:
+
+- **More than two peers.** The sim has always taken ten seats and the
+  host-relay star transport is written and tested, but the setup handshake and
+  the seat plumbing are still two-peer. AI slots already give you a full arena
+  from two machines.
+- **Host migration** — if the host drops, the match ends rather than re-electing
+  a new hub. The design is in ADR-0011 (§ Risks) and the server half is built.
+- **`wss://` for the signaling connection.** It is plain `ws://` today because
+  IXWebSocket v11.4.6's mbedTLS backend does not compile against any single
+  mbedTLS release. No credentials cross it, but a lobby code is readable on the
+  path — treat a "private" code as semi-public until this lands.
+
+**Cross-platform** is structural rather than aspirational: the sim is
+integer-only, the wire is little-endian, and a compile-time `build_hash` is
+checked at the lobby door and again before tick 0, so mismatched builds are
+refused loudly instead of desyncing. Only Windows is regularly built and tested
+today. See `docs/adr/`, `docs/re/network-screens.md` and
+`services/matchmaker/PROTOCOL.md`.
 
 ## Contributing
 
