@@ -43,6 +43,17 @@ target_link_libraries(bomber_net_build_hash_tests PRIVATE bomber::net)
 bomber_add_test(bomber_net_rendezvous_tests net_rendezvous test_rendezvous.cpp)
 target_link_libraries(bomber_net_rendezvous_tests PRIVATE bomber::net)
 
+# MatchConfig wire codec: the full-field round-trip that guards the determinism
+# boundary (a forgotten field = a desync), plus the malformed-input rejections.
+bomber_add_test(bomber_net_match_config_tests net_match_config test_match_config_codec.cpp)
+target_link_libraries(bomber_net_match_config_tests PRIVATE bomber::net)
+
+# SetupSession: the host-authoritative setup sync (docs/re/network-screens.md
+# §7) over a LoopbackLink — live preview, chunked final config, ack, loss
+# tolerance, and the never-partially-applied guarantee.
+bomber_add_test(bomber_net_setup_tests net_setup test_setup_session.cpp)
+target_link_libraries(bomber_net_setup_tests PRIVATE bomber::net)
+
 # StarHubTransport: the >2-seat host-relay star — fan-out, guest->guest
 # reflection, and the stranger-drop guard.
 bomber_add_test(bomber_net_star_tests net_star test_star_hub.cpp)

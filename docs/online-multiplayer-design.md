@@ -323,12 +323,60 @@ relay must re-punch/re-allocate to the new hub, which can exceed the drop timeou
 and surface as a brief "migrating…" overlay. v1 accepts the stall; a later
 refinement pre-warms a backup-hub path so migration is seamless.
 
+## 9. Match setup after the punch (host-authoritative)
+
+The punch produces a connected `Transport`; the match itself needs a
+`sim::MatchConfig`. Between the two sits `libs/net`'s `SetupSession` — the
+online equivalent of the original's roster and level screens.
+
+**Why it exists.** Netplay used to build a hard-coded canonical config (2 seats,
+no AI, stage derived from the seed) purely so the two peers could not disagree.
+That bought determinism at the price of no map choice, no AI slots and no
+roster. The original does not need that compromise: after its two network
+screens every peer lands in the *ordinary* roster (`sub_410F81`) and level
+(`sub_406DDE`) screens, the **host drives them and broadcasts each change**
+(slot kind 40, team kind 58, level kind 43, rounds kind 44), and **guests are
+read-only** (SFX 40 on any edit attempt) — `docs/re/network-screens.md` §7.
+
+**Shape.** Same polarity, our transport, after the punch, so the matchmaker
+stays config-agnostic (ADR-0011: the server never sees a `MatchConfig`).
+
+| direction | message | payload |
+|---|---|---|
+| host → guest | `MsgType::SetupPreview` | live, DISPLAY-ONLY subset: per-slot kind, level index + name, rounds, team flags. Re-sent every 250 ms. |
+| host → guest | `MsgType::SetupChunk` | one 1024-byte slice of the serialized `MatchConfig` + revision, total length and a whole-blob checksum. Re-sent every 200 ms until acked. |
+| guest → host | `MsgType::SetupAck` | revision + blob checksum, so the host learns the guest holds *its* bytes. |
+
+**The final payload is the whole resolved config, never a level index.** A level
+index would have each peer build its own board, and two installs disagree
+constantly — a different `.SCH`, a different `EXTRA<n>.RES`, a custom map at
+that index, a hand-edited `VALUELST`. Shipping the resolved config (cells, stage
+actors, warp destinations, spawns, per-slot `active`/`ai`/`team`, seed, the whole
+`Tuning`, the powerup override/forbid/born-with arrays, the campaign fields)
+makes every peer feed `Simulation` byte-identical input. The preview may be
+lossy; the final may not.
+
+**Chunked, not fragmented.** A full 10-spawn config serializes to 1842 bytes —
+past a safe UDP payload — so it travels as two datagrams of at most 1039 bytes
+each rather than relying on IP fragmentation surviving an arbitrary path. A
+reassembly is decoded only when every slice of one revision is present and the
+blob checksum matches, so a lost chunk yields *no* config rather than half of
+one.
+
+**Scope limits, both deliberate.** (1) Like `SeedHandshake`, `SetupSession`
+models ONE remote peer: `peer_acked()` flips on the first matching ack, so over
+a `StarHubTransport` (>2 seats) one guest's ack would wrongly mean "everybody
+has it". The star needs either a session per guest or a seat id in the ack plus
+a per-seat mask. (2) The original's guest→host slot upload (kind 40) — a guest
+contributing its own local humans/AI to the shared roster — is not built; it is
+a new `MsgType` plus a host-side merge, and another `kWireProtocolVersion` bump.
+
 ## 7. What is reused vs new
 
 | reused unchanged (ADR-0010) | new (this design, ADR-0011) |
 |---|---|
 | `Transport` seam, `UdpTransport`, `LoopbackLink` | `RelayedTransport` (a `Transport` impl) |
-| `input_codec`, `protocol` (`Input`/`InputRange`/`Hash`/`Hello`) | `PunchPing`/`PunchPong` + `Stun*` tags (extend `MsgType`) |
+| `input_codec`, `protocol` (`Input`/`InputRange`/`Hash`/`Hello`) | `PunchPing`/`PunchPong` + `Stun*` tags (extend `MsgType`); `SetupPreview`/`SetupChunk`/`SetupAck` + the `MatchConfig` codec (§9) |
 | `RollbackSession`, `LockstepSession` | `LobbyClient`, `Rendezvous` (control + punch) |
 | `SeedHandshake`, `state_hash` desync | `build_hash` door (server + Hello) |
 | the whole `libs/sim` (untouched) | the minimal signaling/relay **server** |

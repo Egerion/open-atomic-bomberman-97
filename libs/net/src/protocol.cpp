@@ -41,6 +41,17 @@ constexpr std::size_t kRangeHeaderBytes = 1 + 4 + 1 + 2;  // tag + first_tick u3
 constexpr std::size_t kHelloFrameBytes = 1 + 4 + 1;  // tag + seed u32 + is_ack u8
 constexpr std::size_t kPunchFrameBytes = 1 + 4 + 1;  // tag + nonce u32 + is_pong u8
 constexpr std::size_t kDropFrameBytes = 1 + 1 + 4;   // tag + seat u8 + at_tick u32
+constexpr std::size_t kAckFrameBytes = 1 + 4 + 4;    // tag + revision u32 + checksum u32
+// tag + revision u32 + level_index u8 + rounds u8 + name_len u8
+constexpr std::size_t kPreviewHeaderBytes = 1 + 4 + 1 + 1 + 1;
+constexpr std::size_t kPreviewRosterBytes = 2 * static_cast<std::size_t>(sim::kMaxPlayers);
+
+// The number of chunks a blob of `total_len` bytes MUST be cut into. Both the
+// encoder and the decoder derive it, so a sender cannot claim a different
+// split than the one its total_len implies.
+constexpr std::size_t chunks_for(std::size_t total_len) {
+    return (total_len + kSetupChunkPayloadBytes - 1) / kSetupChunkPayloadBytes;
+}
 
 }  // namespace
 
@@ -82,6 +93,46 @@ std::vector<std::uint8_t> encode_drop(std::uint8_t seat, std::uint32_t at_tick) 
     b.push_back(static_cast<std::uint8_t>(MsgType::Drop));
     b.push_back(seat);
     put_u32_le(b, at_tick);
+    return b;
+}
+
+std::vector<std::uint8_t> encode_setup_preview(const SetupPreviewFrame& preview) {
+    std::vector<std::uint8_t> b;
+    b.push_back(static_cast<std::uint8_t>(MsgType::SetupPreview));
+    put_u32_le(b, preview.revision);
+    b.push_back(preview.level_index);
+    b.push_back(preview.rounds);
+    // Caller-supplied names longer than the cap are TRUNCATED here (the host
+    // owns this string, so it is not untrusted); decode still rejects an
+    // over-long one, which can only come from a peer that disagrees with us.
+    const std::size_t name_len = preview.level_name.size() < kSetupLevelNameMax
+                                     ? preview.level_name.size()
+                                     : kSetupLevelNameMax;
+    b.push_back(static_cast<std::uint8_t>(name_len));
+    for (std::size_t i = 0; i < name_len; ++i)
+        b.push_back(static_cast<std::uint8_t>(preview.level_name[i]));
+    for (const SetupSlotKind k : preview.slots) b.push_back(static_cast<std::uint8_t>(k));
+    for (const std::uint8_t t : preview.team) b.push_back(t);
+    return b;
+}
+
+std::vector<std::uint8_t> encode_setup_chunk(const SetupChunkFrame& chunk) {
+    std::vector<std::uint8_t> b;
+    b.push_back(static_cast<std::uint8_t>(MsgType::SetupChunk));
+    put_u32_le(b, chunk.revision);
+    put_u32_le(b, chunk.total_len);
+    put_u32_le(b, chunk.checksum);
+    b.push_back(chunk.chunk_count);
+    b.push_back(chunk.chunk_index);
+    b.insert(b.end(), chunk.payload.begin(), chunk.payload.end());
+    return b;
+}
+
+std::vector<std::uint8_t> encode_setup_ack(std::uint32_t revision, std::uint32_t checksum) {
+    std::vector<std::uint8_t> b;
+    b.push_back(static_cast<std::uint8_t>(MsgType::SetupAck));
+    put_u32_le(b, revision);
+    put_u32_le(b, checksum);
     return b;
 }
 
@@ -136,6 +187,70 @@ bool decode(const std::uint8_t* data, std::size_t size, Message* out) {
         out->type = MsgType::Drop;
         out->drop.seat = data[1];
         out->drop.at_tick = get_u32_le(data + 2);
+        return true;
+    }
+    if (tag == MsgType::SetupAck) {
+        if (size != kAckFrameBytes) return false;
+        out->type = MsgType::SetupAck;
+        out->setup_ack.revision = get_u32_le(data + 1);
+        out->setup_ack.checksum = get_u32_le(data + 1 + 4);
+        return true;
+    }
+    if (tag == MsgType::SetupPreview) {
+        if (size < kPreviewHeaderBytes) return false;
+        const std::size_t name_len = data[7];
+        if (name_len > kSetupLevelNameMax) return false;
+        if (size != kPreviewHeaderBytes + name_len + kPreviewRosterBytes) return false;
+
+        SetupPreviewFrame pf;
+        pf.revision = get_u32_le(data + 1);
+        pf.level_index = data[5];
+        pf.rounds = data[6];
+        pf.level_name.reserve(name_len);
+        for (std::size_t i = 0; i < name_len; ++i) {
+            const std::uint8_t c = data[kPreviewHeaderBytes + i];
+            // Printable ASCII only: the GUI draws this string, and a remote peer
+            // has no business smuggling NULs or control codes into it.
+            if (c < 0x20U || c > 0x7EU) return false;
+            pf.level_name.push_back(static_cast<char>(c));
+        }
+        std::size_t off = kPreviewHeaderBytes + name_len;
+        for (std::size_t s = 0; s < static_cast<std::size_t>(sim::kMaxPlayers); ++s) {
+            const std::uint8_t k = data[off++];
+            if (k > static_cast<std::uint8_t>(SetupSlotKind::Remote)) return false;
+            pf.slots[s] = static_cast<SetupSlotKind>(k);
+        }
+        for (std::size_t s = 0; s < static_cast<std::size_t>(sim::kMaxPlayers); ++s)
+            pf.team[s] = data[off++];
+        out->type = MsgType::SetupPreview;
+        out->setup_preview = std::move(pf);
+        return true;
+    }
+    if (tag == MsgType::SetupChunk) {
+        if (size < kSetupChunkHeaderBytes) return false;
+        const std::uint32_t revision = get_u32_le(data + 1);
+        const std::uint32_t total_len = get_u32_le(data + 5);
+        const std::uint32_t checksum = get_u32_le(data + 9);
+        const std::size_t count = data[13];
+        const std::size_t index = data[14];
+        if (total_len == 0 || total_len > kMaxMatchConfigBytes) return false;
+        if (count != chunks_for(total_len) || index >= count) return false;
+        const std::size_t begin = index * kSetupChunkPayloadBytes;
+        const std::size_t remaining = static_cast<std::size_t>(total_len) - begin;
+        const std::size_t payload_len =
+            remaining < kSetupChunkPayloadBytes ? remaining : kSetupChunkPayloadBytes;
+        if (size != kSetupChunkHeaderBytes + payload_len) return false;
+
+        SetupChunkFrame cf;
+        cf.revision = revision;
+        cf.total_len = total_len;
+        cf.checksum = checksum;
+        cf.chunk_count = static_cast<std::uint8_t>(count);
+        cf.chunk_index = static_cast<std::uint8_t>(index);
+        cf.payload.assign(data + kSetupChunkHeaderBytes,
+                          data + kSetupChunkHeaderBytes + payload_len);
+        out->type = MsgType::SetupChunk;
+        out->setup_chunk = std::move(cf);
         return true;
     }
     if (tag == MsgType::InputRange) {
