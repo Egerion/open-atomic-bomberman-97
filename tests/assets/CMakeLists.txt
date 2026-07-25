@@ -48,6 +48,13 @@ add_executable(bomber_sch_write_tests test_sch_write.cpp)
 target_link_libraries(bomber_sch_write_tests PRIVATE bomber::assets doctest::doctest bomber::warnings)
 add_test(NAME sch_write COMMAND bomber_sch_write_tests)
 
+# Install locator: the probe order that decides whether a fresh copy of the
+# game starts on a machine that is not the developer's.
+add_executable(bomber_install_locate_tests test_install_locate.cpp)
+target_link_libraries(bomber_install_locate_tests PRIVATE bomber::assets doctest::doctest
+                                                          bomber::warnings)
+add_test(NAME install_locate COMMAND bomber_install_locate_tests)
+
 # .SCH loader malformed-input contract (bad numeric field -> std::runtime_error).
 add_executable(bomber_sch_malformed_tests test_sch_malformed.cpp)
 target_link_libraries(bomber_sch_malformed_tests PRIVATE bomber::assets doctest::doctest bomber::warnings)

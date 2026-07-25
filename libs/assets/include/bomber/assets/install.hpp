@@ -9,10 +9,17 @@
 namespace bomber::assets {
 
 // Locates the player's original Atomic Bomberman installation. Probes, in
-// order: the BOMBER_GAME_DIR environment variable, a gamedir.txt in the
-// working directory, then the standard install locations. Returns an empty
-// path when nothing is found.
-std::filesystem::path default_game_dir();
+// order: the BOMBER_GAME_DIR environment variable, a gamedir.txt (working
+// directory first, then `exe_dir`), then the standard install locations
+// (including a BOMBRMAN folder beside the exe). Returns an empty path when
+// nothing is found.
+//
+// `exe_dir` is the directory holding the running binary, passed in rather than
+// discovered here because this library is deliberately SDL-free (the caller
+// has SDL_GetBasePath). Leave it empty and only the CWD-relative probes run —
+// which is what a shortcut with a different "Start in", or a launch from any
+// other directory, used to silently reduce this to.
+std::filesystem::path default_game_dir(const std::filesystem::path& exe_dir = {});
 
 // The key-remap bindings (docs/re/results-and-options.md §2, `keydef=<set>,
 // <action>,<scancode>` triples, dword_4645BC[10*set+action]). Two keyboard

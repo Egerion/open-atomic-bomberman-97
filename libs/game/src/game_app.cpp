@@ -345,11 +345,37 @@ void GameApp::seed_front_end_rngs() {
 }
 
 bool GameApp::resolve_install_paths(fs::path& game, fs::path& scheme_path) {
-    game = !opts_.game_dir.empty() ? opts_.game_dir : assets::default_game_dir();
+    // SDL_GetBasePath is the exe's own folder; libs/assets is SDL-free so it
+    // cannot ask for it itself. Without this the auto-detect only ever saw the
+    // working directory, so the exe worked on the developer's machine (whose
+    // absolute install path is one of the hardcoded probes) and nowhere else.
+    const char* base = SDL_GetBasePath();  // SDL3: static string, do not free
+    game = !opts_.game_dir.empty() ? opts_.game_dir
+                                   : assets::default_game_dir(base ? fs::path(base) : fs::path{});
     if (game.empty() || !fs::is_directory(game / "DATA")) {
-        std::fprintf(stderr,
-                     "usage: bomber_game [game_dir] [scheme.sch]\n"
-                     "(or set BOMBER_GAME_DIR / gamedir.txt)\n");
+        // This is the ONLY failure a first-time user hits, and it used to be
+        // invisible: bomber_game is a WIN32 (GUI-subsystem) binary, so a
+        // double-clicked exe has no console and this text went nowhere — the
+        // game just silently did not appear. Say it in a window too, and say
+        // what to actually do about it. stderr is kept for CLI/CI runs.
+        const std::string searched =
+            game.empty() ? std::string("(no install found)") : game.string();
+        const std::string msg =
+            "Open Bomberman needs the data files from an original\n"
+            "Atomic Bomberman (1997) installation. It could not find one.\n\n"
+            "Looked at: " +
+            searched +
+            "\n\n"
+            "Point it at your install in any ONE of these ways:\n"
+            "  - copy the install folder next to this exe, named BOMBRMAN, or\n"
+            "  - put a file named gamedir.txt next to this exe, holding the\n"
+            "    install path on a single line (plain UTF-8, no BOM), or\n"
+            "  - set the BOMBER_GAME_DIR environment variable, or\n"
+            "  - pass the path as the first argument.\n\n"
+            "The folder is the one containing DATA\\, e.g.\n"
+            "  C:\\Program Files (x86)\\INTRPLAY\\BOMBRMAN";
+        std::fprintf(stderr, "%s\n", msg.c_str());
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Open Bomberman", msg.c_str(), nullptr);
         return false;
     }
     opts_.game_dir = game;

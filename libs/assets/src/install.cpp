@@ -51,18 +51,63 @@ bool iequals(const std::string& a, const char* b) {
 
 }  // namespace
 
-fs::path default_game_dir() {
+namespace {
+
+// One gamedir.txt: first line, trimmed, accepted only if it names a directory.
+// A UTF-8 BOM is stripped — PowerShell's `-Encoding utf8` writes one, and it
+// otherwise becomes part of the path, which fails in a way that looks like the
+// file was ignored entirely.
+fs::path read_gamedir_file(const fs::path& file) {
+    std::ifstream f(file);
+    if (!f) return {};
+    std::string line;
+    if (!std::getline(f, line)) return {};
+    if (line.rfind("\xEF\xBB\xBF", 0) == 0) line.erase(0, 3);
+    line = trim(line);
+    return (!line.empty() && fs::is_directory(line)) ? fs::path(line) : fs::path{};
+}
+
+}  // namespace
+
+fs::path default_game_dir(const fs::path& exe_dir) {
     if (const char* env = std::getenv("BOMBER_GAME_DIR"); env && *env && fs::is_directory(env))
         return env;
-    if (std::ifstream f("gamedir.txt"); f) {
-        std::string line;
-        if (std::getline(f, line)) {
-            while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
-            if (!line.empty() && fs::is_directory(line)) return line;
-        }
+
+    // The probe order below runs from MOST to LEAST deliberate, and that
+    // ordering is the contract, not an accident: the hardcoded absolute paths
+    // used to be tried before anything exe-relative, so a machine that happened
+    // to have an install at one of them worked while an identical copy of the
+    // game beside its own data did not. "Works on the developer's machine
+    // only" was a probe-order bug, so keep the machine-wide guesses last.
+
+    // 1. gamedir.txt — an explicit answer. Working directory (a dev shell,
+    //    `make run`) first, then the exe's own folder, which is what makes
+    //    "unzip anywhere, drop a one-line gamedir.txt beside the exe" work
+    //    regardless of what a shortcut set as the working directory.
+    if (fs::path p = read_gamedir_file("gamedir.txt"); !p.empty()) return p;
+    if (!exe_dir.empty())
+        if (fs::path p = read_gamedir_file(exe_dir / "gamedir.txt"); !p.empty()) return p;
+
+    if (!exe_dir.empty()) {
+        // 2. The exe sitting INSIDE the install — the thing people actually do
+        //    with a single self-contained binary: copy it into the game folder
+        //    and double-click. The folder's NAME is irrelevant; DATA/ is what
+        //    identifies an install (it is the directory every asset load is
+        //    rooted at), so a renamed or hand-copied install is found too.
+        if (fs::is_directory(exe_dir / "DATA")) return exe_dir;
+        // 3. The install as a subfolder beside the exe.
+        if (fs::is_directory(exe_dir / "BOMBRMAN")) return exe_dir / "BOMBRMAN";
     }
+
+    // 4. Same two shapes relative to the working directory.
+    if (fs::is_directory("DATA")) return ".";
+    if (fs::is_directory("./BOMBRMAN")) return "./BOMBRMAN";
+
+    // 5. Where the 1997 installer puts the game. A machine-wide guess: right
+    //    often enough to be worth trying, never allowed to override any of the
+    //    deliberate placements above.
     for (const char* p : {"D:/Program Files (x86)/INTRPLAY/BOMBRMAN",
-                          "C:/Program Files (x86)/INTRPLAY/BOMBRMAN", "./BOMBRMAN"}) {
+                          "C:/Program Files (x86)/INTRPLAY/BOMBRMAN"}) {
         if (fs::is_directory(p)) return p;
     }
     return {};

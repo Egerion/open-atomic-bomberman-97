@@ -1,4 +1,21 @@
 cmake_minimum_required(VERSION 3.25)
+
+# Link the MSVC runtime STATICALLY, so the shipped exe runs on a clean Windows
+# with nothing installed. SDL3 was already static, which made the build look
+# self-contained — but the exe still imported MSVCP140 / VCRUNTIME140 /
+# VCRUNTIME140_1 from the Visual C++ Redistributable, which Windows does NOT
+# ship. Handing the single .exe to someone without that redistributable failed
+# to launch, and because the game is a GUI-subsystem app the loader error is
+# easy to miss. (The api-ms-win-crt-* imports are the Universal CRT and ARE part
+# of Windows 10+, so those were never the problem.)
+#
+# Must precede project(): CMP0091 makes the runtime a target property that the
+# compiler check itself consumes, and it has to apply to every FetchContent
+# dependency too — mixing static and dynamic CRTs across SDL3/IXWebSocket/the
+# game is a link error at best and a heap mismatch at worst.
+set(CMAKE_POLICY_DEFAULT_CMP0091 NEW)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 project(open_bomberman LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)

@@ -73,17 +73,28 @@ The engine ships no game data: it reads the original ANI/PCX/SCH/RES/RSS files
 at runtime from *your own* Atomic Bomberman installation. So the one thing to
 set up is **where that install lives**.
 
-It is resolved in this order, first hit wins:
+**The simplest way: copy `OPEN-BM95.exe` into your install folder and run it.**
+The executable is fully self-contained — no SDL DLL, and no Visual C++
+redistributable either (the MSVC runtime is linked statically), so on Windows it
+is a single file that needs nothing installed. Dropped in among the game files
+it finds them by itself, whatever the folder is called.
+
+If you would rather keep it elsewhere, the install is resolved in this order,
+first hit wins — deliberate placements always beat machine-wide guesses:
 
 1. an explicit path on the command line — `OPEN-BM95 "D:\...\BOMBRMAN"`
 2. the `BOMBER_GAME_DIR` environment variable
-3. **`gamedir.txt`** in the working directory — one line, the path, nothing else
-4. the standard install paths (`C:\Program Files (x86)\INTRPLAY\BOMBRMAN`, the
-   same on `D:`, or a `BOMBRMAN` folder next to the executable)
+3. **`gamedir.txt`** — one line, the path, nothing else; looked for in the
+   working directory, then next to the executable
+4. the executable's own folder, if it contains `DATA\` (the "just copy it in"
+   case above), or a `BOMBRMAN` folder next to it
+5. the same two shapes relative to the working directory
+6. the standard install paths (`C:\Program Files (x86)\INTRPLAY\BOMBRMAN`, and
+   the same on `D:`)
 
-If your install sits in one of the standard places, you need to do nothing at
-all. Otherwise the easiest thing is `gamedir.txt` in the repo root — it is
-gitignored, so your path never lands in a commit:
+If it cannot find an install it now says so in a dialog instead of exiting
+silently. For a build tree, the easiest thing is `gamedir.txt` in the repo root —
+it is gitignored, so your path never lands in a commit:
 
 ```
 echo D:\Games\BOMBRMAN> gamedir.txt
@@ -106,7 +117,7 @@ make survey
 |---|---|---|
 | `make build` | compiles into `build/<preset>/` — **does not touch your install** | no |
 | `make run` | builds, then runs from the build directory | no (auto-detected) |
-| `make deploy` | builds, then copies `OPEN-BM95.exe` (+ `SDL3.dll`) **into your install** so it runs next to the original assets | yes |
+| `make deploy` | builds, then copies `OPEN-BM95.exe` **into your install** so it runs next to the original assets (plus `SDL3.dll`, only if you configured a dynamic SDL) | yes |
 | `make survey` | validates your install's assets with `abtool` | yes |
 | `make test` | builds headless and runs the test suite | no |
 
