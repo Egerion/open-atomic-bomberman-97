@@ -79,11 +79,17 @@
 //                                      gold_player_ on EITHER team_play or
 //                                      goldman changing, not goldman alone.
 //   1  Random Start                 — LIVE toggle, persisted (random_start=)
-//   2  Node Name                    — SHOWN, non-interactive: net identity
-//                                      string, no network play in this port,
-//                                      and §3 explicitly notes it is not one
-//                                      of the 22 options.ini keys. Displays
-//                                      empty (no net-identity concept here).
+//   2  Node Name                    — LIVE (2026-07-25): the net identity is
+//                                      real now that the ADR-0011 lobby shows
+//                                      it in every roster row. Left/Right/
+//                                      Enter/Space open sub_4074DC's text-entry
+//                                      prompt (getstring(290) "Enter new node
+//                                      name:", 30-char field) via the SAME
+//                                      modal-push contract as rows 8/15.
+//                                      Persisted to install-root NODENAME.INI
+//                                      (sub_40C08C / sub_40C140), NOT to
+//                                      options.ini — §3 is explicit that this
+//                                      is not one of the 22 keys.
 //   3  Conveyor Speed               — LIVE cycle, persisted (conveyor_speed=)
 //   4  Stomped Bombs Detonate       — LIVE toggle, persisted
 //                                      (stomped_bombs_detonate=)
@@ -153,7 +159,7 @@ namespace bomber::game {
 enum class OptionRow : std::uint8_t {
     TeamPlay,          // row 0
     RandomStart,       // row 1
-    NodeName,          // row 2  — display-only
+    NodeName,          // row 2  — opens the node-name text-entry prompt (sub_4074DC)
     ConveyorSpeed,     // row 3
     StompedBombs,      // row 4
     WinByKills,        // row 5
@@ -210,10 +216,12 @@ struct OptionsSnapshot {
     bool lost_net_revert_ai = false;   // row 12
     bool disable_game_music = false;
     bool small_memory = false;  // row 17 backing value; LABEL is inverted, see file doc
-    // Row 2, display-only: the net node name (sub_40FE34's runtime buffer
-    // unk_460140 — bss, EMPTY by default, and NOT one of options.ini's 22
-    // keys; the original edits it via a text prompt, getstring(290)).
-    // Rendered through getstring(252) "Node Name: '%s'".
+    // Row 2: the net node name (sub_40FE34's runtime buffer unk_460140 — NOT
+    // one of options.ini's 22 keys; it lives in its own install-root
+    // NODENAME.INI, assets::load_node_name/save_node_name). Edited through the
+    // original's own text prompt, getstring(290); rendered through
+    // getstring(252) "Node Name: '%s'". Empty only until GameApp seeds it —
+    // from the file, or from the random default the original falls back to.
     std::string node_name;
     // Row 14, display-only: the four modem fields (getstring(264) "Modem:
     // P:%u  I:%u  B:%u  #:%s"; sources dword_464970/4648B8/46482C + the dial
@@ -302,6 +310,14 @@ public:
         snap_.scheme_filename = std::move(name);
         changed_ = true;
     }
+    // Same contract for row 2 "Node Name": all four of Left/Right/Enter/Space
+    // open sub_4074DC's text-entry prompt (the original routes every direction
+    // to the same per-row case), and the caller writes the typed name back.
+    bool open_node_name_prompt() const { return open_node_name_prompt_; }
+    void set_node_name(std::string name) {
+        snap_.node_name = std::move(name);
+        changed_ = true;
+    }
 
     const OptionsSnapshot& snapshot() const { return snap_; }
 
@@ -331,6 +347,7 @@ private:
     bool done_ = false;
     bool open_keyremap_ = false;
     bool open_scheme_picker_ = false;
+    bool open_node_name_prompt_ = false;
     bool goldman_touched_ = false;  // see gold_forfeiting_row_touched()
     bool team_play_touched_ = false;
 };

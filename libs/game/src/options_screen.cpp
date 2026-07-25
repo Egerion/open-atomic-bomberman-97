@@ -62,6 +62,7 @@ void OptionsScreen::enter(const OptionsSnapshot& current, std::string backdrop) 
     changed_ = false;
     open_keyremap_ = false;
     open_scheme_picker_ = false;
+    open_node_name_prompt_ = false;
     goldman_touched_ = false;
     team_play_touched_ = false;
     snap_ = current;
@@ -110,14 +111,19 @@ void OptionsScreen::activate_row(int dir) {
             changed_ = true;
             break;
         case OptionRow::NodeName:
+            // sub_4074DC — the node-name text-entry prompt. Reached from BOTH
+            // dispatch switches (Left as well as Right/Enter/Space), like every
+            // other "opens a sub-screen" row; the caller pushes the prompt and
+            // calls set_node_name() with the result.
+            open_node_name_prompt_ = true;
+            break;
         case OptionRow::Modem:
         case OptionRow::NetProtocol:
             // Display-only rows (options_screen.hpp's file doc) — the
-            // original's handlers here (sub_4074DC text-entry prompt,
-            // sub_40798B/sub_407F4F nested net sub-screens) are real UI this
-            // port does not implement; every direction (Left/Right/Enter/
-            // Space all reach this same case in the original) stays a no-op
-            // here rather than inventing one.
+            // original's handlers here (sub_40798B/sub_407F4F nested modem/
+            // protocol sub-screens) are real UI this port does not implement;
+            // every direction (Left/Right/Enter/Space all reach this same case
+            // in the original) stays a no-op here rather than inventing one.
             break;
         case OptionRow::SchemeFile:
             // CONFIRMED (pseudo.c 9342-9343 `goto LABEL_46` in the forward
@@ -219,6 +225,7 @@ void OptionsScreen::activate_row(int dir) {
 void OptionsScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
     open_keyremap_ = false;
     open_scheme_picker_ = false;
+    open_node_name_prompt_ = false;
     // CONFIRMED (pseudo.c 9298-9299): sub_4080DC plays SFX 20 (nav blip) for
     // ANY real keypress, unconditionally — there is no distinct "accept"
     // sound anywhere in this function. One call here covers every branch

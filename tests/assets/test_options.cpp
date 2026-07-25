@@ -27,8 +27,11 @@
 
 namespace fs = std::filesystem;
 using bomber::assets::KeyDef;
+using bomber::assets::kNodeNameMax;
+using bomber::assets::load_node_name;
 using bomber::assets::load_options;
 using bomber::assets::Options;
+using bomber::assets::save_node_name;
 using bomber::assets::save_options;
 
 namespace {
@@ -41,6 +44,23 @@ fs::path write_temp(const std::string& body) {
     std::ofstream f(p, std::ios::binary);
     f << body;
     return p;
+}
+
+// Same, for the install-root nodename.ini (a different file, a different
+// reader/writer pair — see install.hpp's load_node_name doc).
+fs::path write_temp_node(const std::string& body) {
+    static int counter = 0;
+    fs::path p = fs::temp_directory_path() / ("bomber_node_" + std::to_string(counter++) + ".ini");
+    std::ofstream f(p, std::ios::binary);
+    f << body;
+    return p;
+}
+
+std::string read_all(const fs::path& p) {
+    std::ifstream in(p, std::ios::binary);
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
 }
 
 }  // namespace
@@ -392,5 +412,55 @@ TEST_CASE(
     std::size_t first = body.find("keydef=0,0,");
     REQUIRE(first != std::string::npos);
     CHECK(body.find("keydef=0,0,", first + 1) == std::string::npos);
+    fs::remove(p);
+}
+
+// --- nodename.ini: the net identity's own file (sub_40C08C / sub_40C140) ----
+// docs/re/network-screens.md §3 "Session model", docs/re/results-and-options.md
+// "Net identity". NOT one of options.ini's 22 keys — its own one-line file with
+// its own reader (boot init) and writer (shutdown hook).
+
+TEST_CASE("nodename.ini: the first line is the name (sub_40C08C's fgets)") {
+    auto p = write_temp_node("Egerion");
+    CHECK(load_node_name(p) == "Egerion");
+    fs::remove(p);
+
+    // The shipped file has no trailing newline; one written by a text editor
+    // must read identically ('\n' is what sub_40C08C strips), and a second line
+    // is not part of the name.
+    auto q = write_temp_node("Neil's House Of Pain\r\nignored second line\n");
+    CHECK(load_node_name(q) == "Neil's House Of Pain");
+    fs::remove(q);
+}
+
+TEST_CASE("nodename.ini: absent or blank file yields an empty name") {
+    // The caller (GameApp) then draws the original's random MESSAGES 500..548
+    // default — this loader never invents one.
+    CHECK(load_node_name(fs::temp_directory_path() / "bomber_no_such_nodename.ini").empty());
+    auto p = write_temp_node("   \n");
+    CHECK(load_node_name(p).empty());
+    fs::remove(p);
+}
+
+TEST_CASE("nodename.ini: hostile content is sanitised on read AND on write") {
+    // The name goes straight into the lobby roster, so a hand-edited file must
+    // not be able to smuggle in control bytes or an over-long run.
+    auto p = write_temp_node(std::string("A\x01\x02Z\x7f!"));
+    CHECK(load_node_name(p) == "AZ!");
+    fs::remove(p);
+
+    auto q = write_temp_node("");
+    save_node_name(q, std::string(kNodeNameMax + 25, 'X'));
+    CHECK(read_all(q) == std::string(kNodeNameMax, 'X'));
+    CHECK(load_node_name(q).size() == kNodeNameMax);
+    fs::remove(q);
+}
+
+TEST_CASE("nodename.ini: save/load round-trips and rewrites in place") {
+    auto p = write_temp_node("OLD NAME");
+    save_node_name(p, "NEW NAME");
+    // One line, nothing else (sub_40C140 is a single fputs of the buffer).
+    CHECK(read_all(p) == "NEW NAME");
+    CHECK(load_node_name(p) == "NEW NAME");
     fs::remove(p);
 }

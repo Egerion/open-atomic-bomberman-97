@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -159,5 +160,36 @@ Options load_options(const std::filesystem::path& path);
 // std::runtime_error if the file cannot be written (caller decides how to
 // surface that).
 void save_options(const std::filesystem::path& path, const Options& opts);
+
+// The longest node name the original can hold: `sub_40C08C` fills the ≤40-char
+// buffer `unk_460140` with `fgets(buf, 40)`, which stores at most 39 characters
+// plus the NUL (docs/re/network-screens.md §3 "Session model", docs/re/
+// results-and-options.md "Net identity"). The Options-row-2 edit field is
+// shorter still (30 chars, `sub_4074DC` -> `sub_40FE55`) — that cap belongs to
+// the UI, this one to the file.
+inline constexpr std::size_t kNodeNameMax = 39;
+
+// The install-root `nodename.ini` — this machine's NET IDENTITY, the string the
+// original shows in every lobby row (`sub_40FE34` returns `&unk_460140`).
+// Deliberately NOT part of `Options`: it is a separate one-line file, not one
+// of options.ini's 22 keys, and it has its own reader/writer in the binary.
+//
+// Reader — `sub_40C08C`, called from the boot init `sub_40C74C`: the FIRST line
+// only, `fgets(buf, 40)` with the trailing '\n' stripped. A missing/empty file
+// yields an empty string; the caller then draws the original's random default
+// (`getstring(500 + rand() % getvalue(47))`, `getvalue(47) = 49` names) — that
+// pick needs the message table, so it is the CALLER's job, not this loader's.
+// Also strips a '\r' (the original's "rt"-mode read does) and control bytes, and
+// truncates at kNodeNameMax, so a hand-edited file cannot inject a newline or a
+// glyph the FON cannot draw into the lobby roster.
+std::string load_node_name(const std::filesystem::path& path);
+
+// Writer — `sub_40C140`, reached from the shutdown hook `sub_40C4DB`
+// (registered with `sub_410EBF`, the same atexit-style registrar options.ini's
+// `sub_405DE3` uses): `fopen("nodename.ini", "wt")` + `fputs`. So an edited name
+// persists and a randomly-assigned one becomes permanent after the first run.
+// Sanitises and truncates exactly like the reader. Throws std::runtime_error if
+// the file cannot be written.
+void save_node_name(const std::filesystem::path& path, const std::string& name);
 
 }  // namespace bomber::assets

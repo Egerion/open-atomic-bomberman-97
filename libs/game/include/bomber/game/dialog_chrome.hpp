@@ -29,6 +29,7 @@
 #include <SDL3/SDL.h>
 
 #include <string>
+#include <vector>
 
 #include "bomber/game/bmscreen.hpp"
 #include "bomber/game/sprites.hpp"
@@ -109,6 +110,32 @@ void draw_dialog_button(SDL_Renderer* ren, const FontTextures& font, float x, fl
 void draw_bevel_rect(SDL_Renderer* ren, float x, float y, float w, float h, bool raised,
                      Uint8 face_r, Uint8 face_g, Uint8 face_b);
 
+// The 4-space run every key-hint line separates two hints with. Exported so a
+// caller measuring a hint block by hand uses the SAME gap pack_hint_lines does.
+inline constexpr char kHintGap[] = "    ";
+
+// A packed block of key-hint text: the lines to draw, and the pixel width the
+// block was BUDGETED at (see pack_hint_lines) — what a caller feeds into a
+// content-sized window's width so the hints land INSIDE its border.
+struct HintBlock {
+    std::vector<std::string> lines;
+    float width = 0.0f;
+};
+
+// PORT-ONLY (ADR-0011: the original front end has no online lobby, so there is
+// no hint-line chrome to pin). Packs `parts` into the fewest kHintGap-joined
+// lines whose MEASURED width stays within `max_w`, so a longer — or localised —
+// hint wraps and widens its window instead of spilling past the border.
+// Nothing is ever truncated: a single part wider than `max_w` still gets its
+// own full line, and `width` reports it so the window grows to match.
+//
+// `budget`, when non-empty, must be parallel to `parts` and supplies the text
+// each part is MEASURED as while packing. A hint whose wording changes with
+// state ("SPACE = READY" / "SPACE = NOT READY") passes its longest variant
+// there, so flipping the state never resizes the dialog under the player.
+HintBlock pack_hint_lines(const FontTextures& font, const std::vector<std::string>& parts,
+                          const std::vector<std::string>& budget, float max_w);
+
 // Layout returned by draw_list_dialog so the caller can place its item text
 // and the inverted selection band on top of the chrome.
 struct ListDialogLayout {
@@ -119,6 +146,7 @@ struct ListDialogLayout {
     float item_w;     // item text column width (selection-band width)
     float done_x;     // "Done" button window-x
     float done_y;     // "Done" button window-y
+    float footer_y0;  // baseline y of the first reserved footer line (see footer_lines)
     bool has_scrollbar;
 };
 
@@ -133,9 +161,16 @@ struct ListDialogLayout {
 // selection as an inverted band (draw_list_selection). `y_px` is the window
 // top (100 for the help/scheme pickers); the window is horizontally centred
 // and `content_w` px wide.
+//
+// `footer_lines` reserves that many extra text lines INSIDE the window between
+// the item area and the "Done" button, reported as `footer_y0` — the PORT-ONLY
+// room for the online lobby's key hints (ADR-0011), which have no home in
+// sub_42DBCC's own chrome. It defaults to 0, so every RE'd caller (the help
+// browser, the *.SCH picker) keeps byte-identical geometry.
 ListDialogLayout draw_list_dialog(SDL_Renderer* ren, const FontTextures& font,
                                   const std::string& title, float y_px, float content_w,
-                                  int visible_rows, int total_rows, int top_row);
+                                  int visible_rows, int total_rows, int top_row,
+                                  int footer_lines = 0);
 
 // The selection highlight for a list row — the original inverts the video
 // under the selected item (sub_442C28). In truecolour we approximate that
