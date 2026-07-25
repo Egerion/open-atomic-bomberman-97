@@ -66,7 +66,17 @@ struct DropPolicy {
     bool is_host = false;       // only the hub/host schedules + broadcasts a handoff
     // Pumps of TOTAL SILENCE from a seat before it is declared dropped. 0 (the
     // default) disables drop detection entirely, so existing callers and every
-    // pre-existing scenario behave exactly as before. 50 pumps = 2.5 s at 20 Hz.
+    // pre-existing scenario behave exactly as before. At 20 Hz a pump is 50 ms.
+    //
+    // Size this GENEROUSLY. The counter resets the moment any input from the
+    // seat arrives, so a peer that comes back inside the window costs nothing —
+    // but crossing it is IRREVERSIBLE with Options row 12 off (`aborted_`
+    // latches and the match is over). An early value of 50 (2.5 s) killed
+    // matches whenever a player merely dragged their window: Windows blocks the
+    // message pump for the whole drag, the peer sees silence, and the match died
+    // with no way back. Alt-tab, a stalled disk, a laptop sleeping for a moment
+    // and ordinary network hiccups all blow past a few seconds too, so the
+    // threshold must mean "genuinely gone", not "briefly busy".
     int timeout_ticks = 0;
 };
 

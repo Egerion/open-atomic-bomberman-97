@@ -1068,8 +1068,13 @@ AppInput GameApp::run_netplay_match_seats(net::UdpTransport& transport, std::uin
     // same tick, so the match plays on; with it OFF the drop ends the match
     // loudly instead of hanging. This is that option's FIRST consumer — it
     // reached CFG.INI and the Options screen and stopped there until now.
-    // 50 pumps = 2.5 s at 20 Hz.
-    const net::DropPolicy drop{options_.lost_net_revert_ai, is_host, /*timeout_ticks=*/50};
+    // The window is deliberately LONG (600 pumps = 30 s at 20 Hz): crossing it is
+    // irreversible with row 12 off, and the counter resets on any input, so a
+    // peer that returns inside it costs nothing. An earlier 2.5 s killed a match
+    // whenever someone dragged their window — Windows blocks the message pump for
+    // the whole drag, so the peer just stops existing for as long as the mouse is
+    // held. This must mean "genuinely gone", not "briefly busy".
+    const net::DropPolicy drop{options_.lost_net_revert_ai, is_host, /*timeout_ticks=*/600};
     net::RollbackSession session(sim_, local_seats, kAllSeats, /*max_prediction=*/8, transport,
                                  drop);
     MatchRunnerState mrs = match_runner_state();
