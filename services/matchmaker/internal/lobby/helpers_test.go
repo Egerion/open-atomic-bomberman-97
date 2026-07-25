@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/egedemirbas/open-bomberman/matchmaker/internal/config"
 	"github.com/egedemirbas/open-bomberman/matchmaker/internal/protocol"
 	"github.com/egedemirbas/open-bomberman/matchmaker/internal/relay"
@@ -125,7 +127,7 @@ func newTestManager(t *testing.T) *Manager {
 		RelayAdvertise:    "relay.test:8082",
 		RelayIdle:         time.Minute,
 	}
-	log := config.NewLogger("error")
+	log := zap.NewNop()
 	return NewManager(cfg, relay.NewTable(cfg.RelayIdle, log), log)
 }
 

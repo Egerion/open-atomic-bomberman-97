@@ -3,22 +3,19 @@ package relay
 import (
 	"bytes"
 	"encoding/hex"
-	"log/slog"
 	"net"
 	"strconv"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 // ---- helpers ----------------------------------------------------------------
 
-func testLogger() *slog.Logger {
-	return slog.New(slog.NewJSONHandler(discard{}, &slog.HandlerOptions{Level: slog.LevelError}))
-}
-
-type discard struct{}
-
-func (discard) Write(p []byte) (int, error) { return len(p), nil }
+// testLogger discards everything. zap's own no-op logger costs nothing per call,
+// which matters in the forwarding suites that push thousands of datagrams.
+func testLogger() *zap.Logger { return zap.NewNop() }
 
 // relayPacket builds a client→relay datagram: [16B alloc_id][1B dst_seat][payload].
 func relayPacket(t *testing.T, allocID string, dstSeat int, payload []byte) []byte {

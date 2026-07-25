@@ -31,11 +31,12 @@ package stun
 import (
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/egedemirbas/open-bomberman/matchmaker/internal/ratelimit"
 )
@@ -91,8 +92,14 @@ type counters struct {
 type Server struct {
 	conn    *net.UDPConn
 	ingress *ratelimit.Table
-	log     *slog.Logger
+	log     *zap.Logger
 	done    chan struct{}
+
+	// alive is the liveness signal the health check reads; serveDone lets a
+	// draining caller wait for the read loop instead of racing it. See the same
+	// pair in relay.Server — SECURITY.md F6 is the failure they make visible.
+	alive     atomic.Bool
+	serveDone chan struct{}
 
 	replied     atomic.Uint64
 	oversize    atomic.Uint64
@@ -106,7 +113,7 @@ type Server struct {
 	closeOnce sync.Once
 }
 
-func Start(addr string, log *slog.Logger) (*Server, error) {
+func Start(addr string, log *zap.Logger) (*Server, error) {
 	udpAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		return nil, err
@@ -116,17 +123,26 @@ func Start(addr string, log *slog.Logger) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{
-		conn:    conn,
-		ingress: ratelimit.NewTable(kIngressSlots, kIngressCostMs, kIngressBurst),
-		log:     log,
-		done:    make(chan struct{}),
+		conn:      conn,
+		ingress:   ratelimit.NewTable(kIngressSlots, kIngressCostMs, kIngressBurst),
+		log:       log,
+		done:      make(chan struct{}),
+		serveDone: make(chan struct{}),
 	}
+	s.alive.Store(true)
 	go s.serve()
 	go s.maintain()
 	return s, nil
 }
 
+// Alive reports whether the echo's read loop is still running.
+func (s *Server) Alive() bool { return s.alive.Load() }
+
 func (s *Server) serve() {
+	defer func() {
+		s.alive.Store(false)
+		close(s.serveDone)
+	}()
 	// One byte of slack so an oversized datagram is DETECTED rather than
 	// silently truncated by the kernel copy into an exact-sized buffer.
 	buf := make([]byte, MaxDatagram+1)
@@ -196,10 +212,10 @@ func (s *Server) logStats() {
 		return
 	}
 	s.log.Info("stun stats",
-		"replied", cur.replied,
-		"drop_oversize", cur.oversize, "drop_malformed", cur.malformed,
-		"drop_long_nonce", cur.longNonce, "drop_rate_limited", cur.rateLimited,
-		"read_err", cur.readErr, "write_err", cur.writeErr)
+		zap.Uint64("replied", cur.replied),
+		zap.Uint64("drop_oversize", cur.oversize), zap.Uint64("drop_malformed", cur.malformed),
+		zap.Uint64("drop_long_nonce", cur.longNonce), zap.Uint64("drop_rate_limited", cur.rateLimited),
+		zap.Uint64("read_err", cur.readErr), zap.Uint64("write_err", cur.writeErr))
 	s.lastStats = cur
 }
 
@@ -218,7 +234,10 @@ func (s *Server) maintain() {
 
 func (s *Server) LocalAddr() net.Addr { return s.conn.LocalAddr() }
 
+// Close stops the listener and returns once the read loop has actually exited.
 func (s *Server) Close() error {
 	s.closeOnce.Do(func() { close(s.done) })
-	return s.conn.Close()
+	err := s.conn.Close()
+	<-s.serveDone
+	return err
 }
