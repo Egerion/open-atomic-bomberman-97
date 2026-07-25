@@ -27,6 +27,17 @@ target_link_libraries(bomber_goldman_wheel_tests PRIVATE bomber::sim doctest::do
 target_include_directories(bomber_goldman_wheel_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
 add_test(NAME goldman_wheel COMMAND bomber_goldman_wheel_tests)
 
+# The online setup stage's PURE roster/level mapping (net_setup_roster.hpp): the
+# local 10-slot roster <-> net::SetupPreviewFrame translation, including the seat
+# re-pointing that makes the host's own player read as "someone else's" on the
+# guest. SDL-free like the suites above, but it does speak the wire types, so it
+# links bomber::net (which the headless preset builds too).
+add_executable(bomber_net_setup_roster_tests test_net_setup_roster.cpp)
+target_link_libraries(bomber_net_setup_roster_tests
+  PRIVATE bomber::net bomber::sim doctest::doctest bomber::warnings)
+target_include_directories(bomber_net_setup_roster_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+add_test(NAME net_setup_roster COMMAND bomber_net_setup_roster_tests)
+
 # Scheme editor's pure grid model (editor_grid.hpp/.cpp) is SDL-free despite
 # living under libs/game/src — compiled directly into its own test binary rather
 # than linking bomber_game_core (which pulls in SDL3).

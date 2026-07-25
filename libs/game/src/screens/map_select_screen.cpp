@@ -38,6 +38,12 @@ static const char* level_fallback(const match::LevelRegistry& levels, int idx) {
 // -> dword_464A7C) and starts; Escape backs to the player screen. Presentation
 // only — the committed level drives start_match's stage choice.
 AppInput MapSelectScreen::run() {
+    // ONLINE LEVEL & ROUNDS (docs/re/network-screens.md §7, net_setup_link.hpp):
+    // the same screen wired to the host-authoritative setup session. `net_mode`
+    // false is the ordinary local path and every branch below it is inert.
+    const bool net_mode = net_setup_active(net_);
+    const bool net_guest = net_setup_readonly(net_);
+    bool net_dirty = false;  // a value changed this frame -> re-publish the preview
     const std::string glue = pick_glue(state_.setup_lcg, ctx_.values);
     // Level count from the registry. For the stock 11 built-ins this equals the
     // original getvalue(35)=11, so the cycle bounds and RANDOM per-cell pick are
@@ -74,6 +80,11 @@ AppInput MapSelectScreen::run() {
     // frame — pinned in the doc above. -2 is a sentinel forcing the first
     // roll below.
     int pattern_level = -2;
+    // GUEST: the level LABEL the host has on screen, taken verbatim off the wire
+    // (SetupPreviewFrame::level_name) rather than re-resolved from this install's
+    // getstring(150+n) — so a custom map the guest does not have still reads
+    // correctly instead of showing the wrong name or a blank.
+    std::string net_level_name;
     // tile_of[row][col]: the stage index whose "tile <n> solid/brick" art
     // that cell draws, or -1 for a blank cell. Solid/brick-ness itself is
     // re-derived below from the (j&1,i&1) parity rule, which is pure
@@ -182,10 +193,11 @@ AppInput MapSelectScreen::run() {
         // level&rounds audit), clip getvalue(738)=300. The original marks the
         // active row with the cursor sprite ALONE — the old per-row colour
         // highlight and the grey key legend were invented.
-        const std::string level_name =
+        const std::string local_name =
             level < 0 ? ctx_.assets.getstring(149, "Random Each Game")
                       : ctx_.assets.getstring(150 + level,
                                               level_fallback(ctx_.assets.levels(), level));
+        const std::string& level_name = net_level_name.empty() ? local_name : net_level_name;
         const std::string level_line = fmt_s(ctx_.assets.getstring(210, "%s"), level_name);
         ctx_.front_font.draw_outlined(ctx_.sdl, level_line, lx, ly, 240, 248, 252, 0, 0, 0,
                                   lw);
@@ -258,6 +270,7 @@ AppInput MapSelectScreen::run() {
                         if (hev.type == SDL_EVENT_KEY_DOWN) browser.on_key(hev.key.key, ctx_.audio);
                     }
                     if (browser.viewing() && browser.viewer().done()) browser.close_viewer();
+                    net_setup_pump(net_);  // the link must not go silent under the browser
                     ctx_.audio.update_music();
                     draw_frame();
                     browser.draw(ctx_.sdl);
@@ -272,6 +285,12 @@ AppInput MapSelectScreen::run() {
                 // sting 10. Ignored inside the 1 s debounce window
                 // (8220-8228): the key still blips, nothing commits.
                 ctx_.audio.play(20);
+                // §7: the HOST owns the screen advance (`sub_40F064(902)`, kind
+                // 32); a guest pressing Enter lands on LABEL_97's SFX 40.
+                if (net_guest) {
+                    ctx_.audio.play(40);
+                    continue;
+                }
                 if (SDL_GetTicks() < accept_after_ms) continue;
                 ctx_.audio.play(10);
                 state_.selected_level = level;  // commit the working copies
@@ -280,20 +299,32 @@ AppInput MapSelectScreen::run() {
                 break;
             }
             ctx_.audio.play(20);
+            // §7's read-only gate: Up/Down (pure navigation) and F1 stay live on
+            // a guest; every value-changing key buzzes instead, the same shape as
+            // `sub_406DDE`'s `sub_40C06A() != 1` guards.
+            if (net_guest && (k == SDLK_LEFT || k == SDLK_RIGHT || k == SDLK_PAGEUP ||
+                              k == SDLK_PAGEDOWN)) {
+                ctx_.audio.play(40);
+                continue;
+            }
             if (k == SDLK_UP || k == SDLK_DOWN)
                 row = (row + 1) % 2;  // 2 rows: either arrow toggles
             else if (row == 0 && k == SDLK_LEFT) {  // --level, wrap below -1
                 if (--level < -1) level = level_count - 1;
                 accept_after_ms = SDL_GetTicks() + 1000;  // debounce re-arm (8325)
+                net_dirty = true;
             } else if (row == 0 && k == SDLK_RIGHT) {  // ++level, wrap above count-1 to -1
                 if (++level >= level_count) level = -1;
                 accept_after_ms = SDL_GetTicks() + 1000;
+                net_dirty = true;
             } else if (row == 1 && k == SDLK_LEFT) {  // wins -1
                 if (--wins < 1) wins = 1;
                 accept_after_ms = SDL_GetTicks() + 1000;
+                net_dirty = true;
             } else if (row == 1 && k == SDLK_RIGHT) {  // wins +1
                 if (++wins > 100) wins = 100;
                 accept_after_ms = SDL_GetTicks() + 1000;
+                net_dirty = true;
             } else if (row == 1 && k == SDLK_PAGEUP) {
                 // wins +5 (batch_0x405B3A.cpp 1097-1128, code 372) — WINS row
                 // only, clamp 1..100. Rebound from the old invented Ctrl+Left/
@@ -301,13 +332,38 @@ AppInput MapSelectScreen::run() {
                 wins += 5;
                 if (wins > 100) wins = 100;
                 accept_after_ms = SDL_GetTicks() + 1000;
+                net_dirty = true;
             } else if (row == 1 && k == SDLK_PAGEDOWN) {  // wins -5 (code 371), WINS row only
                 wins -= 5;
                 if (wins < 1) wins = 1;
                 accept_after_ms = SDL_GetTicks() + 1000;
+                net_dirty = true;
             }
         }
 
+        // The HOST broadcasts each change (§7: level kind 43, rounds kind 44) —
+        // on the edit, not every frame. `rounds = wins` (never 0 here, the row
+        // clamps to 1..100) is also what tells the guest the host has LEFT the
+        // roster screen (net_setup_link.hpp's sentinel), so the first publish
+        // fires on entry.
+        if (net_mode && !net_guest && (net_dirty || !net_setup_on_level_screen(net_))) {
+            const std::string name =
+                level < 0 ? ctx_.assets.getstring(149, "Random Each Game")
+                          : ctx_.assets.getstring(150 + level,
+                                                  level_fallback(ctx_.assets.levels(), level));
+            net_setup_publish_level(net_, level, name, wins);
+            net_dirty = false;
+        }
+        net_setup_pump(net_);
+        if (net_guest) {
+            // Read-only: the level/rounds ARE the host's newest preview.
+            net_setup_apply_level(net_, level_count, level, wins, net_level_name);
+            // The host confirmed: the caller already holds the agreed config.
+            if (net_setup_final(net_)) return AppInput::Advance;
+            // Timed out / the host vanished. Back returns to the caller, which
+            // reads net_setup_failed() to tell this from an Esc.
+            if (net_setup_failed(net_)) return AppInput::Back;
+        }
         ctx_.audio.update_music();
         draw_frame();
         SDL_RenderPresent(ctx_.sdl);

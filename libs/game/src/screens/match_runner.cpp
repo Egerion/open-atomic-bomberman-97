@@ -34,6 +34,46 @@ constexpr int kStageMusicFallback = 1120;  // 0x460 — GENERIC.RSS
 }  // namespace
 
 void MatchRunner::start_match(std::uint32_t seed) {
+    // The config build was split out VERBATIM into build_config() so the ONLINE
+    // setup stage can produce the SAME config from the SAME screens without
+    // seeding the sim (see that method's doc comment). Everything below the call
+    // is start_match's unchanged tail; the golden hashes depend on this being a
+    // pure extract-method, not a rewrite.
+    const sim::MatchConfig cfg = build_config(seed);
+    state_.sim = sim::Simulation(cfg);
+    const int stage = cfg.tuning.level_index;
+    if (ctx_.assets.load_stage(stage)) {
+        ctx_.seqs.resolve_stage(ctx_.assets, stage);
+        // Disable music during gameplay (options.ini "disable_game_music=" /
+        // Options row 13, §3): the original's round init (sub_410B6E
+        // LABEL_48) FREES the music outright (sub_427342) when the option is
+        // set — the round is SILENT, the setup-screens track (1020) does not
+        // bleed into it. Menu/results music is untouched (the option is
+        // specifically "during gameplay"; round end starts 1130 regardless).
+        //
+        // Per-level stage track (docs/re/in-match-shell.md §2, sub_4293E5):
+        // SOUNDLST 1100+level, falling back to 1120 ("generic") when the level
+        // has no entry — our 11 built-in stages all have one (SOUNDLST.RES
+        // 1100..1110), so this only matters for a stripped/modified install.
+        if (!state_.options.disable_game_music) {
+            int stage_music = 1100 + stage;
+            if (!ctx_.audio.has_track(stage_music)) stage_music = kStageMusicFallback;  // 1120
+            ctx_.audio.start_music(stage_music);
+        } else {
+            ctx_.audio.stop_music();  // sub_427342: silent round, not "keep 1020 playing"
+        }
+    }
+    // Untimed round HUD (docs/re/in-match-shell.md §3): the 1001 sentinel is a
+    // presentation-only concept (see cfg.tuning.game_seconds's own comment in
+    // build_config — the sim gets a very long but finite clock instead), so
+    // tell the renderer directly rather than trying to infer "untimed" back
+    // out of ticks_left.
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — emplaced in init()
+    state_.renderer.reset_match(state_.options.playtime_seconds == 1001);
+    ctx_.sounds.reset();
+}
+
+sim::MatchConfig MatchRunner::build_config(std::uint32_t seed) const {
     // Random Start (options.ini "random_start=" / Options row 1, §3):
     // shuffles which of the scheme's own spawn slots each player index gets
     // — CONFIRMED as the original's 200-pair-swap over the 10 start slots
@@ -188,36 +228,7 @@ void MatchRunner::start_match(std::uint32_t seed) {
     // pinned frame for no coverage gain. A demo-fixture pin like the
     // LETTERBOX scaler in init(); live play keeps the authentic freeze.
     if (state_.demo) cfg.tuning.input_freeze_ticks = 0;
-    state_.sim = sim::Simulation(cfg);
-    if (ctx_.assets.load_stage(stage)) {
-        ctx_.seqs.resolve_stage(ctx_.assets, stage);
-        // Disable music during gameplay (options.ini "disable_game_music=" /
-        // Options row 13, §3): the original's round init (sub_410B6E
-        // LABEL_48) FREES the music outright (sub_427342) when the option is
-        // set — the round is SILENT, the setup-screens track (1020) does not
-        // bleed into it. Menu/results music is untouched (the option is
-        // specifically "during gameplay"; round end starts 1130 regardless).
-        //
-        // Per-level stage track (docs/re/in-match-shell.md §2, sub_4293E5):
-        // SOUNDLST 1100+level, falling back to 1120 ("generic") when the level
-        // has no entry — our 11 built-in stages all have one (SOUNDLST.RES
-        // 1100..1110), so this only matters for a stripped/modified install.
-        if (!state_.options.disable_game_music) {
-            int stage_music = 1100 + stage;
-            if (!ctx_.audio.has_track(stage_music)) stage_music = kStageMusicFallback;  // 1120
-            ctx_.audio.start_music(stage_music);
-        } else {
-            ctx_.audio.stop_music();  // sub_427342: silent round, not "keep 1020 playing"
-        }
-    }
-    // Untimed round HUD (docs/re/in-match-shell.md §3): the 1001 sentinel is a
-    // presentation-only concept (see cfg.tuning.game_seconds's own comment
-    // just above — the sim gets a very long but finite clock instead), so
-    // tell the renderer directly rather than trying to infer "untimed" back
-    // out of ticks_left.
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — emplaced in init()
-    state_.renderer.reset_match(state_.options.playtime_seconds == 1001);
-    ctx_.sounds.reset();
+    return cfg;
 }
 
 sim::TickInputs MatchRunner::collect_inputs() const {

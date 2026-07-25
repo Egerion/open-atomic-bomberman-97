@@ -52,6 +52,13 @@ void SetupScreen::cycle_input_type(int slot) {
 // goes on to the LEVEL screen, Escape cancels to the menu. Presentation only.
 AppInput SetupScreen::run() {
     ctx_.audio.start_music(kWinMusicId);  // 1020, the Play-handler track (sub_42A3F6)
+    // ONLINE ROSTER (docs/re/network-screens.md §7, net_setup_link.hpp): the same
+    // screen, wired to the host-authoritative setup session. `net_mode` false is
+    // the ordinary local path and every branch below it is inert.
+    const bool net_mode = net_setup_active(net_);
+    const bool net_guest = net_setup_readonly(net_);
+    unsigned net_spin = 0;   // the [WAIT] prompt's frame-paced spinner phase
+    bool net_dirty = false;  // an edit happened this frame -> re-publish the preview
     // TEAM default — CORRECTED 2026-07-09 (docs/re/setup-screens.md "TEAM
     // default — CORRECTED"): sub_410F81 unconditionally calls sub_4046CC()
     // first thing, which (CD present) calls sub_403EEE(), which itself
@@ -242,6 +249,10 @@ AppInput SetupScreen::run() {
                     mev.key.key == SDLK_SPACE || mev.key.key == SDLK_ESCAPE)
                     return AppInput::Advance;
             }
+            // Keep the setup link alive under the modal: the guest fails after
+            // `timeout_ms` of silence, so a host sitting on a start-guard error
+            // must still be re-broadcasting.
+            net_setup_pump(net_);
             ctx_.audio.update_music();
             draw_frame();
             // Ink = byte_49A390 = DARK RED (164,0,0): the setup start-guard
@@ -311,11 +322,20 @@ AppInput SetupScreen::run() {
             // sub_410F81 pseudo.c 15357-15365): 5 CONSECUTIVE 'C' presses
             // (any other key resets the counter — same same-key-repeat
             // pattern as present_menu's Ctrl+E x6) opens the *.cam picker.
-            // Local-only in the original (sub_40C06A() guard); this port has
-            // no netplay (ADR-0003), so that guard is always-true and
-            // omitted. Checked BEFORE the general dispatch below so 'C'
-            // itself never falls into the row-navigation switch.
+            // Local-only in the original (sub_40C06A() guard) — see the
+            // net_mode arm below, which is that guard. Checked BEFORE the
+            // general dispatch below so 'C' itself never falls into the
+            // row-navigation switch.
             if (k == SDLK_C) {
+                // LOCAL ONLY — the original gates the whole campaign trigger on
+                // `sub_40C06A()` (docs/re/campaign.md §4). That guard used to be
+                // omitted here because the port had no netplay; now it does, so
+                // it is real again: a campaign roster/stage pick is a local-only
+                // concept that would never reach the peer.
+                if (net_mode) {
+                    ctx_.audio.play(40);
+                    continue;
+                }
                 // CUMULATIVE, not consecutive (sub_410F81 pseudo.c 840,
                 // 1193-1197): ONLY the 'C' handler touches this counter — no
                 // other key resets it — so 5 total 'C' presses across the
@@ -369,6 +389,12 @@ AppInput SetupScreen::run() {
             // debounce and the two start guards.
             if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) {
                 ctx_.audio.play(20);  // any-key blip first (sub_427961(20))
+                // §7: the HOST owns the screen advance (`sub_40F064(901)`, kind
+                // 32); a guest pressing Enter lands on LABEL_159's SFX 40.
+                if (net_guest) {
+                    ctx_.audio.play(40);
+                    continue;
+                }
                 if (SDL_GetTicks() < accept_after_ms) continue;  // held-Enter debounce
                 // Guard 2 first (sub_422085): same-controller humans -> error
                 // getstring(45) over getstring(96).
@@ -393,22 +419,51 @@ AppInput SetupScreen::run() {
                 break;
             }
             ctx_.audio.play(20);  // any real key blips first (sub_427961(20))
+            // §7's read-only gate: Up/Down (pure navigation) and F1 stay live on
+            // a guest; every EDIT key below falls through to the SFX-40 buzz,
+            // the same shape as `sub_410F81`'s `sub_40C06A() != 1` guards.
+            const bool edit_denied =
+                net_guest || (net_mode && net_setup_slot_locked(net_, cursor));
             if (k == SDLK_UP)
                 cursor = (cursor + 9) % 10;  // 328
             else if (k == SDLK_DOWN)
-                cursor = (cursor + 1) % 10;                    // 336
-            else if (k == SDLK_RIGHT)
-                cycle_input_type(cursor);                      // 333 sub_421E80
-            else if (k == SDLK_LEFT || k == SDLK_0 || k == SDLK_O) {  // 331 / '0' / 'o' (111)
-                state_.setup_type[cursor] = 0;                       // sub_421E33(i,0,0)
-                state_.setup_sub[cursor] = 0;
+                cursor = (cursor + 1) % 10;  // 336
+            else if (k == SDLK_RIGHT) {      // 333 sub_421E80
+                if (edit_denied) {
+                    ctx_.audio.play(40);
+                } else if (net_mode) {
+                    // Online, a non-seat slot can only be an AI (net_setup_link.
+                    // hpp "SEAT LOCKING"), so the cycle collapses to the two
+                    // states that ARE simulable on both peers.
+                    state_.setup_type[cursor] =
+                        state_.setup_type[cursor] == static_cast<int>(SlotInputType::Computer)
+                            ? static_cast<int>(SlotInputType::Off)
+                            : static_cast<int>(SlotInputType::Computer);
+                    state_.setup_sub[cursor] = 0;
+                    net_dirty = true;
+                } else {
+                    cycle_input_type(cursor);
+                }
+            } else if (k == SDLK_LEFT || k == SDLK_0 || k == SDLK_O) {  // 331 / '0' / 'o' (111)
+                if (edit_denied) {
+                    ctx_.audio.play(40);
+                } else {
+                    state_.setup_type[cursor] = 0;  // sub_421E33(i,0,0)
+                    state_.setup_sub[cursor] = 0;
+                    net_dirty = true;
+                }
             } else if (k == SDLK_T) {  // 'T' team toggle (+84)
                 // batch_0x410401.cpp 1206-1223: only an ACTIVE slot toggles;
-                // an OFF slot buzzes (SFX 40) and does nothing.
-                if (state_.setup_type[cursor] != 0)
+                // an OFF slot buzzes (SFX 40) and does nothing. A LOCKED slot
+                // still toggles online — the team byte travels in the confirmed
+                // config, so it is safe to edit on a wire seat; only the input
+                // TYPE of those two slots is fixed.
+                if (!net_guest && state_.setup_type[cursor] != 0) {
                     state_.setup_team[cursor] = state_.setup_team[cursor] ? 0 : 1;
-                else
-                    ctx_.audio.play(40);
+                    net_dirty = true;
+                } else {
+                    ctx_.audio.play(40);  // OFF slot, or a guest that may not edit
+                }
             } else if (k == SDLK_F1) {
                 // sub_410F81 15432-15436: key 0x13B (F1) dispatches the SAME
                 // generic *.BM help browser as menu row 5 / the options
@@ -423,6 +478,7 @@ AppInput SetupScreen::run() {
                         if (hev.type == SDL_EVENT_KEY_DOWN) browser.on_key(hev.key.key, ctx_.audio);
                     }
                     if (browser.viewing() && browser.viewer().done()) browser.close_viewer();
+                    net_setup_pump(net_);  // the link must not go silent under the browser
                     ctx_.audio.update_music();
                     draw_frame();
                     browser.draw(ctx_.sdl);
@@ -431,8 +487,38 @@ AppInput SetupScreen::run() {
                 }
             }
         }
+        // The HOST broadcasts each change (§7: roster kind 40, team kind 58) —
+        // on the edit, not every frame, so `revision` only moves when something
+        // actually did. `rounds = 0` is the "still on the roster screen"
+        // sentinel (net_setup_link.hpp); the level travels from the LEVEL &
+        // ROUNDS screen, which is where the host picks it.
+        if (net_mode && !net_guest && (net_dirty || !net_setup_has_preview(net_))) {
+            net_setup_publish(net_, state_.setup_type, state_.setup_team, state_.team_play,
+                              /*level=*/-1, /*level_name=*/std::string(), /*rounds=*/0);
+            net_dirty = false;
+        }
+        net_setup_pump(net_);
+        if (net_guest) {
+            // Read-only: the displayed roster IS the host's newest preview.
+            net_setup_apply_roster(net_, state_.setup_type, state_.setup_sub, state_.setup_team,
+                                   state_.team_play);
+            // The host moved on (its preview now carries a real win target), or
+            // it confirmed outright and we already hold the config: follow it.
+            if (net_setup_final(net_) || net_setup_on_level_screen(net_))
+                return AppInput::Advance;
+            // Timed out / the host vanished. Back returns to the caller, which
+            // reads net_setup_failed() to tell this from an Esc.
+            if (net_setup_failed(net_)) return AppInput::Back;
+        }
         ctx_.audio.update_music();
         draw_frame();
+        // Before the first preview lands there is nothing of the host's to show,
+        // so the guest sits on `sub_42B47D`'s own [WAIT] prompt (§6) over this
+        // screen's backdrop — the closest RE'd composition to `sub_410F81`'s
+        // head, where a guest likewise BLOCKS in a pump loop until the host
+        // speaks (§7). Nothing new is drawn: the pinned prompt, the pinned
+        // anchor, the real getstring(80).
+        if (net_guest && !net_setup_has_preview(net_)) draw_net_wait_prompt(ctx_, net_spin);
         SDL_RenderPresent(ctx_.sdl);
         SDL_Delay(2);
     }
