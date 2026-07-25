@@ -104,12 +104,12 @@ public:
         std::uint16_t net_peer_port = 0;   // the OTHER peer's UDP port
         std::uint32_t net_seed = 0x1234u;  // shared match seed (must match on both peers)
         // Online lobby endpoints (ADR-0011 Phase 1d). Empty = fall through to the
-        // BOMBER_MATCHMAKER_* env vars, then to the compile-time placeholders in
-        // game_app.cpp — the matchmaker is not deployed yet, so nothing here can
-        // be a real default. `--matchmaker <ws-url>` and `--matchmaker-stun
-        // <host[:port]>` set them; the STUN host defaults to the URL's own host
-        // (the Go server serves the WebSocket and the UDP STUN echo from one box,
-        // PROTOCOL.md §2).
+        // BOMBER_MATCHMAKER_* env vars, then to the compile-time defaults in
+        // game_app.cpp, which now name the DEPLOYED matchmaker — so the online
+        // rows work with no flags. `--matchmaker <ws-url>` and `--matchmaker-stun
+        // <host[:port]>` override (a local instance, or your own host); the STUN
+        // host defaults to the URL's own host (the Go server serves the WebSocket
+        // and the UDP STUN echo from one box, PROTOCOL.md §2).
         std::string matchmaker_url;
         std::string matchmaker_stun_host;
         std::uint16_t matchmaker_stun_port = 0;  // 0 = unset
