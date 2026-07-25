@@ -1,5 +1,14 @@
 # Multiplayer deep-dive audit — original netplay end-to-end (2026-07-24)
 
+> **UPDATE 2026-07-25 — §2 has been superseded by a binary pass.** Both network
+> screens were read end-to-end against the raw bytes; the definitive spec is
+> **`docs/re/network-screens.md`**. It resolves this audit's biggest open items
+> (host/guest polarity, the 4-item list, the "bind detect", the machine cap, the
+> lobby flow, the `netprotocol` ordinals) and **corrects** several claims here —
+> most importantly **`dword_460058` is `1 = guest`, `2 = host`**, the opposite of
+> what §3 assumes. Corrections are marked inline; §1.4, §2.x and §5 carry the
+> resolved state.
+
 **Purpose.** A complete map of what the original 1997 **Atomic Bomberman**
 (BM95.EXE, Watcom C, imagebase `0x400000`) offered in **network multiplayer** —
 both the **menus/screens** and the **mechanics** — so the port's netplay
@@ -98,71 +107,117 @@ What the RE does **not** settle, and a binary trace must:
 | Per-seat guest sends | `sub_40CE27` (0x40CE27), `sub_40FE88`, `sub_40FF14`, `sub_40FDE8` | whether the packed payload includes a seat id (→ many seats) or is hard-wired to "this guest's one seat" |
 | Roles | `sub_40C035` (0x40C035) writers of `dword_460058` | confirm only `{0,1,2}` exist (no 4th "guest #k" role); a guest-index must therefore live elsewhere (the roster / a per-connection field) |
 
-**Bottom line for the roadmap:** treat **"up to 10 players"** as the target and
-**machine topology (1 host + up to ~4-9 guests, 1+ humans each)** as the open
-variable to pin from the packet-queue cluster and the `sub_40CE27`/`funcs_40E9D7`
-seat-indexing. The port's current **hard 2** (host=seat 0, guest=seat 1;
-`run_netplay_match` builds a canonical 2-human config) is the #1 gap.
+### 1.4 RESOLVED 2026-07-25 — the machine cap is **5**, and multi-local is real
+
+The 2026-07-25 net-screens pass (`docs/re/network-screens.md`) settles both
+open variables:
+
+- **1 host + up to 4 guests = 5 machines.** The host's client table is
+  `word_45FFA4[4]` / `dword_45FFFC[4]` (`sub_40D175` seats a join request in
+  the first free entry of a `for j in 0..3`); the assembled session node list
+  is `word_460130[5]` (`sub_40ED08`: `[0]` = host, then each client); and the
+  receive pump `sub_40E765` **drops any datagram whose sender is not one of
+  those 5** (`for (i = 0; i < 5 && word_460130[i] != sender; ++i); if (i >= 5)
+  discard`). The "5-slot packet-queue cluster" question also resolves: boot
+  allocates `sub_418511(1004, 5)` = **five 1004-byte per-node dedupe rings**
+  (500 sequence entries each), indexed by that same node slot — per-peer, not
+  ring depth.
+- **Multiple local humans per machine: YES.** `sub_410F81` (the shared roster
+  screen) walks all 10 slots on a guest and uploads **every** slot whose local
+  type is non-zero and != 4 with its own `sub_40EE16(i, type, sub)` (kind 40).
+  Nothing clamps the count. So 10 players across ≤5 boxes is exactly the
+  intended shape, and the per-box limit is just local hardware.
+- **There is no "bind detect".** The Space key the previous pass read as a
+  net-only controller bind is the JOIN key on the guest's server browser
+  (§2.2); seats are claimed through the shared roster screen, not the lobby.
+
+**Bottom line for the roadmap:** target **up to 10 players across up to 5
+machines (1 host + 4 guests), any number of local humans per machine**. The
+port's current **hard 2** (host=seat 0, guest=seat 1; `run_netplay_match`
+builds a canonical 2-human config) is the #1 gap.
 
 ---
 
 ## 2. The network menu / screens in full — "the extra pages"
 
+> **SUPERSEDED 2026-07-25 by `docs/re/network-screens.md`.** Both screens have
+> since been read end-to-end against the raw bytes; that file is the definitive,
+> porter-ready spec (geometry table, per-state line contents, key table,
+> LUT-decoded inks, the full join/wait state machine). This section is kept as
+> the index and now records the **corrections** that pass produced. Everything
+> below that was marked [NEEDS BINARY] here is resolved there.
+
 The net path is reached from **two adjacent main-menu rows** (`sub_42B9CE`, the
 7-row menu, `frontend-flow.md` menu table):
 
-| menu row | handler | VALUELST legend | mode-set at head | music | backdrop |
-|---|---|---|---|---|---|
-| 1 **START NET GAME** | `sub_42B0CE` @0x42B0CE | 765-778 | `sub_40C839(2)` | 1040 (`sub_42741E(0x410)`) | random `GLUE<n>` (`sub_4148E5`) |
-| 2 **JOIN NET GAME** | `sub_42B47D` @0x42B47D | 750-763 | `sub_40C839(1)` | 1040 | random `GLUE<n>` |
+| menu row | handler | VALUELST legend | mode-set at head | role | music | backdrop |
+|---|---|---|---|---|---|---|
+| 1 **START NET GAME** | `sub_42B0CE` @0x42B0CE | 765-778 | `sub_40C839(2)` | **HOST** | 1040 (`sub_42741E(0x410)`) | random `GLUE<n>` (`sub_4148E5`) |
+| 2 **JOIN NET GAME** | `sub_42B47D` @0x42B47D | 750-763 | `sub_40C839(1)` | **GUEST** | 1040 | random `GLUE<n>` |
 
-> **[NEEDS BINARY] — a real internal inconsistency in the existing docs.** The
-> naming says row 1 = **START** (host) and row 2 = **JOIN** (guest), but the
-> recorded `sub_40C839` argument at each screen's head is the **opposite** of
-> that reading: `setup-screens.md` records `sub_42B0CE` (row 1, "START") entering
-> **mode 2** and `sub_42B47D` (row 2, "JOIN") entering **mode 1**, and
-> `multiplayer.md`/`frontend-flow.md` both note `sub_40C839(2)` (=guest) at the
-> top of `sub_42B0CE`. Either the START/JOIN labels or the mode-set is
-> mis-attributed. **The decisive read is the `sub_40C839(1)` vs `(2)` literal at
-> the head of `sub_42B0CE` and `sub_42B47D`** — that byte alone says which screen
-> is host and which is guest. Flagging because the port's `present_net_host`
-> (role 1) / `present_net_join` (role 2) mapping should follow whichever the
-> binary confirms.
+> **RESOLVED (2026-07-25) — the labels were right, the mode table was wrong.**
+> The conflict this section flagged is settled: **`dword_460058` is `1 = guest`,
+> `2 = host`**, the opposite of what `multiplayer.md` §1.1, `frontend-flow.md`
+> and §3 below assume. Proofs: `sub_40C035` gives *only* mode 2 its own node id
+> as session authority (`dword_4600D4 = HIWORD(dword_46013C)`); `sub_40CD1C`
+> stamps mode 2's own id but mode 1's *host's* id into the packet header;
+> `sub_4105D2` has mode 1 copy the match clock while mode 2 computes and
+> broadcasts it; and the announce/start/options senders (`sub_40EBC1`,
+> `sub_40ED08`, `sub_40FE88`) are all `== 2` only. Raw bytes at the heads:
+> `0x42B0DC mov eax,2` / `0x42B48B mov eax,1`. VALUELST's own section comments
+> ("JOIN NET GAME SCREEN" = 750-763 = the ids `sub_42B47D` reads; "START NET
+> GAME SCREEN" = 765-778 = `sub_42B0CE`'s) corroborate.
+> **Port mapping: `present_net_host` ⇒ `sub_42B0CE`, `present_net_join` ⇒
+> `sub_42B47D`.** Full detail: `network-screens.md` §1.
 
-### 2.1 Screen: START NET GAME — `sub_42B0CE` (the game-options pane)
+### 2.1 Screen: START NET GAME — `sub_42B0CE` (the HOST's live client list)
 
-A **4-item options list** (`for i in 0..3`, `sub_40F1E9(i)` active? →
-`sub_40F217(i)` value; string 71 active / 72 off) at getvalue `775 (x) /
-776+777*i (y) / 778 (colour)`, plus two headers at 765/766/768 and 770/771/773
-(strings 73 and 70). Same getkey model as the local screens (SFX 20 on any key,
-Enter proceeds). This is the **game-type/options** pane for a net match (team
-play etc.) — the network equivalent of the local PLAYER-INPUT screen's siblings.
-Fields/defaults of the 4 items are **[NEEDS BINARY]** (`sub_40F1E9`/`sub_40F217`
-enumerate them). (`setup-screens.md` "Screen A".)
+**CORRECTED.** This is **not** an options pane. The `for i in 0..3` loop walks
+the host's **connected-client table** `word_45FFA4[4]` / `dword_45FFFC[4]`
+(`sub_40F1E9(i)` = client i's node id, `sub_40F217(i)` = a `char*` to its
+name). An occupied row is `getstring(71)` with **two** args (`%s` name, `%u`
+node id — Hex-Rays dropped the second); an empty row is `getstring(72)` with
+**none**. So the host sees up to **4 connected machines**, and the cap of 4 is
+where the 5-machine session limit (`word_460130[5]`) comes from.
 
-### 2.2 Screen: JOIN NET GAME — `sub_42B47D` (the controller/roster assignment)
+The screen beacons `sub_40EBC1()` (kind 0, 82 B: client count + node name) at
+**1 Hz**, and Enter/Space starts the game once the client set has been stable
+for `1000*getvalue(13)` = **3000 ms** (VALUELST 13's own comment: "minimum
+number of seconds to wait at screens so that other computers can catch up"),
+requiring ≥1 client (`sub_410262()`), else modal 95/105. Start =
+5× `sub_40ED08()` (kind 14) 100 ms apart, then `sub_40FE88()` (kind 49, the
+8-word options blob), then `sub_42A3F6()`. Entry force-sets
+`dword_464990` (diseases_destroyable) = 1. Full spec: `network-screens.md` §5.
 
-The **10-slot roster** screen for the net game: `for i in 0..9`, `sub_40F163(i)`
-(slot active?) → if active, controller type/index via `sub_40F191(i)`/
-`sub_40F1BD(i)`, line = string 62 formatted with the controller index; else
-string 63 (off). Title string 66; header string 60. Row at getvalue `760 (x) /
-761+762*i (y) / 763 (colour)`; selection cursor via `sub_413BD6(760-20,…)`.
-Player-config store `unk_4632CC`, **404 B/player × 10** (`setup-screens.md`
-"Screen B"). Keys:
+### 2.2 Screen: JOIN NET GAME — `sub_42B47D` (the GUEST's server browser)
+
+**CORRECTED.** Not a controller assignment and not a 10-player roster: the
+`for i in 0..9` loop walks the guest's **discovered-server table**
+`word_4600D8[10]` (filled passively by `sub_40CF93` from the hosts' kind-0
+announces). An occupied row is `getstring(62)` with **three** args in this
+order — `%s` server name (`sub_40F191(i)`), `%u` how many clients it already
+has (`sub_40F1BD(i)`), `%u` its node id (`sub_40F163(i)`); two of the three
+were Hex-Rays-dropped. An empty row is `getstring(63)`, no args. Title 66 and
+header 60 both take the local node name. Rows at getvalue `760 (x) /
+761+762*i (y) / 763 (**clip width**, not colour)`; cursor at
+`sub_413BD6(760-20, 761+16+762*sel)` — the `+16` was dropped too.
+`unk_4632CC` is **not** a player store; it is `JOYCAPSA[10]` from
+`joyGetDevCapsA` (`network-screens.md` §10). Keys:
 
 - **Up 328 / Down 336** — move the selection (wrap).
-- **Space 0x20** — **BIND DETECT** (the net-only control): SFX 10, then a ~3000 ms
-  detect loop (`sub_40EC6F(sel)` polls controllers; `sub_40F386()` = a control was
-  pressed) showing the **animated "press a control now" prompt** (string 80,
-  cycling `dword_45BFB4[c&3]`) at (150,400); on detect, bind that controller to
-  the slot; on timeout, cancel (overlays strings 100/110 + 95). This is how a
-  machine **claims its local seat(s)** into the shared roster — the mechanism that
-  makes a slot a *local* human on this box (the others show as remote/off).
-- **Any key < 0x20 (Enter 13 / Esc 27)** — leave the screen (proceed / back).
+- **Enter 13 / Space 0x20** — **JOIN the selected server** (not a bind-detect):
+  SFX 10; refuse with modal 95/65 if the row is empty or 96/7 if
+  `sub_40F1BD(sel) >= 4` (server full); else send `sub_40EC6F(sel)` (kind 3,
+  join request) once per second for up to **3000 ms** until `sub_40F386()`
+  (the host's kind-18 accept) or time out with modal 95/100. Then a
+  **wait-for-start** loop draws the animated `getstring(80)` prompt (spinner
+  `dword_45BFB4[] = '/','-','\','|'`, advanced once per frame) at **x=150,
+  y=200, clip w=400** until the host's kind-14 arrives (`sub_40F342()`), the
+  host vanishes (modal 95/110), or Esc.
+- **Esc 27** — leave the screen. Keys < 13 and 14..26 are **ignored**.
 
-Message ids: 60/62/63/66/80/95/100/110 (`setup-screens.md` id table). This is the
-closest thing the original has to a **lobby/roster view** — a live list of the 10
-slots, each OFF / a local controller / (implicitly) a remote seat.
+Message ids: 60/62/63/65/66/80/95/96/7/100/110. Full spec:
+`network-screens.md` §6.
 
 ### 2.3 The `.BM` documentation screen — NETWORK.BM (NOT transport)
 
@@ -192,34 +247,73 @@ protocol picker (`sub_407F4F`), plus the NETWORK.BM help text. The **modem** and
 per-machine net identity; **Lost net players revert to AI** is a live gameplay
 policy toggle (§3).
 
-The **`netprotocol` 0..3 → transport** mapping is **[NEEDS BINARY]**: only the
-clamp (0..3, so four options) and the "Winsock socket/IPX + modem/serial-COM"
-split are documented (`multiplayer.md` §1.3, `dark-matter.md` §4). The classic
-1997 quartet for a `WSOCK32`+COM stack of this shape is **IPX / TCP-IP / serial
-null-modem / dial-up modem**, but the exact ordinal order is unconfirmed
-(`sub_407F4F`'s option table + how `netprotocol` selects a transport in the
-`sub_43BA06`–`sub_43C668` cluster is the read).
+The **`netprotocol` → transport** mapping is **RESOLVED (2026-07-25)**:
+VALUELST's own comment block at 1100-1104 (the per-protocol retransmit
+timeouts) and MESSAGES 630-634 name the ordinals one-for-one —
+**0 = none/cancel, 1 = IPX, 2 = modem, 3 = serial, 4 = TCP/IP**. But
+`getvalue(1110) = 4` ("how many different protocols are supported") is the item
+count handed to the picker widget (`sub_42FEF0(list, count)` iterates
+`i < count`), so **TCP/IP is never drawn**, and `sub_40C839` accepts only
+`1..3` anyway (raw: `cmp [46012C],1 / jl fail`, `cmp [46012C],3 / jle ok`) —
+matching `sub_407F4F`'s `if (r >= 0 && r <= 3)` store and the `options.ini`
+`>3 → 3` clamp. The shipped exe therefore supports **IPX / modem / serial**;
+TCP/IP is dead data. Details: `network-screens.md` §2.
+
+Also pinned there: entering either net screen runs the whole bring-up in
+`sub_40C839` — the **`CFG.INI` `netonoff` gate** (0 → modal 96/340 and a
+straight bounce back to the menu), the protocol picker, the transport bind
+(`sub_43B81D` fills a 60-byte vtable at `0x4600F0`), and a cancellable
+connect-wait — and a non-zero return **aborts the screen before it draws
+anything**.
 
 ### 2.5 The "waiting for players / lobby" screen and host-start / join-while-waiting
 
-**[NEEDS BINARY] — the single biggest screen-flow unknown.** The RE has **not**
-located a distinct "waiting for players / lobby" screen in the original. The
-plausible model, given the pieces above, is that **`sub_42B47D` (the 10-slot
-roster) IS the waiting room**: the host sits on it while guests join, each join
-lighting up a slot as a remote seat (arriving via the receive pump `sub_40E765` →
-`funcs_40E9D7`), and the host presses Enter to start once the roster is set. But
-whether there is a separate waiting state, how a mid-wait join is announced/seated,
-and how host-start is broadcast to guests are all unconfirmed. To settle it, read:
+**RESOLVED (2026-07-25). There is no separate lobby screen — the two net
+screens ARE the waiting room, one per role**, and the wait is explicit in both:
 
-- `sub_42B0CE` / `sub_42B47D` frame loops — is there a "wait for host-start"
-  branch on the guest, and a "wait for all joins" branch on the host?
-- `funcs_40E9D7` (the `sub_40E765` dispatch table) — the message kinds; a *join*
-  and a *start* command would show up here.
-- the SFX-40 gate (`sub_40C06A()==1`, `frontend-flow.md` §SFX 40): the net
-  non-host "you can't do that here" buzz fires on the setup/results wait loops,
-  which is *evidence a guest sits in a wait state* the host controls — worth
-  reading `sub_42B0CE`/`sub_42B47D` lines ~6102/8230/15390 (the SFX-40 sites) to
-  see exactly what the guest is blocked from doing while waiting.
+- **Host** (`sub_42B0CE`): its 4-row client list is live (rebuilt every frame
+  from `word_45FFA4[]`, which the kind-3 handler `sub_40D175` fills as guests
+  arrive and the kind-39 handler `sub_40D2F8` empties as they leave), it
+  beacons kind 0 at 1 Hz, and Enter is gated on a **3000 ms "client set
+  unchanged"** settle timer plus ≥1 client. Host-start is broadcast as
+  **kind 14 sent five times, 100 ms apart** (`sub_40ED08`), immediately
+  followed by the 8-word options blob (kind 49, `sub_40FE88`).
+- **Guest** (`sub_42B47D`): after its join is accepted (kind 3 → kind 18) it
+  sits in a dedicated **wait loop** rendering the animated `getstring(80)`
+  prompt until the host's kind 14 sets `dword_460068` (`sub_40F342()`), with
+  live outs if the host disappears from the server list or Esc is pressed.
+- A **mid-wait join** needs no special handling: the host's table simply gains
+  a row (and its settle timer restarts, which is exactly what stops the host
+  from starting a game a straggler has not finished joining).
+- The **SFX-40 sites** are *not* on these screens. They are on the **shared**
+  pre-match screens (`sub_410F81`, `sub_406DDE`), where a guest
+  (`sub_40C06A() == 1`) that touches any host-only control gets the buzz —
+  see §2.6 and `network-screens.md` §7.
+
+### 2.6 After the lobby: the shared local screens carry map + AI (2026-07-25)
+
+Both net screens commit into **`sub_42A3F6()`** — the very same handler
+main-menu row 0 (PLAY) uses. There is **no net-specific match setup**:
+`sub_42A3F6` → `sub_410F81` (PLAYER INPUT TYPE = the roster, where CPU slots
+are set) → its tail `sub_406DDE` (LEVEL / ROUNDS = the map) → `sub_410B6E` +
+the round loop. So **map selection and AI-slot assignment for a net game live
+in the shared local screens**, host-driven:
+
+- a guest blocks at `sub_410F81`'s head (`sub_40F3A8()` … until
+  `sub_40F3C7()`), then **uploads each of its local non-zero, non-type-4
+  slots** with `sub_40EE16` (kind 40); the receiver applies them as
+  `sub_421E33(slot, 4, 0)` — input type **4 = network-remote**;
+- every edit path on both screens is guarded by `sub_40C06A() != 1`, so a
+  guest is read-only and gets SFX 40 on any attempt;
+- the host broadcasts roster type (kind 40), team flag (kind 58), **level
+  index (`sub_40FA66`, kind 43)** and **round count (`sub_40FAD5`, kind 44)**,
+  and drives both screen advances with `sub_40F064(901)` / `(902)` (kind 32);
+- the host's Enter on each shared screen repeats the same **3000 ms settle
+  gate** and needs `sub_42223E() >= 2` players.
+
+This is the answer to "where do map choice and AI slots go in the port's
+online flow": **not into the lobby — into the existing shared setup screens,
+with the host authoritative and the guest observing.**
 
 **Port note.** The port has **no lobby at all**: `present_net_host` shows a
 "WAITING FOR A PLAYER..." acknowledge modal (port-invented, `netplay_connect_
@@ -232,19 +326,29 @@ roster view, no slot list, no join-while-waiting for a 3rd+ peer.
 ## 3. Netplay MECHANICS — everything the original does differently under `dword_460058 != 0`
 
 This deepens `multiplayer.md` §1.5/§1.6. All gates key on `sub_40C06A()` (=
-`return dword_460058`) or the raw `dword_460058 == 2` (guest) comparison.
+`return dword_460058`) or a raw numeric comparison against it.
 
-### 3.1 Host is the clock authority (`sub_4105D2` / `sub_4105B0`)
+> **POLARITY CORRECTION (2026-07-25).** This section was written with
+> `1 = host, 2 = guest`. **It is the other way round: `1 = guest,
+> 2 = host`** (`network-screens.md` §1, four independent proofs plus raw
+> bytes). Wherever §3 below names a role from the numeric value, swap it. The
+> *behaviours* described are unaffected — only the labels are. The two
+> subsection titles that stated it outright are fixed inline.
 
-The match-clock update `sub_4105D2` (pseudo.c 14456-14552) computes elapsed time
-against a subtrahend that is **`dword_4601B0` when HOSTING**, or a fresh
-wall-clock read `sub_43ACF8()` (`timeGetTime`) otherwise (`facts.md` 2262-2274).
-Guests therefore **take the match clock from the host, not their own wall time** —
-the defining property of a host-authoritative session. The receive pump runs at
-frame top (step 2, 29516) *before* the clock update (step 4, 29518), so a guest's
-frame is stamped with host-derived timing folded in first.
+### 3.1 The clock authority is mode 2 = the HOST (`sub_4105D2` / `sub_4105B0`)
 
-### 3.2 Guest → host state-packet sends (`sub_40CE27` & siblings), gated `dword_460058 == 2`
+The match-clock update `sub_4105D2` (pseudo.c 14456-14552): when
+`sub_40C06A() == 1` (**guest**) the displayed clock is *copied* from
+`dword_4601B0`, the value received from the host; otherwise (local, or
+`== 2` = **host**) it is computed from the wall clock `sub_43ACF8()`
+(`timeGetTime`) — and a host whose value changed pushes it out with
+`sub_40FCA1(clock)`. Guests therefore **take the match clock from the host,
+not their own wall time** — the defining property of a host-authoritative
+session. The receive pump runs at frame top (step 2, 29516) *before* the clock
+update (step 4, 29518), so a guest's frame is stamped with host-derived timing
+folded in first. (CORRECTED: the earlier reading had the roles swapped.)
+
+### 3.2 HOST → guest state-packet sends (`sub_40CE27` & siblings), gated `dword_460058 == 2`
 
 `sub_40CE27` packs `(x,y,type)` into a buffer (`sub_40CE27((__int16*)0x30,…)`);
 the siblings `sub_40FE88` / `sub_40FF14` / `sub_40FDE8` sit in the same source
@@ -350,8 +454,8 @@ already does (`libs/net` `LockstepSession`, ADR-0010). Therefore:
   authoritative sim). This is *more* faithful to the game's *feel* than
   replicating the correction hacks would be.
 - **REPRODUCE the shape, for feel/parity:** the **10-slot roster** with **remote
-  seats mapped onto the type-4 concept**, the **host(1)/guest(2) roles**, a **real
-  lobby/roster screen** (revive `sub_42B47D`'s list), **best-of-N round rotation**
+  seats mapped onto the type-4 concept**, the **guest(1)/host(2) roles**, a **real
+  lobby** (both role screens, `network-screens.md`), **best-of-N round rotation**
   in net (the port runs one round then exits), **team play in net** (the roster's
   `+84` team byte works in net too — the port forces `team=0`), and **lost-net →
   AI** dropout handling (§3.7). These are gameplay/UX parity items, independent of
@@ -366,17 +470,18 @@ Port state read from `run_netplay_match` (`game_app.cpp` 930-1015),
 
 | Feature | Original had it | Port MVP has it | Priority to add |
 |---|---|---|---|
-| **Human players per match** | up to **10** (10-slot roster, type-4 seats; RE-consistent, cap **[NEEDS BINARY]**) | **2** (host=seat0, guest=seat1; canonical 2-human `MatchConfig`) | **HIGH — the #1 gap** |
-| **Machines / endpoints** | 1 host + N guests (N **[NEEDS BINARY]**, ~5 per the `0x430C00` queue) | 1 host + 1 guest (single UDP peer) | **HIGH** |
-| **Multiple local humans per box in net** | plausible (per-machine bind-detect claims local controllers) — **[NEEDS BINARY]** | no (one local arrow-key seat) | MEDIUM |
-| **Lobby / waiting-room screen** | `sub_42B47D` 10-slot roster as the wait room (distinct lobby **[NEEDS BINARY]**) | none (a connect modal + text-entry only) | **HIGH** |
-| **Roster view in net mode** | yes — `sub_42B47D` live 10-slot list, per-slot bind | no (config built from seed, roster ignored) | **HIGH** |
+| **Human players per match** | up to **10** (10-slot roster, type-4 seats) | **2** (host=seat0, guest=seat1; canonical 2-human `MatchConfig`) | **HIGH — the #1 gap** |
+| **Machines / endpoints** | **1 host + 4 guests = 5** (CONFIRMED §1.4: `word_45FFA4[4]`, `word_460130[5]`, the 5 × 1004 B dedupe rings) | 1 host + 1 guest (single UDP peer) | **HIGH** |
+| **Multiple local humans per box in net** | **yes** (CONFIRMED §1.4: the guest uploads every local slot with its own kind-40 message) | no (one local arrow-key seat) | MEDIUM |
+| **Lobby / waiting-room screen** | **yes, one per role** — `sub_42B0CE` is the host's live client list, `sub_42B47D` the guest's browser + wait loop (`network-screens.md`) | none (a connect modal + text-entry only) | **HIGH** |
+| **Roster view in net mode** | the *lobby* lists machines, not players; the **player roster** is the shared `sub_410F81` screen with remote seats as type 4 | no (config built from seed, roster ignored) | **HIGH** |
+| **Map + AI chosen in net** | in the **shared** `sub_410F81`/`sub_406DDE` screens, host-only, broadcast as kinds 40/58/43/44 (§2.6) | no (map/AI fixed by the caller) | **HIGH** |
 | **Round rotation (best-of-N) in net** | yes (same match loop as local) | no ("ONE match then exit — no round rotation yet") | **HIGH** |
 | **Team play in net** | yes (roster `+84` team byte, red/white) | no (`cfg.team[i]=0` forced) | MEDIUM |
 | **AI seats mixed with humans in net** | yes (unclaimed active slots → computer) | no (`cfg.ai[i]=false` forced; only 2 humans) | MEDIUM |
 | **Lost net player → revert to AI** | yes (Options row 12, `dword_464928`) | no (option round-tripped, unconsumed) | MEDIUM |
-| **Node Name (net identity)** | yes (Options row 2, `sub_4074DC`) | field parsed, unused; no identity in lobby | LOW |
-| **Protocol options (IPX/TCP/serial/modem)** | **4** (`netprotocol` 0..3, mapping **[NEEDS BINARY]**) | UDP only | LOW (dead transports; keep UDP) |
+| **Node Name (net identity)** | yes — `NODENAME.INI` / a random default from MESSAGES 500..548, edited at Options row 2; **it is the text every lobby row shows** | field parsed, unused; no identity in lobby | **MEDIUM** (the lobby is unreadable without it) |
+| **Protocol options (IPX/TCP/serial/modem)** | ordinals CONFIRMED **0 cancel / 1 IPX / 2 modem / 3 serial / 4 TCP-IP**; only 1..3 reachable | UDP only | LOW (dead transports; keep UDP) |
 | **Modem / serial-COM config** | yes (`sub_40798B`, `0x445AC6` driver) | no | SKIP (obsolete hardware) |
 | **Seed / config parity** | host authoritative (replicated) | host seed via `SeedHandshake`, canonical cfg both sides | done (port's is cleaner) |
 | **Desync handling** | silent correction (tile-sync §3.3) | **loud** `state_hash` mismatch, no correction | done (port's is better) |
@@ -392,41 +497,47 @@ Port state read from `run_netplay_match` (`game_app.cpp` 930-1015),
    / `all_seats` bitmasks and merges per-seat frames; `input_codec` packs any seat
    subset) — the block is purely in the game-layer 2-seat assumptions and the
    transport being a single peer.
-2. **A real net lobby/roster screen** reviving `sub_42B47D`'s 10-slot list, with
-   **remote seats shown as the type-4 concept**, per-machine seat claim (bind), and
-   host-start. This is the highest-value UX gap and the natural home for Node Name.
-3. **Round rotation + team + AI seats in net** — drop the `run_netplay_match`
+2. **The two real lobby screens** (`network-screens.md` is the 1:1 spec): a host
+   pane listing connected machines by **node name** with a settle-gated START,
+   and a guest pane browsing announced games (name / client count / id) with
+   join + a "waiting for the server to start" spinner. Highest-value UX gap and
+   the natural home for Node Name.
+3. **Route the net flow through the SHARED setup screens** (§2.6) instead of
+   inventing net-only ones: after the lobby, both roles enter the normal roster
+   screen (remote seats as type 4, host-only edits, guest buzzed) and then the
+   level/rounds screen. That is where **map selection and AI slots** belong —
+   and it deletes, rather than adds, port-specific UI.
+4. **Round rotation + team + AI seats in net** — drop the `run_netplay_match`
    forcing of one round / `team=0` / `ai=false`; reuse the local `MatchRunner`
    best-of-N loop.
-4. **Lost-net → AI** dropout handling (Options row 12 finally gets a consumer):
+5. **Lost-net → AI** dropout handling (Options row 12 finally gets a consumer):
    on a peer timeout, flip its seat to the AISystem and continue deterministically.
-5. **Multi-peer transport** (the current `UdpTransport` is one-peer): a host that
-   fans input out to K guests and collects K input streams — informed by the
-   machine-cap read (§1.3).
+6. **Multi-peer transport** (the current `UdpTransport` is one-peer): a host that
+   fans input out to **up to 4** guests and collects their input streams — the
+   cap is now CONFIRMED (§1.4), so size for 5 machines.
 
 ---
 
 ## 5. Biggest [NEEDS BINARY] unknowns (ranked)
 
-1. **The player/machine CAP.** Read the roster loop bound in `sub_42B0CE`/
-   `sub_42B47D`, the **5-slot packet-queue cluster `0x430C00`–`0x4331EC`** (is it
-   a 5-peer connection table?), and whether `sub_40CE27`/`funcs_40E9D7` carry a
-   **seat index**. Settles "up to 10 players across how many machines".
-2. **host vs guest labeling of `sub_42B0CE`/`sub_42B47D`.** The `sub_40C839(1)`
-   vs `(2)` literal at each screen's head — the existing docs are internally
-   inconsistent (START labeled row 1 but recorded entering mode 2 = guest).
-3. **`funcs_40E9D7` remote-command set.** The `sub_40E765` dispatch table — is it
-   movement/bomb only, or does it include join, host-start, chat, pause,
-   mid-match join? Bears on lobby flow *and* the chat/pause/mid-join gaps.
-4. **Waiting-room / lobby flow.** Whether a distinct wait screen exists and how
-   host-start + join-while-waiting are sequenced (read the `sub_42B0CE`/
-   `sub_42B47D` frame loops + the SFX-40 guest-block sites ~6102/8230/15390).
-5. **Wire packet formats** of `sub_40CE27`/`sub_40FE88`/`sub_40FF14`/`sub_40FDE8`
-   (fields, tick-stamping, how corrections are keyed) and **guest simulation
-   depth** (full reconciled sim vs thin corrected client).
-6. **`netprotocol` 0..3 → transport mapping** (`sub_407F4F` option table).
-7. **Lost-net → AI** drop-detection + handover site (near `sub_40E765` / the
+**Items 1, 2, 4 and 6 of the original list were RESOLVED on 2026-07-25** by the
+net-screens pass (`docs/re/network-screens.md`): the machine cap is **5**
+(§1.4), the roles are **1 = guest / 2 = host** with row 1 `sub_42B0CE` = host
+(§2), the lobby flow is fully mapped (§2.5-2.6), and the `netprotocol` ordinals
+are pinned (§2.4). What remains:
+
+1. **`funcs_40E9D7` in-match command set.** The 51 registered kinds are now
+   enumerated (`sub_40E474`) and the **lobby/setup** ones are decoded
+   (`network-screens.md` §3: 0/1/3/14/18/32/39/40/43/44/49/58); the **in-match**
+   kinds (4-13, 15-17, 33-38, 42, 45-48, 50-61) are still uncatalogued — that
+   is where chat / pause / mid-match join would live if they exist.
+2. **Wire packet formats** of `sub_40CE27`/`sub_40FF14`/`sub_40FDE8` (fields,
+   tick-stamping, how corrections are keyed) and **guest simulation depth**
+   (full reconciled sim vs thin corrected client).
+3. **Lost-net → AI** drop-detection + handover site (near `sub_40E765` / the
    `0x430C00` queue's per-connection timeout).
+4. **The 5th machine's refusal path** — what `sub_40D175` does when both of its
+   `for j in 0..3` scans fail (silent drop, or a reply the guest surfaces?).
 
 *Historical-context only (do not port): the exact 1997 protocol. The port's clean
 lockstep on `tick()` + `state_hash` (ADR-0010) is the correct replacement; this

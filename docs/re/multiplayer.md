@@ -46,8 +46,20 @@ dword_460058;`) and written by the setter `sub_40C035` (pseudo.c 11123-11133):
 | value | role | meaning |
 |---|---|---|
 | `0` | **local** | not networked (hotseat / shared-keyboard / all-CPU) |
-| `1` | **host** | the authoritative machine |
-| `2` | **guest** | a joining client |
+| `1` | **guest** | a joining client — CORRECTED 2026-07-25 |
+| `2` | **host** | the authoritative machine — CORRECTED 2026-07-25 |
+
+> **CORRECTION (2026-07-25, `docs/re/network-screens.md` §1).** This table
+> previously read `1 = host, 2 = guest`. The binary says the opposite, four
+> ways: `sub_40C035` gives *only* mode 2 its own node id as session authority
+> (`dword_4600D4 = HIWORD(dword_46013C)`); `sub_40CD1C` stamps mode 2's own id
+> but mode 1's *host's* id into the packet header; `sub_4105D2` has mode 1 copy
+> the match clock while mode 2 computes and broadcasts it; and the game
+> announce / start / options senders (`sub_40EBC1`, `sub_40ED08`,
+> `sub_40FE88`) are all `== 2` only. Consequently `sub_40C839(2)` at the head
+> of `sub_42B0CE` means **entering START NET GAME sets HOST**, not guest — the
+> row labels in §1.2 below were right all along. Every "mode 1/2" role name in
+> the rest of this file should be read swapped.
 
 Provenance for the tri-state: `facts.md` "Overpowered-powerup relocation"
 disassembly note (`0x425184` `call 0x40c06a … -> dword_460058 (network role)`)
@@ -55,7 +67,8 @@ and its prose "the local/host/guest network role flag (0 = not networked,
 1 = host, 2 = guest — set by `sub_40C035`)". `frontend-flow.md` §"SFX 40"
 independently corroborates: "the game-mode global (0 = local, 1/2 = the two
 network roles)", and pins mode 2's **only** non-zero writer — `sub_40C839(2)`
-at the top of the net-game screen `sub_42B0CE` (i.e. entering JOIN sets guest).
+at the top of the net-game screen `sub_42B0CE` — which, per the correction
+above, means entering **START** sets **host**.
 There is **no fourth "demo" role** — attract mode is a *separate* flag
 (`dword_464938`, §1.6), a correction `frontend-flow.md` calls out explicitly.
 
@@ -70,8 +83,12 @@ The 7-row main menu (`sub_42B9CE`, selection `v10` 0..6, `frontend-flow.md`
 
 | row | handler | address | screen |
 |---|---|---|---|
-| 1 | `sub_42B0CE` | `0x42B0CE` | **START NET GAME** — setup screen A (host); `sub_42741E(0x410)`, `sub_40C839(2)` at head |
-| 2 | `sub_42B47D` | `0x42B47D` | **JOIN NET GAME** — setup screen B (guest sibling, same `sub_42741E(0x410)`) |
+| 1 | `sub_42B0CE` | `0x42B0CE` | **START NET GAME** — the HOST's live list of up to 4 connected clients + START; `sub_42741E(0x410)`, `sub_40C839(2)` (= host) at head |
+| 2 | `sub_42B47D` | `0x42B47D` | **JOIN NET GAME** — the GUEST's browser of up to 10 announced servers + join + wait-for-start; `sub_40C839(1)` (= guest) at head |
+
+Full 1:1 spec for both: **`docs/re/network-screens.md`** (2026-07-25). It also
+corrects the older reading of these screens as "game options" / "controller
+assignment".
 
 (`frontend-flow.md` menu table rows 1-2; `coverage-audit.md` §4 lists both as
 "net-game setup screens".) The port's `menu_screen.cpp` comments name them
@@ -90,9 +107,16 @@ byte `+16` == 4** — the "network-remote" / "network-spectator" input kind
 OFF→CPU→KBD0→KBD1→JOY… and *skips* type-4 slots: Right/Left do nothing "unless
 type==4", `setup-screens.md` key table). Type 4 sits alongside 0=off,
 1=computer, 2=keyboard, 3=joystick as the fifth input source, filled by the net
-layer rather than by local hardware. The player-setup screen's **Space** key is
-"bind detect" **only** in net mode (`sub_40C06A()==1`), inert locally
-(`setup-screens.md`).
+layer rather than by local hardware.
+
+> **CORRECTION (2026-07-25).** This paragraph used to end "the player-setup
+> screen's **Space** key is 'bind detect' **only** in net mode
+> (`sub_40C06A()==1`), inert locally". There is no bind-detect anywhere.
+> In `sub_410F81`, key `0x20` jumps to the **same label as Enter (13)** — it is
+> the commit/proceed key — and the `sub_40C06A() == 1` test there is the
+> *guest lock-out* that routes to the SFX-40 denial buzz, not a mode in which
+> Space does something extra. The same myth in `setup-screens.md`'s Screen B
+> section is corrected in `docs/re/network-screens.md` §11.
 
 ### 1.3 Transport — Winsock (no DirectPlay) + a modem/serial-COM driver
 
@@ -195,8 +219,8 @@ takes the local side of each):
 | Goldman roulette wheel (`sub_410F81` head, `sub_4034BC`) | `!sub_40C06A()` | local only | `goldman-roulette.md` |
 | Campaign `.cam` picker ('C'×5 on player-setup) | `!sub_40C06A()` | local only | `campaign.md`, `setup-screens.md` |
 | Campaign round-continuation | `sub_40C06A()==1` treated parallel to campaign | keep looping under external control | `campaign.md` |
-| Player-setup Space "bind detect" | `sub_40C06A()==1` | net only; inert locally | `setup-screens.md` |
-| SFX 40 "you can't do that here" buzz (results/draw/setup waits) | `sub_40C06A()==1` | net non-host feedback | `frontend-flow.md` §"SFX 40" |
+| ~~Player-setup Space "bind detect"~~ | — | **DELETED 2026-07-25** — no such feature; Space is Enter's twin (commit) and the `==1` test is the guest lock-out | `network-screens.md` §11 |
+| SFX 40 "you can't do that here" buzz (results/draw/setup waits) | `sub_40C06A()==1` | **guest** (mode 1) feedback on host-only controls | `frontend-flow.md` §"SFX 40", `network-screens.md` §7 |
 | Per-kind spawn-count `k==12` zeroing | `sub_40C06A() && k==12` | net-only, N/A locally | `audit/setup.md` |
 | Player-kill dispatcher / enclosure finder | `+16 == 4` / `type != 4` | skip network-remote players | `facts.md` (1012/1030), `enclosure.md` (`sub_421D3F`, `sub_41DE63`) |
 | Match-clock subtrahend | host vs wall-clock split | host is clock authority | `facts.md` (`sub_4105D2`) |
