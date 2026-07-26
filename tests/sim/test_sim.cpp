@@ -16,6 +16,20 @@ MatchConfig test_config() {
     return cfg;
 }
 
+// Move both players off the closing spiral's early path, onto ring-4 tiles
+// (min(x, y, 14-x, 10-y) == 4), which the spiral does not reach until drop
+// event 160+. open_config's spawns are the (0,0) and (14,10) corners, i.e.
+// ring 0 — the first tiles the walls take. Since round end now FREEZES the
+// stepper (docs/re/enclosure.md §8), a crushed player would silently stop the
+// very spiral a cadence/geometry test is trying to observe. Relocating after
+// construction leaves the board (and the spawn-pocket clear) untouched.
+void park_off_spiral(Simulation& s) {
+    s.state().players[0].x = 6 * kTileWF + kTileWF / 2;
+    s.state().players[0].y = 4 * kTileHF + kTileHF / 2;
+    s.state().players[1].x = 8 * kTileWF + kTileWF / 2;
+    s.state().players[1].y = 6 * kTileHF + kTileHF / 2;
+}
+
 }  // namespace
 
 TEST_CASE("bomb explodes at its fuse and burns the brick") {
@@ -668,6 +682,12 @@ TEST_CASE("a ring corner replays the wall-slam event before the next new tile") 
     cfg.tuning.hurry_seconds = 8;
     cfg.tuning.enclosement_depth = 1;
     Simulation s(cfg);
+    // Keep the round UNDECIDED: the spiral's very first drop is (0,0), player
+    // 0's spawn corner, and crushing it would leave one side standing — which
+    // now FREEZES the whole stepper (docs/re/enclosure.md §8, sub_426818's
+    // `sub_421969() > 1` gate). Park both players on ring-4 tiles, far past
+    // event 17, so this cadence/geometry test still sees a running spiral.
+    park_off_spiral(s);
     run(s, 41 + 79 + 1 + 4 + 1);  // tick 126: event index 0, (0,0), drops
     run(s, 14 * 5);               // tick 196: event index 14, (14,0), drops (a NEW tile)
     CHECK(s.state().enclose_index == 15);
@@ -708,6 +728,7 @@ TEST_CASE("enclosure interval is a fixed 5 ticks (250 ms at 20 Hz)") {
         20;  // banner at tick 1 (remaining 19s); walls arm tick 81 (remaining 15s)
     cfg.tuning.enclosement_depth = 3;  // all rings — proves interval != f(n)
     Simulation s(cfg);
+    park_off_spiral(s);                        // see the corner test — keep the round undecided
     run(s, 81);                                // reach the wall-arm (remaining 15s)
     REQUIRE(s.state().enclose_interval == 5);  // armed with the fixed interval
     // Walk the index forward and confirm it steps exactly once per 5 ticks.
@@ -719,6 +740,93 @@ TEST_CASE("enclosure interval is a fixed 5 ticks (250 ms at 20 Hz)") {
         CHECK(s.state().enclose_index == last + 1);  // one drop on the 5th
         ++last;
     }
+}
+
+TEST_CASE("arming the walls switches off warpholes and trampolines, not belts or arrows") {
+    // sub_405D0C (native/src/game/batch_0x405B3A.cpp 298-325), called from
+    // sub_426818's ARM branch (batch_0x42583B.cpp:695): it walks all 100 actor
+    // slots and clears the ACTIVE flag of every actor whose type field (+4) is
+    // 1 (warphole) or 3 (trampoline), leaving 0 (dirarrow) and 2 (conveyor)
+    // alone. Clearing the active flag removes the actor from sub_405654 (the
+    // tile lookup that fires the step-on warp/bounce) as well as from
+    // sub_4056CA (the animator), so it is a GAMEPLAY change, not a render hide
+    // — a warphole really does stop teleporting once the walls arm.
+    // docs/re/enclosure.md §5.1. Live-confirmed on COAL MINE.
+    MatchConfig cfg = test_config();
+    cfg.tuning.game_seconds = 10;
+    cfg.tuning.hurry_seconds = 8;  // walls arm at tick 121 (remaining 3s)
+    cfg.tuning.enclosement_depth = 1;
+    // All four actor types, all on ring-4 tiles the spiral cannot reach within
+    // this test — so anything that changes is the ARM sweep, not a wall drop.
+    cfg.actor_type[4][6] = ActorType::Warphole;
+    cfg.warp_dest_x[4][6] = 8;
+    cfg.warp_dest_y[4][6] = 6;
+    cfg.actor_type[6][8] = ActorType::Trampoline;
+    cfg.actor_type[4][8] = ActorType::Conveyor;
+    cfg.actor_dir[4][8] = 1;  // east
+    cfg.actor_type[6][6] = ActorType::DirArrow;
+    cfg.actor_dir[6][6] = 2;  // south
+
+    Simulation s(cfg);
+    park_off_spiral(s);
+    REQUIRE(s.state().actor_type[4][6] == ActorType::Warphole);
+    REQUIRE(s.state().actor_type[6][8] == ActorType::Trampoline);
+
+    run(s, 120);  // one tick before the arm
+    CHECK(s.state().enclose_interval == 0);
+    CHECK(s.state().actor_type[4][6] == ActorType::Warphole);  // still live
+    CHECK(s.state().actor_type[6][8] == ActorType::Trampoline);
+
+    run(s, 1);  // the ARM tick
+    REQUIRE(s.state().enclose_interval == 5);
+    CHECK(s.state().actor_type[4][6] == ActorType::None);  // warphole gone
+    CHECK(s.state().actor_type[6][8] == ActorType::None);  // trampoline gone
+    CHECK(s.state().actor_type[4][8] == ActorType::Conveyor);  // belt survives
+    CHECK(s.state().actor_type[6][6] == ActorType::DirArrow);  // arrow survives
+    // The original zeroes only the slot's ACTIVE dword; every other field of
+    // the record survives, so the port leaves the exit coordinates in place.
+    CHECK(s.state().warp_dest_x[4][6] == 8);
+
+    // ...and the mechanic really is dead: parking a player dead-centre on the
+    // ex-warphole no longer starts a warp.
+    s.state().players[0].x = 6 * kTileWF + kTileWF / 2;
+    s.state().players[0].y = 4 * kTileHF + kTileHF / 2;
+    s.state().players[0].warp_latch = false;
+    run(s, 1);
+    CHECK(s.state().players[0].warp == 0);
+}
+
+TEST_CASE("the walls stop closing the moment the round is decided") {
+    // sub_426818's whole body sits inside `if (sub_421969() > 1)`
+    // (native/src/game/batch_0x42583B.cpp 678-679), and sub_421969 is
+    // recomputed every frame from the player pass's alive tally
+    // (dword_4621D0 -> dword_4621D4). So once one side is left the spiral
+    // stops dead and never restarts. This is NOT the same as TimeUp, which
+    // does NOT stop it (§2's "NO ticks_left > 0 guard"). docs/re/enclosure.md §8.
+    MatchConfig cfg = test_config();
+    cfg.tuning.game_seconds = 20;
+    cfg.tuning.hurry_seconds = 20;     // walls arm at tick 81
+    cfg.tuning.enclosement_depth = 3;  // plenty of rings left to close
+    Simulation s(cfg);
+    park_off_spiral(s);
+    run(s, 81 + 5 * 6);  // armed, then six drop events
+    const int index_before = s.state().enclose_index;
+    REQUIRE(index_before > 0);
+    REQUIRE(sides_remaining(s.state()) == 2);
+
+    // Decide the round: kill player 1 outright (white-box — how they died is
+    // irrelevant to the gate, which only reads the alive tally).
+    s.state().players[1].alive = false;
+    REQUIRE(sides_remaining(s.state()) == 1);
+
+    run(s, 5 * 6);  // six more cadence slots' worth of ticks
+    CHECK(s.state().enclose_index == index_before);  // frozen, not one more drop
+
+    // The freeze is permanent for the rest of the round: the tally only ever
+    // falls further, and the original's outer loop pauses the match clock on
+    // the same edge (sub_410522, batch_0x4293E5.cpp:1060-1061).
+    run(s, 200);
+    CHECK(s.state().enclose_index == index_before);
 }
 
 TEST_CASE("the HURRY banner precedes the walls by 5 seconds (two distinct moments)") {

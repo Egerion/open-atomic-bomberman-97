@@ -54,14 +54,11 @@ if ( result <= v1 - 5 ) {      // remaining <= hurry_seconds - 5   (NON-STRICT)
         dword_462244 = rand() % 3;
         dword_45BE9C = 1;
         dword_46223C = sub_43ACF8();   // = timeGetTime(), the drop clock
-        sub_405D0C();          // NOT an actor-grid clear — CORRECTED 2026-07-20
-                               // (fidelity audit): sub_405D0C is a LEVEL-SELECT
-                               // lobby-screen broadcast-table cleanup, unrelated
-                               // to gameplay actors (its real body,
-                               // native/src/game/batch_0x405B3A.cpp ~298-325,
-                               // touches no warphole/trampoline cell). The port
-                               // correctly implements NO actor clear on arm.
-                               // Do NOT add one. See docs/re/audit/enclosure.md F0.
+        sub_405D0C();          // *** IS an actor-registry sweep: deactivates
+                               // every WARPHOLE and TRAMPOLINE. RE-CONFIRMED
+                               // 2026-07-26; the 2026-07-20 "correction" that
+                               // called this an inert lobby-table cleanup was
+                               // itself wrong and is retracted. See §5.1. ***
     }
 } else if ( dword_45BE9C ) {   // DISARM (only if time somehow went back up)
     dword_45BE9C = 0;
@@ -334,80 +331,142 @@ either way), and a bomb sharing a tile with a floor powerup is not a
 reachable state under normal placement rules. See `drop_wall`'s comments for
 the full per-branch citation.
 
-### 5.1 Stage actors under a closing wall — a RENDER-only hide, not a registry clear  [render fact INFERRED 2026-07-24; needs binary confirmation of `sub_4056CA`'s gate]
+### 5.1 Warpholes and trampolines are SWITCHED OFF when the walls arm — `sub_405D0C`  [CONFIRMED 2026-07-26 from the binary + live play]
 
-`sub_426818` solidifies the tile with `sub_425E9B(x,y,1)` but its per-drop
-cleanup touches ONLY the player/powerup/bomb/flame state listed in §5 — it
-never writes the stage-actor registry (`dword_45E0A8`). This was re-confirmed
-in the 2026-07-20 audit (`docs/re/audit/enclosure.md`, full `sub_426818`
-trace) and is the same registry the arm branch's `sub_405D0C` was WRONGLY
-thought to clear (Finding 0, §2). So a warphole / trampoline / conveyor /
-dirarrow whose tile the closing wall lands on **stays live in the actor
-registry** — the original does not remove it.
+**This section replaces a wrong conclusion.** Two earlier passes got it
+backwards, in opposite directions, and both are retracted here:
 
-Yet on screen the actor visibly disappears under the wall (two live-play
-reports: an outer-ring trampoline, and warpholes vanishing "as the walls
-close"). The reconciliation is the DRAW layer, not the sim: the actor
-animator `sub_4056CA` is a per-frame floor-layer blit over the SAME background
-surface `sub_425D22` stamps solid/brick tiles into (§renderer facts, "tile
-layer"), so with no gate the actor would composite OVER the wall. Every
-floor-decoration drawer instead gates on the collision grid reading floor —
-CONFIRMED for the sibling powerup drawer `sub_424F89` (`*(_DWORD*)==2 &&
-!sub_425FB9(x,y)`, i.e. skip unless the cell is blank floor; see
-`docs/re/audit/renderer.md` "powerup-token reveal gate"). By that shared
-convention `sub_4056CA` gates the same way, so a wall-covered actor tile
-(collision grid now non-zero) simply isn't drawn. Direct confirmation of
-`sub_4056CA`'s own gate still wants a binary read; the powerup-drawer analogue
-is strong circumstantial evidence and matches live observation.
+- 2026-07-04 glossed `sub_405D0C` correctly ("clear warpholes+trampolines")
+  but on a *guess* — it was an unverified cross-batch forward declaration.
+- 2026-07-20 (`audit/enclosure.md` Finding 0) "corrected" that gloss to
+  "inert level-select lobby-table cleanup, port is right to do nothing". That
+  correction is the **wrong** one: it trusted `batch_0x405B3A.cpp`'s own stale
+  file header, which mislabels `dword_45E0A8` as a broadcast table. There is
+  exactly ONE `dword_45E0A8` in the program (`native/src/globals.cpp` line 653;
+  `globals.h` line 678 labels it *"the 100-slot × 152-byte 'extra object'
+  pool"*) — the same pool `sub_404D16` allocates, `sub_405654` looks tiles up
+  in and `sub_4056CA` draws. `batch_0x405B3A.cpp` is the actor table's
+  **network-sync** code (`sub_405B3A` writes actor fields +28/+32/+0/+4/+44/
+  +46/+52; `sub_405BBA` broadcasts them ten at a time), which is why its header
+  calls it a "broadcast table".
+- 2026-07-24 (`audit/enclosure-warphole-close.md`) correctly falsified the
+  per-tile hypothesis on geometry and predicted a global arm-time trigger, but
+  could not name the mechanism. This is it.
 
-**GEOMETRY UPDATE 2026-07-24 — the per-tile inference above does NOT explain the
-COAL warphole report; it may be an ARM-time global render gate instead. See
-`docs/re/audit/enclosure-warphole-close.md`.** A fresh live report ("on COAL the
-warpholes really disappear when the walls START closing") was checked against the
-actual `EXTRA4.RES` layout. COAL's four warpholes sit at (2,2),(12,2),(12,8),(2,8)
-— the corners of the depth-2 box, i.e. **all on ring 2**, which the clockwise
-spiral closes THIRD (drop events 96/106/113/124, ~24-31 s after the first drop),
-NOT on the outer ring it closes first. At the DEFAULT `enclosement_depth = 1` the
-walls close only rings 0-1 (events 0-95) and **never reach ring 2 at all**, so the
-current `cells != Blank` gate keeps those warpholes visible for the whole match.
-Under no depth does the tile-by-tile gate hide them "at close-start". The fixed
-trampolines (`EXTRA9`) sit on the SAME ring-2 corners and every conveyor tile
-(`EXTRA10`) is also on ring 2, so the pattern is shared — the earlier "outer-ring
-trampoline" report was almost certainly a random `-T,H,H` placement, which does
-NOT discriminate the two hypotheses. If the COAL observation is accurate the
-original hides actors on a GLOBAL trigger at/near arm (render-only — Finding 0
-still holds, no registry write), which the powerup-drawer per-tile analogy does
-not capture: powerups gate on their OWN cell-state grid, whereas actors have no
-per-tile "revealed" state. **This is NOT yet resolved — the decisive read is
-`sub_4056CA`'s draw gate (per-actor `sub_425FB9` solid test vs. a global armed/
-hurry-clock early-out); a disambiguating live test (a centre warphole at (7,5) =
-ring 5, covered dead last) is specified in the audit file. No code change made
-pending that trace.**
+**The body** (`native/src/game/batch_0x405B3A.cpp` lines 298-325, called from
+`sub_426818`'s arm branch at `batch_0x42583B.cpp` line 695):
 
-**Port.** The gameplay-side behaviour was already correct by construction: a
-solid tile is impassable, so a covered conveyor/trampoline/dirarrow can never
-re-trigger (nothing can stand or slide onto it), and a covered warphole cannot
-be used as a SOURCE for the same reason — so NO sim change is warranted (and
-mutating the hashed `State::actor_type` in `drop_wall` would DIVERGE from the
-registry-retaining original, however golden-safe). The only missing piece was
-the render gate: `Renderer::draw_actors` (`libs/game/src/renderer.cpp`) now
-skips a tile whose `cells[y][x] != Cell::Blank`, mirroring `draw_powerups`'
-existing `sub_424F89`-derived gate. Actors are always placed on Blank floor
-(`match::apply_actors`), so this only ever fires on a tile a wall (or, on level
-7, a regenerated brick) has since covered. Render-only ⇒ no `state_hash()`
-impact, golden unchanged.
+```c
+int sub_405D0C() {                       // 100 slots, stride 152
+  for (v3 = dword_45E0A8, v2 = 0; v2 < 100; ++v2, v3 += 38) {
+    if ( *v3 ) {                         // slot active?
+      v1 = v3[1];                        // +4 = actor TYPE (unsigned)
+      if ( v1 )                          //   0 = DirArrow  -> skipped
+        if ( v1 <= 1 || v1 == 3 )        //   1 = Warphole, 3 = Trampoline
+          *v3 = 0;                       //   -> DEACTIVATE the slot
+    }                                    //   2 = Conveyor  -> untouched
+  }
+}
+```
 
-**Unresolved edge (needs the binary).** A warphole B on an already-covered
-outer tile is still a valid DESTINATION for a partner A on a not-yet-covered
-inner tile (the exit is a static coordinate resolved at setup, `sub_405A81`
-in the original — which likewise still finds the retained B in the registry).
-A player using A would be relocated onto B's now-solid tile (`tick_warp`
-relocates with only an in-grid check, no solid check). Whether the original
-guards this (cancel / stay put / land-in-wall) is unverified — `sub_405A81`
-and the state-6→7 relocation were not read for a solid-destination check.
-Left as-is (the render gate does not address it, and neither does clearing the
-covered tile's own actor entry, since the link is stored at the SOURCE A);
-flagged rather than patched to avoid inventing un-RE'd sim behaviour.
+`v1` is unsigned and already known non-zero, so `v1 <= 1` is exactly `v1 == 1`.
+Net: **every warphole and every trampoline is switched off, globally, on the
+single frame the walls arm; dirarrows and conveyors are left alone.**
+
+**It is a GAMEPLAY change, not a render hide.** Clearing the slot's active
+dword removes the actor from both of the registry's consumers at once:
+
+- `sub_405654(x,y)` (the tile→actor lookup) skips inactive slots, so the
+  step-on trigger in `sub_41EC84` never sets movement state 5 (bounce) or 6
+  (warp) again — **warpholes and trampolines stop WORKING**. The same lookup
+  backs `sub_4230A5`'s sliding-bomb entry probe, so a kicked bomb that used to
+  be blocked by a warphole tile (§stage-actors.md §6 item 4) now rolls onto it.
+- `sub_4056CA` (the animator) iterates the same 100 slots and only draws
+  `if (*(_DWORD*)slot)` — **so the art disappears too**, all four at once,
+  independent of where the spiral is.
+
+**Why those two types and not the other two.** `sub_41DE63`, the shared
+player-kill routine the wall crush itself calls (§5 item 1), early-outs while
+the victim's movement-state word (+78) is 5 (trampoline hop) or 6/7 (warp
+out/in). Leaving warpholes and trampolines live would let a player ride a
+bounce or a warp straight through a closing wall, indefinitely. Conveyors and
+dirarrows create no invulnerable state, so they survive the sweep.
+
+**Live confirmation (Ege, COAL MINE).** COAL is level index 4 → `EXTRA4.RES`,
+four warpholes at (2,2),(12,2),(12,8),(2,8) — all on **ring 2**, which the
+spiral closes THIRD (drop events 96-124, ~24-31 s in) and, at the default
+`enclosement_depth = 1`, never reaches at all. They were observed vanishing
+**the moment the walls started closing**. Only a global arm-time trigger can
+produce that; the geometry is worked out in
+`docs/re/audit/enclosure-warphole-close.md`, which this finding resolves.
+
+**Falsifiable prediction from the same code, not yet play-tested:** on INNER
+CITY TRASH (`EXTRA10.RES`, conveyors) and on the dirarrow maps (HOCKEY RINK /
+ANCIENT EGYPT, `EXTRA2/3.RES`) the belts and arrows must KEEP working and
+KEEP drawing after the walls arm — only the ring-2 tiles they sit on go quiet,
+and only once a wall physically lands on them.
+
+**Port.** `EnclosureSystem::update()`'s arm branch calls
+`clear_hurry_disabled_actors(s)`, which sets `State::actor_type` to `None` on
+every `Warphole`/`Trampoline` cell (the port's equivalent of zeroing the
+slot's active flag) and deliberately leaves `actor_dir` / `warp_dest_*` alone,
+because the original leaves every other field of the record intact. NOT
+depth-gated: the original's `sub_405D0C()` sits inside the `if (!dword_45BE9C)`
+arm block, which is ABOVE the `2*enclosement_depth > ring` drop gate, so even
+`enclosement_depth = 0` kills them. An in-flight hop or warp COMPLETES —
+`sub_41F29B` states 5/6/7 never re-consult the registry, and neither do
+`tick_bounce`/`tick_warp`. `actor_type` is hashed, so this MOVES GOLDENS (see
+`tests/sim/test_golden.cpp`); it is a deliberate behaviour change.
+
+### 5.2 A wall landing on an actor tile does NOT clear that tile's actor
+
+Separately from §5.1: `sub_426818` solidifies the tile with
+`sub_425E9B(x,y,1)` but its per-drop cleanup touches ONLY the player/powerup/
+bomb/flame state listed in §5 — it never writes the stage-actor registry
+(`dword_45E0A8`). Verified by the 2026-07-20 audit's full `sub_426818` trace
+AND by grepping every write to `dword_45E0A8` in the native transliteration:
+the only ones reachable at all are `sub_404D53` (level load), `sub_404E3C`
+(slot claim), `sub_405B3A` (editor/net set), `sub_405D7E` (editor-only
+truncate, gated on `sub_40C06A() == 1`) and `sub_405D0C` (§5.1). So a
+CONVEYOR or DIRARROW whose tile the closing wall lands on **stays live in the
+registry** — it is just never drawn again (§5.3) and never reachable (a solid
+tile is impassable). The port matches: `drop_wall()` does not touch
+`actor_type`.
+
+### 5.3 The animator's draw gate is PER TYPE — `sub_4056CA`  [CONFIRMED 2026-07-26]
+
+Read off `sub_4056CA`'s switch (`native/src/game/batch_0x404852.cpp` lines
+736-894). The gate is **not** uniform:
+
+| case | type       | draw gate                                                   |
+|-----:|------------|-------------------------------------------------------------|
+| 0    | dirarrow   | `if (!sub_425FB9(x,y))` — skip unless the cell is walkable floor |
+| 1    | warphole   | **no solid test at all**; only `if (+52)` (the parsed arg0, which every `-W` line sets non-zero) |
+| 2    | conveyor   | frame counter `+48` advances unconditionally; the DRAW is `if (!sub_425FB9(x,y))` |
+| 3    | trampoline | `if (!sub_425FB9(x,y))`                                      |
+
+There is **no** global early-out on `dword_45BE9C` or the hurry clock anywhere
+in `sub_4056CA`, and `sub_42A191` calls it unconditionally
+(`batch_0x4293E5.cpp` line 807). So the per-tile hypothesis was right *as a
+draw gate* — it was just the wrong explanation for the COAL report, which
+§5.1 now accounts for.
+
+Port: `Renderer::draw_actors` keeps the `cells != Cell::Blank` skip for
+dirarrow/conveyor/trampoline and exempts `Warphole`, matching the table. That
+exemption is only reachable via level 7's brick regen landing a brick on a
+warphole tile; the HURRY walls can no longer cover a live warphole, because
+§5.1 removed it first.
+
+### 5.4 Retracted text (kept as a signpost)
+
+Everything that used to stand between here and §6 — the "render-only hide"
+reconciliation inferred from the sibling powerup drawer `sub_424F89`, the
+2026-07-24 GEOMETRY UPDATE's open question, and the "unresolved warp-onto-a-
+covered-destination edge" — is superseded by §5.1/§5.3 above. The warp-onto-a-
+covered-tile edge in particular is now **unreachable via the enclosure**: the
+walls cannot cover a live warphole, because arming removes every warphole
+first. (It remains theoretically reachable via level 7's brick regen; still
+un-RE'd, still not patched, but no longer on the enclosure's critical path.)
 
 ## 6. Wall-triggered bomb detonation is deferred ONE TICK, not synchronous [CONFIRMED 2026-07-10]
 
@@ -496,23 +555,76 @@ fading highlight over the next few tiles about to close. It mutates no
 gameplay state and draws no RNG; this port has no such preview overlay and
 none is added here.)
 
-## 8. Round-end interaction — no enclosure-specific stop condition  [CONFIRMED]
+## 8. Round end STOPS the spiral — `sub_421969() > 1`  [CORRECTED 2026-07-26]
 
-`sub_426818`'s only top-level gate is `sub_421969() > 1` — a general
-"are we actively in a match" game-state check SHARED by the whole per-frame
-loop, not anything enclosure-specific. Tracing `sub_421969`'s backing store
-(`dword_4621D4`/`dword_4621DC`, `sub_421793`-adjacent init) turns up no write
-site that reacts to "one side is left" mid-round — that state is set once at
-round start and doesn't change until the screen itself transitions away from
-the match loop. So **the walls keep closing through the "round decided, but
-still lingering on the final frame" window**, exactly like every other
-system (movement, bombs, flames) — there is nothing for `EnclosureSystem`
-itself to special-case. This port's architecture already gets this right by
-construction: `libs/sim` has no concept of "screens" at all, and
-`GameApp::run_app`'s existing 3-second post-decision linger
-(`over_ticks`, `game_app.cpp` ~2892-2909, from an earlier audit) keeps
-calling `Simulation::tick()` — enclosure included — for that whole window
-before handing off to the Results screen.
+**This section previously said the opposite and was wrong.** It read
+`sub_426818`'s top-level gate `sub_421969() > 1` as a static "are we in a
+match" flag set once at round start, and concluded the walls keep closing
+through the round-decided window. `sub_421969` is not static: it is
+**recomputed every single frame**.
+
+```c
+// native/src/game/batch_0x42583B.cpp 678-682 — the ENTIRE stepper is inside it
+result = sub_421969();
+if ( result > 1 )
+{
+    if ( sub_40C06A() != 1 && sub_412135(dword_46499C + 340) )
+        sub_426704();          // per-level tile regen (level 7) — also gated
+    ... arm/disarm, preview, the 250 ms drop loop ...
+}
+```
+
+```c
+// native/src/game/batch_0x420D4E.cpp 525-532
+int sub_421969() {
+  if ( dword_46489C ) return 2;              // campaign: forced 2 -> never freezes
+  if ( dword_464964 ) return dword_4621DC;   // team mode: TEAMS still in play
+  return dword_4621D4;                       // free-for-all: PLAYERS still in play
+}
+```
+
+`dword_4621D4` is latched from the accumulator `dword_4621D0` at the tail of
+the per-frame player pass `sub_420F07` (`batch_0x420D4E.cpp` 170-222), and
+`sub_41F29B` bumps that accumulator once per player that is still in play —
+line 238 for a live player (`+8 == 0`), line 862 for one still inside its
+death animation (`+48 < getvalue(25)`). Teams work the same way via
+`dword_4621BC`/`dword_4621C0` → `dword_4621DC`. So the count falls the moment
+the last opponent's death animation finishes, and `sub_426818` returns at its
+first line from then on: **the walls stop closing when the round is decided,
+and never restart** (the count only falls further; the outer match loop also
+pauses the match clock right there — `if (sub_421969() <= 1) sub_410522();`,
+`batch_0x4293E5.cpp` 1060-1061, and `sub_410522` clears the clock-running flag
+`dword_4601B4`).
+
+### The three systems have DIFFERENT gates — this is the useful part
+
+| system | function | round-end gate | behaviour once ≤1 side remains |
+|--------|----------|----------------|--------------------------------|
+| bomb fuses + detonation | `sub_42331C` | `if (sub_421969() > 1)` wraps BOTH the fuse-elapsed accrual (`+68 += dword_464958`) and the `+68 >= +74` explode branch — `batch_0x422DDD.cpp` 807-817 | **FROZEN** — no fuse advances, nothing detonates, no chain link fires |
+| bomb MOVEMENT | `sub_42331C` | none (the `switch(+46)` slide/fly cases run BEFORE the gate) | keeps sliding/flying |
+| flames + brick burn-away | `sub_426D06` | **none at all** — `batch_0x426C4C.cpp` 160-281 has no such check | keeps running: live flames age out normally and bricks finish crumbling |
+| enclosure + level-7 tile regen | `sub_426818` | `if (sub_421969() > 1)` wraps the whole body | **FROZEN** — spiral stops mid-ring |
+
+So the user-visible "bombs stop going off when the round is decided" and "do
+the walls stop too?" are the *same* gate, evaluated in two functions off the
+same latched value within one frame — they can never disagree. Flames are the
+odd one out and deliberately keep burning.
+
+**NOT the same question as TimeUp.** §2's "NO `ticks_left > 0` guard" note
+still stands: the match CLOCK hitting zero does not stop the spiral
+(`sub_410578` clamps remaining-seconds at 0, so the arm predicate stays true
+forever). Round END stops it. Two different events, two different answers.
+
+**Port.** `simulation.cpp` already had `bombs_frozen = sides_remaining(s) <= 1
+&& !s.campaign_hazards_active` (from `audit/bombs.md` finding 1 — the same
+`sub_421969() > 1` predicate). It is renamed `round_frozen` and now also gates
+`tile_regen.update()` and `enclosure.update()`, which the original covers with
+ONE gate. `flames.age_flames_and_bricks()` and `bombs.advance_bombs()` stay
+ungated, per the table. `sides_remaining()` counts only `alive` players, so it
+drops one death-animation length earlier than `dword_4621D4` does — a
+pre-existing approximation shared with the bomb freeze, noted rather than
+changed so both systems keep freezing on the same edge as each other.
+This MOVES GOLDENS (goldens B and C reach the hurry phase and get decided).
 
 ## 9. Addresses (evidence)
 

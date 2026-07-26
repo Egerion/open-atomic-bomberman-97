@@ -477,28 +477,30 @@ void Renderer::draw_actors(const sim::State& s) {
         for (int x = 0; x < sim::kGridWidth; ++x) {
             sim::ActorType at = s.actor_type[y][x];
             if (at == sim::ActorType::None) continue;
-            // A floor decoration is only drawn while its tile reads floor.
-            // sub_4056CA is a per-frame floor-layer draw over the BACKGROUND
-            // surface (the same surface sub_425D22 stamps solid/brick tiles
-            // into), so without a gate the actor art composites OVER any wall
-            // sitting on its tile. The HURRY enclosure (sub_426818) solidifies
-            // tiles in a spiral (drop_wall -> Cell::Solid) but never clears the
-            // actor registry (docs/re/audit/enclosure.md — its per-drop cleanup
-            // touches player/powerup/bomb/flame only), so the covered actor
-            // lingers in State exactly as it does in the original; the original
-            // stops SHOWING it because every floor-decoration drawer gates on
-            // the collision grid reading floor. The sibling powerup drawer
-            // sub_424F89's confirmed `!sub_425FB9` gate (== "cell not Blank ⇒
-            // skip", draw_powerups below, re-verified in docs/re/audit/
-            // renderer.md) is that pattern; mirror it here. Actors are always
-            // placed on Blank floor (match_factory apply_actors clears the
-            // cell), so this never hides a live actor — it only stops the
-            // trampoline/warphole/conveyor/arrow art from drawing THROUGH a
-            // closing wall (the two reported bugs). Intentionally a render-only
-            // gate: mutating the hashed s.actor_type here would DIVERGE from the
-            // registry-retaining original (and a solid tile is impassable, so a
-            // covered actor can never re-trigger in the sim anyway).
-            if (s.cells[y][x] != sim::Cell::Blank) continue;
+            // sub_4056CA (the per-frame actor animator, transliterated at
+            // native/src/game/batch_0x404852.cpp lines 736-894) is a floor-layer
+            // draw over the SAME background surface sub_425D22 stamps solid/
+            // brick tiles into, so without a gate the art composites OVER a wall
+            // on its tile. Its gate is PER TYPE, and it is not uniform — read
+            // off the switch, case by case:
+            //   case 0 dirarrow   : `if (!sub_425FB9(x,y))` -> gated
+            //   case 1 warphole   : NO solid test at all (only `if (+52)`,
+            //                       the parsed arg0, which every -W line sets)
+            //   case 2 conveyor   : frame counter advances unconditionally,
+            //                       draw gated by `if (!sub_425FB9(x,y))`
+            //   case 3 trampoline : `if (!sub_425FB9(x,y))` -> gated
+            // sub_425FB9 == "cell not walkable floor", i.e. our
+            // `cells != Cell::Blank` (the same gate the sibling powerup drawer
+            // sub_424F89 uses, docs/re/audit/renderer.md).
+            //
+            // The warphole exemption is only reachable via level 7's brick
+            // regen (sub_426704) landing a brick on a warphole tile: the OTHER
+            // way a warphole tile turns solid — the HURRY walls — can no longer
+            // happen, because arming the enclosure deactivates every warphole
+            // and trampoline outright (sub_405D0C, docs/re/enclosure.md §5.1),
+            // which the sim now models by clearing actor_type. So by the time a
+            // wall could cover one, it is already ActorType::None here.
+            if (at != sim::ActorType::Warphole && s.cells[y][x] != sim::Cell::Blank) continue;
             float sx = tile_screen_x(x) + sim::kTileW / 2.0f;
             float sy = tile_screen_y(y) + sim::kTileH - 1.0f;
             const int g = s.actor_dir[y][x] & 3;
