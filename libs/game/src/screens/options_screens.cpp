@@ -270,45 +270,11 @@ void SchemePickerRunner::run(OptionsScreen& opt, const std::string& backdrop) {
     // "%s: %s" (filename + the file's -N name, aSS), header getstring(721).
     SchemeFilePicker picker(ctx_.assets, ctx_.front_font);
     picker.enter(state_.game_dir / "DATA" / "SCHEMES", backdrop);
-    if (picker.empty()) {
-        // Empty glob (pseudo.c 8467-8473): sub_414340 with getstring(95)
-        // "NOTE!" on top, getstring(720) "No Scheme files found!" below, in
-        // byte_49A390's ink — LUT offset 0x5000 -> idx 248 -> (164,0,0),
-        // the SAME dark red as the quit-confirm prompt (docs/re/
-        // frontend-flow.md "COLOR.PAL" table). sub_414340's own key loop:
-        // nav blip on any key, close on Enter/Space/Esc.
-        const std::string top = ctx_.assets.getstring(95, "NOTE!");
-        const std::string bottom = ctx_.assets.getstring(720, "No Scheme files found!");
-        const std::string ok = ctx_.assets.getstring(27, " Ok ");
-        while (true) {
-            SDL_Event ev;
-            while (SDL_PollEvent(&ev)) {
-                if (ev.type == SDL_EVENT_QUIT) return;
-                if (ev.type != SDL_EVENT_KEY_DOWN) continue;
-                ctx_.audio.play(20);
-                if (ev.key.key == SDLK_RETURN || ev.key.key == SDLK_KP_ENTER ||
-                    ev.key.key == SDLK_SPACE || ev.key.key == SDLK_ESCAPE)
-                    return;
-            }
-            ctx_.audio.update_music();
-            SDL_SetRenderDrawColor(ctx_.sdl, 0, 0, 0, 255);
-            SDL_RenderClear(ctx_.sdl);
-            const Sprite& bg = ctx_.assets.frontend_pcx(backdrop);
-            if (bg.tex) {
-                SDL_FRect d{0, 0, static_cast<float>(bg.w), static_cast<float>(bg.h)};
-                SDL_RenderTexture(ctx_.sdl, bg.tex, nullptr, &d);
-            }
-            // Ink = byte_49A390 = DARK RED (164,0,0): sub_407582's empty-glob box
-            // is sub_414340(getstring(95)|getstring(720), byte_49D37A,
-            // byte_49A390) (batch_0x4074DC.cpp:180-184); a3 (byte_49A390) is the
-            // foreground/ink = (164,0,0) warning red (docs/re/frontend-flow.md),
-            // NOT white. (Restores the correct red.)
-            draw_acknowledge_dialog(ctx_.sdl, ctx_.front_font,
-                                    &ctx_.assets.frontend_pcx("WINZ"), top, bottom, ok, 164, 0, 0);
-            SDL_RenderPresent(ctx_.sdl);
-            SDL_Delay(2);
-        }
-    }
+    // The empty-glob case is NOT special-cased here any more: sub_407582 raises
+    // its own getstring(95)/getstring(720) sub_414340 box @0x4076CA, so
+    // SchemeFilePicker owns that (draw + the Enter/Space/Esc key loop) and both
+    // entry points get it from the one component, exactly as both get the list.
+    // An empty glob therefore just runs the loop below and ends cancelled.
     while (!picker.done()) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -324,12 +290,21 @@ void SchemePickerRunner::run(OptionsScreen& opt, const std::string& backdrop) {
         SDL_Delay(2);
     }
     if (picker.cancelled()) return;
-    // sub_407582's selection write-back (pseudo.c 8457-8463): the display
-    // line is cut at its FIRST '.' (strchr, which also drops the ": <name>"
-    // suffix in one stroke), copied into byte_4648C4, then uppercased
-    // (sub_412A3B = strupr).
+    // sub_407582's selection write-back @0x40767A-0x4076B8, CORRECTED
+    // 2026-07-26 against the binary: the cut character is `mov edx, 0x3A` —
+    // a COLON, not a '.' — fed to sub_45167A/strchr. Cutting the display line
+    // "BASIC.SCH: Basic Bomberman" at its first ':' therefore recovers the
+    // filename WITH its extension, and that is what is strcpy'd into
+    // byte_4648C4 and then uppercased (sub_412A3B = strupr).
+    //
+    // It still loads: the extension strip lives in the READER, not here —
+    // sub_403EEE @0x403FE8 does strrchr(name, '.'), truncates, then strcat's
+    // ".sch", so "BASIC.SCH" and "BASIC" resolve to the same file. (The
+    // shipped options.ini says "BASIC" because MAKECFG's default was never
+    // round-tripped through the picker.) The visible difference is Options
+    // row 8, which prints the buffer verbatim through getstring(258)
+    // "Scheme File: %s".
     std::string name = picker.selected().filename().string();
-    if (auto dot = name.find('.'); dot != std::string::npos) name.erase(dot);
     for (auto& c : name) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
     opt.set_scheme_filename(name);
     // The original re-parses byte_4648C4 at the next Play-flow entry

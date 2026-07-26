@@ -40,11 +40,20 @@ struct DialogRect {
     float x, y, w, h;
 };
 
-// sub_43C734's real signature is `(y, height, width, colormode, flags)`; X is
-// never an explicit parameter anywhere in this family (docs/re/
-// frontend-flow.md's X-placement TODO(RE)) — every caller's evident intent is
-// a horizontally centered window, so this always centers against the 640-px
-// screen width (renderer.hpp's kScreenW).
+// CORRECTED 2026-07-26: sub_43C734 is SIX-arg — `(x, y, width, height,
+// colormode, flags)`. It ends `ret 8` (two stack args) on top of the four
+// Watcom register args, and its a1/a2 flow into sub_43D398 @0x43C8C2, which
+// bounds-checks `[win+0x18] (width) + edx` against the right clip edge and
+// `[win+0x1c] (height) + ebx` against the bottom — so a1 is X and a2 is Y.
+// The old "X is never an explicit parameter anywhere in this family" note
+// (and the X-placement TODO(RE) it came from) was a decompiler artefact:
+// Hex-Rays dropped the EAX argument at these call sites. Confirms the rescued
+// `worktree-dialog-chrome-todo-re` branch, commit 0c0b00d.
+//
+// This helper still CENTERS, because the callers that use it (the confirm /
+// acknowledge families) do center themselves. It is no longer a claim about
+// the primitive: callers with a literal X — the boot LOADING dialog's 150, the
+// list dialog's 100 — must pass it, and draw_list_dialog now does.
 DialogRect dialog_rect(float y_px, float height_px, float width_px);
 // The vertically-centered variant sub_41456C's own callers use, computing
 // `(screenH - height) / 2` instead of passing a literal y.
@@ -137,45 +146,62 @@ HintBlock pack_hint_lines(const FontTextures& font, const std::vector<std::strin
                           const std::vector<std::string>& budget, float max_w);
 
 // Layout returned by draw_list_dialog so the caller can place its item text
-// and the inverted selection band on top of the chrome.
+// and the selection band on top of the chrome. Screen-space pixels.
 struct ListDialogLayout {
-    DialogRect win;   // full window rect (x auto-centred)
+    DialogRect win;   // full window rect
     float item_x;     // left edge of item text
-    float item_y0;    // baseline y of the first visible item
+    float item_y0;    // top y of the first visible item
     float item_h;     // per-row pitch (one font line)
     float item_w;     // item text column width (selection-band width)
-    float done_x;     // "Done" button window-x
-    float done_y;     // "Done" button window-y
-    float footer_y0;  // baseline y of the first reserved footer line (see footer_lines)
-    bool has_scrollbar;
+    float done_x;     // "Done" button x
+    float done_y;     // "Done" button y
+    float footer_y0;  // top y of the first reserved footer line (see footer_lines)
 };
 
-// The generic bevel LIST dialog — sub_42DBCC (chrome audit, docs/re/
-// results-and-options.md §4): a 1-px black outer rect, a raised bevel, a
-// SUNKEN title strip at (5,5) with the centred grey title
-// (byte_495390[dword_45C478] = (168,168,164)), a dark item area
-// (dword_45C46C = the base coat), a right-hand scrollbar (arrow buttons +
-// sunken track + proportional bevel thumb) when total_rows > visible_rows,
-// and a centred "Done" button at the bottom. Draws the chrome ONLY and
-// returns the layout; the caller draws item text (its own ink) and the
-// selection as an inverted band (draw_list_selection). `y_px` is the window
-// top (100 for the help/scheme pickers); the window is horizontally centred
-// and `content_w` px wide.
+// The generic bevel LIST dialog — sub_42DBCC, RE-PINNED 2026-07-26 from a full
+// read of the body (docs/re/results-and-options.md §5c;
+// list_dialog_geometry.hpp carries the per-offset citations). The chrome, in
+// the order the original lays it down:
+//   * a 1-px BLACK outer rect (0,0)..(w-1,h-1)          sub_442384 @0x42DCF9
+//   * a RAISED bevel at inset 1                          sub_44240C @0x42DD39
+//   * a base-coat title-strip fill at (5,5), then a SUNKEN bevel over it, then
+//     the centred title in dword_45C478 grey (168,168,164) at y = 8
+//   * a base-coat item-area fill and its own SUNKEN frame
+//   * the scrollbar — arrow buttons "\x18"/"\x19", a sunken track, and a
+//     FIXED 15x15 raised thumb. UNCONDITIONAL: there is no branch around it,
+//     so a list that fits still shows a full-height scrollbar.
+//   * a "Done" button at (w/2 - 32, h - fontheight - 14). The label is the
+//     hardcoded literal at 0x45AAB4, NOT a getstring.
+// The window is NOT centred — `x_px`/`y_px` go straight to sub_43C734, and
+// both RE'd callers pass the literal (100, 100). No WINZ 9-patch is painted
+// (no sub_41726B call in the body), so the panel is the flat (88,84,80) grey.
+//
+// `item_text_w` is the widest ITEM's measured width (sub_42FEF0's max), NOT
+// pre-maxed with the title — the widget folds the title in itself:
+// win_w = max(item_text_w + 16, measure(title)) + 20.
 //
 // `footer_lines` reserves that many extra text lines INSIDE the window between
 // the item area and the "Done" button, reported as `footer_y0` — the PORT-ONLY
 // room for the online lobby's key hints (ADR-0011), which have no home in
 // sub_42DBCC's own chrome. It defaults to 0, so every RE'd caller (the help
-// browser, the *.SCH picker) keeps byte-identical geometry.
+// browser, the *.SCH picker) keeps the pinned geometry exactly.
 ListDialogLayout draw_list_dialog(SDL_Renderer* ren, const FontTextures& font,
-                                  const std::string& title, float y_px, float content_w,
-                                  int visible_rows, int total_rows, int top_row,
+                                  const std::string& title, float x_px, float y_px,
+                                  float item_text_w, int visible_rows, int top_row,
                                   int footer_lines = 0);
 
-// The selection highlight for a list row — the original inverts the video
-// under the selected item (sub_442C28). In truecolour we approximate that
-// with a filled bevel-light band the caller draws its item text over in the
-// dark base-coat ink; `row_index` is 0-based within the visible window.
+// The selection highlight for a list row. The original does NOT invert: it
+// runs sub_442C28 @0x42DF80 over the selected row's rectangle (item_w x
+// fontheight), a per-pixel remap through byte_495390's runtime blend LUT at
+// column 0x93 — a lerp of each 5-bit channel toward white. Applied to the
+// base coat that is exactly the sub_432298 BUTTON FACE wash (sub_432298 calls
+// the same sub_442C28 at 0x4323DB on the same base coat), so the band colour
+// here is the button face by construction rather than a new constant.
+//
+// The row's already-drawn TEXT is washed too, but the general white ink
+// (240,248,252) = 5-bit (30,31,31) is at the ramp ceiling and does not move,
+// so callers keep drawing selected rows in their NORMAL ink — no dark-on-light
+// inversion. `visible_index` is 0-based within the visible window.
 void draw_list_selection(SDL_Renderer* ren, const ListDialogLayout& lay, int visible_index);
 
 // sub_414340 — the ACKNOWLEDGE modal (PINNED from the body, pseudo.c

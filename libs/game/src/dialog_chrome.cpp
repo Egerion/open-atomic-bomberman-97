@@ -5,7 +5,8 @@
 #include <string>
 #include <vector>
 
-#include "bomber/game/renderer.hpp"  // kScreenW/kScreenH
+#include "bomber/game/list_dialog_geometry.hpp"  // sub_42DBCC's pinned pixel geometry
+#include "bomber/game/renderer.hpp"              // kScreenW/kScreenH
 
 namespace bomber::game {
 
@@ -241,83 +242,110 @@ HintBlock pack_hint_lines(const FontTextures& font, const std::vector<std::strin
     return block;
 }
 
+namespace {
+
+// sub_44240C takes INCLUSIVE corner coordinates; draw_bevel_rect takes an
+// origin plus a size. One converter, so each bevel below reads exactly like
+// the original's (x0, y0, x1, y1) argument quad. `ox`/`oy` are the window
+// origin (sub_42DBCC draws window-relative, into the window's own buffer).
+void bevel_corners(SDL_Renderer* ren, float ox, float oy, int x0, int y0, int x1, int y1,
+                   bool raised, Uint8 fr, Uint8 fg, Uint8 fb) {
+    draw_bevel_rect(ren, ox + static_cast<float>(x0), oy + static_cast<float>(y0),
+                    static_cast<float>(x1 - x0 + 1), static_cast<float>(y1 - y0 + 1), raised, fr,
+                    fg, fb);
+}
+
+// Base-coat fill of a window-relative rect (sub_442A5C).
+void fill_base(SDL_Renderer* ren, float ox, float oy, int x, int y, int w, int hgt) {
+    SDL_FRect r{ox + static_cast<float>(x), oy + static_cast<float>(y), static_cast<float>(w),
+                static_cast<float>(hgt)};
+    SDL_SetRenderDrawColor(ren, kDialogFillR, kDialogFillG, kDialogFillB, 255);
+    SDL_RenderFillRect(ren, &r);
+}
+
+}  // namespace
+
 ListDialogLayout draw_list_dialog(SDL_Renderer* ren, const FontTextures& font,
-                                  const std::string& title, float y_px, float content_w,
-                                  int visible_rows, int total_rows, int top_row,
+                                  const std::string& title, float x_px, float y_px,
+                                  float item_text_w, int visible_rows, int top_row,
                                   int footer_lines) {
     const float h = line_h(font);
-    // Window: title strip (1 line) + a small gap + `visible_rows` item lines
-    // + the optional PORT-ONLY footer block + a "Done" button row. Width =
-    // content + side padding (the audit's "+20" over the widest of title/items;
-    // the caller already sized content_w to the widest column). x is
-    // auto-centred. footer_lines == 0 (every RE'd caller) leaves the height
-    // formula exactly as it was.
-    const float win_w = content_w + 20.0f;
-    const float footer_h =
-        footer_lines > 0 ? 8.0f + static_cast<float>(footer_lines) * h : 0.0f;
-    const float win_h =
-        (h + 8.0f) + 8.0f + static_cast<float>(visible_rows) * h + footer_h + (h + 12.0f);
-    const DialogRect win = dialog_rect(y_px, win_h, win_w);
+    const float tw = text_w(font, title);
+    // Every number below comes from list_dialog_geometry(), which carries the
+    // per-offset sub_42DBCC citations. `top_row` deliberately does NOT enter
+    // the chrome: the original's thumb is a fixed 15x15 block its own event
+    // loop slides, so the scroll position changes nothing this function draws.
+    const ListDialogGeometry g = list_dialog_geometry(
+        static_cast<int>(x_px), static_cast<int>(y_px), static_cast<int>(item_text_w),
+        static_cast<int>(tw), static_cast<int>(h), visible_rows, footer_lines);
+    (void)top_row;
 
-    // Raised panel with a 1-px black outer rect (sub_442384 + the bevel).
-    draw_bevel_rect(ren, win.x, win.y, win.w, win.h, /*raised=*/true, kDialogFillR, kDialogFillG,
-                    kDialogFillB);
-    SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
+    const float ox = static_cast<float>(g.win_x);
+    const float oy = static_cast<float>(g.win_y);
+    const DialogRect win{ox, oy, static_cast<float>(g.win_w), static_cast<float>(g.win_h)};
+
+    // sub_43C734's flat colormode-256 base coat (this family paints no WINZ
+    // 9-patch), then the 1-px black outer rect @0x42DCF9 and the RAISED bevel
+    // at inset 1 @0x42DD39.
+    fill_base(ren, ox, oy, 0, 0, g.win_w, g.win_h);
+    SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);  // byte_495390[0]
     SDL_FRect outline{win.x, win.y, win.w, win.h};
     SDL_RenderRect(ren, &outline);
+    bevel_corners(ren, ox, oy, 1, 1, g.win_w - 2, g.win_h - 2, /*raised=*/true, kDialogFillR,
+                  kDialogFillG, kDialogFillB);
 
-    // Sunken title strip at (5,5), the centred grey title inside it.
-    const float strip_h = h + 8.0f;
-    draw_bevel_rect(ren, win.x + 5.0f, win.y + 5.0f, win.w - 10.0f, strip_h, /*raised=*/false,
-                    kDialogFillR, kDialogFillG, kDialogFillB);
-    const float tw = text_w(font, title);
-    draw_dialog_text(ren, font, title, win.x + (win.w - tw) / 2.0f, win.y + 5.0f + 4.0f,
-                     kButtonInkR, kButtonInkG, kButtonInkB);
+    // Title strip: base-coat fill @0x42DD9E, SUNKEN bevel @0x42DE0E, then the
+    // centred title in dword_45C478 grey @0x42DDCB.
+    fill_base(ren, ox, oy, 5, 5, g.strip_fill_w, g.strip_fill_h);
+    bevel_corners(ren, ox, oy, 5, 5, g.strip_x1, g.strip_y1, /*raised=*/false, kDialogFillR,
+                  kDialogFillG, kDialogFillB);
+    draw_dialog_text(ren, font, title, ox + static_cast<float>(g.title_x),
+                     oy + static_cast<float>(g.title_y), kButtonInkR, kButtonInkG, kButtonInkB);
 
-    const bool scrollbar = total_rows > visible_rows;
+    // Item area: base-coat fill @0x42DEA2 and its SUNKEN frame @0x42DFD2.
+    fill_base(ren, ox, oy, g.item_fill_x, g.item_fill_y, g.item_fill_w, g.item_fill_h);
+    bevel_corners(ren, ox, oy, 5, g.item_fill_y - 1, g.item_frame_x1, g.item_frame_y1,
+                  /*raised=*/false, kDialogFillR, kDialogFillG, kDialogFillB);
+
+    // Scrollbar — drawn UNCONDITIONALLY (no branch guards it in sub_42DBCC),
+    // so a list that fits still shows a full-height bar. FONT6 glyphs
+    // \x18/\x19 are the arrows; both labels are the hardcoded literals at
+    // 0x45AAAC/0x45AAB0, not message-table lookups.
+    draw_dialog_button(ren, font, ox + static_cast<float>(g.sb_button_x),
+                       oy + static_cast<float>(g.sb_up_y), "\x18");
+    draw_dialog_button(ren, font, ox + static_cast<float>(g.sb_button_x),
+                       oy + static_cast<float>(g.sb_down_y), "\x19");
+    fill_base(ren, ox, oy, g.sb_track_x, g.sb_track_y, g.sb_track_w, g.sb_track_h);
+    bevel_corners(ren, ox, oy, g.sb_frame_x0, g.sb_frame_y0, g.sb_frame_x1, g.sb_frame_y1,
+                  /*raised=*/false, kDialogFillR, kDialogFillG, kDialogFillB);
+    // The thumb: a fixed 15x15 RAISED bevel whose face gets the sub_442C28
+    // wash @0x42E1E6 — the same wash sub_432298 gives a button face, hence the
+    // same colour.
+    bevel_corners(ren, ox, oy, g.sb_thumb_x0, g.sb_thumb_y0, g.sb_thumb_x1, g.sb_thumb_y1,
+                  /*raised=*/true, kButtonFaceR, kButtonFaceG, kButtonFaceB);
+
     ListDialogLayout lay{};
     lay.win = win;
-    lay.item_x = win.x + 8.0f;
-    lay.item_y0 = win.y + strip_h + 8.0f;
+    lay.item_x = ox + static_cast<float>(g.item_x);
+    lay.item_y0 = oy + static_cast<float>(g.item_y0);
     lay.item_h = h;
-    lay.item_w = win.w - 16.0f - (scrollbar ? 18.0f : 0.0f);
-    lay.footer_y0 = lay.item_y0 + static_cast<float>(visible_rows) * h + 8.0f;
-    lay.has_scrollbar = scrollbar;
-
-    if (scrollbar) {
-        // Right-hand scrollbar: up/down arrow buttons + a sunken track + a
-        // proportional raised thumb (sub_42DBCC 32439-32469). FONT6 glyphs
-        // \x18/\x19 are the arrows.
-        const float sx = win.x + win.w - 17.0f;
-        const float track_y0 = lay.item_y0;
-        const float track_h = static_cast<float>(visible_rows) * h;
-        draw_dialog_button(ren, font, sx, track_y0 - h - 4.0f, "\x18");
-        draw_dialog_button(ren, font, sx, track_y0 + track_h + 2.0f, "\x19");
-        draw_bevel_rect(ren, sx, track_y0, 15.0f, track_h, /*raised=*/false, kDialogFillR,
-                        kDialogFillG, kDialogFillB);
-        const float frac = static_cast<float>(visible_rows) / static_cast<float>(total_rows);
-        const float thumb_h = std::max(track_h * frac, 8.0f);
-        const float max_top = static_cast<float>(total_rows - visible_rows);
-        const float pos = max_top > 0 ? static_cast<float>(top_row) / max_top : 0.0f;
-        const float thumb_y = track_y0 + pos * (track_h - thumb_h);
-        draw_bevel_rect(ren, sx, thumb_y, 15.0f, thumb_h, /*raised=*/true, kButtonFaceR,
-                        kButtonFaceG, kButtonFaceB);
-    }
-
-    // "Done" button centred at the bottom (w/2 - 32).
-    lay.done_x = win.x + win.w / 2.0f - 32.0f;
-    lay.done_y = win.y + win.h - h - 8.0f;
+    lay.item_w = static_cast<float>(g.item_w);
+    lay.footer_y0 = oy + static_cast<float>(g.footer_y0);
+    lay.done_x = ox + static_cast<float>(g.done_x);
+    lay.done_y = oy + static_cast<float>(g.done_y);
+    // "Done" @0x42E072 — the literal at 0x45AAB4, widget id 27 (Esc).
     draw_dialog_button(ren, font, lay.done_x, lay.done_y, "Done");
     return lay;
 }
 
 void draw_list_selection(SDL_Renderer* ren, const ListDialogLayout& lay, int visible_index) {
-    // The original inverts the video under the selected row (sub_442C28); in
-    // truecolour we fill a bevel-light band the caller draws its dark-ink
-    // item text over.
-    SDL_FRect band{lay.item_x - 2.0f, lay.item_y0 + static_cast<float>(visible_index) * lay.item_h,
+    // sub_442C28 @0x42DF80 over exactly (item_x, item_y0 + i*fontheight),
+    // sized item_w x fontheight. See the header: washing the base coat yields
+    // the button-face colour by construction, so this invents no new constant
+    // and the caller keeps drawing the row in its NORMAL ink.
+    SDL_FRect band{lay.item_x, lay.item_y0 + static_cast<float>(visible_index) * lay.item_h,
                    lay.item_w, lay.item_h};
-    SDL_SetRenderDrawColor(ren, kBevelLightR, kBevelLightG, kBevelLightB, 255);
+    SDL_SetRenderDrawColor(ren, kButtonFaceR, kButtonFaceG, kButtonFaceB, 255);
     SDL_RenderFillRect(ren, &band);
 }
 

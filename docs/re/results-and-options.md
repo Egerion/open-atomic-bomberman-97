@@ -381,7 +381,7 @@ confirming the `+25` idiom already seen elsewhere in the codebase.
 | 5 | 255 | Win Matches By Kill Total | `dword_46497C` (`win_by_kills=`) | toggle; forced off whenever Team Play is on |
 | 6 | 256 | Gold Bomberman | `dword_4648BC` (`goldman=`) | toggle; also resets `dword_46492C=-1` (clears the pending roulette winner) — INLINE on every press, not gated on the net before/after value (`docs/re/goldman-roulette.md` §2.1) |
 | 7 | 257 | Enclosement Depth | `dword_464974` (`enclosement_depth=`) | cycle 0..`getvalue(28)-1` (=0..3: None/A Little/A Lot/All the way, msg 315-318) |
-| 8 | 258 | Scheme File | `byte_4648C4[100]` (`schemefilename=`) | `sub_407582` — the `*.SCH` file-picker LIST DIALOG (CORRECTED 2026-07-13: BOTH dispatch switches route here via `goto LABEL_46`, pseudo.c 9342-9343/9443-9445, so Left/Right/Enter/Space all OPEN THE PICKER; the earlier `sub_4076FE` claim was the Play Time stepper). The picker: `sub_411D17("*.SCH")` path-maps into DATA/SCHEMES, `sub_41404B` findfirst/qsort glob, each row `aSS` = `"%s: %s"` (filename + the file's `-N` name via `sub_404BE9`, default `getstring(727)` "No Scheme Name"), list dialog `sub_41485A` at (100,100) header `getstring(721)`; a selection is cut at its FIRST '.' (strchr — drops extension AND the ": name" suffix), strcpy'd into `byte_4648C4`, then UPPERCASED (`sub_412A3B` = strupr). Empty glob → `sub_414340` error `getstring(95)`/`getstring(720)` in `byte_49A390` dark red (164,0,0). The stored name is re-parsed into the live scheme at Play-flow entry (`sub_410F81` → `sub_4046CC` → `sub_403EEE`). |
+| 8 | 258 | Scheme File | `byte_4648C4[100]` (`schemefilename=`) | `sub_407582` — the `*.SCH` file-picker LIST DIALOG (CORRECTED 2026-07-13: BOTH dispatch switches route here via `goto LABEL_46`, pseudo.c 9342-9343/9443-9445, so Left/Right/Enter/Space all OPEN THE PICKER; the earlier `sub_4076FE` claim was the Play Time stepper). The picker: `sub_411D17("*.SCH")` path-maps into DATA/SCHEMES, `sub_41404B` findfirst/qsort glob, each row `aSS` = `"%s: %s"` (filename + the file's `-N` name via `sub_404BE9`, default `getstring(727)` "No Scheme Name"), list dialog `sub_41485A` → `sub_42DB80` → `sub_42DBCC` at the literal (100,100), header `getstring(721)`; a selection is cut at its FIRST **':'** (`mov edx, 0x3A` @0x40767A → strchr — CORRECTED 2026-07-26 from the earlier "first '.'" reading, so the stored value KEEPS the extension: "BASIC.SCH"), strcpy'd into `byte_4648C4`, then UPPERCASED (`sub_412A3B` = strupr). Empty glob → `sub_414340` error `getstring(95)`/`getstring(720)` in `byte_49A390` dark red (164,0,0). The stored name is re-parsed into the live scheme at Play-flow entry (`sub_410F81` → `sub_4046CC` → `sub_403EEE`), and it is THAT reader which strips the extension (`strrchr('.')` then `strcat(".sch")` @0x403FE8), which is why both spellings resolve. Full geometry + the ordering/row-text confirmations: §5c. |
 | 9 | 259 | Play Time | `dword_464948` (`playtime=`), read via `sub_4078FE()` | `sub_4076FE(±1)` — the CONFIRMED fixed stepper chain 60-90-120-150-180-240-300-600-1001("Infinite", `getstring(280)`), wrapping both ways; an off-list value (hand-edited ini) snaps to `getvalue(100)` (= 150 shipped) instead of stepping (pseudo.c 8489-8559) |
 | 10 | 260 | Assign Keyboard Player | `dword_464968` (`assign_keyboards=`) | toggle |
 | 11 | 261 | Diseases Can Be Destroyed | `dword_464990` (`diseases_destroyable=`) | toggle |
@@ -881,15 +881,157 @@ The reader clamps bornwith `< 0 → 0` and normalises both booleans `!= 0`.
 
 Globs `"*.SCH"` via `sub_41404B` (the help browser's findfirst/qsort
 helper, §4), pre-reads each file's embedded `-N` name (`sub_404BE9`), and
-lists **"`%s %s`" (filename + scheme name)** rows through the generic list
-dialog **`sub_41485A` → `sub_42DBCC`** at **(100, 100)** with header
-**`getstring(721)`** and the general white ink (`byte_49D38F | 0x10000`).
-`sub_42DBCC` sizes its window for **13 visible rows** first, falling back
-12→9 only when the window allocation fails; longer lists scroll. Selecting
-a row truncates at the first space (recovering the bare filename) and
-copies it into the live `schemefilename` global (`byte_4648C4`, then
-`sub_412A3B`). An empty glob shows the `getstring(720)`/`getstring(95)`
-error dialog instead.
+lists the results through the generic list dialog at **(100, 100)** with
+header **`getstring(721)`** ("Available Scheme Files:") and the general
+white ink (`byte_49D38F | 0x10000`). An empty glob shows the
+`getstring(720)`/`getstring(95)` error dialog instead.
+
+#### 2026-07-26 re-read — three corrections and the full dialog geometry
+
+This section previously said the rows were `"%s %s"`, that selection cut at
+the first space, and that the dialog showed 13 rows; §3's row-8 entry said
+the cut was at the first `'.'`. All four claims were wrong. A byte-level
+re-read of `sub_407582` and the whole dialog chain fixes them and supplies
+the geometry the port had been drawing without.
+
+**The call chain (this resolves the `sub_41485A`-vs-`sub_42DBCC` clash).**
+Neither prior citation was complete — there are FOUR routines, not two:
+
+| addr | routine | what it actually is |
+|---|---|---|
+| `0x407582` | `sub_407582` | the picker: glob, reformat, call, write back |
+| `0x407657` | `sub_41485A` | a mouse show/hide bracket (`sub_431178`/`sub_431360`) around ONE call, and nothing else. `ret 0xc` |
+| `0x41488E` | `sub_42DB80` | an argument trampoline: re-pushes a5..a7 and appends an 8th argument, the INITIAL SELECTION INDEX, hardcoded `0`. `ret 0xc` |
+| `0x42DB94` | `sub_42DBCC` | the widget that measures, builds and draws. `ret 0x10` |
+
+So §5c's "`sub_41485A` → `sub_42DBCC`" skipped `sub_42DB80`, and
+`editor_screen.cpp`'s "the generic list dialog (`sub_42DBCC`) is invoked at
+(100, 100)" named the right widget but not the routine `sub_407582` calls.
+
+**The window is NOT centred.** `sub_42DBCC` opens it with
+`sub_43C734(x, y, w, h, colormode=256, flags=0x14)` @ `0x42DC81`, passing
+its own a5/a6 straight through — and `sub_407582` @ `0x407641` pushes the
+literal pair `(100, 100)`. `sub_43C734` really is **6-arg** (`ret 8` plus
+the four Watcom register args), and its a1/a2 reach `sub_43D398` @
+`0x43C8C2`, which bounds-checks `[win+0x18]` (the width it just stored)
+`+ edx` against the right clip edge and `[win+0x1c]` (height) `+ ebx`
+against the bottom — so **a1 = x, a2 = y**, decisively. This independently
+CONFIRMS the rescued `worktree-dialog-chrome-todo-re` branch (commit
+`0c0b00d`) and retires the old "X is never an explicit parameter in this
+family" note. Cross-check: the boot LOADING dialog @ `0x412E7D` passes
+`eax = 0x96` (150) with `ebx = 0x168` (360) width — centring would be 140,
+so 150 is a hardcoded literal, exactly as that branch reported.
+
+**TEN visible rows, not thirteen.** @ `0x42DC44` the widget seeds two
+SEPARATE counters: `[esp+0xA8] = 10` (the rows it draws — the value used at
+every later site) and `ebp = 13` (the font-height multiplier for the window
+it requests). Both decrement together when the allocation fails
+(`cmp ebp, 8; jg` @ `0x42DCA2` → heights 13..9, rows 10..6), which the port
+never hits. The invariant is `multiplier == rows + 3`. Thirteen rows is not
+merely wrong but impossible: the item area alone needs `13*fh` starting at
+`y = fh+16`, i.e. `14*fh + 16 > 13*fh + 22` for any `fh > 6`.
+
+**Geometry** (window-relative; the widget draws into the window's own
+buffer at `bitmap + y*pitch + x`). Full offset citations live in
+`libs/game/include/bomber/game/list_dialog_geometry.hpp`:
+
+- `item_w` = widest ITEM (`sub_42FEF0` @ `0x42DC16`, a plain max over
+  `textwidth`); `win_w = max(item_w + 16, textwidth(title)) + 20`, and the
+  widget bumps `item_w` so `item_w == win_w - 36` always.
+- `win_h = (rows + 3) * fontheight + 22`.
+- 1-px BLACK outer rect `(0,0)..(w-1,h-1)` (`sub_442384` @ `0x42DCF9`),
+  then a RAISED bevel at inset 1 (`sub_44240C` @ `0x42DD39`).
+- Title strip: base-coat fill at `(5,5)` sized `(w-11) x (fh+3)`
+  (`sub_442A5C` @ `0x42DD9E`), a SUNKEN bevel `(5,5)..(w-6, fh+8)`
+  @ `0x42DE0E`, and the title centred at `(w/2 - tw/2, 8)` @ `0x42DDCB` in
+  `dword_45C478` grey (168,168,164).
+- Items at `x = 8`, `y0 = fh + 16`, pitch `fh` (@ `0x42DE4A`); base-coat
+  fill at `(5, fh+14)` sized `(item_w+6) x (rows*fh+2)` @ `0x42DEA2`, inside
+  a SUNKEN frame `(5, fh+13)..(item_w+10, item_bottom)` @ `0x42DFD2`.
+- **Scrollbar, drawn UNCONDITIONALLY** — there is no branch around it, so a
+  list that fits still shows a full-height bar. Arrow buttons at
+  `x = w-25`, `y = fh+13` and `y = item_bottom - fh - 5`, hotkeys `0x148`/
+  `0x150` (the DOS extended up/down codes); labels are the HARDCODED
+  literals `"\x18"`/`"\x19"` at `0x45AAAC`/`0x45AAB0`. Track: base-coat fill
+  15 px wide at `(w-21, 2*fh+23)` @ `0x42E0F8` in a SUNKEN frame
+  `(w-22, 2*fh+22)..(w-6, item_bottom-fh-9)` @ `0x42E189`. The thumb is a
+  **FIXED 15x15** raised bevel @ `0x42E1D4`, not proportional.
+- `"Done"` button at `(w/2 - 32, win_h - fh - 14)` @ `0x42E072` — the
+  hardcoded literal at `0x45AAB4` (NOT a `getstring`), widget id 27, the
+  same x rule and id as `sub_414340`'s `" Ok "`.
+
+**No WINZ 9-patch.** `sub_42DBCC`'s body contains no `sub_41726B`/
+`sub_416B43` call anywhere, so this dialog keeps `sub_43C734`'s flat
+colormode-256 base coat, `dword_45C46C` → **(88, 84, 80) grey**. The "grey
+popup" recollection that prompted this pass is correct; the blue WINZ skin
+belongs to the boot/confirm family, not here.
+
+**Selection is a LIGHTEN, not an invert.** `sub_442C28` @ `0x42DF80` runs
+over exactly `(8, fh+16 + sel*fh)` sized `item_w x fh`, remapping each pixel
+through `byte_495390[p*256 + 0x93]` — a runtime-built 256x256 blend LUT
+(built @ `0x42C726`-`0x42C777` as `c' = c + (31-c)*k/128` per 5-bit
+channel, i.e. a lerp toward white). Crucially `sub_432298` calls the SAME
+`sub_442C28` at `0x4323DB` on the same base coat to make a button face, so
+**the selected row's background is the button-face colour by construction**
+— no new constant needs deriving. The row's already-drawn text is washed
+too, but the general white ink (240,248,252) = 5-bit (30,31,31) is at the
+ramp ceiling and does not move, so white text stays white over the band.
+
+**Ordering — CONFIRMED, and it is not what the row text suggests.**
+`sub_41404B` uppercases EVERY globbed name first (`sub_412A3B`/strupr over
+the whole array @ `0x414146`) and only THEN qsorts @ `0x41415D` with the
+comparator at `0x41400F`, which is a plain `sub_451F10`/**strcmp** on the
+two `char*` (Watcom's dword-at-a-time strcmp — the `0xFEFEFEFF`/`0x80808080`
+zero-byte trick). Because the `": <name>"` suffix is appended AFTERWARDS by
+`sub_407582`'s own reformat loop, **the sort key is the uppercased bare
+filename and the scheme name never participates.**
+
+**Row text — CONFIRMED `"%s: %s"`.** The format string at `0x458B11` is
+literally `"%s: %s"`, sprintf'd @ `0x4075EE` from the glob filename (WITH
+its extension, and already uppercased by `sub_41404B`) and
+`sub_404BE9(filename)`. `sub_404BE9` strcpy's `getstring(727)`
+("No Scheme Name") into its static return buffer BEFORE it opens the file,
+so that default also covers an unreadable or `-N`-less file; on success it
+takes everything after the first `,` on the first `-N` line, strips the
+trailing newline, and caps the line at 99 chars. So rows really do read
+`"BASIC.SCH: Basic Bomberman"`.
+
+**Selection write-back cuts at `':'`, NOT at `'.'`.** @ `0x40767A` the
+instruction is `mov edx, 0x3A` (raw bytes `ba 3a 00 00 00`) feeding
+`sub_45167A`/strchr — a COLON. Cutting `"BASIC.SCH: Basic Bomberman"` at its
+first `':'` therefore recovers the filename **WITH its extension**, and that
+is what is strcpy'd into `byte_4648C4` @ `0x4076AE` and uppercased
+(`sub_412A3B`) @ `0x4076B8`. It still loads because the extension strip
+lives in the READER: `sub_403EEE` @ `0x403FE8` does `strrchr(name, '.')`,
+truncates there, then `strcat`s `".sch"` — so `"BASIC.SCH"` and `"BASIC"`
+resolve to the same file. (The shipped `options.ini` reads
+`schemefilename=BASIC` because that default was never round-tripped through
+the picker.) The visible consequence is Options row 8, which prints the
+buffer verbatim through `getstring(258)` `"Scheme File: %s"` — after a pick
+the original shows **"Scheme File: BASIC.SCH"**, not "...: BASIC".
+
+**Nav keys** (jump table at `0x42DBA0`, dispatched @ `0x42E46E` for codes
+`0x147..0x151`): Home `0x147`, Up `0x148`, PgUp `0x149`, End `0x14F`,
+Down `0x150`, PgDn `0x151`; Left/Right and the gaps fall through to the
+default arm. Enter (13) or a row widget (`0x400+i`) accepts; `0x1B`/the
+"Done" button cancels. The dialog returns the absolute index, or -1. NOTE
+a4 (`ecx`, which `sub_407582` passes as 0) is a **callback**: when non-null,
+Enter invokes `callback(items, index)` and the list stays open instead of
+returning — an unused capability at this call site.
+
+**Port status (2026-07-26):** `list_dialog_geometry.hpp` holds the geometry
+above as SDL-free integer math, doctest-pinned in
+`tests/game/test_list_dialog.cpp` (ctest `list_dialog`);
+`dialog_chrome.cpp`'s `draw_list_dialog` draws through it; and
+`SchemeFilePicker::draw` now renders the picker THROUGH that chrome instead
+of the bare `font_->draw(header, 100, 100)` + plain rows it had before. The
+`':'` cut, the strupr-then-strcmp ordering and the 10-row window are ported.
+NOT established from the binary, and therefore not reproduced: the exact
+truecolour value of the `sub_442C28` wash is taken as "whatever the button
+face already is" rather than re-derived (the blend LUT lives in `.bss` and
+is built at runtime, so it cannot be read statically), and the mouse-driven
+parts of the widget — dragging the fixed thumb, the `0x200+i` per-row click
+targets, the `sub_4321F0` slider — are still keyboard-only in the port.
 
 ### §5d. Editor canvas art (PINNED) — and the port's wiring
 
@@ -925,7 +1067,7 @@ editor_screen}.{hpp,cpp}` + `AssetStore::misc()`: single-cell painting,
 §5a's new-scheme board (VALUELST 600..619 starts passed through
 `GameApp`), the -V,2 writer version, §5b's 4-prompt chain (keyboard
 'E'/Right substitutes for the original's mouse-only row buttons — a
-documented deviation), §5c's 13-row picker at (100,100) with `-N` name
+documented deviation), §5c's 10-row picker at (100,100) with `-N` name
 suffixes, the Ctrl+F fill confirm, and the real TILES0/MISC.ANI canvas
 art (stage 0 loaded at editor entry; flat swatches remain only as the
 missing-asset fallback).

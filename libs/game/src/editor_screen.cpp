@@ -22,6 +22,9 @@ constexpr Uint8 kNameR = 252, kNameG = 248, kNameB = 88;  // byte_49D37A
 constexpr Uint8 kHeadR = 96, kHeadG = 252, kHeadB = 252;  // byte_497F8F
 constexpr Uint8 kSelR = 255, kSelG = 220, kSelB = 80;
 constexpr Uint8 kHintR = 160, kHintG = 160, kHintB = 160;
+// byte_49A390 — sub_407582's empty-glob error ink (LUT offset 0x5000 -> idx
+// 248), the same dark red the main-menu quit prompt uses.
+constexpr Uint8 kErrR = 164, kErrG = 0, kErrB = 0;
 
 // §5 CONFIRMED: title getstring(730) at getvalue(810/811/813); rows
 // getstring(731..733) at getvalue(815-818) ("; Editor - mainmenu header" /
@@ -32,6 +35,13 @@ constexpr Uint8 kHintR = 160, kHintG = 160, kHintB = 160;
 constexpr int kChooserHeaderX = 50, kChooserHeaderY = 100;  // getvalue(810/811)
 constexpr int kChooserItemX = 80, kChooserItemY0 = 140,
               kChooserItemYStep = 20;  // getvalue(815-818)
+
+// sub_412A3B — the strupr the glob helper runs over every matched filename
+// before sorting (and that sub_407582 runs again over the picked value).
+std::string upper(std::string s) {
+    for (auto& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    return s;
+}
 
 }  // namespace
 
@@ -54,18 +64,27 @@ void SchemeFilePicker::enter(const std::filesystem::path& schemes_dir, std::stri
         for (auto& c : ext) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
         if (ext == ".SCH") entries_.push_back(entry.path());
     }
-    std::sort(entries_.begin(), entries_.end());  // sub_41404B qsorts its glob results
-    // sub_407582 pre-reads each file's embedded -N name (sub_404BE9) and
-    // lists "<filename> <scheme name>" rows. An unreadable/corrupt file
-    // keeps its filename with no name suffix.
+    // ORDERING, PINNED: sub_41404B uppercases EVERY globbed name first
+    // (@0x414146, a sub_412A3B/strupr pass over the whole array) and only then
+    // qsorts it (@0x41415D) with the comparator at 0x41400F, which is a plain
+    // sub_451F10/strcmp on the two char*. So the sort key is the UPPERCASED
+    // BARE FILENAME — the ": <scheme name>" suffix is appended afterwards, by
+    // sub_407582's own reformat loop, and never participates.
+    std::sort(entries_.begin(), entries_.end(), [](const auto& a, const auto& b) {
+        return upper(a.filename().string()) < upper(b.filename().string());
+    });
+    // sub_407582 pre-reads each file's embedded -N name (sub_404BE9) for the
+    // second column. An unreadable/corrupt file falls back to getstring(727),
+    // exactly as a file with no -N line does (sub_404BE9 seeds that default
+    // into its buffer before it even opens the file).
     names_.reserve(entries_.size());
     for (const auto& p : entries_) {
         std::string n;
         try {
             n = assets::sch::load(p).name;
         } catch (const std::exception&) {  // NOLINT(bugprone-empty-catch)
-            // Deliberate: an unreadable/corrupt file keeps its filename with
-            // no name suffix (sub_407582's behavior — see the function doc).
+            // Deliberate: an unreadable/corrupt file keeps the getstring(727)
+            // default (sub_407582's behavior — see the function doc).
         }
         names_.push_back(std::move(n));
     }
@@ -73,7 +92,10 @@ void SchemeFilePicker::enter(const std::filesystem::path& schemes_dir, std::stri
 
 void SchemeFilePicker::on_key(SDL_Keycode key, AudioEngine& audio) {
     if (entries_.empty()) {
-        if (key == SDLK_ESCAPE || key == SDLK_RETURN) {
+        // The empty-glob acknowledge box is sub_414340's own key loop: a nav
+        // blip on ANY real key, closing only on Enter(13)/Space(32)/Esc(27).
+        audio.play(20);
+        if (key == SDLK_ESCAPE || key == SDLK_RETURN || key == SDLK_KP_ENTER || key == SDLK_SPACE) {
             done_ = true;
             cancelled_ = true;
         }
@@ -124,40 +146,61 @@ void SchemeFilePicker::draw(SDL_Renderer* ren) const {
         }
     }
     if (!font_ || !font_->loaded()) return;
-    // The generic list dialog (sub_42DBCC) is invoked at (100, 100) with
-    // header getstring(721) in the general white ink (byte_49D38F|0x10000).
-    const std::string header = assets_ ? assets_->getstring(721, "Available Scheme Files:")
-                                       : std::string("Available Scheme Files:");
-    font_->draw(ren, header, 100.0f, 100.0f, kInkR, kInkG, kInkB);
     if (entries_.empty()) {
-        // sub_407582's empty-glob path: the getstring(720)/getstring(95)
-        // error dialog (id cited; minimal inline rendering here).
-        const std::string err =
-            assets_ ? assets_->getstring(720, "No scheme files found!") : std::string();
-        font_->draw(ren, err.empty() ? "No scheme files found!" : err, 100.0f, 124.0f, kHintR,
-                    kHintG, kHintB);
+        // sub_407582's empty-glob branch @0x4076CA: instead of the list it
+        // raises sub_414340 with getstring(95) "NOTE!" over getstring(720)
+        // "No Scheme files found!", ink byte_49A390 = (164,0,0) dark red.
+        // This lives in the picker rather than in each caller because in the
+        // original it is the same ONE routine that both entry points call.
+        const std::string top = assets_ ? assets_->getstring(95, "NOTE!") : std::string("NOTE!");
+        const std::string bottom = assets_ ? assets_->getstring(720, "No Scheme files found!")
+                                           : std::string("No Scheme files found!");
+        const std::string ok = assets_ ? assets_->getstring(27, " Ok ") : std::string(" Ok ");
+        draw_acknowledge_dialog(ren, *font_, assets_ ? &assets_->frontend_pcx("WINZ") : nullptr,
+                                top, bottom, ok, kErrR, kErrG, kErrB);
         return;
     }
-    // Up to kVisibleRows (13) rows in the scroll window — sub_407582
-    // formats each row through `aSS` = "%s: %s" (pseudo.c 8447): the glob
-    // filename (extension included), a colon, then the file's own -N scheme
-    // name (getstring(727) "No Scheme Name" when the file has none — the
-    // sub_404BE9 default seeded before the parse).
-    int count = static_cast<int>(entries_.size());
-    int last = std::min(count, top_ + kVisibleRows);
+    // The list dialog itself: sub_407582 @0x407641 pushes the LITERAL pair
+    // (100, 100) and getstring(721) into sub_41485A -> sub_42DB80 ->
+    // sub_42DBCC, in the general white ink (byte_49D38F | 0x10000). Not
+    // centred, and not bare text on the backdrop: draw_list_dialog carries the
+    // whole pinned chrome (grey panel, bevels, title strip, scrollbar, "Done"
+    // button) — see list_dialog_geometry.hpp.
+    const std::string header = assets_ ? assets_->getstring(721, "Available Scheme Files:")
+                                       : std::string("Available Scheme Files:");
+    const int count = static_cast<int>(entries_.size());
+    const int last = std::min(count, top_ + kVisibleRows);
+
+    // sub_42FEF0 @0x42DC16: the widest ITEM row drives the width. The title is
+    // folded in by the widget itself, so it must NOT be pre-maxed here.
+    float item_w = 0.0f;
+    for (int i = 0; i < count; ++i)
+        item_w = std::max(item_w, static_cast<float>(font_->measure(row_text(i))));
+
+    const ListDialogLayout lay =
+        draw_list_dialog(ren, *font_, header, 100.0f, 100.0f, item_w, kVisibleRows, top_);
     for (int i = top_; i < last; ++i) {
-        bool sel = (i == row_);
-        Uint8 r = sel ? kSelR : kInkR, g = sel ? kSelG : kInkG, b = sel ? kSelB : kInkB;
-        const std::string& nm = names_[static_cast<std::size_t>(i)];
-        const std::string fallback =
-            assets_ ? assets_->getstring(727, "No Scheme Name") : std::string("No Scheme Name");
-        std::string line = (sel ? "> " : "  ") +
-                           entries_[static_cast<std::size_t>(i)].filename().string() + ": " +
-                           (nm.empty() ? fallback : nm);
-        font_->draw(ren, line, 100.0f, 124.0f + static_cast<float>(i - top_) * 20.0f, r, g, b);
+        const int vi = i - top_;
+        const float ty = lay.item_y0 + static_cast<float>(vi) * lay.item_h;
+        // The selected row is LIGHTENED under unchanged text (sub_442C28), not
+        // inverted — so the ink is the same for every row.
+        if (i == row_) draw_list_selection(ren, lay, vi);
+        font_->draw(ren, row_text(i), lay.item_x, ty, kInkR, kInkG, kInkB);
     }
-    font_->draw(ren, "UP/DOWN SELECT   ENTER OPEN   ESC CANCEL", 100.0f,
-                124.0f + static_cast<float>(kVisibleRows) * 20.0f + 8.0f, kHintR, kHintG, kHintB);
+}
+
+std::string SchemeFilePicker::row_text(int i) const {
+    // sub_407582 @0x4075EE formats every row through `aSS` = "%s: %s"
+    // (0x458B11): the glob filename WITH its extension, then the file's own -N
+    // scheme name. sub_404BE9 seeds getstring(727) "No Scheme Name" into its
+    // return buffer before parsing, so a file with no -N line shows that.
+    // sub_41404B strupr's every globbed name @0x414146, so the filename half
+    // is uppercase; the -N name keeps the case the file spells it with.
+    const std::string& nm = names_[static_cast<std::size_t>(i)];
+    const std::string fallback =
+        assets_ ? assets_->getstring(727, "No Scheme Name") : std::string("No Scheme Name");
+    return upper(entries_[static_cast<std::size_t>(i)].filename().string()) + ": " +
+           (nm.empty() ? fallback : nm);
 }
 
 // ---------------------------------------------------------------------------

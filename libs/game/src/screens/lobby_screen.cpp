@@ -10,8 +10,9 @@
 #include <string>
 #include <vector>
 
-#include "bomber/game/dialog_chrome.hpp"  // the pinned chrome primitives
-#include "bomber/game/sprites.hpp"        // Sprite
+#include "bomber/game/dialog_chrome.hpp"         // the pinned chrome primitives
+#include "bomber/game/list_dialog_geometry.hpp"  // list_dialog_width (centring)
+#include "bomber/game/sprites.hpp"               // Sprite
 #include "bomber/platform/frame_clock.hpp"
 
 #if defined(BOMBER_HAS_LOBBY)
@@ -37,6 +38,16 @@ constexpr float kMinListW = 260.0f;     // keeps a 1-row list from collapsing
 // the 640-px screen. Presentation-only, like everything else in this file.
 constexpr float kHintWrapW = 440.0f;
 constexpr float kScreenW = 640.0f;  // renderer.hpp's kScreenW, what dialog_rect centres against
+
+// PORT-ONLY window placement. sub_42DBCC takes an explicit x (see
+// list_dialog_geometry.hpp — sub_43C734 really is 6-arg), and both RE'd
+// callers pass the literal 100. These lobby screens have no original to copy a
+// position from, so they keep the centred look they have always had — stated
+// here rather than smuggled into the shared primitive.
+float centered_list_x(const FontTextures& font, const std::string& title, float item_w) {
+    const int w = list_dialog_width(static_cast<int>(item_w), font.measure(title));
+    return (kScreenW - static_cast<float>(w)) / 2.0f;
+}
 
 // Crockford base-32: the digits plus the letters MINUS I, L, O and U — dropped
 // so a code read out loud cannot be misheard (ADR-0011 lobby codes).
@@ -123,20 +134,17 @@ LobbyMenuChoice LobbyScreen::run_menu(bool online_available) {
 
         ctx_.audio.update_music();
         draw_backdrop();
-        const ListDialogLayout lay = draw_list_dialog(ctx_.sdl, ctx_.front_font, title, kListY,
-                                                      content_w, count, count, 0);
+        const ListDialogLayout lay = draw_list_dialog(
+            ctx_.sdl, ctx_.front_font, title, centered_list_x(ctx_.front_font, title, content_w),
+            kListY, content_w, count, 0);
         for (int i = 0; i < count; ++i) {
             const float ty = lay.item_y0 + static_cast<float>(i) * lay.item_h;
             const std::string label = rows[static_cast<std::size_t>(i)]->label;
-            if (i == sel) {
-                // Inverted-band selection: dark base-coat ink over the light band.
-                draw_list_selection(ctx_.sdl, lay, i);
-                ctx_.front_font.draw(ctx_.sdl, label, lay.item_x, ty, kDialogFillR, kDialogFillG,
-                                     kDialogFillB);
-            } else {
-                ctx_.front_font.draw(ctx_.sdl, label, lay.item_x, ty, kDialogInkR, kDialogInkG,
-                                     kDialogInkB);
-            }
+            // The selection LIGHTENS the row (sub_442C28), it does not invert
+            // it, so the ink is the same either way.
+            if (i == sel) draw_list_selection(ctx_.sdl, lay, i);
+            ctx_.front_font.draw(ctx_.sdl, label, lay.item_x, ty, kDialogInkR, kDialogInkG,
+                                 kDialogInkB);
         }
         SDL_RenderPresent(ctx_.sdl);
         frame_clock.pace();
@@ -195,20 +203,15 @@ bool LobbyScreen::run_seat_count(int& seats, bool& window_closed) {
 
         ctx_.audio.update_music();
         draw_backdrop();
-        const ListDialogLayout lay =
-            draw_list_dialog(ctx_.sdl, ctx_.front_font, title, kListY, content_w, count, count, 0,
-                             static_cast<int>(hints.lines.size()));
+        const ListDialogLayout lay = draw_list_dialog(
+            ctx_.sdl, ctx_.front_font, title, centered_list_x(ctx_.front_font, title, content_w),
+            kListY, content_w, count, 0, static_cast<int>(hints.lines.size()));
         for (int i = 0; i < count; ++i) {
             const float ty = lay.item_y0 + static_cast<float>(i) * lay.item_h;
             const std::string& label = labels[static_cast<std::size_t>(i)];
-            if (i == sel) {
-                draw_list_selection(ctx_.sdl, lay, i);
-                ctx_.front_font.draw(ctx_.sdl, label, lay.item_x, ty, kDialogFillR, kDialogFillG,
-                                     kDialogFillB);
-            } else {
-                ctx_.front_font.draw(ctx_.sdl, label, lay.item_x, ty, kDialogInkR, kDialogInkG,
-                                     kDialogInkB);
-            }
+            if (i == sel) draw_list_selection(ctx_.sdl, lay, i);
+            ctx_.front_font.draw(ctx_.sdl, label, lay.item_x, ty, kDialogInkR, kDialogInkG,
+                                 kDialogInkB);
         }
         for (std::size_t i = 0; i < hints.lines.size(); ++i) {
             const std::string& line = hints.lines[i];
@@ -358,22 +361,18 @@ void draw_room(ScreenContext& ctx, const net::LobbyFlow& flow, bool local_ready,
     content_w = std::max(content_w, kMinListW);
     content_w = std::max(content_w, hints.width);
 
-    const ListDialogLayout lay =
-        draw_list_dialog(ctx.sdl, ctx.front_font, title, kListY, content_w, rows, rows, 0,
-                         static_cast<int>(hints.lines.size()));
+    const ListDialogLayout lay = draw_list_dialog(
+        ctx.sdl, ctx.front_font, title, centered_list_x(ctx.front_font, title, content_w), kListY,
+        content_w, rows, 0, static_cast<int>(hints.lines.size()));
 
     for (std::size_t i = 0; i < roster.size(); ++i) {
         const net::RosterEntry& e = roster[i];
         const float ty = lay.item_y0 + static_cast<float>(i) * lay.item_h;
-        Uint8 r = kDialogInkR;
-        Uint8 g = kDialogInkG;
-        Uint8 b = kDialogInkB;
-        if (e.seat == flow.my_seat()) {
-            draw_list_selection(ctx.sdl, lay, static_cast<int>(i));
-            r = kDialogFillR;
-            g = kDialogFillG;
-            b = kDialogFillB;
-        }
+        const Uint8 r = kDialogInkR;
+        const Uint8 g = kDialogInkG;
+        const Uint8 b = kDialogInkB;
+        // Own-seat highlight: the lightening band, same ink (sub_442C28).
+        if (e.seat == flow.my_seat()) draw_list_selection(ctx.sdl, lay, static_cast<int>(i));
         ctx.front_font.draw(ctx.sdl, std::to_string(e.seat + 1), lay.item_x, ty, r, g, b);
         ctx.front_font.draw(ctx.sdl, safe_wire_name(e.name, "PLAYER"), lay.item_x + kNameCol, ty, r,
                             g, b);
@@ -462,9 +461,9 @@ void draw_browser(ScreenContext& ctx, const std::vector<net::PublicLobby>& list,
     content_w = std::max(content_w, kMinListW);
     content_w = std::max(content_w, hints.width);
 
-    const ListDialogLayout lay =
-        draw_list_dialog(ctx.sdl, ctx.front_font, title, kListY, content_w, visible, count, top,
-                         static_cast<int>(hints.lines.size()));
+    const ListDialogLayout lay = draw_list_dialog(
+        ctx.sdl, ctx.front_font, title, centered_list_x(ctx.front_font, title, content_w), kListY,
+        content_w, visible, top, static_cast<int>(hints.lines.size()));
     const float mark_x = lay.item_x + lay.item_w - mark_w;
     const float code_x = mark_x - kColGap - code_w;
     const float occ_x = code_x - kColGap - occ_w;
@@ -473,19 +472,14 @@ void draw_browser(ScreenContext& ctx, const std::vector<net::PublicLobby>& list,
         const net::PublicLobby& l = list[static_cast<std::size_t>(i)];
         const int vi = i - top;
         const float ty = lay.item_y0 + static_cast<float>(vi) * lay.item_h;
-        Uint8 r = l.build_ok ? kDialogInkR : kDialogDimR;
-        Uint8 g = l.build_ok ? kDialogInkG : kDialogDimG;
-        Uint8 b = l.build_ok ? kDialogInkB : kDialogDimB;
-        if (i == sel) {
-            // Inverted-band selection, as everywhere else. On the light band the
-            // readable ink is the dark base coat; a DIMMED variant of it would be
-            // a new colour, so a selected incompatible row leans on its VERSION
-            // marker (and the buzz on Enter) instead of a third ink.
-            draw_list_selection(ctx.sdl, lay, vi);
-            r = kDialogFillR;
-            g = kDialogFillG;
-            b = kDialogFillB;
-        }
+        const Uint8 r = l.build_ok ? kDialogInkR : kDialogDimR;
+        const Uint8 g = l.build_ok ? kDialogInkG : kDialogDimG;
+        const Uint8 b = l.build_ok ? kDialogInkB : kDialogDimB;
+        // The selection band LIGHTENS the row instead of inverting it, so the
+        // incompatible-build rows keep their dim ink while selected — which is
+        // what the earlier inverted band could not express without inventing a
+        // third colour.
+        if (i == sel) draw_list_selection(ctx.sdl, lay, vi);
         ctx.front_font.draw(ctx.sdl, display_name(l.name), lay.item_x, ty, r, g, b);
         const std::string occ = occupancy(l);
         const float ow = static_cast<float>(ctx.front_font.measure(occ));
