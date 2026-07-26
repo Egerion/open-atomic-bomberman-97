@@ -2672,13 +2672,23 @@ assertion in the golden suite is byte-identical before and after):
 
 Confirmed unchanged (verified, not just assumed): the enclosure draws ZERO
 `State::rng` (the only `rand()` in `sub_426818` is the presentation-only
-drop-sound variant pick, once per arm); `sub_426818`'s only top-level gate
-(`sub_421969() > 1`) is a general match-active check with no enclosure-
-specific round-end special-casing, so the existing `GameApp` post-decision
-linger already gives the correct "walls keep closing for a few seconds after
-one side is left" behaviour; the depth/id-46/motion-exemption/order-of-checks
-details from the 2026-07-08 "Options toggles" entry below all re-verified
-identical.
+drop-sound variant pick, once per arm); the depth/id-46/motion-exemption/
+order-of-checks details from the 2026-07-08 "Options toggles" entry below all
+re-verified identical.
+
+> **RETRACTED 2026-07-26 — this entry's reading of `sub_426818`'s top-level
+> gate was WRONG.** It said `sub_421969() > 1` is "a general match-active
+> check with no enclosure-specific round-end special-casing, so the existing
+> `GameApp` post-decision linger already gives the correct *walls keep closing
+> for a few seconds after one side is left* behaviour". `sub_421969` is not a
+> static match-active flag — it returns `dword_4621D4` (or `dword_4621DC` in
+> team mode), which the per-frame player pass `sub_420F07` **relatches every
+> frame** from the alive-side accumulator `sub_41F29B` fills. The walls
+> therefore STOP DEAD when the round is decided, on the identical edge that
+> freezes the bomb fuses, and never restart. Corrected in full, with the gate
+> table for bombs / bomb movement / flames / enclosure, in
+> `docs/re/enclosure.md` §8. (Not to be confused with TimeUp: the match clock
+> hitting zero still does NOT stop the spiral — `docs/re/enclosure.md` §2.)
 
 **Flagged DEVIATION-reported, NOT changed** (see `docs/re/enclosure.md` §4
 "Ring count" for the full writeup): a literal transcription of the ring-stop
@@ -3744,8 +3754,12 @@ call — and thus `sub_426704` and its 100-attempt RNG loop below — is
 **short-circuited to never run at all** on any level whose regen id is 0, so
 levels other than Haunted House draw **zero extra RNG** from this mechanic.
 The call is nested inside `sub_426818`'s own outer `sub_421969() > 1` gate
-(the same "round actually running" gate the wall-closing spiral itself uses),
-which our per-tick sim already implies for the whole of `run_tick`.
+(the same gate the wall-closing spiral itself uses). **CORRECTED 2026-07-26:**
+that gate is NOT implied by our `run_tick` — it is the round-decided freeze
+(`docs/re/enclosure.md` §8), re-latched every frame, so the regen stops the
+moment one side is left, exactly like the spiral. `simulation.cpp` now gates
+`tile_regen.update()` with `round_frozen` alongside `enclosure.update()`,
+since the original covers both with this one `if`.
 
 **`sub_426704`** (pseudo.c 27093-27132):
 

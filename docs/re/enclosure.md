@@ -400,11 +400,29 @@ spiral closes THIRD (drop events 96-124, ~24-31 s in) and, at the default
 produce that; the geometry is worked out in
 `docs/re/audit/enclosure-warphole-close.md`, which this finding resolves.
 
-**Falsifiable prediction from the same code, not yet play-tested:** on INNER
-CITY TRASH (`EXTRA10.RES`, conveyors) and on the dirarrow maps (HOCKEY RINK /
-ANCIENT EGYPT, `EXTRA2/3.RES`) the belts and arrows must KEEP working and
-KEEP drawing after the walls arm — only the ring-2 tiles they sit on go quiet,
-and only once a wall physically lands on them.
+(The `-W` lines really are `-W,1,<idno>,<x>,<y>,<linkto>` with arg0 = 1, and
+`-3` normalizes to `15-3 = 12` / `11-3 = 8`, which is where those ring-2
+coordinates come from. `EXTRA4.RES` is the only warphole file shipped.)
+
+**NOT the HURRY banner — the WALLS.** The two moments are 5 s apart (§2): the
+banner/voice latches on `dword_464984` at `remaining < getvalue(101)`, and the
+walls arm at `remaining <= getvalue(101) - 5`. `sub_405D0C` hangs off the
+SECOND one. `dword_464984` is a HUD-only latch and gates nothing in
+`sub_405654`, `sub_4056CA` or `sub_41EC84`. So the actors survive the whole
+banner window and die exactly when the first wall is scheduled — not when
+"HURRY!" appears.
+
+**Falsifiable predictions from the same code, not yet play-tested.** Three
+things this reading commits to, each cheap to check in the original:
+1. On INNER CITY TRASH (`EXTRA10.RES`, conveyors) and the dirarrow maps
+   (HOCKEY RINK / ANCIENT EGYPT, `EXTRA2/3.RES`) the belts and arrows must
+   KEEP working and KEEP drawing after the walls arm — only the ring-2 tiles
+   they sit on go quiet, and only once a wall physically lands on them.
+2. On COAL the warpholes must survive the "HURRY!" banner and vanish 5 s
+   later, on the first wall drop — not at the banner.
+3. With `enclosement_depth = 0` (walls never actually close) the warpholes
+   and trampolines must STILL vanish at the arm moment, because the sweep is
+   above the depth gate. This one is the sharpest test of the whole reading.
 
 **Port.** `EnclosureSystem::update()`'s arm branch calls
 `clear_hurry_disabled_actors(s)`, which sets `State::actor_type` to `None` on
@@ -645,7 +663,10 @@ This MOVES GOLDENS (goldens B and C reach the hurry phase and get decided).
 | sub_424841  | zero a bomb record in place (the "eat", `wall_detonates` OFF) |
 | sub_42331C  | bomb/fuse tick: drains the queue (once/frame, frame-stamped) and runs the normal fuse check that detonates a freshly-drained bomb |
 | sub_4245B9 / sub_42459A | the frame's two `sub_42331C` calls (modes 0/1); mode 0 runs BEFORE sub_426818, mode 1 AFTER — only mode 0 ever drains |
-| sub_421969  | top-level "are we in a match" gate — no enclosure-specific round-end logic |
+| sub_421969  | top-level gate, re-latched EVERY frame from the alive-side tally (`dword_4621D4`, or `dword_4621DC` in team mode; forced 2 in campaign) — the round-decided freeze, §8 |
+| sub_405D0C  | arm-time actor sweep: deactivates every warphole (type 1) and trampoline (type 3), leaves dirarrows (0) and conveyors (2), §5.1 |
+| sub_405654  | tile→actor lookup; skips slots whose active dword is 0, which is what makes §5.1's sweep a gameplay change |
+| sub_4056CA  | per-frame actor animator; per-TYPE draw gate, warphole exempt from the solid test, §5.3 |
 | VALUELST 27 | enclosement_depth (rings = 2× per its own authored comment; §4's "Ring count" flags an unresolved literal-disassembly conflict) |
 | VALUELST 28 | the depth setting's own valid range (0..3) — "the possible different enclosement depths" |
 | VALUELST 101| hurry_seconds — banner strictly below this; walls arm at this − 5, non-strict |

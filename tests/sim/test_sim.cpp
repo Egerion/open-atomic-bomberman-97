@@ -779,8 +779,8 @@ TEST_CASE("arming the walls switches off warpholes and trampolines, not belts or
 
     run(s, 1);  // the ARM tick
     REQUIRE(s.state().enclose_interval == 5);
-    CHECK(s.state().actor_type[4][6] == ActorType::None);  // warphole gone
-    CHECK(s.state().actor_type[6][8] == ActorType::None);  // trampoline gone
+    CHECK(s.state().actor_type[4][6] == ActorType::None);      // warphole gone
+    CHECK(s.state().actor_type[6][8] == ActorType::None);      // trampoline gone
     CHECK(s.state().actor_type[4][8] == ActorType::Conveyor);  // belt survives
     CHECK(s.state().actor_type[6][6] == ActorType::DirArrow);  // arrow survives
     // The original zeroes only the slot's ACTIVE dword; every other field of
@@ -819,7 +819,7 @@ TEST_CASE("the walls stop closing the moment the round is decided") {
     s.state().players[1].alive = false;
     REQUIRE(sides_remaining(s.state()) == 1);
 
-    run(s, 5 * 6);  // six more cadence slots' worth of ticks
+    run(s, 5 * 6);                                   // six more cadence slots' worth of ticks
     CHECK(s.state().enclose_index == index_before);  // frozen, not one more drop
 
     // The freeze is permanent for the rest of the round: the tally only ever

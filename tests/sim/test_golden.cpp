@@ -676,9 +676,9 @@ TEST_CASE("golden C: trigger bombs and a fast hurry phase") {
     // spiral by tick 1500; it now never arms, so this single checkpoint moves.
     CHECK(s.hash() == 0xd1aa9371228f9052ull);
     // Legible companions to the digest, so a stepper regression names itself.
-    CHECK(sides_remaining(s.state()) == 1);   // decided at tick 11 of 1500...
-    CHECK(s.state().enclose_interval == 0);   // ...so the walls never armed...
-    CHECK(s.state().enclose_index == 0);      // ...and not one tile ever dropped.
+    CHECK(sides_remaining(s.state()) == 1);  // decided at tick 11 of 1500...
+    CHECK(s.state().enclose_interval == 0);  // ...so the walls never armed...
+    CHECK(s.state().enclose_index == 0);     // ...and not one tile ever dropped.
 }
 
 TEST_CASE("golden D: the disease gauntlet") {
@@ -889,16 +889,14 @@ TEST_CASE("golden F: a full hurry phase with the round still undecided") {
     }
     // Legible assertions alongside the opaque digests, so a regression in the
     // stepper says WHAT broke and not just "some hash moved".
-    CHECK(sides_remaining(s.state()) == 2);       // never decided -> never frozen
-    CHECK(s.state().ticks_left == 0);             // the clock ran out at tick 600...
-    CHECK(s.state().enclose_index == 96);  // ...and the spiral finished anyway (§2):
-                                           // rings 0-1 = 96 drop events, all landed
+    CHECK(sides_remaining(s.state()) == 2);  // never decided -> never frozen
+    CHECK(s.state().ticks_left == 0);        // the clock ran out at tick 600...
+    CHECK(s.state().enclose_index == 96);    // ...and the spiral finished anyway (§2):
+                                             // rings 0-1 = 96 drop events, all landed
     CHECK(s.state().actor_type[4][4] == ActorType::None);       // warphole swept (§5.1)
     CHECK(s.state().actor_type[6][10] == ActorType::None);      // warphole swept
     CHECK(s.state().actor_type[6][4] == ActorType::None);       // trampoline swept
     CHECK(s.state().actor_type[4][10] == ActorType::Conveyor);  // belt survives
     CHECK(s.state().actor_type[6][6] == ActorType::DirArrow);   // arrow survives
-    CHECK(s.state().warp_dest_x[4][4] == 10);  // only the ACTIVE flag is cleared
+    CHECK(s.state().warp_dest_x[4][4] == 10);                   // only the ACTIVE flag is cleared
 }
-
-

@@ -1,5 +1,23 @@
 # RE investigation — do stage actors vanish at enclosure ARM, or tile-by-tile?
 
+> **RESOLVED 2026-07-26 — this file's Hypothesis 2 (a GLOBAL arm-time trigger)
+> is CONFIRMED, and its geometry argument was right.** The mechanism it could
+> not name (no binary in that worktree) is `sub_405D0C`, the 100-slot actor
+> sweep the arm branch calls: it deactivates every warphole and every
+> trampoline outright. See `docs/re/enclosure.md` §5.1 for the body, the call
+> site and the citations.
+>
+> **One correction to what follows.** This file inherited from
+> `audit/enclosure.md` Finding 0 the premise that the arm branch writes no
+> actor registry, and therefore concluded that whatever the trigger was, it
+> had to be **render-only**. Finding 0 is retracted (see its own banner): the
+> sweep clears the slots' ACTIVE flag, which removes them from the tile
+> lookup `sub_405654` as well as from the animator `sub_4056CA`. So it is a
+> **gameplay** change — warpholes and trampolines stop *working*, not just
+> stop drawing — and the fix landed in `libs/sim`, not only in the renderer.
+> Read this file for the geometry (still correct and still the reason the
+> per-tile hypothesis is dead); read §5.1 for the answer.
+
 **Trigger.** Live-play report (Ege): on the **COAL** map the warpholes "really
 disappear when the walls START closing," and a suspicion that all the
 special-feature maps share the pattern. This re-examines `docs/re/enclosure.md`

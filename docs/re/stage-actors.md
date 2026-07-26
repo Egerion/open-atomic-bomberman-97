@@ -16,6 +16,16 @@ and the conveyor / trampoline / dirarrow / warphole mechanics.
 - Tile→actor lookup `sub_405654(x, y)`: linear scan, stride 38 dwords (=152
   bytes); returns the first slot whose `[0]` (active) is set and whose
   `[7]==x && [8]==y` (actor+28 = tileX, actor+32 = tileY). Returns 0 if none.
+- **Half the actors are switched OFF for the rest of the round when the HURRY
+  walls arm.** `sub_405D0C`, called from the enclosure stepper's arm branch,
+  walks all 100 slots and clears the active flag `[0]` of every actor whose
+  type `[1]` is **1 (warphole) or 3 (trampoline)**; dirarrows and conveyors
+  are left alone. Because the lookup above and the animator `sub_4056CA` both
+  test that same flag, this kills the MECHANIC and the ART together — a
+  warphole stops teleporting, a trampoline stops bouncing. Motive: the shared
+  kill routine `sub_41DE63` early-outs on movement states 5/6/7, so a live
+  bounce or warp would otherwise carry a player through a closing wall. Full
+  citation and the port mapping: `docs/re/enclosure.md` §5.1.
 
 ### Actor struct layout (the fields the mechanics read)
 
@@ -548,6 +558,12 @@ resting bomb is `state +16 == 9`, with a movement sub-mode `switch(+46)`.
 
 Three of the four consume the SAME `actor_type`/`actor_dir` grids in `State`;
 `warp_dest` remains a player-only input (§5).
+
+All four reactions go through `sub_405654`, so all four inherit §1's arm-time
+sweep: once the HURRY walls arm, reaction 4 stops applying (every warphole is
+deactivated, so a sliding bomb rolls onto what used to be an impassable tile)
+while 1 and 2 keep working (belts and arrows survive the sweep). 3 was never
+a reaction in the first place.
 
 ## 7. Sounds  [WIRED 2026-07-04]
 
