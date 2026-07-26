@@ -183,15 +183,27 @@ bool AISystem::safe_tile(int tx, int ty) const {
 }
 
 // sub_423188: the drop-tile CLEARANCE predicate (0x423188) — "may a bomb be
-// placed on THIS tile". Byte-exact reduction (docs/re/ai.md §3.3): no bomb here
-// (sub_422E48) AND the cell is blank floor (sub_425FB9 == 0, i.e. NOT a wall or
-// brick). It is NOT an escape search — the original does no look-ahead here and
-// trusts behaviour 2 to flee the resulting blast. The original also skips a
-// campaign-entity here (sub_405654, the rover/ghost list dword_45E0A8); that
-// list is empty in the versus AI, so it drops out. Used by behaviour 3.
+// placed on THIS tile". Byte-exact (0x423188):
+//     if (sub_422E48(x,y)) return 0;               // a bomb already here
+//     v5 = sub_405654(x,y);
+//     return (!v5 || v5[1] != 1) && sub_425FB9(x,y) == 0;
+// It is NOT an escape search — the original does no look-ahead here and trusts
+// behaviour 2 to flee the resulting blast. Gates behaviours 3 and 4.
+//
+// CORRECTED 2026-07-26 (facts.md "AI never bombs a warphole"): `sub_405654` is
+// the STAGE-ACTOR registry lookup (dword_45E0A8, stride 38 dwords, tile match on
+// +28/+32 — docs/re/stage-actors.md §1), NOT a campaign rover/ghost list, and
+// `v5[1]` is the actor's TYPE word at +4. So `v5[1] != 1` rejects a WARPHOLE
+// tile — the identical tail `sub_4230A5` uses to make a warphole impassable to a
+// sliding bomb (stage-actors.md §4 note 4, which read the same expression
+// correctly). ai.md §3.3's old "rover/ghost list, empty in versus" gloss was
+// wrong and this port inherited it, which is why our AI bombed warpholes (and
+// span the deny SFX) where the original never even presses the key. Only type 1
+// blocks: an AI may still drop on a dirarrow(0)/conveyor(2)/trampoline(3).
 bool AISystem::drop_tile_clear(int tx, int ty) const {
     if (!grid::in_grid(tx, ty)) return false;                // out of bounds: sub_425FB9 -> 1
     if (grid::bomb_at(s_, tx, ty) != nullptr) return false;  // sub_422E48
+    if (s_.actor_type[ty][tx] == ActorType::Warphole) return false;  // sub_405654 -> v5[1] == 1
     return s_.cells[ty][tx] == Cell::Blank && s_.burning[ty][tx] == 0;  // sub_425FB9 == 0
 }
 

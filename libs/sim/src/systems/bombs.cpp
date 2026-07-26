@@ -86,10 +86,21 @@ void BombSystem::drop(Player& p, std::uint8_t owner) {
     // drop was disease-forced). facts.md "Core-feel audit" §3. DropRefused
     // carries `owner` and is emitted for ANY player: sub_41F29B is the shared
     // human+AI input processor (fact #6 — only its reversed-controls flip is
-    // human-gated) and sub_427961(40) is a GLOBAL SFX, so an AI warphole drop
-    // plays 40/41 too. An AI simply reaches this branch rarely — its drop
-    // behaviours pre-check the tile (sub_423188) and slots (sub_4245DA) before
-    // pressing bomb (a decision-side avoidance, NOT a per-listener gate).
+    // human-gated) and sub_427961(40) is a GLOBAL SFX with no per-source gate,
+    // so an AI warphole drop WOULD play 40/41 too. It just never happens in the
+    // original — see below; this branch is human-only in practice.
+    //
+    // CORRECTION 2026-07-26 (the 2026-07-24 audit's last sentence was WRONG in
+    // its premise, not its mechanism). That note said an AI "reaches this branch
+    // rarely" because its drop behaviours pre-check the tile via sub_423188 —
+    // true of the ORIGINAL, but OUR AI did not implement that check, so it hit
+    // this branch constantly and machine-gunned the deny SFX (Ege, playing both
+    // builds side by side). The original's sub_423188 rejects a tile carrying a
+    // type-1 stage actor (`sub_405654(x,y)[1] != 1`), i.e. a warphole, and BOTH
+    // AI drop behaviours (sub_40AD8D, sub_40ABED) gate on it before pressing the
+    // key — so an original AI standing on a warp exit never presses bomb at all.
+    // Fixed in ai_grids.cpp's drop_tile_clear; facts.md "AI never bombs a
+    // warphole". This branch itself was and remains correct.
     if (grid::in_grid(tx, ty) && s_.actor_type[ty][tx] == ActorType::Warphole) {
         if (!p.sick(Disease::Diarrhea) && !p.sick(Disease::Super))
             s_.events.push_back({Event::Type::DropRefused, static_cast<std::int8_t>(owner),

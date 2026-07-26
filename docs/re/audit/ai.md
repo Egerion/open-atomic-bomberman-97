@@ -321,3 +321,16 @@ batches were not re-read end-to-end this pass, only their call-site
 contracts as exercised from `batch_0x40A140.cpp`), and the input-flag bridge
 on the mover side (`sub_41F29B`, already the subject of its own facts.md/
 ai.md §7 audits and the "Round-start input freeze"/ice-buffer passes).
+
+**2026-07-26 — that exclusion cost a real finding.** One of the un-re-read
+helpers, the drop-clearance predicate `sub_423188`, was NOT faithfully ported:
+its `sub_405654(x,y)[1] != 1` term is a **warphole** rejection (the stage-actor
+registry, not the "campaign rover/ghost list, empty in versus" that ai.md §3.3
+claimed and this audit took on trust), so an original AI standing on a warphole
+never presses the bomb key while ours did — audible in the port as a
+machine-gunning bomb-refusal SFX the original never plays for an AI. Reading a
+helper's *call-site contract* is not enough when the contract itself came from
+the document under audit; see ai.md §3.3's CORRECTION box and facts.md "AI never
+bombs a warphole". The other three excluded helpers (`sub_422718`,
+`sub_421CB5`, `sub_4245DA`) were NOT re-read in the 2026-07-26 pass either and
+remain open to the same class of error.

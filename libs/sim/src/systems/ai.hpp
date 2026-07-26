@@ -75,10 +75,10 @@ private:
     bool obstacle_at(int tx, int ty) const;          // sub_409083: 1 == blocked
     bool safe_tile(int tx, int ty) const;            // sub_40A59D step-onto gate
 
-    // sub_423188: "may a bomb be placed on THIS tile" — no bomb here (sub_422E48)
-    // and the cell is blank floor (sub_425FB9 == 0). NOT an escape search (the
-    // original's campaign-entity check sub_405654 has no versus equivalent — that
-    // entity list is empty here; see docs/re/ai.md §3.3). Used by behaviour 3.
+    // sub_423188: "may a bomb be placed on THIS tile" — no bomb here (sub_422E48),
+    // NO WARPHOLE here (sub_405654 -> actor type +4 == 1; corrected 2026-07-26,
+    // see ai_grids.cpp and docs/re/ai.md §3.3) and the cell is blank floor
+    // (sub_425FB9 == 0). NOT an escape search. Gates behaviours 3 and 4.
     bool drop_tile_clear(int tx, int ty) const;
 
     // The behaviours-3/4 entry gate, `sub_4245DA(me) < maxBombs(+86)` inverted:

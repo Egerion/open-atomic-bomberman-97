@@ -1357,6 +1357,10 @@ proofs):
 3. **Drop/spooge block details (`sub_41F29B` LABEL_246).** (a) A drop on a
    WARPHOLE tile is refused (`sub_405654` type 1 short-circuits placement;
    sound 40/41 "enrt" unless disease-auto-drop — `Event::DropRefused`).
+   In practice this is a HUMAN-only sound: an AI never presses the bomb key
+   on a warphole, because `sub_423188` vetoes the tile first — see "AI never
+   bombs a warphole" (2026-07-26) below, which also corrects a wrong
+   2026-07-24 note that claimed otherwise.
    (b) The spooge branch requires the underfoot bomb to be OWN (owner word
    +62 == self), not just any bomb. (c) The spooge run ALSO stops at a live
    player (`sub_421CB5` is the loop's first break). (d) The run index n is
@@ -1557,6 +1561,84 @@ disassembly (capstone) at `0x423A80-0x423C48` and `0x4443CC-0x444440`, and
 `idautils.XrefsTo(0x4443CC)` against `BM95_copy.idb` — read-only queries via
 `python-idb`/`pefile`/`capstone` against a scratch copy of the idb, no
 exe-derived material committed.)
+
+## AI never bombs a warphole — CONFIRMED (`sub_423188` / `sub_405654`, 2026-07-26)
+
+**Observation first.** Ege, playing the ORIGINAL and the port side by side,
+reported that the bomb-refused-on-a-warphole sound (SOUNDLST 40/41, the
+`sub_427961(40)` in `sub_41F29B`'s drop block ~23354 — "Core-feel audit" §3a)
+**never happens for a computer player in the original**, while the port
+machine-guns it. A 2026-07-24 audit note in `bombs.cpp` had concluded the
+opposite ("an AI warphole drop plays 40/41 too; an AI simply reaches this branch
+rarely"). That note's MECHANISM was right and its PREMISE about our own port was
+wrong; this entry records the resolution and supersedes it.
+
+**The gate is on the AI's decision side, in `sub_423188`.** The drop-tile
+clearance predicate (0x423188) is, byte-exact:
+
+```c
+if ( sub_422E48(a1, a2) ) return 0;            // a bomb already on this tile
+v5 = sub_405654(a1, a2);                       // STAGE-ACTOR lookup
+return (!v5 || v5[1] != 1) && sub_425FB9(a1, a2) == 0;
+```
+
+`sub_405654` (0x405654) is the **stage-actor registry** scan — `dword_45E0A8`,
+stride 38 dwords, matching the record's tile fields `i[7]`/`i[8]` (actor
+`+28`/`+32`), exactly as pinned in `stage-actors.md` §1 — and `v5[1]` is the
+actor **type word at +4** (`0=dirarrow, 1=warphole, 2=conveyor, 3=trampoline`).
+So `v5[1] != 1` is a **warphole rejection**, and this is the *same tail
+expression* as the sliding-bomb cell-entry probe `sub_4230A5` documented in
+"Bomb/warphole reconciliation 2026-07-10" above — the two functions are adjacent
+in the binary and share the verdict verbatim.
+
+`sub_423188` gates **both** AI drop behaviours, in each case called on the AI's
+OWN standing tile and evaluated BEFORE the behaviour's `rand()%N` whim:
+- `sub_40AD8D` (blast bricks, priority 3): `if (sub_423188(brain+46>>16,
+  brain+48>>16)) { ...rand()%getvalue(915)... } else return 0;`
+- `sub_40ABED` (bomb near an enemy, priority 4): `if (!sub_423188(...)) return 0;`
+  before `rand()%5`.
+
+The only other writer of the AI's bomb-key byte `+56` is `sub_40BD44` (grab
+glove, priority 0), which first requires `sub_422E48(pos)` — a bomb already on
+the AI's own tile — and a bomb can never be on a warphole tile (placement,
+slide-entry and flight-landing are all blocked there; see the truth table in
+"Bomb/warphole reconciliation" above). An exhaustive grep of the AI batch found
+exactly those three `+56 = 1` sites. **Therefore an AI in the original never
+presses the bomb key while standing on a warphole**, and `sub_427961(40)` — a
+global SFX with no per-source gate — is never reached from an AI. The remaining
+AI-adjacent bomb press, the diarrhea/super auto-drop (`+135`/`+137` at
+`sub_41F29B` LABEL_246), is explicitly excluded from the sound by that same
+block's `if (!+135 && !+137)` guard, so it is silent for humans and AI alike.
+
+**Our divergence (fixed here).** `docs/re/ai.md` §3.3 had glossed `sub_405654`
+as "an ENTITY (rover/ghost) — empty in versus" and told the port the term "drops
+out"; `AISystem::drop_tile_clear` (`libs/sim/src/systems/ai_grids.cpp`) therefore
+implemented only the bomb + blank-floor conditions. Our AI happily parked on a
+warp exit next to a brick and pressed bomb on ~1-in-5 eligible ticks, which
+`BombSystem::drop` refused and turned into a `DropRefused` event (and the deny
+SFX) every time — measured at 9 refusals in 300 ticks in the new regression
+fixture. The missing `actor_type == Warphole ⇒ not clear` condition is now
+ported. **This is an AI-behaviour fix, not a sound fix**: the sound was only the
+symptom of our AI walking onto warpholes and pressing bomb, which was wrong
+regardless of what it sounded like. Only type 1 blocks — an AI may still drop on
+a dirarrow, conveyor or trampoline tile, and a test pins that.
+
+**RNG / golden impact.** The new condition sits where the original's does: BEFORE
+the `rand()` whim in both behaviours, so on a warphole tile the behaviour now
+returns 0 **without drawing**, and the dispatcher chain falls through to the
+lower-priority behaviours (which take their own draws) — exactly the original's
+stream. Golden A-E are **byte-identical** (verified): they have no AI players at
+all (`Player::ai` defaults false, no golden config sets it) and no warpholes, so
+the branch is unreachable there. The only behaviour change is on boards that have
+both an AI and a warphole.
+
+(Provenance: `sub_423188` @ 0x423188; `sub_405654` @ 0x405654; `sub_40AD8D` @
+0x40AD8D; `sub_40ABED` @ 0x40ABED; `sub_40BD44` @ 0x40BD44; `sub_41F29B`'s drop
+block and its `sub_427961(40)`; the `+56` writer census over the AI batch
+0x40A140-0x40BEE7. Cross-checked against the `sub_4230A5` reading already
+recorded in "Bomb/warphole reconciliation 2026-07-10" and `stage-actors.md` §1's
+registry layout. Live-play observation by Ege is the finding's origin and its
+independent confirmation.)
 
 ## Chain-reaction timing — CONFIRMED (`sub_423209` queue, `sub_42331C` drain, 2026-07-10 flame-system audit)
 
