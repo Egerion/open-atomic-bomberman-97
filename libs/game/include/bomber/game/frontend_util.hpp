@@ -39,10 +39,13 @@ inline std::string pick_glue(std::uint32_t& setup_lcg, const assets::res::ValueL
 // entry, sub_410F81 -> sub_4046CC -> sub_403EEE).
 inline bool reload_scheme(assets::sch::Scheme& scheme, const std::filesystem::path& game_dir,
                           const std::string& name) {
-    // Accept the name with or without an extension ("BASIC" from the picker /
-    // a hand-edited "BASIC.SCH" from options.ini alike).
+    // Accept the name with or without an extension — "BASIC.SCH" from the
+    // picker (sub_407582 cuts the row at its ':' and so keeps the extension)
+    // and a hand-edited/MAKECFG "BASIC" from options.ini alike. This mirrors
+    // sub_403EEE @0x403FE8: strrchr(name, '.'), truncate there, then strcat
+    // ".sch" — the LAST dot, so a "MY.MAP.SCH" keeps its "MY.MAP" stem.
     std::string want = name;
-    if (auto dot = want.find('.'); dot != std::string::npos) want.erase(dot);
+    if (auto dot = want.rfind('.'); dot != std::string::npos) want.erase(dot);
     for (auto& c : want) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
     if (want.empty()) return false;
     std::filesystem::path schemes_dir = game_dir / "DATA" / "SCHEMES";

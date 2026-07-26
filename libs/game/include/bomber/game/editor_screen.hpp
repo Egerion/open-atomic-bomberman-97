@@ -13,8 +13,8 @@
 //
 // The screen-widget details are now pinned from full body reads (docs/re/
 // results-and-options.md §5): the file picker is the generic list dialog
-// (sub_41485A -> sub_42DBCC) at (100,100) with header getstring(721) and up
-// to 13 visible rows; the powerup rows edit through sub_4023A2's chain of
+// (sub_41485A -> sub_42DB80 -> sub_42DBCC) at (100,100) with header
+// getstring(721) and 10 visible rows; the powerup rows edit through sub_4023A2's chain of
 // four modal prompts; the canvas draws the match field's own "tile %d
 // blank/solid/brick" ANI sequences and MISC.ANI's "teamring%u" markers at
 // the match field origin/cell size (sub_426524/sub_42655F). Only the text
@@ -33,24 +33,38 @@
 #include "bomber/audio/audio_engine.hpp"
 #include "bomber/game/bmscreen.hpp"
 #include "bomber/game/editor_grid.hpp"
+#include "bomber/game/list_dialog_geometry.hpp"
 
 namespace bomber::game {
 
-// The *.SCH file picker — sub_407582 @0x407582 (§5, PINNED from the body):
-// globs "*.SCH" (sub_41404B, the same findfirst/qsort helper as the help
-// browser), reads each file's embedded -N scheme name (sub_404BE9;
-// getstring(727) "No Scheme Name" when absent) and lists rows formatted
-// through aSS = "%s: %s" — "<FILENAME.SCH>: <scheme name>" — in the generic
-// list dialog (sub_41485A -> sub_42DBCC) at (100, 100) with header
-// getstring(721), the general white ink, and up to 13 visible rows (the
-// dialog shrinks to 12..9 rows if the window can't fit; more entries
-// scroll). Selecting a row cuts the line at its FIRST '.' (dropping both
-// the extension and the ": name" suffix in one strchr) and stores that,
-// uppercased (sub_412A3B strupr), as the live schemefilename (byte_4648C4);
-// an empty glob shows the getstring(95)/getstring(720) sub_414340 error in
-// byte_49A390's dark red instead. This ONE routine serves both the editor's
-// "edit an existing scheme" path AND the Options screen's row 8 (pseudo.c
-// 5501 and 9445, the same sub_407582).
+// The *.SCH file picker — sub_407582 @0x407582 (§5c, PINNED from the body;
+// re-read against the binary 2026-07-26). Globs "*.SCH" (sub_41404B, the same
+// findfirst/qsort helper as the help browser), reads each file's embedded -N
+// scheme name (sub_404BE9; getstring(727) "No Scheme Name" when absent) and
+// lists rows formatted through aSS = "%s: %s" @0x458B11 —
+// "<FILENAME.SCH>: <scheme name>" — in the generic list dialog at the LITERAL
+// (100, 100) with header getstring(721) and the general white ink.
+//
+// The dialog chain is sub_41485A @0x407657 (a mouse show/hide bracket) ->
+// sub_42DB80 (an arg trampoline appending initial-selection 0) -> sub_42DBCC
+// (the widget). TEN rows are visible, not thirteen: 13 is only the window's
+// font-height multiplier — see list_dialog_geometry.hpp, which carries the
+// whole pinned geometry and the arithmetic proof.
+//
+// Selecting a row cuts the line at its FIRST ':' — `mov edx, 0x3A` @0x40767A
+// feeding sub_45167A/strchr, CORRECTED 2026-07-26 from the earlier "first '.'"
+// reading — so the stored value KEEPS the extension: "BASIC.SCH", uppercased
+// (sub_412A3B strupr) into the live schemefilename (byte_4648C4). That still
+// loads, because the '.'-strip lives in the READER: sub_403EEE @0x403FE8 does
+// strrchr(name, '.'), truncates, then strcat's ".sch". The visible
+// consequence is Options row 8, which prints the buffer verbatim
+// ("Scheme File: BASIC.SCH", not "...: BASIC").
+//
+// An empty glob shows the getstring(95)/getstring(720) sub_414340 error in
+// byte_49A390's dark red instead — the CALLER draws that; this class draws
+// nothing when empty(). This ONE routine serves both the editor's "edit an
+// existing scheme" path AND the Options screen's row 8 (pseudo.c 5501 and
+// 9445, the same sub_407582).
 class SchemeFilePicker {
 public:
     SchemeFilePicker(const AssetStore& assets, const FontTextures& font)
@@ -74,11 +88,16 @@ public:
     }
     bool empty() const { return entries_.empty(); }
 
-    // sub_42DBCC sizes the dialog for 13 rows first (falling back 12..9 only
-    // when the window allocation fails, which ours never does).
-    static constexpr int kVisibleRows = 13;
+    // sub_42DBCC's visible-row count (list_dialog_geometry.hpp): 10. The
+    // window is sized 13 font-heights tall, which is what the old 13 here
+    // confused it with.
+    static constexpr int kVisibleRows = kListDialogRows;
 
 private:
+    // One row as the original formats it: "<FILENAME.SCH>: <scheme name>".
+    // Used both to draw and to measure the list's width (sub_42FEF0).
+    std::string row_text(int i) const;
+
     const AssetStore* assets_ = nullptr;
     const FontTextures* font_ = nullptr;
     std::string backdrop_;

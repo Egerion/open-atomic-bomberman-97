@@ -499,35 +499,31 @@ void HelpBrowser::draw(SDL_Renderer* ren) const {
                                 head, body, ok, kErrorInkR, kErrorInkG, kErrorInkB);
         return;
     }
-    // The generic bevel list dialog (sub_42DBCC) at y=100, header
-    // getstring(600) — the SAME primitive/coords SchemeFilePicker's *.SCH
-    // picker uses (§4/§5). Width fits the widest of header/entries.
+    // The generic bevel list dialog at the LITERAL (100, 100), header
+    // getstring(600) — the SAME primitive and the SAME coordinates
+    // SchemeFilePicker's *.SCH picker uses (§4/§5c). Width comes from the
+    // widest ENTRY alone: the widget folds the title in itself
+    // (max(item_w + 16, title_w) + 20), so pre-maxing them here would inflate
+    // it by 16. The old 200-px floor was a port stand-in and is gone.
     const std::string header = assets_ ? assets_->getstring(600, "Available help files:")
                                         : std::string("Available help files:");
     int count = static_cast<int>(entries_.size());
-    float content_w = static_cast<float>(font_->measure(header));
+    float item_w = 0.0f;
     for (const auto& e : entries_)
-        content_w = std::max(content_w, static_cast<float>(font_->measure(e.filename().string())));
-    content_w = std::max(content_w, 200.0f);
+        item_w = std::max(item_w, static_cast<float>(font_->measure(e.filename().string())));
 
     const int last = std::min(count, top_ + kVisibleRows);
-    const int visible = last - top_;
     const ListDialogLayout lay =
-        draw_list_dialog(ren, *font_, header, 100.0f, content_w, kVisibleRows, count, top_);
+        draw_list_dialog(ren, *font_, header, 100.0f, 100.0f, item_w, kVisibleRows, top_);
     for (int i = top_; i < last; ++i) {
         const int vi = i - top_;
-        const bool sel = (i == row_);
         const float ty = lay.item_y0 + static_cast<float>(vi) * lay.item_h;
         std::string name = entries_[static_cast<std::size_t>(i)].filename().string();
-        if (sel) {
-            // Inverted-band selection: dark base-coat ink over the light band.
-            draw_list_selection(ren, lay, vi);
-            font_->draw(ren, name, lay.item_x, ty, kDialogFillR, kDialogFillG, kDialogFillB);
-        } else {
-            font_->draw(ren, name, lay.item_x, ty, kListInkR, kListInkG, kListInkB);
-        }
+        // sub_442C28 LIGHTENS the selected row rather than inverting it, so
+        // every row keeps the same ink (dialog_chrome.hpp's own note).
+        if (i == row_) draw_list_selection(ren, lay, vi);
+        font_->draw(ren, name, lay.item_x, ty, kListInkR, kListInkG, kListInkB);
     }
-    (void)visible;
 }
 
 }  // namespace bomber::game

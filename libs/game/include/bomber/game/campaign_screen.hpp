@@ -25,6 +25,7 @@
 #include "bomber/game/asset_store.hpp"
 #include "bomber/audio/audio_engine.hpp"
 #include "bomber/game/bmscreen.hpp"
+#include "bomber/game/list_dialog_geometry.hpp"  // kListDialogRows
 
 namespace bomber::game {
 
@@ -54,7 +55,11 @@ public:
     const std::filesystem::path& selected() const { return entries_[static_cast<std::size_t>(row_)]; }
     bool empty() const { return entries_.empty(); }
 
-    static constexpr int kVisibleRows = 13;  // sub_42DBCC's 13-row dialog, same as SchemeFilePicker
+    // CORRECTED 2026-07-26: sub_42DBCC shows TEN rows, not thirteen — 13 is
+    // only the window's font-height multiplier (list_dialog_geometry.hpp).
+    // NOTE: unlike SchemeFilePicker, this screen still draws bare text rather
+    // than routing through draw_list_dialog's chrome — a separate fix.
+    static constexpr int kVisibleRows = kListDialogRows;
 
 private:
     const AssetStore* assets_ = nullptr;

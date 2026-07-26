@@ -11,6 +11,7 @@
 #include "bomber/assets/bmtext.hpp"
 #include "bomber/game/asset_store.hpp"
 #include "bomber/audio/audio_engine.hpp"
+#include "bomber/game/list_dialog_geometry.hpp"  // kListDialogRows
 #include "bomber/game/sdl.hpp"
 
 // The front-end `.BM` text-screen viewer — the SDL realisation of the original's
@@ -175,10 +176,12 @@ public:
     // (getstring(5)/getstring(95)), checked ahead of the glob (§4).
     bool disabled() const { return disabled_; }
 
-    // sub_42DBCC tries heights 13*line_h+22 down to 9 and takes visible =
-    // attempt-3, capped at 10 (chrome audit §3). 10 is the steady-state
-    // count for a list that overflows.
-    static constexpr int kVisibleRows = 10;
+    // CLARIFIED 2026-07-26 (list_dialog_geometry.hpp): sub_42DBCC keeps TWO
+    // counters @0x42DC44 — 10 rows drawn, and a separate 13 as the window's
+    // font-height multiplier (`(rows+3)*fh + 22`). They fall together, 13/10
+    // down to 9/6, only if the window allocation fails, which never happens
+    // here. So 10 is the count outright, not a cap on an attempt index.
+    static constexpr int kVisibleRows = kListDialogRows;
 
 private:
     const AssetStore* assets_ = nullptr;

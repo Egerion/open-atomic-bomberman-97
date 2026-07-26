@@ -41,6 +41,14 @@ target_link_libraries(bomber_net_setup_roster_tests
 target_include_directories(bomber_net_setup_roster_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
 add_test(NAME net_setup_roster COMMAND bomber_net_setup_roster_tests)
 
+# The generic list dialog's pinned pixel geometry (list_dialog_geometry.hpp,
+# sub_42DBCC). Header-only integer math with no SDL and no other dependency, so
+# this target needs nothing but the game include dir.
+add_executable(bomber_list_dialog_tests test_list_dialog.cpp)
+target_link_libraries(bomber_list_dialog_tests PRIVATE doctest::doctest bomber::warnings)
+target_include_directories(bomber_list_dialog_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+add_test(NAME list_dialog COMMAND bomber_list_dialog_tests)
+
 # Scheme editor's pure grid model (editor_grid.hpp/.cpp) is SDL-free despite
 # living under libs/game/src — compiled directly into its own test binary rather
 # than linking bomber_game_core (which pulls in SDL3).
