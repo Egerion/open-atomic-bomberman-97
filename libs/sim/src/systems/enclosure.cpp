@@ -108,6 +108,53 @@ int rings_for(int depth) {
     return std::min(std::clamp(depth, 0, 3) * 2, max_rings);
 }
 
+// sub_405D0C — the actor-registry sweep sub_426818's ARM branch runs exactly
+// once, the frame the walls start closing (native/src/game/batch_0x405B3A.cpp
+// lines 298-325, called from batch_0x42583B.cpp line 695):
+//
+//   for (100 slots) if (active) { t = slot[+4]; if (t) if (t <= 1 || t == 3) active = 0; }
+//
+// `t` is the actor TYPE field (0=DirArrow, 1=Warphole, 2=Conveyor,
+// 3=Trampoline, docs/re/stage-actors.md §1) and is unsigned, so with `t != 0`
+// already established `t <= 1` is exactly `t == 1`: the sweep DEACTIVATES
+// every WARPHOLE and every TRAMPOLINE and leaves dirarrows and conveyors
+// alone. Clearing the slot's active flag removes the actor from BOTH consumers
+// at once — the tile->actor lookup sub_405654 (so the step-on warp/bounce
+// trigger, and the sliding-bomb warphole block in sub_4230A5, stop firing) and
+// the per-frame animator sub_4056CA (so the art disappears). It is therefore a
+// GAMEPLAY change, not a render hide.
+//
+// Why those two types: a player in the trampoline-hop (movement state 5) or
+// warp (states 6/7) is immune to the shared kill routine sub_41DE63, which is
+// the very routine the wall crush calls — leaving them live would let a player
+// ride a bounce or a warp straight through a closing wall. Conveyors and
+// dirarrows create no such invulnerable state and keep working.
+//
+// (This corrects docs/re/audit/enclosure.md Finding 0, which read
+// batch_0x405B3A.cpp's own stale header comment calling dword_45E0A8 a
+// "level-select broadcast table" and concluded the call was inert. It is the
+// same single global the actor pool lives in — allocated by sub_404D16,
+// scanned by sub_405654/sub_4056CA in batch_0x404852.cpp; globals.h line 678
+// labels it "the 100-slot x 152-byte 'extra object' pool". Confirmed in-game
+// by Ege on COAL MINE: the warpholes vanish the moment the walls start
+// closing, whole ring-2 rectangle at once, long before the spiral could reach
+// their tiles.)
+void clear_hurry_disabled_actors(State& s) {
+    for (int y = 0; y < kGridHeight; ++y)
+        for (int x = 0; x < kGridWidth; ++x) {
+            const ActorType t = s.actor_type[y][x];
+            if (t == ActorType::Warphole || t == ActorType::Trampoline)
+                s.actor_type[y][x] = ActorType::None;
+        }
+    // NOTE: warp_dest_x/y and actor_dir are deliberately left alone. The
+    // original only zeroes the slot's ACTIVE dword (`*v3 = 0`); every other
+    // field of the record survives untouched, and no consumer reads them
+    // without first matching on the type (start_warp gates on
+    // actor_type == Warphole), so retaining them is the faithful mapping.
+    // An in-flight hop/warp likewise completes: sub_41F29B's states 5/6/7
+    // never re-consult the registry, and neither do tick_bounce/tick_warp.
+}
+
 }  // namespace
 
 int EnclosureSystem::total(int depth) {
@@ -289,6 +336,12 @@ void EnclosureSystem::update() {
         s.enclose_interval = kEncloseIntervalTicks;
         s.enclose_timer = s.enclose_interval;
         s.enclose_index = 0;
+        // sub_405D0C: warpholes and trampolines are switched off for the rest
+        // of the round, globally, on this one edge. NOT depth-gated — the
+        // original runs it inside the `if (!dword_45BE9C)` arm block, which
+        // sits ABOVE the `2*enclosement_depth > ring` drop gate, so even
+        // enclosement_depth = 0 (walls never actually close) still kills them.
+        clear_hurry_disabled_actors(s);
         return;  // NO drop on the arm tick (original: dword_46223C==now, gate shut);
                  // the first wall lands exactly one interval (5 ticks) later.
     }

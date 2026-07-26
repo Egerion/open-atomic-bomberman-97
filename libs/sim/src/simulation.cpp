@@ -790,7 +790,16 @@ void run_tick(State& s, const TickInputs& inputs, Cadence cad = {},
     // dword_4621D4/dword_4621DC. Bomb MOVEMENT (advance_bombs, step 5 — the
     // switch cases BEFORE the 25603 gate) is NOT frozen; only the fuse/
     // explosion/chain tail is.
-    const bool bombs_frozen = sides_remaining(s) <= 1 && !s.campaign_hazards_active;
+    //
+    // The SAME `sub_421969() > 1` predicate is the TOP-LEVEL gate of the
+    // enclosure stepper sub_426818 (native/src/game/batch_0x42583B.cpp lines
+    // 678-679: `result = sub_421969(); if (result > 1) { ...everything... }`),
+    // so the closing walls and the per-level tile regen inside it freeze on the
+    // very same edge — see step 8. Both sites read the same latched
+    // dword_4621D4 that the frame's player pass (sub_420F07) just recomputed,
+    // so they can never disagree within a frame. Flame aging (sub_426D06,
+    // step 7) has NO such gate and keeps running — that asymmetry is real.
+    const bool round_frozen = sides_remaining(s) <= 1 && !s.campaign_hazards_active;
 
     // 4. Drain the chain-detonation queue (docs/re/facts.md "Chain-reaction
     // timing", sub_423209/dword_462200): a flame arm that reached another
@@ -806,7 +815,7 @@ void run_tick(State& s, const TickInputs& inputs, Cadence cad = {},
     // per-bomb-slot loop, which runs AFTER its own drain already fired) is
     // only caught by the NEXT tick's drain — one chain LINK per tick, not
     // the whole chain at once. Frozen once the round is decided (bombs F1).
-    if (!bombs_frozen) flames.drain_chain_queue();
+    if (!round_frozen) flames.drain_chain_queue();
 
     // 5. Kicked bombs slide; airborne bombs fly. NOT frozen by bombs F1
     //    (movement is the original's switch cases, before the freeze gate).
@@ -814,7 +823,7 @@ void run_tick(State& s, const TickInputs& inputs, Cadence cad = {},
 
     // 6. Fuses (paused while a bomb is airborne). Frozen once the round is
     //    decided down to <= 1 alive side (bombs F1).
-    if (!bombs_frozen) bombs.tick_fuses();
+    if (!round_frozen) bombs.tick_fuses();
 
     // NOTE (documented deviation, facts.md "Per-tick call order" accepted
     // deviations): the original interleaves steps 5/6 PER BOMB SLOT — slot
@@ -837,8 +846,24 @@ void run_tick(State& s, const TickInputs& inputs, Cadence cad = {},
     // right before its own arm/disarm/drop logic (docs/re/facts.md
     // "Per-level tile regeneration"). A no-op on every level but Haunted
     // House.
-    tile_regen.update();
-    enclosure.update();
+    //
+    // enclosure F2 (docs/re/enclosure.md §8, rewritten 2026-07-26):
+    // sub_426818's whole body — the per-level regen call sub_426704, the
+    // arm/disarm edge, the fading preview, and the 250 ms drop loop — sits
+    // inside `if (sub_421969() > 1)` (native batch_0x42583B.cpp lines
+    // 678-682). So once the round is decided down to <= 1 side the spiral
+    // STOPS DEAD, on the same edge that freezes the bombs, and it never
+    // restarts (sub_421969 only falls further; the outer match loop also
+    // pauses the match clock right there, sub_410522 at
+    // batch_0x4293E5.cpp:1060-1061). Both calls below go behind the gate
+    // because the original has ONE gate covering both. This is a DIFFERENT
+    // question from TimeUp: the clock hitting zero does NOT stop the spiral
+    // (sub_410578 clamps at 0, the predicate stays true) — see §2's "NO
+    // ticks_left > 0 guard" note, which still stands.
+    if (!round_frozen) {
+        tile_regen.update();
+        enclosure.update();
+    }
 
     // 9. The head checks: flames kill players, floor powerups get picked up —
     // the original's NEXT player pass's turn-head pair (sub_41F29B

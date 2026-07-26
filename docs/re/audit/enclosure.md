@@ -43,7 +43,38 @@ arm branch — see Finding 0), `docs/re/enclosure.md` (full), `docs/re/facts.md`
 
 ---
 
-## Finding 0 — `docs/re/enclosure.md` misidentifies `sub_405D0C`: it does NOT clear warpholes/trampolines, and the port is right to do nothing there
+## Finding 0 — ~~`sub_405D0C` does NOT clear warpholes/trampolines~~ **RETRACTED 2026-07-26: IT DOES, and this finding caused the bug it warned about**
+
+> **RETRACTION.** Everything below this banner is **wrong** and is kept only
+> so the mistake stays legible. `sub_405D0C` **is** the actor-registry sweep
+> the original `docs/re/enclosure.md` gloss said it was: it deactivates every
+> warphole and every trampoline the frame the walls arm. The corrected,
+> fully-cited finding is `docs/re/enclosure.md` §5.1; the port now implements
+> it (`clear_hurry_disabled_actors` in `libs/sim/src/systems/enclosure.cpp`).
+>
+> **Where this went wrong — worth remembering.** The reasoning below is not
+> based on reading the disassembly (which it quotes correctly and completely);
+> it is based on trusting `batch_0x405B3A.cpp`'s own **file header comment**
+> for what `dword_45E0A8` is. That header calls it a level-select broadcast
+> table. It is not. There is exactly ONE `dword_45E0A8` in the program —
+> `native/src/globals.h` line 678 labels it *"the 100-slot × 152-byte 'extra
+> object' pool"*, allocated by `sub_404D16` (`sub_418511(152, 100)`), looked
+> up per tile by `sub_405654` (`if (*i && i[7]==x && i[8]==y)` — note it skips
+> slots whose active dword is 0, which is precisely the dword `sub_405D0C`
+> clears) and drawn by `sub_4056CA`. `batch_0x405B3A.cpp` is the actor pool's
+> **network-sync** code (`sub_405B3A` writes actor fields, `sub_405BBA`
+> broadcasts them ten at a time) — hence "broadcast" in its header. A
+> transliteration batch's prose header is a *note*, not evidence; the global's
+> declaration and its call graph are.
+>
+> **This finding's own "Suggested fix" was carried out**, which is how the
+> real gloss was deleted from `docs/re/enclosure.md` — and the resulting
+> "the port is right to do nothing" note is what kept the bug alive through
+> the 2026-07-24 investigation, which then had to falsify a per-tile render
+> hypothesis on map geometry because the actual mechanism had been ruled out
+> on paper. Ege reported it from live play twice before it was believed.
+>
+> *(The text below is retained verbatim. Do not act on it.)*
 
 **Original**: `sub_426818`'s arm branch (`native/src/game/batch_0x42583B.cpp`
 lines 690-696):
@@ -245,11 +276,18 @@ both are eaten when OFF.
 
 ## Verified faithful (no change) — re-confirmed from the native transliteration, not just from re-reading the prior docs
 
-- **Top-level gate** (`sub_421969() > 1`) is a general match-active check
+- ~~**Top-level gate** (`sub_421969() > 1`) is a general match-active check
   with no enclosure-specific round-end logic — `docs/re/enclosure.md` §8,
   re-confirmed directly in `sub_426818`'s first lines
   (`batch_0x42583B.cpp` 678-679). This port has no "screens" concept in
-  `libs/sim`, so nothing to gate — already correct by construction.
+  `libs/sim`, so nothing to gate — already correct by construction.~~
+  **RETRACTED 2026-07-26.** The gate reads correctly; the claim that it is
+  *static* does not. `sub_421969` returns `dword_4621D4`, which the per-frame
+  player pass `sub_420F07` relatches every frame from the alive-side tally —
+  the very same predicate this audit's sibling `audit/bombs.md` Finding 1
+  identified as the bomb freeze, which should have been the tell. So the
+  spiral FREEZES when the round is decided. Corrected in
+  `docs/re/enclosure.md` §8 and ported (`round_frozen` in `simulation.cpp`).
 - **Arm/disarm trigger arithmetic** (`v1 = sub_412135(101); result =
   sub_410578(); if (result <= v1 - 5) {...} else if (dword_45BE9C) {...}`,
   `batch_0x42583B.cpp` 686-705) matches `EnclosureSystem::update()`'s

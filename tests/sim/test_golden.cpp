@@ -558,6 +558,40 @@ MatchConfig pillars_config() {
 // hashes recaptured (below). B/C/D unaffected (no kicked/belt bomb in their
 // paths); goldens headless 49/49 green + visual goldens 5/5 re-recaptured. The
 // rover +100 (a DIFFERENT sub with no backoff) is NOT affected and stays.
+//
+// UPDATE 2026-07-26 (enclosure F2 — ROUND END STOPS THE SPIRAL,
+// docs/re/enclosure.md §8, `sub_426818`'s `sub_421969() > 1` top-level gate;
+// facts.md "Enclosure/HURRY arithmetic audit" corrected in the same commit).
+// A DELIBERATE behaviour recapture reaching golden B and C ONLY.
+//   The whole body of the original's enclosure stepper — the level-7 tile
+//   regen call, the arm/disarm edge and the 250 ms drop loop — sits inside the
+//   SAME alive-side-count gate that already froze the bomb fuses here
+//   (`bombs_frozen`, audit/bombs.md F1), so `simulation.cpp` now gates
+//   `tile_regen.update()` and `enclosure.update()` with it too (renamed
+//   `round_frozen`). Flames deliberately stay ungated — `sub_426D06` has no
+//   such check.
+//   Why exactly B and C move, and nothing else. Both are pattern-input
+//   free-for-alls that decide almost immediately, and both run long enough to
+//   reach the hurry phase; every other scenario fails one of those two halves.
+//   Measured by instrumenting each scenario with and without the new gate
+//   (tick counts are 1-based; "armed" is the pre-change arm tick):
+//     B  decided after 45 ticks of 3000, armed 1881 -> never  =>  only the
+//        2000/2500/3000 checkpoints move; 500/1000/1500 are BYTE-IDENTICAL
+//        because nothing had armed by then even before.
+//     C  decided after 11 ticks of 1500, armed  281 -> never  =>  its single
+//        tick-1500 checkpoint moves.
+//     D  decided after 45 ticks too, but runs only 600 ticks on a 150 s clock
+//        and so armed NEITHER before nor after  =>  unmoved, and it stays a
+//        live control for "the gate did not touch anything else".
+//     A  has no players at all (already frozen from tick 0) and a 9999 s clock
+//        that never reaches the hurry window  =>  unmoved.
+//     E  is scripted choreography that never reaches the phase  =>  unmoved,
+//        all four checkpoints plus the bounce count and the final rng.
+//   COVERAGE NOTE: this is why golden F below was added. B and C were the only
+//   scenarios whose runs ever reached the wall spiral, and after this change
+//   neither does — recapturing them alone would have quietly retired the
+//   goldens' enclosure coverage. F is a fresh capture (nothing re-baselined)
+//   of a round that stays undecided through a complete two-ring spiral.
 TEST_CASE("golden A: empty state, 10000 ticks") {
     Simulation a;
     a.state().rng = 42u;
@@ -602,9 +636,16 @@ TEST_CASE("golden B: 4-player brick match with all abilities") {
         0x608a718e0f0f7f5eull,  // tick 500  (setup F1 recapture 2026-07-20)
         0xa4e6ced6f087779cull,  // tick 1000
         0xd941f8ebb9f0f797ull,  // tick 1500
-        0xd82e656367a1dc66ull,  // tick 2000
-        0x510710fdce69da65ull,  // tick 2500
-        0x5d86b9c91e3a4340ull,  // tick 3000
+        // Recaptured 2026-07-26 (enclosure F2 — see the file-level UPDATE).
+        // Measured with the gate temporarily disabled, on the same run that
+        // produced these three: the round is down to one side after 45 ticks,
+        // and the stepper USED to arm at tick 1881 and close all 96 tiles by
+        // tick 3000. It now never arms — which is exactly why the three
+        // checkpoints ABOVE (all before 1881) are byte-identical and only
+        // these three, all after it, move.
+        0xb0ef787b1d8e3829ull,  // tick 2000
+        0x03b06c6ebc3b35bcull,  // tick 2500
+        0xb1d69bdf7e87d168ull,  // tick 3000
     };
     for (std::uint64_t t = 0; t < 3000; ++t) {
         s.tick(pattern(t));
@@ -628,7 +669,16 @@ TEST_CASE("golden C: trigger bombs and a fast hurry phase") {
     // Recaptured again 2026-07-20 (setup F1 rejection-sampling scatter — see the
     // file-level BATCH 2 UPDATE note): C's default positive spawn_counts now
     // draw the rejection-sampling stream at setup, shifting the tick-0 RNG.
-    CHECK(s.hash() == 0x0df571426a3b1c79ull);
+    // Recaptured again 2026-07-26 (enclosure F2 — see the file-level UPDATE):
+    // measured, with the gate temporarily disabled, on the very same run that
+    // produced the constant below — this scenario is down to one side after 11
+    // ticks and USED to arm the walls at tick 281 and close all 96 tiles of the
+    // spiral by tick 1500; it now never arms, so this single checkpoint moves.
+    CHECK(s.hash() == 0xd1aa9371228f9052ull);
+    // Legible companions to the digest, so a stepper regression names itself.
+    CHECK(sides_remaining(s.state()) == 1);  // decided at tick 11 of 1500...
+    CHECK(s.state().enclose_interval == 0);  // ...so the walls never armed...
+    CHECK(s.state().enclose_index == 0);     // ...and not one tile ever dropped.
 }
 
 TEST_CASE("golden D: the disease gauntlet") {
@@ -782,4 +832,71 @@ TEST_CASE("golden E: jelly ping-pong and a veering punched flight") {
     // pre-F2 leg count and detonation rng. A jelly bounce itself draws no RNG.
     CHECK(bounces == 10);                 // the ping-pong really happened
     CHECK(s.state().rng == 0xc6a9f3b2u);  // base kicked speed: detonation back on its pre-F2 tile
+}
+
+// NEW 2026-07-26 (enclosure F2/F3, docs/re/enclosure.md §5.1/§8). B and C used
+// to be the only goldens whose runs reached the hurry phase at all — and after
+// the round-end freeze landed they no longer do (both decide within 45 ticks,
+// so the stepper never arms; see the file-level UPDATE note). This scenario
+// replaces that lost coverage deliberately: nobody ever presses a key, so no
+// bomb is ever dropped, nobody dies, `sides_remaining` stays 2 for the whole
+// run and the stepper's round-end gate never trips. It therefore pins, in one
+// hash chain, the arm moment, the 250 ms drop cadence over a complete two-ring
+// spiral, the fact that the spiral keeps going PAST TimeUp (§2 — ticks_left
+// hits 0 at tick 600, well before the last drop), and the arm-time
+// warphole/trampoline sweep (§5.1) that leaves the belt and the arrow alone.
+TEST_CASE("golden F: a full hurry phase with the round still undecided") {
+    MatchConfig cfg = pillars_config();
+    // Both spawns are ring-4 tiles (min(x, y, 14-x, 10-y) == 4); with
+    // enclosement_depth = 1 the walls close rings 0-1 only, so neither player
+    // is ever crushed and the round stays undecided to the last tick.
+    cfg.spawns = {{6, 4}, {8, 6}};
+    cfg.player_count = 2;
+    cfg.seed = 0xEC105u;
+    cfg.tuning.game_seconds = 30;
+    cfg.tuning.hurry_seconds = 25;
+    cfg.tuning.enclosement_depth = 1;
+    // One of each actor type, all on ring-4 tiles the spiral never reaches and
+    // none under a player, so the ONLY thing that can change them is the arm
+    // sweep: the warphole pair and the trampoline must go, the belt and the
+    // arrow must stay (sub_405D0C, docs/re/enclosure.md §5.1).
+    cfg.actor_type[4][4] = ActorType::Warphole;
+    cfg.warp_dest_x[4][4] = 10;
+    cfg.warp_dest_y[4][4] = 6;
+    cfg.actor_type[6][10] = ActorType::Warphole;
+    cfg.warp_dest_x[6][10] = 4;
+    cfg.warp_dest_y[6][10] = 4;
+    cfg.actor_type[6][4] = ActorType::Trampoline;
+    cfg.actor_type[4][10] = ActorType::Conveyor;
+    cfg.actor_dir[4][10] = 1;
+    cfg.actor_type[6][6] = ActorType::DirArrow;
+    cfg.actor_dir[6][6] = 2;
+
+    Simulation s(cfg);
+    // Captured 2026-07-26 (new scenario, nothing re-baselined). The walls arm
+    // at tick 180 (30 s clock, hurry 25 ⇒ the arm predicate `remaining <=
+    // hurry - 5` first holds with 419 ticks left) and the two-ring spiral's
+    // 96th and last tile lands around tick 660.
+    static constexpr std::uint64_t kExpected[4] = {
+        0x15b964e019636158ull,  // tick 250  (armed at 180; drop index 13)
+        0x9ca332db9b278092ull,  // tick 500  (index 63)
+        0x279757764b09dc82ull,  // tick 750  (index 96 — past TimeUp at tick 600)
+        0x557ed4881d8382efull,  // tick 1000 (spiral exhausted, board static)
+    };
+    for (std::uint64_t t = 0; t < 1000; ++t) {
+        s.tick(TickInputs{});
+        if ((t + 1) % 250 == 0) CHECK(s.hash() == kExpected[(t + 1) / 250 - 1]);
+    }
+    // Legible assertions alongside the opaque digests, so a regression in the
+    // stepper says WHAT broke and not just "some hash moved".
+    CHECK(sides_remaining(s.state()) == 2);  // never decided -> never frozen
+    CHECK(s.state().ticks_left == 0);        // the clock ran out at tick 600...
+    CHECK(s.state().enclose_index == 96);    // ...and the spiral finished anyway (§2):
+                                             // rings 0-1 = 96 drop events, all landed
+    CHECK(s.state().actor_type[4][4] == ActorType::None);       // warphole swept (§5.1)
+    CHECK(s.state().actor_type[6][10] == ActorType::None);      // warphole swept
+    CHECK(s.state().actor_type[6][4] == ActorType::None);       // trampoline swept
+    CHECK(s.state().actor_type[4][10] == ActorType::Conveyor);  // belt survives
+    CHECK(s.state().actor_type[6][6] == ActorType::DirArrow);   // arrow survives
+    CHECK(s.state().warp_dest_x[4][4] == 10);                   // only the ACTIVE flag is cleared
 }
