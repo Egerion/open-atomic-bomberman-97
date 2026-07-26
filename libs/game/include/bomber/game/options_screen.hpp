@@ -241,6 +241,24 @@ inline constexpr int kPlayTimeChoices[] = {60, 90, 120, 150, 180, 240, 300, 600,
 inline constexpr int kPlayTimeChoiceCount =
     static_cast<int>(sizeof(kPlayTimeChoices) / sizeof(kPlayTimeChoices[0]));
 
+// The "Infinite" sentinel, and the finite clock the sim gets in its place.
+//
+// The sim has no untimed mode: `State::ticks_left` is a plain countdown with no
+// sentinel value, so "Infinite" is realised as a clock long enough never to
+// expire (99999 s ≈ 27 h) while the HUD is told separately to hide it. Both
+// halves have to agree, which is why they are named here rather than spelled as
+// bare literals at each site — ONLINE they must also agree across peers, and
+// they did not: the netplay path hardcoded "not untimed", so a host playing
+// Infinite left every peer watching a 27-hour countdown tick down.
+//
+// Only tuning.game_seconds crosses the wire (it is part of the host's Tuning),
+// so the receiving side recovers the intent by comparing against it.
+inline constexpr int kPlayTimeUnlimited = 1001;
+inline constexpr int kUnlimitedGameSeconds = 99999;
+inline constexpr bool is_unlimited_game_seconds(int game_seconds) {
+    return game_seconds >= kUnlimitedGameSeconds;
+}
+
 class OptionsScreen {
 public:
     OptionsScreen(const AssetStore& assets, const FontTextures& font)

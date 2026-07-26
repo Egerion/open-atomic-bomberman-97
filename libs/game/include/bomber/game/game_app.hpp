@@ -152,6 +152,17 @@ private:
     // calls them in order, threading the resolved install paths and the live
     // SDL renderer between the steps that need them.
     bool init();
+    // Is this run a PIXEL CAPTURE (--demo / --demo-shots / --bm-shot /
+    // --menu-shot) rather than someone playing? Capture runs must be hermetic:
+    // identical inputs, identical pixels, on any machine. Anything read from the
+    // player's own options.ini that could move a pixel has to be pinned for them.
+    //
+    // This exists because it was NOT one predicate. `playtime` was pinned here
+    // for exactly this reason, then the three PORT-ONLY Video Settings keys were
+    // added later and nobody pinned them — so simply playing the game with the
+    // FPS readout on (F3) silently broke all five visual pins, and an
+    // investigation blamed an innocent commit before the real cause was found.
+    bool capture_run() const;
     void seed_front_end_rngs();  // reseed the presentation LCGs (demo pins them)
     // Resolve the install dir + scheme path (out-params), or fail with usage.
     bool resolve_install_paths(std::filesystem::path& game,

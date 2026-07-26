@@ -69,7 +69,7 @@ void MatchRunner::start_match(std::uint32_t seed) {
     // tell the renderer directly rather than trying to infer "untimed" back
     // out of ticks_left.
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — emplaced in init()
-    state_.renderer.reset_match(state_.options.playtime_seconds == 1001);
+    state_.renderer.reset_match(state_.options.playtime_seconds == kPlayTimeUnlimited);
     ctx_.sounds.reset();
 }
 
@@ -126,8 +126,9 @@ sim::MatchConfig MatchRunner::build_config(std::uint32_t seed) const {
     // "unlimited" sentinel (1001) has no sim meaning yet — a very long but
     // finite clock is the closest faithful stand-in without inventing a
     // separate "no clock" sim mode (out of scope: PRESENTATION/CONFIG ONLY).
-    cfg.tuning.game_seconds =
-        state_.options.playtime_seconds == 1001 ? 99999 : state_.options.playtime_seconds;
+    cfg.tuning.game_seconds = state_.options.playtime_seconds == kPlayTimeUnlimited
+                                  ? kUnlimitedGameSeconds
+                                  : state_.options.playtime_seconds;
     // Team Play (options.ini "team_play=" / the interactive Options screen):
     // the game-type-level team-mode GATE (docs/re/setup-screens.md
     // `dword_464964`), separate from each slot's own +84 team byte. OFF means

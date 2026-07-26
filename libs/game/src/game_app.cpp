@@ -344,6 +344,15 @@ void GameApp::seed_front_end_rngs() {
     }
 }
 
+bool GameApp::capture_run() const {
+    // The four capture entry points. `demo` itself is NOT in this list: it is
+    // already pinned separately and setting it is how `--demo` requests exactly
+    // this, but --demo-shots / --bm-shot / --menu-shot are equally captures and
+    // were the ones being missed.
+    return opts_.demo || opts_.demo_ticks > 0 || !opts_.demo_shots.empty() ||
+           !opts_.bm_shot_name.empty() || !opts_.menu_shot_out.empty();
+}
+
 bool GameApp::resolve_install_paths(fs::path& game, fs::path& scheme_path) {
     // SDL_GetBasePath is the exe's own folder; libs/assets is SDL-free so it
     // cannot ask for it itself. Without this the auto-detect only ever saw the
@@ -505,9 +514,17 @@ bool GameApp::load_config(const fs::path& game, const fs::path& scheme_path) {
         // PORT-ONLY "Video Settings" keys (install.hpp), faithful defaults: vsync
         // ON (uncap off), native cadence OFF (deterministic), fps readout hidden.
         // vsync ON == uncapped OFF, so the internal uncap flag is its inverse.
-        uncap_fps_ = !loaded_opts.vsync.value_or(true);
-        native_cadence_ = loaded_opts.native_cadence.value_or(false);
-        show_fps_ = loaded_opts.show_fps.value_or(false);
+        // A capture run pins all three to their faithful defaults instead of
+        // honouring the file (see capture_run()). show_fps draws an overlay over
+        // every captured frame; native_cadence drives the sim off the wall clock,
+        // which is non-deterministic by construction; vsync/uncap changes the
+        // pacing a capture has no reason to inherit. None of them belong in a
+        // pixel pin, and all three come from the machine the capture happens to
+        // run on.
+        const bool capture = capture_run();
+        uncap_fps_ = capture ? false : !loaded_opts.vsync.value_or(true);
+        native_cadence_ = capture ? false : loaded_opts.native_cadence.value_or(false);
+        show_fps_ = capture ? false : loaded_opts.show_fps.value_or(false);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "%s\n", e.what());
         return false;
@@ -558,13 +575,10 @@ bool GameApp::init_video(SDL_Renderer*& ren) {
     // STRETCH — matching how the original fills the panel edge to edge on
     // the reference machine — and demo runs keep the LETTERBOX scaler every
     // existing pin was captured under.
-    const bool demo_mode =
-        opts_.demo_ticks > 0 || !opts_.demo_shots.empty() || !opts_.bm_shot_name.empty() ||
-        !opts_.menu_shot_out.empty();
     SDL_SetRenderLogicalPresentation(ren, kScreenW, kScreenH,
-                                     demo_mode ? SDL_LOGICAL_PRESENTATION_LETTERBOX
-                                               : SDL_LOGICAL_PRESENTATION_STRETCH);
-    if (fullscreen_ && !demo_mode) SDL_SetWindowFullscreen(win, true);
+                                     capture_run() ? SDL_LOGICAL_PRESENTATION_LETTERBOX
+                                                   : SDL_LOGICAL_PRESENTATION_STRETCH);
+    if (fullscreen_ && !capture_run()) SDL_SetWindowFullscreen(win, true);
     // Global Alt+Enter/F11 fullscreen toggle (task item 1): an SDL_EventFilter
     // runs synchronously inside SDL_PumpEvents (before the event ever reaches
     // any of this file's many per-screen SDL_PollEvent loops), so it works
@@ -1169,7 +1183,15 @@ AppInput GameApp::run_netplay_match_seats(net::Transport& transport, std::uint16
                 stage_music = 1120;  // GENERIC.RSS fallback (sub_4293E5)
             audio_.start_music(stage_music);
         }
-        renderer_->reset_match(/*untimed=*/false);  // NOLINT(bugprone-unchecked-optional-access)
+        // Untimed HUD from the AGREED config, not from this peer's own
+        // options.ini. Play Time travels as part of the host's Tuning, so the
+        // CLOCK was already the host's — but this flag was hardcoded false, so
+        // a host playing "Infinite" left both peers watching the 99999 s
+        // stand-in count down (~27 h) instead of hiding the clock. The mirror
+        // case was worse: a guest whose own options.ini said Infinite hid the
+        // clock on a match that really did end on time.
+        renderer_->reset_match(  // NOLINT(bugprone-unchecked-optional-access)
+            is_unlimited_game_seconds(round_cfg.tuning.game_seconds));
         sounds_.reset();
 
         // PRESENTATION roster, derived from the AGREED config so both peers show
