@@ -644,6 +644,32 @@ pre-existing approximation shared with the bomb freeze, noted rather than
 changed so both systems keep freezing on the same edge as each other.
 This MOVES GOLDENS (goldens B and C reach the hurry phase and get decided).
 
+### What this section's evidence is — and what it is NOT
+
+Be precise about which leg each claim stands on, because the previous version
+of this section was confidently wrong:
+
+- **Static, first-hand, and decisive**: the gate itself (`sub_426818`'s first
+  two lines), `sub_421969`'s body, the per-frame relatch in `sub_420F07`'s
+  tail, the two accumulator bumps in `sub_41F29B`, the match loop's
+  `if (sub_421969() <= 1) sub_410522();`, and the *absence* of any such gate
+  in `sub_426D06`. Each was read directly, not inferred from a sibling or
+  from a doc. The earlier error was not a misreading of these lines — it was
+  the unchecked assumption that `dword_4621D4` is written once at round
+  start. It is written every frame.
+- **NOT verified live.** Unlike §5.1 (which Ege observed in play on COAL),
+  the round-end freeze has NOT been watched in the running original. The
+  in-play check is easy and worth doing: in a 2-player round, arm the walls,
+  then let one player die and watch whether the next tile lands 250 ms later.
+- **The `native/` oracle harness does NOT cover this path**, and cannot
+  without work. `native/src/main.cpp`'s per-tick oracle loop deliberately
+  omits `sub_426818` (its own comment: driven by the real wall clock through
+  `sub_43ACF8`, which the shim maps straight to `SDL_GetTicks()`, so it is
+  non-deterministic, and `dword_464978` is stale at match start so it would
+  fire the walls on frame 1). Making the oracle able to arbitrate anything in
+  this file needs a faked millisecond clock in the shim plus a scenario that
+  reaches the hurry window — neither exists today.
+
 ## 9. Addresses (evidence)
 
 | addr        | role                                                       |
