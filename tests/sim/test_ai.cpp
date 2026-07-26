@@ -358,6 +358,70 @@ TEST_CASE("Stage 4: an AI beside a brick drops a bomb and flees its own blast") 
     CHECK(st.cells[5][5] != Cell::Brick);
 }
 
+TEST_CASE("2026-07-26 warphole fix: an AI standing on a warphole never presses bomb") {
+    // facts.md "AI never bombs a warphole" / docs/re/ai.md §3.3. sub_423188 (the
+    // drop-tile clearance predicate that gates BOTH AI drop behaviours) returns 0
+    // when sub_405654 finds a type-1 STAGE ACTOR on the tile — a warphole. Our
+    // port had inherited ai.md's old "sub_405654 is an empty campaign rover list"
+    // gloss and omitted that condition, so an AI parked on a warp exit kept
+    // pressing bomb: BombSystem::drop refused it and emitted DropRefused every
+    // time, i.e. the deny SFX (SOUNDLST 40/41) machine-gunned — a sound the
+    // original NEVER produces for an AI, because the AI never presses the key.
+    //
+    // Fixture: the same brick-to-the-west arrangement as the blast-bricks test
+    // above (which DOES drop, see the control below), plus an UNPAIRED warphole
+    // under the AI. Unpaired = dest is its own tile, so the step-on warp is a
+    // harmless in-place hop and the latch then keeps the AI parked on the
+    // warphole exactly as a real warp exit does (stage_actors.cpp start_warp).
+    Simulation s = open_arena(/*tx=*/6, /*ty=*/5, /*ai=*/true);
+    State& st = s.state();
+    st.rng = 0x13572468u;
+    st.cells[5][5] = Cell::Brick;  // adjacent brick: behaviour 3 wants to drop here
+    st.actor_type[5][6] = ActorType::Warphole;
+    st.warp_dest_x[5][6] = 6;  // unpaired: dest == own tile
+    st.warp_dest_y[5][6] = 5;
+
+    int refusals = 0;
+    for (int t = 0; t < 300; ++t) {
+        s.tick(idle());
+        for (const Event& e : st.events)
+            if (e.type == Event::Type::DropRefused && e.player == 0) ++refusals;
+    }
+    CHECK(refusals == 0);  // the AI never even pressed the key on the warphole
+
+    // Control: the identical fixture WITHOUT the warphole does drop a bomb, so
+    // the zero above is the clearance predicate talking, not an inert fixture.
+    Simulation ctrl = open_arena(/*tx=*/6, /*ty=*/5, /*ai=*/true);
+    State& cs = ctrl.state();
+    cs.rng = 0x13572468u;
+    cs.cells[5][5] = Cell::Brick;
+    bool dropped = false;
+    for (int t = 0; t < 300 && !dropped; ++t) {
+        ctrl.tick(idle());
+        if (!cs.bombs.empty()) dropped = true;
+    }
+    CHECK(dropped);
+}
+
+TEST_CASE("2026-07-26 warphole fix: only type 1 blocks — an AI still bombs a conveyor") {
+    // sub_423188 rejects `v5[1] == 1` ONLY. A dirarrow (0), conveyor (2) or
+    // trampoline (3) under the AI leaves the tile droppable, so the fix must not
+    // over-reject. Same fixture with a conveyor instead of the warphole.
+    Simulation s = open_arena(/*tx=*/6, /*ty=*/5, /*ai=*/true);
+    State& st = s.state();
+    st.rng = 0x13572468u;
+    st.cells[5][5] = Cell::Brick;
+    st.actor_type[5][6] = ActorType::Conveyor;
+    st.actor_dir[5][6] = 1;  // godir 1 = Right
+
+    bool dropped = false;
+    for (int t = 0; t < 300 && !dropped; ++t) {
+        s.tick(idle());
+        if (!st.bombs.empty()) dropped = true;
+    }
+    CHECK(dropped);
+}
+
 TEST_CASE("Stage 4: no adjacent brick -> the AI never drops a blast-bricks bomb") {
     // Same seed, but NO brick anywhere near the AI. Behaviour 3's brick count is 0,
     // so it never rolls the 1-in-5 and never drops. (The AI just wanders on the

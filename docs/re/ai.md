@@ -24,7 +24,12 @@ one-time constant recapture (see that file's own note); the untamed
 independently re-verified every behaviour's arithmetic and RNG draw order
 against pseudo.c line-by-line and found (and fixed) five real deviations —
 none touching golden (no AI players there) — see §11 for the full verdict
-table and evidence.
+table and evidence. **2026-07-26: a sixth deviation was found from LIVE PLAY,
+not from a re-read** — the drop-tile clearance predicate `sub_423188` rejects
+warphole tiles and our port did not, so our AIs bombed warp exits (and span the
+refusal SFX) where the original never presses the key. It slipped both prior
+audits because §3.3 mis-glossed `sub_405654` and both passes trusted that gloss.
+See §3.3's CORRECTION box, §11 row 4, and facts.md "AI never bombs a warphole".
 
 ## 0. One-paragraph shape
 
@@ -305,18 +310,37 @@ except this self-clear; it exists for the original's anim/telemetry.)
 I escape?" gloss). Byte-exact (0x423188):
 ```
 if sub_422E48(x,y): return 0                 // a bomb already on this tile -> can't drop here
-v5 = sub_405654(x,y)                         // an ENTITY (rover/ghost, dword_45E0A8 stride-38) here?
-return (!v5 || v5[1] != 1) && sub_425FB9(x,y) == 0   // no solid(kind-1) entity AND cell type == 0 (blank floor)
+v5 = sub_405654(x,y)                         // STAGE-ACTOR lookup (dword_45E0A8, stride 38 dwords)
+return (!v5 || v5[1] != 1) && sub_425FB9(x,y) == 0   // NOT a warphole (type +4 == 1) AND cell type == 0
 ```
 It is a **drop-tile clearance** predicate: "may a bomb be placed on THIS tile" —
-no bomb here (`sub_422E48`), no solid campaign entity here (`sub_405654`, the
-rover/ghost list — empty in versus), and the cell is blank floor (`sub_425FB9==0`,
-NOT a wall/brick). Called with the AI's own standing tile, so in the versus AI it
-reduces to `!bomb_at(pos) && cells[pos]==Blank`. There is **no look-ahead**: the
-original trusts behaviour 2 to flee afterward, it does not verify an escape exists
-before dropping. Our port reproduces exactly the two conditions we model (the
-`sub_405654` entity array has no versus-mode equivalent; it is empty here — see
-§5.7 campaign rovers). This is the same clearance predicate behaviour 4 uses.
+no bomb here (`sub_422E48`), **no WARPHOLE here** (`sub_405654`), and the cell is
+blank floor (`sub_425FB9==0`, NOT a wall/brick). Called with the AI's own standing
+tile. There is **no look-ahead**: the original trusts behaviour 2 to flee
+afterward, it does not verify an escape exists before dropping. This is the same
+clearance predicate behaviour 4 uses.
+
+> **CORRECTION 2026-07-26 — `sub_405654` is the STAGE-ACTOR registry, not a
+> campaign rover/ghost list.** This section previously glossed `v5 =
+> sub_405654(x,y)` as "an ENTITY (rover/ghost) here? — empty in versus" and told
+> the port it "drops out". That is wrong. `sub_405654` (0x405654) linearly scans
+> `dword_45E0A8` at stride 38 dwords matching the record's tile fields `i[7]`/
+> `i[8]` (= actor +28/+32) — the EXTRA*.RES stage-actor registry
+> (docs/re/stage-actors.md §1) — and `v5[1]` is the actor **type word at +4**
+> (0=dirarrow, 1=warphole, 2=conveyor, 3=trampoline). So `v5[1] != 1` is a
+> **warphole rejection**, and it is populated in versus mode on every warphole
+> stage. The identical tail appears in `sub_4230A5`, the sliding-bomb cell-entry
+> probe, where stage-actors.md §4 note 4 already read it correctly ("whenever the
+> probed tile carries ANY actor of type 1 (warphole), the whole expression is
+> false"). Consequence: **an original AI standing on a warphole never presses the
+> bomb key** — both drop behaviours (§3.3, §3.4) call `sub_423188` on their own
+> tile *before* the `rand()%N` whim, so they return 0 with no draw and the chain
+> falls through. Only type 1 blocks; a dirarrow/conveyor/trampoline tile stays
+> droppable. Our port had inherited the wrong gloss and omitted the condition,
+> which is why our AIs bombed warpholes and spammed the refusal SFX that the
+> original never plays for them (facts.md "AI never bombs a warphole"; fixed in
+> `libs/sim/src/systems/ai_grids.cpp` `drop_tile_clear`, tests in
+> `tests/sim/test_ai.cpp`).
 
 ### 3.4 — `sub_40ABED`: drop a bomb next to an enemy (priority 4) — RESOLVED (Stage 5)
 ```
@@ -923,7 +947,7 @@ cluster of `sub_XXXX` functions end to end and cross-checked them against
 | 1 | Dispatcher & personality | `sub_40A1C6`, `sub_40A140`, `off_45BA78`, `sub_41F29B`/`sub_420F07` | IDENTICAL (dispatcher, chain loop, table order, personality init, outer loop) + **DEVIATION-fixed** (caller-side stun gate, §7) |
 | 2 | Danger grid, flee BFS, walk-the-path | `sub_424D37/DFE`, `sub_426D06`, `sub_42331C` (danger write), the closing-wall writer, `sub_40970B`, `sub_40A76E`, `sub_40B20F` | IDENTICAL, **doc-only fix** (§4 brick/powerup contradiction) + **DEVIATION-fixed** (walk-path veto return value, §3.2) |
 | 3 | Directed BFS, powerup scan, seek-powerup, readers | `sub_4092A1`, `sub_409C1F`, `sub_40BAF5`, `sub_40A59D`, `sub_425FB9`, `sub_422E48`, `sub_42708D`, `sub_42542D`, `sub_409083` | IDENTICAL + **DEVIATION-fixed** (boxed-in `iters`, §5.1) + documented structural caveat (BFS is a faithful shortest-path rewrite, not the original's beam-flood — §5.1) |
-| 4 | Bomb-drop behaviours | `sub_40AD8D`, `sub_40ABED`, `sub_40BD44`, `sub_4245DA`, `sub_423188`, `sub_405654` | IDENTICAL (blast-bricks, bomb-near-enemy, capacity gate, clearance predicate) + **DEVIATION-fixed** (grab-glove polarity + sliding-bomb exclusion, §3.0) + **doc-only fix** (+62 mislabelled "team", §1.1/§3.0) |
+| 4 | Bomb-drop behaviours | `sub_40AD8D`, `sub_40ABED`, `sub_40BD44`, `sub_4245DA`, `sub_423188`, `sub_405654` | ~~IDENTICAL (blast-bricks, bomb-near-enemy, capacity gate, clearance predicate)~~ → **DEVIATION-fixed 2026-07-26** (§3.3 CORRECTION): the clearance predicate `sub_423188` was NOT identical — this pass carried over the wrong "`sub_405654` = rover/ghost list, empty in versus" gloss and so accepted a port that omits the `v5[1] != 1` **warphole** rejection. `sub_405654` is the stage-actor registry; an original AI never bomb-keys a warphole tile, ours did (and span the deny SFX). Also **DEVIATION-fixed** earlier (grab-glove polarity + sliding-bomb exclusion, §3.0) + **doc-only fix** (+62 mislabelled "team", §1.1/§3.0) |
 | 5 | Enemy targeting | `sub_422718`, `sub_421CB5`, `sub_40B8C2`, `sub_40BE02` | ~~IDENTICAL — no deviations found~~ → **DEVIATION-fixed** in a 2026-07-10 follow-up (§12): the target-liveness `q.stun` reads in `behave_bomb_enemy`/`pick_live_enemy`/`behave_seek_enemy` mirrored `+8` (`v7[2]`/`!i[2]`) but this pass mislabelled +8 "stunned" — it is the DEAD flag. The extra `stun` check wrongly skipped stunned-but-alive foes; removed |
 | 6 | Team filter | `AISystem::same_team`, the enemy-scan/finder team gates | IDENTICAL — confirmed `slot != self` + nonzero-team-equality matches the `dword_464964`-gated `+84` compares; unaffected by this pass |
 
