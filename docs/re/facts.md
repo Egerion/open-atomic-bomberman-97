@@ -301,7 +301,8 @@ deaths, all authored in "green") is retargeted per player at load time by
 **`sub_414A65`** (0x414A65), which bakes a 256-entry remap table (`%u.rmp`,
 `dword_460564[player]`). Init loops all ten players building the args from
 VALUELST: `getvalue(200+5k)=R%`, `getvalue(201+5k)=G%`, `getvalue(202+5k)=B%`,
-then `sub_414A65(k, R%, B%, G%, 0)` (arg order a2=R%, a3=B%, a4=G%). Per source
+then `sub_414A65(k, R%, B%, G%, 0)` — note the argument ORDER: 2nd = R%,
+3rd = B%, 4th = G% (blue before green). Per source
 palette entry `[R,G,B]`:
 
 ```
@@ -413,8 +414,9 @@ pulse (~0.4 s buzz, 0.4 s calm at 20 Hz); only the phase differs (imperceptible
 in a strobe). The prior `s.tick & 1` produced a uniform ~10 Hz shimmer easily
 dismissed as a render artifact — the clustered pulse reads far better as a
 distinct "I am diseased" state. This matters because the strobe is the SOLE
-ongoing cue for the no-bomb **Constipation** disease (`+134`, the `sub_41F29B`
-LABEL_246 drop gate), whose faithful placement block is exactly the "sometimes I
+ongoing cue for the no-bomb **Constipation** disease (`+134`, the drop gate
+inside `sub_41F29B`'s bomb-action block), whose faithful placement block is
+exactly the "sometimes I
 can't place bombs, for no reason" report — the sim gate is correct; the cue was
 the weak link. Presentation-only (reads hashed `disease_timer`, never
 `State::rng`); golden unaffected. NOTE: `renderer.cpp` is not built by the
@@ -498,7 +500,8 @@ deliberate behaviour change (this section is the citation).
 Read 2026-07-03. Bomb state (+0): 0 dead, 1 live, **2 = dud (fizzling)**.
 
 - **Roll site = bomb creation** (`sub_422EDE`): only when the kind is REGULAR
-  (`!a4` — trigger and jelly never fizzle) and not a network game. Gated by a
+  (its kind argument is 0 — trigger and jelly never fizzle) and not a network
+  game. Gated by a
   global timer (`dword_464AF4`): when open, the gate re-arms FIRST
   (`sub_422C13`: gate += getvalue(320) + rand() % getvalue(321)) and then the
   bomb duds on `rand() % max(1, getvalue(322)) == 0` (322 = 3). The gate is
@@ -621,7 +624,7 @@ Evidence, cross-checked three ways:
    different fields.
 
 What stun (+58) actually gates, read end to end: **only new-input
-acquisition.** A local can-act flag (the decompiler's `v113`) is initialised
+acquisition.** A local can-act flag is initialised
 to 1 at ~22981 and forced to 0 while +58 > 0 or while the player is in states
 4/5/6/7. That flag, combined with `dword_4621E0` being zero, is the sole gate
 on the one input-acquisition site at ~23028-23039 (the `sub_41E61E` human
@@ -657,7 +660,8 @@ drives it:
   probe, and still triggers warphole/trampoline step-ons (the stepper's
   own check for a still-unset (-1) direction), all exactly as a keyless idle
   player. If no actor is
-  underfoot the branch goto's LABEL_155 without touching the mover.
+  underfoot the branch jumps straight to the anim/draw block (23081) without
+  touching the mover.
 - The keyed branch (~23430-23453, the one that accrues the player's OWN
   speed/disease budget) is only reachable with +46 != -1, i.e. never while
   stunned. And `sub_41EC84`'s budget loop (22568) drains its budget to <= 0
@@ -672,10 +676,12 @@ bomb-action block is skipped (mirroring the +56/+57 key bytes staying at
 their per-tick 0 reset), but `move_on_actor`/kick-probe/step-on triggers all
 still run, so a belt keeps carrying a stunned player into whatever it leads
 to. **RESOLVED 2026-07-11 (follow-up commit):** the original still reaches
-LABEL_246 while stunned, so disease AUTO-drop (the +135/+137 forced edge) and
+the bomb-action block (23277-23380) while stunned, so disease AUTO-drop (the
++135/+137 forced edge) and
 the release-throw of a carried bomb keep firing during a stun there; this was
 deferred (our port used to skip both while stunned) and is now ported — see
-"LABEL_246 runs in every alive state (standing-stun restructure)" below. The
+"The bomb-action block runs in every alive state (standing-stun
+restructure)" below. The
 grab's own pickup_pause window is a SEPARATE, still-deferred case (the
 original forces the key HELD there, not zero — a different rule the
 restructure below deliberately does not touch; see that entry).
@@ -1151,7 +1157,8 @@ are the per-kind counts (86 bombs, 87 flame, 89 kick, 90 skate, 91 punch,
   (`sub_425BED` → `sub_4255B2`, the head-hit scatter — same RNG draw
   pattern) and writes the count back to the baseline (the non-flag branch
   loops, scattering ALL surplus — never reached from the dispatcher). And
-  when the evicted kind is TRIGGER (a2 == 9) and the flag ends cleared, it
+  when the evicted kind is TRIGGER (the kind argument is 9) and the flag ends
+  cleared, it
   calls **`sub_424C47`**, which walks the bomb array and DOWNGRADES every
   live kind-1 bomb of that player to kind 0 with fuse-elapsed reset to 0 —
   the orphaned trigger bombs relight with a fresh full fuse (they'd
@@ -1343,8 +1350,9 @@ Read 2026-07-04 ("devam" #8). Three gaps audited against the kicked-slide loop.
    (This corrects the task's "resting player re-reads godir" premise.)
    Sidenote — **CORRECTED 2026-07-10 (core-feel audit):** the earlier claim
    here that `sub_4230A5` "does not test for players" was wrong. Re-read of
-   the function (0x4230A5): its second check is literally
-   `if (sub_421CB5(a1, a2)) return 0;` — `sub_421CB5` IS the player-at-tile
+   the function (0x4230A5): its SECOND check calls `sub_421CB5` on the
+   candidate tile and returns 0 (blocked) the moment it hits — and
+   `sub_421CB5` IS the player-at-tile
    scan (the head-hit helper). A sliding bomb is **blocked by a live
    player**, exactly as our slide already behaved; the "future pass" this
    note requested is unnecessary. (It also probes `sub_405654` type 1 —
@@ -2468,7 +2476,8 @@ still burns its budget; unlike `sub_4255B2`'s inner/outer split, there is no
    (`sub_425FB9(x,y)==2`) holding ANY record at all (`sub_42542D(x,y)` —
    hidden OR already-visible-but-still-crumbling; the state field isn't
    checked) whose kind is NOT ALSO 5/6/11. On a hit, **swap the two full
-   152-byte records** (`qmemcpy`-based 3-way swap) — the whole struct,
+   152-byte records** (a three-way whole-struct byte copy through a scratch
+   buffer) — the whole struct,
    including its state byte, not just the kind — and fall through to
    the reveal tail, which now reveals-or-not based on whichever record ended up
    at the original tile.
@@ -2756,11 +2765,10 @@ assertion in the golden suite is byte-identical before and after):
 1. **Trigger-boundary arithmetic (`sub_410578` vs. `sub_412135(101)`,
    `sub_42A191` ~29531-29549).** The banner is STRICT (`remaining <
    hurry_seconds`, confirmed via Watcom's register calling convention —
-   `sub_412135`'s own signature is `int __usercall sub_412135@<eax>(int
-   a1@<eax>)`, argument AND return both in EAX, which is what makes the
-   pseudocode's bare unassigned-looking `sub_410578();`/`sub_412135(101);`
-   calls actually feed the comparison via an EDX-preserved value rather than
-   being discarded); the wall-arm is NON-STRICT (`remaining <= hurry_seconds
+   `sub_412135` takes its id argument in EAX and returns its value in EAX
+   too, which is what makes the decompile's bare, unassigned-looking
+   `sub_410578()` / `sub_412135(101)` call statements actually feed the
+   comparison, via an EDX-preserved value, rather than being discarded); the wall-arm is NON-STRICT (`remaining <= hurry_seconds
    - 5`). The prior port compared raw `ticks_left` directly against
    `threshold * kTicksPerSecond`, which is not equivalent to flooring
    `ticks_left/kTicksPerSecond` first and then comparing with the correct
@@ -3091,11 +3099,12 @@ SOUNDLST.RES`) settles the intended playback shape directly:
 ```
 
 **2026-07-04's dismissal of the one literal `140` site was a misread — it IS
-the call site.** `sub_4278F2` (pseudo.c 27879-27896) checks
-`result < dword_463080` and indexes `dword_463094`/`dword_463088` before
+the call site.** `sub_4278F2` (pseudo.c 27879-27896) bounds-checks its id
+argument against the loaded-sound count `dword_463080`, then indexes
+`dword_463094`/`dword_463088` by it before
 calling `sub_411D17` (the actual sample-play primitive) — the SAME three
 globals `sub_427961`'s sound-play path (pseudo.c 27902-27952) uses for its own
-`result < dword_463080` / `dword_463094[]` lookup. `sub_4278F2` is therefore a
+count check and table lookup. `sub_4278F2` is therefore a
 sound-play function over the SOUNDLST table, not "pointer arithmetic on an
 unrelated base" as 2026-07-04 concluded — that base (`dword_462244 + 140`) IS
 a SOUNDLST id, exactly as `docs/re/enclosure.md` §3/§7 (a separate, earlier RE
@@ -4878,14 +4887,15 @@ unchanged through the recapture):
 - **Conveyor term**: `getvalue(190+idx) × delta / 50` per sub-frame (exact
   totals for the shipped belt speeds, which are divisible). NOTE: the belt (and
   kicked) bomb slide has NO flat +100 bonus, unlike the rover above. The
-  original's LABEL_21 does add `+= 100`, but the two lines after it back the
+  original's slide-budget block does add `+= 100`, but the two statements
+  after it back the
   position off one direction step and the move loop spends that +100 undoing
   it — a wash (confirmed 2026-07-20 against the native oracle; an audit that
   briefly folded a `+100 × kSubFrames` bonus here was reverted). The rover's
   `sub_401B5C` +100 is real ONLY because that function has no such backoff.
 
 **Deliberately still tick-quantized** (each ≤50 ms of phase, invisible, and
-kept to bound the blast radius): the LABEL_246 bomb-action tail runs once per
+kept to bound the blast radius): the bomb-action tail (23277-23380) runs once per
 tick with the AI's action-key presses OR-latched across its sub-frames (all
 four blocks are edge-gated, so only the auto-drop diseases' intra-tick
 attempt density differs); HUMAN direction sampling stays one sample per tick
@@ -4993,7 +5003,8 @@ ported in `ai.cpp` (goldens carry no AI players; all 42 suites stayed green):
    2026-07-12 port froze the boxed-in case calmly (write_move(-1)/return 1)
    — an RNG-stream and jitter divergence, now mirrored exactly (ai.cpp
    behave_walk_path).
-5. **Flee BFS ring cap = 20** (`a4`, 10048-10053), best-so-far kept. The
+5. **Flee BFS ring cap = 20** (the search's 4th argument, 10048-10053),
+   best-so-far kept. The
    port's frontier had only the 100-node cap.
 6. **The enclosure lookahead burns an iteration per corner turn**
    (27201-27223: the candidate exiting the ring turns the cursor and
@@ -5447,7 +5458,8 @@ a nearest-search "cyan-ish" estimate in `results-and-options.md`). Rows/header
 use `byte_49D38F` (240,248,252) with a `byte_495390[0]` black outline. All five
 net modals go through `sub_414340(line1, line2, ink=EBX, outline=ECX)` with
 ink `byte_49A390` **(164,0,0)** and outline `byte_49D37A` **(252,248,88)** —
-traced `sub_414340` → `sub_4172BA` → `sub_41696C(a6=ink, a7=outline)`.
+traced `sub_414340` → `sub_4172BA` → `sub_41696C`, whose 6th argument is the
+ink and 7th the outline.
 
 **`sub_41696C` signature re-confirmed by raw bytes:** `(EAX surface, EDX text,
 ECX x, EBX max_width, [stack] y, ink, outline)`, matching `frontend-flow.md`.
