@@ -532,7 +532,7 @@ private:
     // reaches Results).
     AppInput run_match();
 
-    // The six match-outcome predicates below are thin forwarders to the free
+    // The match-outcome predicates below are thin forwarders to the free
     // functions of the same names in bomber/game/match_outcome.hpp, where they
     // were promoted VERBATIM (ADR-0009 §10) so the extracted ScoreboardScreen and
     // MatchRunner can call the SAME clinch/outcome logic run_app uses without a
@@ -547,6 +547,8 @@ private:
     bool is_team_mode() const;
     // The §1 v73 match-clinch check; the clinching player's index, or -1.
     int match_clinch() const;
+    // Tally the round win, mirroring it onto the winner's teammates (sub_421B56).
+    void award_round_win(int winner);
     // The DRAW/RESULTS screens may auto-advance after their dwell (all-AI/demo).
     bool auto_advance_results() const;
     // Reset the per-match win tally + read the win target getvalue(310) at the

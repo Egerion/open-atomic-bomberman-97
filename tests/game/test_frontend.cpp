@@ -797,3 +797,69 @@ TEST_CASE("best-of-N: an undecided round continues the match; the target ends it
     reset_match_scores(win_count, kill_count, win_target, empty, 0);
     CHECK(win_target == 1);
 }
+
+// The TEAM half of the same round-end tail: sub_421B56 @ 0x421B56 credits the
+// surviving slot and then, under Team Play, COPIES that counter into every other
+// PRESENT slot on the winner's team. Without the copy the tally splits across a
+// team's members — the RESULTS "Team N score" row (which reads ONE member, like
+// the original's clinch) shows a team that keeps winning stuck near zero, and
+// the clinch lands rounds late.
+TEST_CASE("team play: a round win is mirrored to the whole team, so the clinch is on time") {
+    using bomber::game::award_round_win;
+    using bomber::game::match_clinch;
+    using bomber::game::round_winner;
+
+    // 2v2: slots 0+1 are team 0, slots 2+3 are team 1 (the frontend's raw +84
+    // byte). The sim's Player::team is that byte + 1 (match_runner.cpp's
+    // cfg.team[i] = setup_team[i] + 1), because sim team 0 means "no team".
+    bomber::sim::State s;
+    const std::array<int, bomber::sim::kMaxPlayers> setup_team{0, 0, 1, 1};
+    for (int i = 0; i < 4; ++i) {
+        s.players[i].present = true;
+        s.players[i].team = static_cast<std::uint8_t>(setup_team[i] + 1);
+    }
+    std::array<int, bomber::sim::kMaxPlayers> win_count{};
+    std::array<int, bomber::sim::kMaxPlayers> kill_count{};
+    const int win_target = 2;
+
+    auto round = [&](int survivor) {
+        for (int i = 0; i < 4; ++i) s.players[i].alive = (i == survivor);
+        const int w = round_winner(s);
+        CHECK(w == survivor);  // the sole survivor is the round winner
+        award_round_win(win_count, w, /*team_play=*/true, s, setup_team);
+    };
+    auto clinch = [&] {
+        return match_clinch(s, /*team_play=*/true, setup_team, /*win_by_kills=*/false, kill_count,
+                            win_count, win_target);
+    };
+
+    // Round 1: team 0 wins with slot 1 — slot 0 died, so an unmirrored tally
+    // would leave it on 0 forever if it keeps dying.
+    round(1);
+    CHECK(win_count[0] == 1);  // the DEAD teammate is credited too (+0x10 is
+    CHECK(win_count[1] == 1);  // "present", not "alive")
+    CHECK(win_count[2] == 0);
+    CHECK(win_count[3] == 0);
+    CHECK(clinch() == -1);  // one win of two: not decided
+
+    // Round 2: team 0 wins again, this time with the OTHER member. The mirror is
+    // a COPY, not a second increment, so the team reads 2 — not 1 and 1 — and
+    // the match clinches on round 2, exactly at win_target. Pre-fix this said
+    // 1/1 and the match dragged on to a third round.
+    round(0);
+    CHECK(win_count[0] == 2);
+    CHECK(win_count[1] == 2);
+    CHECK(clinch() == 0);  // the first present member of the clinching team
+
+    // The losing team never picks up a point from the mirror.
+    CHECK(win_count[2] == 0);
+    CHECK(win_count[3] == 0);
+
+    // Same roster with Team Play OFF: no mirror at all (the original gates the
+    // copy loop on dword_464964), so each survivor keeps only its own win.
+    win_count.fill(0);
+    for (int i = 0; i < 4; ++i) s.players[i].alive = (i == 1);
+    award_round_win(win_count, 1, /*team_play=*/false, s, setup_team);
+    CHECK(win_count[0] == 0);
+    CHECK(win_count[1] == 1);
+}
