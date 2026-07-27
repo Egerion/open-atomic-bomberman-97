@@ -2440,8 +2440,8 @@ int GameApp::run_app() {
                 } else if (w >= 0) {
                     // Round win, match not over: show the running scores. NO
                     // winner voice here — sub_42A3F6 fires sub_427BFB(2000) only
-                    // in the clinch branch (v73 != -1); a non-clinching RESULTS
-                    // pass (v73 == -1, batch_0x4293E5.cpp:1260-1272) plays no
+                    // when the clinch index is a real player; a non-clinching
+                    // RESULTS pass (index -1, batch_0x4293E5.cpp:1260-1272) plays no
                     // "we have a winner" cue. (The port formerly fired it every
                     // round win.)
                     audio_.start_music(kDrawMusicId);  // 1130 under RESULTS (doc §2 correction)

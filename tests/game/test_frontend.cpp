@@ -427,7 +427,7 @@ TEST_CASE("assign_gold_player mirrors dword_46492C's RESULTS-tier write") {
     // goldman on, solo: the clinching player's own index passes through
     // untouched (v73 IS a player index outside team mode).
     CHECK(assign_gold_player(true, false, 2, team_of) == 2);
-    // No clinch yet this RESULTS pass (v73 == -1): no pending gold player.
+    // No clinch yet this RESULTS pass (clinch index -1): no pending gold player.
     CHECK(assign_gold_player(true, false, -1, team_of) == -1);
 
     // goldman on, team mode: dword_46492C stores the clinching player's team
