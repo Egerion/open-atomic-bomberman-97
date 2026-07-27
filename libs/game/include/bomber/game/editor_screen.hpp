@@ -51,8 +51,9 @@ namespace bomber::game {
 // font-height multiplier — see list_dialog_geometry.hpp, which carries the
 // whole pinned geometry and the arithmetic proof.
 //
-// Selecting a row cuts the line at its FIRST ':' — `mov edx, 0x3A` @0x40767A
-// feeding sub_45167A/strchr, CORRECTED 2026-07-26 from the earlier "first '.'"
+// Selecting a row cuts the line at its FIRST ':' — the separator loaded
+// @0x40767A is 0x3A, fed to sub_45167A/strchr, CORRECTED 2026-07-26 from the
+// earlier "first '.'"
 // reading — so the stored value KEEPS the extension: "BASIC.SCH", uppercased
 // (sub_412A3B strupr) into the live schemefilename (byte_4648C4). That still
 // loads, because the '.'-strip lives in the READER: sub_403EEE @0x403FE8 does

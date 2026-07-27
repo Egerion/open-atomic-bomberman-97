@@ -170,7 +170,8 @@ TEST_CASE("a swap roll with no valid target still emits the pickup announce") {
 TEST_CASE("a stunned-but-alive player still ages its disease") {
     // CORRECTED 2026-07-10 (facts.md "Stun does NOT gate flame-death or
     // pickup"): sub_41F29B's freshness--/age/cure block is nested inside the
-    // ALIVE gate `if (!+8)` (~22904) — +8 is the died-this-round flag, NOT the
+    // ALIVE gate at ~22904, which requires +8 to be clear — +8 is the
+    // died-this-round flag, NOT the
     // +58 head-hit stun countdown (which is decremented INSIDE that same block
     // at ~22982; a field cannot gate a block that only decrements itself). So a
     // merely-stunned-but-alive player ages its disease normally — only a DEAD

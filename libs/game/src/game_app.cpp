@@ -2067,7 +2067,7 @@ void GameApp::restore_from_attract() {
     setup_team_ = attract_saved_.team;
     selected_level_ = attract_saved_.level;
     team_play_ = attract_saved_.team_play;
-    attract_ = false;  // dword_464938 = 0
+    attract_ = false;  // the original clears dword_464938 here
 }
 
 void GameApp::reset_match_scores() {
@@ -2257,8 +2257,8 @@ int GameApp::run_app() {
                     // only (always true), and a gold player actually pending
                     // from a previous match's rounds. An Esc abort forfeits
                     // the whole Play flow (skip straight back to the menu,
-                    // mirroring sub_410F81's post-call `if (dword_464A68)
-                    // return`).
+                    // mirroring sub_410F81, which returns right after the call
+                    // whenever dword_464A68 is set).
                     if (options_.goldman && gold_player_ >= 0) {
                         AppInput wheelResult = present_goldman_wheel();
                         if (wheelResult == AppInput::Quit) return 0;
@@ -2391,7 +2391,7 @@ int GameApp::run_app() {
                             victory_screen(is_team_mode(), clinched, setup_team_[clinched]));
                     // Campaign stage advance (docs/re/campaign.md
                     // "Advances through campaign stages automatically",
-                    // sub_401312/sub_40133F gated `if (dword_46489C)`): a
+                    // sub_401312/sub_40133F, both gated on dword_46489C): a
                     // decided match steps dword_4648B0 to the next stage and
                     // loads its scheme/roster instead of returning to the
                     // menu. sub_4016DA's per-tick round pacing (RE'd
@@ -2412,7 +2412,7 @@ int GameApp::run_app() {
                     // original's own post-last-stage behaviour is unpinned
                     // — see ROADMAP.md).
                     if (campaign_active_ && ev != AppInput::Quit) {
-                        ++campaign_stage_index_;  // ++dword_4648B0
+                        ++campaign_stage_index_;  // the original bumps dword_4648B0 here
                         if (campaign_stage_index_ < static_cast<int>(campaign_stages_.size()) &&
                             load_campaign_stage(campaign_stage_index_, campaign_state())) {
                             reset_match_scores();

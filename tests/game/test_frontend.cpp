@@ -492,8 +492,9 @@ TEST_CASE(
 }
 
 // docs/re/campaign.md "Round pacing" clauses 4-5 (sub_4016DA, pseudo.c
-// 4634-4648): `for (i=0;i<10;++i) { sub_421DD2(i,&type,0); if (type!=1 &&
-// type && sub_4228C4(i)) return; }` falling through -> replay the stage.
+// 4634-4648): the scan over slots 0..9 returns early once sub_421DD2 reports a
+// slot type that is neither 0 nor 1 and sub_4228C4 reports that slot alive;
+// falling through the whole loop instead -> replay the stage.
 TEST_CASE("campaign_round_needs_replay: an all-COMPUTER roster replays even with a live side") {
     std::array<bool, kMaxPlayers> present{};
     std::array<bool, kMaxPlayers> alive{};

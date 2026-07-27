@@ -156,9 +156,11 @@ TEST_CASE("flame arm stops at a bomb it chain-detonates, without igniting past i
 }
 
 // A chain-triggered bomb's own explosion skips re-casting an arm back toward
-// the flame that hit it (bomb+56, pseudo.c 25621: `if (!field56 || k+1 !=
-// field56)`, pushed as `((k+2)&3)+1` — the OPPOSITE of the triggering arm's
-// direction). The other three directions still fire at full reach.
+// the flame that hit it: pseudo.c 25621 casts an arm only when the bomb's +56
+// word is zero, or when the 1-based arm index does not equal it. The value
+// stored there is (arm index + 2) mod 4, plus 1 — the OPPOSITE of the
+// triggering arm's direction, in the same 1-based space. The other three
+// directions still fire at full reach.
 TEST_CASE("a chain-detonated bomb skips re-blasting back toward its trigger") {
     Simulation s(open_config());
     // Row 0: no pillars there (the (odd,odd) pattern never hits an even row).
@@ -797,7 +799,8 @@ TEST_CASE("arming the walls switches off warpholes and trampolines, not belts or
 }
 
 TEST_CASE("the walls stop closing the moment the round is decided") {
-    // sub_426818's whole body sits inside `if (sub_421969() > 1)`
+    // sub_426818's whole body only runs when sub_421969 reports more than one
+    // side left
     // (native/src/game/batch_0x42583B.cpp 678-679), and sub_421969 is
     // recomputed every frame from the player pass's alive tally
     // (dword_4621D0 -> dword_4621D4). So once one side is left the spiral

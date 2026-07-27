@@ -916,10 +916,11 @@ void Renderer::draw_world(const sim::State& s) {
             if (pickup_pose_[i] > 0 && !up.steps.empty()) {
                 a = &up;
                 // The DISPLAYED frame is walk-phase-driven, NOT elapsed-since-
-                // grab: the original unconditionally recomputes v110 =
-                // sub_41DAA7(seq, (u16)player[+0x30] / 3) at the shared draw
-                // tail (pseudo.c 23410; disasm-confirmed 0x420350-0x420379,
-                // `idiv ebx` with ebx=3), discarding the elapsed-based frame the
+                // grab: the original unconditionally recomputes the frame at the
+                // shared draw tail, calling sub_41DAA7 with the sequence and the
+                // player's +0x30 word (unsigned 16-bit) divided by 3 (pseudo.c
+                // 23410; confirmed in the disassembly at 0x420350-0x420379, an
+                // integer division by 3), discarding the elapsed-based frame the
                 // pickup block computed. Only pickup_pose_'s countdown (the
                 // state's exit timer, set from the sequence length) survives.
                 // Same +48/3 walk leg-cycle as the walk/stand/carry poses above.

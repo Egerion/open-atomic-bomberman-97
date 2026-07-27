@@ -43,7 +43,8 @@ public:
     int spacing() const { return spacing_; }
 
     // Advance width of one character (glyph width + inter-char spacing), 0 for a
-    // code the font does not cover — mirroring sub_432120's `if (c < count)`.
+    // code the font does not cover — mirroring sub_432120, which only advances
+    // for codes below the glyph count.
     int advance(unsigned char c) const;
     // Pixel width the string would occupy laid left-to-right (sub_432120).
     int measure(const std::string& s) const;

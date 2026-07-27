@@ -292,7 +292,7 @@ void SchemePickerRunner::run(OptionsScreen& opt, const std::string& backdrop) {
     }
     if (picker.cancelled()) return;
     // sub_407582's selection write-back @0x40767A-0x4076B8, CORRECTED
-    // 2026-07-26 against the binary: the cut character is `mov edx, 0x3A` —
+    // 2026-07-26 against the binary: the cut character loaded there is 0x3A —
     // a COLON, not a '.' — fed to sub_45167A/strchr. Cutting the display line
     // "BASIC.SCH: Basic Bomberman" at its first ':' therefore recovers the
     // filename WITH its extension, and that is what is strcpy'd into

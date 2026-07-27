@@ -41,10 +41,11 @@ struct DialogRect {
 };
 
 // CORRECTED 2026-07-26: sub_43C734 is SIX-arg — `(x, y, width, height,
-// colormode, flags)`. It ends `ret 8` (two stack args) on top of the four
-// Watcom register args, and its a1/a2 flow into sub_43D398 @0x43C8C2, which
-// bounds-checks `[win+0x18] (width) + edx` against the right clip edge and
-// `[win+0x1c] (height) + ebx` against the bottom — so a1 is X and a2 is Y.
+// colormode, flags)`. Its return pops 8 bytes of stack arguments (two of them)
+// on top of the four Watcom register args, and its a1/a2 flow into sub_43D398
+// @0x43C8C2, which bounds-checks the window's +0x18 width plus the first of
+// those two against the right clip edge, and the +0x1c height plus the second
+// against the bottom — so a1 is X and a2 is Y.
 // The old "X is never an explicit parameter anywhere in this family" note
 // (and the X-placement TODO(RE) it came from) was a decompiler artefact:
 // Hex-Rays dropped the EAX argument at these call sites. Confirms the rescued

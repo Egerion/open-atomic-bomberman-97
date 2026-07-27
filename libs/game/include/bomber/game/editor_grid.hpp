@@ -52,8 +52,9 @@ inline EditorBrush cell_char_to_brush(char c) {
 }
 
 // '0' key — sub_4028D2 case 48 (docs/re/results-and-options.md §5, PINNED
-// from the body, pseudo.c 5654-5657): `if (++dword_45B7B8 > 0)
-// dword_45B7B8 = -1;`. NOT a plain 0/-1 flip — it is this exact
+// from the body, pseudo.c 5654-5657): it increments dword_45B7B8 and, if the
+// incremented value is above 0, forces it to -1. NOT a plain 0/-1 flip — it is
+// this exact
 // increment-then-clamp sequence, which happens to toggle strictly between 0
 // and -1 for any starting value in {0, -1} (0 -> 1 -> clamped to -1; -1 -> 0,
 // not >0, stays 0). A dead-end feature in the original: `dword_45B7B8`

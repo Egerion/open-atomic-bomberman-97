@@ -174,7 +174,8 @@ MatchConfig pillars_config() {
 //      and a surviving disease transmits its post-age value, not last
 //      tick's.
 //   2. Disease aging and contagion (both source and target eligibility) are
-//      now frozen for stunned players (`if (!+8)` wraps the whole block in
+//      now frozen for stunned players (a gate on +8 being clear wraps the
+//      whole block in
 //      the original), matching the "present && alive && stun==0" valid-
 //      other-player test used everywhere else in this codebase (ai.cpp
 //      etc.).
@@ -192,7 +193,7 @@ MatchConfig pillars_config() {
 //
 // CORRECTION 2026-07-10 (offset +8/+58 mislabel, docs/re/facts.md "Stun does
 // NOT gate flame-death or pickup" + "Disease system fidelity audit" point 3
-// CORRECTED): the disease audit above got point 2 WRONG. The `if (!+8)` block
+// CORRECTED): the disease audit above got point 2 WRONG. The +8-is-clear block
 // that wraps disease aging/contagion is the ALIVE gate (+8 = died-this-round
 // flag), NOT a "not stunned" gate — the +58 head-hit stun is a separate WORD,
 // decremented INSIDE that same block (~22982). The spurious `stun == 0` /

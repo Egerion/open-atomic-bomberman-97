@@ -34,8 +34,9 @@ constexpr Uint8 kButtonInkR = kDialogDimR, kButtonInkG = kDialogDimG, kButtonInk
 // frontend-flow.md "sub_432298 — the button widget (RE-PINNED)".
 constexpr Uint8 kButtonFaceR = 108, kButtonFaceG = 112, kButtonFaceB = 108;
 
-// sub_416B43 splits the source into a fixed 3x3 grid (v22 = srcW/3,
-// v23 = srcH/3) — for the 72x72 WINZ.PCX that is 24-px cells.
+// sub_416B43 splits the source into a fixed 3x3 grid (cell width = source
+// width / 3, cell height = source height / 3) — for the 72x72 WINZ.PCX that is
+// 24-px cells.
 constexpr float kPatchCells = 3.0f;
 
 float line_h(const FontTextures& font) {
@@ -47,8 +48,10 @@ float text_w(const FontTextures& font, const std::string& s) {
 }
 
 // One tiled band of a 9-patch: repeats the source cell across the dest rect,
-// clipping the last partial tile — sub_416B43's `if (i + cell < extent) v =
-// cell; else v = extent - i` loops, translated to src/dst rect pairs.
+// clipping the last partial tile — sub_416B43's loops take a full cell while
+// the walking offset plus one cell still fits inside the extent, and the
+// remainder (extent minus offset) otherwise, translated here to src/dst rect
+// pairs.
 void tile_patch(SDL_Renderer* ren, SDL_Texture* tex, const SDL_FRect& src, float dx, float dy,
                 float dw, float dh) {
     // Integer tile index (not a float loop counter): ox/oy are derived as

@@ -76,15 +76,16 @@ inline bool load_campaign_stage(int index, CampaignState state) {
     // AI roster auto-fill — CORRECTED 2026-07-09 (docs/re/campaign.md
     // "Rover/ghost/AI roster — CORRECTED"). sub_40151B (the real per-stage
     // starter gated dword_46489C, not sub_42288C as previously mislabelled)
-    // is the actual roster/actor seeder: `for (j=0;j<ai_count;++j)
-    // sub_422928()`, where sub_422928 picks a RANDOM currently-OFF slot
-    // (`rand()%10`, retried up to 100 times) and flips it to COMPUTER — not
+    // is the actual roster/actor seeder: it calls sub_422928 once per AI, as
+    // many times as the stage's ai_count, and sub_422928 picks a RANDOM
+    // currently-OFF slot (rand() modulo 10, retried up to 100 times) and flips
+    // it to COMPUTER — not
     // a sequential fill from slot 0. Only the AI COUNT (field 7) seeds
     // player slots at all; rovers/ghosts are NOT player slots (see below),
     // so folding them into COMPUTER slots (the prior port behaviour) was a
     // mislabelling, now removed. Every slot starts OFF, then exactly
     // `ai_count` distinct slots (clamped to kMaxPlayers) are flipped to
-    // COMPUTER at random, matching sub_422928's `rand()%10` + retry-on-
+    // COMPUTER at random, matching sub_422928's rand()-modulo-10 + retry-on-
     // occupied shape but using the presentation LCG (state.setup_lcg), never
     // State::rng — this only steers which slot ids get the pre-supplied
     // roster, no sim RNG draw.
