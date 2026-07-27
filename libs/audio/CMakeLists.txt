@@ -5,6 +5,7 @@
 # later mechanical rename to bomber::audio, D1.)
 add_library(bomber_audio STATIC
   src/audio_engine.cpp
+  src/sound_bank.cpp    # SDL-free sound SELECTION engine (sub_427961 & friends)
   src/sound_director.cpp
 )
 add_library(bomber::audio ALIAS bomber_audio)

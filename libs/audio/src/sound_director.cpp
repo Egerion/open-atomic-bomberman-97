@@ -11,7 +11,7 @@ void SoundDirector::reset() {
 void SoundDirector::on_tick(const sim::State& s) {
     for (auto it = pending_.begin(); it != pending_.end();) {
         if (s.tick >= it->first) {
-            audio_.play_random_in_range(it->second.first, it->second.second);
+            audio_.play(it->second);
             it = pending_.erase(it);
         } else {
             ++it;
@@ -66,18 +66,18 @@ void SoundDirector::on_tick(const sim::State& s) {
                     if (pl.max_bombs >= s.tuning.taunt_many_bombs &&
                         pl.bombs_placed == pl.max_bombs &&
                         audio_.chance(s.tuning.taunt_many_chance))
-                        audio_.play_random_in_range(1200, 1299);
+                        audio_.play(1200);
                 }
                 // Diarrhea/super drop = random "poops" splat (SOUNDLST 550-554,
                 // sub_41F29B's forced-drop branch); a normal drop is 100/101.
                 if (ev.data)
-                    audio_.play_random_in_range(550, 554);
+                    audio_.play(550);
                 else
-                    audio_.play_one_of({100, 101});
+                    audio_.play(100);
                 break;
             }
-            case sim::Event::Type::BombKicked: audio_.play_random_in_range(120, 123); break;
-            case sim::Event::Type::Explosion: audio_.play_random_in_range(200, 299); break;
+            case sim::Event::Type::BombKicked: audio_.play(120); break;
+            case sim::Event::Type::Explosion: audio_.play(200); break;
             // No sound at clock-zero: the original plays the tie/draw voice
             // (1700-1999) only on the DRAW result screen, via the blocking
             // sub_427BFB(1700) (batch_0x4293E5.cpp:1097) — NOT mid-round when
@@ -90,10 +90,11 @@ void SoundDirector::on_tick(const sim::State& s) {
                 // per-frame game loop (sub_42A191 ~0x42A2C4) latches on
                 // dword_464984 and fires sub_427961(2700) exactly once, right
                 // before it flashes the "hurry" banner (aHurry). SOUNDLST labels
-                // 2700 "hurry" with the comment "2799 is last hurry up! sound",
-                // so the block is 2700..2799 and sub_427961 random-picks across
-                // the contiguously loaded slots — hence the range, not play(2700).
-                audio_.play_random_in_range(2700, 2799);
+                // 2700 "hurry" with the comment "2799 is last hurry up! sound".
+                // 39 clips are authored there; the load-time cull keeps a random
+                // FIVE of them per session (sub_42814B: cull(2700, 2799, 5)), and
+                // play() then walks that surviving run.
+                audio_.play(2700);
                 break;
             case sim::Event::Type::WallClosed:
                 // sub_426818 (docs/re/facts.md "Wall-slam SFX", `sub_4278F2`
@@ -104,7 +105,7 @@ void SoundDirector::on_tick(const sim::State& s) {
                 // last reset() (one per round, matching the original's
                 // per-arm draw) and reuse it thereafter.
                 if (wall_slam_id_ < 0) wall_slam_id_ = 140 + audio_.roll(3);
-                audio_.play(wall_slam_id_);
+                audio_.play_exact(wall_slam_id_);
                 break;
             case sim::Event::Type::BombPunched:
                 // The glove swings on every press (the event fires regardless so
@@ -113,7 +114,7 @@ void SoundDirector::on_tick(const sim::State& s) {
                 // inside sub_424A50's `if (bomb ahead)`. ev.data carries that hit
                 // flag. SOUNDLST 150/151 are "punching a bomb"; sub_427961(150)
                 // random-picks across the contiguously loaded 150,151 slots.
-                if (ev.data) audio_.play_one_of({150, 151});
+                if (ev.data) audio_.play(150);
                 break;
             case sim::Event::Type::BombBounced: audio_.play(160); break;
             case sim::Event::Type::BombStopped: audio_.play(130); break;   // "bombstop"
@@ -126,33 +127,47 @@ void SoundDirector::on_tick(const sim::State& s) {
                 // NOT gated to a human/local player: sub_427961 is a global
                 // SFX and the event carries any owner, so an AI's warphole drop
                 // buzzes too — do not add an `ev.player == 0` check here.
-                audio_.play_one_of({40, 41});
+                audio_.play(40);
                 break;
-            case sim::Event::Type::JellyBounced: audio_.play(135); break;  // "bombboun"
+            case sim::Event::Type::JellyBounced:
+                // The ONLY debounced sound in the binary: `sub_423776` reaches
+                // the jelly reversal through `sub_427ABB(135)`, not the usual
+                // `sub_427961`, so a jelly bomb pinballing between two walls
+                // cannot re-trigger "bombboun" more than once every 3 frames.
+                // Its non-jelly sibling one branch down (`sub_427961(130)`,
+                // BombStopped) is NOT debounced — a bomb only stops once.
+                audio_.play_debounced(135, s.tick);
+                break;
             case sim::Event::Type::BombGrabbed:
                 // Pickup "grab1". sub_41F29B's +92 grab branch (~0x41F4CA) calls
                 // sub_424AF4(bomb, player), which cross-links the pair and fires
-                // sub_427961(170). This is the ONLY sub_427961(170) in BM95, and
-                // SOUNDLST 170 is "grab1" (171 "grab2" loads contiguously, so 170
-                // random-picks across 170,171 — audio_.play(170) plays the slot).
+                // sub_427961(170). CORRECTION (2026-07-27): the 170 group is not
+                // {grab1, grab2} — SOUNDLST loads 170..175 with no gap, so the
+                // group is SIX members and the four "bmbthrw" clips are IN it.
+                // facts.md's earlier "the bmbthrw ids are dead assets, never
+                // played" was wrong: nothing calls sub_427961(172), but 170's
+                // group walk reaches them. See docs/re/sound-engine.md.
                 audio_.play(170);
                 break;
             case sim::Event::Type::BombThrown:
                 // Silent by design. The carried-bomb RELEASE in sub_41F29B's +37
                 // block (~0x41F3E5) launches the held bomb via sub_424987 with NO
                 // sub_427961 call — throwing plays no sound at the release instant.
-                // (The unused SOUNDLST "bmbthrw" ids 172-175 are dead assets:
-                // sub_427961 is never invoked with 171-175 anywhere in BM95.)
+                // (No call site names 171-175, but they are NOT dead assets: they
+                // sit inside the 170 "grab" group's contiguous run, so the grab
+                // pick reaches them. See BombGrabbed below.)
                 // The audible part of a throw is the in-flight/settle "bmdrop3"
                 // (160), emitted as BombBounced from the flight code — verified by
                 // an exhaustive sub_42331C sound census: its only calls are
                 // 160 (fly, case 2), 130 (kick stop, NOT flying), 200 (explode),
                 // 120 (kick). A thrown bomb therefore never plays 130.
                 break;
-            case sim::Event::Type::HeadHit: audio_.play_random_in_range(360, 362); break;
-            // Stage actors (docs/re/stage-actors.md §7): the original plays a
-            // single SOUNDLST slot via sub_427961 — 350 "1017" (trampoline boing,
-            // sub_41EC84 line 22606), 1330 "warp1" (warphole, line 22599).
+            // 360 is a FOUR-member group (bombhit1..4) — the old 360..362 range
+            // silently dropped bombhit4.
+            case sim::Event::Type::HeadHit: audio_.play(360); break;
+            // Stage actors (docs/re/stage-actors.md §7): sub_427961(350) /
+            // sub_427961(1330) — group bases like every other call site, so the
+            // trampoline picks across 350..353 and the warp across 1330..1332.
             case sim::Event::Type::TrampolineBounce: audio_.play(350); break;
             case sim::Event::Type::WarpUsed: audio_.play(1330); break;
             case sim::Event::Type::Infected: {
@@ -160,7 +175,7 @@ void SoundDirector::on_tick(const sim::State& s) {
                 // block), else the generic "oh no" (2300) — as sub_41DFB6.
                 int base = 3000 + 50 * ev.data;
                 if (audio_.chance(3))
-                    audio_.play_random_in_range(base, base + 49);
+                    audio_.play(base);
                 else
                     audio_.play(2300);
                 break;
@@ -180,16 +195,16 @@ void SoundDirector::on_tick(const sim::State& s) {
                 const bool milestone = (n == 7 || (n > 7 && (n - 7) % 5 == 0));
                 if (n > 50) pickups_[ev.player] = 7;
                 if (milestone)
-                    audio_.play_random_in_range(1400, 1699);  // replaces the pickup voice
+                    audio_.play(1400);  // replaces the pickup voice
                 else if (ev.data == static_cast<std::int8_t>(sim::PowerupType::Jelly))
                     audio_.play(135);  // jelly boing
                 else
                     // 400 (woohoo1) starts the pickup block (was 401, dropping it).
-                    audio_.play_random_in_range(400, 499);
+                    audio_.play(400);
                 break;
             }
             case sim::Event::Type::PlayerDied: {
-                audio_.play_random_in_range(300, 309);
+                audio_.play(300);
                 // Post-death taunt from a survivor (VALUELST id 95: 1-in-N,
                 // sub_427961(700) call site). FIXED (docs/re/id-audit.md):
                 // the taunt group is SOUNDLST 700..999 ("after a player
@@ -200,7 +215,7 @@ void SoundDirector::on_tick(const sim::State& s) {
                 // drop sound, played elsewhere via BombPlaced), so a dying
                 // player had a small chance of "taunting" with a fart splat.
                 if (audio_.chance(s.tuning.taunt_chance))
-                    pending_.push_back({s.tick + 25, {700, 999}});
+                    pending_.push_back({s.tick + 25, 700});
                 break;
             }
             default: break;

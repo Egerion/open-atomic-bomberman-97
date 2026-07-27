@@ -80,6 +80,7 @@ getvalue" libs/game`):
 
 | id(s) | area |
 |---|---|
+| 8 | **concurrent SFX voice cap** (the file's own comment: "how many concurrent sounds do we want to allow?"), authored **5**. `sub_427859` opens with `if (getvalue(8) < active_voices) return;` — over-cap sounds are DROPPED, never stolen from a playing voice. `AudioEngine::voice_cap_`, read at init; `docs/re/sound-engine.md` §5 |
 | 12 | boot/title/logo dwell timeout, seconds |
 | 32 | round-start **own-colour reveal** window, in nominal frames. Round init arms `dword_4621E8 = (1000/getvalue(30)) × getvalue(32)` = 50 ms × 40 = 2000 ms; while it runs, each player's BODY blits in that player's own slot colour instead of the +60 draw-colour byte, so everyone can find their bomberman before the team colours take over. Visually a **Team-Play-only** effect (with team play off both branches yield the same slot index). `Renderer` reads it straight from the `ValueList` (`renderer.cpp` `at_or(32, 40)`) and deliberately **NOT** via `Tuning::apply` — it is presentation-only and putting it in `sim::Tuning` would drag a render value into hashed-sim territory. `docs/re/facts.md` "Round-start own-colour reveal" |
 | 15 | "is the online manual enabled?" — gates the help browser glob |
@@ -115,6 +116,7 @@ id-audit pass:
 
 | id(s) | area |
 |---|---|
+| 3, 4, 6, 7 | sound-cache policy, all read in `sub_428A??`/`sub_428AEF`: 3 = selective pre-caching (**0**), 4 = total pre-caching (**0**, the file itself calls it "a bad idea"), 6 = cache byte budget (**7000000**), 7 = seconds between voluntary cache clears **and re-choosing/re-loading of SOUNDLST** (**1800**). Deliberately not ported: the port loads clips lazily and culls once at init, so ids 3/4/6 have no analogue and id 7's 30-minute re-roll of the random voice subsets is skipped. `docs/re/sound-engine.md` §3 |
 | 40 | "do we randomize player starting positions?" — the DEFAULT seed of the Random Start option (dword_464AE8 = getvalue(40) = 1 at `sub_41095A`, overridden by options.ini `random_start=`); consumed by the game layer as the absent-key default, `docs/re/facts.md` "Options toggles" |
 | 101 | **= 60 (CONFIRMED)**: in-round "hurry" threshold, seconds remaining — when the round clock enters the (getvalue(101)−5, getvalue(101)) window the tick callback one-shots SFX 2700 and flashes the "hurry" ANI at screen centre on alternating `frame & 4` ticks (`sub_42A191` ~29531-29549, `docs/re/in-match-shell.md` "hurry flash"). (id 101's OWN threshold-seconds value already feeds `Tuning::hurry_seconds` — see the Consumed table above; this row is the still-unported SFX/ANI presentation detail only.) |
 | 110, 111, 112 | in-round countdown-clock HUD (**CONFIRMED**, `sub_4105D2` @ 0x4105D2, drawn every tick): 110/111 **= 525/36** = x/y of the MM:SS digits (drawn glyph-by-glyph with the `numeric font` ANI, message 281 `"%u:%02u"`; an "∞" glyph when the round is untimed), 112 **= 4** = extra px between digits (the file's own comment). Ink switches to the warning colour at ≤30 s remaining — the 30 is hardcoded, not a VALUELST id (`docs/re/in-match-shell.md` "in-round HUD") |

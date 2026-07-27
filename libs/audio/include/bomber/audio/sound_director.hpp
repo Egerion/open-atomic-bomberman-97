@@ -27,8 +27,8 @@ public:
 
 private:
     AudioEngine& audio_;
-    // Voice lines scheduled a beat after their trigger: (due tick, id range).
-    std::vector<std::pair<std::uint64_t, std::pair<int, int>>> pending_;
+    // Voice lines scheduled a beat after their trigger: (due tick, group base).
+    std::vector<std::pair<std::uint64_t, int>> pending_;
     std::array<int, sim::kMaxPlayers> pickups_{};
     // Wall-slam SFX id, latched on the FIRST `WallClosed` event since reset()
     // and replayed for every one after — the original draws `rand() % 3`
