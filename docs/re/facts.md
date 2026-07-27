@@ -288,7 +288,8 @@ matches it 1:1 (verified 2026-07-04). Floor art is POWERS.ANI (40x36, hotspot
 POW*.PCX menu icons is that format's transparent key, and red is also used for
 interior detail so the PCX must not be raw-blitted on the floor). Our animated
 path draws POWERS.ANI; the static POW*.PCX tile-fill is a robustness fallback;
-**the shadow** blits at the player's OWN anchor `(v111+28, v111+32)` with no
+**the shadow** blits at the player's OWN anchor — the X at player offset +28
+and the Y at +32 — with no
 offset (its (14,16) hotspot centres it). Our renderer had a stray `+8` on the
 shadow (removed 2026-07-04) and draws powerups top-left (≈1 px off, animation
 aside). (Resolved while reviewing Ege's "shadow/powerups/bombs a bit too high".)
@@ -337,13 +338,15 @@ it plays sound `50*index+3000` (per-disease voice) 1/3 of the time, else 2300.
 | 1 | +133 | **fast** (hyper) | move budget `×3/2` (23438) | 131 |
 | 2 | +134 | **constipation** | can't drop bombs (gates +56 at 23310; `return 0` at 10585) | 132 |
 | 3 | +135 | **diarrhea** | forces auto-drop every frame (sets +56 at 23279) | 133 |
-| 4 | +136 | **short flame** | dropped-bomb flame forced to 1 (`sub_41EB13` v9=1) | 134 |
+| 4 | +136 | **short flame** | dropped-bomb flame forced to 1 (`sub_41EB13` forces its flame-length argument to 1) | 134 |
 | 5 | +137 | **super/ebola** | fast **and** auto-drop (grouped with +133 and +135) | 135 |
-| 6 | +138 | **short fuse** | dropped-bomb fuse `÷3` (`sub_41EB13` v10/=3) | 136 |
+| 6 | +138 | **short fuse** | dropped-bomb fuse `÷3` (`sub_41EB13` divides its fuse-length argument by 3) | 136 |
 | 7 | — | **swap** | swaps (x,y) with a random other live player; no flag | 137 |
 | 8 | +140 | **reversed** | godir `(g+2)&3`, humans only (`+16 != 1`, at 23049) | 138 |
 
-Move-budget order (23436-23438): `v91 = base; if(slow) v91/=3; if(fast||super) v91 = 3*v91/2`.
+Move-budget order (23436-23438), applied in exactly this sequence to one
+running value: start from the base budget; if slow, divide it by 3; then if
+fast or super, replace it with 3× the current value divided by 2.
 Bomb flame comes from player `+0x57` (flame stat), overridden to 1 by short-flame,
 or to `max(cols,rows)` by goldflame `+0x5e`; fuse from `+0x48`, `÷3` by short-fuse.
 
@@ -402,7 +405,8 @@ flash genuinely shows the player briefly wearing one of the ten shipped
 player recolors, matching the original's actual mechanism instead of
 approximating it with a tint. **Cadence corrected 2026-07-10** (bomb-placement
 investigation): the gate now reproduces the counter-bit pulse exactly —
-`(disease_timer & 8) != 0`, the confirmed `v111[60] & 8` — replacing the prior
+`(disease_timer & 8) != 0`, mirroring the confirmed bit-3 (value 8) test on the
+player's disease counter at +120 (word index 60) — replacing the prior
 alternating-tick simplification (`s.tick & 1`). Our `disease_timer` counts down
 where `+120` counts up, but `& 8` yields the identical 8-tick-on / 8-tick-off
 pulse (~0.4 s buzz, 0.4 s calm at 20 Hz); only the phase differs (imperceptible
@@ -534,7 +538,8 @@ again 2026-07-10 for the seconds correction.
 
 Read 2026-07-03. When a flying bomb lands on a live player:
 
-- **Stun = hardcoded 16 ticks** (`a1[29] = 16`, the word at +58): the player
+- **Stun = hardcoded 16 ticks** (the literal 16 is stored straight into the
+  player's word at +58, i.e. word index 29 of the struct): the player
   updater decrements it each tick, blocks the whole turn while positive, and
   clears action-state 3 when it reaches zero. NOT a VALUELST id — our old
   `head_stun_frames = 20` guess corrected to 16 and marked confirmed.
@@ -616,13 +621,15 @@ Evidence, cross-checked three ways:
    different fields.
 
 What stun (+58) actually gates, read end to end: **only new-input
-acquisition.** The local `v113` (init `1` at ~22981, forced `0` while
-+58>0 or while the player is in states 4/5/6/7) gates a single `if (v113 &&
-!dword_4621E0) { sub_41E61E(...) / AI decide }` at ~23028-23039 — i.e., a
-stunned player cannot change direction or start a new bomb action — plus one
-cosmetic standing-animation frame pick at ~23086. Movement-budget accrual and
+acquisition.** A local can-act flag (the decompiler's `v113`) is initialised
+to 1 at ~22981 and forced to 0 while +58 > 0 or while the player is in states
+4/5/6/7. That flag, combined with `dword_4621E0` being zero, is the sole gate
+on the one input-acquisition site at ~23028-23039 (the `sub_41E61E` human
+decode / the AI decide path) — i.e., a stunned player cannot change direction
+or start a new bomb action — plus one cosmetic standing-animation frame pick
+at ~23086. Movement-budget accrual and
 the `sub_41EC84` per-pixel-step call (~23422/23423 and ~23451/23452) are
-**inside** the +8 block but are **not** gated on `v113`/+58 at all, so a
+**inside** the +8 block but are **not** gated on that flag or on +58 at all, so a
 still-alive stunned player's movement machinery keeps executing every tick
 of the stun (only issuing a *new* direction is blocked) — surprising, but
 consistent with "the player got bonked and can't react" rather than "the
@@ -638,8 +645,8 @@ drives it:
 - The +58 decrement (~22982-22990) runs unconditionally every alive tick
   (also clears the head-hit action-state 3 when it hits 0); it is NOT inside
   the movement branch.
-- The new-direction word +46 (`v111[23]`) is reset to `-1` every tick at
-  ~22980, BEFORE the v113 gate — so a keyed direction lives exactly one tick
+- The new-direction word +46 in the player struct is reset to `-1` every tick
+  at ~22980, BEFORE the can-act gate — so a keyed direction lives exactly one tick
   and is never retained across ticks, stunned or not. While stunned,
   sub_41E61E/AI (the only writers of a keyed +46) are skipped, so +46 stays
   -1 into the movement dispatch.
@@ -648,7 +655,8 @@ drives it:
   adds the belt budget getvalue(190+idx), and calls `sub_41EC84` — so a
   stunned player IS still carried by a belt, still fires the in-loop kick
   probe, and still triggers warphole/trampoline step-ons (the stepper's
-  `v35 == -1` check), all exactly as a keyless idle player. If no actor is
+  own check for a still-unset (-1) direction), all exactly as a keyless idle
+  player. If no actor is
   underfoot the branch goto's LABEL_155 without touching the mover.
 - The keyed branch (~23430-23453, the one that accrues the player's OWN
   speed/disease budget) is only reachable with +46 != -1, i.e. never while
@@ -704,11 +712,12 @@ same +8 field as "Player::stun") DID rest on this mislabelling — every one
 mirrors an original gate that reads `!player[2]` (offset +8 = **dead**), not
 +58. They have been **removed**: a merely-stunned-but-alive player now ages,
 spreads/catches disease, and is a valid Swap target, matching the binary
-(`sub_41DFB6` 22073 `!v3[2]`; `sub_41F29B` age/contagion block 22904 `if
-(!+8)` with the +58 stun decremented *inside* it at 22982). `ai.cpp`'s
+(`sub_41DFB6` 22073 tests the actor's +8 dead flag for zero; `sub_41F29B`'s
+age/contagion block at 22904 is gated on that same +8 being zero, with the +58
+stun decremented *inside* that block at 22982). `ai.cpp`'s
 `pick_live_enemy`/`behave_bomb_enemy`/`behave_seek_enemy` target-liveness
-checks (`q.stun` reads mirroring `sub_421CB5` 24207 `!i[2]` / `sub_422718`
-24741 `v7[2]`) were the same mislabel and are likewise switched to `!alive`
+checks (`q.stun` reads mirroring the identical +8 dead-flag tests at
+`sub_421CB5` 24207 and `sub_422718` 24741) were the same mislabel and are likewise switched to `!alive`
 (dead) only. GOLDEN: inert in scenario D (no head-hits there → no stun ever),
 so all golden constants stayed byte-identical, kExpectedRng included — no RNG
 draw added or removed. The AI-dispatch stun gate (`simulation.cpp`, §7 of
