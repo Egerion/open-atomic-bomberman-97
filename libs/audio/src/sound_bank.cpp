@@ -105,17 +105,18 @@ int SoundBank::pick(int id) {
     // cycle. The 200-draw ceiling is the binary's; on exhaustion it plays
     // whatever the last draw was, so a large group degrades to uniform rather
     // than hanging.
-    int least = plays_[static_cast<std::size_t>(id)];
-    for (int j = 1; j < n; ++j)
-        least = std::min(least, plays_[static_cast<std::size_t>(id + j)]);
+    const std::size_t base = static_cast<std::size_t>(id);
+    int least = plays_[base];
+    for (std::size_t j = 1; j < static_cast<std::size_t>(n); ++j)
+        least = std::min(least, plays_[base + j]);
 
-    int chosen = id;
+    std::size_t chosen = base;
     for (int k = 0; k < kPickTries; ++k) {
-        chosen = id + static_cast<int>(next_rand() % static_cast<unsigned>(n));
-        if (plays_[static_cast<std::size_t>(chosen)] == least) break;
+        chosen = base + static_cast<std::size_t>(next_rand() % static_cast<unsigned>(n));
+        if (plays_[chosen] == least) break;
     }
-    ++plays_[static_cast<std::size_t>(chosen)];
-    return chosen;
+    ++plays_[chosen];
+    return static_cast<int>(chosen);
 }
 
 int SoundBank::pick_debounced(int id, std::uint64_t frame) {

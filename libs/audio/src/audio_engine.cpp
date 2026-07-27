@@ -71,7 +71,7 @@ bool AudioEngine::init(const std::filesystem::path& game_dir,
         const std::int64_t cap = values.at_or(8, kDefaultVoiceCap);
         if (cap > 0 && cap < kStreams) voice_cap_ = static_cast<int>(cap);
     } catch (const std::exception&) {
-        // keep kDefaultVoiceCap
+        voice_cap_ = kDefaultVoiceCap;  // unreadable VALUELST: keep the authored 5
     }
 
     // Seed the cosmetic generator from the clock and build the slot table —
