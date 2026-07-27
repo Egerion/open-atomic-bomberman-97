@@ -37,46 +37,56 @@ binary with `python native/tools/disasm.py 0xADDR` for every finding below
 **Original**: `sub_40ABED` (bomb-near-enemy), `native/src/game/batch_0x40A140.cpp`
 lines 297-354, specifically the HEXRAYS-FIX at lines 316-329:
 
-```c
-// HEXRAYS-FIX: original is 'sub_42665C(a1[5]); abs_(); sub_4266A3(a1[6]);
-// v3 = abs_();' with v3 declared __int64 and tested via '(int)v3 +
-// HIDWORD(v3) >= 3' — a chained-register-argument artifact. CORRECTED
-// against disasm 0x40AC24..0x40AC69 (fuller than ai.md sec 3.4's summary,
-// which omits the subtraction): each operand is a DIFFERENCE, not a bare
-// coordinate — "sub edx,eax" runs before each abs_() call. The real gate is
-// abs((dword_45ED70+46>>16) - sub_42665C(a1[5]))
-//   + abs((dword_45ED70+48>>16) - sub_4266A3(a1[6])) >= 3,
-v3 = abs_((*(int *)(dword_45ED70 + 46) >> 16) - sub_42665C(a1[5]))
-   + abs_((*(int *)(dword_45ED70 + 48) >> 16) - sub_4266A3(a1[6]));
-if ( v3 >= 3 ) { /* proceed to the enemy-scan cross */ }
+The transliteration carries an explicit correction note at those lines, and
+its content is the finding. Paraphrased in full:
+
+> The decompiler had emitted the two coordinate conversions (`sub_42665C` on
+> the actor's dword at +20, then the absolute-value helper; `sub_4266A3` on
+> the actor's dword at +24, then the absolute-value helper) as bare calls
+> whose results it folded into a single 64-bit temporary, and then tested
+> that temporary by summing its low and high 32-bit halves against 3 — a
+> chained-register-argument artifact, not real 64-bit arithmetic. CORRECTED
+> against the disassembly at 0x40AC24..0x40AC69, which is **fuller than
+> ai.md §3.4's summary, because that summary omits the subtraction**: each
+> operand of the sum is a **DIFFERENCE**, not a bare coordinate — a
+> subtraction runs before each absolute-value call.
+
+So the real gate, in our own notation, is:
+
+```
+abs( brainTileX(+46 >> 16) − tile(actor +20 via sub_42665C) )
+  + abs( brainTileY(+48 >> 16) − tile(actor +24 via sub_4266A3) )  >= 3
+        ⇒ proceed to the enemy-scan cross;  otherwise return 0
 ```
 
-`dword_45ED70+46/+48` is the brain's freshly-refreshed **current** tile
-(written every dispatch, `sub_40A1C6`); `a1[5]/a1[6]` are the actor's
-**`+20/+24`** — a pixel-space snapshot written ONLY at spawn and at
+The brain dwords at **+46/+48** hold the AI's freshly-refreshed **current**
+tile (written every dispatch, `sub_40A1C6`); the actor dwords at
+**+20/+24** are a pixel-space snapshot written ONLY at spawn and at
 punch-restart (`docs/re/ai.md` §3.4/§9.4, unchanged by this audit). So the
 gate is **Manhattan distance the AI has walked since its last spawn or
 punch-restart >= 3 tiles** — not "how far the spawn tile itself is from the
 map origin".
 
-**Byte-confirmed** via `python native/tools/disasm.py 0x40ABED`:
+**Byte-confirmed** via `python native/tools/disasm.py 0x40ABED`. Walking the
+gate's instruction range 0x40AC24-0x40AC6D, the operations are, in order:
 
-```
-40AC24  mov eax,[g_45ED70]        ; brain
-40AC29  mov edx,[eax+0x2E]        ; brain+46 (pos_x dword)
-40AC2C  sar edx,0x10              ; -> current tile X
-40AC2F  mov eax,[ebp-0x1c]        ; actor (a1)
-40AC32  mov eax,[eax+0x14]        ; actor+0x14 = actor+20 (spawn/punch snapshot X, pixels)
-40AC35  call sub_42665C           ; pixel -> tile
-40AC3A  sub edx,eax               ; edx = currentTileX - snapshotTileX
-40AC3E  call abs_
-... (mirror for Y: brain+48/actor+24/sub_4266A3) ...
-40AC64  add edx,eax               ; sum of abs diffs
-40AC69  cmp dword [ebp-8], 3
-40AC6D  jl  0x40ad7a              ; sum < 3 -> behaviour 4 passes (return 0)
-```
+| Addr | What it does |
+|-----:|--------------|
+| 0x40AC24 | load the active-brain pointer `dword_45ED70` |
+| 0x40AC29 | load the brain dword at **+46** (`pos_x`) |
+| 0x40AC2C | arithmetic-shift it right 16 → the AI's **current tile X** |
+| 0x40AC2F | load the actor pointer (the behaviour's argument) |
+| 0x40AC32 | load the actor dword at **+0x14 = +20** — the spawn/punch snapshot X, in **pixels** |
+| 0x40AC35 | call `sub_42665C` — pixel → tile |
+| 0x40AC3A | **subtract**: currentTileX − snapshotTileX |
+| 0x40AC3E | call the absolute-value helper on that difference |
+| … | the same five steps mirrored for Y: brain **+48**, actor **+24**, `sub_4266A3` |
+| 0x40AC64 | add the two absolute differences together |
+| 0x40AC69 | compare that sum against **3** |
+| 0x40AC6D | if the sum is **< 3**, jump to 0x40AD7A — behaviour 4 passes (returns 0) |
 
-This is an explicit **`sub`** before each `abs_()` call — a true difference,
+The load-bearing step is 0x40AC3A (and its Y mirror): a **subtraction runs
+before each absolute-value call** — a true difference,
 never a bare magnitude. `docs/re/ai.md` §3.4/§9.4 ("[RESOLVED]") describes
 only `abs(spawnTileX) + abs(spawnTileY) >= 3` (the snapshot's own magnitude,
 no subtraction), calls it "a near-constant TRUE per player" and says the
@@ -141,16 +151,21 @@ field's did.
 **Original**: `sub_40B20F`, `native/src/game/batch_0x40A140.cpp` lines 607-615
 (the flee sub-branch's "no strictly-safer tile" case):
 
-```c
-v1 = sub_424D37(*(int *)(dword_45ED70 + 46) >> 16, *(int *)(dword_45ED70 + 48) >> 16);
-if ( v1 <= sub_424D37(v10, v11) )
-{
-  *(_WORD *)(dword_45ED70 + 4) = *(_WORD *)(dword_45ED70 + 48);   // +4 (target X) = own tile X
-  *(_WORD *)(dword_45ED70 + 6) = *(_WORD *)(dword_45ED70 + 50);   // +6 (target Y) = own tile Y
-  *(_WORD *)(v4 + 46) = -1;                                       // godir = -1 (stand)
-  return 1;                                                       // ACT, chain stops
-}
-```
+In order, that branch:
+
+1. reads the danger of the AI's **own** tile — `sub_424D37` applied to the
+   brain's current tile X and Y, i.e. the high words of the brain dwords at
+   **+46** and **+48**;
+2. compares it against the danger of the flee BFS's best tile (`bestX/bestY`);
+3. if own-danger **<=** best-danger (the "can't strictly improve" case) it
+   takes the branch, and inside it performs exactly three stores, in this
+   order:
+   - brain **+4** (target X) ← the brain word at **+48** — the AI's own tile X
+     (that word is the high half of the `pos_x` dword at +46);
+   - brain **+6** (target Y) ← the brain word at **+50** — the AI's own tile Y
+     (the high half of the `pos_y` dword at +48);
+   - actor **+46** (godir) ← **-1** (stand still);
+4. returns **1** — the AI ACTs, so the behaviour chain stops here.
 
 Note there is **no write to `+8`** (`path_target_cost`) here — only `+4`/`+6`
 (the target tile) and the actor's godir. `docs/re/ai.md`'s own §3.2
@@ -159,12 +174,13 @@ player.godir(+46) = -1; return 1` — no `brain[+8]=...` line), so this is not
 a case the pseudo.c-only audits could have missed from the doc alone — it's
 that the port's code silently added a write the doc never asked for.
 
-**Byte-confirmed** via `python native/tools/disasm.py 0x40B20F` (0x40B3EC-0x40B422):
-the branch writes actor+46 ("brain +4"/+6" via `mov word ptr [eax+4],dx` /
-`[edx+6],ax`) and the caller's godir (`mov word ptr [eax+0x2e], 0xffff`),
-then jumps **directly** to the function epilogue (`jmp 0x40b588`) — no
-`sub_40A76E` veto call, and no instruction anywhere in the branch touches
-byte offset 8.
+**Byte-confirmed** via `python native/tools/disasm.py 0x40B20F`, over the
+branch's whole instruction range 0x40B3EC-0x40B422. It contains exactly three
+stores — a 16-bit store into brain **+4**, a 16-bit store into brain **+6**,
+and a 16-bit store of 0xFFFF (= -1) into actor **+46** (the godir) — and then
+an unconditional jump **directly** to the function epilogue at 0x40B588. So
+there is no `sub_40A76E` veto call on this path, and no instruction anywhere
+in the branch touches byte offset 8.
 
 **Port**: `libs/sim/src/systems/ai.cpp` lines 667-675 (`AISystem::behave_walk_path`):
 
@@ -182,11 +198,12 @@ if (here <= danger_at(bx, by)) {
 
 **Visible effect**: the top of the danger branch invalidates a held target
 when `has_path_target && path_target_cost == 0 && danger_at(target) != 0`
-(mirroring `dword_45ED70+8`'s only read site). The original leaves `+8`
+(mirroring brain `+8`'s only read site). The original leaves `+8`
 **stale** here — whatever it last held, from either a fresh zero-initialised
 brain (0) or the most recent *successful* flee-improvement write elsewhere in
-this same function (`*(_WORD*)(dword_45ED70+8) = sub_424D37(v10,v11)`, which
-can itself be 0 if that improvement reached full safety). A brain that has
+this same function (that write stores `sub_424D37(bestX, bestY)`, the danger
+of the improved tile, into the brain word at +8; it can itself be 0 if that
+improvement reached full safety). A brain that has
 never yet taken a "found something less-dangerous-but-still->0" step, or
 whose last such step reached danger 0, has stale `+8 == 0`: on the VERY NEXT
 decide, the invalidation check at the top of the danger branch fires
@@ -234,26 +251,31 @@ were re-checked directly against the native transliteration / disasm and
 are **present and correct**:
 
 1. **Walk-path veto fall-through** (`return g != -1;`, ai.cpp 645/690):
-   confirmed the original's `return *(int*)(v4+44)>>16 != -1` really is a
-   read of the packed dword whose HIGH WORD aliases the very godir word
-   (`v4+46`) the veto (`sub_40A76E`) may have just set to -1 — byte-exact
-   equivalent of the port's `g != -1`. (Same packing trick as the brain's
-   `+2/+4` flag/target-X pack, §9.1.)
+   confirmed the original's return expression — the actor dword at **+44**,
+   shifted right 16, compared against -1 — really is a read of a packed dword
+   whose HIGH WORD aliases the very godir word (actor **+46**) the veto
+   (`sub_40A76E`) may have just set to -1 — byte-exact equivalent of the
+   port's `g != -1`. (Same packing trick as the brain's `+2/+4` flag/target-X
+   pack, §9.1.)
 2. **Grab-glove polarity** (`random_below(s_,2) != 0`, ai.cpp 592): matches
-   `sub_40BD44`'s `v3 && *(v3+62)==*(a1+62) && rand_()%2` (truthy grabs)
-   exactly, `native/src/game/batch_0x40A140.cpp` lines 803-809.
+   `sub_40BD44`'s three-term AND — a bomb is found underfoot, its owner word
+   at +62 equals the actor's own at +62, AND `rand()%2` is **truthy** (a
+   truthy roll grabs) — exactly,
+   `native/src/game/batch_0x40A140.cpp` lines 803-809.
 3. **Grab-glove sliding-bomb exclusion**: confirmed no `!under->moving`
    guard remains in `behave_grab_drop` (ai.cpp 585-596).
 4. **Boxed-in `iters` off-by-one** (`if (out_iters==0) out_iters=1;`):
    independently re-derived from `sub_4092A1`'s scratch-pool scan
    (`native/src/game/batch_0x40902A.cpp` lines 234-320) — an all-neighbours-
-   blocked start seeds nothing, the do-while's frontier scan finds zero
-   active entries, `v29` stays 0, and `++v32` still executes once before the
-   `while(v29)` test exits — `iters` becomes 1, never 0, confirming the
-   port's fix is exactly right.
+   blocked start seeds nothing, so the do-while's frontier scan finds zero
+   active entries and its "any node still alive" counter stays 0; the ring
+   counter is nevertheless incremented once, at the bottom of the body,
+   BEFORE that counter is tested as the loop condition — `iters` becomes 1,
+   never 0, confirming the port's fix is exactly right.
 5. **AI dispatch stun/freeze gate**: `simulation.cpp` line 398
    (`if (ai_sys && !sub_stunned && !frozen)`) still gates `ai_sys->decide`
-   correctly; both halves of the original's `v113 && !dword_4621E0` remain
+   correctly; both halves of the original's guard — the per-player
+   eligibility flag AND the global freeze `dword_4621E0` being zero — remain
    modelled.
 6. **§12 dead-vs-stunned target liveness**: re-read `behave_bomb_enemy`
    (ai.cpp 949), `pick_live_enemy` (ai.cpp 1005-1030), and
@@ -263,10 +285,12 @@ are **present and correct**:
 7. **2026-07-16 BFS seed order (fixed godir 0..3)**: confirmed in all three
    pathfinders (`directed_bfs`, `flee_bfs`, `powerup_scan_bfs`, ai.cpp) the
    seed loop is `for (int g = 0; g < 4; ++g)`, matching `sub_4092A1`/
-   `sub_40970B`/`sub_409C1F`'s identical `for (i = 0; i < 4; ++i)` seed loops
+   `sub_40970B`/`sub_409C1F`'s identical fixed 0..3 seed loops
    (`native/src/game/batch_0x40902A.cpp` lines 214/398/623) — the ±1 tie draw
-   only steers the later `(camedir + v35*j)&3` child-spawn order in the
-   do-while, never the seed order. Confirmed structurally faithful (still a
+   only steers the later child-spawn order inside the do-while, where each
+   perpendicular child direction is computed as `(camedir ± tie) & 3` with
+   `tie` the per-call ±1, never the seed order. Confirmed structurally
+   faithful (still a
    documented simplification vs the original's beam-flood shape, not a
    determinism bug — see below).
 8. **2026-07-16 flee boxed-in-vs-no-improvement split**: `behave_walk_path`'s
@@ -279,30 +303,33 @@ are **present and correct**:
 
 **One suspected-then-retracted finding, noted for future auditors.**
 `sub_40A81F`'s (wander) new-turn base, `native/src/game/batch_0x40A140.cpp`
-line 275, reads `BYTE2(*(_DWORD *)(dword_45ED70 + 62))`. Read literally (a
-single byte from brain offset 62+2=64's LOW byte) this looks like a
-different, seemingly-dead field from `wander_dir` (+64, a WORD) — and a grep
-of the entire `native/src/game/` corpus for `dword_45ED70` shows brain+62 is
-**never written** anywhere (only zeroed once by `sub_40A140`'s match-start
-memset), which would make the "BYTE2" term a compile-time constant 0.
-Disassembling `0x40A81F` directly resolves this: the actual instruction is
-`mov edx, [brain+0x3E]; sar edx, 0x10` (0x40A862-0x40A86B) — a 16-bit
-**HIWORD** extraction of the dword at brain+62, not an 8-bit BYTE2. Since a
-dword's high word starting at +62 covers bytes 64-65, this HIWORD IS
-`*(_WORD*)(brain+64)` — i.e. `wander_dir` itself. The transliteration's
-`BYTE2(...)` (inherited verbatim from Hex-Rays' pseudo.c rendering) is a
-decompiler mislabel; the actual original computes `v2 = (wander_dir +
-2*(rand()%2) - 1) & 3`, exactly what `behave_wander` (ai.cpp line 1136)
-already does. **No port bug — the port is correct; the transliteration's own
-comment at that one line is misleading and worth a future correction there**
-(out of scope to fix here — this audit changes no code, and the note is
-about `native/`, not `libs/`).
+line 275, is transliterated as reading the **third byte** (byte index 2) out
+of the brain dword at **+62**. Taken literally that is a single byte living at
+brain+64's low half — i.e. a different, seemingly-dead field from `wander_dir`
+(+64, a WORD) — and a grep of the entire `native/src/game/` corpus for
+`dword_45ED70` shows brain+62 is **never written** anywhere (only zeroed once
+by `sub_40A140`'s match-start memset), which would make that byte term a
+compile-time constant 0. Disassembling `0x40A81F` directly resolves it: at
+0x40A862-0x40A86B the code loads the dword at brain+0x3E (= +62) into a
+register and arithmetic-shifts it right by 16 — a 16-bit **high-word**
+extraction, not an 8-bit third-byte extraction. Since the high word of a dword
+starting at +62 covers bytes 64-65, that high word IS the word at brain+64 —
+i.e. `wander_dir` itself. The byte-index rendering (inherited verbatim from
+the decompiler's pseudo.c) is a decompiler mislabel; the actual original
+computes the new turn as `(wander_dir + 2*(rand()%2) - 1) & 3`, exactly what
+`behave_wander` (ai.cpp line 1136) already does. **No port bug — the port is
+correct; the transliteration's own comment at that one line is misleading and
+worth a future correction there** (out of scope to fix here — this audit
+changes no code, and the note is about `native/`, not `libs/`).
 
 ## Coverage
 
 Read in full and diffed: dispatcher (`sub_40A1C6`, incl. draws A/B, the
-personality/offscreen fatal guards, the behaviour-chain loop and its
-one-arg-`@<eax>`-callee HEXRAYS-FIX), personality init (`sub_40A140`), all
+personality/offscreen fatal guards, the behaviour-chain loop and the
+transliteration's own correction to it — the table's entries are Watcom
+register-call functions taking a single argument in a register, which the
+decompiler had rendered as no-argument calls), personality init
+(`sub_40A140`), all
 eight behaviours (`sub_40BD44`/`sub_40BE02`/`sub_40B20F`/`sub_40AD8D`/
 `sub_40ABED`/`sub_40BAF5`/`sub_40B8C2`/`sub_40A81F`), the flame veto
 (`sub_40A76E`), the safe-tile predicate (`sub_40A59D`), the three BFS
@@ -324,9 +351,11 @@ ai.md §7 audits and the "Round-start input freeze"/ice-buffer passes).
 
 **2026-07-26 — that exclusion cost a real finding.** One of the un-re-read
 helpers, the drop-clearance predicate `sub_423188`, was NOT faithfully ported:
-its `sub_405654(x,y)[1] != 1` term is a **warphole** rejection (the stage-actor
-registry, not the "campaign rover/ghost list, empty in versus" that ai.md §3.3
-claimed and this audit took on trust), so an original AI standing on a warphole
+its stage-actor term — look the tile up in `sub_405654` and reject it when a
+record is found whose type word at +4 equals 1 — is a **warphole** rejection
+(the stage-actor registry, not the "campaign rover/ghost list, empty in versus"
+that ai.md §3.3 claimed and this audit took on trust), so an original AI
+standing on a warphole
 never presses the bomb key while ours did — audible in the port as a
 machine-gunning bomb-refusal SFX the original never plays for an AI. Reading a
 helper's *call-site contract* is not enough when the contract itself came from
