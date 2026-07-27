@@ -174,6 +174,19 @@ std::uint64_t state_hash(const State& s) {
         // recaptured in the same commit with the RNG-stream proof).
         mix(static_cast<std::uint64_t>(p.prev_action1 ? 1u : 0u) |
             (static_cast<std::uint64_t>(p.prev_action2 ? 1u : 0u) << 1));
+        // Facing (Player::facing, the original's +46 godir): gameplay state, not
+        // a draw pose. It decides WHERE a bomb goes — BombSystem reads it for the
+        // kick direction, for the punch's target tile and launch direction, and
+        // for the throw's launch direction; MovementSystem::move is what sets it.
+        // Two sims agreeing on every position and counter but differing here send
+        // the next punched bomb to different tiles, and the per-tick hash
+        // exchange was blind to it, so the loud desync detector stayed quiet
+        // through exactly the divergence it exists to catch. Was a
+        // determinism-contract rule-4 gap. ONE-TIME hash-layout growth (rule 5);
+        // no gameplay moved, so every pinned hash shifts purely because the
+        // digest now covers one more field — test_golden.cpp recaptured in this
+        // same commit.
+        mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.facing)));
         std::uint32_t dbits = 0;
         for (int k = 0; k < kDiseaseKinds; ++k)
             if (p.disease[k]) dbits |= (1u << k);
