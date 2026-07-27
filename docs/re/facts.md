@@ -1034,18 +1034,20 @@ grab/throw/drop through a whole trampoline flight" (the last one exercising
 blocks 1/2/4 repeatedly across an entire bounce, not just the single release
 at entry the earlier port-parity fix already covered).
 
-**Known follow-up, NOT fixed here (flagged, out of scope):** `Player::prev_
-action1`/`prev_action2` (the hashed-looking `+54/+55` mirror, doc-commented
-"part of state!" in player.hpp) are NOT actually mixed into `state_hash()`
-(`hash.cpp` has no `prev_action` reference) — a pre-existing determinism-
-contract gap (CLAUDE.md rule 4) predating this restructure, which only makes
-the field's correctness MORE load-bearing (it now also gates behaviour across
-stun/bounce/warp boundaries, not just plain edge detection). Not fixed in
-this commit: hashing it is a "one-time hash-layout growth" everywhere else in
-this file, but `prev_action1/2` flip on nearly every human/AI tick with any
-button held, so adding it would recapture essentially every golden hash from
-the first button press onward — far outside this restructure's isolation
-proof. Tracked as a separate follow-up.
+**Follow-up raised here, CLOSED since (note corrected 2026-07-27):**
+`Player::prev_action1`/`prev_action2` (the `+54/+55` mirror, doc-commented
+"part of state!" in `player.hpp`) were flagged by this restructure as NOT
+mixed into `state_hash()` — a determinism-contract gap (CLAUDE.md rule 4)
+that predated it and that the restructure made more load-bearing, since the
+latches now also gate behaviour across stun/bounce/warp boundaries rather
+than plain edge detection alone. **They ARE hashed today**: `hash.cpp:174`
+mixes both as one packed word per present player, right after `pickup_pause`,
+under a comment naming them gameplay state. That landed as the usual one-time
+hash-layout growth (rule 5) with `tests/test_golden.cpp` recaptured in the
+same commit — golden A (0 players) stayed byte-identical, every
+player-bearing scenario's constants were re-pinned. This paragraph claimed
+the gap was still open long after it was closed; do not re-open it without
+reading `libs/sim/src/hash.cpp` first (see `docs/re/audit/README.md`).
 
 ## Death powerup scatter — CONFIRMED (`sub_41DBFE`, via the death funnel `sub_41DE63`)
 
