@@ -38,8 +38,24 @@ inline int round_winner(const sim::State& s) {
     // side, so a solo match (every team byte 0) is unchanged — the returned
     // slot is still the sole survivor, just resolved through the same-side
     // rule instead of a raw single-player check.
-    if (s.ticks_left == 0) return -1;  // time up -> draw
-    return sim::winning_side(s);
+    // ORDER MATTERS, and it used to be wrong: the clock was tested FIRST, so a
+    // round whose last opponent died with a second or two left was reported as
+    // a DRAW. The round-decided window keeps ticking (nothing freezes
+    // State::ticks_left), so the clock reliably reached 0 during it and stole
+    // the win the player had just earned.
+    //
+    // The citation above describes one question, not two: sub_42A3F6 asks the
+    // survivor query sub_4219B0 and shows DRAW only when it returns NOBODY.
+    // Asking it first restores that. A genuine time-out still draws, because
+    // with more than one side alive winning_side() has no single winner to
+    // return — the draw falls out of the same question instead of pre-empting
+    // it.
+    //
+    // NOTE: no separate "clock hit zero -> draw" path has ever been pinned in
+    // the original; the old line was not backed by the routine it cited. If one
+    // is ever found, this is where it goes.
+    if (const int side = sim::winning_side(s); side >= 0) return side;
+    return -1;
 }
 
 // Campaign round-pacing clauses 4-5 (docs/re/campaign.md "Round pacing",

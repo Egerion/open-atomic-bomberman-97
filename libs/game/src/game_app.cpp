@@ -384,7 +384,13 @@ bool GameApp::resolve_install_paths(fs::path& game, fs::path& scheme_path) {
             "The folder is the one containing DATA\\, e.g.\n"
             "  C:\\Program Files (x86)\\INTRPLAY\\BOMBRMAN";
         std::fprintf(stderr, "%s\n", msg.c_str());
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Open Bomberman", msg.c_str(), nullptr);
+        // NEVER on a capture run. A message box is MODAL, and the visual golden
+        // harness runs --demo-shots with no install path precisely so it can
+        // SKIP on the exit code — with a box in the way it waits for a click
+        // that will never come, so a machine without the game hangs the test
+        // instead of skipping it. A capture run has no user to inform anyway.
+        if (!capture_run())
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Open Bomberman", msg.c_str(), nullptr);
         return false;
     }
     opts_.game_dir = game;
