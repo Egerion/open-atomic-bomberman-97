@@ -2380,7 +2380,7 @@ int GameApp::run_app() {
                     // on the clinching round (with the "WINS THE MATCH!" outcome
                     // line) and plays the 2000 "we have a winner" voice UNDER it
                     // — the ONLY site that voice fires (batch_0x4293E5.cpp:1298,
-                    // inside the v73 != -1 clinch branch) — THEN cuts to VICTORY.
+                    // inside the branch taken when v73 is not -1) — THEN cuts to VICTORY.
                     // The port formerly skipped the scoreboard and jumped straight
                     // to VICTORY (and mis-fired 2000 on every round win too).
                     audio_.start_music(kDrawMusicId);  // 1130 under RESULTS/VICTORY (doc §2)
