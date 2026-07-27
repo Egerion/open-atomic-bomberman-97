@@ -118,6 +118,51 @@ inline bool is_team_mode(bool team_play, const sim::State& s,
     return false;
 }
 
+// Credit the round win to `winner` — and, under Team Play, MIRROR the tally
+// onto the winner's teammates.
+//
+// sub_421B56 @ 0x421B56 (one caller in the whole image, 0x42A919, the RESULTS
+// tier of the round driver sub_42A3F6, passing a literal 1): it adds the award
+// to the surviving slot's 16-bit win counter at record +0x6A — the very field
+// the accessor sub_421AC8 reads back — and then, gated on the team-play flag
+// dword_464964, walks all ten slots a second time and writes that counter into
+// every OTHER slot that is PRESENT (+0x10) and carries the winner's team byte
+// (+0x54).
+//
+// Two details of that second loop are load-bearing:
+//   * it is a COPY, not another increment. Teammates END the round holding the
+//     TEAM's total; they do not each accumulate a private share of it.
+//   * the teammate filter tests PRESENT, not ALIVE, so a teammate who died this
+//     round is credited too. That matters more for us than for the original:
+//     round_winner() resolves to the lowest-indexed ALIVE member of the
+//     surviving side, so without the mirror the member who happens to die every
+//     round scores nothing at all.
+//
+// The mirror is what makes the SINGLE-SLOT reads downstream correct. The
+// original's team clinch consults sub_421AC8 for the FIRST present member of
+// each team only, and our RESULTS "Team N score" row (results_screens.cpp)
+// faithfully does the same — fed an unmirrored counter it showed one member's
+// share of the team's wins (typically 0) while the team was winning rounds. Our
+// match_clinch() below scans every present slot instead, which is why the
+// missing mirror only ever made the clinch LATE (bounded by pigeonhole), never
+// unreachable; with the mirror in place the two reads agree by construction.
+inline void award_round_win(std::array<int, sim::kMaxPlayers>& win_count, int winner,
+                            bool team_play, const sim::State& s,
+                            const std::array<int, sim::kMaxPlayers>& setup_team) {
+    if (winner < 0 || winner >= sim::kMaxPlayers) return;
+    ++win_count[winner];
+    // dword_464964, the raw game-type gate — NOT is_team_mode()'s derived "two
+    // active players share a team". They only differ when team play is on but
+    // nobody actually shares a team, and then the loop below finds no teammate
+    // anyway, so the faithful gate costs nothing.
+    if (!team_play) return;
+    for (int i = 0; i < sim::kMaxPlayers; ++i) {
+        if (i == winner || !s.players[i].present) continue;
+        if (setup_team[i] != setup_team[winner]) continue;
+        win_count[i] = win_count[winner];
+    }
+}
+
 // The §1 v73 match-clinch check, factored so run_app's Results handler and
 // present_scoreboard call the identical predicate: the default win-count
 // clinch, or (non-team + win_by_kills) the kill_count clinch via results.hpp's

@@ -5516,6 +5516,92 @@ and get the SFX-40 buzz; the host broadcasts level index (kind 43,
 screen advances (kind 32, `sub_40F064(901)`/`(902)`). There is **no** net-only
 map or AI UI.
 
+## Team round wins are MIRRORED across the team — CONFIRMED + PORTED (2026-07-27, `sub_421B56`)
+
+The round-win award is `sub_421B56` (@`0x421B56`), and the whole image has
+exactly **one** caller: `0x42A919`, inside `sub_42A3F6`'s RESULTS tier, passing
+a literal 1.
+
+It does two passes over the ten player records (base `0x461BC4`, stride
+`0x98`). The first picks the round's surviving slot and adds the award to its
+16-bit win counter at record `+0x6A` — the same field the accessor
+`sub_421AC8` reads back (`0x461C2C` is `0x461BC4 + 0x68`, and the accessor
+shifts the dword right by 16). The second pass runs only when the team-play
+flag `dword_464964` is set: for every slot that is **PRESENT** (`+0x10`), is
+not the winner, and carries the winner's team byte (`+0x54`), it **copies**
+the winner's counter into that slot.
+
+Two details are load-bearing:
+
+- it is a **copy, not a second increment** — after the award every member of
+  the winning team holds the TEAM's total, not a private share of it;
+- the teammate filter tests **present, not alive**, so a teammate who died
+  that round is credited too.
+
+The mirror is what makes the single-slot reads downstream correct: the team
+clinch inside `sub_42A3F6` (around `0x42AADD`) asks `sub_421AC8` for the
+**first present member of each team only**, and our RESULTS "Team N score"
+row does the same.
+
+**Port (2026-07-27).** `award_round_win()` in
+`libs/game/include/bomber/game/match_outcome.hpp`, called from both round-end
+tails in `game_app.cpp` (local and netplay) through a `GameApp` forwarder.
+Before it, both sites did a bare `++win_count_[w]` where `w` is the
+lowest-indexed **alive** member of the surviving side, so a teammate who kept
+dying scored nothing and the team row sat near zero while its team won rounds.
+Our clinch scans every present slot rather than one member per team, so the
+missing mirror made the clinch **late** (bounded by pigeonhole at
+`team_size*(target-1)+1` rounds), never unreachable — the "a team match can
+hang" reading is wrong. Presentation state only: `win_count_` is not part of
+`sim::State` and no hash moves. Covered by `tests/game/test_frontend.cpp`
+("team play: a round win is mirrored to the whole team").
+
+(Adjacent, deliberately NOT ported: the same `+0x6A` counter has a second
+writer, `sub_421C71`, behind the campaign gate `dword_46489C` with
+`getvalue(1300/1310/1320)` point awards. Those are **not** mirrored.)
+
+## Round end waits for the death ANIMATION, not a timer — CONFIRMED + PORTED (2026-07-27, `sub_421947`/`sub_41F29B`/`sub_41DA5C`)
+
+There is no post-decision delay in the original at all. The round driver
+`sub_42A3F6` ends each pass of its `while(1)` with two guards: the player
+count `sub_421947` (call at `0x42A6B2`, keep looping while > 1) and the
+clock-expired predicate `sub_41087D` (`0x42A6BE`). Fail either and control
+falls into the outcome tier — the next call in that stretch is the
+DRAW-vs-RESULTS survivor query at `0x42A702`. No sleep helper is called
+between the guard and the outcome branch; the sleeps in this function are all
+downstream of the DRAW/RESULTS wait loops.
+
+What `sub_421947` counts is the point. It is latched once per frame at the
+tail of the per-frame player pass `sub_420F07`, accumulated inside the
+per-player update `sub_41F29B`, and it **still counts a player who is
+mid-death-animation**: the kill routine `sub_41DCB2` only raises the dying
+flag and zeroes the death-anim frame index, leaving the slot's in-play flag
+set. `sub_41F29B` clears that flag only when the death sequence reaches its
+own step count (`sub_41DA5C`). So the round is over one frame after the LAST
+corpse finishes animating.
+
+A second, easily-confused counter exists: `sub_421969` stops counting a dying
+player once its animation frame index passes `getvalue(25)` (VALUELST 25 = 20,
+i.e. 1 s). That is the counter the clock-pause (`0x42A636`), the bomb code and
+the enclosure stepper consult — our "round decided" freeze edge. **Two
+distinct edges**, and neither is a fixed 3 s.
+
+**Port (2026-07-27).** `MatchRunner::run`'s `advance_round_end`
+(`libs/game/src/screens/match_runner.cpp`) waited a flat
+`3 * kTicksPerSecond` from the deciding kill. The shipped "die green"
+sequences run 12-93 steps, i.e. 0.6-4.65 s at 20 Hz, so half of them were
+truncated and the short ones left the finished field on screen for seconds.
+It now waits on `Renderer::death_fx_active()`, which measures each effect
+against its own sequence length (the same rule `draw_world` retires it on, and
+the same rule `sub_41DA5C` states), and returns immediately when the clock
+expires. NETPLAY keeps the fixed window: sequence lengths come from the local
+install's `DATA/ANI`, which `build_hash` does not cover, so an
+animation-driven handoff tick is not guaranteed to agree between peers.
+Presentation-side only — nothing in `libs/sim` changes and no hash moves.
+Corrects `docs/re/in-match-shell.md`'s "a correct constant wired into a
+different point in the sequence" paragraph, which read `sub_421947` as an
+alive count.
+
 ## Still guessed — not yet extracted from the binary
 
 | Constant | Current value | Status |

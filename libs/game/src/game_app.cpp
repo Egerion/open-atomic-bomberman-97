@@ -1305,7 +1305,9 @@ AppInput GameApp::run_netplay_match_seats(net::Transport& transport, std::uint16
         // `sub_4034BC` is gated `!sub_40C06A()`, docs/re/goldman-roulette.md §2 —
         // so an online match legitimately skips them.)
         const int w = round_winner();
-        if (w >= 0) ++win_count_[w];
+        // Same team mirror as the local tail (sub_421B56) — both peers run it
+        // over identical state, so the tallies stay identical too.
+        if (w >= 0) award_round_win(w);
         const int clinched = w >= 0 ? match_clinch() : -1;
         if (clinched >= 0) {
             // MATCH win — the same clinch tier the local path shows: the RESULTS
@@ -2045,6 +2047,10 @@ int GameApp::match_clinch() const {
                                         kill_count_, win_count_, win_target_);
 }
 
+void GameApp::award_round_win(int winner) {
+    ::bomber::game::award_round_win(win_count_, winner, team_play_, sim_.state(), setup_team_);
+}
+
 bool GameApp::auto_advance_results() const {
     return ::bomber::game::auto_advance_results(opts_.demo, opts_.demo_ticks, opts_.demo_shots,
                                                 setup_type_);
@@ -2349,7 +2355,11 @@ int GameApp::run_app() {
                 // does not count. Route it exactly like a plain draw (below)
                 // so it neither tallies a win nor advances the stage.
                 if (w >= 0 && campaign_no_human_survivor()) w = -1;
-                if (w >= 0) ++win_count_[w];  // tally the round win
+                // Tally the round win — and under Team Play mirror it onto the
+                // winner's teammates (sub_421B56 @ 0x421B56, called from
+                // 0x42A919), so every member of the winning team holds the TEAM
+                // total the scoreboard row and the clinch both read.
+                if (w >= 0) award_round_win(w);
                 // The match-over check (§1 v73): the default win-count target,
                 // or (team mode + win_by_kills) the kill-count clinch —
                 // match_clinch() (game_app.hpp) so this agrees with
