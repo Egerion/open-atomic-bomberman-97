@@ -344,7 +344,12 @@ AppInput MatchRunner::run() {
     const std::uint64_t tick_ns = 1'000'000'000ull / sim::kTicksPerSecond;
     std::uint64_t last = SDL_GetTicksNS();
     std::uint64_t acc = 0;
+    // Round-end gating. `over_ticks` is a plain countdown (the campaign
+    // hazard-clear grace, and the netplay fallback); `await_death_fx` is the
+    // animation-driven wait the deciding kill arms instead — see
+    // advance_round_end below for why the two differ.
     int over_ticks = -1;
+    bool await_death_fx = false;
     // Frame pacing (docs/re/in-match-shell.md's per-frame tick driver,
     // sub_42A191/sub_41E61E: the original is a DirectDraw flip loop — one
     // input read + at most one tick per DISPLAYED frame, the flip block IS
@@ -402,22 +407,52 @@ AppInput MatchRunner::run() {
         // Campaign hazard-clear grace timer (docs/re/campaign.md "Round pacing"
         // clause 3, sub_4016DA's dword_4646C0): fires once when every hazard has
         // been dead kHazardClearTicks ticks — an independent early-out.
-        if (over_ticks < 0 && state_.campaign_active &&
+        if (over_ticks < 0 && !await_death_fx && state_.campaign_active &&
             s.hazard_clear_timer == sim::kHazardClearTicks) {
             over_ticks = 3 * sim::kTicksPerSecond;
         }
         // Team-aware round-over: "one SIDE left" (docs/re/ai.md TEAM follow-up);
         // sides_remaining() degenerates to alive_count() in a solo match.
-        if (over_ticks < 0 && (sim::sides_remaining(s) <= 1 || s.ticks_left == 0)) {
-            over_ticks = 3 * sim::kTicksPerSecond;
+        //
+        // WHEN the results screen takes over is not a timer in the original, and
+        // this used to be a flat 3 s. The round driver sub_42A3F6 ends each pass
+        // of its loop with two guards: the player count sub_421947 (call at
+        // 0x42A6B2, keep looping while > 1) and the clock-expired predicate
+        // sub_41087D (0x42A6BE) — no sleep sits between them and the outcome
+        // tier. That count still includes a player who is mid-DEATH-ANIMATION:
+        // the kill routine sub_41DCB2 only raises the dying flag, and the
+        // per-player pass sub_41F29B clears the slot's in-play flag only once
+        // the death sequence has played its last step (its length coming from
+        // sub_41DA5C). So the round is over one frame after the LAST corpse
+        // finishes animating. The shipped "die green" sequences run 12-93 steps
+        // (0.6-4.65 s at our 20 Hz), so a fixed 60-tick linger truncated half of
+        // them and sat on an already-finished field after the short ones.
+        //
+        // The clock-expired exit, by contrast, has no linger at all.
+        if (over_ticks < 0 && !await_death_fx &&
+            (sim::sides_remaining(s) <= 1 || s.ticks_left == 0)) {
             if (s.ticks_left == 0) {
                 std::printf("time up — draw!\n");
-            } else {
-                for (int i = 0; i < sim::kMaxPlayers; ++i)
-                    if (s.players[i].present && s.players[i].alive)
-                        std::printf("player %d wins!\n", i);
+                return true;  // straight into the outcome tier, nothing to wait for
             }
+            for (int i = 0; i < sim::kMaxPlayers; ++i)
+                if (s.players[i].present && s.players[i].alive)
+                    std::printf("player %d wins!\n", i);
+            // NETPLAY keeps the old fixed linger. The death-sequence pool and
+            // each sequence's step count come from the LOCAL install's DATA/ANI
+            // files, which build_hash does not cover, so an animation-driven
+            // handoff could land on a different tick on each peer and leave one
+            // of them ticking a round the other has already walked out of. A
+            // fixed count is the same tick on both.
+            if (state_.net_session)
+                over_ticks = 3 * sim::kTicksPerSecond;
+            else
+                await_death_fx = true;
         }
+        // The round is over when nothing is left playing. death_fx_active()
+        // measures each effect against its own sequence length, the same rule
+        // draw_world retires it on — sub_41DA5C's step count.
+        if (await_death_fx) return !state_.renderer.death_fx_active(s);
         return over_ticks > 0 && --over_ticks == 0;
     };
     while (true) {

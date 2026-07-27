@@ -108,6 +108,25 @@ public:
     // needs this told to it directly rather than inferring it from ticks_left.
     void reset_match(bool untimed = false);
 
+    // True while at least one death animation still has frames left to play at
+    // tick `s.tick`. The ROUND-OVER gate depends on this, so it is a query and
+    // not just cosmetic bookkeeping: the original's round loop keeps running
+    // while a corpse is mid-animation (its per-player pass sub_41F29B still
+    // counts a dying slot, and only clears the slot's in-play flag when the
+    // death sequence's own step count is reached, sub_41DA5C), so the round is
+    // over exactly when the LAST death animation finishes — see MatchRunner's
+    // advance_round_end. Computed from the same start tick + sequence length
+    // draw_world retires each effect on, rather than reading deaths_.empty(),
+    // so the answer is exact at any tick even on a frame that has not drawn yet.
+    bool death_fx_active(const sim::State& s) const {
+        for (const DeathFx& fx : deaths_) {
+            const std::vector<Anim>& pool = assets_->deaths_for(fx.player % kLocalPlayers);
+            if (pool.empty()) continue;
+            if (s.tick - fx.start < pool[fx.anim % pool.size()].steps.size()) return true;
+        }
+        return false;
+    }
+
     static float tile_screen_x(int tx) {
         return static_cast<float>(kFieldOriginX + tx * sim::kTileW);
     }

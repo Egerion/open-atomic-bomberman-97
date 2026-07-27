@@ -767,6 +767,43 @@ flow.md` now reads "RESULTS tally tier — RE'd, port DONE"), and the 6 s
 auto-advance wait loop as `kResultsDwellMs` in `game_app.cpp`'s
 DRAW/RESULTS screen handlers.
 
+**CORRECTION (2026-07-27) — the last sentence above was wrong, and point 1
+already contained the refutation.** Calling our 60-tick window "a correct
+constant wired into a different point in the sequence" conceded too much:
+the original's round-over moment is not a constant at all, so there was
+nothing for a 3 s window to be a correct value *of*. The loop-continue
+guard at `0x42A6B2` keeps looping while `sub_421947` (the per-frame player
+count latched by `sub_420F07`) is greater than 1 — and that count is NOT
+the alive count. `sub_41DCB2` (the kill) only raises the slot's dying flag;
+the per-player pass `sub_41F29B` clears the slot's in-play flag only after
+the death sequence has played its final step, the step count coming from
+`sub_41DA5C`. A corpse mid-animation therefore still counts, and the round
+is over one frame after the LAST death animation completes. This section
+previously read `sub_421947` as an alive count and did not notice that
+`sub_421969` — the OTHER counter, which stops counting a dying player once
+its animation frame index passes `getvalue(25)` (= 20, i.e. 1 s), and which
+the clock-pause at `0x42A636`, the bomb code and the enclosure stepper all
+use — is a different function with different treatment of corpses. Two
+distinct edges, neither of them a fixed 3 s:
+
+| edge | predicate | what it does |
+| --- | --- | --- |
+| freeze / clock pause | `sub_421969` ≤ 1 (partway into the death anim) | stops the clock; our `round_frozen` (`simulation.cpp`) |
+| round over | `sub_421947` ≤ 1 (death anim fully finished) | falls into the outcome tier |
+
+The clock-expired exit (`sub_41087D` at `0x42A6BE`) has no linger at all —
+it drops straight into the outcome tier. There is no `getvalue()` id and no
+literal constant anywhere in the round-over path; the hardcoded 3000 ms
+sleep this paragraph found is real but lives much later, after the RESULTS
+wait and just before VICTORY. Ported 2026-07-27: `MatchRunner`'s
+`advance_round_end` now waits on `Renderer::death_fx_active()` (each effect
+measured against its own sequence length — the same rule `sub_41DA5C`
+applies) and returns immediately on a spent clock. The shipped "die green"
+sequences run 12-93 steps, so at 20 Hz half of them were being truncated by
+the old flat 60 ticks. NETPLAY keeps the fixed window: sequence lengths come
+from the local install's `DATA/ANI`, which `build_hash` does not cover, so
+an animation-driven handoff tick is not guaranteed to agree between peers.
+
 **End-of-round jingle/sting ids** (stings were pinned in
 `docs/re/frontend-flow.md`; the music placement is corrected by step 2
 above): draw sting = SOUNDLST **1700** (`sub_427BFB(1700)`, one-shot group,
