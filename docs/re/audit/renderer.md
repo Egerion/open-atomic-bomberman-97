@@ -32,9 +32,10 @@ All four findings fixed in `renderer.cpp`/`.hpp` with citing comments; no
   `seqs_->kick/punch[render_colour][facing].steps.size()`; `draw_world` phase
   is `a->steps.size() - kick_pose_[i]`. `kActionPoseTicks` removed.
 - **F4** — CONFIRMED against the binary (`native/tools/disasm.py sub_41F29B`,
-  0x420350-0x420379: `mov dx,[edx+0x30]; mov ebx,3; idiv ebx` then the ANI
-  player — the walk-phase counter `v111[24]/3` is unconditionally recomputed
-  at the shared tail, NOT a Hex-Rays artifact). Pickup-pose frame changed to
+  0x420350-0x420379: the walk-phase word at `+48` is loaded, signed-divided
+  by the literal 3, and the quotient handed straight to the ANI frame picker
+  — so the walk-phase-over-3 frame really is recomputed unconditionally at
+  the shared tail, NOT a Hex-Rays artifact). Pickup-pose frame changed to
   `moving_[i] ? walk_phase_[i]/3 : 0`; `pickup_pose_` kept as the exit timer.
 
 **Verification.** Build green (windows-fetch, Release). An instrumented
@@ -67,13 +68,11 @@ sprite emission). Raw `pseudo.c` cross-read for the two pose-tail findings
 **Original**: `sub_420F07` (`native/src/game/batch_0x420D4E.cpp` lines
 147-224, pseudo.c 23628-23724 per `docs/re/facts.md` line 1895):
 
-```c
-for ( i = 0; i < 10; ++i )
-{
-    sub_41F29B((__int16 *)&dword_461BC4[38 * i]);   // shadow+body+carried-bomb drawn INLINE here
-    ...
-}
-```
+The whole player pass is one ascending loop, `i = 0..9`, whose body calls
+`sub_41F29B` on player `i`'s record — the roster array at `dword_461BC4`,
+stride 38 dwords (152 B) per player. Each of those calls draws that player's
+shadow, body and carried bomb INLINE, before the loop advances to the next
+slot. There is no second pass and no sorting step anywhere in the function.
 
 `facts.md` line 1895-1897 already states this plainly: *"29527 `sub_420F07`
 — the PLAYER PASS (23628-23724): slots 0..9 ascending, `sub_41F29B` per
@@ -117,37 +116,44 @@ unrelated reason).
 
 **Original**: `sub_41F29B`, entry (`native/src/game/batch_0x41F29B.cpp`
 lines 344-364, pseudo.c ~23006-23013) and exit (lines 592-612, pseudo.c
-~23396-23411 region — see the immediately-following excerpt from raw
-`pseudo.c` 23397-23411, function is actually `sub_41DAA7`'s caller in the
-same block, address range ~0x420AEA-0x420C2B per the `if (v86>4u)` branch):
+~23396-23411 region — the exit account below is taken from raw `pseudo.c`
+23397-23411; the function is actually `sub_41DAA7`'s caller in the same
+block, address range ~0x420AEA-0x420C2B, reached via the "action state
+greater than 4" branch):
 
-Entry — rolled ONCE, only when freshly boxed in (`v111[39]` was 0):
-```c
-if (v99 < 4) {                                   // has an open neighbour
-    if (v111[39] >= 20 && v111[39] < 40) v111[39] = 0;   // un-box: cancel fidget
-} else if (!v111[39]) {                          // fully boxed, not fidgeting yet
-    v95 = max(sub_412135(330), 1);
-    v111[39] = (__int16)(rand_() % v95 + 20);    // PICKS A VARIANT (20..20+v95-1), not a duration
-    v111[40] = 0;                                 // elapsed-frame counter reset
-}
-```
+Entry — the variant is rolled ONCE, and only when the player is freshly
+boxed in (the fidget word at `+78` still 0). The branch key is the count of
+blocked neighbours, so "fewer than 4" means at least one side is open:
 
-Exit — driven by the chosen variant's OWN sequence length, every tick while
-boxed in:
-```c
-sub_4518D0(v108, aCornerheadU, HIWORD(*((_DWORD*)v111+19)) - 20);  // = v111[39]-20, the variant index
-v109 = sub_41D957(v108);
-v110 = sub_41DAA7(v109, *(int*)(v111+39) >> 16);   // frame = ELAPSED (v111[40]), not a raw tick
-for (v111[41] += dword_464958; v111[41] > 0; v111[41] -= dword_46494C) ++v111[40];
-v50 = sub_41DA5C(v109);          // this variant's own last-frame index (statecnt-1)
-v51 = *(int*)(v111 + 39) >> 16;  // elapsed
-if (v51 >= v50) { v111[39] = 0; v111[40] = 0; }   // ANI finished -> exit; re-rolled next tick since still boxed in
-```
+- **at least one open side** — if `+78` currently holds a value in 20..39
+  (a fidget in progress), clear it to 0. Un-boxing cancels the fidget.
+- **fully boxed AND `+78 == 0`** (not fidgeting yet) — take
+  `getvalue(330)` (`sub_412135(330)`) floored at 1, call it `n`; set
+  `+78 ← rand_() % n + 20`. That is a VARIANT SELECTOR in the range
+  20..20+n-1, **not a duration**. Reset the elapsed-frame counter at `+80`
+  to 0.
+
+Exit — driven by the chosen variant's OWN sequence length, re-evaluated
+every tick while the player stays boxed in:
+
+1. `sub_4518D0` formats the sequence name `"cornerhead%u"` with the index
+   `+78 − 20` (the variant index recovered from the selector).
+2. `sub_41D957` resolves it to a handle.
+3. `sub_41DAA7(handle, elapsed)` picks the frame from the ELAPSED counter at
+   `+80`, NOT from a raw tick number.
+4. The elapsed counter advances by the file's standard per-frame accrual:
+   `+82 += dword_464958`, then while `+82` is positive it sheds
+   `dword_46494C` per iteration and bumps `+80` once each time round.
+5. `sub_41DA5C(handle)` yields THIS variant's own last-frame index
+   (statecnt−1).
+6. If elapsed >= that index, clear both `+78` and `+80` — the ANI has
+   finished, so the fidget exits and, because the player is still boxed in,
+   is re-rolled on the very next tick.
 
 `getvalue(330)` (VALUELST id 330, confirmed = 13, "how many cornerhead
 animations there are") is used **only** as the modulus for picking WHICH
-variant (`rand() % v95`) — it never bounds a tick duration. The value
-`v111[39]` itself (20..32) is the variant selector, held fixed until the
+variant (`rand() % n`) — it never bounds a tick duration. The value at
+`+78` itself (20..32) is the variant selector, held fixed until the
 variant's own `CORNERHEAD<n>.ANI` sequence completes one full playthrough
 (`elapsed >= statecnt`), at which point it resets to 0 and — because the
 player is still boxed in — gets immediately re-rolled to a (possibly
@@ -210,19 +216,22 @@ can be dropped.
 ## Finding 3 — Kick/punch pose duration is a guessed constant; the original ties it to the sequence's own frame count (same pattern already used correctly for "pickup")
 
 **Original**: `sub_41F29B` (`native/src/game/batch_0x41F29B.cpp` lines
-469-504, pseudo.c ~23080-23110), KICK (state 1) and PUNCH (state 2) — shown
-here for KICK, PUNCH is byte-identical in shape:
+469-504, pseudo.c ~23080-23110), KICK (state 1) and PUNCH (state 2) —
+described here for KICK; PUNCH is identical in shape. In order:
 
-```c
-sub_4518D0(v108, aKickS, ...);
-v109 = sub_41D957(v108);
-v110 = sub_41DAA7(v109, *(int*)(v111+39) >> 16);      // frame = elapsed
-for (v111[41] += dword_464958; v111[41] > 0; v111[41] -= dword_46494C) ++v111[40];
-v33 = sub_41DA5C(v109);           // KICK.ANI's own last-frame index
-v34 = *(int*)(v111+39) >> 16;     // elapsed
-if (v34 >= v33) { v111[39] = 0; v111[40] = 0; }        // exits when KICK.ANI's own length is exhausted
-goto LABEL_239;
-```
+1. `sub_4518D0` formats the `"kick <dir>"` sequence name and `sub_41D957`
+   resolves it to a handle.
+2. `sub_41DAA7(handle, elapsed)` picks the frame from the state's ELAPSED
+   counter — the word at `+80` (the high half of the dword at `+78`).
+3. The elapsed counter advances by the file's standard per-frame accrual:
+   `+82 += dword_464958`, then while `+82` is positive it sheds
+   `dword_46494C` per iteration and bumps `+80` once each time round.
+4. `sub_41DA5C(handle)` yields KICK.ANI's OWN last-frame index. Once the
+   elapsed count reaches or passes it, both `+78` (state) and `+80`
+   (elapsed) are cleared — the pose exits when KICK.ANI's own length is
+   exhausted.
+5. The branch then jumps straight to the shared shadow+body draw site
+   (`LABEL_239`), keeping its elapsed-based frame index.
 
 This is the identical "elapsed vs. this sequence's own `sub_41DA5C`
 statecnt" idiom used for pickup (state 4, already ported correctly) and
@@ -275,38 +284,42 @@ dropped once both call sites are converted.
 
 ## Finding 4 — The "picking up a bomb" pose's displayed frame is walk-phase-driven in the original, not elapsed-since-grab
 
-**Original**: `pseudo.c` lines 23396-23411 (raw decompile, not just the
-transliteration — read directly from `D:\...\BOMBRMAN\pseudo.c` to rule out
-a transliteration slip):
+**Original**: `pseudo.c` lines 23396-23411 (read directly off the raw
+decompile in `D:\...\BOMBRMAN\pseudo.c`, not just the transliteration, to
+rule out a transliteration slip). Described in order, with the player record
+addressed by byte offset:
 
-```c
-v38 = (unsigned __int8)sub_413AED(BYTE2(*(_DWORD *)(v111 + 21)));
-sub_4518D0((int)v108, aPickupS, v38);
-v109 = sub_41D957((int)v108);
-v110 = sub_41DAA7(v109, *(int *)(v111 + 39) >> 16);   // (A) elapsed-based frame — COMPUTED...
-for ( v111[41] += dword_464958; v111[41] > 0; v111[41] -= dword_46494C )
-    ++v111[40];
-v39 = sub_41DA5C(v109);
-if ( v40 > v39 )                                       // v40 = elapsed, cached earlier in this branch
-{
-    v111[39] = 0;
-    v111[40] = 0;
-}
-}                                                        // <- closes the v86==4 (pickup) else-block
-v109 = sub_41D957((int)v108);
-v110 = sub_41DAA7(v109, (unsigned __int16)v111[24] / 3);  // (B) ...then UNCONDITIONALLY OVERWRITTEN
-goto LABEL_239;                                            //     by the walk-phase/3 formula
-```
+1. The facing byte (`+44`, i.e. byte 2 of the dword at `+42`) is mapped
+   through `sub_413AED` to a direction suffix, and `sub_4518D0` formats the
+   sequence name `"pickup <dir>"`.
+2. `sub_41D957` resolves that name to a sequence handle.
+3. **(A)** `sub_41DAA7(handle, elapsed)` computes a frame index from the
+   pickup state's ELAPSED counter — the word at `+80`, i.e. the high half of
+   the dword at `+78`. *This result is computed and then thrown away; see
+   step 6.*
+4. The elapsed counter advances by the file's standard per-frame accrual:
+   the sub-tick accumulator at `+82` takes `+= dword_464958` (ms since the
+   last frame), then while it is still positive it sheds `dword_46494C` (ms
+   per tick) per iteration, bumping `+80` once each time round.
+5. `sub_41DA5C(handle)` yields this sequence's own last-frame index. If the
+   elapsed count (cached earlier in this branch) is strictly GREATER than it,
+   both `+78` (state) and `+80` (elapsed) are cleared — the pickup state
+   ends. That closes the state-4 (pickup) else-block.
+6. **(B)** On the shared tail, outside that block, the handle is resolved
+   again and the frame index is recomputed UNCONDITIONALLY from the
+   walk-phase word at `+48` divided by 3 — overwriting (A) — after which the
+   branch jumps to the shared shadow+body draw site (`LABEL_239`).
 
-Line (A)'s elapsed-based `v110` is dead — it is immediately recomputed at
-line (B) using `v111[24]/3`, the exact same "leg-cycle" walk-phase counter
-(`+48`, `/3`) that drives the ordinary walk/stand/carry poses elsewhere in
-this file (already correctly ported as `walk_phase_[i] / 3`). This shared
+Step (A)'s elapsed-based frame index is dead — it is immediately recomputed
+at step (B) from the `+48` counter divided by 3, the exact same "leg-cycle"
+walk-phase counter that drives the ordinary walk/stand/carry poses elsewhere
+in this file (already correctly ported as `walk_phase_[i] / 3`). This shared
 tail is reached by states {0 (idle), 3 (unused), 4 (pickup)} — everything
-that *isn't* kick/punch/trampoline/spin/cornerhead, which all `goto
-LABEL_239` early with their own elapsed-based `v110` intact. Only the (A)
-computation's SIDE EFFECTS survive: advancing `v111[40]` and the `elapsed >=
-statecnt` exit check that ends the pickup state. The actual frame shown on
+that *isn't* kick/punch/trampoline/spin/cornerhead, which all jump to
+`LABEL_239` early with their own elapsed-based frame index intact. Only the
+(A) computation's SIDE EFFECTS survive: advancing the `+80` elapsed counter
+and the `elapsed >= statecnt` exit check that ends the pickup state. The
+actual frame shown on
 screen while picking up a bomb is therefore whatever the player's walk-phase
 counter happens to read at that moment (frozen at its last value if the
 player wasn't mid-step when the grab started), not a clean 0-to-N
@@ -380,8 +393,8 @@ timer (unchanged).
   cited in the port's own comment.
 - **Walk leg-cycle pacing** (`walk_phase_[i] / 3`, driven by the
   `PlayerWalking` event's disease-scaled px budget rather than position
-  delta) — matches `sub_41F29B`'s `v111[24]/3` (pseudo.c 23410) fed by the
-  mover's per-pixel `+48` accrual (`sub_41EC84`,
+  delta) — matches `sub_41F29B`'s "walk-phase word at `+48`, divided by 3"
+  (pseudo.c 23410) fed by the mover's per-pixel `+48` accrual (`sub_41EC84`,
   `native/src/game/batch_0x41DAA7.cpp` lines 770-982); the "burns the
   budget even when blocked" behaviour (pedal-in-place vs. freeze) is
   correctly modelled.
@@ -390,23 +403,26 @@ timer (unchanged).
   `ph = kWarpTicks - p.warp` both correctly reproduce the original's
   "elapsed = 0 at entry, increments to statecnt" shape; only the total
   (`kActionPoseTicks`) is wrong, per Finding 3.
-- **Warp/spin pose selection and priority** — `strcpy(v108, "spin")` for
+- **Warp/spin pose selection and priority** — the sequence-name buffer is set
+  to the literal `"spin"` for
   both state 6 (warp-out) and state 7 (warp-in), elapsed-based frame,
   8-tick (`>8`, i.e. `dword_46494C`-quantum) phase-flip from out to in —
   matches `q.spin[body_colour]` + `kWarpTicks - p.warp`, already
   `facts.md`-confirmed.
 - **Trampoline flight pose** — the original does NOT switch to a dedicated
-  "flying" sprite name for state 5; `v108` is left as whatever
-  walk/stand/walkbomb/standbomb name `LABEL_155` set, and its frame is
-  `v111[24]/3` (the same walk-phase formula as ordinary standing/walking) —
-  the ONLY original-side special-casing is the Y-lift
-  (`v80 = elapsed_half_bounce * getvalue(681)`) and the shadow suppression.
+  "flying" sprite name for state 5; the sequence-name buffer is left holding
+  whatever walk/stand/walkbomb/standbomb name `LABEL_155` put there, and its
+  frame is the `+48` walk-phase counter divided by 3 (the same walk-phase
+  formula as ordinary standing/walking) — the ONLY original-side
+  special-casing is the Y-lift (lift = `elapsed_half_bounce * getvalue(681)`)
+  and the shadow suppression.
   The port's `draw_world` correctly leaves `a`/`ph` at whatever walk/stand
   selection was already made and only adds `lift`/suppresses the shadow —
   no dedicated pose override, matching the original exactly.
-- **Disease flash gate and scope** — `(p.disease_timer & 8) != 0` matches
-  `v111[60] & 8` (the low word of the same +120 dword used elsewhere as the
-  disease-age accumulator), and `LABEL_239` is confirmed to be the SINGLE
+- **Disease flash gate and scope** — `(p.disease_timer & 8) != 0` matches the
+  original's bit-3 test (`& 8`) on the word at `+120` (the low word of the
+  same dword used elsewhere as the disease-age accumulator), and `LABEL_239`
+  is confirmed to be the SINGLE
   shared shadow+body draw site reached by every pose branch (kick, punch,
   trampoline, spin, cornerhead, and the pickup/idle/state-3 shared tail) —
   so computing `body_colour` once before the pose `if`-chain and reusing it

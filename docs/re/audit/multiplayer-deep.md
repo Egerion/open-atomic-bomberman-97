@@ -117,8 +117,9 @@ open variables:
   the first free entry of a `for j in 0..3`); the assembled session node list
   is `word_460130[5]` (`sub_40ED08`: `[0]` = host, then each client); and the
   receive pump `sub_40E765` **drops any datagram whose sender is not one of
-  those 5** (`for (i = 0; i < 5 && word_460130[i] != sender; ++i); if (i >= 5)
-  discard`). The "5-slot packet-queue cluster" question also resolves: boot
+  those 5** — it walks `word_460130[0..4]` looking for the sender's node id
+  and discards the packet if the scan runs off the end. The "5-slot
+  packet-queue cluster" question also resolves: boot
   allocates `sub_418511(1004, 5)` = **five 1004-byte per-node dedupe rings**
   (500 sequence entries each), indexed by that same node slot — per-peer, not
   ring depth.
@@ -159,12 +160,15 @@ The net path is reached from **two adjacent main-menu rows** (`sub_42B9CE`, the
 > The conflict this section flagged is settled: **`dword_460058` is `1 = guest`,
 > `2 = host`**, the opposite of what `multiplayer.md` §1.1, `frontend-flow.md`
 > and §3 below assume. Proofs: `sub_40C035` gives *only* mode 2 its own node id
-> as session authority (`dword_4600D4 = HIWORD(dword_46013C)`); `sub_40CD1C`
+> as session authority (`dword_4600D4` ← the high 16 bits of `dword_46013C`);
+> `sub_40CD1C`
 > stamps mode 2's own id but mode 1's *host's* id into the packet header;
 > `sub_4105D2` has mode 1 copy the match clock while mode 2 computes and
 > broadcasts it; and the announce/start/options senders (`sub_40EBC1`,
-> `sub_40ED08`, `sub_40FE88`) are all `== 2` only. Raw bytes at the heads:
-> `0x42B0DC mov eax,2` / `0x42B48B mov eax,1`. VALUELST's own section comments
+> `sub_40ED08`, `sub_40FE88`) are all `== 2` only. Raw bytes at the heads: the
+> mode constant is loaded as an immediate at **0x42B0DC (value 2)** in
+> `sub_42B0CE` and at **0x42B48B (value 1)** in `sub_42B47D`.
+> VALUELST's own section comments
 > ("JOIN NET GAME SCREEN" = 750-763 = the ids `sub_42B47D` reads; "START NET
 > GAME SCREEN" = 765-778 = `sub_42B0CE`'s) corroborate.
 > **Port mapping: `present_net_host` ⇒ `sub_42B0CE`, `present_net_join` ⇒
@@ -254,7 +258,8 @@ timeouts) and MESSAGES 630-634 name the ordinals one-for-one —
 `getvalue(1110) = 4` ("how many different protocols are supported") is the item
 count handed to the picker widget (`sub_42FEF0(list, count)` iterates
 `i < count`), so **TCP/IP is never drawn**, and `sub_40C839` accepts only
-`1..3` anyway (raw: `cmp [46012C],1 / jl fail`, `cmp [46012C],3 / jle ok`) —
+`1..3` anyway (raw: `dword_46012C` is compared against 1 and rejected if
+below it, then compared against 3 and accepted if less than or equal) —
 matching `sub_407F4F`'s `if (r >= 0 && r <= 3)` store and the `options.ini`
 `>3 → 3` clamp. The shipped exe therefore supports **IPX / modem / serial**;
 TCP/IP is dead data. Details: `network-screens.md` §2.
@@ -350,7 +355,8 @@ folded in first. (CORRECTED: the earlier reading had the roles swapped.)
 
 ### 3.2 HOST → guest state-packet sends (`sub_40CE27` & siblings), gated `dword_460058 == 2`
 
-`sub_40CE27` packs `(x,y,type)` into a buffer (`sub_40CE27((__int16*)0x30,…)`);
+`sub_40CE27` packs `(x, y, type)` into a buffer — its call site passes a
+16-bit-element buffer pointer whose leading argument is the constant `0x30`;
 the siblings `sub_40FE88` / `sub_40FF14` / `sub_40FDE8` sit in the same source
 region and are the same shape (`facts.md` 3844-3849). **These carry position/tile
 STATE, not button presses** — the guest is shipping *where things are*, which is

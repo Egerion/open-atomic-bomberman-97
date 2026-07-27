@@ -85,8 +85,8 @@ bomber/sim/tuning.hpp`, `libs/sim/include/bomber/sim/player.hpp`,
 > an interleaved 1-in-10 `random_below(s,10)` gate; each attempted unit draws a
 > fresh `random_below(s,kGridWidth)` then `random_below(s,kGridHeight)`, retries
 > ≤200 times, and is silently dropped on exhaustion (no candidate side-list).
-> Verified against the `k<13` loop count, x-then-y order, and the
-> `v22 || !(rand()%10)` short-circuit. Golden B (setup + 6 checkpoints) and C
+> Verified against the 13-kind loop count, x-then-y order, and the
+> "always-place flag, else a 1-in-10 roll" short-circuit. Golden B (setup + 6 checkpoints) and C
 > recaptured; D/E zero all `spawn_counts` so their scatter draws nothing either
 > way and stayed byte-identical (kExpectedRng / bounces / final rng UNCHANGED,
 > verified before recapture); A never runs `build_state`. Pinned by
@@ -97,33 +97,26 @@ bomber/sim/tuning.hpp`, `libs/sim/include/bomber/sim/player.hpp`,
 > renderer row's own deferred-recapture convention.
 
 **Original** (`sub_4258E5`'s non-network branch, `native/src/game/
-batch_0x42583B.cpp` lines 220-255):
+batch_0x42583B.cpp` lines 220-255). The structure, in exact order:
 
-```c
-for ( k = 0; k < 13; ++k )
-{
-  v21 = sub_412135(k + 400);           // VALUELST 400-412: per-kind count
-  if ( sub_40C06A() && k == 12 ) v21 = 0;   // netgame-only zeroing, N/A locally
-  v22 = 1;
-  if ( v21 < 0 ) { v22 = 0; v21 = abs_(v21); }
-  for ( m = 0; m < v21; ++m )
-  {
-    if ( v22 || !(rand_() % 10) )      // negative-N: 1-in-10 gate per unit
-    {
-      for ( n = 0; n < 200; ++n )      // UP TO 200 tries, first hit wins
-      {
-        v17 = rand_() % dword_4648AC;  // random column  (1 draw)
-        v18 = rand_() % dword_4648B4;  // random row     (1 draw)
-        if ( sub_425FB9(v17, v18) == 2 && !sub_42542D(v17, v18) )
-        {
-          // ... write the 152-byte powerup-cell record for kind k at (v17,v18)
-          break;
-        }
-      }
-    }
-  }
-}
-```
+- **Outer loop, kind `k` = 0..12.** `count ← getvalue(400 + k)`
+  (`sub_412135`) — VALUELST 400-412 is the per-kind count. If this is a
+  netgame (`sub_40C06A()`) **and** `k == 12`, `count` is forced to 0
+  (netgame-only zeroing, N/A locally).
+- **Sign split.** An `always_place` flag starts at 1; if `count` is
+  negative, `always_place` ← 0 and `count` ← |count|.
+- **Unit loop, `m` = 0..count-1.** The unit is attempted only if
+  `always_place` is set **or** a fresh `rand_() % 10` comes up 0 — i.e. the
+  negative-N form runs a 1-in-10 gate per unit, and the gate's draw is taken
+  only when `always_place` is clear (C short-circuit).
+- **Placement scan, `n` = 0..199** (UP TO 200 tries, first hit wins). Each
+  try draws, in this order: a random column `rand_() % dword_4648AC`
+  (1 draw), then a random row `rand_() % dword_4648B4` (1 draw). The try is
+  accepted when the cell reads Brick (`sub_425FB9(x, y) == 2`) **and** has
+  no powerup record yet (`sub_42542D(x, y)` falsy); on acceptance the
+  152-byte powerup-cell record for kind `k` is written at that (x, y) and
+  the scan breaks. If all 200 tries miss, the loop simply ends — the unit
+  is dropped.
 
 Each successful placement is **independent rejection sampling**: draw a
 uniform-random `(x, y)` pair (2 draws), accept only if the cell is currently
@@ -156,7 +149,8 @@ The port pre-builds the full list of Brick cells once, then spends exactly
 **one** RNG draw per placement to pick a uniformly-random *remaining* list
 index and remove it. The negative-N "how many units succeed the 1-in-10
 roll" phase (lines 162-167) is faithfully ported — that part is a literal,
-draw-for-draw match of the `v22 || !(rand()%10)` gate — but the *placement*
+draw-for-draw match of the "always-place flag, else a 1-in-10 `rand()%10`
+roll" gate — but the *placement*
 phase that follows it is a different algorithm end to end:
 
 - **Draw count/shape**: the original spends 2 draws per try, up to 200
@@ -221,10 +215,9 @@ resolved at the end of this section.
 **Original** (`sub_4214BC`, `native/src/game/batch_0x420D4E.cpp` lines
 427-428, inside the per-player loop that runs for all 10 slots every round):
 
-```c
-for ( j = 0; j < 15; ++j )
-  *((_BYTE *)v6 + j + 86) = sub_412135(j + 50);
-```
+A single loop, `j = 0..14`, writes the byte at `+86 + j` of the player
+record from `getvalue(50 + j)` (`sub_412135`). No condition guards it, and
+nothing else in the function touches that byte range.
 
 This unconditionally seeds **15** per-kind inventory-count bytes
 (`+86..+100`) from VALUELST ids **50 through 64** — every player, every
@@ -308,16 +301,17 @@ conflated or that the overlay's own logic is wrong.
 ## Finding 3 — spawn-coordinate range handling: `std::clamp` vs. the original's asymmetric wrap/clamp
 
 **Original** (`sub_4214BC`, `native/src/game/batch_0x420D4E.cpp` lines
-392-401, reading the (possibly Random-Start-shuffled) spawn arrays):
+392-401, reading the (possibly Random-Start-shuffled) spawn arrays), in
+order, for player slot index *i*:
 
-```c
-v4 = dword_46460C[v8];
-v5 = dword_46465C[v8];
-while ( v4 < 0 ) v4 += dword_4648AC;   // negative X: WRAP (mod grid width)
-while ( v5 < 0 ) v5 += dword_4648B4;   // negative Y: WRAP (mod grid height)
-if ( v4 >= dword_4648AC ) v4 = dword_4648AC - 1;   // overflow X: CLAMP to max
-if ( v5 >= dword_4648B4 ) v5 = dword_4648B4 - 1;   // overflow Y: CLAMP to max
-```
+| step | operation |
+|---|---|
+| 1 | X ← the spawn-X array `dword_46460C[i]` |
+| 2 | Y ← the spawn-Y array `dword_46465C[i]` |
+| 3 | while X < 0: X += `dword_4648AC` (grid width) — negative X: **WRAP** |
+| 4 | while Y < 0: Y += `dword_4648B4` (grid height) — negative Y: **WRAP** |
+| 5 | if X >= `dword_4648AC`: X = `dword_4648AC` − 1 — overflow X: **CLAMP** to max |
+| 6 | if Y >= `dword_4648B4`: Y = `dword_4648B4` − 1 — overflow Y: **CLAMP** to max |
 
 Negative spawn coordinates **wrap** (repeatedly add the grid dimension
 until non-negative — e.g. `-1` on a 15-wide grid becomes `14`, the far
@@ -389,8 +383,10 @@ comment rather than fix immediately.
   window" cosmetic effect with zero gameplay read anywhere else. Correctly
   unported.
 - **VALUELST ids 41 (bomb fuse length) and 42 (starting walk speed)** —
-  `sub_4214BC` copies both onto per-player struct fields
-  (`*(WORD*)(v6+37)=getvalue(41)`, `v6[28]=getvalue(42)`), but since both
+  `sub_4214BC` copies both onto per-player struct fields — the fuse length
+  from `getvalue(41)` into a 16-bit field at element 37 of the player
+  record, and the walk speed from `getvalue(42)` into element 28 — but
+  since both
   values are identical across all players and never diverge afterward, a
   single global `Tuning::fuse_frames`/`Tuning::start_speed` (`tuning.hpp`
   lines 26-27, 226-227) read at point of use is behaviourally equivalent
@@ -422,8 +418,9 @@ comment rather than fix immediately.
   overlay-after-baseline ordering and the "one more born-with unit, not a
   distinct grant mechanism" equivalence; re-confirmed here against the
   same sections, not re-litigated.
-- **Powerup-scatter's per-kind negative-N "how many succeed" phase**
-  (`v22 || !(rand()%10)`, `|N|` iterations) — the port's `count`
+- **Powerup-scatter's per-kind negative-N "how many succeed" phase** (the
+  always-place flag short-circuiting a 1-in-10 `rand()%10` roll, `|N|`
+  iterations) — the port's `count`
   accumulation loop (`setup.cpp` lines 162-167) is a literal, draw-for-draw
   match of this specific sub-step; only the subsequent *placement*
   mechanism diverges (Finding 1).

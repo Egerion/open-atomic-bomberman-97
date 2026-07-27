@@ -122,16 +122,20 @@ links by id: `-W,1,0,2,2,3` (idno 0 at 2,2, links to id 3) pairs with
 
 ### Warphole one-time knockout  [VERIFIED 2026-07-04, DONE]
 
-`sub_4056CA` case 1, the `if (!*(v23+146))` block (the `+146` latch is set on
-first activation, so this fires ONCE per warphole): it clears the warphole's
-OWN tile `sub_425E9B(x,y,0)` AND then clears ONE random ADJACENT tile:
-```c
-do { do { d = rand()%4; nx = dword_45BECC[d]+x; ny = dword_45BEDC[d]+y; }
-     while (nx < 0); }
-while (nx >= 15 /*W*/ || ny < 0 || ny >= 11 /*H*/);   // retry until in-bounds
-sub_42C0C8("knocking out %u,%u");
-sub_425E9B(nx, ny, 0);                                 // set that tile to Blank
-```
+`sub_4056CA` case 1, the block guarded on the `+146` latch still being clear
+(the latch is set on first activation, so this fires ONCE per warphole): it
+clears the warphole's OWN tile via `sub_425E9B(x, y, 0)` AND then clears ONE
+random ADJACENT tile. The neighbour pick, in order:
+
+1. Draw `d = rand() % 4` and form `nx = dword_45BECC[d] + x`,
+   `ny = dword_45BEDC[d] + y`.
+2. Redraw (step 1 again) for as long as `nx` is negative — an inner retry on
+   the X underflow alone.
+3. Redraw the whole of steps 1-2 for as long as `nx >= 15` (board width),
+   `ny < 0`, or `ny >= 11` (board height) — i.e. **retry until in-bounds**.
+4. Log through `sub_42C0C8` with the format string `"knocking out %u,%u"`.
+5. `sub_425E9B(nx, ny, 0)` — **set that tile to Blank**.
+
 `dword_45BECC={0,1,0,-1}` / `dword_45BEDC={-1,0,1,0}` (the cos/sin dir tables) —
 so the target is always a true cardinal neighbour (never the centre; `{0,0}` is
 never produced), and whatever sat there (brick OR solid) is set to Blank.
@@ -164,10 +168,10 @@ wall-clock ms elapsed since the last frame, clamped to `getvalue(31)`.
 
 Normal player move (`sub_41F29B` ~23440, else branch):
 ```
-v91 = getvalue(42) + skates*getvalue(90) - collisions*getvalue(91);  // = speed
-if (molasses) v91 /= 3;  if (hyper||super) v91 = 3*v91/2;
-v91 = dword_464958 * v91 / dword_46494C;      // scale by frame/tick  (≈ v91)
-player[+29] += v91;
+speed = getvalue(42) + skates*getvalue(90) - collisions*getvalue(91);
+if (molasses) speed /= 3;  if (hyper||super) speed = 3*speed/2;
+speed = dword_464958 * speed / dword_46494C;   // scale by frame/tick  (≈ speed)
+player[+29] += speed;
 ```
 Conveyor contribution (`sub_41F29B` ~23422 forced case; ~23447/23449 bonus/pen):
 ```
@@ -194,7 +198,7 @@ id 192 = 450    ; high
 per-board field. It is clamped to `[0, getvalue(189)-1]` and sourced from:
 - **hardcoded default `dword_464930 = 1`** (medium) in the game-init routine
   (pseudo.c 14652, alongside the other option defaults);
-- the persisted options struct field `a1+14` when a config is loaded
+- the persisted options struct's field at offset `+14` when a config is loaded
   (pseudo.c 12655), i.e. the `conveyor_speed=` line in `options.ini`;
 - editor cycling (pseudo.c 9321/9424, wrap/clamp against getvalue(189)).
 
@@ -267,29 +271,33 @@ a random nearby tile at the apex**. RE'd byte-for-byte from `sub_41F29B` state 5
 (raw disasm, imagebase 0x400000) — see the arithmetic below.
 
 Trigger is unchanged: when the per-pixel stepper `sub_41EC84` centres a player
-(`v35 == -1`) on a trampoline actor it sets `actor[+48]=1`, `player[+78]=5`
+on a trampoline actor — its **centre-landing test**, the condition that this
+pixel step settles the player exactly on a tile centre; the term is used
+throughout this file — it sets `actor[+48]=1`, `player[+78]=5`
 (BOUNCE state), `player[+80]=0`, and plays SOUNDLST id 350 (boing). While in
 state 5 (and warp states 6/7) `sub_41DE63` returns 0, so the player is
 **invulnerable to being pushed** and its input is ignored (state-gated).
 
-### The flight — `sub_41F29B` state 5 (`v86==5`), raw disasm 0x420280..0x42053f
+### The flight — `sub_41F29B` state 5 (action state == 5), raw disasm 0x420280..0x42053f
 
-`player[+78]` packs `state | (counter << 16)`; the counter word is `player[+80]`
-(`= (*(int*)(v111+39)) >> 16`), advanced once per tick by the 20 Hz frame loop:
-```
-for ( +82 += dword_464958; +82 > 0; +82 -= dword_46494C )  ++[+80];   // ++c, 1/tick
-if ( c >= getvalue(680) )   { [+78] = 0; [+80] = 0; }                  // end at 30
-```
+`player[+78]` packs `state | (counter << 16)`; the counter word `c` is
+`player[+80]`, i.e. the high half of the dword at `+78`. It is advanced once
+per tick by the 20 Hz frame loop: the sub-tick accumulator at `+82` takes
+`+= dword_464958`, then while it stays positive it sheds `dword_46494C` per
+iteration and bumps `+80` once each time round (`++c`, 1/tick). Once
+`c >= getvalue(680)` both `+78` and `+80` are cleared — the bounce ends at 30.
+
 **Apex relocation — fires the single tick `c == getvalue(680)/2 == 15`**
-(disasm 0x420381: `cmp ebx, 15; jne skip`). The exact loop (0x4203a7):
+(disasm 0x420381 compares the counter against the literal 15 and skips the
+whole block on any other value). The exact loop (0x4203a7):
 ```
 cx = pixelToTileX(player+28);  cy = pixelToTileY(player+32);          // sub_42665C/sub_4266A3
-for ( m = 0; m < 100; ++m ) {
+for (m = 0; m < 100; ++m) {
     nx = cx + rand()%5 - 2;          // FIRST rand draw   (0x4203ef)
     ny = cy + rand()%5 - 2;          // SECOND rand draw  (0x420411)  -- BOTH always drawn
-    if ( nx != cx && ny != cy        // must differ on BOTH axes
-         && !sub_425FB9(nx, ny)      // not solid (see below)
-         && !sub_422E48(nx, ny) ) {  // no grounded bomb (see below)
+    if (nx != cx && ny != cy         // must differ on BOTH axes
+        && !sub_425FB9(nx, ny)       // not solid (see below)
+        && !sub_422E48(nx, ny)) {    // no grounded bomb (see below)
         player+28 = tileToPixelX(nx);  player+32 = tileToPixelY(ny);   // sub_426524/sub_42655F
         break;
     }
@@ -312,10 +320,10 @@ bombs ARE relevant here (unlike the old wrong "never leaves the tile" claim).
 
 ### The hop arc (presentation) — CONFIRMED linear tent, `35 * min(c, 30-c)`
 
-`sub_41F29B` blits the body at `y - v80` (0x42052e) where, from the raw disasm
+`sub_41F29B` blits the body at `y - lift` (0x42052e) where, from the raw disasm
 0x4204b3..0x420517:
 ```
-v80 = getvalue(681) * (c < getvalue(680)/2 ? c : getvalue(680) - c)
+lift = getvalue(681) * (c < getvalue(680)/2 ? c : getvalue(680) - c)
 ```
 i.e. a **linear tent** `35 * min(c, 30-c)`, peaking `35*15 = 525 px` at c=15. The
 sprite rockets high off the top of the field and comes down onto the random apex
@@ -358,7 +366,7 @@ already hashed, and reuses the already-hashed `Player::bounce` countdown.
 
 ### Step-on trigger point (port detail, unchanged)
 
-The original triggers inside the stepper (`v35 == -1`); our port fires it
+The original triggers inside the stepper (at its centre-landing test); our port fires it
 mid-walk via the `MovementSystem::move` step-on callback (see §5) with a post-walk
 safety net for the standing-still case. The one-shot latch `Player::tramp_latch`
 (set on launch, cleared on leaving the tile) keeps a stationary centred player to
@@ -367,8 +375,9 @@ one hop per entry.
 ### Warp/teleport animation — sequence name `"spin"`  [CONFIRMED 2026-07-04]
 
 The warp (states 6/7) draws the player with the `strcpy_`'d literal sequence name
-at **0x45a213 = `"spin"`** (both state blocks: disasm 0x420544 and 0x4205d8,
-`mov edx, 0x45a213; lea eax, [ebp-0x78]; call strcpy_`). `"spin"` is the 5th
+at **0x45a213 = `"spin"`** — both state blocks (disasm 0x420544 and 0x4205d8)
+load that string address and copy it into the stack-local sequence-name buffer
+(the same `[ebp-0x78]` slot in each). `"spin"` is the 5th
 sequence in `DATA/ANI/WALK.ANI` (after the four `walk <dir>`). The renderer draws
 `SequenceSet::spin[player]` while `Player::warp > 0`, advancing the frame by
 `kWarpTicks - warp` (elapsed). There is NO `warp`/`teleport` sequence anywhere in
@@ -398,7 +407,7 @@ steer walking players.
   DIFFERENT registry from the actor grid `dword_45E0A8` — not a dirarrow.) We do
   NOT re-steer players; a prior draft that did was removed as unfaithful.
 - **BOMB** (`sub_42331C` slide loop, pseudo.c ~25532): a sliding bomb, at a tile
-  centre (`!v79 && !v80`, both alignment offsets zero), re-reads the actor grid
+  centre (both of its alignment offsets zero), re-reads the actor grid
   — `if (actor && actor[1]==0 /*dirarrow*/) { bomb[+44] = actor[22]; }` — i.e.
   the bomb turns to the arrow's godir. Ported into `bombs.cpp` `slide()`, reading
   `actor_type`/`actor_dir`, at each tile-centre crossing (kicked + conveyor).
@@ -408,7 +417,7 @@ steer walking players.
 
 ### Warphole (type 1)
 A linked-teleporter tile. **No RNG is drawn by the warp path** (confirmed).
-- Trigger (`sub_41EC84`, `v35 == -1` step-on, `actor[1]==1`):
+- Trigger (`sub_41EC84`, the centre-landing step-on test, `actor[1]==1`):
   `player[+78]=6` (warp state), `player[+80]=0`, `sub_405A81(actor,&dx,&dy)`
   resolves the destination and it is stored in `player[+20]/[+24]`, then
   `sub_427961(1330)`. The player then animates the warp-out/in and is relocated
@@ -426,7 +435,7 @@ A linked-teleporter tile. **No RNG is drawn by the warp path** (confirmed).
 ### Two-phase warp timing — CONFIRMED (`sub_41F29B` state 6/7 blocks, ~23155/23215) [2026-07-04]
 
 The player warp is a **two-phase animation**, now read directly from the state
-machine in `sub_41F29B` (`v86` = `player[+78] >> 16` = the action state):
+machine in `sub_41F29B` (the action state = `player[+78] >> 16`):
 
 - **State 6 (warp-out):** advance the frame counter `+40` each tick; when
   `+40 > 8` (i.e. after **9 ticks**), set state 7, reset `+40`, and **relocate**
@@ -437,9 +446,11 @@ machine in `sub_41F29B` (`v86` = `player[+78] >> 16` = the action state):
   state 0 (normal). The player can move again.
 
 So the whole warp is **18 ticks** (9 + 9). Throughout, `sub_41DE63` returns 0 for
-states 6/7 (`else if (+78 == 6 || +78 == 7) return 0;`, pseudo.c 22003) — the
+states 6/7 (its final else-branch returns 0 whenever the state word at `+78`
+reads 6 or 7, pseudo.c 22003) — the
 player is invulnerable to being pushed, and the mover is not run (both state
-blocks `goto LABEL_246/239`, skipping the movement budget), so input is ignored.
+blocks jump straight to `LABEL_246`/`LABEL_239`, skipping the movement budget),
+so input is ignored.
 No RNG anywhere on the path.
 
 **Port.** `Player::warp` is an 18-tick countdown (hashed — it gates movement
@@ -455,8 +466,8 @@ dest == its own tile, so the warp is a harmless in-place hop.
 
 **The step-on MUST fire mid-walk, not after — root cause of "STILL stuck".**
 The original triggers the warp INSIDE the per-pixel stepper (`sub_41EC84`, the
-`for(+116>0; +116-=100)` loop) at `v35 == -1`, i.e. the exact pixel step that
-lands the player on the tile centre. A first port fired it only AFTER the whole
+`for(+116>0; +116-=100)` loop) at its centre-landing test, i.e. the exact pixel
+step that lands the player on the tile centre. A first port fired it only AFTER the whole
 per-tick move budget was spent, requiring the player to END the tick exactly on
 the centre pixel. But the mover steps ~9 px/tick (speed 923, 100 units/px) and
 tile centres are 40 px apart, so a player WALKING through a warphole in an open
@@ -470,13 +481,14 @@ partner correctly). It was purely the trigger point.
 Fix: `MovementSystem::move` takes a step-on callback (`StepOnFn`, a plain
 function pointer — no heap, deterministic) invoked the instant a per-pixel step
 settles the player on a tile centre. `StageActorSystem::move_on_actor` passes it,
-so a walking player fires `start_warp`/`start_bounce` mid-walk exactly like
-`v35 == -1`. `warphole_after_move`/`trampoline_after_move` remain as a post-walk
+so a walking player fires `start_warp`/`start_bounce` mid-walk exactly like the
+original's centre-landing test.
+`warphole_after_move`/`trampoline_after_move` remain as a post-walk
 safety net for the standing-still case (player already centred, no step). Both
 paths call the same latched `start_warp`/`start_bounce`, so a walk across the
 centre fires exactly once. Verified equivalent to the original: it fires post-
-step (arrival at centre) vs the original's pre-step (`v35 == -1` at centre−1,
-about to step to centre) — the same physical event, and both continue the loop
+step (arrival at centre) vs the original's pre-step (the centre-landing test
+firing at centre−1, about to step to centre) — the same physical event, and both continue the loop
 from the centre with identical remaining budget.
 
 **Destination captured at step-on.** The exit tile is stored into
@@ -496,8 +508,10 @@ scenarios (no actors) are unchanged.
 Note the 8-frame per-phase threshold is a HARDCODED constant in the state
 machine (`+40 > 8`), not a VALUELST id — like the head-hit stun of 16. Confirmed
 9+9=18 ticks: the per-phase frame counter `+40` advances once per tick at 20 Hz
-(`for(+41 += dword_464958; +41 > 0; +41 -= dword_46494C) +++40`, with the
-elapsed-ms delta ≈ dword_46494C = 50 at the locked rate), and each phase ends at
+via the standard accrual — the sub-tick accumulator at `+41` takes
+`+= dword_464958`, then while it stays positive it sheds `dword_46494C` per
+iteration and bumps `+40` once each time round, with the elapsed-ms delta
+≈ `dword_46494C` = 50 at the locked rate — and each phase ends at
 `+40 > 8` = the 9th increment.
 
 ## 6. Bomb ↔ actor reactions (`sub_42331C`)  [IMPLEMENTED 2026-07-04]
@@ -521,7 +535,7 @@ resting bomb is `state +16 == 9`, with a movement sub-mode `switch(+46)`.
    the native oracle showed the slide is base-speed and cadence-invariant. See
    the F2 note in bombs.cpp and `audit/bombs.md` Finding 2.)
 2. **Dirarrow re-steering a sliding bomb** (pseudo.c ~25532, `case 2` slide
-   loop): at a tile centre (`!v79 && !v80`), `if (actor && actor[1]==0)
+   loop): at a tile centre (both alignment offsets zero), `if (actor && actor[1]==0)
    bomb[+44] = actor[22];` — the sliding bomb turns to the arrow's godir.
    Ported into `bombs.cpp` `slide()` at each tile-centre crossing.
 3. **Bomb landing on a trampoline — DOES NOT HAPPEN.** [VERIFIED 2026-07-04]
@@ -540,15 +554,18 @@ resting bomb is `state +16 == 9`, with a movement sub-mode `switch(+46)`.
    PLAYER per-pixel stepper. `sub_42331C` (the bomb mover) never calls it.
    Instead, the sliding-bomb cell-entry probe `sub_4230A5` (pseudo.c
    25155-25179, invoked from the kicked/conveyor slide loop at 25555) ends
-   with `return (!v8 || v8[1] != 1) && sub_425FB9(a1,a2) == 0;` where
-   `v8 = sub_405654(a1,a2)` — so whenever the probed tile carries ANY actor of
+   by returning the conjunction *(no actor at the probed tile, OR an actor
+   whose type field `+4` is not 1) AND `sub_425FB9(x, y) == 0`*, where the
+   actor comes from `sub_405654(x, y)` on the probed tile — so whenever the
+   probed tile carries ANY actor of
    type 1 (warphole), the whole expression is false **regardless of the
    underlying cell type**: the tile is impassable to a sliding bomb, exactly
    like a wall. A kicked or conveyor-carried bomb therefore halts (or, if
    jelly, reverses/ping-pongs) one tile short of a warphole and can never
    cross onto it — there is no bomb-warp code path anywhere in the binary.
    (The punched/flying-bomb landing check similarly refuses to settle a bomb
-   on a warphole tile — pseudo.c 25453 `v62[1] != 1` — it just hops onward,
+   on a warphole tile — pseudo.c 25453 tests the landing tile's actor type
+   field `+4` against 1 — it just hops onward,
    same as over a wall; unlike the slide probe it does NOT destroy a powerup
    on the tile as a side effect, since it never reaches the tile-entry probe
    at all.) Ported: `bombs.cpp` `slide()`'s cell-entry probe now includes
@@ -616,7 +633,7 @@ Event/sound needed.
 | sub_42665C/sub_4266A3 | pixel→tile X/Y; sub_426524/sub_42655F tile→pixel X/Y (relocation) |
 | 0x45a213    | warp sequence-name literal **"spin"** (strcpy'd in warp states 6/7); lives in WALK.ANI |
 | sub_42331C  | bomb mover: bomb-on-conveyor (~25365), bomb dirarrow re-steer (~25532); no tramp/warp interaction (blocked by `sub_4230A5` before ever reaching a warphole tile, §6 item 4) |
-| sub_4230A5  | sliding-bomb cell-entry probe (pseudo.c 25155-25179): blocks entry to a warphole tile (`v8[1] != 1` verdict) — the reason bombs never warp |
+| sub_4230A5  | sliding-bomb cell-entry probe (pseudo.c 25155-25179): blocks entry to a warphole tile (the "actor type field `+4` is not 1" verdict) — the reason bombs never warp |
 | sub_404DB8  | direction letter → godir (n/e/s/w → 0/1/2/3)              |
 | sub_4056CA  | actor animator: conveyor frame = +48/3; tramp bounce = 12-frame seq (case 3) |
 | sub_41DA5C  | sequence frame count (statecnt at `dword_461B5C+60*seq+52`) |
