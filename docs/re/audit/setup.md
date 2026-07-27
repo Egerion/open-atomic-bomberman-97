@@ -379,9 +379,14 @@ comment rather than fix immediately.
   The companion `dword_4621E8 = dword_46494C * getvalue(32)` set right
   after it (line 455-456) is confirmed **presentation-only** — traced to
   `batch_0x41F29B.cpp` line 623, where it only selects which draw-colour
-  index to pass to the sprite-queue call (`sub_415A9F`), a "colour-shuffle
-  window" cosmetic effect with zero gameplay read anywhere else. Correctly
-  unported.
+  index to pass to the sprite-queue call (`sub_415A9F`), with zero gameplay
+  read anywhere else. Correctly unported **from the sim** — but it is not
+  unimplemented: it is the round-start own-colour reveal, ported on the
+  PRESENTATION side 2026-07-22 (88b5168) in `Renderer`, which reads
+  getvalue(32) straight from the `ValueList`. See `docs/re/facts.md`
+  "Round-start own-colour reveal" and the id 32 row in
+  `docs/valuelst-map.md`. (This line previously read "Correctly unported"
+  with no qualifier, which read as "not implemented"; corrected 2026-07-27.)
 - **VALUELST ids 41 (bomb fuse length) and 42 (starting walk speed)** —
   `sub_4214BC` copies both onto per-player struct fields — the fuse length
   from `getvalue(41)` into a 16-bit field at element 37 of the player

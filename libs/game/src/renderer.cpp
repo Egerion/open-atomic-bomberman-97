@@ -812,7 +812,6 @@ void Renderer::draw_world(const sim::State& s) {
         // blits "shadow" @0x45a242), so only a bounce suppresses it.
         if (p.bounce <= 0) draw_anim(q.shadow, 0, sx, sy);
         sy -= lift;  // raise the body (and anything anchored to it) by the hop arc
-        int pv = render_colour(s, i);
         // A diseased player's body sprite strobes — CONFIRMED exact mechanism
         // (sub_41F29B ~23252, traced 2026-07-09): after the shadow blit, the
         // per-player draw-colour byte (+0x3C) that normally selects the FRAME
@@ -848,10 +847,13 @@ void Renderer::draw_world(const sim::State& s) {
         // demo) is byte-identical. Body-only: bombs/flames keep the creation
         // (team) colour they were stamped with, matching the native (their +60
         // is not the reveal path).
+        // Branches 2 and 3 live in match::round_start_body_colour so the
+        // headless suite can pin them (tests/match/test_team.cpp); branch 1,
+        // the strobe, stays here because it draws on a presentation-side RNG.
         const std::int64_t reveal_ticks = values_ ? values_->at_or(32, 40) : 40;
-        const bool in_reveal = static_cast<std::int64_t>(s.tick) < reveal_ticks;
-        int body_colour =
-            disease_flash ? disease_flash_colour() : (in_reveal ? i : pv);
+        int body_colour = disease_flash
+                              ? disease_flash_colour()
+                              : match::round_start_body_colour(s.tick, reveal_ticks, p.team, i);
         const Anim* a = moving_[i] ? &q.walk[body_colour][dir] : &q.stand[body_colour][dir];
         // Leg-cycle pacing: ONE anim frame per THREE pixels walked. The
         // original's pose frame is `(u16)player[+48] / 3 % statecnt`

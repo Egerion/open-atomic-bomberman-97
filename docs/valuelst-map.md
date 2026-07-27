@@ -81,6 +81,7 @@ getvalue" libs/game`):
 | id(s) | area |
 |---|---|
 | 12 | boot/title/logo dwell timeout, seconds |
+| 32 | round-start **own-colour reveal** window, in nominal frames. Round init arms `dword_4621E8 = (1000/getvalue(30)) × getvalue(32)` = 50 ms × 40 = 2000 ms; while it runs, each player's BODY blits in that player's own slot colour instead of the +60 draw-colour byte, so everyone can find their bomberman before the team colours take over. Visually a **Team-Play-only** effect (with team play off both branches yield the same slot index). `Renderer` reads it straight from the `ValueList` (`renderer.cpp` `at_or(32, 40)`) and deliberately **NOT** via `Tuning::apply` — it is presentation-only and putting it in `sim::Tuning` would drag a render value into hashed-sim territory. `docs/re/facts.md` "Round-start own-colour reveal" |
 | 15 | "is the online manual enabled?" — gates the help browser glob |
 | 16 | GLUE\<n\> backdrop count for pre-match screens |
 | 35 | number of built-in levels |
