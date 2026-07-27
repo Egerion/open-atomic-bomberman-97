@@ -529,6 +529,57 @@ AssetStore/SequenceSet/Renderer. Tests: `tests/test_dud.cpp`. Golden fully
 recaptured (hash layout gained two fields; setup consumes one arm draw), and
 again 2026-07-10 for the seconds correction.
 
+## A closing enclosure wall crushes a FIZZLING DUD like a live bomb — CONFIRMED (2026-07-27, `sub_426818` / `sub_422E48` / `sub_42331C`)
+
+The enclosure stepper's bomb-crush step has **no dud branch at all**; a
+fizzling dud follows the exact same ON/OFF paths a grounded live bomb does.
+Two independent reasons, both read in the binary:
+
+- **The finder does not filter duds out.** `sub_426818`'s crush step locates
+  the victim with the grounded-bomb finder `sub_422E48`, which rejects a bomb
+  record only when its state dword is zero (free slot) or its motion word is
+  2/3 (thrown / punch-chained flight). The dud marker is not in the motion
+  word — `sub_422EDE` writes it into the **state dword** (a normal armed bomb
+  gets 1, a bomb that loses the dud roll gets 2, per "Dud bombs" above). A
+  fizzling dud therefore has a nonzero state and a grounded motion, and is
+  found exactly like an armed bomb. A *sliding* bomb (motion 1) is likewise
+  treated as grounded; only an airborne/punch-chained bomb survives under the
+  wall.
+- **The forced-detonation drain does not filter duds out either.** On the
+  "Stomped Bombs Detonate" ON branch (`dword_464940`, see "Options toggles"
+  below) the bomb goes onto the pending-detonation queue via
+  `sub_423209(bomb, -1)`; the drain at the top of `sub_42331C` accepts any
+  record with a nonzero state dword and force-writes elapsed-fuse (+68) =
+  fuse-duration (+74). The load-bearing detail is in that function's per-bomb
+  tail: **only the elapsed-fuse INCREMENT is gated on "state != 2"** (not a
+  dud); the `+68 >= +74` detonation test immediately after it is **ungated**.
+  So the forced write lands and the dud detonates on the very next frame's
+  pass, same as a live bomb.
+- On the OFF branch `sub_424841` simply zeroes the record's state dword —
+  silent absorb, again with no dud special-casing.
+
+**Port fix, 2026-07-27.** `EnclosureSystem::drop_wall` mirrored the finder's
+state filter correctly (it skips only `flying`) and its OFF branch already
+matched `sub_424841`, but the ON branch only forced `fuse = 1` — and our
+`BombSystem::tick_fuses` tests `dud_left` FIRST (correctly: an *ordinary*
+fuse must stay frozen while a bomb fizzles, because `sub_42331C`'s increment
+IS dud-gated). The forced fuse was therefore swallowed for the rest of the
+fizzle window and the blast erupted up to `dud_frames` = getvalue(323) = 120
+ticks = **6 s** later, out of an already-solid wall. The fix clears the
+fizzle on the forced path only (`b.dud_left = 0` beside `b.fuse = 1`) — the
+faithful mapping of the drain's forced elapsed = duration write meeting that
+ungated threshold test. Do NOT instead reorder `tick_fuses`' dud check; only
+the forced detonation bypasses the fizzle. The port's other force-detonation
+path was already correct: `FlameSystem::drain_chain_queue` calls `explode()`
+directly with no dud gate, matching "Chain explosions still set off a
+fizzling dud" above.
+
+Tests: `tests/sim/test_enclosure_stomp.cpp` (ON detonates the crushed dud on
+the next tick; OFF still silently eats it). **No golden moved** — verified,
+not assumed: no pinned scenario reaches the wall-close phase with a fizzling
+dud on the crushed tile, and the full 72-test suite stayed green with the
+hashes byte-identical.
+
 ## Head hit — CONFIRMED (`sub_421F7E`, stun countdown in the player updater)
 
 Read 2026-07-03. When a flying bomb lands on a live player:
@@ -5061,8 +5112,11 @@ timer). The player-pass entry `sub_420F07` decrements it by the measured
 frame delta at the top of every frame (23642-23645, clamped at 0), and
 `sub_41F29B`'s acquisition gate `if (v113 && !dword_4621E0)` (23028) skips
 BOTH the AI brain (`sub_40A1C6`) and the human input read (`sub_41E61E`)
-while it runs — nobody moves or acts for the first second of every round
-(the sprite colour-shuffle window). getvalue(30)'s own VALUELST legend is
+while it runs — nobody moves or acts for the first second of every round.
+(This freeze is NOT the colour window: the two timers are armed side by side
+but are distinct and different lengths — see "Round-start own-colour reveal"
+below. An earlier revision of this entry conflated them.)
+getvalue(30)'s own VALUELST legend is
 "how many frames per second are we gonna attempt to get?" — the engine
 reuses the 20 fps target as "one second's worth of 50 ms frames". LABEL_246
 still runs (its key bytes just stay at their per-frame reset), so only the
@@ -5077,6 +5131,49 @@ reproduces the original's exact t = 1000 ms gate-open boundary at tick
 granularity), gating the AI decide + human decode + bomb-action tail in
 `player_turn`. `tests/helpers.hpp` and the golden/demo fixtures disarm it to
 keep act-from-tick-0 scenarios; `tests/test_freeze.cpp` pins the window.
+
+## Round-start own-colour reveal (Team Play) — CONFIRMED (2026-07-27, `sub_4214BC`/`sub_420F07`/`sub_41F29B`)
+
+VALUELST **id 32** ("how many standard frames to show true colours before
+switching to team colours, on team play only"), value 40. Documented here
+2026-07-27; the behaviour itself was ported 2026-07-22 (88b5168).
+
+Round init `sub_4214BC` arms two timers back to back, right after its 10-slot
+player loop: `dword_4621E0 = [0x46494C] × getvalue(30)` — the input freeze
+above, 1000 ms — and `dword_4621E8 = [0x46494C] × getvalue(32)` = 50 ms × 40
+= **2000 ms**. (`[0x46494C]` = 1000 / getvalue(30) = 50, assigned once.) The
+same loop also sets each player's **+60 draw-colour byte**: under the
+team-play gate `dword_464964` it becomes `team_byte(+84) ? 2 : 0`, otherwise
+the player's own slot index. `sub_420F07` decrements `dword_4621E8` by the
+measured frame delta (`dword_464958`, itself clamped to getvalue(31) = 150
+ms), floored at 0 — the same two lines that decrement the input freeze.
+
+The ONLY read is in the player draw routine `sub_41F29B`, in the three-way
+branch that picks the colour index handed to the sprite blit `sub_415A9F`:
+
+1. disease colour-strobe bit set → `rand() % 10` (the strobe WINS);
+2. else if `dword_4621E8` non-zero → the player's **own slot index**,
+   computed as `(player_ptr - dword_461BC4) / 152`;
+3. else → the +60 byte (the team colour under Team Play).
+
+So for the first ~2 s of every round each bomberman is drawn in his own
+colour and can be found on the board, then they snap to white/red. **Only
+visible with Team Play on** — with it off, branches 2 and 3 both yield the
+same slot index. **Body-only**: bombs and flames keep the colour they were
+stamped with at creation, so the reveal does not touch them.
+
+Ported: `Renderer` (`renderer.cpp`, the `draw_players` colour pick) —
+`reveal_ticks = values_->at_or(32, 40)`, `in_reveal = s.tick < reveal_ticks`,
+`body_colour = disease_flash ? flash : (in_reveal ? slot : team_colour)`,
+same three-way order and same data source as the native, with the team colour
+coming from `match::team_render_colour` (team 1 → 0, team 2 → 2, team 0 → own
+slot — exactly the native's +60 byte). Deliberately **NOT** routed through
+`Tuning::apply`: it is presentation-only, and a render value has no business
+in the hashed sim (same pattern as id 330, the cornerhead fidget spread).
+Note the port counts 40 SIM TICKS rather than a wall-clock ms countdown —
+same 2 s at 20 Hz, and immune to the native's frame-delta clamping wobble
+under a stall. Not a golden concern in either direction: the visual golden is
+a solo demo, where branches 2 and 3 coincide.
 
 ## Draw order — tile layer addendum (2026-07-16, `sub_425D22`/`sub_425EFC`)
 

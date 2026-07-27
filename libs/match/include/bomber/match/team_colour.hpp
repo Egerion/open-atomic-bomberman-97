@@ -42,4 +42,31 @@ inline int team_render_colour(std::uint8_t team, int slot) {
     return slot;
 }
 
+// The round-start OWN-COLOUR REVEAL window (VALUELST id 32, default 40
+// frames = 2 s), CONFIRMED from BM95.EXE — `docs/re/facts.md` "Round-start
+// own-colour reveal". Round init (`sub_4214BC`) arms `dword_4621E8` = 50 ms ×
+// getvalue(32) alongside the input freeze; `sub_420F07` counts it down; while
+// it is non-zero the player draw routine `sub_41F29B` blits the player's BODY
+// in that player's OWN slot index instead of the +60 draw-colour byte, so
+// everyone can find their bomberman before the team colours take over.
+//
+// Only VISIBLE under Team Play: with `team == 0` both branches yield the same
+// slot index. Body-only in the original — bombs and flames keep the colour
+// they were stamped with at creation, so callers must NOT route those here.
+//
+// The disease colour-strobe takes precedence over this window in the native's
+// three-way branch; that branch is the CALLER's (it uses a presentation-side
+// RNG, determinism rule 6), so this helper covers only branches 2 and 3.
+//
+// Lives here, beside `team_render_colour`, for the same reason: the mapping is
+// SDL-free and pure, so the headless suite can pin it without libs/game.
+inline int round_start_body_colour(std::uint64_t round_tick, std::int64_t reveal_ticks,
+                                   std::uint8_t team, int slot) {
+    if (static_cast<std::int64_t>(round_tick) < reveal_ticks) {
+        if (slot < 0 || slot >= sim::kMaxPlayers) return 0;
+        return slot;
+    }
+    return team_render_colour(team, slot);
+}
+
 }  // namespace bomber::match

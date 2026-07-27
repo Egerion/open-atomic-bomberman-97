@@ -316,3 +316,52 @@ TEST_CASE("team_render_colour: an out-of-range slot with no team clamps to 0") {
     CHECK(bomber::match::team_render_colour(0, -1) == 0);
     CHECK(bomber::match::team_render_colour(0, kMaxPlayers) == 0);
 }
+
+// --------------------------------------------------------------------------
+// round_start_body_colour — the round-start OWN-COLOUR REVEAL window
+// (VALUELST id 32, `docs/re/facts.md` "Round-start own-colour reveal";
+// `sub_4214BC` arms it, `sub_420F07` counts it down, `sub_41F29B` reads it).
+// The renderer's per-player body-colour pick delegates branches 2 and 3 here
+// so they can be pinned without SDL. Presentation-only — nothing below can
+// move a golden sim hash.
+// --------------------------------------------------------------------------
+
+TEST_CASE("round_start_body_colour: under Team Play the window shows OWN colours, then team") {
+    constexpr std::int64_t kReveal = 40;  // getvalue(32) = 40 frames = 2 s at 20 Hz
+    // Slot 3 on team 2 (red) and slot 5 on team 1 (white): during the window
+    // each is drawn in its OWN slot index, so teammates are still told apart.
+    for (std::uint64_t t = 0; t < 40; ++t) {
+        CHECK(bomber::match::round_start_body_colour(t, kReveal, 2, 3) == 3);
+        CHECK(bomber::match::round_start_body_colour(t, kReveal, 1, 5) == 5);
+    }
+    // The boundary is exclusive on the low side: tick 40 is already past it.
+    CHECK(bomber::match::round_start_body_colour(40, kReveal, 2, 3) == 2);  // red
+    CHECK(bomber::match::round_start_body_colour(40, kReveal, 1, 5) == 0);  // white
+    // ...and it stays team-coloured for the rest of the round.
+    CHECK(bomber::match::round_start_body_colour(9999, kReveal, 2, 3) == 2);
+    CHECK(bomber::match::round_start_body_colour(9999, kReveal, 1, 5) == 0);
+}
+
+TEST_CASE("round_start_body_colour: with Team Play OFF the window is invisible") {
+    // The native's branches 2 and 3 both yield the player's own slot index
+    // when there is no team, so the reveal changes nothing outside Team Play —
+    // which is why the solo visual golden is byte-identical across it.
+    constexpr std::int64_t kReveal = 40;
+    for (int slot = 0; slot < kMaxPlayers; ++slot) {
+        CHECK(bomber::match::round_start_body_colour(0, kReveal, 0, slot) == slot);
+        CHECK(bomber::match::round_start_body_colour(39, kReveal, 0, slot) == slot);
+        CHECK(bomber::match::round_start_body_colour(40, kReveal, 0, slot) == slot);
+    }
+}
+
+TEST_CASE("round_start_body_colour: a zero-length window (getvalue(32)=0) disables the reveal") {
+    // VALUELST is user-editable; id 32 = 0 must degrade to "team colours from
+    // tick 0", not to a permanent reveal.
+    CHECK(bomber::match::round_start_body_colour(0, 0, 2, 3) == 2);
+    CHECK(bomber::match::round_start_body_colour(0, 0, 1, 5) == 0);
+}
+
+TEST_CASE("round_start_body_colour: an out-of-range slot inside the window clamps to 0") {
+    CHECK(bomber::match::round_start_body_colour(0, 40, 1, -1) == 0);
+    CHECK(bomber::match::round_start_body_colour(0, 40, 1, kMaxPlayers) == 0);
+}

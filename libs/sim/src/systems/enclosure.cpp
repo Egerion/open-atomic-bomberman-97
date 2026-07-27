@@ -203,6 +203,24 @@ void EnclosureSystem::drop_wall(int wx, int wy) {
             // pass (which runs before enclosure.update() in our own tick
             // order) instead of exploding here — the faithful equivalent.
             b.fuse = 1;
+            // A FIZZLING DUD is crushed exactly like a live bomb. The dud
+            // marker lives in the bomb record's state dword (sub_422EDE
+            // writes 2 there), not in the motion word, so the grounded-bomb
+            // finder sub_422E48 — which rejects only a zero state or motion
+            // 2/3 — finds a dud just like an armed bomb, and sub_426818's
+            // crush loop has no dud branch at all. On the drain side
+            // (sub_42331C) only the elapsed-fuse INCREMENT is gated on
+            // "state != 2"; the "elapsed >= duration" detonation test right
+            // after it is UNGATED, so the queue's forced elapsed = duration
+            // write detonates a dud on the next frame's pass, same as a live
+            // bomb. Our tick_fuses() gates on dud_left FIRST (correctly — an
+            // ordinary fuse must stay frozen while the bomb fizzles), so the
+            // forced fuse would otherwise be swallowed for the rest of the
+            // fizzle window (up to dud_frames = 120 ticks = 6 s) and erupt
+            // from under an already-solid wall. Clear the fizzle here, on the
+            // forced path only. facts.md "Enclosure wall crushes a fizzling
+            // dud".
+            b.dud_left = 0;
             // FIX (enclosure F1, docs/re/audit/enclosure.md Finding 1):
             // sub_426818's bomb-crush loop (native/src/game/batch_0x42583B.cpp
             // lines 769-820; pseudo.c 27262 `sub_423209((int)v6, -1)` then an
