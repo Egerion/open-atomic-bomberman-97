@@ -41,7 +41,8 @@ DONE 2026-07-08"; `docs/re/frontend-flow.md` now reads "RESULTS tally tier
   Per-player ink: `sub_41672F(i)` (non-team) / `sub_4141F8(team)` (team
   mode) — the same colour helpers already pinned in
   `docs/re/player-colour.md` and `docs/re/setup-screens.md`.
-- **Match-clinch check (v73):** the check splits on **team mode**
+- **Match-clinch check (its result lands in the winner variable, -1 =
+  nobody has clinched yet):** the check splits on **team mode**
   (`dword_464964`, `sub_42A3F6` batch_0x4293E5.cpp:1189-1255).
   - **Team branch (1189-1221):** ALWAYS wins-based — the first team whose
     `sub_421AC8` (win count) reaches `dword_464A7C` (the configured "number of
@@ -49,7 +50,8 @@ DONE 2026-07-08"; `docs/re/frontend-flow.md` now reads "RESULTS tally tier
     read here.
   - **Non-team branch (1222-1255):** if `win_by_kills` (`dword_46497C`) is set
     it compares the **highest round-kill total** against `dword_464A7C`,
-    breaking ties by requiring a single unique leader (`v78 == 1`); otherwise
+    breaking ties by requiring the count of players tied at that top total to
+    be exactly 1, i.e. a single unique leader; otherwise
     it is the same wins-based check.
   CORRECTED 2026-07-22: `win_by_kills` is a **non-team** feature — team play
   forces it OFF (`batch_0x405B3A.cpp:685-686`, mirrored at
@@ -60,20 +62,23 @@ DONE 2026-07-08"; `docs/re/frontend-flow.md` now reads "RESULTS tally tier
 - **Outcome line** — drawn after the per-player list, at **x =
   getvalue(800), y = getvalue(801), colour = getvalue(803)** (VALUELST
   `; player %u wins the match...` → `800,150,94,0,400`):
-  - **No clinch yet (v73 == -1):** `getstring(dword_46497C + 120)` formatted
+  - **No clinch yet (the winner variable still holds -1):** the string id is
+    120 plus the `win_by_kills` flag `dword_46497C`, and it is formatted
     with `dword_464A7C` (the **flat target**, NOT the remaining count) — id 120
     `"(Match winner must score %u victories)"` or id 121 `"(... %u kills)"`,
     keyed on `win_by_kills` (a non-team feature), stating the TOTAL goal. Ink =
     `byte_49A624` (a distinct "still playing" colour).
-  - **Match clinched (v73 != -1):** keyed on `win_by_kills` (`dword_46497C`),
+  - **Match clinched (the winner variable holds something other than -1):**
+    keyed on `win_by_kills` (`dword_46497C`),
     NOT team mode: set → `getstring(36)` = `"PLAYER %u WINS THE MATCH!"`
-    formatted with the winning player number `v73+1`; unset → `getstring(35)`
+    formatted with the winning player number, i.e. the winner index plus 1;
+    unset → `getstring(35)`
     = `"%s WINS THE MATCH!"` formatted with the winner name. There is NO
     team-specific "TEAM wins" string on this path. Ink = `byte_497F8F` (a
     distinct "match over" colour, different from the still-playing ink above).
 - **Sound:** the winner voice group **`sub_427BFB(2000)`** ("we have a
-  winner", already pinned in frontend-flow.md) fires as soon as `v73 != -1`
-  is computed — i.e. it plays under the RESULTS scoreboard itself, not only
+  winner", already pinned in frontend-flow.md) fires as soon as the clinch
+  check yields a winner (the winner variable stops being -1) — i.e. it plays under the RESULTS scoreboard itself, not only
   under the later VICTORY screen. A short **1500 ms** dwell
   (`sub_413CB0(1500)`) follows before input is accepted.
 - **Music:** inherited — this tier draws inside the same handler as DRAW/
@@ -92,7 +97,8 @@ DONE 2026-07-08"; `docs/re/frontend-flow.md` now reads "RESULTS tally tier
   players get the SFX-40 "can't dismiss" buzz instead (see
   frontend-flow.md's SFX-40 note — identical gating, N/A to local play).
 - **After RESULTS:** if the match is not yet clinched and fewer than 2
-  players remain active (`v76 < 2`, i.e. everyone but one has been
+  players remain active (the active-player tally comes out below 2, i.e.
+  everyone but one has been
   eliminated from the roster entirely, not just the round), a "not enough
   players" dialog (`getstring(47)`/`getstring(95)`) aborts to the menu;
   otherwise `sub_410B6E()` (match/level re-init) runs another round. If the
@@ -161,7 +167,8 @@ per-stage noise):
 
 `sub_4141F8`'s ELSE branch (non-team-1, i.e. team 0 or non-team mode) is
 `byte_49D38F` (general/white ink) — confirmed directly from its body
-(`return a1 ? byte_49D0DA : byte_49D38F;`, pseudo.c 16920-16930).
+(pseudo.c 16920-16930: it returns `byte_49D0DA` when its argument is
+non-zero and `byte_49D38F` otherwise, and nothing else).
 
 These are FIXED engine-chrome colours (not per-slot/per-player data), so the
 port hardcodes the resolved RGB triples as named constants in
@@ -347,7 +354,7 @@ Space-OR-bomb read() shim were invented and are gone).
 ## 3. The Options screen — `sub_4080DC` (CORRECTED: this is NOT the map editor)
 
 **Correction to `docs/re/frontend-flow.md`'s main-menu table.** Row 3
-(`v10==3`, address `sub_4080DC` @ 0x4080DC) is labelled "**map editor**
+(menu selection index 3, address `sub_4080DC` @ 0x4080DC) is labelled "**map editor**
 (EDITOR.BM; the 'Ctrl+E ×6' easter egg lands here)" in that doc. Reading the
 actual body of `sub_4080DC` (pseudo.c 8914-9491) shows a **19-item
 interactive settings/options list** — team play, random start, node name,
@@ -371,7 +378,7 @@ glue backdrop (`sub_4148E5`, same helper as the pre-match screens). Every
 boolean toggle renders `getstring(<global>+25)` (25=" No ", 26=" Yes ") —
 confirming the `+25` idiom already seen elsewhere in the codebase.
 
-| row (v166) | msg id | label (paraphrased) | backing global | on-select (Left/Right or Enter) |
+| row (cursor index) | msg id | label (paraphrased) | backing global | on-select (Left/Right or Enter) |
 |---|---|---|---|---|
 | 0 | 250 | Team Play | `dword_464964` (`team_play=`) | toggle; forces `win_by_kills` off; ALSO resets `dword_46492C=-1` on every press (CORRECTED 2026-07-09, `docs/re/goldman-roulette.md` §2.1 — previously only row 6 was documented as a gold-clear trigger) |
 | 1 | 251 | Random Start | `dword_464AE8` (`random_start=`) | toggle |
@@ -381,7 +388,7 @@ confirming the `+25` idiom already seen elsewhere in the codebase.
 | 5 | 255 | Win Matches By Kill Total | `dword_46497C` (`win_by_kills=`) | toggle; forced off whenever Team Play is on |
 | 6 | 256 | Gold Bomberman | `dword_4648BC` (`goldman=`) | toggle; also resets `dword_46492C=-1` (clears the pending roulette winner) — INLINE on every press, not gated on the net before/after value (`docs/re/goldman-roulette.md` §2.1) |
 | 7 | 257 | Enclosement Depth | `dword_464974` (`enclosement_depth=`) | cycle 0..`getvalue(28)-1` (=0..3: None/A Little/A Lot/All the way, msg 315-318) |
-| 8 | 258 | Scheme File | `byte_4648C4[100]` (`schemefilename=`) | `sub_407582` — the `*.SCH` file-picker LIST DIALOG (CORRECTED 2026-07-13: BOTH dispatch switches route here via `goto LABEL_46`, pseudo.c 9342-9343/9443-9445, so Left/Right/Enter/Space all OPEN THE PICKER; the earlier `sub_4076FE` claim was the Play Time stepper). The picker: `sub_411D17("*.SCH")` path-maps into DATA/SCHEMES, `sub_41404B` findfirst/qsort glob, each row `aSS` = `"%s: %s"` (filename + the file's `-N` name via `sub_404BE9`, default `getstring(727)` "No Scheme Name"), list dialog `sub_41485A` → `sub_42DB80` → `sub_42DBCC` at the literal (100,100), header `getstring(721)`; a selection is cut at its FIRST **':'** (`mov edx, 0x3A` @0x40767A → strchr — CORRECTED 2026-07-26 from the earlier "first '.'" reading, so the stored value KEEPS the extension: "BASIC.SCH"), strcpy'd into `byte_4648C4`, then UPPERCASED (`sub_412A3B` = strupr). Empty glob → `sub_414340` error `getstring(95)`/`getstring(720)` in `byte_49A390` dark red (164,0,0). The stored name is re-parsed into the live scheme at Play-flow entry (`sub_410F81` → `sub_4046CC` → `sub_403EEE`), and it is THAT reader which strips the extension (`strrchr('.')` then `strcat(".sch")` @0x403FE8), which is why both spellings resolve. Full geometry + the ordering/row-text confirmations: §5c. |
+| 8 | 258 | Scheme File | `byte_4648C4[100]` (`schemefilename=`) | `sub_407582` — the `*.SCH` file-picker LIST DIALOG (CORRECTED 2026-07-13: BOTH dispatch switches route here by jumping to LABEL_46, pseudo.c 9342-9343/9443-9445, so Left/Right/Enter/Space all OPEN THE PICKER; the earlier `sub_4076FE` claim was the Play Time stepper). The picker: `sub_411D17("*.SCH")` path-maps into DATA/SCHEMES, `sub_41404B` findfirst/qsort glob, each row `aSS` = `"%s: %s"` (filename + the file's `-N` name via `sub_404BE9`, default `getstring(727)` "No Scheme Name"), list dialog `sub_41485A` → `sub_42DB80` → `sub_42DBCC` at the literal (100,100), header `getstring(721)`; a selection is cut at its FIRST **':'** (`mov edx, 0x3A` @0x40767A → strchr — CORRECTED 2026-07-26 from the earlier "first '.'" reading, so the stored value KEEPS the extension: "BASIC.SCH"), strcpy'd into `byte_4648C4`, then UPPERCASED (`sub_412A3B` = strupr). Empty glob → `sub_414340` error `getstring(95)`/`getstring(720)` in `byte_49A390` dark red (164,0,0). The stored name is re-parsed into the live scheme at Play-flow entry (`sub_410F81` → `sub_4046CC` → `sub_403EEE`), and it is THAT reader which strips the extension (`strrchr('.')` then `strcat(".sch")` @0x403FE8), which is why both spellings resolve. Full geometry + the ordering/row-text confirmations: §5c. |
 | 9 | 259 | Play Time | `dword_464948` (`playtime=`), read via `sub_4078FE()` | `sub_4076FE(±1)` — the CONFIRMED fixed stepper chain 60-90-120-150-180-240-300-600-1001("Infinite", `getstring(280)`), wrapping both ways; an off-list value (hand-edited ini) snaps to `getvalue(100)` (= 150 shipped) instead of stepping (pseudo.c 8489-8559) |
 | 10 | 260 | Assign Keyboard Player | `dword_464968` (`assign_keyboards=`) | toggle |
 | 11 | 261 | Diseases Can Be Destroyed | `dword_464990` (`diseases_destroyable=`) | toggle |
@@ -400,7 +407,8 @@ cyclers step forward on Right, backward with wraparound on Left); Enter/
 Space activate the highlighted row's handler directly; any real key fires
 SFX 20; F1 (`0x13B`) opens the help browser (§4) without leaving the
 screen — CONFIRMED directly against `sub_4080DC`'s F1 dispatch (pseudo.c,
-`if (v165 <= 0x13B) sub_41431C();`), i.e. the generic browser, NOT a fixed
+where the arm is reached through a "key code <= 0x13B" comparison and calls
+`sub_41431C()`), i.e. the generic browser, NOT a fixed
 OPTIONS.BM open (`GameApp::present_options_screen` was calling
 `present_bm_screen("OPTIONS")` until 2026-07-08 — corrected to
 `present_help_browser()`, this screen's F1 site); leaving the screen calls
@@ -420,8 +428,9 @@ Five confirmed mismatches, all now fixed in the port:
 1. **All rows draw unconditionally, in the SAME ink, always** — the
    render loop (pseudo.c 9097-9290) calls `sub_41696C` once per row with no
    gating, and every single call passes the SAME ink argument,
-   `byte_49D38F` (`v112`/`v113`/.../`v129` in the decompile, all assigned
-   from the identical global right before the draw). There is no "hide the
+   `byte_49D38F` (the decompile spends a separate temporary per row — an
+   18-strong run of them — but every one is loaded from that identical
+   global right before its draw). There is no "hide the
    unsupported rows" branch and no per-row/selected recolour anywhere in
    the function. The port previously hid rows 2/8/10/12/14/16/17
    (net/modem/legacy) entirely — this was the invented deviation, not an
@@ -430,7 +439,7 @@ Five confirmed mismatches, all now fixed in the port:
    @9281 — there is NO 19th "Adjust Audio" row**: getstring(268) is never
    fetched anywhere in the binary; only the DEAD dispatch `case 18`
    (sub_407542's "Audio Adjustment screen will be here..." stub) exists,
-   unreachable behind `v168 = 18`. The same audit replaced the port's
+   unreachable behind the wrap modulus of 18. The same audit replaced the port's
    hardcoded ALL-CAPS row strings with the real MESSAGES.TXT compositions
    (mixed-case labels 250-267; values via getstring 25/26 with their
    padding spaces, 295-297, 315-318, 280/281 M:SS play time, the real
@@ -469,9 +478,11 @@ Five confirmed mismatches, all now fixed in the port:
    the player-setup screen's instance (the setup screen anchors at x-15,
    uniquely — every other caller uses x-20).
 4. **Row-navigation wraps over 18, not 19 — row 18 is permanently
-   unreachable** — `v168 = 18;` (pseudo.c 9086) is a plain literal, used
-   verbatim by both the Up-key underflow wrap (`v166 = v168 - 1`) and the
-   Down-key overflow wrap (`++v166 >= v168 → v166 = 0`). With 19 rows (msg
+   unreachable** — pseudo.c 9086 assigns the row-count literal 18 to the
+   wrap-modulus variable, and both wrap paths use that same value verbatim:
+   the Up-key underflow wraps the cursor row to modulus - 1 (i.e. 17), and
+   the Down key increments the cursor row and resets it to 0 as soon as it
+   reaches the modulus. With 19 rows (msg
    ids 250-268 inclusive) but a wrap modulus of 18, the cursor variable can
    only ever hold 0-17; the switch statements' `case 18` (Adjust Audio) is
    therefore genuinely dead code in the shipped binary — not an RE
@@ -480,7 +491,8 @@ Five confirmed mismatches, all now fixed in the port:
    draws every frame but never receives the cursor and never dispatches.
 5. **No distinct "accept" sound** — `sub_427961(20)` is the ONLY sound this
    function ever plays, unconditionally for any real keypress (pseudo.c
-   9298-9299, `if (v165 != -1 && v165 != -2) sub_427961(20);`, evaluated
+   9298-9299 fires `sub_427961(20)` whenever the key code is neither -1 nor
+   -2 — the two no-key sentinels — and this test is evaluated
    BEFORE the Enter/Esc/arrow dispatch). There is no `sub_427961(10)` call
    anywhere in `sub_4080DC`. The port's previous `audio.play(10)` on Enter/
    Escape/opening the key-remap screen was invented; replaced with the same
@@ -526,11 +538,11 @@ navigating) dropped straight back to the main menu. Investigation:
 **The exit bug — CONFIRMED and fixed.** Re-reading `sub_4080DC`'s key tail
 in full (pseudo.c 9297-9406, not just the "Input model" paragraph's summary
 above, which was already correct but never actually implemented) pins the
-EXACT dispatch: `v165` is the raw key code; the ONLY branch that sets the
-loop's own exit flag (`v167 = 1`) is `v165 == 0x1B` (Escape,
-pseudo.c 9374-9378). Enter (13) and Space (32) both `goto LABEL_29`
-(pseudo.c 9306), the identical per-row switch Right (`v165 == 0x14D`,
-pseudo.c 9406) dispatches to; Left (`v165 == 0x14B`) runs a second,
+EXACT dispatch, all of it switching on the raw key code the loop reads: the
+ONLY branch that raises the loop's own exit flag is the one for key 0x1B
+(Escape, pseudo.c 9374-9378). Enter (13) and Space (32) both jump to
+LABEL_29 (pseudo.c 9306) — the very label the per-row switch for Right
+(key 0x14D, pseudo.c 9406) dispatches to; Left (key 0x14B) runs a second,
 textually-separate switch with the SAME 19 cases (pseudo.c 9408-9485) —
 toggles do the same toggle regardless of direction, cyclers step backward
 instead of forward, and the "opens a sub-screen" rows (2/8/14/15/16/17/18)
@@ -545,7 +557,7 @@ main menu" bug. Fixed: `on_key`'s Enter/Space/Right cases now all call a
 shared `activate_row(dir)` (dir=+1) — the exact same per-row switch Left
 (dir=-1) already ran — and Escape is the only key that sets `done_`. The
 KeyRemap row (15) now also opens via Left/Right, not Enter/Space only,
-matching the original's `goto LABEL_53` from both switches.
+matching the original's jump to LABEL_53 from both switches.
 
 **The layout complaint — re-verified, no numeric error found.** Re-checked
 every input to the `55/40/22/500` constants against primary sources rather
@@ -709,10 +721,12 @@ which supersedes this paragraph's summary.
 
 **Loop-back detail, from `sub_414235`'s body (pseudo.c 16933-16983,
 transcribed in full):** the `sub_41404B("*.BM", &count)` glob runs exactly
-ONCE per browser open — the `do { ... sub_41485A(...) ... } while (v14 != -1)`
-loop re-shows the SAME list dialog (header `getstring(600)`, ink
-`byte_49D38F`, at `(100, 100)`) on every return from the `.BM` viewer,
-indexing the SAME `v12` filename array (`v12[v14]`) rather than re-globbing;
+ONCE per browser open — the browser body is a do-while loop that calls
+`sub_41485A(...)` (the `.BM` viewer) each pass and keeps looping for as long
+as the list dialog's chosen-index return is not -1, re-showing the SAME list
+dialog (header `getstring(600)`, ink `byte_49D38F`, at `(100, 100)`) on every
+return from the `.BM` viewer and indexing the SAME filename array from that
+one glob at the dialog's chosen index, rather than re-globbing;
 the directory is only re-read on the browser's NEXT top-level open. The list
 finally frees via `sub_414173` when the dialog itself returns -1 (its own
 Esc/cancel). The two gated error paths (`getvalue(15)==0` "manual disabled"
@@ -722,7 +736,8 @@ LUT table: RGB (252, 80, 80), the SAME LUT element as `sub_4141F8`'s team-1
 ink, confirmed identical, not merely similar) with `getstring(5)`/`getstring(4)`
 (disabled) or `getstring(4)`/`getstring(95)` (empty) — CORRECTION: reading
 the exact call order, the "disabled" branch is `getstring(5)` then
-`getstring(95)`, and the "empty glob" branch (inside the `v12==0` arm) is
+`getstring(95)`, and the "empty glob" branch (the arm taken when the glob
+returned a null/empty filename array) is
 `getstring(4)` then `getstring(95)` — i.e. only the FIRST string differs
 between the two error cases (5 vs 4), both share the `95` second line and
 the `414340` two-line dialog shape.
@@ -789,21 +804,24 @@ Call chain, all confirmed by body reads:
   - **left mouse** — paint the hovered cell with the current brush
     (`sub_4048EB(gx, gy, brush)` via the pixel→cell mappers
     `sub_42665C`/`sub_4266A3`). PINNED: exactly ONE cell per click — the
-    brush has only a TYPE (`v53` ∈ 0/1/2); **no multi-cell brush exists**,
+    brush has only a TYPE, a single variable holding 0, 1 or 2; **no
+    multi-cell brush exists**,
     closing the earlier "brush sizes 1/2/3, even-size anchor?" question by
     removal. `sub_4048EB` writes the cell chars directly: `'#'` (35)
     solid, `':'` (58) brick, `'.'` (46) blank — the `-R` row alphabet;
   - **right mouse** — MOVE the currently-selected player-start marker to
     the hovered cell (writes `dword_46481C[12*slot]`/`+4`, clamped);
   - **'1'/'2'/'3'** select the brush (blank/solid/brick); **Tab/Enter/
-    Space** cycle it (`++v53 > 2 → 0`);
+    Space** cycle it (the brush type is incremented and wraps back to 0 once
+    it passes 2);
   - **Ctrl+F (6)** — flood-fill the whole grid with the brush, gated by a
     **`getstring(760)`/`getstring(97)` yes/no confirm** first (then a
     plain j/k double loop over `sub_4048EB` — a full-board fill);
   - **Ctrl+B (2)** — reset the board to the new-scheme defaults
     (`sub_4049C0`, §5a), with a `getstring(740)`/97 confirm when dirty;
   - **'0' (48)** — toggles the tile-art set number `dword_45B7B8` between
-    0 and -1 (`if (++v > 0) v = -1`). A dead-end feature: no TILES ANI
+    0 and -1 (the global is incremented, and forced back to -1 whenever that
+    increment leaves it greater than 0). A dead-end feature: no TILES ANI
     ships a `tile -1 *` sequence, so the editor's art is effectively
     always tileset 0;
   - **'+'/'='/'-'/'_'** cycle the selected start slot; **'T'/'t'** toggle
@@ -901,7 +919,7 @@ Neither prior citation was complete — there are FOUR routines, not two:
 |---|---|---|
 | `0x407582` | `sub_407582` | the picker: glob, reformat, call, write back |
 | `0x407657` | `sub_41485A` | a mouse show/hide bracket (`sub_431178`/`sub_431360`) around ONE call, and nothing else. `ret 0xc` |
-| `0x41488E` | `sub_42DB80` | an argument trampoline: re-pushes a5..a7 and appends an 8th argument, the INITIAL SELECTION INDEX, hardcoded `0`. `ret 0xc` |
+| `0x41488E` | `sub_42DB80` | an argument trampoline: re-pushes its 5th through 7th arguments and appends an 8th argument, the INITIAL SELECTION INDEX, hardcoded `0`. `ret 0xc` |
 | `0x42DB94` | `sub_42DBCC` | the widget that measures, builds and draws. `ret 0x10` |
 
 So §5c's "`sub_41485A` → `sub_42DBCC`" skipped `sub_42DB80`, and
@@ -910,12 +928,14 @@ So §5c's "`sub_41485A` → `sub_42DBCC`" skipped `sub_42DB80`, and
 
 **The window is NOT centred.** `sub_42DBCC` opens it with
 `sub_43C734(x, y, w, h, colormode=256, flags=0x14)` @ `0x42DC81`, passing
-its own a5/a6 straight through — and `sub_407582` @ `0x407641` pushes the
+its own 5th and 6th arguments straight through — and `sub_407582` @
+`0x407641` pushes the
 literal pair `(100, 100)`. `sub_43C734` really is **6-arg** (`ret 8` plus
-the four Watcom register args), and its a1/a2 reach `sub_43D398` @
+the four Watcom register args), and its 1st and 2nd arguments reach
+`sub_43D398` @
 `0x43C8C2`, which bounds-checks `[win+0x18]` (the width it just stored)
 `+ edx` against the right clip edge and `[win+0x1c]` (height) `+ ebx`
-against the bottom — so **a1 = x, a2 = y**, decisively. This independently
+against the bottom — so **argument 1 = x, argument 2 = y**, decisively. This independently
 CONFIRMS the rescued `worktree-dialog-chrome-todo-re` branch (commit
 `0c0b00d`) and retires the old "X is never an explicit parameter in this
 family" note. Cross-check: the boot LOADING dialog @ `0x412E7D` passes
@@ -1015,9 +1035,9 @@ the original shows **"Scheme File: BASIC.SCH"**, not "...: BASIC".
 Down `0x150`, PgDn `0x151`; Left/Right and the gaps fall through to the
 default arm. Enter (13) or a row widget (`0x400+i`) accepts; `0x1B`/the
 "Done" button cancels. The dialog returns the absolute index, or -1. NOTE
-a4 (`ecx`, which `sub_407582` passes as 0) is a **callback**: when non-null,
-Enter invokes `callback(items, index)` and the list stays open instead of
-returning — an unused capability at this call site.
+the 4th argument (in `ecx`, which `sub_407582` passes as 0) is a
+**callback**: when non-null, Enter invokes it with the item list and the
+selected index, and the list stays open instead of returning — an unused capability at this call site.
 
 **Port status (2026-07-26):** `list_dialog_geometry.hpp` holds the geometry
 above as SDL-free integer math, doctest-pinned in
@@ -1042,8 +1062,9 @@ targets, the `sub_4321F0` slider — are still keyboard-only in the port.
   is **always 0** in practice (the '0' key's -1 state is dead). I.e. the
   editor draws **TILES0.ANI**'s own `tile 0 blank/solid/brick` sequences —
   the same art the match field uses. The brush preview draws the brush's
-  tile frame AT the mouse cursor each frame (`sub_402206(v53)` +
-  `sub_415920(mouse_x, mouse_y, frame)`).
+  tile frame AT the mouse cursor each frame: `sub_402206` is called with the
+  current brush type and the resulting frame is blitted through `sub_415920`
+  at the mouse x/y.
 - **Cell geometry:** the cell→pixel mappers are the match field's own
   `sub_426524`/`sub_42655F` (`cellW·x + cellW/2 + originX`, `cellH·y +
   cellH − 1 + originY` — bottom-centre anchors over the standard field
@@ -1077,12 +1098,14 @@ missing-asset fallback).
 - **Ctrl+B board reset** (case 2, pseudo.c 5584-5599): PINNED and ported.
   While the board is untouched it resets immediately with NO confirm;
   once touched, the getstring(740)/97 confirm gates it — `EditorScreen`'s
-  own `dirty_` flag mirrors the original's `v49` exactly, including the
+  own `dirty_` flag mirrors the original's own modified counter exactly,
+  including the
   easy-to-miss detail that Ctrl+B marks the board dirty EVEN WHEN THE
-  CONFIRM IS CANCELLED (`++v49` runs unconditionally after the if/else,
-  pseudo.c 5598). The same `v49`/`dirty_` gate also closes a second,
-  previously-unported fact: the Esc/'Q' exit case wraps its WHOLE
-  save-confirm+write body in `if (v49)` (pseudo.c 5621-5643) — an
+  CONFIRM IS CANCELLED (the counter is incremented unconditionally after the
+  if/else, pseudo.c 5598). The same modified-flag gate also closes a second,
+  previously-unported fact: the Esc/'Q' exit case runs its WHOLE
+  save-confirm+write body only when that flag is non-zero (pseudo.c
+  5621-5643) — an
   untouched board now exits silently with no prompt and no write, which
   the port's Esc/Q handler did not do before this pass (it always asked).
 - **'0' dead tileset toggle** (case 48, pseudo.c 5654-5657): PINNED and

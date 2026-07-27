@@ -476,7 +476,7 @@ void EditorScreen::enter(std::optional<assets::sch::Scheme> initial, std::string
     brush_ = EditorBrush::Blank;
     selected_start_ = 0;
     tileset_ = 0;    // dword_45B7B8 starts at 0 every session, §5 case 48
-    dirty_ = false;  // sub_4028D2's own v49, pseudo.c 5514
+    dirty_ = false;  // sub_4028D2's own touched flag, pseudo.c 5514
     prompt_kind_ = PromptKind::None;
     prompt_text_.clear();
     editing_powerups_ = false;

@@ -16,12 +16,12 @@ namespace bomber::match {
 // player's draw-colour byte (+60 — the SAME byte the body blit, bomb-spawn
 // colour, flame-owner colour, etc. all read, docs/re/player-colour.md) from
 // the per-slot team byte (+84) instead of leaving it as that player's own
-// slot index:
+// slot index. Per player, in the round-init loop:
 //
-//   if (dword_464964)
-//       *(byte*)(v6+60) = *(byte*)(v6+84) ? 2 : 0;
-//   else
-//       *(byte*)(v6+60) = v8;               // v8 = this player's own slot i
+//   dword_464964 (Team Play) set   -> colour byte +60 = 2 when the team byte
+//                                     +84 is nonzero, else 0
+//   dword_464964 clear             -> colour byte +60 = this player's own slot
+//                                     index
 //
 // i.e. team A -> colour 0 (0.RMP, white), team B -> colour 2 (2.RMP, red) —
 // the game's own white/red slots, not a bespoke team palette. This is the fact

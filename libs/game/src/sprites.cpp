@@ -48,8 +48,8 @@ assets::Image recolor_image(assets::Image img, const std::int32_t rgb[3]) {
         if (img.rgba[i + 3] == 0) continue;
         const int r = img.rgba[i], g = img.rgba[i + 1], b = img.rgba[i + 2];
         if (g > r && g > b) {
-            const int baseline = (r + b) / 2;  // sub_414A65 v33
-            const int excess = g - baseline;   // (v32 - v33)
+            const int baseline = (r + b) / 2;  // sub_414A65's own baseline term
+            const int excess = g - baseline;   // green above that baseline
             img.rgba[i + 0] =
                 static_cast<std::uint8_t>(std::clamp(rgb[0] * excess / 100 + baseline, 0, 255));
             img.rgba[i + 1] =

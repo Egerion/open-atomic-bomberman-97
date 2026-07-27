@@ -218,8 +218,9 @@ void PowerupSystem::head_hit(int victim, int tx, int ty) {
     State& s = s_;
     Player& p = s.players[victim];
     p.stun = s.tuning.head_stun_frames;  // plain overwrite, as the original
-    // sub_421F7E also writes `a1[39] = 3; a1[40] = 0` — an UNCONDITIONAL
-    // overwrite of the player-state word +78 — and its caller's victim probe
+    // sub_421F7E also sets the player-state word +78 to 3 and zeroes the anim
+    // counter +80 — an UNCONDITIONAL
+    // overwrite of that state word — and its caller's victim probe
     // (sub_421CB5, pseudo.c 24207) accepts any active-and-not-dead player with
     // NO +78 guard. The original therefore cannot hold state 4 (pickup-pause),
     // 5 (trampoline hop) or 6/7 (warp out/in) past a head hit: the ONE state
@@ -259,8 +260,8 @@ void PowerupSystem::head_hit(int victim, int tx, int ty) {
                         static_cast<std::int8_t>(tx), static_cast<std::int8_t>(ty), 0});
 }
 
-// A player dies (sub_41DBFE, invoked from sub_41F29B LABEL_26 when the death
-// animation completes). Scatters EVERY powerup the player accumulated ABOVE
+// A player dies (sub_41DBFE, invoked from sub_41F29B's death-animation branch
+// when that animation completes). Scatters EVERY powerup the player accumulated ABOVE
 // its VALUELST start-with baseline back onto random floor tiles: iterate the
 // kPowerupKinds real kinds (0..12) in index order and, for each, drop the
 // surplus. (The native's pad slots 13/14 are seeded to their own baseline by
@@ -276,7 +277,8 @@ void PowerupSystem::head_hit(int victim, int tx, int ty) {
 // 0/1, a single `surplus = have - baseline` loop reproduces BOTH branches'
 // draw order and board result exactly.
 //
-// The death-animation VARIANT roll (sub_41DE63 `rand%getvalue(105)+1`, which
+// The death-animation VARIANT roll (sub_41DE63 draws rand % getvalue(105) and
+// adds 1, deciding which
 // DIE*.ANI plays) is a cosmetic death-sprite pick and stays presentation-side
 // per CLAUDE.md determinism rule 6 — it is NOT drawn on State::rng, so this
 // sim's stream carries only the scatter draws.

@@ -149,7 +149,8 @@ void CampaignPickerScreen::run() {
 // Dismiss behaviour — traced from sub_414340's own key loop
 // (0x414510-0x414548, pseudo.c 17085-17106): every real key event plays the
 // nav-blip (sub_427961(20)); only Enter(13)/Space(32)/Escape(27) close the
-// dialog (v33=1 branch) — any OTHER key (arrows, letters, extended codes)
+// dialog (the branch that raises its close flag) — any OTHER key (arrows,
+// letters, extended codes)
 // just loops, waiting for another key. No Yes/No choice — it is a plain
 // acknowledgement modal.
 AppInput CampaignConfirmScreen::run() {

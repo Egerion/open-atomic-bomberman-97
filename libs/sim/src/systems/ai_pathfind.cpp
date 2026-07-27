@@ -115,13 +115,15 @@ int AISystem::flee_bfs(int sx, int sy, int& best_x, int& best_y) {
 // Directed BFS (sub_4092A1, docs/re/ai.md §5.1). The same 100-node wavefront as
 // the flee BFS, but with a fixed goal tile (tx,ty): it returns the first-step
 // godir of a shortest path to the goal within `max_depth` rings, else -1. The
-// original's goal test compares each expanded node against (a4,a3) == (tx,ty)
+// original's goal test compares each expanded node against its goal-coordinate
+// arguments, which are our (tx,ty)
 // (docs/re/ai.md §9.1); we test node==(tx,ty) directly. Draws the ±1 tie-break
 // ONCE at entry — behaviour 2's directed step and behaviour 5's path each take
 // exactly this one BFS draw (RNG contract §8). If the start already equals the
 // goal, the original short-circuits before touching the frontier and returns
 // firstdir 0 (no step); we mirror that (return -1, no expansion, but the draw
-// is already taken, matching v35 = 2*(rand%2)-1 at the very top).
+// is already taken, matching the original's own 2*(rand%2)-1 tie draw at the
+// very top).
 // ---------------------------------------------------------------------------
 int AISystem::directed_bfs(int sx, int sy, int tx, int ty, int max_depth, int& out_iters) {
     // Per-call tie-break: 2*(rand()%2)-1 (docs/re/ai.md §5.1). Drawn at entry,
@@ -165,7 +167,7 @@ int AISystem::directed_bfs(int sx, int sy, int tx, int ty, int max_depth, int& o
         const int hit = seed(sx + kDX[g], sy + kDY[g], g);
         if (hit) {
             // A neighbour IS the goal: found in "pass 0", so out_iters == 0 — this
-            // matches the original's ring counter v32, which is not yet
+            // matches the original's ring counter, which is not yet
             // incremented when the goal is hit on the first sweep. Behaviour 5
             // gates its 50%-give-up draw on `!iters`, so the iters==0 boundary
             // (goal ≤2 tiles away) must match the original exactly (RNG contract).
@@ -175,15 +177,15 @@ int AISystem::directed_bfs(int sx, int sy, int tx, int ty, int max_depth, int& o
     }
 
     // Breadth-first expansion, propagating each node's first-step tag. out_iters
-    // increments once per completed ring (the original's ring counter v32, capped
-    // at a5 == max_depth). While the distance-1 ring is processed out_iters stays
+    // increments once per completed ring (the original's ring counter, capped
+    // at its own max-depth argument). While the distance-1 ring is processed out_iters stays
     // 0, so a goal at distance 2 is also found with out_iters == 0 — matching the
     // original (see the iters==0 note above). Stop the instant the goal is hit.
     int head = 0;
     int ring_end = open_n;
     while (head < open_n) {
         if (head == ring_end) {
-            if (++out_iters > max_depth) break;  // depth cap (v32 > a5)
+            if (++out_iters > max_depth) break;  // depth cap: ring counter past max depth
             ring_end = open_n;
         }
         const Node cur = open[head++];
@@ -202,7 +204,7 @@ int AISystem::directed_bfs(int sx, int sy, int tx, int ty, int max_depth, int& o
     // Boxed in at the start (zero open neighbours were ever seeded, so the
     // while loop above never ran and out_iters is still its initial 0): the
     // original's do..while ALWAYS completes one pass before testing its loop
-    // condition, so v32 (iters) becomes 1 even when nothing was found
+    // condition, so its ring counter (our iters) becomes 1 even when nothing was found
     // (pseudo.c 9705-9821) -- it is never left at 0 once the function is
     // actually invoked. Behaviours 5/6 gate their unreachable-target give-up
     // draw on `iters == 0`, so leaving this at 0 draws a spurious extra

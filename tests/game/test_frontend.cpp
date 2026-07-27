@@ -383,7 +383,8 @@ TEST_CASE("tally_kills counts an owner kill, skips a self-kill and a no-killer d
     CHECK(kills[0] == 2);
 }
 
-// §1's v78==1 tie-break: "the clinch instead compares the highest round-kill
+// §1's unique-leader tie-break (leader count exactly 1): "the clinch instead
+// compares the highest round-kill
 // total against the target, breaking ties by requiring a single unique
 // leader". win_by_kills_clinch (results.hpp) mirrors that predicate exactly.
 TEST_CASE("win_by_kills_clinch requires reaching the target AND a unique leader") {
@@ -399,7 +400,7 @@ TEST_CASE("win_by_kills_clinch requires reaching the target AND a unique leader"
     CHECK(win_by_kills_clinch(kills, present, /*target=*/5) == -1);
 
     kills[0] = 5;
-    kills[1] = 5;  // tied at the target: v78 != 1, no clinch
+    kills[1] = 5;  // tied at the target: leader count != 1, no clinch
     CHECK(win_by_kills_clinch(kills, present, /*target=*/5) == -1);
 
     // An absent slot's always-0 kill count must not fake a tie against a

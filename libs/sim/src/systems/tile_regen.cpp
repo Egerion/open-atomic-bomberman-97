@@ -72,8 +72,9 @@ void TileRegenSystem::update() {
         return;
     }
     // All 100 attempts failed (no eligible tile this cycle) — the timer was
-    // already reset above, exactly like the original (dword_464978 = v4
-    // happens unconditionally once the interval has elapsed, win or lose).
+    // already reset above, exactly like the original, which rearms its deadline
+    // global dword_464978 unconditionally once the interval has elapsed, win or
+    // lose.
 }
 
 }  // namespace bomber::sim

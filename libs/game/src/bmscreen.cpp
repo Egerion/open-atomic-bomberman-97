@@ -228,23 +228,23 @@ void BmScreen::on_key(SDL_Keycode key) {
             done_ = true;
             break;
         case SDLK_UP:
-            if (top_ > 0) --top_;  // one line up (v54--)
+            if (top_ > 0) --top_;  // one line up (the scroll top decrements)
             break;
         case SDLK_DOWN:
-            if (top_ < max_scroll()) ++top_;  // one line down (v54++)
+            if (top_ < max_scroll()) ++top_;  // one line down (the scroll top increments)
             break;
         case SDLK_PAGEUP:
         case SDLK_LEFT: {
             // Left (331) pages up alongside PgUp (329) — sub_41302D treats
             // both identically (chrome audit 2026-07-12).
-            top_ -= visible_rows() - 1;  // v54 -= v60 - 1
+            top_ -= visible_rows() - 1;  // scroll top back by (visible rows - 1)
             if (top_ < 0) top_ = 0;
             break;
         }
         case SDLK_PAGEDOWN:
         case SDLK_RIGHT: {
             // Right (333) pages down alongside PgDn (337).
-            top_ += visible_rows() - 1;  // v54 += v60 - 1
+            top_ += visible_rows() - 1;  // scroll top on by (visible rows - 1)
             int m = max_scroll();
             if (top_ > m) top_ = m;
             break;

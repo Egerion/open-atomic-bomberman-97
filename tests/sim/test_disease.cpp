@@ -138,7 +138,7 @@ TEST_CASE("swap exchanges position only, not move_budget") {
 
 TEST_CASE("a swap roll with no valid target still emits the pickup announce") {
     // diseases.md finding 1: sub_41DFB6 (batch_0x41DAA7.cpp:308-315, pseudo.c
-    // 22041+) plays the pickup voice line as soon as the disease roll (v7) and
+    // 22041+) plays the pickup voice line as soon as the disease roll and
     // announce flag (a2) are known — strictly BEFORE the branch on the roll
     // being 7 that runs the Swap target scan. A Swap that finds nobody alive to
     // swap with therefore STILL announces (the sound is a pure function of the

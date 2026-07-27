@@ -322,13 +322,13 @@ AppInput MenuScreen::run() {
                 ctx_.audio.play(10);
                 state_.menu_index = 5;
                 if (HelpBrowserScreen(ctx_).run() == AppInput::Quit) return AppInput::Quit;
-                ctx_.audio.start_music(kMenuMusicId);  // outer-loop v14 re-arm
+                ctx_.audio.start_music(kMenuMusicId);  // outer-loop music-flag re-arm
                 state_.menu_idle_since_ms = SDL_GetTicks();  // help time is not idle
                 continue;
             }
             if (menu_alt && ev.key.key == SDLK_A) {
                 ctx_.audio.play(20);
-                state_.menu_index = 0;  // the attract path's own v10 = 0 (30894)
+                state_.menu_index = 0;  // the attract path homes the selection too (30894)
                 roll_attract_match();
                 return AppInput::StartMatch;
             }
@@ -363,7 +363,7 @@ AppInput MenuScreen::run() {
                     // that dialog plays the 2600 exit sting and quits.
                     ctx_.audio.play(20);  // nav blip on the key (SFX 20)
                     ctx_.audio.play(10);  // accept sting selecting Quit (SFX 10)
-                    state_.menu_index = 6;  // v10 = 6, matches the cursor landing on Quit
+                    state_.menu_index = 6;  // selection 6: the cursor lands on Quit
                     quit_confirm = true;
                     break;
                 case SDLK_RETURN:
@@ -450,7 +450,7 @@ AppInput MenuScreen::run() {
         // up so a demo match cannot yank the confirm away mid-decision.
         if (attract_enabled && !quit_confirm &&
             SDL_GetTicks() - state_.menu_idle_since_ms >= static_cast<std::uint64_t>(idle_s) * 1000) {
-            state_.menu_index = 0;  // the attract path homes the cursor (v10 = 0, 30894)
+            state_.menu_index = 0;  // the attract path homes the cursor (30894)
             roll_attract_match();
             return AppInput::StartMatch;
         }

@@ -27,8 +27,9 @@ void BombSystem::place(Player& p, std::uint8_t owner, int tx, int ty, int fuse_s
     // the bomb). The +85 counter is refilled only by the next Trigger pickup.
     const bool make_trigger = p.trigger && p.trigger_placed < p.max_bombs;
     if (make_trigger) ++p.trigger_placed;
-    // The fuse DURATION is computed and stored for EVERY kind (sub_41EB13's
-    // v10 -> sub_422EDE word +74), trigger included — a trigger bomb only
+    // The fuse DURATION is computed and stored for EVERY kind (sub_41EB13
+    // computes it and passes it to sub_422EDE, which parks it in word +74),
+    // trigger included — a trigger bomb only
     // gates the fuse TICKING; the duration survives for a later downgrade
     // (sub_424C47) or throw restart. The spooge run index staggers the
     // countdown (+k ticks), not the duration (elapsed +68 = -50*k ms).

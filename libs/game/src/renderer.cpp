@@ -741,8 +741,9 @@ void Renderer::draw_world(const sim::State& s) {
             // here. See docs/re/facts.md "Flame draw offset".
             //
             // Coordinate math resolved by disassembly (BM95.EXE 0x426ee7-
-            // 0x426f46; the whole Y block was lost as Hex-Rays' "v6 possibly
-            // undefined"). Before the blit's own hotspot subtraction the branch
+            // 0x426f46; the whole Y block was lost to a "possibly undefined
+            // variable" decompiler artefact). Before the blit's own hotspot
+            // subtraction the branch
             // computes:
             //   X = sub_426524(j) + dx            (= X_base + dx)
             //   Y = sub_42655F(i) - tileH/2 + dy  (= Y_base - tileH/2 + dy)
@@ -1082,7 +1083,8 @@ void Renderer::draw_hud(const sim::State& s) {
     const Anim& d = seqs_->digits;
     if (d.steps.size() < 11) return;
     int seconds_left = (s.ticks_left + sim::kTicksPerSecond - 1) / sim::kTicksPerSecond;
-    // MESSAGES.TXT id 281 = "%u:%02u" (sub_4105D2's v13/60, v13%60 split);
+    // MESSAGES.TXT id 281 = "%u:%02u" (sub_4105D2 splits the whole seconds by
+    // dividing by 60 and taking the same value modulo 60);
     // getstring falls back to the literal format when the install's own
     // MESSAGES.TXT lacks the id (asset_store.hpp's getstring convention).
     std::string text = format_clock(assets_->getstring(281, "%u:%02u"), seconds_left);

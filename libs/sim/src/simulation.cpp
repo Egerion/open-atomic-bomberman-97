@@ -300,7 +300,7 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
     // p.prev_action1/2 (the original's +54/+55) are updated HERE, to the
     // EFFECTIVE key values just used (post auto-drop-force, post blocked-
     // zeroing) — not the raw controller input — mirroring the original's
-    // literal `+54 = +56` copy at the top of the NEXT tick. This also fixes a
+    // literal copy of +56 into +54 at the top of the NEXT tick. This also fixes a
     // latent divergence: the previous port latched the RAW `in.action1/2`
     // unconditionally, which only matched the original whenever auto-drop
     // was inactive (auto-drop's own in-block override made the raw-vs-

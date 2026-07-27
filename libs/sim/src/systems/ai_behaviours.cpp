@@ -338,7 +338,8 @@ bool AISystem::behave_seek_powerup(int i, PlayerInput& out) {
         return false;
     }
 
-    // Path toward the powerup (maxdist = range+1, the original's v3+1). One BFS
+    // Path toward the powerup (maxdist = range+1, i.e. the original's own
+    // getvalue(920) range plus one). One BFS
     // tie-break draw. If unreachable (0 iters) give up 50% of the time BEFORE the
     // firstdir check, exactly as the original orders it (line 10989).
     int iters = 0;

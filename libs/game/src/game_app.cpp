@@ -819,11 +819,13 @@ ScreenDef victory_screen(bool team_mode, int player, int team) {
                      /*skippable*/ false};
 }
 // The main-menu model (sub_42B9CE) — the MenuItem struct, the seven-row
-// kMenuItems table (v10 dispatch order), and kMenuCount moved to
+// kMenuItems table (the original's selection-index dispatch order), and
+// kMenuCount moved to
 // screens/menu_screen.cpp with present_menu.
 
 // Cursor anchor over MAINMENU.PCX — CONFIRMED getvalue(700/701/702) (sub_42B9CE:
-// v11=getvalue(700)=X, v1=getvalue(701)=Y, getvalue(702)=Y-step; the bomb-
+// X comes from getvalue(700), Y from getvalue(701), the Y-step from
+// getvalue(702); the bomb-
 // trigger sprite is blitted at x=X, y=Y + Ystep*row). Read live from VALUELST
 // (columns of the multi-value row 700, whose own legend reads "X, Y - first item
 // / YS - y-spacing"); these fallbacks are that install's values (332,140,38) so

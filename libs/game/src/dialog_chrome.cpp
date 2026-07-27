@@ -402,10 +402,10 @@ void draw_confirm_dialog(SDL_Renderer* ren, const FontTextures& font, const Spri
     const float h = line_h(font);
     const float w1 = text_w(font, line1);
     const float w2 = line2.empty() ? 0.0f : text_w(font, line2);
-    // v31 in sub_41456C is `2 * fontheight` for two lines (pseudo.c 17176),
-    // NOT `2*fontheight + 2` — the "+2" gap (pseudo.c 17207's `v15 + 2 +
-    // v35`) only offsets line2's DRAW position below line1, it is not added
-    // to the window height itself.
+    // sub_41456C's two-line text height is exactly 2 * fontheight (pseudo.c
+    // 17176), NOT 2*fontheight + 2 — the "+2" gap seen at pseudo.c 17207 is
+    // added to line1's y when placing line2, so it only offsets line2's DRAW
+    // position below line1; it is not added to the window height itself.
     const float lines_h = line2.empty() ? h : (2.0f * h);
     const float win_w = std::max(std::max(w1, w2), 80.0f) + 64.0f;
     const float win_h = 4.0f * h + 64.0f + lines_h;

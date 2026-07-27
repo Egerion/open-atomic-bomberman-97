@@ -225,13 +225,14 @@ State build_state(const MatchConfig& config) {
         std::int32_t want = config.spawn_override[k] > MatchConfig::kNoOverride
                                 ? config.spawn_override[k]
                                 : s.tuning.spawn_counts[k];
-        bool always = true;  // v22
+        bool always = true;  // the original's "positive count, no gate" latch
         if (want < 0) {
             always = false;
             want = -want;
         }
         for (std::int32_t m = 0; m < want; ++m) {
-            // v22 || !(rand()%10): the gate draws (and can reject) only on the
+            // The original ORs that latch with a zero-result rand()%10, so the
+            // gate draws (and can reject) only on the
             // negative-N path; a positive count short-circuits with no draw.
             if (!always && random_below(s, 10) != 0) continue;
             for (int n = 0; n < 200; ++n) {

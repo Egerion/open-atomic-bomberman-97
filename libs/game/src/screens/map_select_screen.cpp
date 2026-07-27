@@ -76,7 +76,8 @@ AppInput MapSelectScreen::run() {
     std::uint64_t accept_after_ms = SDL_GetTicks() + 1000;
     // The sample-block pattern (which cells are blank/solid/brick, and which
     // level's tile art each drawn cell uses) is re-rolled only on screen
-    // entry and on a LEVEL row change (sub_406AA3's v35 re-arm), NEVER every
+    // entry and on a LEVEL row change (sub_406AA3 re-arms its own roll flag
+    // there), NEVER every
     // frame — pinned in the doc above. -2 is a sentinel forcing the first
     // roll below.
     int pattern_level = -2;
@@ -105,7 +106,7 @@ AppInput MapSelectScreen::run() {
     // lambda so the F1 help browser composites over the identical frame.
     auto draw_frame = [&]() {
         // Re-roll the sample-block pattern on entry and whenever the LEVEL
-        // changes (sub_406AA3's v35 re-arm) — never every frame.
+        // changes (sub_406AA3 re-arms its own roll flag) — never every frame.
         if (level != pattern_level) {
             pattern_level = level;
             int max_n = level_count > 1 ? level_count : 1;

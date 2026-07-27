@@ -33,8 +33,9 @@ inline sim::MatchConfig build_match_config(const assets::sch::Scheme& scheme, in
     // `rand() % 100`; if that is `>= brick_density` the candidate is knocked
     // back to blank — so on average `brick_density`% of the ':' cells become
     // real bricks, a fresh random layout every match. `#` (solid) and `.`
-    // (blank) cells are copied verbatim and consume NO draw (the original's
-    // `v3 == 2 && rand()...` short-circuits). Density is the scheme's `-B`
+    // (blank) cells are copied verbatim and consume NO draw (the original tests
+    // "this cell is a brick candidate" FIRST and the && short-circuits before
+    // the draw). Density is the scheme's `-B`
     // value clamped to [0,100] (dword_4647A0). BASIC.SCH ships `-B,90`.
     //
     // Determinism: the original seeds rand() off the wall clock, so its layout
@@ -79,8 +80,9 @@ inline sim::MatchConfig build_match_config(const assets::sch::Scheme& scheme, in
     // screen row 1 — docs/re/results-and-options.md §3). CONFIRMED shuffle
     // (docs/re/facts.md "Options toggles"): the original shuffles its two
     // 10-slot start-coordinate arrays (dword_46460C/dword_46465C) with 200
-    // random pair-swaps — `a = rand() % 10; b = rand() % 10; if (a != b)
-    // swap(x[a],x[b]), swap(y[a],y[b])` — at round init (sub_421793
+    // random pair-swaps: each iteration draws two indices with rand() % 10 and,
+    // when they differ, swaps that pair in BOTH the X and the Y array — at round
+    // init (sub_421793
     // pseudo.c 23996-24012; the demo-replay stepper sub_40133F 4472-4488
     // repeats it verbatim). Every player still starts at one of the scheme's
     // authored spawn points, just reassigned. Mirrored here 1:1 (the %10 is
@@ -141,15 +143,17 @@ inline void apply_actors(sim::MatchConfig& cfg, const std::vector<assets::extra:
     std::uint32_t lcg = seed ? seed : 0x1234567u;  // setup-only stream
     auto roll = [&]() { lcg = lcg * 1664525u + 1013904223u; return lcg >> 16; };
 
-    // Warphole one-time setup knockout (sub_4056CA case 1, the `if (!+146)`
-    // block): when a warphole is first activated it clears its OWN tile
-    // (sub_425E9B(x,y,0) — place() already does this) AND then clears ONE
-    // RANDOM ADJACENT tile too. The original loop is
-    //     do { do { d = rand()%4; nx = dx[d]+x; ny = dy[d]+y; }
-    //          while (nx < 0); } while (nx >= W || ny < 0 || ny >= H);
-    //     sub_425E9B(nx, ny, 0);
-    // i.e. re-roll a cardinal direction until the neighbour is in-bounds, then
-    // set that tile to Blank unconditionally (brick OR solid, whatever sat
+    // Warphole one-time setup knockout (sub_4056CA case 1, the block guarded by
+    // the +146 latch still being clear): when a warphole is first activated it
+    // clears its OWN tile (through sub_425E9B with cell value 0 — place()
+    // already does this) AND then clears ONE
+    // RANDOM ADJACENT tile too. The original's search is a nested rejection
+    // loop: the INNER loop draws a cardinal direction with rand()%4 and offsets
+    // the warphole's tile by that direction's dx/dy, repeating while the
+    // resulting X is negative; the OUTER loop repeats that whole inner search
+    // while the X is off the right edge or the Y is off either vertical edge.
+    // The accepted neighbour is then passed to sub_425E9B with cell value 0,
+    // setting that tile to Blank unconditionally (brick OR solid, whatever sat
     // there). dx/dy are the cos/sin dir tables {0,1,0,-1}/{-1,0,1,0}; both are
     // never 0 together so the centre is never picked — no explicit skip needed.
     // One knockout per warphole (the +146 latch). Driven by the setup-only LCG

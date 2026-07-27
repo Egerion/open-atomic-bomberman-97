@@ -101,13 +101,13 @@ public:
     bool done() const { return done_; }
 
 private:
-    int visible_rows() const;      // 344 / line_height (sub_41302D v60)
+    int visible_rows() const;      // 344 / line_height (sub_41302D's row count)
     int max_scroll() const;        // clamp target for the top line
 
     const AssetStore* assets_ = nullptr;
     const FontTextures* font_ = nullptr;
     assets::bmtext::BmDocument doc_;
-    int top_ = 0;      // index of the first visible line (sub_41302D v54)
+    int top_ = 0;      // index of the first visible line (sub_41302D's scroll top)
     bool done_ = false;
 };
 

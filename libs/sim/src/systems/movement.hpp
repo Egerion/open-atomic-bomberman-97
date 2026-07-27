@@ -41,7 +41,8 @@ public:
 
     // Full form: `on_center(ctx, p, tx, ty)` fires each per-pixel step that
     // settles the player exactly on tile (tx,ty)'s centre — the faithful
-    // step-on trigger point (sub_41EC84 v35 == -1). Pass nullptr to skip it.
+    // step-on trigger point (sub_41EC84's offset-to-centre check for -1). Pass
+    // nullptr to skip it.
     //
     // extra_budget is the conveyor term, getvalue(190+idx) 1/100-px units
     // SIGNED (with/against the belt), delta-scaled inside like the speed term

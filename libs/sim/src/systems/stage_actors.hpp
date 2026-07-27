@@ -39,7 +39,8 @@ public:
     // Advance a trampoline hop by one tick. Call for a bouncing player instead
     // of the normal movement turn.
     //
-    // sub_41F29B state 5 (v86==5, ~23150; raw disasm 0x420280..0x42053f): the
+    // sub_41F29B's state-5 branch (the +78 state word equal to 5, ~23150; raw
+    // disassembly 0x420280..0x42053f): the
     // hop is NOT an in-place freeze — at the APEX (the tick the frame counter
     // reaches getvalue(680)/2 == 15) the original RELOCATES the player to a
     // random nearby open tile. That relocation draws the sim RNG (two rand()%5
@@ -84,7 +85,8 @@ public:
     // tile), start the hop and emit TrampolineBounce (sub_41EC84 step-on branch,
     // sound 350). A one-shot latch (Player::tramp_latch), cleared when the player
     // leaves the tile, stops a player parked on the centre from re-bouncing every
-    // tick — the original only re-fires on the stepper's centring (v35 == -1),
+    // tick — the original only re-fires on the stepper's centring check (its
+    // offset-to-tile-centre temporary hitting -1),
     // which needs the player to arrive. Returns true if a bounce started.
     bool trampoline_after_move(Player& p, int player_index);
 
@@ -99,7 +101,7 @@ public:
 
 private:
     // Shared step-on triggers, called from BOTH the mid-walk callback
-    // (on_step_center, the faithful sub_41EC84 v35 == -1 point) and the
+    // (on_step_center, the faithful sub_41EC84 offset-to-centre == -1 point) and the
     // post-walk safety nets above. Each is latched, so a single walk across a
     // tile centre fires exactly once. Return true if the warp/bounce started.
     bool start_warp(Player& p, int player_index, int tx, int ty);
