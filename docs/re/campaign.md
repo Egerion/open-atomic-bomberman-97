@@ -32,8 +32,9 @@ different key, on a different screen, feeding a different subsystem.
    `dword_45E018 = 1`. On failure, prints `aCouldnTOpenCam` and sets
    `dword_45E018 = 0`. Each line's fields are comma-split (up to 9, matching
    the `.CAM` format below) and only accepted if the line starts with the
-   two-byte marker `-C` (pseudo.c 4374: `v13 == 45 /* '-' */ && toupper() ==
-   67 /* 'C' */ && j == 9`).
+   two-byte marker `-C` (pseudo.c 4374 tests three things, all of which must
+   hold: the first character equals 45 = `'-'`, the second uppercases to
+   67 = `'C'`, and the line's field count is exactly 9).
 3. **Picker — `sub_4015C6` @ 0x4015C6** (pseudo.c 4550-4598): the actual
    caller of `sub_401085`. Globs `*.cam` (`aCam`) via `sub_411D17` +
    `sub_41404B`, shows a list dialog (`sub_41485A`, getstring 1250 header) of
@@ -47,13 +48,14 @@ different key, on a different screen, feeding a different subsystem.
 4. **Trigger — inside `sub_410F81`, the PLAYER INPUT TYPE SELECTION screen**
    (pseudo.c 15357-15365, part of the screen's key-dispatch switch fully
    catalogued in `docs/re/setup-screens.md`):
-   ```
-   if (v107 <= 0x43)          // key code <= 'C' (0x43 = 67 = ASCII 'C')
-     if (!sub_40C06A() && ++v115 == 5)   // not net mode, 5th consecutive 'C'
-       sub_4015C6();          // open the campaign picker
-   ```
-   i.e. pressing **'C' five times in a row** (any other key resets the
-   counter `v115` to 0, same pattern as the confirmed `results-and-
+   The branch, in order: the raw key code is tested `<= 0x43` (0x43 = 67 =
+   ASCII `'C'`); if that holds, then `sub_40C06A()` must be false (not net
+   mode) AND a consecutive-press counter, PRE-incremented in the same test,
+   must equal 5 — the 5th consecutive `'C'`; only then is `sub_4015C6()`
+   called, opening the campaign picker.
+
+   i.e. pressing **'C' five times in a row** (any other key resets that
+   counter to 0, same pattern as the confirmed `results-and-
    options.md` §5 Ctrl+E×6 counter) while on the player-setup screen, in a
    **local (non-network)** game — `sub_40C06A()` is the same net-mode guard
    used throughout the codebase for local-only branches (see
@@ -130,24 +132,31 @@ Read while RE'ing `sub_4016DA`'s consumers. `sub_40151B` (gated
 and every stage advance) and is the true seeder this doc's earlier "Roster/
 level auto-fill" bullet mis-attributed to `sub_4015C6`/`sub_42288C`:
 
-```c
-if (dword_46489C) {
-  v6 = (int*)(112*dword_4648B0 + dword_45E010);   // this stage's record
-  dword_464894 = 0;                                // reset round-phase flag
-  for (i = 0; i < 10; ++i) sub_42288C(i);           // clear per-slot UI latch (NOT roster seed)
-  for (j = 0; j < v6[26]; ++j) sub_422928();        // v6[26] = ai_count (field 7)
-  sub_401994(this);                                 // reset round-timeout: dword_464820=1, dword_4646C0=0
-  sub_401B05(v6[24], v6[25], v1);                   // v6[24]/[25] = ghosts/ghost_speed (fields 5/6)
-  return sub_401AAE(v6[22], v6[23], v2);            // v6[22]/[23] = rovers/rover_speed (fields 3/4)
-}
-```
+Its whole body sits inside that `dword_46489C` gate. With
+`record = dword_45E010 + 112 * dword_4648B0` (this stage's own 112-byte
+record), it does exactly this, in order:
 
-`sub_42288C(i)` (pseudo.c 24755): `if (byte_461BD4[152*i]==1) byte_461BD4[152*i]=0;`
+1. `dword_464894 ← 0` — reset the round-phase flag.
+2. For `i` = 0..9: `sub_42288C(i)` — clear the per-slot UI latch (NOT a
+   roster seed).
+3. Call `sub_422928()` exactly N times, where N is `record`'s dword index 26
+   — that field is **ai_count** (field 7).
+4. `sub_401994(…)` — reset the round timeout: `dword_464820 = 1`,
+   `dword_4646C0 = 0`.
+5. `sub_401B05(record[24], record[25], …)` — dword indices 24/25 =
+   **ghosts / ghost_speed** (fields 5/6).
+6. `sub_401AAE(record[22], record[23], …)` — dword indices 22/23 =
+   **rovers / rover_speed** (fields 3/4). Its result is the function's own
+   return value.
+
+`sub_42288C(i)` (pseudo.c 24755) tests `byte_461BD4[152*i]` and, only if it
+currently reads 1, writes 0 back to it
 — a per-slot "dialog already shown" latch reset, reading NOTHING from the
 campaign record. It does not seed the roster. The 112-byte record's field
-layout is confirmed from the loader `sub_401085`'s own write offsets
-(`v20[13]`=levelno@byte52, `v20[22..27]`=rovers/rover_speed/ghosts/
-ghost_speed/ai_count/ai_difficulty@bytes 88/92/96/100/104/108).
+layout is confirmed from the loader `sub_401085`'s own write offsets: dword
+index 13 = levelno @ byte 52, dword indices 22..27 = rovers / rover_speed /
+ghosts / ghost_speed / ai_count / ai_difficulty @ bytes
+88 / 92 / 96 / 100 / 104 / 108.
 
 ## Rover/ghost/AI roster — CORRECTED 2026-07-09
 
@@ -167,8 +176,9 @@ non-empty count is folded into COMPUTER slots") was a mislabelling based on
 
 Both take `(count, speed)` and loop `count` times calling `sub_4019C2`
 (pseudo.c 4763-4791), which claims a free slot in `dword_45E020`
-(`sub_401914`) and places it at a random tile: `v4=rand()%W, v5=rand()%H`,
-accepted when `sub_425FB9(v4,v5) != 1` (rejects SOLID only, code 1 — bricks,
+(`sub_401914`) and places it at a random tile: a candidate
+`(cx, cy) = (rand()%W, rand()%H)` (two draws, X first),
+accepted when `sub_425FB9(cx, cy) != 1` (rejects SOLID only, code 1 — bricks,
 code 2, ARE an acceptable spawn tile; this check is NOT type-dependent the
 way the mover's per-tick `sub_4017FA` is, since `dword_45E01C` is only ever
 set by `sub_401F76`'s per-tick drive loop, not during spawn) **AND**
@@ -181,42 +191,43 @@ spawned actor's own per-tick move-budget increment (`+116 += +112 *
 frameDelta/frameRef + 100`, the same budget arithmetic as the mover, docs
 below).
 
-**`sub_422351(a1, a2, a3)` — CONFIRMED 2026-07-09 from raw disassembly**
+**`sub_422351(candidateX, candidateY, threshold)` — CONFIRMED 2026-07-09 from
+raw disassembly**
 (same method as the `sub_4245DA` column-guard re-pin, `docs/re/ai.md` §9.3:
 BM95.EXE mapped VA->file offset from its own PE section table — Watcom-
 linked, no `.text`/`.data` names, `BEGTEXT`/`DGROUP`/etc — and disassembled
-with capstone; no dump retained, `CLAUDE.md`). Hex-Rays had lost the
+with capstone; no dump retained, `CLAUDE.md`). The decompiler had lost the
 function's true 3-argument Watcom register-convention signature (EAX/EDX/
-EBX, the same convention that produced the identical class of loss on
-`sub_401B5C`'s `v5/v7/v9/v11` and the original `sub_4245DA` misreading) and
-showed only `a1@<ebx>`; the raw prologue resolves it fully:
+EBX — the same convention that produced the identical class of loss on
+`sub_401B5C`'s own register-passed arguments and on the original `sub_4245DA`
+misreading) and showed a single EBX argument only; the raw prologue resolves
+it fully. `sub_422351` spills all three incoming registers to its own frame
+straight away, in this order:
 
-```
-sub_422351:
-    mov [ebp-0x1c], eax   ; a1 = candidate tile X
-    mov [ebp-0x18], edx   ; a2 = candidate tile Y
-    mov [ebp-0x14], ebx   ; a3 = threshold (caller passes 3)
-```
+| spilled, in order | from register | is the argument |
+|-------------------|---------------|-----------------|
+| frame slot `ebp-0x1c` | EAX | candidate tile X |
+| frame slot `ebp-0x18` | EDX | candidate tile Y |
+| frame slot `ebp-0x14` | EBX | threshold (callers pass 3) |
 
 and the call site inside `sub_4019C2`'s spawn-candidate loop confirms the
 same three registers are loaded with the CANDIDATE tile immediately after
-the `sub_425FB9` solid check, not with anything player-derived:
-
-```
-    mov ebx, 3                  ; a3 = 3
-    mov edx, [ebp-8]            ; a2 = v5 (candidate tile Y, rand()%H)
-    mov eax, [ebp-0xc]          ; a1 = v4 (candidate tile X, rand()%W)
-    call sub_422351
-```
+the `sub_425FB9` solid check, not with anything player-derived: the three
+instructions immediately before the call load EBX with the literal **3**,
+EDX with the candidate tile Y (the loop's own `rand()%H` local) and EAX with
+the candidate tile X (its `rand()%W` local) — the latter two read straight
+back out of the spawn loop's own frame slots.
 
 Inside, the loop over the 10 player slots (`dword_461BC4`, stride 0x98)
 computes, per slot: `tileX = sub_42665C(player.+0x1C)`,
 `tileY = sub_4266A3(player.+0x20)` (pixel->tile conversions, confirming
 these ARE the player's own tile position, unchanged from the earlier
-reading), then `d = abs(a1 - tileX) + abs(a2 - tileY)` (Manhattan distance
-from the CANDIDATE tile — `a1`/`a2` — to that player, not the literal
-`abs(tileX) + abs(tileY)` a single-register misreading might suggest) and
-rejects (returns 0) the first slot where `d <= a3`; accepts (returns 1) only
+reading), then the Manhattan distance
+`d = |candidateX − tileX| + |candidateY − tileY|` — measured from the
+CANDIDATE tile (arguments 1 and 2), not the literal
+`|tileX| + |tileY|` a single-register misreading might suggest — and
+rejects (returns 0) the first slot where `d <=` the threshold argument;
+accepts (returns 1) only
 if all 10 slots clear the gate. **This pins reading (b) definitively — the
 prior "AMBIGUOUS" hedge is resolved, not merely reaffirmed by plausibility.**
 
@@ -252,10 +263,11 @@ flag, `+4`=type (1 rover/2 ghost), `+8`=dead flag (reaped next
 `+20/+24`=spawn-tile pixel pos (written once at spawn, read back only by the
 one-shot rover init below), `+28/+32`=CURRENT pixel x/y (the position the
 mover advances every tick — mirrors the player stepper's `+0x1c/+0x20`),
-`+42`=godir in the HIGH WORD (`>>16`, values 0-3) with the SAME word also
-addressable as `+44` (`*(WORD*)(v28+44)` — little-endian overlay of the high
-half of the `+42` dword; confirmed because the direction-name lookup at the
-end of the function reads `BYTE2(+42)` == `*(BYTE*)(v28+44)`), exactly the
+`+42`=godir in the HIGH WORD (bits 16-31, values 0-3) of that dword, with the
+SAME word also addressable directly as a word at `+44` (a little-endian
+overlay of the high half of the `+42` dword; confirmed because the
+direction-name lookup at the end of the function reads byte 2 of the `+42`
+dword, which is the very byte that sits at `+44`), exactly the
 16.16 godir field `docs/re/facts.md`'s player-stepper section documents at
 player `+0x2c`, `+48`=per-tick step counter (word, feeds the draw-frame
 index), `+112`=speed (the spawn call's `speed` arg), `+116`=move budget
@@ -266,12 +278,12 @@ ONE-SHOT "already initialised" latch (rover-only, see step 0 below).
    very first `sub_401B5C` call (`type==1 && !+146`), BEFORE any movement: set
    the latch, then call `sub_42583B(spawn_tx, spawn_ty, 0)` — for the spawn
    tile and each of its 4 orthogonal neighbours that is walkable
-   (`sub_425FB9 != 1`), `sub_425704(tx,ty,a3=0)` checks the FLOOR-POWERUP
+   (`sub_425FB9 != 1`), `sub_425704(tx, ty, 0)` (third argument 0) checks the FLOOR-POWERUP
    grid (`dword_462214`, `sub_42542D`'s own backing store) for a live record
    at that tile; if one exists, it draws up to 200 random tiles
    (`rand()%W,rand()%H` per attempt) looking for one that is a BRICK
    (`sub_425FB9==2`) with no visible powerup there yet, and relocates the
-   record there verbatim (`qmemcpy`, 0x98=152 bytes) — i.e. **a rover's
+   record there verbatim (a straight 0x98 = 152-byte block copy) — i.e. **a rover's
    landing tile and its neighbours get any powerup silently teleported under
    a random brick** so the rover doesn't spawn standing on one. This is a
    real, RNG-drawing, gameplay-affecting one-shot per rover (never per
@@ -297,12 +309,13 @@ ONE-SHOT "already initialised" latch (rover-only, see step 0 below).
    candidate") and the two distinct comparisons in `sub_4017FA`.
 2. **Wander with human-avoidance bias.** At each tile-centre crossing (the
    "along/perp" rotation matches the player stepper's centring math; the
-   turn-decision block is skipped entirely — `goto LABEL_20` — whenever the
+   turn-decision block is jumped over entirely — a single forward branch past
+   it, to `LABEL_20` — whenever the
    actor is off-centre on the perpendicular axis, so turns are ONLY decided
    exactly at a tile centre) it walkability-tests the tile straight ahead via
    `sub_4017FA`; if blocked (or, even when clear, with probability
    `1 - 1/max(1,getvalue(1200))`, i.e. `getvalue(1200)=3` ⇒ 2-in-3 chance to
-   turn anyway — ONE `rand()%v25` draw) it randomly turns ±90° (ONE
+   turn anyway — ONE `rand() % max(1, getvalue(1200))` draw) it randomly turns ±90° (ONE
    `rand()%2` draw: nonzero → `+44 += 1`, zero → `+44 -= 1`, then masked
    `&3`), then re-tests the (now different) ahead tile and if STILL blocked
    zeroes the move budget (stops early, doesn't overshoot into a wall this
@@ -325,8 +338,10 @@ ONE-SHOT "already initialised" latch (rover-only, see step 0 below).
    both cite) — if the new tile is currently on fire, the actor is killed
    (`+8 = 1`, reaped next `sub_401F76` pass) and the flame's OWNER (stored at
    the flame record's `+62` word when the flame was written, `sub_426FCC`) is
-   awarded points via `sub_421C71`: `HIWORD(dword_461BC4[38*owner+26]) +=
-   points`. VALUELST 1310 (rover, 15 pts) / 1320 (ghost, 25 pts) — both
+   awarded points via `sub_421C71`, which adds them into the HIGH WORD of the
+   score dword at byte 104 (dword index 26) of that owner's own 152-byte
+   player record in `dword_461BC4`.
+   VALUELST 1310 (rover, 15 pts) / 1320 (ghost, 25 pts) — both
    explicitly commented "(in campaign mode only)". (id 1300 = 250 pts "for
    killing an AI" is the same field, written by the NORMAL player-death path
    `sub_41DCB2` — pseudo.c 21913-21962, the shared death routine BOTH normal
@@ -351,14 +366,14 @@ ONE-SHOT "already initialised" latch (rover-only, see step 0 below).
    die 24)", = 24 in the shipped file**, confirming this is a cosmetic
    death-anim index draw, NOT a stun-duration roll as an earlier reading of
    this doc guessed (id 105 was never checked against VALUELST.RES's own
-   comment before now) — then calls `sub_41DCB2(victim, a2=killer_or_-1, ...)`,
+   comment before now) — then calls `sub_41DCB2(victim, killer_or_-1, ...)`,
    the shared death routine (deaths tally `dword_4642B0`++, per-killer kill
    tally `word_461C30[76*killer]`++ when killer != victim slot, the id-1300
    campaign AI-kill-score award when `dword_46489C` is set and the killer
    isn't the victim, sound 300 + an anim trigger, `+8=1` dead flag,
    `+48=0`). **So a rover/ghost stepping onto a HUMAN or NETWORK player's
    tile KILLS them outright** (with owner = -1, i.e. no kill-tally credit —
-   the `a2>=0 && a2<10` guard in `sub_41DCB2` excludes owner `-1` from both
+   the `0 <= killer < 10` guard in `sub_41DCB2` excludes owner `-1` from both
    the per-killer tally and the id-1300 award, so a rover/ghost kill is
    scoreless for the rover/ghost itself; only a FLAME killing the rover/
    ghost awards points, per clause 3, and that's the flame owner's score,
@@ -370,7 +385,8 @@ ONE-SHOT "already initialised" latch (rover-only, see step 0 below).
    `aGhostS="ghost %s"`/`aRoverS="rover %s"` — then a sequence lookup
    (`sub_41D957`/`sub_41DAA7`), i.e. it IS an on-screen animated sprite, not
    an invisible stat modifier. The personality/direction byte
-   (`BYTE2(+42)`, i.e. the low byte of the godir high-word — masked `&3` at
+   (byte 2 of the `+42` dword, i.e. the low byte of the godir high-word —
+   masked `&3` at
    the lookup site `sub_413AED`) selects a direction NAME (`off_45BCC4` =
    `{"north","east","south","west"}`) substituted into the format string,
    producing sequence names like `"ghost north"` / `"rover south"`. **No
@@ -391,10 +407,11 @@ ONE-SHOT "already initialised" latch (rover-only, see step 0 below).
 ### AI difficulty (field 8) — CONFIRMED dead, not a guess
 
 Grepped the WHOLE decompile for every read of the campaign record's field-8
-slot (`v20[27]`/`v6[27]` at the loader's own write offset, byte 108): the
+slot (dword index 27 = byte 108, the loader's own write offset): the
 ONLY write is the loader (`sub_401085` pseudo.c 4394); there is no other read
-of `dword_45E010`'s field-8 offset anywhere in the binary (the other
-`v6[27]`/`v20[27]` hits found by a raw grep, pseudo.c 21573/21582/35364, are
+of `dword_45E010`'s field-8 offset anywhere in the binary (the other hits a
+raw text grep for that same index expression turns up — pseudo.c
+21573/21582/35364 — are
 unrelated locals in an ANI-frame-count loop, confirmed by inspecting their
 surrounding function — not the campaign record). This is a **confirmed
 negative**, not "we didn't find a consumer": the `.CAM` format's own header
@@ -456,26 +473,28 @@ placement and the deliberate simplifications:
 
 ## Round pacing — PINNED (`sub_4016DA`, pseudo.c 4612-4651, 2026-07-09)
 
-```c
-int sub_4016DA() {
-  sub_401F76();                      // drive every rover/ghost's mover 1 tick; sets dword_464820 = live count
-  if (sub_410578() <= 1)             // survivor-SIDE count (same query the normal round-end uses)
-    dword_464894 = 2;                // force round-over phase
-  if (dword_464820) {
-    dword_4646C0 = 0;                // rovers/ghosts still alive: hold the "all clear" timer at 0
-  } else {
-    dword_4646C0 += dword_464958;    // no rovers/ghosts left: accumulate wall-clock ms
-    if (2*dword_46494C*getvalue(25) < dword_4646C0)
-      dword_464894 = 1;              // ~2s grace elapsed with the map clear -> "stage clear, pending"
-  }
-  for (i = 0; i < 10; ++i) {         // early-out guard: is any NON-COMPUTER slot still alive?
-    sub_421DD2(i, &type, 0);
-    if (type != 1 && type && sub_4228C4(i)) return;   // yes -> bail, nothing below runs this tick
-  }
-  --dword_4648B0;                    // all humans/network players dead: undo the pending stage-advance
-  dword_464894 = 2;                  // and force immediate round-over instead
-}
-```
+Per tick, in this exact order:
+
+1. `sub_401F76()` — drive every rover/ghost's mover one tick; this is what
+   sets `dword_464820` = the live rover/ghost count read two steps below.
+2. If `sub_410578() <= 1` — the survivor-SIDE count, the same query the
+   normal round-end uses — then `dword_464894 ← 2`, forcing the round-over
+   phase.
+3. Branch on `dword_464820`:
+   - **non-zero** (rovers/ghosts still alive): `dword_4646C0 ← 0` — hold the
+     "all clear" timer pinned at 0;
+   - **zero** (none left): `dword_4646C0 += dword_464958` — accumulate
+     wall-clock ms — and then, if
+     `2 * dword_46494C * getvalue(25) < dword_4646C0`, set
+     `dword_464894 ← 1` (~2 s grace elapsed with the map clear → "stage
+     clear, pending").
+4. Early-out guard, over slots `i` = 0..9 in order: query the slot via
+   `sub_421DD2(i, &type, 0)`; if `type != 1` AND `type` is non-zero AND
+   `sub_4228C4(i)` — i.e. any NON-COMPUTER, non-empty slot is still alive —
+   **RETURN** at once; nothing below runs this tick.
+5. Reached only when that loop runs to completion (all humans/network players
+   dead): `--dword_4648B0` — undo the pending stage-advance — then
+   `dword_464894 ← 2`, forcing immediate round-over instead.
 
 Five distinct clauses, not one:
 
@@ -554,17 +573,24 @@ level detail.
 `sub_40133F` (called from `sub_410B6E`, the same end-of-round/stage-advance
 handler `dword_464894` feeds into) is the stage-transition banner:
 
-```c
-if (dword_46489C && ++dword_4648B0 < dword_45E014) {
-  v8 = 112*dword_4648B0 + dword_45E010;         // this stage's record
-  dword_464998 = *(int*)(v8 + 52);              // levelno (field 1) -> a global, no further traced consumer
-  sub_4518D0(buf, getstring(1235), v8);         // getstring(1235) = "(%s)"; v8's first bytes = stage NAME (field 0)
-  sub_414340(getstring(1230), ..., byte_49D38F);// getstring(1230) = "Prepare to begin Campaign!"; blocking dialog
-} else if (dword_46489C) {                      // stage list exhausted
-  sub_414340(getstring(1220), ...);             // "Congratulations!" / "You made it through..." (1225)
-  dword_464A68 = 10;
-}
-```
+In order:
+
+1. **Gate**: campaign active (`dword_46489C`) AND, with the stage index
+   PRE-incremented as part of the test, `++dword_4648B0 < dword_45E014` (the
+   loaded stage count). The increment is part of the condition, so the index
+   advances even on the run where the comparison then fails.
+2. **If a next stage exists** (both halves true), in order:
+   - `record = dword_45E010 + 112 * dword_4648B0` — this stage's record;
+   - `dword_464998 ← record[+52]` — levelno (field 1), stored to a global
+     with no further traced consumer;
+   - `sub_4518D0(buf, getstring(1235), record)` — getstring(1235) = `"(%s)"`;
+     the record's own first bytes are the stage NAME (field 0);
+   - `sub_414340(getstring(1230), …, byte_49D38F)` — getstring(1230) =
+     `"Prepare to begin Campaign!"`, a blocking dialog.
+3. **Else, if campaign is active** (stage list exhausted), in order:
+   - `sub_414340(getstring(1220), …)` — `"Congratulations!"` /
+     `"You made it through…"` (1225);
+   - `dword_464A68 ← 10`.
 
 String table (`MESSAGES.TXT`, confirmed against the install):
 `1235="(%s)"`, `1230="Prepare to begin Campaign!"`, `1220="Congratulations!"`,
@@ -596,27 +622,30 @@ addressed here.
 picker and sets `dword_46489C = 1`) shows a two-line acknowledgement dialog
 right after a successful pick/parse, BEFORE the stage-0 banner:
 
-```c
-sub_401085(pickedPath);           // load the .CAM file
-sub_4124A4(1210);                 // getstring(1210) = "Campaign Mode Activated!" -> EDX (preserved)
-LODWORD(v7) = sub_4124A4(95);     // getstring(95)    = "NOTE!"                    -> EAX
-sub_414340(v7, v8, byte_49D38F);  // a1@<edx:eax>: two-line modal, white ink
-dword_46489C = 1;
-```
+The sequence, in order:
 
-**Line order — CONFIRMED from `sub_414340` itself** (pseudo.c 17004-17108,
-`void __usercall sub_414340(__int64 a1@<edx:eax>, ...)`): the two-line branch
-draws `LODWORD(a1)` FIRST, at `y = fontheight+32` (`v30`, the TOP line), then
-`HIDWORD(a1)` SECOND, at `y = v30 + fontheight + 2` (`v31`, the BOTTOM line) —
-see the draw calls `sub_4172BA(v28, v22, v30, ...)` (LODWORD, top) followed by
-`sub_4172BA(v28, SHIDWORD(v22), v31, ...)` (HIDWORD, bottom). Since
-`sub_4015C6` explicitly assigns `LODWORD(v7) = getstring(95)` (unambiguous —
-no register-loss hedge needed here, unlike the `.CAM`-record cases elsewhere
-in this doc), **getstring(95)="NOTE!" is the TOP line**; `HIDWORD(v7)` is
-whatever the compiler carried over from the PREVIOUS `sub_4124A4(1210)` call
-(the standard two-sequential-calls-into-two-registers pattern — the first
-call's `EAX` is preserved into `EDX` before the second call clobbers `EAX`),
-so **getstring(1210)="Campaign Mode Activated!" is the BOTTOM line**.
+1. `sub_401085(picked_path)` — load the chosen `.CAM` file.
+2. `sub_4124A4(1210)` — getstring(1210) = `"Campaign Mode Activated!"`. Its
+   result comes back in EAX and is parked in EDX, surviving the next call.
+3. `sub_4124A4(95)` — getstring(95) = `"NOTE!"`, returned in EAX.
+4. `sub_414340(<the EDX:EAX string pair>, byte_49D38F)` — the two-line modal,
+   white ink. Its first parameter is one 64-bit value carried in the register
+   PAIR EDX:EAX (low half in EAX, high half in EDX).
+5. `dword_46489C = 1` — campaign active.
+
+**Line order — CONFIRMED from `sub_414340` itself** (pseudo.c 17004-17108;
+its first parameter is the EDX:EAX pair described above): the two-line branch
+draws the pair's LOW half FIRST, at `y = fontheight + 32` (the TOP line), then
+its HIGH half SECOND, at `y = <that top y> + fontheight + 2` (the BOTTOM
+line) — two consecutive `sub_4172BA` text draws, low-half-at-top-y followed by
+high-half-at-bottom-y. Since `sub_4015C6` explicitly puts `getstring(95)` in
+the LOW half (unambiguous — no register-loss hedge needed here, unlike the
+`.CAM`-record cases elsewhere in this doc), **getstring(95)="NOTE!" is the TOP
+line**; the HIGH half is whatever the compiler carried over from the PREVIOUS
+`sub_4124A4(1210)` call (the standard two-sequential-calls-into-two-registers
+pattern — the first call's EAX is preserved into EDX before the second call
+clobbers EAX), so **getstring(1210)="Campaign Mode Activated!" is the BOTTOM
+line**.
 
 Geometry is the SAME `sub_43C734` chrome primitive as the quit-confirm dialog
 (`DialogRect`/`draw_dialog_chrome`, `game_app.cpp`), sized from `sub_414340`'s
