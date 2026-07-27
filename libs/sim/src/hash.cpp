@@ -164,10 +164,11 @@ std::uint64_t state_hash(const State& s) {
         // grab has happened this tick's-worth of history.
         mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.pickup_pause)));
         // Action-key edge latches (Player::prev_action1/2): gameplay state —
-        // the LABEL_246 drop/punch edges (`+56 && !+54` / `+57 && !+55`) read
+        // the bomb-action tail's drop/punch edges (a fresh +56 with +54 clear,
+        // a fresh +57 with +55 clear) read
         // them, so two sims agreeing on everything else but these disagree on
         // the NEXT tick's placement. Was a determinism-contract rule-4 gap
-        // (flagged by the LABEL_246 all-states restructure, which made the
+        // (flagged by the all-states restructure of that tail, which made the
         // latches effective-key based and thus more load-bearing). Packed in
         // one word — ONE-TIME hash-layout growth (rule 5; test_golden.cpp
         // recaptured in the same commit with the RNG-stream proof).

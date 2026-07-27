@@ -38,7 +38,7 @@ BmLine parse_line(std::string_view line) {
                 segs.push_back(BmSegment::text(std::move(text)));
                 text.clear();
             }
-            std::size_t name_start = i + kTag.size();  // skip "<IMG", like `v41 += 4`.
+            std::size_t name_start = i + kTag.size();  // skip "<IMG": the original advances 4.
             std::size_t close = line.find('>', name_start);
             if (close == std::string_view::npos)
                 throw std::runtime_error("bmtext: unterminated <IMG tag");

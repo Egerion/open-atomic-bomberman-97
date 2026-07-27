@@ -30,8 +30,9 @@ void EditorGrid::reset(int width, int height,
     for (int j = 0; j < kEditorMaxStarts; ++j) {
         // Start positions: VALUELST getvalue(600+2j)/getvalue(601+2j) via the
         // caller (start_xy), wrapped into the board with the original's
-        // repeated +=/-= loops; team flag = j & 1 (sub_4049C0's
-        // `dword_46481C[12j+8] = j & 1`).
+        // repeated +=/-= loops; team flag = j & 1 (sub_4049C0 writes the slot
+        // index's low bit into the team field at dword_46481C, stride 12,
+        // offset +8).
         int x = start_xy ? (*start_xy)[static_cast<std::size_t>(j)][0] : 0;
         int y = start_xy ? (*start_xy)[static_cast<std::size_t>(j)][1] : 0;
         while (x < 0) x += width_;

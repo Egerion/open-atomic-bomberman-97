@@ -69,7 +69,8 @@ TEST_CASE("bombs F1: the freeze is EXEMPT in campaign (sub_421969 forces 2)") {
 // ---------------------------------------------------------------------------
 // bombs F2 — kicked bomb slides at the BASE kicked speed (LABEL_21's flat +100
 // is a wash). sub_42331C case 1 adds +100 to the budget but first backs the
-// position off one direction step (`+28 -= dword_45BECC[dir]`); the shared
+// position off one direction step (its +28 coordinate has that direction's
+// entry in dword_45BECC subtracted from it); the shared
 // move loop spends that +100 re-advancing exactly that step, so the net
 // per-tick displacement is the speed term alone. Confirmed against the native
 // oracle (kicked slide ~0.25 tile/tick at both 1x and 9x cadence). An earlier

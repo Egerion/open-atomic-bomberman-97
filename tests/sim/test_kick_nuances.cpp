@@ -190,7 +190,8 @@ TEST_CASE("the kick fires on the walk-up's ARRIVAL tick (sub_41EC84 !v35 in-loop
     s.tick(right);
     CHECK(!s.state().bombs[0].moving);
     // Tick 2: reaches the centre and is pinned there; the SAME tick's probe
-    // (the original's in-loop v35 == 0 check) kicks the bomb — not tick 3, as
+    // (the original's in-loop check for the along-axis offset being 0) kicks
+    // the bomb — not tick 3, as
     // the old post-stall gate had it.
     s.tick(right);
     CHECK(s.state().bombs[0].moving);

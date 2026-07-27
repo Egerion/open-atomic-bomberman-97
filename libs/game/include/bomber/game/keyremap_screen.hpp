@@ -51,7 +51,8 @@
 // sub_41043C), then polls the RAW 256-byte scancode state (byte_4A2BA0)
 // until any key is down — the 0..255 ascending scan keeps overwriting its
 // result, so the HIGHEST held index wins — and stores it UNCONDITIONALLY
-// (the caller's `dword_4645BC[10*set+action] = result` has no cancel
+// (the caller writes it into the binding table dword_4645BC at index
+// 10*set + action, with no cancel
 // branch: pressing Esc binds Esc; only the tap-released-between-polls race
 // can store 0 = unbound, a timing artifact this port does not reproduce).
 // No validation, duplicates across actions allowed.

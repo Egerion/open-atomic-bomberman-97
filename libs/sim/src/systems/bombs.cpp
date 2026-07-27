@@ -48,7 +48,8 @@ void BombSystem::place(Player& p, std::uint8_t owner, int tx, int ty, int fuse_s
     // Units per VALUELST 320/321's own legend ("minimum/additional random
     // number of SECONDS between potential dud bombs"): 180+rand%180 s = 3-6
     // minutes per opportunity, converted to ticks here. The re-arm ADDS to the
-    // previous deadline (sub_422C13 `dword_464AF4 += ...`), it does not anchor
+    // previous deadline (sub_422C13 accumulates the new interval INTO the
+    // deadline global dword_464AF4), it does not anchor
     // on "now" — a long-idle gate can bank consecutive openings, exactly like
     // the original. facts.md "Dud bombs" (units corrected 2026-07-09).
     if (!b.trigger && !b.jelly && s.tick >= s.dud_gate) {
@@ -62,8 +63,9 @@ void BombSystem::place(Player& p, std::uint8_t owner, int tx, int ty, int fuse_s
     }
     ++p.bombs_placed;
     s.bombs.push_back(b);
-    // Diarrhea/super players drop with a wet "poops" splat: sub_41F29B's v112
-    // branch plays a random SOUNDLST 550-554 instead of the normal drop 100/101.
+    // Diarrhea/super players drop with a wet "poops" splat: sub_41F29B's
+    // forced-drop branch (the one the disease auto-drop takes) plays a random
+    // SOUNDLST 550-554 instead of the normal drop 100/101.
     // The flag rides in the (unhashed) event data for the SoundDirector.
     const bool poop = p.sick(Disease::Diarrhea) || p.sick(Disease::Super);
     s.events.push_back({Event::Type::BombPlaced, static_cast<std::int8_t>(owner),
@@ -96,7 +98,8 @@ void BombSystem::drop(Player& p, std::uint8_t owner) {
     // true of the ORIGINAL, but OUR AI did not implement that check, so it hit
     // this branch constantly and machine-gunned the deny SFX (Ege, playing both
     // builds side by side). The original's sub_423188 rejects a tile carrying a
-    // type-1 stage actor (`sub_405654(x,y)[1] != 1`), i.e. a warphole, and BOTH
+    // type-1 stage actor (it looks the actor up with sub_405654 and demands the
+    // type field at +4 differ from 1), i.e. a warphole, and BOTH
     // AI drop behaviours (sub_40AD8D, sub_40ABED) gate on it before pressing the
     // key — so an original AI standing on a warp exit never presses bomb at all.
     // Fixed in ai_grids.cpp's drop_tile_clear; facts.md "AI never bombs a
@@ -171,8 +174,9 @@ bool BombSystem::try_grab(Player& p, int who) {
     p.carried_owner = b->owner;
     p.carried_colour = b->colour;
     // Store the creation-time DURATION, not the frozen remnant: the throw
-    // restarts the fuse from scratch (sub_41F29B LABEL_246 zeroes elapsed +68
-    // before sub_424987), so the remnant is never consumed by anything.
+    // restarts the fuse from scratch (sub_41F29B's bomb-action tail zeroes the
+    // elapsed-fuse dword at +68 before it calls sub_424987), so the remnant is
+    // never consumed by anything.
     p.carried_fuse = b->fuse_init;
     p.carried_flame = b->flame;
     p.carried_jelly = b->jelly;
@@ -183,8 +187,8 @@ bool BombSystem::try_grab(Player& p, int who) {
     // Player::pickup_pause doc comment and facts.md "Player state machine
     // (+78) — COMPLETE". Overwriting p.stun here used to clobber an
     // in-progress head-hit stun countdown, which cannot happen: a grab needs a
-    // fresh input edge (+56), which the head-stun's v113 gate already blocks,
-    // so this path is never reached while p.stun > 0.
+    // fresh input edge (+56), which the head-stun's new-input acquisition gate
+    // already blocks, so this path is never reached while p.stun > 0.
     p.pickup_pause = s_.tuning.pickup_pause;
     s_.events.push_back({Event::Type::BombGrabbed, static_cast<std::int8_t>(who),
                          static_cast<std::int8_t>(p.tile_x()),
@@ -201,9 +205,10 @@ void BombSystem::throw_carried(Player& p, int who) {
     nb.colour = p.carried_colour;
     nb.x = grid::tile_center_x(p.tile_x());
     nb.y = grid::tile_center_y(p.tile_y());
-    // Fresh full fuse on release (sub_41F29B LABEL_246: `+68 = 0` right before
-    // the launch): a thrown bomb always lands with its complete creation-time
-    // duration ahead of it, not the remnant frozen at grab time. Trigger bombs
+    // Fresh full fuse on release (sub_41F29B's bomb-action tail zeroes the
+    // elapsed-fuse dword at +68 right before the launch): a thrown bomb always
+    // lands with its complete creation-time duration ahead of it, not the
+    // remnant frozen at grab time. Trigger bombs
     // stay fuse-less. facts.md "Core-feel audit" §5.
     nb.fuse_init = p.carried_fuse;  // carried_fuse holds fuse_init since grab
     nb.fuse = p.carried_trigger ? -1 : p.carried_fuse;
@@ -325,8 +330,10 @@ void BombSystem::fly(Bomb& b) {
     s.events.push_back({Event::Type::BombBounced, -1, static_cast<std::int8_t>(tx),
                         static_cast<std::int8_t>(ty), 0});
 
-    // Landing-tile verdict (sub_42331C ~25443): `!sub_425FB9 && !sub_422E48 &&
-    // !sub_42542D` — wall/brick, a grounded bomb, AND a floor powerup (hidden
+    // Landing-tile verdict (sub_42331C ~25443): the tile counts as clear only
+    // when all three probes come back empty — sub_425FB9 (tile type), sub_422E48
+    // (grounded bomb) and sub_42542D (floor powerup). Wall/brick, a grounded
+    // bomb, AND a floor powerup (hidden
     // OR visible; sub_42542D returns the record regardless of state) are ALL
     // treated as an occupied landing tile. This is facts.md's flagged gap:
     // our previous port never consulted `floor` here, so a flying bomb would
@@ -350,15 +357,18 @@ void BombSystem::fly(Bomb& b) {
     // victim scan on warphole tiles entirely — corrected 2026-07-11, facts.md
     // "Player state machine (+78) — COMPLETE".)
     //
-    // A WARPHOLE actor blocks SETTLING (pseudo.c ~25453: `!v62 ||
-    // exp_ && v62[1] != 1`). `exp_` decompiles to a bare reference to the
-    // statically-linked, NEVER-CALLED CRT `exp()` routine (0x4443CC) — the
-    // ONLY xref to it in the whole binary is a `dr_O` (offset/immediate)
-    // load at 0x423B11, right here, confirmed by direct disassembly:
-    // `mov eax, 4443CCh / test eax,eax / je short 423B26h` — a compile-time-
-    // constant non-null pointer tested for truthiness, so the `je` can never
-    // be taken. The term is dead code; the REAL condition is exactly
-    // `!actor || actor.type != Warphole`, i.e. the same "type 1 blocks like
+    // A WARPHOLE actor blocks SETTLING. The settle condition at pseudo.c ~25453
+    // reads as three ORed/ANDed terms: no actor on the tile, OR a spurious
+    // truthiness test, AND the actor's type word at +4 differing from 1. That
+    // middle term decompiles to a bare reference to the statically-linked,
+    // NEVER-CALLED CRT exponential routine at 0x4443CC — the ONLY xref to it in
+    // the whole binary is an offset/immediate load at 0x423B11, right here,
+    // confirmed by direct disassembly: the address is loaded as a constant into
+    // eax, tested against itself, and the conditional jump over the rest of the
+    // condition is taken only when it is zero. Being a compile-time-constant
+    // non-null pointer, that jump can never be taken. The term is dead code; the
+    // REAL condition is exactly "no actor here, or the actor is not a Warphole",
+    // i.e. the same "type 1 blocks like
     // a wall" rule already confirmed for the sliding-bomb probe (sub_4230A5,
     // docs/re/facts.md "Bomb/warphole reconciliation"). Resolved 2026-07-10,
     // see facts.md "Chain-reaction timing" sibling entry / exp_ resolution.
@@ -388,8 +398,10 @@ void BombSystem::fly(Bomb& b) {
     }
     b.flying = false;
     // A bomb that lands on an already-flaming tile settles there AND is
-    // queued for forced detonation next tick (pseudo.c 25459-25465:
-    // `if (sub_42708D(...)) sub_423209(v75, 0);`, unconditional — no
+    // queued for forced detonation next tick (pseudo.c 25459-25465: the flame
+    // probe sub_42708D runs on the landing tile and, whenever it reports flame,
+    // the bomb is handed to the chain queue sub_423209 with mode 0 —
+    // unconditional — no
     // "kind 9 / brick-burn" exemption here, unlike the sliding-bomb probe;
     // moot for us anyway since `tile_open` above already refuses to land on
     // a still-crumbling brick tile). docs/re/facts.md "Chain-reaction
@@ -405,8 +417,9 @@ void BombSystem::slide(std::size_t index, std::int32_t budget) {
         int tx = b.tile_x(), ty = b.tile_y();
         // Sliding into a flame QUEUES the bomb for forced detonation next
         // tick, not an immediate explosion (sub_42331C checks sub_42708D
-        // per pixel-step; pseudo.c 25545-25554: `sub_423209(v75, 0)` then
-        // unconditionally falls into the same "stop" code (LABEL_36) a
+        // per pixel-step; pseudo.c 25545-25554 hands the bomb to the chain
+        // queue sub_423209 with mode 0 and then unconditionally falls into the
+        // same shared "stop" block a
         // dirarrow re-steer or a kick-stop uses — jelly REVERSES and keeps
         // sliding, exactly like bouncing off a wall; only a non-jelly bomb
         // actually halts. The "kind 9 / brick-burn" exemption the original
@@ -436,8 +449,10 @@ void BombSystem::slide(std::size_t index, std::int32_t budget) {
         Fixed to_center = (center - axis) * sign;
         if (to_center <= 0) {
             // Stage-actor reactions fire ONLY when the bomb is EXACTLY on the
-            // tile centre (both axes) — the original's `!v79 && !v80` gate
-            // (sub_42331C ~25532). Testing only the move axis would re-fire every
+            // tile centre (both axes) — the original's gate requiring BOTH of
+            // its axis-offset temporaries (the bomb's distance from the tile
+            // centre in X and in Y) to be zero (sub_42331C ~25532). Testing only
+            // the move axis would re-fire every
             // pixel as the bomb slides away from a dirarrow, snapping it back
             // forever. dirarrow (type 0) turns the bomb to the arrow's godir.
             //
@@ -465,7 +480,10 @@ void BombSystem::slide(std::size_t index, std::int32_t budget) {
                     sign = grid::dir_dx(b.dir) + grid::dir_dy(b.dir);
                 }
             }
-            // Kick+action2 stop (sub_42331C `if (+57 && v81 >= 0)`): a pending
+            // Kick+action2 stop (sub_42331C fires it when the +57 stop flag is
+            // set AND its signed centre-offset temporary for the move axis has
+            // gone non-negative, i.e. the bomb has reached or passed the
+            // centre): a pending
             // stop is consumed the moment the bomb is at/past a tile centre —
             // snap onto it and halt. Checked AFTER the actor block (a dirarrow
             // just cleared it) and before probing the next tile. Never set on
@@ -496,15 +514,18 @@ void BombSystem::slide(std::size_t index, std::int32_t budget) {
                                     static_cast<std::int8_t>(nx), static_cast<std::int8_t>(ny),
                                     static_cast<std::int8_t>(squashed)});
                 s.floor[ny][nx] = PowerupType::None;
-                // Same skull compensation as the flame walk (sub_4230A5:
-                // `if (kind == 2 && !dword_464990) sub_4255B2(2)`) — a
+                // Same skull compensation as the flame walk (sub_4230A5 calls
+                // sub_4255B2 for kind 2 whenever dword_464990, the
+                // "diseases destroyable" flag, is clear) — a
                 // squashed Disease token relocates when diseases cannot be
                 // destroyed. scatter() is our sub_4255B2 (RNG order/count).
                 if (squashed == PowerupType::Disease && !s.tuning.diseases_destroyable)
                     powerups_.scatter(PowerupType::Disease);
             }
             if (!grid::tile_open(s, nx, ny)) blocked = true;
-            // sub_4230A5's final verdict is `(!v8 || v8[1] != 1) && blank==0`:
+            // sub_4230A5's final verdict is: the cell is enterable only when
+            // there is no actor on it OR that actor's type field at +4 is not 1,
+            // AND the cell's blank/tile-type verdict is 0. So
             // a WARPHOLE actor (type 1) makes the cell impassable regardless of
             // its underlying (blank) cell type — a sliding/kicked/conveyor bomb
             // is blocked at a warphole's doorstep exactly like a wall, and can
@@ -515,7 +536,7 @@ void BombSystem::slide(std::size_t index, std::int32_t budget) {
             if (blocked) {
                 b.x = cx;
                 b.y = cy;
-                b.stop_pending = false;  // LABEL_36 clears +57 on any stop
+                b.stop_pending = false;  // the shared stop block clears +57 on any stop
                 if (b.jelly) {
                     // Jelly (sub_42331C slide block): reverse and KEEP the
                     // moving state — it ping-pongs off obstacles instead of
@@ -556,8 +577,9 @@ void BombSystem::conveyor_carry(std::size_t index) {
     // sub_42331C case 0 (batch_0x422DDD.cpp:512-547): a resting bomb whose
     // CURRENT tile is a conveyor is pushed one frame's worth along the belt —
     // and the belt check is re-run EVERY tick (bombs.md finding 3). The case
-    // NEVER writes the motion word to 1 (`goto LABEL_115` when the tile is not
-    // a belt), so a belt bomb stays motion-state-0: the instant it slides off
+    // NEVER writes the motion word to 1 (when the tile is not a belt the case
+    // jumps straight out to the shared per-bomb epilogue), so a belt bomb stays
+    // motion-state-0: the instant it slides off
     // the belt onto a non-conveyor tile it simply stops being processed here
     // and FREEZES, rather than coasting on at kicked speed. Because it is
     // never state 1, sub_4247C5's "stop my sliding bombs" (state-1-only) also
@@ -567,8 +589,8 @@ void BombSystem::conveyor_carry(std::size_t index) {
     // frame, so any jelly bounce inside slide() is moot on a belt.
     b.dir = grid::from_godir(s_.actor_dir[ty][tx]);
     b.moving = true;
-    // Belt speed (getvalue(190+idx)). The original's LABEL_21 also adds a flat
-    // +100 budget here, but see the F2 note in advance_bombs: that +100 is
+    // Belt speed (getvalue(190+idx)). The original's shared move block also adds
+    // a flat +100 budget here, but see the F2 note in advance_bombs: that +100 is
     // spent re-advancing a one-step position backoff the same code path does,
     // so it nets to zero. The faithful per-tick displacement is the base belt
     // speed alone.
@@ -589,11 +611,14 @@ void BombSystem::advance_bombs() {
             // speed (getvalue(300), the bomb's +112 field) regardless of the
             // tile underneath — the belt is consulted only by case 0 (resting).
             //
-            // sub_42331C case 1 / LABEL_21 (batch_0x422DDD.cpp:551, pseudo.c
+            // sub_42331C case 1, feeding the shared move block
+            // (batch_0x422DDD.cpp:551, pseudo.c
             // 25393-25400): the original adds a flat +100 to the move budget
             // — but the SAME code path first backs the bomb's position off by
-            // one direction step (`+28 -= dword_45BECC[dir]`, `+32 -=
-            // dword_45BEDC[dir]`), and the shared per-frame move loop then
+            // one direction step, subtracting that direction's entry in the X
+            // delta table dword_45BECC from the bomb's +28 X and its entry in
+            // the Y delta table dword_45BEDC from the +32 Y, and the shared
+            // per-frame move loop then
             // spends that +100 re-advancing exactly that one step. The +100
             // and the backoff cancel; the net per-frame displacement is the
             // speed term alone (getvalue(300), the +112 field). Confirmed

@@ -82,7 +82,8 @@ enum class SlotInputType : std::uint8_t {
 
 // ATTRACT-MODE roster/stage rolls (docs/re/frontend-flow.md "Attract mode",
 // sub_410F81's attract branch, pseudo.c 15125-15143). The menu idle timeout
-// forces v10=0 (Play) with the attract flag set; sub_410F81 then short-
+// forces the menu's selected row back to 0 (Play) with the attract flag set;
+// sub_410F81 then short-
 // circuits: every slot OFF, then `rand()%10 + 1` (clamped to a MINIMUM of 3)
 // slots flipped to COMPUTER, and the level set to `rand() % getvalue(35)`
 // DIRECTLY — bypassing the VALUELST 1150-1160 random-level enable flags the
@@ -125,7 +126,8 @@ constexpr int attract_stage_pick(unsigned roll, int level_count) {
 }
 
 // Per-slot TEAM default on EVERY entry to the setup screen (sub_4049C0,
-// pseudo.c line 6716: `dword_46481C[12*j+8] = j & 1`, unconditionally
+// pseudo.c line 6716 writes each slot's team field — dword_46481C, stride 12,
+// offset +8 — with the low bit of the slot index; unconditionally
 // re-applied by `sub_410F81`'s own `sub_4046CC()` -> `sub_403EEE()` ->
 // `sub_4049C0()` chain at pseudo.c lines 15046/6573/6321 before the screen
 // draws a single frame — docs/re/setup-screens.md "TEAM default —

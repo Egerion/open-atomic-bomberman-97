@@ -46,7 +46,8 @@ TEST_CASE("goldflame overrides short-flame (goldflame wins)") {
 
     s.tick(press1(0));
     REQUIRE(s.state().bombs.size() == 1);
-    // sub_41EB13 sets v9=1 for short-flame, then goldflame overrides it.
+    // sub_41EB13 pins the blast reach at 1 for short-flame, then goldflame
+    // overrides it.
     CHECK(s.state().bombs[0].flame == std::max(kGridWidth, kGridHeight));
 }
 

@@ -12,7 +12,8 @@ public:
 
     // Step-on callback: invoked the instant a per-pixel step lands the player
     // exactly on a tile centre (both axes aligned), passing that tile. This is
-    // the port of sub_41EC84's `v35 == -1` in-loop check — the original fires
+    // the port of sub_41EC84's in-loop check for an offset-to-centre of -1 (the
+    // pixel before the centre) — the original fires
     // the warphole/trampoline step-on DURING the walk, not after it. A plain
     // function pointer (no heap, deterministic) keeps the stepper body in the
     // .cpp; ctx carries the caller's state. See docs/re/stage-actors.md §5.

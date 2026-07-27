@@ -62,7 +62,7 @@ AppInput MapSelectScreen::run() {
     const int pxsize = static_cast<int>(ctx_.values.column_or(730, 2, 5));
     const int pysize = static_cast<int>(ctx_.values.column_or(730, 3, 5));
 
-    int row = 0;  // 0 = level, 1 = wins (v34 = 2 rows in sub_406DDE)
+    int row = 0;  // 0 = level, 1 = wins (sub_406DDE navigates exactly 2 rows)
     // WORKING COPIES (sub_406DDE 8092-8093: dword_45E0B8/45E0B4 seeded from
     // the committed globals on entry): edits touch only these; Enter/Space
     // commits them (LABEL_101, 8261-8271) and Escape DISCARDS them — the old
@@ -147,7 +147,8 @@ AppInput MapSelectScreen::run() {
         // 2026-07-12): border fill = the general WHITE byte_49D38F —
         // (240,248,252), NOT the old invented (40,40,60) — at (378,80,
         // 224x202); the field swatch is a 1:1 CROP of FIELDn.PCX starting 48
-        // rows down (the `&v17[12*640]` int-indexing = 48 scanlines; NOT a
+        // rows down (the source is taken 12*640 int-sized steps into the
+        // 640-byte-wide bitmap — 4 bytes a step, so 48 scanlines; NOT a
         // stretch — sub_4428B4 is a plain rect copy), 220x198 at (380,82),
         // which lines the backdrop's own board grid up under the drawn
         // tiles; then the 5x5 solid/brick grid at native 40x36 cells.

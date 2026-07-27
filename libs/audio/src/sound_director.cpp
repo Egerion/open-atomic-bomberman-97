@@ -24,19 +24,21 @@ void SoundDirector::on_tick(const sim::State& s) {
                 // "Fire In The Hole" taunt (docs/re/id-audit.md item 1; VALUELST
                 // 650/651, SOUNDLST 1200 group; sub_41F29B pseudo.c ~23360-23368,
                 // the plain single-bomb-drop path — the file's own comment reads
-                // "after laying out a HUGE string of bombs"). Literal decompile:
-                //   v60 = getvalue(651);
-                //   if (v61 >= v60 && player.bombCount - 1 == bombs_placed_before)
-                //       if (!(rand() % max(1, getvalue(650)))) sub_427961(1200);
-                // `v61` is read from a register the decompiler itself flags
-                // "possibly undefined" at this call site (no visible assignment
-                // anywhere in sub_41F29B) — its provenance can't be pinned from
-                // the text decompile alone. The best-supported reading, matching
-                // the VALUELST author's own comment ("what constitutes 'many'
-                // dropped bombs") and the adjacent code (which already holds
-                // player+86 = max_bombs in a register a few lines up for the
-                // drop-eligibility gate), is that v61 is that same cached
-                // max_bombs read. Ported on that basis: a player whose bomb-count
+                // "after laying out a HUGE string of bombs"). The original's
+                // shape: it loads the "many bombs" threshold from getvalue(651),
+                // requires an unnamed register value to be >= that threshold AND
+                // the player's bomb count minus one to equal the number of bombs
+                // already placed, and only then rolls 1-in-max(1, getvalue(650))
+                // before playing SOUNDLST 1200 via sub_427961.
+                // The register holding the left-hand side of the threshold test
+                // has no visible assignment anywhere in sub_41F29B, so its
+                // provenance can't be pinned from the recovered source alone. The
+                // best-supported reading, matching the VALUELST author's own
+                // comment ("what constitutes 'many' dropped bombs") and the
+                // adjacent code (which already holds player+86 = max_bombs in a
+                // register a few lines up for the drop-eligibility gate), is that
+                // it is that same cached max_bombs read. Ported on that basis: a
+                // player whose bomb-count
                 // powerup level is >= id 651 ("many") who has just placed the
                 // LAST bomb of their current allotment (bombs_placed, already
                 // incremented by BombSystem::place before this event, equals
@@ -67,7 +69,7 @@ void SoundDirector::on_tick(const sim::State& s) {
                         audio_.play_random_in_range(1200, 1299);
                 }
                 // Diarrhea/super drop = random "poops" splat (SOUNDLST 550-554,
-                // sub_41F29B v112 branch); a normal drop is 100/101.
+                // sub_41F29B's forced-drop branch); a normal drop is 100/101.
                 if (ev.data)
                     audio_.play_random_in_range(550, 554);
                 else
@@ -164,10 +166,11 @@ void SoundDirector::on_tick(const sim::State& s) {
                 break;
             }
             case sim::Event::Type::PowerupPicked: {
-                // sub_41E21E (batch_0x41DAA7.cpp:495-503): v8 defaults to the
-                // pickup voice (400, or 135 for jelly, case 0xA), but the
-                // "You are now AWESOME" MILESTONE OVERWRITES it to 1400 — then a
-                // SINGLE sub_427961(v8). So on a milestone the pickup voice is
+                // sub_41E21E (batch_0x41DAA7.cpp:495-503): the sound id it will
+                // play defaults to the pickup voice (400, or 135 for jelly,
+                // case 0xA), but the "You are now AWESOME" MILESTONE OVERWRITES
+                // it with 1400 — then there is a SINGLE sub_427961 call on that
+                // one id. So on a milestone the pickup voice is
                 // REPLACED by 1400, not layered, and plays immediately. The port
                 // used to play BOTH (pickup voice now + 1400 on an invented
                 // +8-tick delay) — two sounds where the original plays one.

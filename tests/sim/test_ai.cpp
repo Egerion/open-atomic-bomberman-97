@@ -404,7 +404,8 @@ TEST_CASE("2026-07-26 warphole fix: an AI standing on a warphole never presses b
 }
 
 TEST_CASE("2026-07-26 warphole fix: only type 1 blocks — an AI still bombs a conveyor") {
-    // sub_423188 rejects `v5[1] == 1` ONLY. A dirarrow (0), conveyor (2) or
+    // sub_423188 rejects an actor whose type byte (the record's second byte)
+    // is exactly 1, and nothing else. A dirarrow (0), conveyor (2) or
     // trampoline (3) under the AI leaves the tile droppable, so the fix must not
     // over-reject. Same fixture with a conveyor instead of the warphole.
     Simulation s = open_arena(/*tx=*/6, /*ty=*/5, /*ai=*/true);
@@ -769,7 +770,9 @@ TEST_CASE("Stage 5: deterministic replay with two fully-live AIs fighting") {
 
 TEST_CASE("Audit fix: a flame-vetoed directed step falls through to blast bricks, not stalls") {
     // sub_40B20F's danger branch returns `godir != -1` after the flame veto
-    // (pseudo.c 10841-10842: `sub_40A76E(v4); return *(int*)(v4+44)>>16 != -1;`),
+    // (pseudo.c 10841-10842 calls sub_40A76E on the actor and then returns
+    // whether the godir living in the high half of the actor's +44 dword --
+    // i.e. the +46 word -- is still not -1),
     // so a vetoed step PASSES DOWN to behaviours 3-7 (and their draws) instead
     // of stalling. Latch a directed path target whose shortest first step is
     // permanently on fire -- the directed BFS never sees flame (it is not in
@@ -858,8 +861,10 @@ TEST_CASE("Audit fix: a grab-AI still rolls to grab its own SLIDING bomb") {
 
 TEST_CASE("Audit fix: a stunned AI draws no RNG this tick") {
     // sub_41F29B gates the WHOLE AI dispatch -- draws A/B included -- behind
-    // `v113 && !dword_4621E0` (line 23028), and v113 is false while
-    // `actor+58 > 0` (a stun/pickup-pause countdown). An earlier port bug
+    // the input-acquisition gate at line 23028 -- the per-actor "input was
+    // acquired" local ANDed with dword_4621E0 being clear -- and that local is
+    // false while the actor's +58 stun/pickup-pause countdown is above zero.
+    // An earlier port bug
     // called AISystem::decide() for any present&&alive&&ai player regardless
     // of Player::stun, drawing spurious RNG on a tick the original skips
     // outright (docs/re/ai.md §7 RESOLVED). player_turn already no-ops a
@@ -893,7 +898,8 @@ TEST_CASE("Audit fix: an AI mid pickup-pause also draws no RNG this tick") {
     // Player::pickup_pause (player state +78==4) is a SEPARATE counter from
     // Player::stun (+58) -- see facts.md "Player state machine (+78) —
     // COMPLETE" and the Player::pickup_pause doc comment. Both independently
-    // clear v113 in the original (sub_41F29B ~23017-23027), so an AI mid
+    // clear the acquisition gate in the original (sub_41F29B ~23017-23027),
+    // so an AI mid
     // pickup-pause must draw nothing this tick exactly like a head-hit stun,
     // even with Player::stun == 0.
     Simulation stunned = open_arena(/*tx=*/5, /*ty=*/5, /*ai=*/true);

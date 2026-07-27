@@ -235,7 +235,8 @@ AppInput ScoreboardScreen::run() {
             if (clinched_player < 0) {
                 // Pre-clinch line (batch_0x4293E5.cpp:1262-1263):
                 // getstring(dword_46497C + 120) formatted with the FLAT target
-                // v60 = dword_464A7C — NOT the remaining count. The strings are
+                // read straight from dword_464A7C — NOT the remaining count.
+                // The strings are
                 // 120 "(Match winner must score %u victories)" / 121 "(... %u
                 // kills)", so the id keys off win_by_kills (a non-team feature),
                 // not team mode, and always shows the total goal.
@@ -250,7 +251,8 @@ AppInput ScoreboardScreen::run() {
             } else {
                 // Clinch line (batch_0x4293E5.cpp:1300-1310): win_by_kills ->
                 // getstring(36) "PLAYER %u WINS THE MATCH!" with the winning
-                // player NUMBER (v73+1); else getstring(35) "%s WINS THE MATCH!"
+                // player NUMBER (the clinch winner's index + 1); else
+                // getstring(35) "%s WINS THE MATCH!"
                 // with the winner name. The native has NO team-specific win
                 // string here — the former `team_mode ? "TEAM %u WINS"` gate
                 // AND that fallback text were both invented (id 36 is "PLAYER

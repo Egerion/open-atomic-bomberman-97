@@ -115,23 +115,23 @@ void CampaignPickerScreen::run() {
 // 2026-07-09, replacing the accept-sting stand-in
 // (formerly a coverage-audit.md crumb, now closed). Uses the SAME sub_43C734 chrome
 // primitive (DialogRect/draw_dialog_chrome, above) as the quit-confirm
-// dialog, sized from BOTH lines' text extents (sub_414340's own v24 =
+// dialog, sized from BOTH lines' text extents (sub_414340 keeps
 // max(measure(top), measure(bottom)), traced from the raw disassembly at
-// 0x41436c-0x4143a1: it measures LODWORD's text, then HIDWORD's, and keeps
-// the wider) — width = max(that, 80)+64, height = 4*fontheight+64+2*
+// 0x41436c-0x4143a1: it measures the EAX-half string, then the EDX-half one,
+// and keeps the wider) — width = max(that, 80)+64, height = 4*fontheight+64+2*
 // fontheight (two lines).
 //
 // Line order/content — CONFIRMED via raw disassembly (BM95.EXE, imagebase
 // 0x400000, capstone; see docs/re/campaign.md "Round pacing" provenance note
 // for the same disassembly method), NOT guessed:
-//   sub_4015C6 @ 0x401653-0x401669: `mov eax,0x4ba(1210); call getstring;
-//   mov edx,eax; mov eax,0x5f(95); call getstring; call sub_414340` — so at
-//   the call, EDX=getstring(1210)="Campaign Mode Activated!", EAX=
-//   getstring(95)="NOTE!".
+//   sub_4015C6 @ 0x401653-0x401669 resolves string id 1210 first and parks
+//   that pointer in EDX, then resolves id 95 into EAX, and calls sub_414340
+//   with those two registers — so at the call, EDX=getstring(1210)="Campaign
+//   Mode Activated!", EAX=getstring(95)="NOTE!".
 //   sub_414340 @ 0x414471-0x4144bb: draws the caller's EAX-sourced text
 //   FIRST at the top y (fontheight+32), then the EDX-sourced text SECOND,
-//   fontheight+2 further down — i.e. LODWORD/EAX is the TOP line, HIDWORD/
-//   EDX is the BOTTOM line. So "NOTE!" (95) is on top, "Campaign Mode
+//   fontheight+2 further down — i.e. the EAX half is the TOP line and the
+//   EDX half is the BOTTOM line. So "NOTE!" (95) is on top, "Campaign Mode
 //   Activated!" (1210) is below it — matching the SAME header-word-on-top
 //   pattern the sibling error dialog uses (getstring(97)="Warning!" over
 //   getstring(1215)="Campaigns not available!...", identical EAX/EDX

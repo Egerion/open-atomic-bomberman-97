@@ -26,7 +26,7 @@ top to bottom:
    LEVEL & ROUNDS); returns early for attract mode.
 3. `sub_410B6E()` — level load + round init (chooses the stage, resets the
    round timer via `sub_4104C2`/`sub_410494`).
-4. **`sub_43A6FC((int)sub_42A191)`** — registers `sub_42A191` (@ 0x42A191) as
+4. **`sub_43A6FC(sub_42A191)`** — registers `sub_42A191` (@ 0x42A191) as
    a **per-frame tick callback**. This is the actual gameplay driver: it
    advances `dword_464994` (the frame/tick counter), calls the movement/AI/
    physics chain, the per-player render-and-cornerhead pass (`sub_420F07`,
@@ -37,13 +37,14 @@ top to bottom:
    `dword_4646AC`, making the callback a no-op) for the duration of the
    DRAW/RESULTS/VICTORY screens — re-enabled (`sub_42A16F(0)`, 30113) if a
    multi-round match loops back into the next round — and only
-   **unregistered** (`sub_43A74C((int)sub_42A191)`, `LABEL_204`, pseudo.c
-   29815-29818) when the Play flow exits for good. Either way, gameplay
+   **unregistered** (`sub_43A74C(sub_42A191)`, at the teardown label
+   pseudo.c 29815-29818) when the Play flow exits for good. Either way, gameplay
    ticking and its render pass genuinely stop the instant the round-driver
    loop exits, before the outcome screens run their own bespoke wait loops.
-5. **`while (1) { v72 = sub_43A508(...); switch-on-v72; ...standard-frame-
-   work... }`** (pseudo.c 29705-29819) — the loop this task calls "the
-   in-round main loop". `sub_43A508` polls one already-remapped virtual key
+5. **An endless loop whose every iteration is: poll ONE key code from
+   `sub_43A508`, dispatch on it through the auxiliary-key chain, then do the
+   standard per-frame work** (pseudo.c 29705-29819) — the loop this task
+   calls "the in-round main loop". `sub_43A508` polls one already-remapped virtual key
    code per iteration (same primitive used by the menu/boot code, chained
    through `sub_43A56C`/`sub_43A624`/`sub_43DF28`; `sub_43DF28` applies the
    player's key-remap table, so the numeric codes below are **post-remap
@@ -182,11 +183,11 @@ while the action keys are edge-consumed, capture-or-lose. The sim's
 Reading the exact nested-if chain at pseudo.c 29709-29788 (not paraphrased —
 every comparison in the chain is accounted for below):
 
-| key (v72) | gate | action | notes |
+| key code | gate | action | notes |
 |---|---|---|---|
 | `1` | `sub_413D01()` (debug/skip-logos flag) | `sub_42A325()` — dumps a debug text file | **debug cheat**, see below |
 | `4` | none | `sub_413BB0()` — arms the DOS text-mode debug overlay (`dword_45BCD4=1`, `sub_42C098(0)`) | **debug cheat**, see below; no visible in-game effect without the mono/color text-page overlay actually being read by a debugger/second monitor — effectively inert on a normal VGA session |
-| `0x11` = **17** | none | `dword_46492C=-1; dword_464A68=2;` — **abort round, forfeit, back to menu** | the SAME target the menu's Escape handler jumps to (`docs/re/frontend-flow.md`'s `v8>=17 && (v8<=17\|\|v8==27)` Escape/Quit dispatch uses the identical 17/27 pairing) — see "Esc negative finding" below for why only 17 fires here |
+| `0x11` = **17** | none | `dword_46492C=-1; dword_464A68=2;` — **abort round, forfeit, back to menu** | the SAME target the menu's Escape handler jumps to (`docs/re/frontend-flow.md`'s Escape/Quit dispatch — condition "code ≥ 17 AND (code ≤ 17 OR code == 27)", i.e. exactly {17, 27} — uses the identical 17/27 pairing) — see "Esc negative finding" below for why only 17 fires here |
 | `18` | `sub_413D01()` | `sub_4165D2()` — toggles a display mode (`dword_460BA4` ? `sub_416591` : `sub_4162F0`) | **debug cheat**, gated — now fully characterized, see below |
 | `0x111` = **273** | none | `dword_4646B4 = 1` | **not an abort** — arms a flag consumed only by the DRAW/RESULTS wait loops' 6 s auto-advance test (`(sub_42247A()\|\|dword_4646B4) && time>t0+6000`, pseudo.c 29838/30062); reset to 0 at round entry (29704). Effectively a "skip the outcome screens quickly" latch, not a live pause/skip of the round itself |
 | `288` | none | `sub_413D45()` — opens the **"Internal debugging information window"** (MESSAGES.TXT id 400) | **debug cheat**, NOT gated by `sub_413D01()` — reachable in retail; shows total/audio mem, local net id, BOMBER_ID, critical-retrans rate, audio cache hit % (msg ids 405/410/411/415/420); dismissed by Enter/Esc. Same handler the main menu binds to raw code 288 (`docs/re/frontend-flow.md`'s table) |
@@ -197,7 +198,7 @@ every comparison in the chain is accounted for below):
 | anything, while `dword_464938` (attract mode) | — | `dword_46492C=-1; dword_464A68=2;` (same as key 17) | any key aborts an attract-mode demo round back to the menu — already documented in `docs/re/frontend-flow.md` "Attract mode" |
 
 All codes not listed above (including ordinary movement/gameplay keys) fall
-through to `LABEL_54` and are consumed by the normal per-tick input
+through to the loop's shared tail label and are consumed by the normal per-tick input
 collection elsewhere in the tick callback (`sub_42A191`'s chain) — outside
 this loop's switch, which only handles the auxiliary set above.
 
@@ -250,15 +251,17 @@ things LOOK like a pause and are not, for the record:
    function that builds it is **`sub_43A7C0`** (pseudo.c 42103-42134,
    `sub_43C734`/`sub_432298` dialog chrome — the SAME primitives
    `docs/re/frontend-flow.md`'s "sub_43C734 dialog-chrome primitive" section
-   already pins), not "`sub_43A7D4`" — that address is merely an inline
-   Hex-Rays comment inside `sub_43A7C0`'s own body ("43A7D4: variable 'v4' is
-   possibly undefined"), not a separate function; no `sub_43A7D4` function
-   exists in the binary. Tracing every caller, root to leaf:
+   already pins), not "`sub_43A7D4`" — that address appears only inside
+   `sub_43A7C0`'s own body, as a decompiler diagnostic about an undefined
+   local at that instruction, not as a separate function; no `sub_43A7D4`
+   function exists in the binary. Tracing every caller, root to leaf:
    - `sub_43A7C0` is reachable **only** as the default value of a function
      pointer, `dword_4A37BC = sub_43A7C0` (pseudo.c 41809, set once at
      windowing-engine init, `sub_43A400`).
    - `dword_4A37BC` is called from exactly one site: `sub_43A784()` (pseudo.c
-     42082-42096) — `dword_4A37BC(); while (sub_43A508(v0) != 27); ...` —
+     42082-42096), whose body is three steps — call through the function
+     pointer, then spin polling `sub_43A508` until it yields 27, then tear
+     down —
      i.e. open the dialog, then loop the SAME low-level key-poll primitive
      `sub_43A508` (`docs/re/in-match-shell.md`'s own round-driver section
      already cites this as the primitive every context — round loop, menu
@@ -267,8 +270,9 @@ things LOOK like a pause and are not, for the record:
      engine layer, callable from anywhere `sub_43A508` runs.
    - `sub_43A784` itself is called from exactly one site: `sub_43A594`
      (pseudo.c 41897-41927), the raw-key dispatcher every `sub_43A508` call
-     runs through BEFORE the caller-specific key remap — `if (a1 ==
-     dword_4A37B4) sub_43A784();` where **`dword_4A37B4` is the "pause key"
+     runs through BEFORE the caller-specific key remap — when the incoming
+     key id equals `dword_4A37B4` it calls `sub_43A784()`, where
+     **`dword_4A37B4` is the "pause key"
      id, defaulted to `281`** at the same `sub_43A400` init (pseudo.c 41808).
      Had this default survived, key 281 would have opened "Paused" from
      EVERY `sub_43A508` call site in the whole binary (menu, round loop,
@@ -278,8 +282,9 @@ things LOOK like a pause and are not, for the record:
      `sub_414DF4` (the `WIN_INIT` log line owner, pseudo.c 17522-17561),
      calls **`sub_43A8BC(-1, 0)`** (pseudo.c 17542) — the very first
      statement after confirming the window system came up — which sets
-     `dword_4A37B4 = -1`. Since `sub_43A594`'s outer guard is `if (a1 != -1)
-     { if (a1 == dword_4A37B4) ... }`, and `dword_4A37B4` is now itself -1,
+     `dword_4A37B4 = -1`. Since `sub_43A594` first checks that the incoming
+     key id is **not** -1 and only then compares it against `dword_4A37B4`,
+     and `dword_4A37B4` is now itself -1,
      the pause branch can **never** fire again: a real key's raw id is only
      ever compared against -1 while already known not to equal -1. This
      makes `sub_43A7C0`/`sub_43A784` provably unreachable for the rest of
@@ -307,22 +312,25 @@ help, the faithful behaviour is "freeze the sim, let the clock keep running".
 ### Esc negative finding — CONFIRMED, and it changes what our port's Esc should do
 
 **Raw Esc (27) alone does NOT abort an in-round match in the original.**
-Tracing the exact comparison chain: the outer dispatch is
-`if (v72 < 0x1B) {...} else if (v72 > 0x1B) {...}` (pseudo.c 29709/29743) —
-**27 (`0x1B`) satisfies neither branch** and falls straight through to
-pseudo.c 29788's `if (dword_464938) goto LABEL_34;`, which only fires during
-attract mode. In a real, player-controlled round, pressing Esc reaches
-`LABEL_54` having done **nothing** — no abort, no pause, no visible effect.
+Tracing the exact comparison chain: the outer dispatch splits the key code
+into a **"less than 0x1B"** arm (pseudo.c 29709) and a **"greater than
+0x1B"** arm (29743) with no equal case —
+**27 (`0x1B`) satisfies neither branch** and falls straight through to the
+attract-mode test at pseudo.c 29788, which jumps to the abort branch only
+when `dword_464938` is set. In a real, player-controlled round, pressing Esc
+reaches the shared fall-through label at the loop's tail having done
+**nothing** — no abort, no pause, no visible effect.
 
 **The key that actually aborts/forfeits mid-round is `0x11` = 17 (CONFIRMED
 Ctrl+Q).** This is the same numeric-control-code pattern already established
 elsewhere in the binary: `docs/re/frontend-flow.md`'s main-menu Ctrl+E-×6
 map-editor trigger uses raw code 5 = the ASCII control code for Ctrl+E; by
 the identical convention, ASCII control code 17 = **DC1 = Ctrl+Q**. The menu
-loop's own Escape/Quit dispatch (`v8>=17 && (v8<=17||v8==27)`,
-`docs/re/frontend-flow.md` line ~30861) treats 17 and 27 as synonyms **only
-there** — in the round loop the two codes are NOT synonyms: only 17 is
-wired to the abort branch (`LABEL_34`), 27 is not reachable by that branch at
+loop's own Escape/Quit dispatch — whose condition is "code ≥ 17 AND (code ≤ 17
+OR code == 27)", i.e. exactly {17, 27} (`docs/re/frontend-flow.md` line
+~30861) — treats 17 and 27 as synonyms **only
+there**. In the round loop the two codes are NOT synonyms: only 17 is
+wired to the abort branch, 27 is not reachable by that branch at
 all. So in-round, **Ctrl+Q forfeits/aborts to the menu; Esc is inert**.
 
 This directly changes the answer to the task's framing question ("what
@@ -330,8 +338,8 @@ should our Esc-to-menu really do — instant quit, confirm prompt, or
 forfeit?"): the original's answer is **none of those for Esc** — Esc is not
 bound to anything mid-round; the real abort key is Ctrl+Q, and when it
 fires it is an **instant, unconfirmed forfeit** (`dword_464A68=2` with no
-dialog, immediately followed by the standard teardown at `LABEL_200`/
-`LABEL_204`: `sub_40FB44` [network-notify, N/A locally] → a 10×100 ms drain
+dialog, immediately followed by the standard teardown at the two shared tail
+labels (pseudo.c 30139 / 29815): `sub_40FB44` [network-notify, N/A locally] → a 10×100 ms drain
 loop pumping `sub_40EA1E`/`sub_413CB0` → `sub_43A74C` unregisters the tick
 callback → return to the menu). There is no confirm prompt anywhere in this
 path (contrast the main menu's Quit row, which does pop one).
@@ -380,8 +388,9 @@ Its body:
    `aInfinity` ("∞") at `getvalue(110)`, `getvalue(111)` instead of digits —
    so the HUD still appears, just showing infinity, when a round has no time
    limit.
-3. **Timed rounds** format `MM:SS` via message **`281 = "%u:%02u"`**
-   (`v13/60`, `v13%60`), then draw it **digit by digit** using the
+3. **Timed rounds** format `MM:SS` via message **`281 = "%u:%02u"`** — the
+   two arguments are the seconds-remaining count divided by 60 and the same
+   count modulo 60, in that order — then draw it **digit by digit** using the
    **`aNumericFont`** glyph set (a dedicated font resource distinct from the
    FONT6 UI font used by `.BM` screens), one `sub_415920` blit per character
    at `x = getvalue(110)` (**525**), `y = getvalue(111)` (**36**), advancing
@@ -390,7 +399,7 @@ Its body:
    font digits") per digit.
 4. **Colour changes at ≤30 s remaining** — `byte_49D38F` (the normal ink
    colour) is swapped for `byte_49A390` (a distinct, presumably warning-red,
-   palette index) once `v13 <= 30`. This is a separate, permanent colour
+   palette index) once that same seconds-remaining count is **≤ 30**. This is a separate, permanent colour
    change (not the blinking "hurry" flash below, which is a separate
    late-round text warning).
 
@@ -415,7 +424,7 @@ missed a real draw block inside it. See "The player row" below.
 Still inside `sub_42A191` (pseudo.c 29531-29549), after the clock draw:
 reads **`getvalue(101)` = 60** and compares it against the round's total
 length; when the **remaining time is within 5 seconds of `getvalue(101)`**
-(`v6 > v7 - 5`, i.e. within the last ~5 s of crossing the 60 s-remaining
+(the test is "elapsed > total − 5", i.e. within the last ~5 s of crossing the 60 s-remaining
 threshold — practically: fires once, near the 55-60 s-remaining mark, not
 continuously for the rest of the round) it plays **SFX 2700** once
 (`dword_464984` latch guards the one-shot) and, **on alternating frames**
@@ -448,23 +457,29 @@ block, separate from the clock/hurry HUD, gated `if (byte_461BD4[152*i])`
 "this slot has ever had a player in this MATCH", not "alive this round",
 since a round-eliminated slot still draws — see the marker overlay below):
 
-```
-v10 = sub_412135(i/2 + 115);           // x = getvalue(115 + i/2)
-v9  = sub_412135((i&1) + 113);         // y = getvalue(113 + i&1)
-v4  = dword_461C2C[38*i] >> 16;        // sub_421AC8(i) — win count
-v1  = sub_4124A4(37);                  // getstring(37) = "S:%d K:%d"
-sub_4518D0(v8, v1, v4);                // sprintf (2nd %d arg lost to
-                                        // Hex-Rays' variadic-call undercount,
-                                        // resolved below via sub_421AC8's
-                                        // OWN call sites elsewhere)
-v5 = sub_416867(i); v2 = sub_41672F(i);        // ink/shadow, per-player colour
-sub_41696C(dword_464AE4, v8, v10, 90, v9, v2, v5);
-if (!dword_461BC4[38*i]) {             // +0x00 "active/moving" == dead THIS round
-    v6 = sub_41D957(aXxx);             // aXxx = "xxx" (literal, lowercase)
-    v7 = sub_41DAA7(v6, 0);
-    sub_415920(v10, v9, v7);           // overlay the "xxx" sprite
-}
-```
+Per slot `i`, in this order:
+
+1. **Row x** ← `getvalue(115 + i/2)` (integer divide — the column), via the
+   getvalue primitive `sub_412135`.
+2. **Row y** ← `getvalue(113 + (i & 1))` (the parity row).
+3. **Win count** ← the **upper 16 bits** of the dword at
+   `dword_461C2C[38*i]` — this expression is `sub_421AC8(i)` inlined; see the
+   paragraph below for why the second number is the kill count.
+4. **Format string** ← `getstring(37)` = `"S:%d K:%d"`, via `sub_4124A4`.
+5. **sprintf** (`sub_4518D0`) the win count into that format into a scratch
+   buffer. *Annotation from the original transcription: the SECOND `%d`
+   argument is lost to the decompiler's variadic-call argument undercount —
+   it is resolved below via `sub_421AC8`'s OWN call sites elsewhere.*
+6. **Ink and shadow colours** ← `sub_41672F(i)` and `sub_416867(i)` — the
+   per-player colour pair (docs/re/player-colour.md).
+7. **Draw** the formatted line with `sub_41696C` onto surface
+   `dword_464AE4`, at (row x, row y), box width **90**, foreground = the
+   `sub_41672F` ink, background = the `sub_416867` shadow.
+8. **Eliminated overlay** — if the dword at `dword_461BC4[38*i]` (player
+   struct **+0x00**, "active/moving") is **zero**, i.e. this slot is dead
+   THIS round: look up the sequence named by the literal `aXxx` = `"xxx"`
+   (lowercase) with `sub_41D957`, take its **frame 0** via `sub_41DAA7`, and
+   blit it with `sub_415920` at the SAME (row x, row y) as the text.
 
 **Layout — pixel-exact from the VALUELST file's OWN comments** (not
 inferred): `; two vertical (Y) coordinates of each player row across the
@@ -476,8 +491,9 @@ the screen (y=6 or y=26; x=10/110/210/310/410), column = `i/2`, row = `i&1`
 passed to `sub_41696C` (90 px) is a literal, not a `getvalue()` id.
 
 **The two numbers ARE win-count and kill-count, not a decompiler artifact.**
-`sub_421AC8(a1)` (`return dword_461C2C[38*a1]>>16`) is the SAME accessor
-`sub_420F07` inlines as `v4` above — and it is independently used at the
+`sub_421AC8(slot)` returns the **upper 16 bits** of the dword at
+`dword_461C2C[38*slot]` — the same accessor `sub_420F07` inlines for its win
+count in step 3 above — and it is independently used at the
 RESULTS tier's match-clinch check (`sub_421AC8(k) >= dword_464A7C`, pseudo.c
 29943, "wins needed to clinch") and its own per-player score print (pseudo.c
 29959-29960, `sub_421B0F(j)` / `sub_421AC8(j)`, immediately followed by
@@ -513,23 +529,26 @@ bubble — CONFIRMED N/A for a same-screen port (2026-07-09).** Still inside
 section already cites for the idle-fidget "cornerhead" poses — CONFIRMED
 unrelated to this section, already ported as `Renderer`'s
 `panic_ticks_`/`panic_variant_`), a SEPARATE block (pseudo.c 23269-23276)
-draws a `KFACE.ANI` face (`sub_4518D0(v76, aKfaceS, dir)`, `aKfaceS = "kface
-%s"`; `KFACE.ANI` ships `kface north/east/south/west`, 4 single-frame
-~40x40 images, confirmed via `abtool ani KFACE.ANI`) at `(player_x - 4,
-player_y - 34)` (`sub_415A9F(*(v111+7) - 4, *(v111+8) - 34, 0, v74)`, frame 0
-of the direction sequence, drawn every tick the gate holds — no health/
-disease/event condition, no cadence beyond "gate is true this frame") —
-gated `if (((char*)v111-(char*)dword_461BC4)/152 == dword_45BE3C)`, i.e.
-only for the player slot equal to global `dword_45BE3C`. The direction is
-picked by `sub_413AED(BYTE2(*(v111+21)))` — `off_45BCC4[facing_byte & 3]`, a
-4-entry direction-name table indexed by the player's own facing.
+draws a `KFACE.ANI` face. It sprintf's the sequence name from the template
+`aKfaceS = "kface %s"` plus a direction word; `KFACE.ANI` ships `kface
+north/east/south/west`, 4 single-frame ~40x40 images, confirmed via `abtool
+ani KFACE.ANI`. The blit is `sub_415A9F` at **player x (struct dword +7)
+minus 4** and **player y (dword +8) minus 34**, frame index **0** of the
+direction sequence, drawn every tick the gate holds — no health/disease/
+event condition, no cadence beyond "gate is true this frame". The **gate**
+is: this player's slot index — the struct's byte distance from the array
+base `dword_461BC4` divided by the 152-byte stride — equals the global
+`dword_45BE3C`. The direction word comes from `sub_413AED`, fed the
+**third byte (bits 16-23) of the struct dword at +21** — the facing byte;
+`sub_413AED` indexes the 4-entry direction-name table `off_45BCC4` with
+that byte masked to its low 2 bits.
 
 `dword_45BE3C`'s semantics are now **exhaustively traced** — every read and
 write in the whole decompile (5 sites total, confirmed by a full-file grep,
 no others exist):
 
-- **Declaration/init** (pseudo.c 2235): `int dword_45BE3C = -1;` — global,
-  starts "nobody designated."
+- **Declaration/init** (pseudo.c 2235): a global int statically initialised
+  to **-1** — starts "nobody designated."
 - **Round-start reset** (pseudo.c 23986, `sub_421793`, the per-round init
   function that also resets the +53/+54 fields on all 10 slots and shuffles
   the spawn-point tables): `dword_45BE3C = -1;` — cleared at the top of
@@ -539,14 +558,16 @@ no others exist):
   input-type-category byte `docs/re/setup-screens.md`'s "State model" section
   pins at player-struct `+16` (0=OFF, 1=COMPUTER, 2=keyboard, **3=joystick**,
   4=other controller)): **only `case 3` (joystick) touches it.**
-  `sub_429520(stick_index, &v29, &v31, &v30)` reads the live joystick sample
-  cached by the polling loop `sub_429790` (confirmed: `v4[8]`/`v4[9]` are the
-  X/Y axes rescaled to 0-100, `v4[10] = pji.dwButtons`, the raw
-  `joyGetPosEx` button bitmask — so `v31` here is that raw button bitmask,
-  not a percentage). If `v31 == 74` exactly, `dword_45BE3C` is set to *this
-  player's own slot index* (`(v28 - dword_461BC4)/152`) and
-  `sub_4101F1(index)` fires; if `v31 == 138` exactly, it is cleared to `-1`
-  and `sub_4101F1(-1)` fires. Both 74 (`0b01001010`) and 138 (`0b10001010`)
+  `sub_429520(stick_index, &out_x, &out_buttons, &out_y)` reads the live
+  joystick sample cached by the polling loop `sub_429790` (confirmed: the
+  cached sample's slots 8 and 9 are the X/Y axes rescaled to 0-100, and
+  slot 10 is `pji.dwButtons`, the raw `joyGetPosEx` button bitmask — so the
+  second out-parameter here is that raw button bitmask, not a percentage).
+  If that bitmask is **exactly 74**, `dword_45BE3C` is set to *this player's
+  own slot index* — computed as the player struct's byte distance from the
+  array base `dword_461BC4` divided by the 152-byte stride — and
+  `sub_4101F1(index)` fires; if it is **exactly 138**, `dword_45BE3C` is
+  cleared to `-1` and `sub_4101F1(-1)` fires. Both 74 (`0b01001010`) and 138 (`0b10001010`)
   are multi-bit chords, not single-button presses — an unlikely-to-hit-by-
   accident gesture, and one that requires a **joystick specifically**
   (neither keyboard `case 2` nor the "other controller" `case 4` ever touch
@@ -555,12 +576,14 @@ no others exist):
   `sub_40C326(57)` + `sub_40CE27((int16*)0x39, &value, ..., 2)` — it puts the
   new value on the wire as message id **57 (0x39)**, a 2-byte payload.
 - **The matching receive-side handler, `sub_40E2D8`** (pseudo.c 12786-12795,
-  one of the `sub_40C497(a1)`-gated message dispatch wrappers alongside
-  every other `sub_40Exxx` handler in that block): on a valid inbound
-  message it calls **`sub_4226F6(*(int16*)(a1+12))`**.
-- **`sub_4226F6`** (pseudo.c 24697-24702) is a trivial setter:
-  `dword_45BE3C = result; return result;` — the mirror-side write, applying
-  whatever slot index a network peer broadcast.
+  one of the message-dispatch wrappers gated on `sub_40C497` of the incoming
+  message pointer, alongside every other `sub_40Exxx` handler in that
+  block): on a valid inbound message it reads the **signed 16-bit field at
+  offset +12 of the message record** and passes it to **`sub_4226F6`**.
+- **`sub_4226F6`** (pseudo.c 24697-24702) is a trivial setter: it stores its
+  argument into `dword_45BE3C` and returns that same value — the mirror-side
+  write, applying whatever slot index a network peer broadcast, with no
+  validation of any kind.
 - **The only READ anywhere** is the KFACE gate above (pseudo.c 23269).
 
 **Conclusion: this is a netplay-only, joystick-gated "designate one slot to
@@ -622,8 +645,9 @@ ani` against this install's `DATA/ANI/`; `dword_45BE3C` full trace —
 declaration pseudo.c 2235, `sub_421793` round-reset pseudo.c 23977-23986,
 `sub_41E61E` joystick-case write pseudo.c 22279-22391 [`case 3` block
 22358-22391], `sub_429520` joystick-sample accessor pseudo.c 28957-28980,
-`sub_429790` joystick-poll loop confirming `v4[8]/v4[9]/v4[10]` = X%/Y%/
-`dwButtons` pseudo.c 29090-29152, `sub_4101F1` network-send wrapper pseudo.c
+`sub_429790` joystick-poll loop confirming that the cached sample's dword
+slots 8/9/10 hold X% / Y% / `dwButtons` respectively, pseudo.c 29090-29152,
+`sub_4101F1` network-send wrapper pseudo.c
 14249-14257 [message id 0x39=57], `sub_40E2D8` receive-side dispatch
 pseudo.c 12786-12795, `sub_4226F6` mirror-side setter pseudo.c 24697-24702;
 input-type category table `docs/re/setup-screens.md` "State model —
@@ -634,11 +658,12 @@ CONFIRMED (`sub_421DD2`)".)
 The task's ported "~3 s linger" and the original's actual shell, precisely
 matched up:
 
-1. **Round loop exit.** Every iteration of the `while(1)` auxiliary-key
-   loop ends with `if (!dword_464AEC && sub_421947() > 1 && !sub_41087D())
-   goto LABEL_200;` (pseudo.c 29810). `LABEL_200` (pseudo.c 30139) doubles
+1. **Round loop exit.** Every iteration of the endless auxiliary-key loop
+   ends with a three-part test (pseudo.c 29810): `dword_464AEC` clear
+   **and** `sub_421947() > 1` **and** `sub_41087D()` false → jump to the
+   shared teardown label at pseudo.c 30139. That label doubles
    as the **bottom of the loop**: with `dword_464A68 == 0` it does nothing
-   and the `while(1)` iterates again — so that guard reads "more than one
+   and the loop iterates again — so that guard reads "more than one
    alive (`sub_421947`) and clock not expired (`sub_41087D`) → keep
    looping". (`dword_464AEC` is only ever set by the network key 324 —
    always 0 locally.) When the survivor count drops to ≤1 **or** the clock
@@ -661,7 +686,7 @@ matched up:
    - **Play entry** (pseudo.c 29696): track **1020** ("win") — this is
      actually the **setup-screens music** (player select / LEVEL & ROUNDS),
      not victory music.
-   - **Round init** (`sub_410B6E` LABEL_48, pseudo.c 14847-14850): if the
+   - **Round init** (`sub_410B6E`'s music block, pseudo.c 14847-14850): if the
      Options toggle **"Disable music during gameplay"** (`dword_4648C0`,
      options.ini `disable_game_music=` — `docs/re/results-and-options.md`
      §3 row 13) is set, `sub_427342()` frees the music → the round is
@@ -692,7 +717,8 @@ matched up:
    (pseudo.c 29830-29881, NOT the generic `sub_42A088` primitive) with:
    - nav-blip (SFX 20) on any real key;
    - `sub_40C06A()==1` (network client) forces Esc — N/A locally;
-   - **auto-advance after `sub_43ACF8() > v74 + 6000`ms — a literal
+   - **auto-advance once the millisecond clock `sub_43ACF8()` passes the
+     loop's entry timestamp + 6000 ms — a literal
      **hardcoded 6000, not a `getvalue()` id** — gated on
      `sub_42247A() || dword_4646B4` (all-AI roster OR the in-round 273-key
      latch, see the aux-key table above);
@@ -703,26 +729,28 @@ matched up:
    - **SFX 40 ("enrt1", "can't do that here")** fires if `sub_40C06A()==1`
      and a key was pressed — network-only, matches `docs/re/frontend-flow.md`.
 4. **RESULTS branch (a survivor exists):** loads RESULTS.PCX, computes the
-   winner-so-far index (`v73`, -1 if nobody has clinched yet) and prints
+   **winner-so-far index** (call it *clinched*; it is **-1** if nobody has
+   clinched yet) and prints
    tallies (`docs/re/results-and-options.md` §1 territory) — then runs an
    **almost identical bespoke wait loop** (pseudo.c 30051-30105) with the
    same 6000 ms hardcoded auto-advance gate, the same accept-key set (13/32/
    903 this time — a different net code, still N/A locally), and the same
    SFX-40 network buzz.
 5. **Loop-back or VICTORY.** After the RESULTS wait:
-   - **No clinch yet (`v73 == -1`):** if `v76 >= 2` (at least 2 players
-     have a score entry — i.e. the match isn't degenerate), calls
+   - **No clinch yet (*clinched* is -1):** if the seated-slot count is **≥ 2**
+     (at least 2 players have a score entry — i.e. the match isn't
+     degenerate), calls
      `sub_410B6E()` again — **starts the next round of the same match**,
      looping the whole `while(1)` structure from step... this is the
      multi-round match structure `docs/re/frontend-flow.md`'s "RESULTS
      tally tier" section flagged as still needing a port when this section
      was written — **shipped since**, ROADMAP "Multi-round best-of-N loop +
-     RESULTS tally 1:1 — DONE 2026-07-08". If `v76 < 2`
+     RESULTS tally 1:1 — DONE 2026-07-08". If that count is **< 2**
      (fewer than 2 players ever scored — a degenerate/aborted setup), shows
      message 47 ("Too many players have left the game!", header 95 "NOTE!")
      and sets `dword_464A68 = 2` (quit to menu) — **no forfeit-vs-quit
      distinction here; this is a hard bailout**, not a normal round loss.
-   - **Clinched (`v73 != -1`):** formats `aTeamU`/`aVictoryU` (already
+   - **Clinched (*clinched* is not -1):** formats `aTeamU`/`aVictoryU` (already
      documented in `docs/re/frontend-flow.md`), draws it via the generic
      `sub_42A088(name, 0)` (cut, no wipe, no wait — `wait=0`), then **a
      literal `sub_413CB0(3000)`** — a **hardcoded, blocking 3000 ms
@@ -732,7 +760,8 @@ matched up:
      after the sleep does it set `dword_464A68 = 1` (clean match-win flag,
      the ONLY site in the whole binary that assigns 1 to this variable —
      every other assignment is 0/2/10) and fall through to teardown.
-6. **Teardown (`LABEL_200`/`LABEL_204`, shared by every exit path):** if
+6. **Teardown (the two shared tail labels at pseudo.c 30139 / 29815, reached
+   by every exit path):** if
    `dword_464A68` is nonzero, calls `sub_40FB44` (network-notify;
    `sub_40FCE6()` locally — a local-only stub call, not further RE'd here as
    out of scope), then a **10-iteration × 100 ms drain loop**
@@ -800,12 +829,14 @@ above.
 The single most load-bearing correction in this pass. The outcome tier splits on
 `sub_4219B0(...)` (the round-survivor query, pseudo.c 29823):
 
-- **survivor exists → `goto LABEL_102`** (pseudo.c 29824), which is the RESULTS
-  tier's own head (`aResultsPlt` load at 29888). DRAW.PCX is skipped entirely.
+- **survivor exists → jumps directly to the RESULTS tier's own head**
+  (pseudo.c 29824 → the `aResultsPlt` load at 29888). DRAW.PCX is skipped
+  entirely.
 - **no survivor → DRAW.PCX** (`sub_42A088(aDraw, 0)` 29825, sting `sub_427BFB(1700)`
   29826) and its bespoke wait loop — and when that loop exits it does three
   teardown calls (`sub_415CE3`/`sub_415C1F`/`sub_4150BD`, 29882-29884) and then
-  **falls straight through into `LABEL_102`** (29885). There is no jump over it.
+  **falls straight through into that same RESULTS head** (29885). There is no
+  jump over it.
 
 So a drawn round shows **DRAW and then the cumulative tally**, dismissing two
 wait loops, before the next round starts. This document's earlier "DRAW branch"
@@ -827,7 +858,7 @@ RESULTS loop (30051-30105) is the same shape with 903 in place of 904:
 | `sub_40C06A() == 1 && !sub_40F386()` | the key is **forced to 27** (29837-29838) → the `<= 27` arm sets `dword_464A68 = 2` and leaves: **a client whose net session is dead is kicked to the menu** |
 | `(sub_42247A() \|\| dword_4646B4) && now > t0 + 6000` | the key is forced to 13 — the all-AI/attract auto-advance only |
 | `27` | `dword_464A68 = 2`, abort to the menu |
-| `32` (Space) or **`904`** | straight to `LABEL_98`: accept sting SFX 10, leave the loop — **no dwell gate** |
+| `32` (Space) or **`904`** | jumps straight to the loop's accept arm: accept sting SFX 10, leave the loop — **no dwell gate** |
 | `13` (Enter) | falls PAST the accept arm to the tail, where a client is intercepted (next row) and everyone else is dwell-gated (row after) |
 | `sub_40C06A() == 1` (tail, 29869-29873) | **SFX 40 and `continue`** — a client pressing Enter simply cannot dismiss the screen |
 | tail dwell (29877-29878) | Enter accepts only once `t0 + 1000 * sub_4148AC()` has passed |
@@ -860,8 +891,9 @@ role (pseudo.c 14727-14769):
   otherwise `dword_46499C = dword_464998` verbatim (14745-14759). So **a fixed
   level replays the SAME map every round and RANDOM re-rolls per round.**
 - **HOST additionally** drains 10×100 ms and calls `sub_4101B5` (14760-14769),
-  whose body puts `dword_46499C` on the wire (`LOWORD(a1) = dword_46499C`,
-  pseudo.c 14240) — the send that unblocks every guest's loop above.
+  whose body puts `dword_46499C` on the wire as the **low 16 bits** of the
+  outgoing message's payload word (pseudo.c 14240) — the send that unblocks
+  every guest's loop above.
 - `dword_46499C` IS the stage index everything else keys off:
   `"field%u.plt"` (14778) and `"extra%u.res"` (6903).
 
@@ -882,7 +914,7 @@ Two smaller confirmations: a round that ends on the CLOCK awards nobody a win
 (both `sub_4219B0` and the tally writer early-out on the timeout, which is why
 a time-up round is a DRAW even with someone still standing — our
 `round_winner()`'s `if (s.ticks_left == 0) return -1;` already matches); and the
-`v76 >= 2` guard on the loop-back counts **SEATED SLOTS**, not players with a
+"at least 2" guard on the loop-back counts **SEATED SLOTS**, not players with a
 score, so its message-47 bailout is unreachable in local play.
 
 **[NEEDS BINARY]** — not settled this pass, and not needed by the port as built:
@@ -925,7 +957,7 @@ than the messages:
 
 | trigger | gate | effect |
 |---|---|---|
-| in-round key `1` | `sub_413D01()` (the `-nologo`/debug global) | writes a debug text dump (`sub_42A325`) — one line per something in a `v6[0]`-sized buffer, format `"%s\n"`, opened `"wt"` |
+| in-round key `1` | `sub_413D01()` (the `-nologo`/debug global) | writes a debug text dump (`sub_42A325`) — a loop of one `"%s\n"` line per entry, the entry count taken from the first slot of a small local array, file opened in `"wt"` (text-write) mode |
 | in-round key `4` | none (always live) | arms a DOS text-mode debug overlay pointer (mono/color text page, `0xB0000`/`0xB8000`) — invisible under normal VGA graphics mode, a leftover text-mode debug hook |
 | in-round key `18` | `sub_413D01()` | toggles a display mode via `sub_4165D2` (`dword_460BA4` ? `sub_416591` : `sub_4162F0`) — FULLY CHARACTERIZED below, a colour-remap QA overlay, not a keyboard-remap screen |
 | in-round key `288` | none (always live, also live in the main menu per `docs/re/frontend-flow.md`) | opens the "Internal debugging information window" — mem/audio-mem/net-id/BOMBER_ID/retrans-rate/cache-hit stats |
@@ -950,10 +982,12 @@ them a residual port gap — each for a distinct, evidenced reason, not a blanke
 "low priority, skip":
 
 - **Key `1` (debug text dump, `sub_42A325`, pseudo.c 29577-29603).** Reading
-  the full body: `v1 = fopen_(v1, aWt_3)` — the filename argument register is
-  flagged by the decompiler itself as **"variable 'v1' is possibly
-  undefined"** (pseudo.c 29604), and the dump's own content buffer
-  (`v6[1]`, fed to `fprintf_(v7, aS_7)` in a loop) is built through
+  the full body: it opens a file in text-write mode (`aWt_3` = `"wt"`) — but
+  **the register holding the filename argument is flagged undefined by the
+  decompiler itself** (a diagnostic at pseudo.c 29604), so the target
+  filename is not recoverable; and the dump's own content buffer (the second
+  slot of a small local array, fed to `fprintf` with the `"%s\n"` format
+  string `aS_7` in a loop) is built through
   `sub_41D826`/`sub_41485A`, neither of which resolves what data is being
   serialized without further RE this pass didn't do. This is the SAME class
   of decompiler gap `docs/re/coverage-audit.md`'s existing TODO(RE) crumb

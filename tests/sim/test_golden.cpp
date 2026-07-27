@@ -143,7 +143,8 @@ MatchConfig pillars_config() {
 //      hashed dud_gate VALUE grew x20 (same single setup RNG draw). Within
 //      3000/1500-tick runs the gate (>= 3600 ticks) never opens, so B's and
 //      C's in-run dud re-arm+roll draws VANISH.
-//   2. Kick fidelity (sub_41EC84 `!v35` in-loop probe): the kick now fires on
+//   2. Kick fidelity (sub_41EC84's in-loop kick probe, the branch taken when
+//      the along-axis offset to the tile centre is zero): the kick now fires on
 //      the ARRIVAL tick (was one tick later), and a bomb sliding in another
 //      direction is snapped + REDIRECTED (sub_42464B). Kick+action2 stops own
 //      sliding bombs (sub_4247C5). Reaches B (kick players) and E (the

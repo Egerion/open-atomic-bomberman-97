@@ -53,8 +53,8 @@ void EditorRunner::run() {
             // every other screen reaches on F1 — CORRECTED 2026-07-08: this
             // was calling present_bm_screen("EDITOR") directly (a fixed-topic
             // cut), contradicting this very comment. Confirmed against
-            // sub_403184's own F1 branch (pseudo.c, `if (v18 == 315)
-            // sub_41431C();`): it is the generic browser, listing EDITOR.BM
+            // sub_403184's own F1 branch (pseudo.c — key code 315 calls
+            // sub_41431C): it is the generic browser, listing EDITOR.BM
             // as one glob entry among the rest (§3's correction: "reachable
             // only as a directory-listing entry of the help browser's *.BM
             // glob") — not a direct open of it.

@@ -118,8 +118,9 @@ private:
 // getstring(600) ("Available help files:"), and opens the selected topic
 // through the SAME `.BM` viewer (BmScreen) main-menu row 4/present_bm_screen
 // already use. Selecting a topic and dismissing its viewer re-shows the SAME
-// list (sub_414235's `do { list } while (v14 != -1)` loop indexes the one
-// glob result array rather than re-scanning the directory) until the list
+// list (sub_414235 re-runs the list dialog in a do/while that only ends when
+// the returned selection index is -1, and it indexes the one glob result
+// array rather than re-scanning the directory) until the list
 // itself is cancelled with Esc. This is the SAME routine both the main
 // menu's row 5 (§4) and the in-round F1 key (docs/re/in-match-shell.md §1)
 // invoke; the caller (GameApp) owns the loop and, for the in-round case,

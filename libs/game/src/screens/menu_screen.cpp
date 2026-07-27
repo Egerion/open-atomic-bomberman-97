@@ -41,8 +41,8 @@ constexpr std::int64_t kAttractIdleFallbackS = 30;
 constexpr std::int64_t kAttractIdleMinS = 5;  // getvalue(92) <= 5 disables attract
 
 // --- Main-menu model (sub_42B9CE) -----------------------------------------
-// The original menu highlights one of seven rows (its selection variable v10
-// runs 0..6) over MAINMENU.PCX and dispatches on Enter: 0=Play (sub_42A3F6 runs
+// The original menu highlights one of seven rows (its selection index runs
+// 0..6) over MAINMENU.PCX and dispatches on Enter: 0=Play (sub_42A3F6 runs
 // a match + results), 1/2=setup screens (sub_42B0CE/sub_42B47D), 3=editor,
 // 4=credits (.BM), 5=the generic *.BM help browser (sub_41431C — CORRECTED,
 // docs/re/results-and-options.md §4: the row's old "Roulette" label was wrong;
@@ -55,10 +55,11 @@ struct MenuItem {
     bool live;        // false = a documented stub row (no handler yet, inert)
 };
 
-// Seven rows in the ORIGINAL's v10 order (sub_42B9CE), so the cursor anchor
-// (getvalue 700-702) lands on the labels baked into MAINMENU.PCX. Row targets
-// per the CORRECTED dispatch (docs/re/results-and-options.md: v10==3 goes to
-// sub_4080DC = the OPTIONS screen, NOT an editor; v10==1/2 are the START/JOIN
+// Seven rows in the ORIGINAL's selection-index order (sub_42B9CE), so the
+// cursor anchor (getvalue 700-702) lands on the labels baked into MAINMENU.PCX.
+// Row targets per the CORRECTED dispatch (docs/re/results-and-options.md: row 3
+// goes to sub_4080DC = the OPTIONS screen, NOT an editor; rows 1/2 are the
+// START/JOIN
 // NET GAME screens sub_42B0CE/sub_42B47D — now LIVE, our own UDP-lockstep
 // netplay (ADR-0010 §3.3 step 5) rather than the original's IPX/serial link):
 //   0 Play           -> StartMatch   (live)
@@ -96,7 +97,8 @@ constexpr MenuItem kMenuItems[] = {
 constexpr int kMenuCount = static_cast<int>(std::size(kMenuItems));
 
 // Cursor anchor over MAINMENU.PCX — CONFIRMED getvalue(700/701/702) (sub_42B9CE:
-// v11=getvalue(700)=X, v1=getvalue(701)=Y, getvalue(702)=Y-step; the bomb-
+// X comes from getvalue(700), Y from getvalue(701), the Y-step from
+// getvalue(702); the bomb-
 // trigger sprite is blitted at x=X, y=Y + Ystep*row). Read live from VALUELST
 // (columns of the multi-value row 700, whose own legend reads "X, Y - first item
 // / YS - y-spacing"); these fallbacks are that install's values (332,140,38) so
@@ -118,16 +120,17 @@ AppInput MenuScreen::run() {
     // in the menu. Returns the AppInput the highlighted row resolves to, or
     // Quit on window close.
     //
-    // v14 (docs/re/frontend-flow.md "sub_42B9CE") is NOT a run-once-per-process
-    // flag: sub_42B9CE has an OUTER while(1) (one iteration per menu visit,
-    // pseudo.c ~30744) wrapping an INNER while(1) (the per-frame input-poll
-    // loop, ~30768). `v14 = 1` is set once per OUTER iteration, right before
-    // the inner loop starts; the inner loop's `if (v14) { sub_42741E(0x3F2);
-    // v14 = 0; }` just stops it from re-firing on every polled FRAME within
+    // The music re-arm flag (docs/re/frontend-flow.md "sub_42B9CE") is NOT a
+    // run-once-per-process flag: sub_42B9CE has an OUTER loop (one iteration
+    // per menu visit, pseudo.c ~30744) wrapping an INNER one (the per-frame
+    // input-poll loop, ~30768). The flag is raised once per OUTER iteration,
+    // right before the inner loop starts; inside the inner loop it gates the
+    // sub_42741E(0x3F2) call and is cleared the moment that call is made,
+    // which only stops the track re-firing on every polled FRAME within
     // that one visit. Every switch case at the bottom of the outer loop
     // (Play/setup cancel, Credits, Options, Quit-confirm-cancel, Results,
     // idle-timeout->attract, ...) falls through back to the top of the outer
-    // loop, which re-arms v14=1, so sub_42741E(0x3F2) — a full free +
+    // loop, which re-arms the flag, so sub_42741E(0x3F2) — a full free +
     // reload-from-disk + restart-from-sample-0 (sub_4273A4, no same-id
     // no-op) — fires again on EVERY return to the menu. present_menu() is
     // called once per Menu (re-)entry from run_app's dispatcher, i.e. once
@@ -244,9 +247,10 @@ AppInput MenuScreen::run() {
                     case SDLK_ESCAPE:
                         quit_confirm = false;
                         // The cancel path exits through sub_42B9CE's OUTER
-                        // loop: cursor home to row 0 (case 6 -> v10 = 0,
-                        // 30920-30922) and MENU.RSS reloaded from sample 0
-                        // (the outer loop re-arms v14 -> sub_42741E(0x3F2)).
+                        // loop: cursor home to row 0 (case 6 resets the
+                        // selection index, 30920-30922) and MENU.RSS reloaded
+                        // from sample 0 (the outer loop re-arms the music flag,
+                        // so sub_42741E(0x3F2) runs again).
                         state_.menu_index = 0;
                         ctx_.audio.start_music(kMenuMusicId);
                         break;
@@ -275,8 +279,9 @@ AppInput MenuScreen::run() {
                                                        .game_dir = state_.game_dir,
                                                        .scheme_path = state_.scheme_path})
                         .run();
-                    // Return through the outer loop re-arms v14 -> MENU.RSS
-                    // reloads from sample 0 (goto LABEL_2 at 30882).
+                    // Return through the outer loop re-arms the music flag, so
+                    // MENU.RSS reloads from sample 0 (the jump back to LABEL_2
+                    // at 30882).
                     ctx_.audio.start_music(kMenuMusicId);
                     // Time spent in the editor must NOT count toward the 30 s
                     // attract idle trigger — reseed the idle clock on return.
@@ -348,8 +353,9 @@ AppInput MenuScreen::run() {
                 case SDLK_ESCAPE:
                     // Escape's full sound path in sub_42B9CE: the "any real key"
                     // line fires the nav blip (SFX 20) for EVERY key including 27,
-                    // then Escape (27) reaches the accept branch `if (v8>=17 &&
-                    // (v8<=17 || v8==27)) { sub_427961(10); v10=6; }` — the accept
+                    // then Escape (27) reaches the accept branch — whose key test
+                    // admits exactly the code 17 and the code 27, and which plays
+                    // sub_427961(10) and forces the cursor to row 6 — the accept
                     // sting (SFX 10) — and selects row 6 = Quit. The Quit row then
                     // dispatches to sub_412987, which pops the "Are you sure you
                     // want to exit?" confirm dialog (PINNED, see quit_confirm's
@@ -382,8 +388,8 @@ AppInput MenuScreen::run() {
                     if (state_.menu_index == 5) {
                         if (HelpBrowserScreen(ctx_).run() == AppInput::Quit) return AppInput::Quit;
                         // The inline return path falls through sub_42B9CE's
-                        // outer loop -> v14 re-arm -> MENU.RSS reloads from
-                        // sample 0.
+                        // outer loop, which re-arms the music flag, so MENU.RSS
+                        // reloads from sample 0.
                         ctx_.audio.start_music(kMenuMusicId);
                         state_.menu_idle_since_ms = SDL_GetTicks();  // help time is not idle
                         break;
@@ -397,7 +403,8 @@ AppInput MenuScreen::run() {
                     AppInput sel = kMenuItems[state_.menu_index].action;
                     // Row 3 (Options) is one of the rows whose fall-through
                     // resets the cursor to row 0 for the next menu visit
-                    // (case 3 -> v10 = 0, 30910-30912); Play/Credits/Help/
+                    // (case 3 resets the selection index, 30910-30912);
+                    // Play/Credits/Help/
                     // editor keep the row (verified faithful list).
                     if (state_.menu_index == 3) state_.menu_index = 0;
                     // Quit selected from the menu (Enter/Space on row 6): the SAME
@@ -432,7 +439,8 @@ AppInput MenuScreen::run() {
         // ATTRACT trigger (docs/re/frontend-flow.md "Attract mode"): once the
         // idle clock exceeds getvalue(92) seconds (gated > 5), fire the SAME
         // Play dispatch a real Enter-on-row-0 would — sub_42B9CE forces
-        // v10=0 regardless of the highlighted row, so this returns StartMatch
+        // the selection index to 0 regardless of the highlighted row, so this
+        // returns StartMatch
         // directly rather than nudging state_.menu_index. roll_attract_match() does
         // the sub_4224E2 save + the roster/stage rolls; run_app's StartMatch
         // handler (game_app.cpp) checks state_.attract and skips the goldman wheel/
@@ -500,13 +508,14 @@ AppInput MenuScreen::run() {
         // 2026-07-10 — docs/re/frontend-flow.md "Escape/Quit-row confirm
         // dialog"): the SAME sub_43C734 chrome as the loading dialog — the
         // WINZ.PCX 9-patch (sub_41726B @ pseudo.c 17200), NOT a flat grey —
-        // sized from the prompt extent (v29=max(prompt-width,80),
-        // v30=v29+64=width, v32=4*fontheight+64+fontheight=height for this
-        // one-line prompt), centered on screen (both axes — see the chrome
+        // sized from the prompt extent (an inner width of max(prompt width,
+        // 80); the dialog width is that inner width + 64; the height is
+        // 4*fontheight + 64 + fontheight for this one-line prompt), centered
+        // on screen (both axes — see the chrome
         // comment's X-placement TODO(RE)). Prompt at y=fontheight+32
         // (window-relative, centered) in sub_412987's OWN ink byte_49A390 —
         // LUT offset 0x5000 -> idx 248 -> (164,0,0), a dark red (pseudo.c
-        // 16027: `v0 = byte_49A390` is the a3/foreground argument;
+        // 16027 passes byte_49A390 as the a3/foreground argument;
         // correcting this pass's earlier white) — outlined black via
         // sub_41696C; two sub_432298 buttons at the pinned
         // y=height-32-fontheight-6, x=width/2-80 (Yes) / width/2+22 (No).

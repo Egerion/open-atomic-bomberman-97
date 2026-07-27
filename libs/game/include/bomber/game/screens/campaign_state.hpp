@@ -103,8 +103,9 @@ inline bool load_campaign_stage(int index, CampaignState state) {
     // MatchConfig::campaign_rovers/etc (this function only prepares the
     // scheme/roster/banner, not the sim config, so the counts are read
     // there, not stashed here). ai_difficulty (field 8) is CONFIRMED dead
-    // code (grep of the whole binary: dword_45E010's field-8 slot,
-    // v20[27]/v6[27], is written once by the loader and read NOWHERE else),
+    // code (grep of the whole binary: dword_45E010's field-8 slot, reached in
+    // the loader as element 27 of the per-stage record, is written once there
+    // and read NOWHERE else),
     // matching the .CAM format's own "(unused at present)" comment exactly
     // — not a guess, a confirmed negative. Round pacing clauses 1/3/4/5
     // (docs/re/campaign.md "Round pacing") are now wired too: clause 1 by

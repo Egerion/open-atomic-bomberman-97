@@ -205,8 +205,9 @@ ListDialogLayout draw_list_dialog(SDL_Renderer* ren, const FontTextures& font,
 void draw_list_selection(SDL_Renderer* ren, const ListDialogLayout& lay, int visible_index);
 
 // sub_414340 — the ACKNOWLEDGE modal (PINNED from the body, pseudo.c
-// 17003-17107): two centered lines (top = the EAX/LODWORD arg — getstring(95)
-// "NOTE!" at every UI call site — bottom = the EDX/HIDWORD arg), width =
+// 17003-17107): two centered lines (top = the EAX half of the packed 64-bit
+// string argument — getstring(95) "NOTE!" at every UI call site — bottom =
+// its EDX half), width =
 // max(measure(top), measure(bottom), 80) + 64, height = 4*fontheight + 64 +
 // linesHeight (2*fontheight when both lines are non-empty), vertically AND
 // horizontally centered, WINZ 9-patch (sub_41726B @ 17070), lines at
@@ -232,7 +233,8 @@ void draw_acknowledge_dialog(SDL_Renderer* ren, const FontTextures& font, const 
 // + 64 + linesHeight` (linesHeight = fontheight for one line, 2*fontheight
 // for two — CONFIRMED pseudo.c 17176/17190; the "+2" at 17207 only offsets
 // line2's DRAW position below line1, it is not part of the window height —
-// sub_41456C packs up to two prompt lines into one `__int64` argument),
+// sub_41456C packs up to two prompt lines into one 64-bit argument, one
+// pointer per half),
 // width = `max(textwidth, 80) + 64`, buttons bottom-anchored at
 // `y = height - 32 - fontheight - 6`, x = `width/2 - 80` (first/"Yes") and
 // `width/2 + 22` (second/"No") — both CONFIRMED literal offsets read
@@ -244,9 +246,9 @@ void draw_acknowledge_dialog(SDL_Renderer* ren, const FontTextures& font, const 
 // a dark red) for the quit prompt; the editor confirms pass the general
 // white — so the ink is a parameter here, outlined via
 // draw_dialog_text (frontend-flow.md "sub_41696C — outlined dialog text").
-// NOT pinned: which of the two packed lines (`LODWORD`/`HIDWORD` of the
-// `__int64` arg) actually lands on TOP at the pixel level — the decompiler's
-// register-spill for that packing (pseudo.c 17167-17190) is ambiguous the
+// NOT pinned: which of the two packed lines (the low or the high half of the
+// 64-bit argument) actually lands on TOP at the pixel level — the recovered
+// register spill for that packing (pseudo.c 17167-17190) is ambiguous the
 // same way sub_43C734's own X-placement is (see that TODO(RE)); this
 // primitive always draws `line1` first (top) as the more legible ordering,
 // a port convention rather than a confirmed fact.

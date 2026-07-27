@@ -11,8 +11,9 @@
 
 namespace bomber::game {
 
-// sub_4105D2's MM:SS split: v13/60, v13%60 (truncating integer division on
-// whole seconds remaining) formatted through MESSAGES.TXT id 281 = "%u:%02u".
+// sub_4105D2's MM:SS split: the whole seconds remaining divided by 60 and the
+// same value modulo 60 (truncating integer division), formatted through
+// MESSAGES.TXT id 281 = "%u:%02u".
 // `seconds_left` is already whole seconds (the caller ceil-divides ticks_left
 // by the tick rate); this function only does the minutes/seconds split and
 // substitutes the two %u specifiers of `fmt` (the getstring(281) result, or

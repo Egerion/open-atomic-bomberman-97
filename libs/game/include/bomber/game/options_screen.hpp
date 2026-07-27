@@ -54,7 +54,7 @@
 //    teamring1`). Ported as a real sprite draw here instead of the earlier
 //    yellow-recolour + "> " prefix stand-in.
 //  - The row-navigation wrap count is a literal **18**, not 19
-//    (`v168 = 18;`, pseudo.c 9086, used verbatim by both the Up-key
+//    (pseudo.c 9086 assigns the wrap count 18, used verbatim by both the Up-key
 //    underflow wrap and the Down-key overflow wrap) — i.e. row 18 ("Adjust
 //    Audio") is drawn but is PERMANENTLY UNREACHABLE via Up/Down in the
 //    shipped binary (a genuine off-by-one in the original, not an RE
@@ -63,8 +63,9 @@
 //    reproduced: `kCursorRowCount` gates navigation to rows 0..17, which is
 //    ALSO the full drawn set (18 rows — see the kCursorRowCount note below).
 //  - `sub_427961(20)` (nav blip) is the ONLY sound sub_4080DC ever plays,
-//    unconditionally for any real keypress (`if (v165 != -1 && v165 != -2)
-//    sub_427961(20);`, pseudo.c 9298-9299) — there is no separate "accept"
+//    unconditionally for any real keypress (pseudo.c 9298-9299 fires it
+//    whenever the raw key code is neither -1 nor -2) — there is no separate
+//    "accept"
 //    jingle (SFX 10) anywhere in this function, unlike screens that
 //    genuinely do fire one on Enter. The port's previous `audio.play(10)`
 //    calls on Enter/Escape/"open key-remap" were invented — replaced with
@@ -103,7 +104,7 @@
 //                                      dispatch re-read): BOTH switch bodies
 //                                      route this row to sub_407582 — the
 //                                      *.SCH file-picker LIST DIALOG — via
-//                                      `goto LABEL_46` (pseudo.c 9342-9343
+//                                      a jump to LABEL_46 (pseudo.c 9342-9343
 //                                      forward, 9443-9445 Left), so Left/
 //                                      Right/Enter/Space all OPEN THE PICKER
 //                                      (the §3 table's old "sub_4076FE(±1)
@@ -140,21 +141,24 @@
 //                                      play; displays "N/A".
 //   17 Use Enhanced Memory Model     — LIVE toggle, persisted (smallmemory=);
 //                                      label is INVERTED versus the backing
-//                                      value (`getstring((dword_464824==0)+
-//                                      25)`, pseudo.c 9280) — smallmemory==0
+//                                      value (the row fetches string id 25
+//                                      plus one more when dword_464824 is
+//                                      zero, pseudo.c 9280) — smallmemory==0
 //                                      shows "YES", ==1 shows "NO". No
 //                                      consumer (no memory-model concept in
 //                                      a modern build); round-trips.
 //   18 Adjust Audio                  — SHOWN, PERMANENTLY UNREACHABLE (see
-//                                      the v168=18 note above) — drawn every
+//                                      the 18-row wrap-count note above) —
+//                                      drawn every
 //                                      frame, never selectable, never
 //                                      dispatches. No nested volume sub-
 //                                      screen exists here either way
 //                                      (AudioEngine has no volume control).
 namespace bomber::game {
 
-// All 19 rows, in the original's exact order/positions (row index == the
-// original's `v166` switch case). See the file doc above for each row's
+// All 19 rows, in the original's exact order/positions (row index == the case
+// index of the original's per-row dispatch switch). See the file doc above for
+// each row's
 // disposition; `kCursorRowCount` below governs which are reachable.
 enum class OptionRow : std::uint8_t {
     TeamPlay,          // row 0
@@ -178,7 +182,8 @@ enum class OptionRow : std::uint8_t {
     kCount,
 };
 
-// CONFIRMED literal (pseudo.c 9086, `v168 = 18;`): the screen has exactly 18
+// CONFIRMED literal (pseudo.c 9086 assigns the row count 18): the screen has
+// exactly 18
 // rows, cursor and draw alike. CORRECTED 2026-07-12 by the chrome audit: the
 // earlier "row 18 (Adjust Audio) is drawn but unreachable" reading was wrong
 // — the draw loop contains exactly 18 sub_41696C row calls (getstring 250 @

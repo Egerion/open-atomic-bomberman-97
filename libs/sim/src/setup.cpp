@@ -16,7 +16,7 @@ State build_state(const MatchConfig& config) {
     s.tuning = config.tuning;
     s.forbidden = config.forbidden;
     s.ticks_left = config.tuning.game_seconds * kTicksPerSecond;
-    // Round-start input freeze (sub_4214BC `dword_4621E0 = 50 * getvalue(30)`
+    // Round-start input freeze (sub_4214BC arms dword_4621E0 with 50 × getvalue(30)
     // — see Tuning::input_freeze_ticks / State::input_freeze).
     s.input_freeze = config.tuning.input_freeze_ticks;
     s.cells = config.cells;
@@ -112,8 +112,9 @@ State build_state(const MatchConfig& config) {
         p.x = grid::tile_center_x(tx);
         p.y = grid::tile_center_y(ty);
         // AI behaviour-4 reset snapshot (ai.md finding 1; the original's actor
-        // +20/+24, written at spawn by sub_4214BC's `v6[5]/v6[6] = spawn tile`
-        // at batch_0x420D4E.cpp:402-403, and at warp step-on to the warp exit).
+        // +20/+24, which sub_4214BC writes at spawn — dwords 5 and 6 of the
+        // actor record take the spawn tile's X and Y, batch_0x420D4E.cpp:402-403
+        // — and which warp step-on rewrites to the warp exit).
         // The port already stores the warp exit in warp_to_x/y at start_warp —
         // it IS the +20/+24 field — so seed it to the SPAWN TILE here to
         // complete the dual use: behave_bomb_enemy gates on distance travelled
@@ -124,8 +125,8 @@ State build_state(const MatchConfig& config) {
         p.warp_to_x = tx;
         p.warp_to_y = ty;
         // Seed ALL 13 per-kind starting-inventory baselines from VALUELST ids
-        // 50-62 (setup.md finding 2 / powerups.md finding 1; sub_4214BC's
-        // `for (j=0;j<15;++j) +86+j = getvalue(50+j)` at
+        // 50-62 (setup.md finding 2 / powerups.md finding 1; sub_4214BC loops
+        // j = 0..14 and writes getvalue(50+j) into the inventory byte at +86+j,
         // batch_0x420D4E.cpp:427-428), not just ExtraBomb/Flame. The original's
         // is an unconditional raw byte write with no eviction/clamp (that only
         // runs for the Goldman-wheel bonus and the scheme born_with overlay
@@ -151,8 +152,9 @@ State build_state(const MatchConfig& config) {
             if (config.born_with[k]) powerups.apply(p, static_cast<PowerupType>(k));
         // Goldman wheel award (docs/re/goldman-roulette.md §4/§8): a per-
         // player overlay applied AFTER the global born_with loop, through the
-        // same PowerupSystem::apply path — sub_4214BC's `++player_byte[86 +
-        // prize]` is exactly one more born-with unit, not a distinct grant
+        // same PowerupSystem::apply path — sub_4214BC simply increments the
+        // inventory byte at +86 + prize, which is exactly one more born-with
+        // unit, not a distinct grant
         // mechanism. Default all-false, so this is a no-op for every
         // existing config (golden hashes unaffected).
         for (int k = 0; k < kPowerupKinds; ++k)
@@ -160,8 +162,9 @@ State build_state(const MatchConfig& config) {
         // Goldman wheel clogs award (docs/re/goldman-roulette.md §9): outside
         // the kPowerupKinds/PowerupSystem::apply space (§9.2), so folded into
         // speed directly here, mirroring skates' own `start_speed +
-        // skates*bonus` term with clogs SUBTRACTED (sub_41F29B's `v20 -
-        // v22*v21`, §9.1). Order: skates first (via powerups.apply above),
+        // skates*bonus` term with clogs SUBTRACTED (sub_41F29B's per-tick speed
+        // expression subtracts the clog count times the clog penalty from the
+        // running total, §9.1). Order: skates first (via powerups.apply above),
         // then clogs, matching the original's single combined expression.
         // Default 0 -> no-op, golden hashes unaffected.
         p.clogs = config.born_with_clogs[i];
@@ -187,9 +190,11 @@ State build_state(const MatchConfig& config) {
     // batch_0x42583B.cpp:222-255, pseudo.c 26647-26679): INDEPENDENT REJECTION
     // SAMPLING per unit, NOT list-removal. For each kind k in 0..12 (the loop
     // reads getvalue(k+400) = our spawn_counts[k], scheme-overridable):
-    //   - positive count (v22=1): place every unit unconditionally. Negative
-    //     count -N: attempt |N| units, each gated by a 1-in-10 roll
-    //     (`v22 || !(rand()%10)`, so the gate draws ONLY on the negative path,
+    //   - positive count (the original latches a "no gate" flag): place every
+    //     unit unconditionally. Negative
+    //     count -N: attempt |N| units, each gated by a 1-in-10 roll — the
+    //     original ORs that latched flag with a zero-result rand()%10, so the
+    //     gate draws ONLY on the negative path,
     //     INTERLEAVED immediately before the unit's own scan — not batched up
     //     front the way the old port pre-rolled all |N| gates).
     //   - each attempted unit draws a fresh random (x, y) — rand()%W then

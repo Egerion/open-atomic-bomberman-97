@@ -2355,7 +2355,7 @@ int GameApp::run_app() {
                 // Gold player assignment (docs/re/goldman-roulette.md §2,
                 // pseudo.c 30004-30022, LABEL_102): sub_42A3F6 only reaches
                 // the RESULTS tier (and its unconditional dword_46492C
-                // write) when sub_4219B0(...) != -1, i.e. a ROUND SURVIVOR
+                // write) when sub_4219B0 returns anything but -1, i.e. a ROUND SURVIVOR
                 // exists (`w >= 0` below) — a DRAW falls through to the
                 // separate DRAW.PCX branch instead and never touches
                 // dword_46492C at all, so a pending gold player survives a
@@ -2473,7 +2473,7 @@ int GameApp::run_app() {
                     // prefix to RESULTS", raw 0x42A875-0x42A88B: the DRAW wait
                     // loop ends with NO jump and execution lands in LABEL_102,
                     // which loads RESULTS.PCX; the RESULTS-only path is the
-                    // `goto LABEL_102` taken when a survivor EXISTS). So a drawn
+                    // jump to LABEL_102 taken when a survivor EXISTS). So a drawn
                     // round shows both screens and dismisses both wait loops.
                     // The port showed DRAW alone until this was pinned.
                     if (ev != AppInput::Quit && ev != AppInput::Back) ev = present_scoreboard();

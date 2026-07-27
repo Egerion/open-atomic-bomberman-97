@@ -1,6 +1,7 @@
 // Diarrhea (auto-drop) x grab/throw glove interaction (Gap 4). Faithful to
 // sub_41F29B LABEL_246: the auto-drop disease forces the bomb-key edge every
-// frame (+56=1, +54=0, v112=1); v112 also unconditionally RELEASES a carried
+// frame -- +56 set to 1, +54 cleared to 0, and the local "bomb pressed this
+// frame" flag raised; that same flag also unconditionally RELEASES a carried
 // bomb (the +37 throw block). With the grab glove this becomes a grab->throw->
 // drop->grab loop = the "serial throwing" the user observed. This suite pins
 // that the port reproduces it, and that plain diarrhea (no grab) only drops.

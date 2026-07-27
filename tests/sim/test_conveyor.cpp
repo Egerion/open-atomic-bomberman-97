@@ -132,7 +132,8 @@ TEST_CASE("the actor layout is part of the hashed state") {
 
 TEST_CASE("a head-stunned player on a conveyor is still carried by the belt") {
     // sub_41F29B decrements the +58 stun countdown every tick (~22982), but the
-    // gate it drives (v113, ~23028) blocks ONLY new-input acquisition — NOT the
+    // gate it drives (the acquisition gate at ~23028) blocks ONLY new-input
+    // acquisition — NOT the
     // mover. With the new-direction word +46 left at its per-tick -1 reset
     // (22980) a stunned player takes the IDLE movement branch (23413), where a
     // conveyor under it still forces +46 to the belt direction and runs the
@@ -147,7 +148,7 @@ TEST_CASE("a head-stunned player on a conveyor is still carried by the belt") {
     p.x = kTileWF / 2;  // (0,0) dead centre
     p.y = kTileHF / 2;
     p.facing = Direction::Down;
-    p.stun = 16;  // the head-hit value (sub_421F7E hardcodes a1[29] = 16)
+    p.stun = 16;  // the head-hit value (sub_421F7E hardcodes 16 into the +58 word)
 
     const int x0 = p.x;
     run(s, 10, TickInputs{});  // stunned throughout (16 > 10); no key input
@@ -174,7 +175,7 @@ TEST_CASE("a head-stunned player on a conveyor is still carried by the belt") {
 }
 
 TEST_CASE("a stunned player takes no new input and does not coast; input resumes after") {
-    // While +58 > 0 the v113 gate skips sub_41E61E entirely, so a HELD key never
+    // While +58 > 0 the acquisition gate skips sub_41E61E entirely, so a HELD key never
     // becomes a direction: +46 stays -1 and the mover's keyed branch (23430) is
     // unreachable. There is no momentum to coast on either — the original resets
     // +46 every tick (22980) and the budget loop drains to <= 0 within the tick

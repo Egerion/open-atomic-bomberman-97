@@ -90,8 +90,9 @@ TEST_CASE("pickup_pause blocks new input like a stun, then releases") {
 // ---- forbidden combo: carrying && (bounce || warp) -------------------------
 
 TEST_CASE("entering a warp releases a carried bomb (no carrying-through-a-warp)") {
-    // LABEL_246's release check `if (+37) { if (v112 || !+56) throw }` runs in
-    // ALL +78 states (state 5 goto at pseudo.c 23198; 6/7 fall through
+    // LABEL_246's release check — when +37 says a bomb is carried, throw it if
+    // either the bomb-pressed-this-frame flag is up or +56 is clear — runs in
+    // ALL +78 states (state 5 jumps there at pseudo.c 23198; 6/7 fall through
     // LABEL_239 into 23277), and input-blocked states leave +56 at its
     // per-tick 0 reset — so the original throws the carried bomb on the first
     // flight tick. facts.md "Player state machine (+78)" port-parity fix 2.
@@ -151,7 +152,8 @@ TEST_CASE("entering a trampoline hop releases a carried bomb") {
 // ---- forbidden combo: (bounce || warp || pickup-pause) && head-stun --------
 
 TEST_CASE("a head hit cancels an in-flight bounce, warp and pickup-pause") {
-    // sub_421F7E writes `a1[39] = 3; a1[40] = 0` UNCONDITIONALLY and its
+    // sub_421F7E writes 3 into the +78 state word and 0 into the +80 counter
+    // UNCONDITIONALLY, and its
     // victim probe sub_421CB5 (pseudo.c 24207) has no +78 guard — the single
     // state word means a head hit CLOBBERS states 4/5/6/7. facts.md
     // port-parity fix 3.
@@ -287,7 +289,7 @@ TEST_CASE("a standing head-hit stun releases a carried bomb (release-throw while
     // a plain head-stun previously left player_turn's whole bomb-action block
     // skipped, holding a carried bomb frozen through the stun. The original
     // reaches LABEL_246 every alive tick regardless of +78 == 3, and with
-    // input blocked (+56 stuck at 0) the throw's `!+56` check fires on the
+    // input blocked (+56 stuck at 0) the throw's "+56 is clear" arm fires on the
     // very first stunned tick.
     Simulation s(open_config());
     State& st = s.state();
@@ -313,7 +315,7 @@ TEST_CASE("a standing head-hit stun releases a carried bomb (release-throw while
 
 TEST_CASE("diarrhea auto-drop still fires every tick during a standing head-hit stun") {
     // The auto-drop force (+135/+137 -> +56=1;+54=0) lives INSIDE LABEL_246,
-    // unconditional on the v113/`blocked` gate that only affects the RAW key
+    // unconditional on the acquisition/`blocked` gate that only affects the RAW key
     // read — so it keeps firing even while a stun blocks every other action.
     Simulation s(open_config());
     State& st = s.state();
@@ -350,10 +352,11 @@ TEST_CASE("diarrhea + grab keeps cycling grab/throw/drop through a whole trampol
     CHECK(throws >= 2);  // released more than once across the flight, not just at entry
 }
 
-// ---- AI silence in blocked states (v113 == 0) -------------------------------
+// ---- AI silence in blocked states (acquisition gate clear) ------------------
 
 TEST_CASE("an AI mid-bounce or mid-warp draws no RNG this tick") {
-    // v113 is forced 0 for +78 == 5/6/7 (sub_41F29B 23015-23016), skipping the
+    // The acquisition gate is forced clear for +78 == 5/6/7 (sub_41F29B
+    // 23015-23016), skipping the
     // whole input/AI dispatch — same contract as the stun/pickup-pause skips
     // pinned in test_ai.cpp. The bounce apex is kept out of this tick's
     // window (it draws relocation RNG by design, tested in

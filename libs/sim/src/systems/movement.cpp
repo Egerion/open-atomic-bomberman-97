@@ -14,8 +14,9 @@ namespace bomber::sim {
 // tile centre the player is on, exactly like the original.
 //
 // on_center (if non-null) fires the instant a per-pixel step lands the player
-// exactly on a tile centre — the port of the original's in-loop `v35 == -1`
-// step-on check. The original tests this at the START of each pixel iteration
+// exactly on a tile centre — the port of the original's in-loop step-on check,
+// which tests its running offset-to-tile-centre temporary for exactly -1 (one
+// pixel short of the centre). The original tests this at the START of each pixel iteration
 // (position at centre-1 about to become centre); measured post-step it is the
 // same physical event (arrival at the centre pixel), and because steps are
 // exactly ±1px along the axis, every centre crossing is caught. This fixes the
@@ -50,9 +51,11 @@ void MovementSystem::move(Player& p, Direction d, std::int32_t extra_budget, Ste
 
     // Per-frame budget accrual (sub_41F29B 23432-23440): the disease factors
     // scale the SPEED first — molasses divides by 3, then hyper/super
-    // multiplies by 3/2 — and only THEN the delta division runs (`v91 =
-    // base + skates·gv(90) − clogs·gv(91); if (molasses) v91 /= 3;
-    // if (hyper/super) v91 = 3*v91/2; v91 = delta*v91/50`). Resolves the
+    // multiplies by 3/2 — and only THEN the delta division runs. In order, the
+    // original's single speed temporary is: seeded with
+    // base + skates·gv(90) − clogs·gv(91); divided by 3 if molasses; replaced by
+    // 3/2 of itself if hyper or super; and finally rescaled to delta·speed/50.
+    // Resolves the
     // former facts.md [VERIFY] on this ordering (2026-07-16 movement audit):
     // factors FIRST, delta scaling SECOND — identical at delta 50, ±1 budget
     // unit per sub-frame versus the old scale-after order, diseased players
@@ -120,10 +123,12 @@ void MovementSystem::move(Player& p, Direction d, std::int32_t extra_budget, Ste
         p.x = (px + mdx) * kScale;
         p.y = (py + mdy) * kScale;
 
-        // sub_41EC84 `v35 == -1`: fire the step-on the moment this pixel step
+        // sub_41EC84's step-on check (its offset-to-centre temporary hitting
+        // -1): fire the step-on the moment this pixel step
         // brings the player to the tile centre ALONG THE TRAVEL AXIS. The
-        // original rotates the offset by the facing (v35 = along-axis offset)
-        // and tests only that axis — the perpendicular (v36) is not required to
+        // original rotates the offset by the facing, so that temporary holds the
+        // ALONG-axis offset, and tests only that axis — the companion
+        // perpendicular offset is not required to
         // be centred — and looks the actor up at the player's CURRENT tile. So
         // match that: horizontal travel fires at the x-centre (any row),
         // vertical at the y-centre (any column). Whole-pixel positions make the

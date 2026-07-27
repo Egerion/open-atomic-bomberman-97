@@ -268,8 +268,9 @@ TEST_CASE("a full lap of the cycle returns to OFF, for any joystick count") {
     }
 }
 
-// Locks the setup-screen's TEAM default (sub_4049C0, pseudo.c line 6716:
-// `dword_46481C[12*j+8] = j & 1`, re-applied on EVERY entry to the setup
+// Locks the setup-screen's TEAM default (sub_4049C0, pseudo.c line 6716 writes
+// each slot's team field — dword_46481C, stride 12, offset +8 — with the slot
+// index's low bit, i.e. slot parity; re-applied on EVERY entry to the setup
 // screen via sub_410F81 -> sub_4046CC -> sub_403EEE -> sub_4049C0 —
 // docs/re/setup-screens.md "TEAM default — CORRECTED 2026-07-09"). Before
 // this fix `present_setup()` left every slot's team at its all-0 default, so
@@ -542,7 +543,7 @@ TEST_CASE("campaign_round_needs_replay: a fully empty roster replays (vacuous fa
 }
 
 // docs/re/in-match-shell.md §3 (sub_4105D2): MM:SS via MESSAGES.TXT id 281 =
-// "%u:%02u" (v13/60, v13%60 on whole seconds remaining).
+// "%u:%02u", fed the whole seconds remaining divided by 60 and modulo 60.
 TEST_CASE("format_clock splits whole seconds into MM:SS via the 281 format") {
     CHECK(format_clock("%u:%02u", 0) == "0:00");
     CHECK(format_clock("%u:%02u", 5) == "0:05");

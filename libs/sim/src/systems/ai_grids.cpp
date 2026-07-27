@@ -183,17 +183,17 @@ bool AISystem::safe_tile(int tx, int ty) const {
 }
 
 // sub_423188: the drop-tile CLEARANCE predicate (0x423188) — "may a bomb be
-// placed on THIS tile". Byte-exact (0x423188):
-//     if (sub_422E48(x,y)) return 0;               // a bomb already here
-//     v5 = sub_405654(x,y);
-//     return (!v5 || v5[1] != 1) && sub_425FB9(x,y) == 0;
+// placed on THIS tile". Three tests, in this order: bail out if sub_422E48
+// reports a bomb already on the tile; look the tile up in the stage-actor
+// registry (sub_405654) and reject the tile if that lookup hits an actor whose
+// type is 1; finally require the blank-cell predicate sub_425FB9 to return 0.
 // It is NOT an escape search — the original does no look-ahead here and trusts
 // behaviour 2 to flee the resulting blast. Gates behaviours 3 and 4.
 //
 // CORRECTED 2026-07-26 (facts.md "AI never bombs a warphole"): `sub_405654` is
 // the STAGE-ACTOR registry lookup (dword_45E0A8, stride 38 dwords, tile match on
 // +28/+32 — docs/re/stage-actors.md §1), NOT a campaign rover/ghost list, and
-// `v5[1]` is the actor's TYPE word at +4. So `v5[1] != 1` rejects a WARPHOLE
+// the field it tests is the actor's TYPE word at +4. So type 1 means a WARPHOLE
 // tile — the identical tail `sub_4230A5` uses to make a warphole impassable to a
 // sliding bomb (stage-actors.md §4 note 4, which read the same expression
 // correctly). ai.md §3.3's old "rover/ghost list, empty in versus" gloss was
@@ -203,15 +203,16 @@ bool AISystem::safe_tile(int tx, int ty) const {
 bool AISystem::drop_tile_clear(int tx, int ty) const {
     if (!grid::in_grid(tx, ty)) return false;                // out of bounds: sub_425FB9 -> 1
     if (grid::bomb_at(s_, tx, ty) != nullptr) return false;  // sub_422E48
-    if (s_.actor_type[ty][tx] == ActorType::Warphole) return false;  // sub_405654 -> v5[1] == 1
+    if (s_.actor_type[ty][tx] == ActorType::Warphole) return false;  // sub_405654 -> type word == 1
     return s_.cells[ty][tx] == Cell::Blank && s_.burning[ty][tx] == 0;  // sub_425FB9 == 0
 }
 
 // sub_4245DA(idx) (0x4245DA): count of live bomb slots OWNED by player idx —
 // the bomb dword at +60's high word is the owner index written at creation
 // (sub_422EDE word-store to +62), not a tile X. Behaviours 3/4 gate on
-// `sub_4245DA(me) < maxBombs(+86)` (the comparand Hex-Rays lost as an
-// "undefined edx" is `mov dl, [actor+0x56]` in the raw disasm) — i.e. the
+// sub_4245DA's count for the acting player staying strictly below that player's
+// max-bomb byte at +86 (the comparand the decompiler lost as an "undefined edx"
+// is a byte load from the actor's +0x56 in the raw disassembly) — i.e. the
 // standard spare-bomb-capacity check, the very count the mover compares at a
 // normal drop. Player::bombs_placed is the sim's maintained equivalent of
 // that owner scan (BombSystem::drop gates on the same counter), so the AI

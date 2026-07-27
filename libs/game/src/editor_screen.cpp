@@ -274,7 +274,8 @@ void PowerupRulesScreen::begin_chain() {
 void PowerupRulesScreen::advance_chain(AudioEngine& audio) {
     // Move to the next prompt of sub_4023A2's fixed order; prompt 4 is asked
     // only when has-override is set, else the value is FORCED to 0 (the
-    // original's unconditional else-branch `dword_4646C4[i] = 0`).
+    // original's else-branch unconditionally zeroes that row's entry in
+    // dword_4646C4).
     auto& pr = (*rows_)[static_cast<std::size_t>(row_)];
     switch (step_) {
         case ChainStep::BornWith: step_ = ChainStep::Forbidden; break;
@@ -408,7 +409,7 @@ void PowerupRulesScreen::draw(SDL_Renderer* ren) const {
         font_->draw(ren, ov, 450.0f, y, kInkR, kInkG, kInkB);
     }
     // The open chain prompt — sub_4023A2's own sub_42E938/sub_42EDE0 calls,
-    // ALL at the CONFIRMED literal y=400 (pseudo.c 5225 `v16 = 400`, reused
+    // ALL at the CONFIRMED literal y=400 (pseudo.c 5225 assigns that y, reused
     // unchanged by every one of the 4 calls at 5230/5239/5245/5254), each
     // labelled `getstring(<id>)` formatted with the row's own powerup name
     // (`sub_4518D0`'s "%s%s"-style pack, pseudo.c 5226-5229 etc — exact
@@ -554,12 +555,12 @@ void EditorScreen::on_mouse_down(int button, int gx, int gy) {
         // §5, PINNED: exactly one cell per click — sub_4028D2's paint path
         // is sub_4048EB(cell_x, cell_y, brush); no multi-cell brush exists.
         grid_.paint(gx, gy, brush_);
-        dirty_ = true;  // v57&1 branch's unconditional `++v49`, pseudo.c 5561
+        dirty_ = true;  // left-button (mask bit 0) branch bumps touched, pseudo.c 5561
     } else if (button == SDL_BUTTON_RIGHT) {
         // §5: "MOVE the currently-selected player-start marker to the
         // hovered cell".
         grid_.move_start(selected_start_, gx, gy);
-        dirty_ = true;  // v57&2 branch's unconditional `++v49`, pseudo.c 5577
+        dirty_ = true;  // right-button (mask bit 1) branch bumps touched, pseudo.c 5577
     }
 }
 
@@ -581,7 +582,7 @@ void EditorScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
         } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
             grid_.set_density(prompt_text_.empty() ? 0 : std::atoi(prompt_text_.c_str()));
             prompt_kind_ = PromptKind::None;
-            dirty_ = true;  // case 68/100's ACCEPTED-only `++v49`, pseudo.c 5678
+            dirty_ = true;  // case 68/100 bumps touched only when ACCEPTED, pseudo.c 5678
             audio.play(10);
         } else if (key == SDLK_ESCAPE) {
             prompt_kind_ = PromptKind::None;  // discard the in-progress edit
@@ -597,7 +598,7 @@ void EditorScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
         } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
             grid_.set_name(prompt_text_);
             prompt_kind_ = PromptKind::None;
-            dirty_ = true;  // case 78/110's ACCEPTED-only `++v49`, pseudo.c 5688
+            dirty_ = true;  // case 78/110 bumps touched only when ACCEPTED, pseudo.c 5688
             audio.play(10);
         } else if (key == SDLK_ESCAPE) {
             prompt_kind_ = PromptKind::None;
@@ -622,9 +623,9 @@ void EditorScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
     if (prompt_kind_ == PromptKind::FillConfirm) {
         // sub_4028D2 case 6 (Ctrl+F): the getstring(760)/97 yes/no confirm
         // gates the fill; only "yes" runs the sub_4048EB loop AND marks the
-        // board dirty (`++v49` is INSIDE the accepted branch, pseudo.c
-        // 5605-5613 — unlike Ctrl+B below, a cancelled fill leaves v49
-        // untouched).
+        // board dirty (the touched-flag bump is INSIDE the accepted branch,
+        // pseudo.c 5605-5613 — unlike Ctrl+B below, a cancelled fill leaves
+        // that flag alone).
         if (key == SDLK_Y || key == SDLK_RETURN || key == SDLK_KP_ENTER) {
             grid_.flood_fill(brush_);
             dirty_ = true;
@@ -638,7 +639,7 @@ void EditorScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
     }
     if (prompt_kind_ == PromptKind::ResetConfirm) {
         // sub_4028D2 case 2 (Ctrl+B), pseudo.c 5584-5599: the confirm only
-        // gates whether sub_4049C0 actually RUNS — `++v49` happens
+        // gates whether sub_4049C0 actually RUNS — the touched-flag bump happens
         // unconditionally after the if/else, so dirty_ is already true from
         // the SDLK_B case below regardless of the answer here.
         if (key == SDLK_Y || key == SDLK_RETURN || key == SDLK_KP_ENTER) {
@@ -689,7 +690,7 @@ void EditorScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
             // PINNED (pseudo.c 5584-5599): while the board is untouched
             // (!dirty_), sub_4049C0 runs immediately with NO confirm; once
             // dirty_, the getstring(740)/97 confirm gates it instead. Either
-            // way `++v49` executes UNCONDITIONALLY right after the if/else
+            // way the touched-flag bump executes UNCONDITIONALLY after the if/else
             // — even a CANCELLED confirm still marks the board dirty — so
             // Ctrl+B always sets dirty_ = true.
             if (dirty_) {
@@ -721,7 +722,7 @@ void EditorScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
             break;
         case SDLK_T:
             grid_.toggle_start_team(selected_start_);
-            dirty_ = true;  // case 84/116's unconditional `++v49`, pseudo.c 5699
+            dirty_ = true;  // case 84/116 bumps touched unconditionally, pseudo.c 5699
             audio.play(20);
             break;
         case SDLK_D:
@@ -735,13 +736,14 @@ void EditorScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
         case SDLK_P:
             editing_powerups_ = true;
             powerups_screen_.enter(&grid_.powerups());
-            dirty_ = true;  // case 80/112's unconditional `++v49`, pseudo.c 5694
+            dirty_ = true;  // case 80/112 bumps touched unconditionally, pseudo.c 5694
             audio.play(20);
             break;
         case SDLK_ESCAPE:
         case SDLK_Q:
             // sub_4028D2's exit case (27/81/113, pseudo.c 5621-5643) wraps
-            // its WHOLE save-confirm+write body in `if (v49)` — an
+            // its WHOLE save-confirm+write body in a test of the touched
+            // flag — an
             // untouched board (!dirty_) exits immediately with NO prompt
             // and NO write at all.
             if (dirty_) {
@@ -815,8 +817,9 @@ void EditorScreen::draw(SDL_Renderer* ren) const {
     // Brush preview at cursor — PINNED (pseudo.c 5518-5524): every frame,
     // BEFORE the start markers/status text but AFTER the grid, the original
     // draws the CURRENT brush's own "tile %d blank/solid/brick" frame
-    // (`sub_402206(v53)`, v53 being the SAME brush-selection variable '1'/
-    // '2'/'3'/Tab write) at the raw mouse pixel position (`sub_431804`) via
+    // (resolved by sub_402206 from the SAME brush-selection variable the
+    // '1'/'2'/'3'/Tab keys write) at the raw mouse pixel position (read by
+    // sub_431804) via
     // the SAME sub_415920 primitive the grid cells above use — i.e. the
     // same hotspot anchor, just centred on the cursor instead of a cell.
     if (have_tiles) {

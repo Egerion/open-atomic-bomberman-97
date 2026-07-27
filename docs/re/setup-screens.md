@@ -2,7 +2,7 @@
 
 Reverse-engineered from `BM95.EXE` (pseudo.c). The original's pre-match
 configuration is a small multi-screen flow reached from the two "setup" rows of
-the main menu (`sub_42B9CE` v10 == 1 and 2). This doc pins the assets, the
+the main menu (`sub_42B9CE`, its selected-row index 1 and 2). This doc pins the assets, the
 getvalue-driven layout, the string IDs, the player-config model, and the input
 flow so the screens can be reproduced 1:1. It records structure only — the
 actual `MESSAGES.TXT` text and the `GLUE*.PCX` art load at runtime from the
@@ -41,7 +41,7 @@ getvalue ids):
   prefixed by the player label msg **51** (formatted with i+1). Drawn at
   getvalue(710)=x **70**, y = getvalue(711)=**170** + getvalue(712)=**24**·i,
   clip width getvalue(713) (see the column-4 correction in the layout section
-  below). The cursor for the selected player (`v108`) is drawn via
+  below). The cursor for the selected player is drawn via
   `sub_413BD6(x-15, …)`. In team mode (`dword_464964`) a team marker (msg **230**,
   `sub_4141F8`) is appended.
 - Joystick pane: heading msg **40** at getvalue(715)=**(300,140)**; per-joystick
@@ -78,14 +78,16 @@ reference but are NOT the screen we reproduce.
 
 Both pre-match screens draw a **random** decorative backdrop via the shared
 `sub_4148E5()` helper (called by `sub_410F81` @ pseudo.c 15121 and `sub_406DDE`
-@ 8089). Its body (CONFIRMED):
+@ 8089). Its body (CONFIRMED), in order:
 
-```
-v3 = getvalue(16) <= 1 ? 1 : getvalue(16);   // getvalue(16) = how many glue backdrops
-idx = rand() % v3;                            // uniform random
-name = sprintf("glue%u.plt", idx);            // aGlueUPlt
-apply_palette(name);  load(name);             // sub_4151AD/sub_411D17/sub_4151CC
-```
+1. **Backdrop count** ← `getvalue(16)` (how many glue backdrops exist),
+   floored at **1**: a stored value of 1 or less is treated as 1, so the
+   modulo below can never divide by zero.
+2. **Index** ← `rand() %` that count — a uniform random pick each call.
+3. **Name** ← the index formatted into the `"glue%u.plt"` template (string
+   `aGlueUPlt`).
+4. **Apply + load** that palette/backdrop pair, via `sub_4151AD` /
+   `sub_411D17` / `sub_4151CC`.
 
 `getvalue(16) == 7` (VALUELST `16,7`), install ships `GLUE0.PCX`..`GLUE6.PCX`
 (7) + `glue0.plt`..`glue6.plt`. So each pre-match screen = a random `GLUE<n>`
@@ -167,17 +169,18 @@ human) or leave it OFF. Structure per frame:
      else line = `getstring(63)` (off).
    - Blitted at **getvalue(760) (x), getvalue(761)+getvalue(762)*i (y),
      getvalue(763) (colour)** — 761 = list origin y, 762 = per-row y step, 760 =
-     x, 763 = colour. (Row y = `761 + 762*i` from the `v41 = v11 + v10` with
-     `v10=getvalue(761)`, step `getvalue(762)`.)
-   - The selection cursor is drawn for row `v59` via `sub_413BD6(getvalue(760)-20, …)`.
+     x, 763 = colour. (Row y accumulates: a running y starts at
+     `getvalue(761)` and gains `getvalue(762)` per row, i.e. `761 + 762*i`.)
+   - The selection cursor is drawn for the currently selected row via
+     `sub_413BD6` at x = `getvalue(760) - 20`.
 4. Input (`sub_4102B7` getkey; any real key → SFX **20**):
    - **Up = 328 (0x148)** → `--sel` (wrap 9); **Down = 336 (0x150)** → `++sel` (wrap 0).
    - **Space = 0x20** → SFX **10**, then BIND: for the selected slot, run a
      ~3000 ms detect loop (`sub_40EC6F(sel)` polls controllers; `sub_40F386()` =
      a control was pressed) showing the animated `getstring(80)` prompt at
      (150,400); on detect, bind that controller to the slot; on timeout, cancel
-     (overlay `getstring(100)`/`getstring(110)` + `getstring(95)`). Restarts the
-     screen (`LABEL_3`).
+     (overlay `getstring(100)`/`getstring(110)` + `getstring(95)`). Either way
+     it jumps back to the top of the screen's redraw, restarting the frame.
    - **Any key < 0x20** (Enter 13 / Esc 27) → break the loop → leave the screen
      (proceed to the match / back to the menu).
 
@@ -263,7 +266,7 @@ grey joystick pane, +70 selected-row boost and key-legend line removed).
   args (i+1, typetext) — pseudo.c 15169-15195 (a two-piece concat leaves a
   literal "%s" on screen with the real MESSAGES.TXT). Drawn at x =
   getvalue(710) = **70**, y = getvalue(711)=**170** + getvalue(712)=**24**·i,
-  clip width getvalue(713)=**150**. Cursor for the selected slot (`v108`) via
+  clip width getvalue(713)=**150**. Cursor for the selected slot via
   `sub_413BD6(getvalue(710)-15, …)`.
 - **COLOUR is per-slot and IMPLICIT — there is NO colour picker on this screen.**
   Each of the 10 slots has a **fixed colour keyed by its index**: VALUELST
@@ -279,8 +282,10 @@ grey joystick pane, +70 selected-row boost and key-legend line removed).
   the VALUELST-derived percents with the file's tail on load). `Tuning::
   color_rgb[10][3]` mirrors VALUELST 200-247 and is the fallback when a `.RMP`
   is absent.
-- **TEAM** is the player byte **+84** (`dword_461BC4[38*i + 21]`, `LOBYTE`),
-  read by `sub_4223E7(i)` and written by `sub_422437(i, v)`. Rendered ONLY in
+- **TEAM** is the player byte **+84** — the low byte of the dword at
+  `dword_461BC4[38*i + 21]`; only that one byte is read or written, the upper
+  three are untouched. Read by `sub_4223E7(i)`, written by `sub_422437(i,
+  value)`. Rendered ONLY in
   team mode (`dword_464964 != 0`), for EVERY slot (not gated on that slot's own
   team value): a trailing marker glyph, `getstring(230)`, appended after the
   name+type line (pseudo.c ~15212-15224) — CONFIRMED **unformatted** (no `%u`:
@@ -309,8 +314,10 @@ grey joystick pane, +70 selected-row boost and key-legend line removed).
   0,1,0,1,... by slot parity. `sub_403EEE`'s own save-file parse loop only
   ever overwrites a slot's colour fields (`+0`/`+4`) from disk; TEAM (`+8`)
   is left at the `j & 1` default UNLESS a "-S slot,x,y,team" 5-field profile
-  line is present (pseudo.c line 6427, `dword_46481C[12*v31+8] =
-  sub_4516C1(v39)!=0`) — a rare, hidden colour-profile file format this port
+  line is present — in that case (pseudo.c line 6427) the parser writes the
+  TEAM field of the slot named by that line, `dword_46481C[12*slot + 8]`, with
+  the boolean "the line's 5th field, run through `sub_4516C1` (atoi), is
+  non-zero" — a rare, hidden colour-profile file format this port
   does not implement. `sub_403EEE` finishes by pushing all 10
   `dword_46481C[...+8]` values into `dword_461BC4[38*i+21]` via
   `sub_422437(k, ...)` (pseudo.c line 6491) — the exact array `sub_4223E7`/
@@ -341,20 +348,23 @@ grey joystick pane, +70 selected-row boost and key-legend line removed).
 **Key table (raw `sub_4102B7` codes, EXHAUSTIVE, `sub_410F81`):** any real key
 (`≠ -1,-2`) first fires SFX **20** (`sub_427961(20)`).
 
+Below, **sel** = the screen's cursor slot index (0..9), the local the cursor
+sprite and every slot mutation are keyed off.
+
 | key | effect |
 |---|---|
-| `328` Up (0x148) | `--v108` cursor, wraps 0→9 |
-| `336` Down (0x150) | `++v108` cursor, wraps 9→0 |
-| `333` Right (0x14D) | `sub_421E80(v108)` — **cycle input type forward** (unless type==4) |
-| `331` Left (0x14B) | reset the slot: `sub_421E33(v108,0,0)` (type/sub→0 = OFF), unless type==4 |
-| `48` '0' / `111` 'o' | `sub_421E33(v108,0,0)` — set slot OFF |
-| `84` 'T' / `116` 't' | toggle TEAM +84: `sub_422437(v108, sub_4223E7(v108)==0)` |
+| `328` Up (0x148) | decrement **sel**, wrapping 0→9 |
+| `336` Down (0x150) | increment **sel**, wrapping 9→0 |
+| `333` Right (0x14D) | `sub_421E80(sel)` — **cycle input type forward** (unless that slot's type is 4) |
+| `331` Left (0x14B) | reset the slot: `sub_421E33(sel, 0, 0)` (type and sub both → 0 = OFF), unless that slot's type is 4 |
+| `48` '0' / `111` 'o' | `sub_421E33(sel, 0, 0)` — set slot OFF (no type-4 guard here) |
+| `84` 'T' / `116` 't' | toggle TEAM +84: writes `sub_422437(sel, …)` with the boolean "the slot's current team byte, read back via `sub_4223E7(sel)`, is zero" — i.e. a strict 0↔1 flip |
 | `13` Enter | (< 0x20 branch) leave the screen → proceed to match init |
 | `27` Esc | back out: `dword_46492C=-1`, `dword_464A68=2`, SFX **10** |
 | `32` Space | **CORRECTED 2026-07-25: the same as Enter** — key `0x20` jumps to Enter's label (commit/proceed). There is no "bind detect"; the `sub_40C06A()==1` test on that path is the **guest lock-out** (→ SFX 40). See `network-screens.md` §7/§11 |
 | `1` | dev: set all 10 slots to COMPUTER (local only) |
 | `288`/`315` | menu toggles / roulette (`sub_413D45`/`sub_41431C`) |
-| `67` 'C' ×5 (local only) | **CAMPAIGN picker** — 5 consecutive presses (same-key counter `v115`, any other key resets it; `!sub_40C06A()` guard) open the `*.cam` file picker `sub_4015C6` (pseudo.c 15357-15365). Missed by the original "EXHAUSTIVE" pass — full chain in `docs/re/campaign.md` |
+| `67` 'C' ×5 (local only) | **CAMPAIGN picker** — 5 consecutive presses (a same-key repeat counter local to the screen loop, any other key resets it; `!sub_40C06A()` guard) open the `*.cam` file picker `sub_4015C6` (pseudo.c 15357-15365). Missed by the original "EXHAUSTIVE" pass — full chain in `docs/re/campaign.md` |
 
 So the local-play controls are: **Up/Down pick a slot; Right cycles its type
 (OFF→CPU→KBD0→KBD1→JOY…→OFF); Left/'0' set it OFF; 'T' toggles its team; Enter
@@ -370,7 +380,8 @@ VALUELST legend (`; OPTIONS SCREEN:`):
 ```
 
 - **Backdrop:** random `GLUE<n>` (`sub_4148E5`), **music 1020** (inherited).
-- A **2-item list** (`v34 = 2`): row 0 = **LEVEL**, row 1 = **NUMBER OF WINS**.
+- A **2-item list** (the row count is a hard-coded 2, not a getvalue): row 0 =
+  **LEVEL**, row 1 = **NUMBER OF WINS**.
   Drawn at x = getvalue(735) = **55**, y = getvalue(736)=**170** +
   getvalue(737)=**24**·row, colour getvalue(738)=**300**. Cursor via
   `sub_413BD6(getvalue(735)-20, …)`.
@@ -403,15 +414,17 @@ VALUELST legend (`; OPTIONS SCREEN:`):
   (wrap).
 
 **How the level flows into the match (`sub_410B6E` @0x410B6E):** at match init
-it resolves the committed level:
-```
-if (dword_464998 < 0)                 // RANDOM
-    for up to 200 tries:
-        dword_46499C = rand() % getvalue(35)
-        if getvalue(dword_46499C + 1150) break   // RANDOM-LEVEL enable flags
-else
-    dword_46499C = dword_464998        // the chosen specific level
-```
+it resolves the committed level into `dword_46499C` in one of two ways:
+
+- **Committed level `dword_464998` is negative (RANDOM):** it runs a retry
+  loop of at most **200** iterations. Each iteration draws
+  `rand() % getvalue(35)` into `dword_46499C` and then reads
+  `getvalue(dword_46499C + 1150)` — the RANDOM-LEVEL enable flag for that
+  level — breaking out as soon as the flag is non-zero. If all 200 tries fail
+  the last drawn index stands, enabled or not.
+- **Otherwise (a specific level was chosen):** `dword_46499C` ← `dword_464998`
+  directly, with no draw and no enable-flag test.
+
 `dword_46499C` (0..10) then names every per-level asset: `FIELD<n>.PLT`/
 `FIELD<n>.PCX` (`aFieldUPlt_0`), `EXTRA<n>.RES` (`aExtraURes`), `TILE<n>*`
 (`aTileUSolid`/`aTileUBrick`), and per-level flag rows `getvalue(<n>+340)` /
@@ -425,50 +438,62 @@ keep `pick_stage`.
 ### The "sample" block preview — CONFIRMED (`sub_406AA3` @0x406AA3)
 
 `sub_406DDE`'s frame loop calls a separate helper, `sub_406AA3()`, exactly
-once per **screen entry** and once again per **LEVEL row change** (the outer
-loop's `v35` flag: set to `1` before the loop's first pass, and
-`++v35`'d — i.e. re-armed — whenever `sub_40FAB3() != dword_45E0B8` fires,
-the net-sync path for a level edit; local play's Left/Right level cycle sets
-`dword_45E0B8` directly and takes the SAME `v35` re-arm on the next frame
-through the `sub_40C06A()==1` branch above it). WINS-row edits do **not**
+once per **screen entry** and once again per **LEVEL row change**, gated by a
+"panel dirty" counter local to the outer loop: it is set to 1 before the
+loop's first pass, and incremented — i.e. re-armed — whenever `sub_40FAB3()`
+disagrees with `dword_45E0B8`, the net-sync path for a level edit; local
+play's Left/Right level cycle sets `dword_45E0B8` directly and takes the SAME
+re-arm on the next frame through the `sub_40C06A()==1` branch above it.
+WINS-row edits do **not**
 re-run it. Full body (pseudo.c 7938-8041):
 
-```c
-v18 = getvalue(730);   // X = 400
-v19 = getvalue(731);   // Y = 100
-v24 = getvalue(732);   // XSize = 5  (columns)
-v25 = getvalue(733);   // YSize = 5  (rows)
-sub_4151AD();          // apply the CURRENT (glue) palette — no new backdrop
-```
+It opens by latching the four VALUELST geometry values into locals, then
+applying the palette — in this order:
+
+| read | meaning | value in the shipped VALUELST |
+| --- | --- | --- |
+| `getvalue(730)` | grid origin **X** | 400 |
+| `getvalue(731)` | grid origin **Y** | 100 |
+| `getvalue(732)` | **XSize** = grid columns | 5 |
+| `getvalue(733)` | **YSize** = grid rows | 5 |
+
+then calls `sub_4151AD()` — apply the CURRENT (glue) palette; it does **not**
+load a new backdrop. Below, "X"/"Y"/"XSize"/"YSize" mean these four latched
+values.
 
 1. **Field swatch panel** — `FIELD<n>.PLT` for the SELECTED level (`n =
    dword_45E0B8`) or, for RANDOM, `n = rand() % max(getvalue(35),1)` — picked
    ONCE per `sub_406AA3()` call, i.e. re-rolled only on entry/level-change,
    not every frame. `sub_4150F0` decodes it into a raw framebuffer; if that
    succeeds:
-   - `sub_4168B5(v18-22, v19-20, YSize*36+22, XSize*40+24, byte_49D38F)` — a
-     filled border/background rect, inset 22px left/20px up from the grid
-     origin, sized to the grid box + a ~20-24px margin, colour
-     `byte_49D38F` (a fixed UI ink, not level-dependent — the same byte
-     `sub_4141F8` uses for the "team 2" tint elsewhere in this doc).
-   - `sub_4152D7(&field[12*640], v18-20, XSize*40+20, v19-18, YSize*36+18,
-     …)` — CORRECTED 2026-07-12 (level&rounds audit): the source expression
-     indexes an `int*`, so `12*640` int elements = **48 scanlines**, not 12;
+   - `sub_4168B5` fills a border/background rect: left edge **X−22**, top
+     edge **Y−20**, extents `YSize*36+22` and `XSize*40+24` — i.e. inset 22px
+     left / 20px up from the grid origin, sized to the grid box + a ~20-24px
+     margin — in colour `byte_49D38F` (a fixed UI ink, not level-dependent —
+     the same byte `sub_4141F8` uses for the "team 2" tint elsewhere in this
+     doc).
+   - `sub_4152D7` then copies the decoded field image in, with source offset
+     `12*640` and destination rect (**X−20**, width `XSize*40+20`, **Y−18**,
+     height `YSize*36+18`)
+     — CORRECTED 2026-07-12 (level&rounds audit): the source offset is
+     applied to a pointer to `int`, so `12*640` elements = **48 scanlines**, not 12;
      and `sub_4152D7` -> `sub_4428B4` (pseudo.c 47637-47641) is a **plain
      1:1 rect copy, NOT a stretch**. So: a 220×198 crop of FIELDn.PCX
-     starting at (0,48), copied to (v18-20, v19-18) = (380,82) — which puts
+     starting at (0,48), copied to (X−20, Y−18) = (380,82) — which puts
      the backdrop's own board grid (origin (20,68)) flush under the drawn
      tile cells (dest inset +20,+18). The earlier "12 scanlines +
      stretch-blit" reading is superseded. Border fill = the general white
      `byte_49D38F` (240,248,252).
-2. **The 5×5 block grid** — `for (i in 0..YSize) for (j in 0..XSize)` at
-   cell `(v18 + 40*j, v19 + 36*i)` (40×36 = the same `TILEn.ANI` cell pitch
+2. **The 5×5 block grid** — a row loop `row = 0..YSize` with a nested column
+   loop `col = 0..XSize`, cell origin = (**X + 40·col**, **Y + 36·row**)
+   (40×36 = the same `TILEn.ANI` cell pitch
    the in-match renderer uses, `sim::kTileW/kTileH` — **no stretching**, 1:1
-   native tile size):
-   - `(j&1) && (i&1)` → **always SOLID** (the checkerboard-parity cells, the
-     same parity the in-match board's outer solid lattice uses).
-   - else if `(j>1 || i>1)` → **BRICK with probability 4/5** (`rand()%5 !=
-     0`); the top-left 2×2 corner (`j<=1 && i<=1`) is reserved as guaranteed
+   native tile size). Per cell, tested in this order:
+   - both `col` and `row` **odd** → **always SOLID** (the checkerboard-parity
+     cells, the same parity the in-match board's outer solid lattice uses).
+   - else if `col > 1` **or** `row > 1` → **BRICK with probability 4/5** (a
+     `rand()%5` draw, brick unless it comes out 0); the top-left 2×2 corner
+     (`col <= 1` and `row <= 1`) is therefore reserved as guaranteed
      clear (a "spawn corner"), matching every built-in level's own top-left
      start-safety carve-out.
    - else → **blank** (no tile drawn).

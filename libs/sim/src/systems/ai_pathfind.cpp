@@ -53,8 +53,8 @@ int AISystem::flee_bfs(int sx, int sy, int& best_x, int& best_y) {
     // Seed with the (up to 4) open, in-bounds neighbours of the start, each
     // tagged with the godir it came from (the eventual return value). Seed
     // order is FIXED godir 0..3 — the original's runner-seed loop is a plain
-    // `for (i = 0; i < 4; ++i)` (sub_40970B pseudo.c ~9911-9930); the ±1 tie
-    // draw (v40, our `tie`) only flips the ±90° CHILD-spawn order deeper in
+    // ascending 0..3 loop over the four godirs (sub_40970B pseudo.c ~9911-9930);
+    // the ±1 tie draw (our `tie`) only flips the ±90° CHILD-spawn order deeper in
     // the walk, which our flattened expansion loop below models. Seeding in
     // tie-flipped order made equal-danger first steps flip ~50% per decide —
     // an oscillation the original does not have (2026-07-16 movement audit).
@@ -126,12 +126,13 @@ int AISystem::flee_bfs(int sx, int sy, int& best_x, int& best_y) {
 int AISystem::directed_bfs(int sx, int sy, int tx, int ty, int max_depth, int& out_iters) {
     // Per-call tie-break: 2*(rand()%2)-1 (docs/re/ai.md §5.1). Drawn at entry,
     // before any expansion and before the start==goal check, exactly as the
-    // original draws v35 first (line 9705).
+    // original takes its tie draw first (line 9705).
     const int tie = 2 * static_cast<int>(random_below(s_, 2)) - 1;
     out_iters = 0;
 
-    // start == goal: the original's `if (a1 != a4 || a2 != a3)` guard skips the
-    // whole search (firstdir stays 0). No path step needed — we are already there.
+    // start == goal: the original only enters the search when the start and goal
+    // coordinates differ, so a coincident pair skips it entirely (firstdir stays
+    // 0). No path step needed — we are already there.
     if (sx == tx && sy == ty) return -1;
 
     struct Node {
@@ -146,8 +147,9 @@ int AISystem::directed_bfs(int sx, int sy, int tx, int ty, int max_depth, int& o
 
     // Seed with the (up to 4) open, in-bounds neighbours of the start, tagged
     // with the godir they came from (the eventual return value), in FIXED
-    // godir order 0..3 — the original's seed loop is a plain `for (i = 0;
-    // i < 4; ++i)` (sub_4092A1 pseudo.c 9721-9740, `v20[4] = i`); the ±1 tie
+    // godir order 0..3 — the original's seed loop is a plain ascending 0..3 loop
+    // over the four godirs, stamping the loop index into the queued entry's
+    // first-step slot (sub_4092A1 pseudo.c 9721-9740); the ±1 tie
     // draw only flips ±90° child-spawn order deeper (kept in the expansion
     // loop below). See flee_bfs's seed comment (2026-07-16 movement audit).
     auto seed = [&](int nx, int ny, int first) -> int {

@@ -425,8 +425,9 @@ AppInput MatchRunner::run() {
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
             // ATTRACT abort (docs/re/frontend-flow.md "Attract mode" point 3,
-            // mirroring sub_42A3F6's round-loop tail `if (dword_464938) goto
-            // LABEL_34` on a keypress): ANY key, mouse button, or gamepad
+            // mirroring sub_42A3F6's round-loop tail, which jumps to LABEL_34
+            // as soon as a keypress has set dword_464938): ANY key, mouse
+            // button, or gamepad
             // button input during an attract demo returns to the menu
             // IMMEDIATELY — checked first, ahead of the specific-key
             // handling below, and only while attract_ is armed (a real match

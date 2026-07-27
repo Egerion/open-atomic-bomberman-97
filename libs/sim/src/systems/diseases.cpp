@@ -60,10 +60,12 @@ void DiseaseSystem::give(int idx, Disease d, bool announce) {
     // Announce FIRST — before the Swap branch ever checks for a target
     // (diseases.md finding 1). sub_41DFB6 (batch_0x41DAA7.cpp:308-314, pseudo.c
     // 26290+/22041+) resolves and plays the pickup voice line as soon as the
-    // disease roll (v7) and announce flag (a2) are known, at lines 308-314 —
-    // strictly BEFORE the `if (v7 == 7)` Swap target scan at line 315. A rolled
+    // rolled disease id and the announce argument are known, at lines 308-314 —
+    // strictly BEFORE the Swap target scan at line 315, which is the branch
+    // taken when that disease id is 7. A rolled
     // Swap that finds nobody alive to swap with therefore STILL makes its sound
-    // (the sound is a pure function of v7 + a2, never of whether the scan
+    // (the sound is a pure function of the disease id plus the announce flag,
+    // never of whether the scan
     // succeeds). The earlier port `continue`d past give() on a no-target Swap,
     // silencing the whole pickup (and, for a SuperDisease skull, all three
     // rolls, since only the first announces). The announce is NOT a State::rng
@@ -77,9 +79,11 @@ void DiseaseSystem::give(int idx, Disease d, bool announce) {
     const DiseaseSpec& sp = kDiseases[static_cast<int>(d)];
     if (!sp.persistent) {
         // sub_41DFB6's target scan requires the SAME "valid other player" test
-        // its contagion sibling (sub_41F29B) uses: not self, present, and NOT
-        // DEAD (`v3 != v5 && *((_BYTE*)v3+16) && (…||*v3) && !v3[2]`, pseudo.c
-        // 22073). `!v3[2]` is offset +8, the died-this-round flag = our !alive
+        // its contagion sibling (sub_41F29B) uses: the candidate must not be the
+        // player itself, its presence byte at +16 must be set, the record's
+        // leading state dword at +0 participates in the same clause, and the +8
+        // dword must be zero (pseudo.c 22073). That +8 dword is the
+        // died-this-round flag = our !alive
         // — NOT the +58 head-hit stun countdown, so a stunned-but-alive player
         // is still a valid swap target (facts.md "Stun does NOT gate flame-
         // death or pickup"; an earlier mislabel added a spurious `stun == 0`).
@@ -139,7 +143,8 @@ void DiseaseSystem::spread_and_age() {
     // processes each player in slot order as freshness-- (~22927), then
     // age+=frameDelta/cure (~22929-22942), THEN that SAME player's own
     // contagion scan (~22943-22974) — all nested inside the ALIVE gate
-    // (`if (!+8)` ~22904, where +8 is the died-this-round flag = our !alive,
+    // (the gate at ~22904 requires the +8 dword to be zero, +8 being the
+    // died-this-round flag = our !alive,
     // NOT the +58 head-hit stun countdown, which is decremented INSIDE this
     // same block at ~22982; a field cannot gate a block that only decrements
     // itself). A merely-stunned-but-alive player DOES age and spread its
@@ -181,9 +186,10 @@ void DiseaseSystem::spread_and_age() {
 
     // Contagion: a diseased player overlapping a healthy one hands the whole
     // set over (sub_41F29B ~22943, overlap |dx| <= 30 & |dy| <= 26). Both
-    // ends must be ALIVE: the source gate below sits inside the same `!+8`
-    // alive block as the ager, and the target's own `!v103[2]` (pseudo.c
-    // 22951) is +8 (not-dead) — NOT the +58 stun, so a stunned-but-alive
+    // ends must be ALIVE: the source gate below sits inside the same
+    // "+8 is zero" alive block as the ager, and the target is tested the same
+    // way — the zero-check at pseudo.c 22951 is on the target's own +8 dword
+    // (not-dead) — NOT the +58 stun, so a stunned-but-alive
     // player both spreads and catches. multiply=1 (default) infects EVERY
     // valid target found this tick and the source keeps it; multiply=0 infects
     // only the first (slot order) and clears the source right there, ending

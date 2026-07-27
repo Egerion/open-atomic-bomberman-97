@@ -64,16 +64,19 @@ file's tail when a `.RMP` is present (see the builder below).
 When a `.RMP` exists, `sub_414A65` reads the 256-byte table into the colour's
 in-memory table `dword_460564[player]`, reads the 3 tail bytes into the per-slot
 colour bytes `byte_460BD0/BDA/BE4[player]`, then **backfills the table to
-identity**:
+identity**. In file order, exactly:
 
-```
-fread(table, 256);                      // the file's remap band
-byte_460BD0[p] = fgetc();               // tail R
-byte_460BDA[p] = fgetc();               // tail G
-byte_460BE4[p] = fgetc();               // tail B
-for (i = 0; i < 256; ++i)
-    if (table[i] == 0) table[i] = i;    // 0 == "not remapped" -> identity
-```
+| step | reads | writes |
+| --- | --- | --- |
+| 1 | one 256-byte block (the file's remap band) | `dword_460564[player]`, all 256 entries |
+| 2 | next byte — tail R | `byte_460BD0[player]` |
+| 3 | next byte — tail G | `byte_460BDA[player]` |
+| 4 | next byte — tail B | `byte_460BE4[player]` |
+| 5 | — | backfill pass over entries 0..255: **any entry that is 0 is replaced by its own index** (0 means "not remapped") |
+
+The backfill runs after all 259 bytes are consumed, and its condition is
+equality with zero — not "outside 100..174" — so a colour whose file happened
+to map some band index to 0 would also be turned into identity there.
 
 So after load the table is TOTAL: `dst = table[src]` is identity outside the
 band and the colour ramp inside. This is what lets a plain remap blit leave every
@@ -84,27 +87,32 @@ non-band pixel (shadow / casing / transparent) exactly where it was.
 If the `%u.rmp` file is missing (or a forced rebuild), `sub_414A65` BUILDS the
 table from the base palette and writes the file out (with the 3 tail bytes). Init
 feeds the args from VALUELST (`sub_412135` = getvalue), in the loop over the ten
-players `k`:
+players `k`. Per player it pulls three percentages — `R% = getvalue(200 + 5k)`,
+`G% = getvalue(201 + 5k)`, `B% = getvalue(202 + 5k)` (so each player owns a
+stride-5 block of VALUELST ids starting at 200) — and calls
+`sub_414A65` with five arguments in the order **player index `k`, then R%, then
+B%, then G%, then 0**. Note the swap: the builder's 2nd/3rd/4th parameters are
+R, **B**, G, *not* R, G, B, and the trailing 0 is the "don't force a rebuild"
+flag.
 
-```
-G% = getvalue(201 + 5k);  R% = getvalue(200 + 5k);  B% = getvalue(202 + 5k);
-sub_414A65(k, R%, B%, G%, 0);          // a2=R%, a3=B%, a4=G%
-```
+and then walks every base-palette entry `i` with components `[R,G,B]` (base
+palette getter `sub_42C570`), doing this per entry, in this order:
 
-and for each base-palette entry `[R,G,B]` (base palette getter `sub_42C570`):
-
-```
-if (G > R && G > B) {                  // green-dominant (strict, no margin)
-    baseline = (R + B) / 2;            // v33
-    excess   = G - baseline;           // v32 - v33  (lum = G)
-    outR = R% * excess / 100 + baseline;
-    outG = G% * excess / 100 + baseline;
-    outB = B% * excess / 100 + baseline;
-    table[i] = argmin_j |basePalette[j] - (outR,outG,outB)|^2;   // nearest entry
-} else {
-    table[i] = i;                      // non-green: identity
-}
-```
+1. **Green-dominance test** — `G > R` **and** `G > B`, both strict, no margin
+   or tolerance. If it fails, the entry is **not** part of the armour band:
+   `table[i] ← i` (identity) and the entry is done.
+2. **baseline** ← `(R + B) / 2` — integer divide of the sum of the red and
+   blue components only.
+3. **excess** ← `G - baseline` — how far the green channel stands above that
+   baseline; green is the luminance carrier here.
+4. **Retarget each output channel** with the caller's three percentages,
+   multiply-then-divide (so the multiply happens before the `/100` truncation):
+   - `outR ← R% * excess / 100 + baseline`
+   - `outG ← G% * excess / 100 + baseline`
+   - `outB ← B% * excess / 100 + baseline`
+5. **Snap to the palette** — `table[i]` ← the index `j` minimising the squared
+   RGB distance between base-palette entry `j` and `(outR, outG, outB)`, i.e.
+   the nearest base-palette entry, scanned over the whole palette.
 
 The **baseline `(R+B)/2` is preserved**, so the sprite's shading/casing survives.
 Our `recolor_image` (`libs/game/src/sprites.cpp`) is the truecolour port of THIS
@@ -114,13 +122,15 @@ used ONLY as the fallback for a colour whose `.RMP` failed to load.
 ## Blit — CONFIRMED (`sub_415A1C`, wrapper @ decompile 18002)
 
 The standard sprite blit takes the colour's remap table and applies it to each
-pixel's index before the palette lookup. The wrapper clamps the colour and
-selects the table:
+pixel's index before the palette lookup. The wrapper (`sub_4158CF`) does two
+things, in this order, before handing off:
 
-```
-if (colour < 0) colour = 0;  if (colour >= 10) colour = 9;
-return sub_415A1C(surface, src, dword_460564[colour], dst);
-```
+1. **Clamps the colour argument to 0..9** — a negative colour becomes 0, a
+   colour of 10 or more becomes 9. (Two independent clamps, not a modulo, so
+   out-of-range slots ink as white / purple rather than wrapping.)
+2. **Selects the table** `dword_460564[colour]` and calls `sub_415A1C` with the
+   destination surface, the source cel and that table; its return value is the
+   wrapper's return value.
 
 `dword_460564[10]` are the ten in-memory remap tables (identity-backfilled).
 `sub_415A1C` walks the source indices, does `dst_index = table[src_index]`, and
@@ -150,8 +160,11 @@ earlier "team colour in team mode" reading was wrong. So the slot colour is
 the **`.RMP` tail**, not the raw VALUELST percent.
 
 **`sub_41672F` itself branches on Team Play** (CONFIRMED, pseudo.c 18463-18493):
-`if (dword_464964) return sub_4141F8(sub_4223E7(a1)); else { ...the .RMP-tail
-quantise above... }` — i.e. the FUNCTION's own team-mode branch replaces the
+its first test is on `dword_464964` — when Team Play is on it returns
+`sub_4141F8` of the slot's team byte (fetched by `sub_4223E7(slot)`) and never
+reaches the tail quantise; only when Team Play is off does it fall through to
+the `.RMP`-tail quantise described above. I.e. the FUNCTION's own team-mode
+branch replaces the
 slot's individual ink with the fixed two-colour team ink
 (`sub_4141F8`/`byte_49D0DA` red vs `byte_49D38F` white, `docs/re/results-and-
 options.md` §1 "screen-ink byte globals"). **BUT** the PLAYER INPUT screen's own
@@ -163,8 +176,9 @@ colour**, team mode or not. Team Play's visible effect on THIS screen is a
 separate, later block (pseudo.c ~15212-15224) that — only when `dword_464964`
 is still set (i.e. unconditionally, once per slot) — draws an **unformatted**
 marker glyph (`getstring(230)`, no `%u`: confirmed by the back-to-back
-`sub_4124A4(230)` calls with no intervening `sub_4518D0`/sprintf) inked via
-`sub_4141F8(v96)` where `v96 = sub_4223E7(i)` (that slot's own team byte) — red
+`sub_4124A4(230)` calls with no intervening `sub_4518D0`/sprintf) inked by
+passing that slot's own team byte (fetched by `sub_4223E7(i)`) to
+`sub_4141F8` — red
 for team B, white for team A. So on the setup screen the COLOUR split is
 carried entirely by this trailing marker glyph, not by recolouring the slot's
 own name/type text.
@@ -178,14 +192,17 @@ player's **draw-colour byte, offset +60** — the SAME byte the body blit
 (`sub_4158CF`/`dword_460564[colour]` above), the bomb-spawn colour
 (`sub_422EDE` via `sub_426FCC`, colour forwarded from the placing player's own
 +60 byte at pseudo.c 22517), and by inheritance every flame/carried-bomb/
-death-anim colour selection all read — from:
+death-anim colour selection all read — as follows, per player struct in the
+reset loop:
 
-```c
-if (dword_464964)                          // Team Play on
-    *(byte*)(v6 + 60) = *(byte*)(v6 + 84) ? 2 : 0;   // team byte -> 2 (red) or 0 (white)
-else
-    *(byte*)(v6 + 60) = v8;                 // v8 = this player's own slot index (0-9)
-```
+| condition | what +60 (draw colour) is set to |
+| --- | --- |
+| `dword_464964` non-zero (Team Play ON) and the player's team byte at **+84** is non-zero | **2** (red — `2.RMP`) |
+| `dword_464964` non-zero and the team byte at +84 is zero | **0** (white — `0.RMP`) |
+| `dword_464964` zero (Team Play OFF) | the player's **own slot index**, 0-9, i.e. the loop counter |
+
+The team byte is read as a plain truth test (any non-zero → red), and the
+whole decision is made once per player per round init, before any draw.
 
 i.e. under Team Play **every player's sprite is forced to ONE OF TWO EXISTING
 colour slots — `0.RMP` (white) for team A, `2.RMP` (red) for team B** —

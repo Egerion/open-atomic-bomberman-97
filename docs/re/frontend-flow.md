@@ -41,16 +41,12 @@ The user's memory of a boot-time "loading" screen is CONFIRMED, but it is
 **not** a fourth full-screen PCX bolted onto the IPLOGO/HSLOGO/TITLE chain —
 it is a small **modal progress dialog**, shown **twice**, entirely before
 `sub_42B060` (the logo/title chain) starts. The real app entry is
-`sub_42BE22` (`__noreturn`, decompile 30947-30953):
+`sub_42BE22` (never returns, decompile 30947-30953). Its whole body is three
+calls, in this order and with no arguments, no branches and no return:
 
-```
-void __noreturn sub_42BE22()
-{
-  sub_41095A();   // init — INCLUDES the two LOADING dialogs, below
-  sub_42B060();   // IPLOGO -> HSLOGO -> TITLE (see "Top-level flow" below)
-  sub_42B9CE();   // the menu
-}
-```
+1. **`sub_41095A()`** — init; this INCLUDES the two LOADING dialogs, below.
+2. **`sub_42B060()`** — IPLOGO → HSLOGO → TITLE (see "Top-level flow" below).
+3. **`sub_42B9CE()`** — the menu, which itself never returns.
 
 `sub_41095A` (the config/subsystem-init routine, decompile 14602-14663) calls,
 in order: … `sub_42971F()` → **`sub_41D695()`** → **`sub_42896E()`** → …
@@ -122,22 +118,26 @@ getters; `sub_43D398` — the bounds-clamp/placement step; `sub_43D4D0`/
 full geometry/colour contract, and CORRECTS the parameter order an earlier
 investigation pass guessed:
 
-**Signature (CORRECTED): `sub_43C734(a1=y, a2=height, a3=width, a4=colormode,
-a5=flags)`** — NOT `(x, y, width, ...)`. Proof: the master 640×480 root
-window is created at `sub_414DF4` (@0x417523, the graphics-init routine) as
-`sub_43C734(0, 480, 640, byte_495390[0], 1)` — only readable as
+**Signature (CORRECTED): `sub_43C734`'s five arguments are, in order,
+`y, height, width, colormode, flags`** — NOT `(x, y, width, ...)`. Proof: the
+master 640×480 root
+window is created at `sub_414DF4` (@0x417523, the graphics-init routine) with
+the arguments `0, 480, 640, byte_495390[0], 1` — only readable as
 `(y=0, height=480, width=640, black, flags)`; as `(x, y, width, ...)` it would
 place a 640-wide window at `y=480` on a 480-tall screen, entirely off-screen.
 Every other call site is consistent with this reading once re-parsed:
-`a3` always lands on the literal pixel width (200/360/450/300/600/…), matches
+**the 3rd argument** always lands on the literal pixel width
+(200/360/450/300/600/…), matches
 `sub_43DE0C`'s offset-24 "width" accessor at every use, and the two dialogs
-this task cares about both compute `a2` as an explicit height expression
+this task cares about both compute **the 2nd argument** as an explicit height
+expression
 (`8·fontheight` for the loading dialog, `4·fontheight+64+promptheight` for the
-confirm) rather than a Y screen-position. **`a1` (the "y" slot) is X in the
+confirm) rather than a Y screen-position. **The 1st argument (the "y" slot)
+looks like an X in the
 percent-bar's own reading only insofar as that call hardcodes it (`200`); the
-confirm dialog instead computes `a1 = (screenH − windowHeight) / 2` —
-i.e. `a1` genuinely is used as the window's Y origin, vertically centering the
-box.** (Provenance: `sub_414DF4` @ 0x414DF4/0x417523 window-create line;
+confirm dialog instead computes it as `(screenH − windowHeight) / 2` —
+i.e. the 1st argument genuinely is used as the window's Y origin, vertically
+centering the box.** (Provenance: `sub_414DF4` @ 0x414DF4/0x417523 window-create line;
 `sub_43DE0C`/`sub_43DE28` @ 0x43DE0C/0x43DE28 struct-offset accessors,
 confirmed against `sub_4327DC`'s own-bounds check `x+w <= sub_43DE0C(win)`,
 `y+h <= sub_43DE28(win)`.)
@@ -152,10 +152,10 @@ in `sub_414DF4`). `sub_43D398` (the placement/clamp step, called from the
 constructor right after the background fill) DOES clamp an X value (its
 internal `v3`) against the screen-width bound `dword_4A3BE8`, so a
 horizontal position genuinely exists and is genuinely clamped — but its
-SOURCE register is one IDA's decompiler explicitly marks lost
-(`// 43D3C7: variable 'v3' is possibly undefined`, i.e. a stack-spilled value
-across the constructor's slot-search loop that the decompiler failed to
-recover). `TODO(RE): sub_43D398`'s exact X-default formula needs a
+SOURCE register is one the decompiler explicitly marks lost, with a
+"possibly undefined variable" diagnostic at address **0x43D3C7**: a
+stack-spilled value across the constructor's slot-search loop that the
+decompiler failed to recover. `TODO(RE): sub_43D398`'s exact X-default formula needs a
 disassembler pass (not available in this environment) to pin bit-for-bit; the
 port instead centers each dialog horizontally against the 640-px screen
 width, which is faithful to every visual call site's evident intent (nothing
@@ -196,27 +196,35 @@ is the blue the user remembers** — the loading dialog (and every confirm) is
 a blue textured window, not the flat grey the base coat alone would give.
 
 `sub_416B43(src, srcW, dstBuf, srcH, dstW, dstH)` @ 0x416B43 is a classic
-**9-patch tiler**: it splits the source into a fixed 3×3 grid (`v22 =
-srcW/3`, `v23 = srcH/3` — 24-px cells for WINZ), then:
+**9-patch tiler**: it splits the source into a fixed 3×3 grid — cell width =
+`srcW/3`, cell height = `srcH/3`, both integer divides, so 24-px cells for
+WINZ — then:
 - tiles the CENTER cell across the WHOLE window (first loop, full range),
 - tiles the top/bottom EDGE cells across the top/bottom strips,
 - tiles the left/right EDGE cells down the side strips,
 - stamps the four CORNER cells last, pinned.
-Partial tiles clip via `if (i + cell < extent) v = cell; else v = extent −
-i`. Later bands overpaint the earlier full-range center tiling, so the net
+Partial tiles clip by taking the FULL cell size when the tile still fits
+(`i + cell < extent`) and the REMAINDER (`extent − i`) when it does not.
+Later bands overpaint the earlier full-range center tiling, so the net
 result is the standard corners-pinned / edges-tiled / center-tiled skin.
 (Provenance: `sub_41726B` @ pseudo.c 18682-18693, `sub_416B43` @
 18585-18680; caller list = grep for `sub_41726B` — 16181, 16423, 16787,
 17070, 17200 and NOTHING in the 32xxx editor-prompt range.)
 
-**Fill colour resolution (a4=colormode) — the base coat.**
-`sub_43C734`/`sub_43D1C0` share one decode: `a4==256` → the THEME DEFAULT —
-IF a window-manager background texture `dword_4A39AC` is set, a tiled
-texture fill (`sub_442AC0`, with the per-window random phase pair
-`rand_() & 0xFFFE` stored at creation, v10[9]/v10[10]); otherwise the flat
-`byte_495390[dword_45C46C]`. `BYTE1(a4)!=0` (high byte set) → an indexed
-palette lookup via `dword_45C068[a4 & 0xFFFF]`; otherwise `a4` is a raw
-palette index. Both boot-chrome dialogs pass literal `256`.
+**Fill colour resolution (the 4th argument, "colormode") — the base coat.**
+`sub_43C734`/`sub_43D1C0` share one decode of that argument, tested in this
+order:
+
+1. **exactly 256** → the THEME DEFAULT — IF a window-manager background
+   texture `dword_4A39AC` is set, a tiled texture fill (`sub_442AC0`, with
+   the per-window random phase pair, each drawn as `rand_() & 0xFFFE` and
+   stored in the window record's 10th and 11th dwords at creation);
+   otherwise the flat `byte_495390[dword_45C46C]`.
+2. **its second byte (bits 8-15) non-zero** → an indexed palette lookup:
+   `dword_45C068` indexed by the argument's low 16 bits.
+3. **otherwise** → the argument is itself a raw palette index.
+
+Both boot-chrome dialogs pass literal `256`.
 **`dword_4A39AC` is ALWAYS 0 at runtime** — it belongs to a vestigial
 "window theme file" system living in an IDA-undecompiled gap between
 `sub_43CA60` and `sub_43CD44` (absent from pseudo.c; recovered by a raw
@@ -251,7 +259,7 @@ same RGB shows at boot and in the menu:
 
 | global | LUT offset | LUT idx | decoded RGB | role | old (nearest-search) value |
 |---|---|---|---|---|---|
-| `dword_45C46C` | 10570 | 205 | **(88, 84, 80)** | window base coat (`a4==256`, no theme texture) | (82,82,82) |
+| `dword_45C46C` | 10570 | 205 | **(88, 84, 80)** | window base coat (colormode 256, no theme texture) | (82,82,82) |
 | `dword_45C470` | 15855 | 60 | **(108, 116, 128)** | button bevel "light" (a cool blue-grey, not neutral) | (123,123,123) |
 | `dword_45C474` | 8456 | 142 | **(60, 68, 56)** | button bevel "dark" (a green-grey) | (66,66,66) |
 | `dword_45C478` | 21140 | 178 | **(168, 168, 164)** | button label ink | (165,165,165) |
@@ -269,12 +277,14 @@ pinned (white/team-red/yellow/mid-grey/cyan) are within a few counts of the
 LUT-true ones because that region's entries sit close to their RGB555
 targets, but the LUT-true values above supersede them where they differ.)
 
-**Flags (a5) do not affect visible appearance.** Loading dialog passes `4`;
+**The flags (5th) argument does not affect visible appearance.** Loading
+dialog passes `4`;
 the confirm dialog passes `20` (0x14 = bits 2|4). Every flags-bit tested
 anywhere in the constructor or its siblings (`sub_43D2A4`, `sub_43D4D0`)
-governs internal z-order/redraw-callback bookkeeping (e.g. `a5&1` merges in
-a default-flags global before storage; `a5&4==0` triggers a stacking-reorder
-insertion pass) — none gates a border, shadow, or fill-colour branch. So the
+governs internal z-order/redraw-callback bookkeeping — **bit 0** set merges
+in a default-flags global before storage; **bit 2 CLEAR** triggers a
+stacking-reorder insertion pass — none gates a border, shadow, or
+fill-colour branch. So the
 flags difference between the two dialogs (4 vs 20) is a genuine but
 INVISIBLE difference (window-manager stacking behaviour only); the port does
 not need to (and cannot meaningfully) reproduce it.
@@ -296,12 +306,15 @@ confirm-dialog call sites and not needed to reproduce the visible geometry).
 Full draw order for the "up" bitmap (pseudo.c 35192-35236):
 
 - **Size is text-derived, not caller-specified:** width = `measure(label) +
-  16`, height = `fontheight + 6` (pseudo.c ~35197-35199, `v13`/`v15`).
-- **Face fill = the WINDOW's stored fill colour** `v22[8]` (pseudo.c 35213 —
-  the flat branch; the `v24[8]==256 && dword_4A39AC` textured branch is dead
-  with the theme system, above) = `byte_495390[10570]` = idx 205,
-  (88,84,80)…
-- **…then a whole-bitmap brightness WASH** (`sub_442C28(v16,w,w,h)` @ 35216):
+  16`, height = `fontheight + 6` (pseudo.c ~35197-35199, both computed into
+  locals there).
+- **Face fill = the WINDOW's stored fill colour** — the 9th dword of the
+  window record (pseudo.c 35213, the flat branch; the sibling branch taken
+  when that same field is 256 AND `dword_4A39AC` is set would use the theme
+  texture, but is dead with the theme system, above) = `byte_495390[10570]`
+  = idx 205, (88,84,80)…
+- **…then a whole-bitmap brightness WASH** (`sub_442C28` over the button
+  bitmap, its full width used as both width and stride, @ 35216):
   every pixel is remapped through `byte_475390[p*256 + 0x93]` — row `p` of
   the brightness-ramp table `sub_42C68C`/`sub_42C794` build per palette
   index (128 darken entries then 128 lighten entries; entry 0x93 = lighten
@@ -321,8 +334,9 @@ Full draw order for the "up" bitmap (pseudo.c 35192-35236):
   (`dword_45C378(...)|0x10000` call before each bevel pass).
 - **Confirm-dialog button positions (from `sub_41456C`, both CONFIRMED
   literal expressions):** Yes at `x = width/2 − 80`, No at `x = width/2 +
-  22` (both window-relative, `width` = the dialog's own computed width
-  `v30`), same `y = height − 32 − fontheight − 6` for both (window-relative,
+  22` (both window-relative, `width` = the dialog's own computed width, the
+  `max(prompt-width, 80) + 64` expression pinned below), same
+  `y = height − 32 − fontheight − 6` for both (window-relative,
   bottom-anchored). Hotkey chars are ASCII `'Y'`=89, `'N'`=78 — cosmetic
   labels only; the REAL accept/cancel logic lives in `sub_41456C`'s own key
   loop (already pinned below), not in the button widget.
@@ -336,20 +350,24 @@ outline; `sub_442C28` @ 0x442C28 = per-pixel `byte_475423[p<<8]` remap,
 
 ### `sub_41696C` — outlined dialog text (PINNED 2026-07-10)
 
-Every text draw in this dialog family routes through `sub_41696C(win, text,
-x, w, y, inkA6, inkA7)` @ pseudo.c 18515-18573: it renders the string into a
-colour-key-0 scratch bitmap **FIVE times — four passes in the `a7` colour,
-then one in the `a6` colour on top** (the four `dword_45C378(..., a7 |
-0x2000000)` calls @ 18556-18559 then the single `a6` call @ 18560), and
+Every text draw in this dialog family routes through `sub_41696C` @ pseudo.c
+18515-18573, whose seven arguments are, in order: **window, text, x, width,
+y, INK, OUTLINE**. It renders the string into a
+colour-key-0 scratch bitmap **FIVE times — four passes in the OUTLINE
+colour, then one in the INK colour on top** (four `dword_45C378` calls with
+the outline colour OR'd with `0x2000000` @ 18556-18559, then the single ink
+call @ 18560), and
 blits the scratch with `sub_4428E4` (the colour-key-0 MMX blit — background
 transparent, NOT a filled box). So dialog text = **ink glyphs with a 1-px
-4-way OUTLINE** in the a7 colour; every visible call site passes
-`byte_495390[0]` (black) as a7. The per-pass offsets are register-lost; the
+4-way OUTLINE**; every visible call site passes
+`byte_495390[0]` (black) as the outline. The per-pass offsets are
+register-lost; the
 four cardinal ±1 offsets are the only reading consistent with the pass
-count. The a6/a7 argument order ("ink, then outline") is confirmed by the
-percent dialog's own calls (white/black and yellow/black) and `sub_41456C`'s
-caller @ 5713 (`black, white` in `(a2, a3)` caller order = outline black,
-ink white after the `sub_4172BA(…, a3, a2)` swap).
+count. The ink-then-outline argument order is confirmed by the
+percent dialog's own calls (white/black and yellow/black) and by
+`sub_41456C`'s caller @ 5713, which passes black then white — and
+`sub_4172BA` SWAPS that pair on the way through, so it lands as outline
+black, ink white.
 
 ### The percent-bar dialog, `sub_412E33` — RE-PINNED 2026-07-10 (it is BLUE)
 
@@ -368,8 +386,10 @@ re-decoded through COLOR.PAL):
 - **The caption is the CALLER's loading message, not "Completion"
   (CORRECTED).** The caption draw passes the buffer at **0x45BC5C** — IDA
   symbolizes it `aCompletion` because its on-disk INITIAL value is
-  "Completion", but it is a writable DGROUP buffer: `sub_412E0C` (raw bytes
-  @ 0x412E0C: `mov edx,<arg>; mov eax,0x45BC5C; call strcpy`) copies the
+  "Completion", but it is a writable DGROUP buffer: `sub_412E0C` is a bare
+  `strcpy` wrapper whose destination is the fixed address 0x45BC5C and whose
+  source is its own argument (confirmed against the raw bytes at 0x412E0C),
+  so it copies the
   caller's `sub_4124A4(201)/(200)` text over it before every percent run
   (`sub_41D695` @ 21668-21669: getmessage(201) = "Loading data...";
   `sub_4287B9`: getmessage(200) = "Loading sound..."; every other percent
@@ -379,7 +399,8 @@ re-decoded through COLOR.PAL):
   above): centered, y = `h/2 + h` = 1.5·fontheight, ink `byte_49D38F` →
   **(240,248,252)** with the black 4-way outline.
 - **"%d" percent readout:** second `sub_41696C` call at **y =
-  3.5·fontheight** (`v12+3·v13`, `v12=h/2`), ink `byte_49D37A` → LUT idx 182
+  3.5·fontheight** (built as `h/2` plus three whole `fontheight`s), ink
+  `byte_49D37A` → LUT idx 182
   → **(252,248,88)** yellow (NOT the caption's white), black outline.
 - **White bar FRAME (`sub_43D080` RESOLVED — the earlier TODO(RE)):**
   `sub_43D080(win, 5.5·h, 6.5·h, byte_49D38F)` is a thin wrapper over
@@ -444,29 +465,31 @@ by either dialog. (Provenance: call order pseudo.c 14602-14663 read in full;
 The quit-confirm modal (`sub_412987` → `sub_41456C`, already pinned above
 for its behaviour/sound path) uses the SAME `sub_43C734` chrome as the
 loading dialog — which after the 2026-07-10 pass means the **WINZ.PCX
-9-patch skin** (`sub_41456C` calls `sub_41726B(v33)` @ pseudo.c 17200,
-right after creating its window @ 17197; its acknowledge-modal sibling
+9-patch skin** (`sub_41456C` calls `sub_41726B` on its own window handle @
+pseudo.c 17200,
+right after creating that window @ 17197; its acknowledge-modal sibling
 `sub_414340` does the same @ 17070), NOT the earlier flat grey. Geometry
-(unchanged, all CONFIRMED — with one phrasing fix: `v29` measures the
-PROMPT line(s), not the button labels): width `v30 = max(prompt-width, 80)
-+ 64`, height `v32 = 4·fontheight+64+fontheight` for a one-line prompt
+(unchanged, all CONFIRMED — with one phrasing fix: the measured text is the
+PROMPT line(s), not the button labels): width = `max(prompt-width, 80)
++ 64`, height = `4·fontheight + 64 + fontheight` for a one-line prompt
 (buttons getstring(26)/(25) = " Yes "/" No " size themselves from their own
 labels inside `sub_432298`), vertically centered
-(`y=(480−v32)/2`) and horizontally centered against the 640-px screen width
+(`y = (480 − that height) / 2`) and horizontally centered against the 640-px screen width
 (the X-placement gap above), two `sub_432298` buttons at the pinned
 positions/colours (RE-PINNED button section above).
 
 **The prompt ink is DARK RED, not white (CORRECTED 2026-07-10).**
-`sub_412987` passes its OWN foreground ink to `sub_41456C`: `v0 =
-byte_49A390` (pseudo.c 16027) lands in the a3/foreground slot — the same
+`sub_412987` passes its OWN foreground ink to `sub_41456C`: it loads
+`byte_49A390` (pseudo.c 16027) into `sub_41456C`'s **3rd** (foreground)
+argument slot — the same
 slot the editor's caller @ 5713 fills with `byte_49D38F` (white), which is
-how the a3=foreground mapping is confirmed. `byte_49A390` = LUT offset
+how that slot is confirmed to be the foreground. `byte_49A390` = LUT offset
 0x5000 → idx 248 → **(164,0,0)** under both the master and MAINMENU
 palettes. So "Are you sure you want to exit?" (getstring(10)) renders in
 dark red, window-relative `y = fontheight+32`, horizontally centered,
 via `sub_41696C` = 1-px 4-way outline under the ink (the outline
-colour rides `sub_412987`'s a2 argument, decompiler-lost — black per every
-sibling call site). REVISED 2026-07-24 (reference photo): the original's
+colour rides `sub_412987`'s **2nd** argument, which the decompiler lost —
+black per every sibling call site). REVISED 2026-07-24 (reference photo): the original's
 exit pop-up actually draws the prompt as the red FILL over a GOLD 1-px
 outline (the game's emphasised red/gold text), so the outline arg is NOT
 black for the quit path — it reads as the LUT-true "percent readout yellow"
