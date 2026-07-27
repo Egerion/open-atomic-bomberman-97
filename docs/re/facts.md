@@ -306,8 +306,8 @@ palette entry `[R,G,B]`:
 ```
 if (G > R && G > B) {                 // green-dominant (strict, no margin)
     lum      = G;
-    baseline = (R + B) / 2;           // v33
-    excess   = lum - baseline;        // v32 - v33
+    baseline = (R + B) / 2;
+    excess   = lum - baseline;
     outR = R% * excess / 100 + baseline;   // then snap to nearest palette entry
     outG = G% * excess / 100 + baseline;
     outB = B% * excess / 100 + baseline;
@@ -379,10 +379,11 @@ down by 1/tick" note here was stale/pre-ADR-0006 and made contagion re-spread
 after the shadow blit, the body sprite's FRAME argument (normally the
 player's own draw-colour byte, `+0x3C`/+60 — one frame per player colour,
 0-9, within whatever pose sequence the animation state machine already
-picked) is replaced by `rand() % 10` whenever `v111[60] & 8` is set —
-`v111[60]` is a **WORD** at struct byte offset **+120** (`v111` is typed
-`__int16*` in this function; NOT the same access width as the `+0x3C` byte
-field), the SAME offset this section's "Timer" paragraph already names as
+picked) is replaced by `rand() % 10` whenever bit 3 of the player's disease
+counter is set. That counter is a **WORD** at struct byte offset **+120**
+(the routine indexes the player through a 16-bit-wide pointer, so its
+element 60 is byte offset 120 — NOT the same access width as the `+0x3C`
+byte field), the SAME offset this section's "Timer" paragraph already names as
 the disease-age counter that "counts up by the frame delta each tick" — so
 this is bit 3 of the elapsed-disease-duration counter, not an independent
 flag: `if (diseaseAge & 8) draw(x, y, rand() % 10, sprite)`. Net effect: the

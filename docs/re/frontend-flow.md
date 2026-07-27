@@ -806,23 +806,22 @@ row — both just *select* row 6, and row 6's dispatch is `sub_412987`
 (decompile 16018-16040), which pops a real **Yes/No confirm dialog** before
 anything is torn down:
 
-```
-void sub_412987()
-{
-  sub_431178();                       // freeze/enter-dialog bracket
-  v3 = sub_41456C(getmessage(10), byte_49A390, ...);  // "Are you sure...?" Y/N
-  sub_431360();                       // thaw/leave-dialog bracket
-  if (v3 == 1) {                      // Yes
-    sub_427342();                     // stop the current music
-    if (!sub_413D01())                // skip-logos flag NOT set
-      sub_427BFB(2600);               // exit sting group (2600..2699)
-      sub_452012(0xFA0);              // Sleep(4000 ms) — let the sting finish
-    sub_4128C9(0);                    // __noreturn — the REAL process exit
-  }
-  // v3 == 0 (No): falls straight through, back to the menu loop. Nothing
-  // else happens — no sting, no sleep, no exit.
-}
-```
+`sub_412987` runs, in this exact order:
+
+1. `sub_431178()` — the freeze/enter-dialog bracket.
+2. `sub_41456C(getmessage(10), byte_49A390, …)` — the generic Yes/No dialog,
+   prompting "Are you sure…?" in the dark-red ink `byte_49A390`. Its return
+   value is the answer and is the ONLY thing the rest of the function branches
+   on.
+3. `sub_431360()` — the thaw/leave-dialog bracket, run before the branch, so
+   it happens whichever way the user answered.
+4. If the answer is **1 (Yes)**: stop the current music (`sub_427342`); then,
+   only when the skip-logos predicate `sub_413D01` returns false, play the exit
+   sting group (`sub_427BFB(2600)`, ids 2600..2699) and sleep 4000 ms
+   (`sub_452012(0xFA0)`) so the sting can finish; then call `sub_4128C9(0)`,
+   which never returns — that is the REAL process exit.
+5. If the answer is **0 (No)**: the function falls straight through and returns
+   to the menu loop. Nothing else happens — no sting, no sleep, no exit.
 
 `sub_41456C` (decompile 17129-17278) is the generic Yes/No dialog primitive
 (also used by several other confirm sites in the binary): it draws a
@@ -1173,19 +1172,22 @@ parser + the new `bmfont` parser):
   (CRLF/`0x1A`-EOF handling, 4-column tab stops, one `<IMG>` tag form).
 - **Layout (confirmed literals):** text starts **34 px** from the top of the
   scroll region, one line per row at the **font cell height**; the left inset is
-  **34 px**; the on-screen row count is `v60 = 344 / line_height`; each `<IMG>`
+  **34 px**; the on-screen row count is `344 / line_height`; each `<IMG>`
   segment blits its named PCX inline and advances the pen past it.
 - **Inline images are VERTICALLY CENTERED on their text row — CONFIRMED
-  (`sub_41302D` @ 16456-16497, `pseudo.c`):** the blit Y is
-  `v33 = rowY − (imageHeight − lineHeight) / 2` (`HIDWORD(v14) = v35 −
-  (*(imgptr+28) − fontHeight)/2`), NOT the row top. The image is then clipped
-  to the window band `[34, height−62]` (window-relative → screen `[54, 398]`):
-  a top source-row offset (`if (v33 < 34) { skip 34−v33 rows; v33 = 34; }`), a
-  bottom height clamp (`if (v31+v33 > h−62) v31 = h−62−v33`), and a right width
-  clamp to the 532-px line budget (`if (v32 > v36) v32 = v36`). Because a
+  (`sub_41302D` @ 16456-16497, `pseudo.c`):** the blit Y is the row's Y minus
+  half the overhang, i.e. `rowY − (imageHeight − lineHeight) / 2`, where the
+  image height is read from the sprite header at `+28` and the line height is
+  the font height, NOT the row top. The image is then clipped
+  to the window band `[34, height−62]` (window-relative → screen `[54, 398]`)
+  in three steps: if the blit Y lands above 34, that many source rows are
+  skipped from the top and the blit Y is pulled down to 34; the draw height is
+  clamped so that blitY + height never exceeds `height−62`; and the draw width
+  is clamped to the remaining part of the 532-px line budget. Because a
   centred tall image can poke past the visible rows both ways, the render loop
-  runs `for (j = −16; j < v39+16; ++j)` — images on lines up to 16 rows
-  off-screen still blit their visible half; text draws only for `0 ≤ j < v39`.
+  runs from row −16 to (row count + 16) — images on lines up to 16 rows
+  off-screen still blit their visible half; text draws only for rows inside
+  `0 ≤ row < rowCount`.
   The port (`bmscreen.cpp`) originally **top-aligned** inline images
   (`SDL_FRect{x, y, w, h}`), which shifted every credits photo/logo DOWN by
   ~half its height so the `----->` arrows no longer met their photos (Ege's
