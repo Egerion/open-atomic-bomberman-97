@@ -27,20 +27,23 @@ tick's movement or arm the same-tile landing-kill.**
 
 **Original** (`sub_401B5C`, pseudo.c 4839-4977; confirmed against raw
 disassembly `native/tools/disasm.py 0x401B5C 0x401F76`): inside the
-`while (*(v28+116) > 0)` pixel-budget loop, the flame probe
-(`sub_42708D`, disasm 401E24) sets the dead flag (`*(v28+8)=1`, 401E35)
-and — only if kind matches — awards `sub_421C71` score (401E3F-401E7D).
+pixel-budget loop — which runs while the actor's move-budget dword at
+`+116` is greater than 0 — the flame probe
+(`sub_42708D`, disasm 401E24) sets the actor's dead flag at `+8` to 1
+(401E35) and — only if kind matches — awards `sub_421C71` score
+(401E3F-401E7D).
 **Nothing branches out of the loop on this path**: execution falls straight
-through into the landing-tile-kill `do..while` (401E82-401EBF, `sub_421CB5`
+through into the landing-tile-kill retry loop (401E82-401EBF, `sub_421CB5`
 + `sub_41DE63`, capped at 10 tries on the **same** tile the flame just
 killed the mover on), then commits the new position (401EC1-401ED0), then
-unconditionally jumps back to the loop's own top (401ED3 `jmp 0x401c0f`) and
+at 401ED3 jumps unconditionally back to the loop's own top at 401C0F and
 keeps consuming the rest of *this* tick's `move_budget` — potentially
 crossing further flame tiles (re-arming the score award again each time,
 since the dead-flag check is not re-tested inside the loop) and further
 landing-tile kills. The dead flag is only consulted at the very **top** of
-the function (401BAE `cmp [eax+8],0` / pseudo `if (*(v28+8)) { *v28=0;
-return; }`), i.e. on the **next frame's** call from `sub_401F76` — the actor
+the function (401BAE tests the `+8` dead flag on entry and, when it is set,
+zeroes the actor's active dword at `+0` and returns immediately), i.e. on
+the **next frame's** call from `sub_401F76` — the actor
 is drawn/moves through the remainder of the current frame's budget and is
 only reaped (skipped, deactivated) starting the following frame.
 
@@ -84,9 +87,9 @@ for (int i = 0; i < kMaxPlayers; ++i) { ... }
 a real scoring/kill effect, but campaign-only and narrow to trigger).
 
 **Confidence:** High — verified against raw x86 disassembly, not just
-Hex-Rays pseudocode (see disasm excerpt above: no branch out of the
-budget loop on the flame-death path, `jmp 0x401c0f` unconditionally loops
-back).
+the decompiler's pseudocode (see the instruction-level trace above: there
+is no branch out of the budget loop anywhere on the flame-death path, and
+the tail at 401ED3 jumps unconditionally back to the loop top at 401C0F).
 
 **Suggested fix:** give `Rover` a "pending death" flag instead of removing
 it immediately. On flame contact: record the flame-death event/score
@@ -112,8 +115,9 @@ flame-death cases place the flame one tile away with nothing else on it).
 
 **Original** (`sub_4019C2`, pseudo.c 4762-4789, cross-checked against
 `native/src/game/batch_0x401010.cpp` and the raw disasm): the spawn
-candidate loop tests only `sub_425FB9(v4,v5) != 1` (not solid) and
-`sub_422351(v4,v5,3)` (clear of players). There is **no** `sub_422E48`
+candidate loop tests only the candidate tile's state query
+`sub_425FB9(col,row) != 1` (not solid) and `sub_422351(col,row,3)` (clear of
+players). There is **no** `sub_422E48`
 (grounded-bomb) check anywhere in this function.
 
 **Port** (`libs/sim/src/systems/rovers.cpp:50-51`):
@@ -151,8 +155,9 @@ deviation in `docs/re/campaign.md`).
 **System:** rovers
 
 **Original** (`sub_4017FA`, pseudo.c ~4729 area / batch_0x401010.cpp
-lines 432-439): `return sub_425FB9(a1, a2) == 0;` for the non-ghost
-(rover) case — a pure cell-type check, no flame/burning read anywhere.
+lines 432-439): for the non-ghost (rover) case the function returns true
+exactly when the tile-state query `sub_425FB9(col, row)` yields 0 — a pure
+cell-type check, no flame/burning read anywhere.
 `docs/re/facts.md`'s "Flame is NEVER checked" note independently confirms
 `sub_425FB9`'s backing array (`dword_46222C`) is entirely separate from
 the flame array `sub_42708D` reads.
@@ -200,7 +205,8 @@ than copy-paste).
   `sub_412135(dword_46499C+340)` short-circuit.
 - Interval: `regen_seconds * kTicksPerSecond` countdown, reset
   *unconditionally* (win or lose) at the top of the attempt cycle — matches
-  `dword_464978 = v4` running before the 100-attempt loop, not after.
+  the original re-arming its interval global `dword_464978` from the
+  freshly-read interval value *before* the 100-attempt loop, not after.
 - Attempt loop: up to 100 candidates, exactly 2 RNG draws per attempt
   (x then y) regardless of outcome, stop at first eligible tile — matches
   `sub_426704`'s `for (i<100) { rand%W; rand%H; if (eligible) { write;
@@ -250,10 +256,10 @@ than copy-paste).
   unconditional turn when blocked, re-probe after turning): matches
   `sub_401B5C`'s along/perp centring math and roll shape one-for-one.
 - Re-probe after turning uses the **freshly turned** direction, not a
-  stale pre-turn one — **independently confirmed via raw disassembly**
-  (`401DAD: mov edx,[eax+0x2a]` reloads the direction dword fresh from
-  memory for the second ahead-check, after the turn write at
-  401D9E-401DA5). Note: the native transliteration file
+  stale pre-turn one — **independently confirmed via raw disassembly**: at
+  401DAD the actor's direction dword at `+0x2a` is re-loaded fresh from
+  memory for the second ahead-check, i.e. *after* the turn has already been
+  written back at 401D9E-401DA5. Note: the native transliteration file
   (`native/src/game/batch_0x401010.cpp`)'s C++ reuses a single
   `int dir42 = ...` local for both the first and second ahead-checks,
   which reads as if the second check used the stale pre-turn value — that

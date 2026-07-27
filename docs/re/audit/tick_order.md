@@ -22,7 +22,9 @@ Highest severity: none.
    confirm the original's own frame-local call order.
 2. Read `sub_41F29B` (native transliteration `batch_0x41F29B.cpp`) to confirm
    the per-player turn's internal phase order (head check → disease →
-   contagion → key-shuffle → stun → input → movement → LABEL_246).
+   contagion → key-shuffle → stun → input → movement → the end-of-turn
+   action tail, i.e. `sub_41F29B`'s bomb-action block at
+   `batch_0x41F29B.cpp:642-759`).
 3. Built the "gap" order (player-pass → player-pass) per facts.md's rotation
    section, cross-checked against my own read of (1)/(2) rather than trusting
    the doc blindly.
@@ -39,7 +41,7 @@ One "gap" = from one player pass to the next player pass, matching facts.md's
 
 | # | Original (gap position, `sub_42A191` line) | Port (`run_tick` step, file:line) | Match |
 |---|---|---|---|
-| 1 | Player pass `sub_420F07` (29527): head(flame+pickup) → disease age/expire → contagion → key-shuffle → stun → input → movement(in-move flame+pickup) → LABEL_246 actions, per player slot 0..9 | Step 1: `player_turn` loop, `simulation.cpp:611-633` — movement w/ in-move flame+pickup (`on_move_pixel`/`resolve_player_field`, `:126-129,481-494`) + LABEL_246-equivalent `bomb_actions` (`:242-281`) | Rotation-shifted (documented, not a bug) — this step is the *second half* of a player's turn; the *first half* (head+disease) is step 9/10 of the **previous** tick |
+| 1 | Player pass `sub_420F07` (29527): head(flame+pickup) → disease age/expire → contagion → key-shuffle → stun → input → movement(in-move flame+pickup) → end-of-turn action tail, per player slot 0..9 | Step 1: `player_turn` loop, `simulation.cpp:611-633` — movement w/ in-move flame+pickup (`on_move_pixel`/`resolve_player_field`, `:126-129,481-494`) + the end-of-turn-action-tail equivalent `bomb_actions` (`:242-281`) | Rotation-shifted (documented, not a bug) — this step is the *second half* of a player's turn; the *first half* (head+disease) is step 9/10 of the **previous** tick |
 | 1b | `dword_4621E0` decrement at TOP of `sub_420F07` (23642-23645), same frame it gates | Step 1b: `s.input_freeze` decrement AFTER the player loop, `:645` | Deliberately shifted one half-step to land the same **1000 ms boundary** at tick granularity (re-derived below) — matches |
 | 2 | Rover/ghost mover `sub_401F76`, called from `sub_4016DA` immediately after the player pass (29528-29529) | Step 2: `rovers.tick()`, `:656` | Matches — directly after players, before clock |
 | — | Carried-bomb pass `sub_42459A` (29530) — draw/position-sync only, no gameplay | *(none — carried bomb has no separate entity to sync)* | Accepted deviation, already documented (facts.md "Carried-bomb pass") |

@@ -44,18 +44,21 @@ constants.hpp`, `libs/sim/include/bomber/sim/tuning.hpp`, `tests/test_ice.cpp`.
 **Original** (`sub_41F29B` ~23058-23078, `native/src/game/batch_0x41F29B.cpp`
 lines 412-436): every call (once per displayed frame, humans only) first
 ages **every** existing slot by the real measured frame delta, *then* shifts
-the buffer down and inserts the fresh sample at slot 0:
+the buffer down and inserts the fresh sample at slot 0.
 
-```c
-for (k = 0; k < 30; ++k)
-  v93[2 * k] += dword_464958;              // age ALL slots by this frame's real delta
-for (k = 29; k > 0; --k) { v93[2k] = v93[2(k-1)]; v93[2k+1] = v93[2(k-1)+1]; }  // shift
-v93[0] = 0; v93[1] = want_godir;           // insert fresh sample, age 0
-for (k = 0; k < 30; ++k) {
-  v111[23] = v93[2k + 1];
-  if (getvalue(dword_46499C + 450) <= v93[2k]) break;   // first slot old enough wins
-}
-```
+The buffer is 30 slots of two fields each, stored interleaved — slot `k`'s
+**age** at word index `2k` and its **direction** at word index `2k+1`. The
+four passes run in this order, each over the whole buffer:
+
+| # | pass | detail |
+|---|---|---|
+| 1 | **age** | for `k` = 0..29: slot `k`'s age += `dword_464958` — *age ALL slots by this frame's real delta* |
+| 2 | **shift** | for `k` = 29 down to 1: slot `k` ← slot `k-1`, **both** fields (age and direction) |
+| 3 | **insert** | slot 0's age ← 0, slot 0's direction ← the freshly resolved want-godir — *fresh sample, age 0* |
+| 4 | **resolve** | for `k` = 0..29 ascending: write slot `k`'s direction into the player's requested-direction word at `+46`, then **break** as soon as slot `k`'s age is >= the level's ice delay `getvalue(dword_46499C + 450)` — *first slot old enough wins* |
+
+Note pass 4's write happens **before** its break test, so the last slot
+examined is the one that survives into `+46`.
 
 Because the age-then-shift order applies each call's *own* delta only to
 what is *already* in the buffer (the fresh insert always starts at age 0),
@@ -134,7 +137,9 @@ wild that actually sets an off-tick ice delay.
   exactly (VALUELST values are match-constant, so baking in at mutation time
   is outcome-identical to the original's live re-read); disease factors
   (molasses `÷3`, hyper/super `×3/2`) applied to that base *before*
-  delta-scaling, matching `v91/=3` then `v91=3·v91/2` then `v91=delta·v91/50`
+  delta-scaling, matching the original's own three successive rewrites of
+  its speed local — first `speed ÷= 3`, then `speed = 3·speed / 2`, then
+  `speed = delta · speed / 50` —
   in that exact order. Already the subject of a dedicated 2026-07-16 fix
   (see `movement.cpp`'s own header comment) — re-verified here against the
   batch transliteration and found correct.
@@ -146,21 +151,25 @@ wild that actually sets an off-tick ice delay.
   779-823 term-for-term, including the belt term being *separately*
   delta-scaled and applied *after* the disease-scaled speed term is already
   computed (not folded into the same division). The add/subtract direction
-  test (`v90[+22] == v111[23]` vs `belt_dir == (player_dir+2)&3`) is
+  test (the belt actor's own direction word at `+44` compared against the
+  player's requested-direction word at `+46`, vs
+  `belt_dir == (player_dir+2)&3`) is
   algebraically the involution-equivalent of the port's `want_godir ==
   belt_dir` / `want_godir == (belt_dir+2)&3` — verified by hand (both reduce
   to the same equality mod 4).
 - **Per-pixel corner/glide/settle resolution** (`movement.cpp` lines 84-118
   vs `sub_41EC84` lines 814-951): `along`/`perp` computation matches
-  (`v35`/`v36`, confirmed via the `DX/DY` table dot-products, commutative
+  (the original's own along/perp offset locals, confirmed via the `DX/DY`
+  table dot-products, commutative
   with the port's `sx·dxg+sy·dyg` / `sy·dxg−sx·dyg`); the "no distance
   threshold, only which side of centre" advance/settle logic matches
   (`along<0 || passable(ahead)` gates the advance branch unconditionally,
   exactly as the port's `along < 0 || passable(...)`); the settle-back
   distance (`along * DX[(dir+2)&3]`) matches exactly. The batch
-  transliteration's corner-round branch (`v36>0`/`v36<0` cases) contains an
+  transliteration's corner-round branch (the perpendicular-offset positive
+  and negative cases) contains an
   apparent dead recheck of the already-known-blocked straight-ahead tile
-  (traced by hand: the recomputed `v37/v38` in that branch use the identical
+  (traced by hand: the candidate tile coords that branch recomputes use the identical
   `dir`-indexed formula as the already-failed top-of-loop check, with no
   intervening state change) — this is very likely an unresolved
   register-misattribution artifact of the *batch transliteration specifically*
@@ -174,7 +183,8 @@ wild that actually sets an off-tick ice delay.
   correct reading and matches that prior verification. Not re-litigated as a
   new finding.
 - **Step-on centring trigger** (`movement.cpp`'s `on_center`, lines 123-140):
-  the original's pre-move `v35 == -1` predictive check and the port's
+  the original's pre-move predictive check ("the along-axis offset is
+  exactly −1") and the port's
   post-move "landed exactly on axis-centre" check are provably the same
   event — traced by hand that `along == -1` unconditionally triggers a
   forward step this same iteration (via the `along < 0` branch), landing
@@ -185,8 +195,8 @@ wild that actually sets an off-tick ice delay.
   original's pre-step predictive check does. Already the subject of an
   extensive doc comment in `movement.cpp` (lines 9-23) — independently
   re-derived here, not just trusted.
-- **Kick probe handoff** (`simulation.cpp` lines 495-519 vs `sub_41EC84`
-  `!v35` branch, lines 860-881): the original checks the kick condition
+- **Kick probe handoff** (`simulation.cpp` lines 495-519 vs `sub_41EC84`'s
+  along-offset-is-zero branch, lines 860-881): the original checks the kick condition
   *inside* the per-pixel loop (fires on every remaining budget iteration
   once parked at a blocked bomb's near-centre); the port checks once,
   post-move, using the player's final tick-end position. Proved these are
@@ -200,10 +210,12 @@ wild that actually sets an off-tick ice delay.
   Core-feel audit finding 1, already cited in the port's own comment.
 - **`try_kick`'s "tile beyond the bomb must be passable" gate** (`bombs.cpp`
   lines 220-228): present and correctly separate from the probe's own
-  centring test, matching `sub_41EC84`'s `sub_41E5C3(dword_45BECC[dir]+v37,
-  ...)` check before dispatching `sub_424708`.
+  centring test, matching `sub_41EC84`'s passability check on the tile one
+  further `dword_45BECC`/`dword_45BEDC` step beyond the bomb's tile (via
+  `sub_41E5C3`) before dispatching `sub_424708`.
 - **Opposite-key resolution + last-index-wins bias** (`simulation.cpp` lines
-  415-442 vs `sub_41E61E` LABEL_58, `batch_0x41DAA7.cpp` lines 666-711):
+  415-442 vs `sub_41E61E`'s opposite-key resolution tail,
+  `batch_0x41DAA7.cpp` lines 666-711):
   count-pressed → conditional passability filter → last-surviving-index wins,
   matches exactly, including the GODIR ordering (0=Up,1=Right,2=Down,3=Left)
   that produces the documented "Left beats Right, Down beats Up" bias.
@@ -233,7 +245,8 @@ wild that actually sets an off-tick ice delay.
   value. Negative/fractional carry-over across ticks (no clamping to 0 in
   either) also matches.
 - **Stun/pickup-pause vs the mover**: confirmed (independently re-derived
-  from `sub_41F29B`'s `v113` gate scope) that neither counter gates the
+  by tracing how far `sub_41F29B`'s stun/pause gate flag actually reaches)
+  that neither counter gates the
   per-pixel mover or the ice buffer — only new-input *acquisition*. The
   port's `sub_stunned`/`paused`/`frozen` flags in `simulation.cpp` gate
   exactly that slot (lines 379-403) and nothing else in the sub-frame loop,
@@ -241,8 +254,10 @@ wild that actually sets an off-tick ice delay.
   the "Player state machine (+78) — COMPLETE" facts.md table.
 - **Frame-budget integer truncation** (`constants.hpp` `frame_budget`):
   `speed * delta_ms / kMsPerTick`, truncate-toward-zero, matches the
-  original's `(int)(delta * (long long)v91 / (unsigned int)46494C)` — the
-  `unsigned int` divisor cast doesn't change truncation behaviour here since
+  original's "frame delta × the disease-scaled speed local, divided by
+  `dword_46494C`, truncated back to `int`" — where the divisor is read as
+  `unsigned` and the product is widened to 64-bit first. The
+  `unsigned` divisor read doesn't change truncation behaviour here since
   the divisor (`dword_46494C` = 50) is always positive, so the usual
   arithmetic conversions produce an ordinary positive-divisor truncating
   division identical to the port's. No overflow risk at realistic speed
@@ -251,6 +266,7 @@ wild that actually sets an off-tick ice delay.
   re-flagged): the original writes the glide's diagonal direction into the
   facing word mid-loop, sub-tick and cosmetic-adjacent (`docs/re/facts.md`
   Core-feel audit, "Deviations found but deliberately NOT changed"); the
-  direction-change-cancels-kick/punch-anim bookkeeping (`v111[22] !=
-  v111[23]`) is presentation/animation-state territory living in bombs.cpp's
+  direction-change-cancels-kick/punch-anim bookkeeping (the original's
+  "facing word at `+44` differs from requested-direction word at `+46`"
+  test) is presentation/animation-state territory living in bombs.cpp's
   scope (system 2), not re-audited here.
