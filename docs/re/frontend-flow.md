@@ -149,8 +149,8 @@ computes ONLY the vertical center `(dword_464A6C − height)/2` (`dword_464A6C`
 = 480, confirmed screen height, corrected from an earlier pass's "screen
 width" misreading — `dword_464A70` = 640 is the width, set one line above it
 in `sub_414DF4`). `sub_43D398` (the placement/clamp step, called from the
-constructor right after the background fill) DOES clamp an X value (its
-internal `v3`) against the screen-width bound `dword_4A3BE8`, so a
+constructor right after the background fill) DOES clamp an X value (held in
+a local of its own) against the screen-width bound `dword_4A3BE8`, so a
 horizontal position genuinely exists and is genuinely clamped — but its
 SOURCE register is one the decompiler explicitly marks lost, with a
 "possibly undefined variable" diagnostic at address **0x43D3C7**: a
@@ -493,8 +493,8 @@ black per every sibling call site). REVISED 2026-07-24 (reference photo): the or
 exit pop-up actually draws the prompt as the red FILL over a GOLD 1-px
 outline (the game's emphasised red/gold text), so the outline arg is NOT
 black for the quit path — it reads as the LUT-true "percent readout yellow"
-`byte_49D37A` = (252,248,88). This is PHOTO-DERIVED (that a2/a7 outline arg
-is still decompiler-lost); the port passes the gold ONLY for the quit prompt
+`byte_49D37A` = (252,248,88). This is PHOTO-DERIVED (that outline argument —
+`sub_412987`'s 2nd, `sub_41696C`'s 7th — is still decompiler-lost); the port passes the gold ONLY for the quit prompt
 (`draw_confirm_dialog`'s outline args in the `quit_confirm` block,
 `menu_screen.cpp`), leaving the editor confirms on the black default.
 Behaviour (Y/Enter/Space confirm,
@@ -506,16 +506,17 @@ pass is chrome-only.
 The two calls that make up the whole app entry sit back-to-back
 (`sub_42B060(); sub_42B9CE();`, decompile ~30951):
 
-1. **`sub_42B060` — the boot presentation.** Body (paraphrased):
-   ```
-   sub_42741E(0x3E8)              ; START THE BOOT MUSIC (1000), FIRST OF ALL
-   if (!sub_413D01())            ; skip-logos gate (returns global dword_460260)
-       show("iplogo", wait=1)    ; sub_42A088(aIplogo, 1)
-       show("hslogo", wait=1)    ; sub_42A088(aHslogo, 1)
-   sub_427BFB(2800)              ; play SOUNDLST group 2800 (title intro sting)
-   show("title", wait=1)         ; sub_42A088(aTitle, 1)
-   ; then teardown, return to caller
-   ```
+1. **`sub_42B060` — the boot presentation.** Its body, in order:
+
+   | # | step |
+   |---|---|
+   | 1 | `sub_42741E(0x3E8)` — **START THE BOOT MUSIC (1000), FIRST OF ALL** |
+   | 2 | skip-logos gate: **only if `sub_413D01()` returns false** (it is a bare read of the global `dword_460260`) do steps 3-4 run at all |
+   | 3 | `sub_42A088(aIplogo, 1)` — show "iplogo", **wait = 1** |
+   | 4 | `sub_42A088(aHslogo, 1)` — show "hslogo", **wait = 1** |
+   | 5 | `sub_427BFB(2800)` — play SOUNDLST group 2800, the title intro sting (**unconditional**, outside the skip gate) |
+   | 6 | `sub_42A088(aTitle, 1)` — show "title", **wait = 1** |
+   | 7 | teardown, then return to the caller |
    So the boot order is **IPLOGO → HSLOGO → TITLE**, each a full-screen image
    that **waits for a keypress or the `getvalue(12)` = 7 s timeout** (below), and
    the two logos are skipped entirely when the skip-logos flag (`dword_460260`, a
@@ -582,7 +583,8 @@ The two calls that make up the whole app entry sit back-to-back
 
    **The MENU music id is `0x3F2` = 1010 (CONFIRMED, id corrected).** On entering
    the menu, `sub_42B9CE` plays the menu track via `sub_42741E(0x3F2)` guarded
-   by `v14`: `if (v14) { sub_42741E(0x3F2); v14 = 0; }`.
+   by a once-per-visit flag: when that flag is set it calls
+   `sub_42741E(0x3F2)` and immediately clears the flag.
    `0x3F2` = **1010** = MENU.RSS (SOUNDLST label `menu`) — this *switches* the
    looping music to the menu track and keeps it playing while in the menu.
    **Do not confuse this with `0x3FC` (1020):** that id is played by the
@@ -595,23 +597,23 @@ The two calls that make up the whole app entry sit back-to-back
    while 1020 belongs to `sub_42A3F6`'s round path. (Provenance: `sub_42B9CE`
    `sub_42741E(0x3F2)` call; `sub_42A3F6` `sub_42741E(0x3FC)`/`(0x46A)` calls.)
 
-   **`v14` is NOT a run-once-per-process flag — CORRECTED 2026-07-09.** An
-   earlier pass read it as "sub_42B9CE is `__noreturn`, so v14 is cleared
+   **That flag is NOT a run-once-per-process latch — CORRECTED 2026-07-09.** An
+   earlier pass read it as "sub_42B9CE never returns, so the flag is cleared
    exactly once for the app's whole lifetime" and gated the port's
    `start_music(1010)` behind a `menu_music_started_` bool that, once set,
    never fired again — this broke returning from a match/results screen
    (which switch the music to 1020/1130) back to the menu: 1010 never
    reclaimed the loop, so 1020/1130 kept looping forever. The actual shape
-   (pseudo.c ~30744-30927) is a nested double loop: an OUTER `while(1)` (one
-   iteration per menu *visit*) wraps an INNER `while(1)` (the per-frame
-   input-poll loop). `v14 = 1` is set once per OUTER iteration (~30766),
-   immediately before the inner loop starts; the inner loop's `if (v14) {
-   sub_42741E(0x3F2); v14 = 0; }` (~30781) only stops it from re-firing every
+   (pseudo.c ~30744-30927) is a nested double loop: an OUTER endless loop (one
+   iteration per menu *visit*) wraps an INNER endless loop (the per-frame
+   input-poll loop). The flag is raised once per OUTER iteration (~30766),
+   immediately before the inner loop starts; the inner loop's guard (~30781) —
+   when the flag is set, call `sub_42741E(0x3F2)` and clear it — only stops it from re-firing every
    polled FRAME within that one visit — it is a per-frame debounce, not a
    per-process latch. Every dispatch at the bottom of the outer loop (Play,
    setup screens, Credits, Quit-confirm, the idle-timeout->attract path, ...,
    pseudo.c ~30896-30927) falls through back to the top of the outer loop,
-   which re-arms `v14 = 1`, so `sub_42741E(0x3F2)` fires again on **every**
+   which re-arms that flag, so `sub_42741E(0x3F2)` fires again on **every**
    return to the menu. `sub_42741E` -> `sub_4273A4` (~27640) has no same-id
    no-op either: it unconditionally frees the previous handle
    (`sub_427342`), reloads the clip from disk, and restarts it looping from
@@ -621,36 +623,40 @@ The two calls that make up the whole app entry sit back-to-back
    loop from whatever track a match/results screen left playing. The port's
    `present_menu()` calls `start_music(1010)` unconditionally once per Menu
    (re-)entry (one call per outer-loop iteration) — that IS the faithful
-   port; no gate needed. (Provenance: `sub_42B9CE` pseudo.c 30744-30927,
-   `v14` decl/use at 30739/30766/30781/30784; `sub_42741E` @ 0x42741E;
+   port; no gate needed. (Provenance: `sub_42B9CE` pseudo.c 30744-30927; the
+   music flag is declared at 30739 and used at 30766/30781/30784;
+   `sub_42741E` @ 0x42741E;
    `sub_4273A4` @ 0x4273A4, `sub_427342` free-old-handle @ 0x427342.)
 
 ## The generic Screen primitive — `sub_42A088(name, wait)`
 
-Every full-screen image goes through one routine, `sub_42A088(a1=name,
-a2=wait)` @ 0x42A088. It is the exact primitive the spine's `Screen` mirrors:
+Every full-screen image goes through one routine, `sub_42A088` @ 0x42A088,
+which takes two arguments — **the screen NAME and a WAIT flag**. It is the
+exact primitive the spine's `Screen` mirrors. Its body, in order:
 
-```
-sub_415CE3()                     ; clear the back buffer (memset framebuffer 0)
-sub_415C1F()                     ; bump frame + flip bookkeeping
-palette = load(sprintf("%s.plt", name))   ; aSPlt_0 = "%s.plt"
-apply_palette(palette)           ; sub_41522D: copies + (>>2) to VGA 6-bit
-sub_429FF1()                     ; draw pass (sets dword_464994|=0x40; sub_429F1A)
-sub_415C1F(); sub_41043C()       ; flip / present
-key = getkey()                   ; sub_4102B7
-if (wait) {
-    t0 = time()
-    loop {
-        key = getkey()                          ; sub_4102B7
-        if (elapsed + getvalue(12) < deadline)  ; ATTRACT TIMEOUT via getvalue(12)
-            key = 13                            ; force "advance" (Enter)
-        if (key != -1 && key != -2) sound(20)   ; sub_427961(20) nav blip
-        if (key >= 0x1B) break                  ; Esc(0x1B) / others exit wait
-        if (key == 13) { sound(10); return }    ; Enter selects, plays sound 10
-        ; Space (32) also selects (checked after the >=0x1B break)
-    }
-}
-```
+1. `sub_415CE3()` — clear the back buffer (a memset of the framebuffer to 0).
+2. `sub_415C1F()` — bump the frame counter + flip bookkeeping.
+3. Build `"<name>.plt"` from the format string `aSPlt_0 = "%s.plt"` and load
+   that palette.
+4. Apply it via `sub_41522D` — a copy with a `>>2` per component (the 8→6-bit
+   VGA conversion, not a fade).
+5. `sub_429FF1()` — the draw pass; it ORs `0x40` into `dword_464994` and
+   calls `sub_429F1A`.
+6. `sub_415C1F()` then `sub_41043C()` — flip / present.
+7. One `sub_4102B7()` key poll.
+8. **If and only if the WAIT flag is set**, latch the current time and enter
+   the wait loop, whose body runs in this order every pass:
+   - poll a key with `sub_4102B7`;
+   - compare elapsed whole seconds against the deadline built from
+     `getvalue(12)`; when it has passed, **overwrite the key with 13**
+     (a synthesized Enter — this is the auto-advance);
+   - if the key is a real one (**neither -1 nor -2**), play the nav blip
+     `sub_427961(20)`;
+   - if the key is **≥ 0x1B**, leave the wait loop (so Escape 27, Space 32
+     and anything above them all exit here);
+   - if the key is **13**, play the accept sting `sub_427961(10)` and return.
+   Codes 1..26 other than 13 fall through all of the above and loop again,
+   having played only their blip.
 
 Key facts the spine reproduces:
 
@@ -690,8 +696,9 @@ Key facts the spine reproduces:
   (silent); it now plays `play(20)` then `play(10)` on the timeout (guarded by
   `!done_` so a key that already accepted this frame does not double-fire), so the
   dwell advance is audible. The blip/accept are one-shot SFX, so the looping boot
-  music is untouched. (Provenance: `sub_42A088` wait loop: `if (result < v12) v8
-  = 13;` then the shared `sub_427961(20)`/`(10)` path.)
+  music is untouched. (Provenance: `sub_42A088`'s wait loop forces the key
+  variable to **13** once the elapsed-seconds comparison against the deadline
+  fires, then falls into the shared `sub_427961(20)`/`(10)` path.)
 - **Skip keys + their SFX (ported exactly).** Reading the wait loop precisely:
   ANY real key (`key != -1 && key != -2`) fires `sub_427961(20)` (the nav blip);
   then the **accept keys Enter (13), Space (32), Escape (0x1B/27)** each reach the
@@ -716,10 +723,10 @@ an **animated cursor sprite** blitted on top — `sub_41D957(aBombTriggerGre)` /
 `sub_41DAA7` resolve `"bomb trigger green"` (the trigger-bomb ANI) as the
 highlight, positioned at `getvalue(700)` x / `getvalue(701)+getvalue(702)` y.
 The **item labels are baked into the PCX art**; only the cursor moves. The
-selection variable (`v10` in the decompile) runs **0..6** — seven rows — and
+selection variable runs **0..6** — seven rows — and
 Enter/keys dispatch it (Provenance: `sub_42B9CE` @ 0x42B9CE):
 
-| `v10` | handler | address | what it is | `.BM`? |
+| row | handler | address | what it is | `.BM`? |
 |---|---|---|---|---|
 | 0 | `sub_42A3F6` | 0x42A3F6 | **Play/Start** — runs a match then the results flow (owns DRAW/RESULTS/VICTORY, below) | no |
 | 1 | `sub_42B0CE` | 0x42B0CE | setup screen A (`sub_42741E(0x410)`) | no |
@@ -751,20 +758,20 @@ real `.SCH` writer `sub_403C16`) — chain and controls in
 **Menu key → sound → action table (raw `sub_4102B7` codes, EXHAUSTIVE, CONFIRMED
 `sub_42B9CE`).** The nav blip fires *first* for every real key, then the dispatch:
 
-| key (v8) | sound | effect |
+| key (raw code) | sound | effect |
 |---|---|---|
-| any real key (`≠ -1, ≠ -2`) | `sub_427961(20)` blip | resets idle timer, then falls to the dispatch below |
-| `13` Enter | `sub_427961(10)` accept | select current row (v9=1) |
-| `32` Space | `sub_427961(10)` accept | select current row (v9=1, via `LABEL_59`) |
-| `17` / `27` Escape | `sub_427961(10)` accept | set v10=6 (**Quit**) and select |
-| `328` Up | (blip only) | `--v10`, wraps 0→6 |
-| `336` Down | (blip only) | `++v10`, wraps 6→0 |
-| `280` | `sub_427961(10)` accept | jump v10=3 (**Options**, corrected) and select |
-| `315` | `sub_427961(10)` accept | jump v10=5 (**Help browser**, corrected) and select |
-| `286` | (blip only) | Alt+A — `break` lands on the ATTRACT path (30888-30894: `dword_464938=1`, roster save, `v10=0` → Play as an all-AI demo). CORRECTED 2026-07-12: the earlier "run the current selection" reading was wrong |
+| any real key (neither -1 nor -2) | `sub_427961(20)` blip | resets idle timer, then falls to the dispatch below |
+| `13` Enter | `sub_427961(10)` accept | select current row (sets the accept flag) |
+| `32` Space | `sub_427961(10)` accept | select current row (sets the accept flag, by jumping to Enter's own arm) |
+| `17` / `27` Escape | `sub_427961(10)` accept | force the selected row to 6 (**Quit**) and select |
+| `328` Up | (blip only) | move the selection up one row, wrapping 0→6 |
+| `336` Down | (blip only) | move the selection down one row, wrapping 6→0 |
+| `280` | `sub_427961(10)` accept | jump the selection to row 3 (**Options**, corrected) and select |
+| `315` | `sub_427961(10)` accept | jump the selection to row 5 (**Help browser**, corrected) and select |
+| `286` | (blip only) | Alt+A — breaking out of the key switch lands on the ATTRACT path (30888-30894: sets the attract flag `dword_464938` to 1, saves the roster, forces the selected row to 0 → Play as an all-AI demo). CORRECTED 2026-07-12: the earlier "run the current selection" reading was wrong |
 | `288` | (blip only) | Alt+D — `sub_413D45()` @ 16752-16832, the hidden modal "Internal debugging information" WINZ window (getstring 400/401/405/410/411/415/420, 450x300 at y=100, Enter/Esc dismiss). CORRECTED 2026-07-12: not a toggle |
-| `5` = **Ctrl+E** (×6 in a row) | `sub_427961(10)` accept | `sub_40330E()` — **the MAP EDITOR** (corrected: code 5 is the Ctrl+E ASCII control code, the counter is `++v15 > 5` = six consecutive presses, and the target is the scheme editor, NOT a campaign — full chain in `docs/re/results-and-options.md` §5) |
-| idle > `getvalue(92)` s | (none) | **ATTRACT MODE** (corrected — it does NOT simply run the current row): sets the attract flag `dword_464938`, saves the roster/level/team config, forces v10=0 and dispatches Play as an AI-only demo match — see "Attract mode" below |
+| `5` = **Ctrl+E** (×6 in a row) | `sub_427961(10)` accept | `sub_40330E()` — **the MAP EDITOR** (corrected: code 5 is the Ctrl+E ASCII control code, the press counter is incremented and must then exceed 5, i.e. six consecutive presses, and the target is the scheme editor, NOT a campaign — full chain in `docs/re/results-and-options.md` §5) |
+| idle > `getvalue(92)` s | (none) | **ATTRACT MODE** (corrected — it does NOT simply run the current row): sets the attract flag `dword_464938`, saves the roster/level/team config, forces the selected row to 0 and dispatches Play as an AI-only demo match — see "Attract mode" below |
 
 `getvalue(92)` = **30** (VALUELST `92,30`) — the menu idle timeout, gated by
 `getvalue(92) > 5` (the file's own legend documents it as the attract-mode
@@ -792,7 +799,8 @@ rising edge → **13** = Enter), and the quit confirm reads the same getkey;
 (c) **cursor-position memory**: the row resets to 0 after Options (30910-
 30912), after a cancelled quit (30920-30922) and after an attract demo
 (30894), and is KEPT after Play/Credits/Help/editor; (d) every inline return
-to the outer loop (quit-cancel, help browser, editor) re-arms `v14` →
+to the outer loop (quit-cancel, help browser, editor) re-arms the
+once-per-visit music flag →
 `sub_42741E(0x3F2)` **reloads MENU.RSS from sample 0**; (e) the cursor's
 frame counter is process-lifetime (phase never resets — cosmetic); (f) the
 menu **re-reads VALUELST.RES from disk** (`sub_4121FF`, 15717) before
@@ -848,7 +856,8 @@ highlighted row to 6, and opens the SAME Yes/No confirm modal Enter-on-row-6
 opens** (`quit_confirm`, `game_app.cpp`) — since 2026-07-10 drawn with the
 RE-PINNED `sub_43C734` chrome ("Escape/Quit-row confirm dialog" above): a
 centered WINZ.PCX-9-patch (blue) window sized from the prompt extent
-(`v29 = max(prompt-width, 80)`, width `v29+64`), `getstring(10)` as the
+(the sized-from extent is max(prompt width, 80), and the window width is that
+value + 64), `getstring(10)` as the
 prompt in the dark-red `byte_49A390` ink with a black outline, and two real
 `sub_432298`-bevel buttons labelled `getstring(26)`/`getstring(25)`
 (" Yes "/" No ", fallback text if MESSAGES.TXT lacks those ids) — not the
@@ -868,13 +877,14 @@ the player-setup screen, `docs/re/campaign.md`) and the **280/315 direct
 jumps to Editor/Roulette** targeted features not yet built at the time, so
 they were documented gaps — not faked. The **WASD nav aliases** (`SDLK_W`/`SDLK_S` = Up/Down) are a
 deliberate modern convenience: in the binary raw 'w'(119)/'s'(115) fall through to
-`LABEL_44` (blip only, no move), so binding them to nav is a superset, not a
+the switch's shared no-op tail (blip only, no move), so binding them to nav is a superset, not a
 misrepresentation.
 
 **Cursor anchor — PINNED.** The bomb-trigger cursor's blit is
-`x = getvalue(700)`, `y = getvalue(701) + getvalue(702)*row` (decompile: `v11 =
-getvalue(700); v1 = getvalue(701); v12 = getvalue(702)*sel + v1; blit("bomb
-trigger green", v11, v12)`). VALUELST stores these as the **columns of one
+`x = getvalue(700)`, `y = getvalue(701) + getvalue(702)*row` — the decompiled
+code reads the X from getvalue(700), the base Y from getvalue(701) and the
+per-row step from getvalue(702), then blits the "bomb trigger green" sequence
+at that X and at base Y + step × selected row. VALUELST stores these as the **columns of one
 multi-value row** — `700,332,140,38,0` — and the file's own legend labels them
 `X, Y - first (top) item / YS - y-spacing / W - width`. The original
 `getvalue(id)` (`sub_412135`) reads a **flat array** the loader (`sub_4121FF`)
@@ -886,12 +896,15 @@ timeout is `getvalue(92)`, not the waited-screen `getvalue(12)`.)
 **Cursor blit + frame lookup — VERIFIED end-to-end (2026-07-10 audit).** The
 menu's draw chain is `sub_41D957("bomb trigger green")` (sequence lookup —
 resolves to TRIGANIM.ANI's 19-step ping-pong sequence, docs/re/
-sequence-map.md) → `sub_41DAA7(seq, v13++)` @ 0x41DAA7 = frame at step
+sequence-map.md) → `sub_41DAA7(seq, n)` @ 0x41DAA7, called with the menu
+loop's own per-pass counter (post-incremented at the call), returning the
+frame at step
 `n % statecnt` (the modulo is explicit in its body) → `sub_415920(x, y,
 frame)` @ 0x415920, which queues a type-0 display-list entry that
 `sub_415B22` flushes through `sub_41537F` @ 0x41537F — and `sub_41537F`
-subtracts the frame's OWN hotspot (`v4 = x − hotx; v6 = y − hoty` from
-`sub_41C5E0`'s frame header) before the clipped blit. So the anchor point
+subtracts the frame's OWN hotspot (the blit position becomes x − hotx,
+y − hoty, with both hotspot components read from `sub_41C5E0`'s frame
+header) before the clipped blit. So the anchor point
 (332, 140+38·row) is the frame's HOTSPOT position, exactly what the port's
 `cx - sp.hx / cy - sp.hy` draw does; with TRIGANIM's uniform 40×40
 hot(20,39) frames the sprite sits ~(312, 101+38·row)..(351, 140+38·row).
@@ -902,10 +915,11 @@ port change needed by this audit; the 2026-07-09/-10 source-file fix
 together close the "cursor looks wrong" report.
 
 **Cursor pacing — CORRECTED (2026-07-09).** The cursor's animation-frame
-counter is `v13`, declared once at `sub_42B9CE`'s top (`v13 = 0`) and
-incremented exactly once per pass of the menu's own poll loop
-(`v3 = v13++;`, pseudo.c 30776, immediately followed by the SAME loop's
-input poll `sub_4102B7` and its own blit/flip). There is no separate
+counter is a single local, declared and zeroed once
+at `sub_42B9CE`'s top and incremented exactly once per pass of the menu's own
+poll loop — pseudo.c 30776 takes its current value for this pass's frame
+lookup and post-increments it, immediately followed by the SAME loop's
+input poll `sub_4102B7` and its own blit/flip. There is no separate
 throttle anywhere in this loop and no `getvalue()` id backs a frame-rate
 constant — "one animation step per displayed frame" IS the original's
 pacing, and the displayed frame rate is whatever the DirectDraw flip's
@@ -924,8 +938,8 @@ other front-end loop that shares it (Goldman wheel spin, boot logo timing,
 attract idle) — not just the main menu, though the main menu's cursor is
 the specific case that surfaced it.
 
-**Spine mapping.** The polished menu keeps the seven rows in the original v10
-order so the cursor anchor lands on the baked labels: Play→`Match`,
+**Spine mapping.** The polished menu keeps the seven rows in the original
+selection-index order so the cursor anchor lands on the baked labels: Play→`Match`,
 setup A→Options `.BM` help, setup B→Network `.BM` help, row 3 (Options,
 corrected above)→inert stub, Credits→Credits `.BM`, row 5 (Help browser,
 corrected above)→**live**: the generic `*.BM` help browser
@@ -994,7 +1008,8 @@ match, not a plain "select the current row".** The idle path in
 increments an attract counter (`dword_4642D8`), sets the **attract flag
 `dword_464938` = 1**, snapshots the 10 slots' input-type/sub bytes and the
 team flag via `sub_4224E2` @ 0x4224E2 (pseudo.c 24605-24620) plus the level
-into `dword_4646B8`, forces team play off, and forces **v10 = 0** — so it
+into `dword_4646B8`, forces team play off, and forces the selected-row
+variable to row **0** — so it
 ALWAYS dispatches Play (`sub_42A3F6`), regardless of the highlighted row.
 The flag then reroutes the whole Play flow:
 
@@ -1010,12 +1025,14 @@ The flag then reroutes the whole Play flow:
 - **The round runs live** — the normal sim with AI players; nothing is
   scripted or replayed.
 - **Any dispatched-through keypress aborts**: the round loop's key handler
-  tail has `if (dword_464938) goto LABEL_34` (pseudo.c 29788 → 29737),
+  tail tests the attract flag `dword_464938` and, when set, jumps to the
+  abort branch (pseudo.c 29788 → 29737),
   which clears the pending gold player and sets `dword_464A68 = 2` — back
   to the menu.
-- **Round end skips ALL outcome screens**: before the DRAW/RESULTS tiers,
-  `if (dword_464938)` tears down and returns (pseudo.c 29812-29819,
-  `LABEL_204`) — an attract match never shows DRAW/RESULTS/VICTORY. (The
+- **Round end skips ALL outcome screens**: before the DRAW/RESULTS tiers, a
+  test on `dword_464938` tears down and returns via the shared teardown
+  label (pseudo.c 29812-29819) — an attract match never shows
+  DRAW/RESULTS/VICTORY. (The
   related 6 s auto-advance on those screens is gated by `sub_42247A` — an
   **all-AI-roster test**, pseudo.c 24586-24602 — which covers the
   human-configured all-CPU case, not the attract flag.)
@@ -1057,20 +1074,24 @@ round-end shell constants (hardcoded 6000/3000/1500 ms, no getvalue ids) — is
 RE'd separately in `docs/re/in-match-shell.md`.** It is a **three-tier**
 outcome:
 
-1. **DRAW — no survivor.** `if (sub_4219B0(v69) != -1) goto RESULTS;` — the
-   survivor query returns the lone survivor's index, or **-1 for none**. With no
+1. **DRAW — no survivor.** The tier's first test calls the survivor query
+   `sub_4219B0` and, when the answer is **not** -1, jumps straight to the
+   RESULTS tier below — the query returns the lone survivor's index, or **-1
+   for none**. With no
    survivor it draws `sub_42A088(aDraw, 0)` (`aDraw = "draw"` → DRAW.PCX) then
    `sub_427BFB(1700)` (the **draw sting, SOUNDLST 1700**), and runs a bespoke
    wait: nav-blip on key, Esc→27, and **`(attract || flag) && time > t0+6000`
    → key=13** — a 6 s auto-advance in attract mode.
 2. **RESULTS scoreboard — a survivor exists.** Loads `aResultsPlt`
    (`"results.plt"` → RESULTS.PCX) and prints each player's win tally, computing
-   `v73` = the index that reached the match-win threshold (`dword_464A7C` =
-   wins-needed), or **-1 if nobody has clinched the match yet**.
-3. **VICTORY — the match is won (`v73 != -1`).** Team game → `aTeamU`
+   a **clinch index** = the index that reached the match-win threshold
+   (`dword_464A7C` = wins-needed), or **-1 if nobody has clinched the match
+   yet**.
+3. **VICTORY — the match is won (the clinch index is not -1).** Team game → `aTeamU`
    (`"team%u"` → TEAM0/TEAM1.PCX); else → `aVictoryU` (`"victory%u"` →
-   **VICTORY0..VICTORY9.PCX**, one per winner index). Draws that named screen
-   `sub_42A088(v66, 0)`, dwells `sub_413CB0(3000)` (3 s), and plays the "we have
+   **VICTORY0..VICTORY9.PCX**, one per winner index). Draws that formatted
+   name through `sub_42A088` with **wait = 0**, dwells `sub_413CB0(3000)`
+   (3 s), and plays the "we have
    a winner" voice group `sub_427BFB(2000)`. (Provenance: `aDraw`/`aResultsPlt`/
    `aTeamU`/`aVictoryU` string table @ 1612-1615; blit sites @ 29825/29888/30130.)
 
@@ -1193,10 +1214,13 @@ parser + the new `bmfont` parser):
   ~half its height so the `----->` arrows no longer met their photos (Ege's
   "kaymalar" report, 2026-07-13); it now mirrors the centre-and-clip above.
 - **Scroll is keyboard-driven, one line at a time — there is NO auto/timed
-  scroll.** Up (`328`) `--v54`, Down (`0x150`) `++v54`, PgUp (`0x149`) `v54 -=
-  v60-1`, PgDn (`337`) `v54 += v60-1`, clamped to `[0, count - v60]`. **Enter
-  (13) or Escape (27) dismiss** the viewer (`LABEL_100` sets the done flag on
-  both). So the earlier task assumption of a "scroll speed" constant does not
+  scroll.** All four keys move one scroll-offset variable (the index of the
+  top visible line): Up (`328`) decrements it by 1, Down (`0x150`) increments
+  it by 1, PgUp (`0x149`) subtracts one less than the visible-row count, PgDn
+  (`337`) adds one less than the visible-row count; the result is clamped to
+  `[0, count − visible rows]`. **Enter
+  (13) or Escape (27) dismiss** the viewer — both jump to the same shared tail
+  label, which sets the done flag. So the earlier task assumption of a "scroll speed" constant does not
   exist — nothing to guess. (Provenance: `sub_41302D` scroll loop @ ~16420-16590.)
 - **Font:** `sub_41302D` draws with the **active font**, which graphics-init
   pins to **FONT6** via `sub_431E9C(6)` at the end of `sub_414DF4` (@ 0x417600).
@@ -1293,8 +1317,9 @@ The **boot-music model** at the port level (`GameApp::run_boot_attract`,
 2. The one-shot title sting `play(2800)` fires right before the title image,
    over the still-playing boot track.
 3. `present_menu` calls `start_music(1010)` unconditionally on every Menu
-   (re-)entry — not just the first — matching `sub_42B9CE`'s `v14` re-arming
-   once per outer-loop iteration (see the `v14` correction above): this
+   (re-)entry — not just the first — matching `sub_42B9CE`'s re-arming of its
+   once-per-visit music flag
+   once per outer-loop iteration (see the correction to that flag above): this
    replaces whatever track is currently playing (boot 1000, or a
    match/results track left at 1020/1130) with the menu track and keeps it
    looping while in the menu.
@@ -1312,7 +1337,7 @@ randomness (SFX group pick) uses `AudioEngine`'s own LCG, never `State::rng`.
 | `getvalue(92)` | main-menu attract-mode delay | **30 s** (VALUELST `92,30`) | CONFIRMED: after `getvalue(92)` s idle (gated `> 5`; legend: < 5 disables attract) `sub_42B9CE` enters ATTRACT MODE — saves config, forces Play, runs a live all-CPU demo match (see "Attract mode"); distinct from `getvalue(12)` |
 | `getvalue(700/701/702)` | main-menu cursor x / y-base / y-step | **332 / 140 / 38** (VALUELST `700,332,140,38,0`) | CONFIRMED anchor + values (`sub_42B9CE`): x=getvalue(700), y=getvalue(701)+getvalue(702)·row |
 | SOUNDLST 1000 | boot/title music (`title`), looping, started ONCE in `sub_42B060`, continuous across logos+title | TITLE.RSS | CONFIRMED (`sub_42741E(0x3E8)` @ boot, loop 0xFFFF) |
-| SOUNDLST 1010 | main-menu music (`menu`), looping, started on **every** menu (re-)entry (`sub_42741E(0x3F2)`, `v14` re-armed once per `sub_42B9CE` outer-loop iteration — CORRECTED 2026-07-09, not a once-per-process gate) — replaces whatever track is currently playing (boot 1000, or 1020/1130 left by a match/results screen) | MENU.RSS | CONFIRMED (`sub_42B9CE`); NOT 0x3FC/1020 (that is `sub_42A3F6`'s round "win" track) |
+| SOUNDLST 1010 | main-menu music (`menu`), looping, started on **every** menu (re-)entry (`sub_42741E(0x3F2)`, the once-per-visit flag re-armed once per `sub_42B9CE` outer-loop iteration — CORRECTED 2026-07-09, not a once-per-process gate) — replaces whatever track is currently playing (boot 1000, or 1020/1130 left by a match/results screen) | MENU.RSS | CONFIRMED (`sub_42B9CE`); NOT 0x3FC/1020 (that is `sub_42A3F6`'s round "win" track) |
 | SOUNDLST 1020 | **setup-screens music** (label `win`), looping, started at `sub_42A3F6` entry (`sub_42741E(0x3FC)`) — CORRECTED: plays under player/level setup, replaced at round init by the stage track; it does NOT underlie VICTORY | WIN.RSS | CONFIRMED (corrected 2026-07-08); port fixed — `game_app.cpp`'s `kWinMusicId` (1020) is now scoped to the Play/setup path only, never started for VICTORY (see "Results MUSIC") |
 | SOUNDLST 1130 | **outcome-tier music** (label `draw`), looping, started unconditionally at round end (`sub_42741E(0x46A)` BEFORE the survivor test) — under DRAW **and** RESULTS **and** VICTORY | DRAW.RSS | CONFIRMED (corrected 2026-07-08); port fixed — `game_app.cpp`'s `kDrawMusicId` (1130) now starts under DRAW, RESULTS, **and** VICTORY/TEAM alike (`audio_.start_music(kDrawMusicId)` in every outcome branch) |
 | SOUNDLST 1100+level, 1120 | per-level in-round stage music (`sub_4293E5` @ 0x4293E5, called from `sub_410B6E` round init unless the "Disable music during gameplay" option frees the music instead); 1120 (0x460) is the fallback when the level has no entry | per-level RSS | CONFIRMED (`docs/re/in-match-shell.md` step 2); PORTED — `GameApp::start_match` starts `1100+stage` with the `has_track` 1120 fallback, and (2026-07-12) the disabled path now calls `AudioEngine::stop_music()` (the sub_427342 free) so a disabled round is SILENT instead of leaking the 1020 setup track into it |

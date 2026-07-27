@@ -161,7 +161,9 @@ shipped executable supports **IPX / modem / serial** and TCP/IP is dead data.
 | `word_460130[5]` | the final session node list — `[0]` = host, `[1..4]` = clients. **The 5-machine cap**: `sub_40E765` drops any datagram whose sender is not one of these 5. |
 | `dword_45BAC4` | **network packet version = 21356**; stamped into every datagram header and checked on receive (`sub_40E765`). Mismatched builds simply never see each other — the original's version of ADR-0011's `build_hash`. |
 
-Accessors the two screens use (all `@<eax>` in, `@<eax>` out):
+Accessors the two screens use (all one-argument, taking the index in the
+first register-argument slot and returning in the same register, per the
+Watcom convention noted at the top of this doc):
 
 | fn | returns |
 |---|---|
