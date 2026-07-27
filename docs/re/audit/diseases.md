@@ -9,7 +9,8 @@ already-fixed items.**
 
 Scope: `libs/sim/src/systems/diseases.cpp`/`.hpp`, the disease-effect gates in
 `libs/sim/src/systems/movement.cpp`, `bombs.cpp`, `libs/sim/src/simulation.cpp`
-(LABEL_246 tail, reversed-controls decode), `libs/sim/src/systems/ai.cpp`
+(the end-of-turn action tail, reversed-controls decode),
+`libs/sim/src/systems/ai.cpp`
 (Constipation gate), and the presentation-side disease flash/voice
 (`libs/game/src/renderer.cpp`, `libs/game/src/sound_director.cpp`).
 
@@ -17,7 +18,8 @@ Method: line-by-line read of `native/src/game/batch_0x41DAA7.cpp` (`sub_41DF4C`
 cure @269-285, `sub_41DFB6` assign @288-345, `sub_41E16A`/`sub_41E21E` pickup
 dispatch @348-514, `sub_41EB13` bomb-param fill @729-768) and
 `native/src/game/batch_0x41F29B.cpp` (the per-player disease/contagion block
-@236-330, LABEL_246 @642-759, the reversed-controls flip @394-410), cross-read
+@236-330, the end-of-turn action tail @642-759, the reversed-controls flip
+@394-410), cross-read
 against `docs/re/facts.md`'s existing "Disease system" (§326-420) and "Disease
 system fidelity audit 2026-07-10" (§2411-2584) entries, which already cover
 most of the ground here in detail.
@@ -28,7 +30,7 @@ most of the ground here in detail.
 
 > **FIXED 2026-07-20 (batch 2).** `DiseaseSystem::give()` now pushes the
 > `Infected` announce event at its TOP — before the Swap branch's target scan —
-> matching `sub_41DFB6`'s announce-before-`if (v7 == 7)` order, and
+> matching `sub_41DFB6`'s announce-before-the-Swap-branch order, and
 > `assign_random()` calls `give()` unconditionally (the old `continue` that
 > skipped it on a no-target Swap is gone). RNG- and hash-neutral (the announce
 > is a derived, unhashed event and adds no `State::rng` draw). Pinned by
@@ -42,29 +44,28 @@ existing test).
 **Original** (`sub_41DFB6`, `native/src/game/batch_0x41DAA7.cpp:298-333`;
 pseudo.c ~22041-22098): the disease-kind roll and its announce sound are
 resolved and played *before* the code ever looks at whether the roll was
-Swap:
+Swap. The routine's order of operations:
 
-```c
-for (i = 0; i < 200; ++i) {
-    v7 = rand_() % 9;
-    result = sub_40C06A();               // net-role predicate; 0 locally
-    if (!result || v7 != 7) break;        // locally: always breaks after ONE draw
-}
-if (a2) {                                 // a2 = "announce" (first roll of a batch)
-    if (rand_() % 3) sub_427961(2300);            // 2/3: generic "oh no"
-    else sub_427961(50 * v7 + 3000);              // 1/3: per-disease voice, incl. Swap's own range
-}
-if (v7 == 7) {
-    for (j = 0; j < 200; ++j) { /* random-player target scan; on success: swap + return */ }
-    // falls through here with NO state change if no valid target is ever found
-} else {
-    /* set disease flag / duration / freshness */
-}
-```
+1. **Kind roll**, up to 200 iterations: draw `rand() % 9` into the
+   disease-kind local, then evaluate `sub_40C06A()` (the net-role
+   predicate; **0 locally**). Break out unless that predicate is nonzero
+   AND the rolled kind is 7 (Swap) — so **locally the loop always breaks
+   after exactly ONE draw**.
+2. **Announce**, gated only on the routine's `a2` parameter ("announce" —
+   set for the first roll of a batch). When set: draw `rand() % 3`; if it
+   is nonzero (2 chances in 3) play sound 2300 (the generic "oh no"),
+   otherwise (1 in 3) play sound `50 * kind + 3000` — the per-disease
+   voice, **including Swap's own range**. Both go through `sub_427961`.
+3. **Only now** does the kind matter: if the rolled kind is 7 (Swap), run a
+   target scan of up to 200 tries picking a random player; on success it
+   performs the swap and returns. If no valid target is ever found the
+   routine **falls out of the scan with NO state change at all**.
+4. Otherwise (kind != 7): set the disease flag / duration / freshness.
 
-The sound plays unconditionally whenever `a2` (announce) is set, purely as a
-function of the roll `v7` — independent of whether the subsequent Swap target
-search (only entered `if (v7 == 7)`) actually finds anyone. A Skull pickup
+The sound in step 2 plays unconditionally whenever `a2` (announce) is set,
+purely as a function of the rolled kind — independent of whether the
+subsequent Swap target search (step 3, only entered when the kind is 7)
+actually finds anyone. A Skull pickup
 therefore **always** makes a sound on its first (announcing) roll, even when
 that roll is Swap and there's nobody left alive to swap with.
 
@@ -126,30 +127,35 @@ divergence from a byte-accurate oracle mirror).
 
 - `sub_41DF4C` (`native/src/game/batch_0x41DAA7.cpp:269-285`, the direct cure
   — expiry and the cure-roll pickup path both call this) zeroes only `+120`
-  (age), `+124` (duration), and the 14-byte `+132..+145` flag block:
-  ```c
-  *(_DWORD *)(result + 120) = 0;
-  *(_DWORD *)(result + 124) = 0;
-  for (i = 0; i < 14; ++i)
-      if (*(_BYTE *)(i + v1 + 132)) *(_BYTE *)(i + v1 + 132) = 0;
-  ```
+  (age), `+124` (duration), and the 14-byte `+132..+145` flag block, in that
+  order:
+  1. `+120` (age) ← 0
+  2. `+124` (duration) ← 0
+  3. for `i` = 0..13 ascending: if the byte at `+132 + i` is nonzero, set it
+     to 0.
+
+  Nothing else on the player record is touched — in particular `+128`
+  (freshness) is never written here.
 - The contagion source-clear inlined in `sub_41F29B` when `diseases_multiply`
   is off (`native/src/game/batch_0x41F29B.cpp:308-319`) likewise only zeroes
-  `+132..+145` (inside the copy loop) then `+120`/`+124`:
-  ```c
-  for (i = 0; i < 14; ++i) {
-      v103[i + 132] = v111[i + 132];
-      if (!dword_464A78) v111[i + 132] = 0;
-  }
-  if (!dword_464A78) { v111[30] = 0; v111[31] = 0; break; }
-  ```
+  `+132..+145` (inside the copy loop) then `+120`/`+124`, in this order:
+  1. for `i` = 0..13 ascending: copy the **source** player's flag byte at
+     `+132 + i` into the **target** player's `+132 + i`; then, if
+     `dword_464A78` (the `diseases_multiply` flag) is clear, zero the
+     source's own `+132 + i`.
+  2. after the loop, still only if `dword_464A78` is clear: zero the
+     source's `+120` (age) and `+124` (duration) dwords, then break out of
+     the contagion scan.
+
+  Again `+128` is left alone on both sides.
 
 `+128` (freshness) is written in exactly one other place — unconditionally,
-on every fresh infection (`sub_41DFB6`, `batch_0x41DAA7.cpp:339-341`:
-`v5[32] = sub_412135(129)`) — and is otherwise read only by the contagion
+on every fresh infection (`sub_41DFB6`, `batch_0x41DAA7.cpp:339-341`, which
+writes `getvalue(129)` (`sub_412135(129)`) into the victim's `+128`) — and
+is otherwise read only by the contagion
 source gate (`!+128`, requires freshness to have counted down to 0 to be
-eligible to spread) and never by the target-validity check (`!v103[30]`,
-which is the age field, not freshness). A stale non-zero freshness value left
+eligible to spread) and never by the target-validity check (which reads the
+target's `+120` **age** dword, not freshness). A stale non-zero freshness value left
 behind on a *healthy* player (`+120 == 0`) can never be observed: the source
 gate already requires `+120 != 0` first (short-circuits before the freshness
 term matters), and any later infection overwrites `+128` outright.
@@ -189,11 +195,9 @@ byte-exact.
 pass; flagging the arithmetic delta only.
 
 **Original** (`sub_41EB13`, `native/src/game/batch_0x41DAA7.cpp:757-758`):
-
-```c
-if (*(_BYTE *)(a1 + 138))     // ShortFuse
-    v10 /= 3;                 // unclamped integer division
-```
+if the player's ShortFuse flag byte at `+138` is set, the fuse-length local
+being assembled for the new bomb is divided by 3 — plain integer division,
+**unclamped**, with no floor of any kind (so a base fuse of 1 or 2 yields 0).
 
 **Port** (`libs/sim/src/systems/bombs.cpp:34-35`):
 
@@ -218,31 +222,34 @@ the extensive existing coverage in `docs/re/facts.md`'s "Disease system" and
 
 - **Roster: exactly 9 diseases, `rand() % 9`**, no 10th disease and
   specifically **no "no-kick" disease** — `types.hpp:51-52` vs `sub_41DFB6`'s
-  `rand_() % 9` (`batch_0x41DAA7.cpp:302`); matches facts.md's own
+  own `rand() % 9` draw (`batch_0x41DAA7.cpp:302`); matches facts.md's own
   2026-07-10 reconfirmation ("no 10th disease... exists in the binary").
 - **Kind → effect table** (Slow ÷3, Fast/Super ×3/2, Constipation blocks only
   the drop block, Diarrhea/Super force the drop edge every tick,
   ShortFlame→flame=1 (overridden by Goldflame→max(cols,rows)), ShortFuse ÷3,
   Swap = 2-field x/y-only teleport, Reversed = `(g+2)&3` humans-only) —
   matches `facts.md:334-344` exactly; independently re-checked against
-  `sub_41EB13` (`batch_0x41DAA7.cpp:737-758`) and the LABEL_246 tail
-  (`batch_0x41F29B.cpp:642-747`).
+  `sub_41EB13` (`batch_0x41DAA7.cpp:737-758`) and the end-of-turn action
+  tail (`batch_0x41F29B.cpp:642-747`).
 - **Molasses-then-hyper speed order, factors-before-delta-scale** —
   `movement.cpp:63-69`; the task's "already audited, verify" item, reconfirmed
   against the same disease-scaling site.
 - **Reversed-controls flip point**: applied to the *resolved* godir, after
   the opposite-key filter, humans-only (`+16 != 1`) — `simulation.cpp:
-  444-453` matches `batch_0x41F29B.cpp:402-404` (`v111[23] &= 3; if (+140 &&
-  +16 != 1) v111[23] = (v111[23]+2)&3;`) exactly, including the gate order
-  (clamp first, then flip).
+  444-453` matches `batch_0x41F29B.cpp:402-404` exactly, including the gate
+  order: the requested-direction word at `+46` is first masked with 3
+  (clamp), then — only if the Reversed flag byte at `+140` is set AND the
+  player is not an AI (`+16 != 1`) — that same word is replaced by
+  `(dir + 2) & 3`.
 - **Constipation gates only the drop block** (grab/spooge/plain-drop), never
   the carried-bomb throw-release or the action2 (kick-stop/punch/trigger)
   block — `simulation.cpp:242-281` vs `batch_0x41F29B.cpp:645-747`
   (`!+134` only guards the `if (+56 && !+54 && !+134)` block at line 677);
   also mirrored in the AI's own drop gate (`ai.cpp:742-745`).
 - **Diarrhea/Super auto-drop force**: `+56=1, +54=0` unconditionally at the
-  top of LABEL_246 (every alive tick, including bounce/warp flights), plus
-  the `v112` "poop" sound flag — `bombs.cpp:64-70`, `simulation.cpp:242-245`
+  top of the end-of-turn action tail (every alive tick, including
+  bounce/warp flights), plus the turn-local "poop" sound flag —
+  `bombs.cpp:64-70`, `simulation.cpp:242-245`
   vs `batch_0x41F29B.cpp:644-650`.
 - **Contagion**: overlap `|dx| ≤ tileW-10, |dy| ≤ tileH-10` (40/36 confirmed
   via `dword_4648A4`/`dword_4648A0`, `facts.md:261`), source requires
@@ -281,7 +288,8 @@ the extensive existing coverage in `docs/re/facts.md`'s "Disease system" and
   correctly not ported (`Player::disease` is a 9-element array).
 - **Disease-timer bit-3 visual flash** (presentation, low priority per this
   audit's brief) — `renderer.cpp:738` (`disease_timer & 8`) matches the
-  confirmed `v111[60] & 8` mechanism (`facts.md:373-411`); not re-derived in
+  confirmed "bit 3 of the disease-timer field" mechanism
+  (`facts.md:373-411`); not re-derived in
   depth here beyond confirming the current code still reads the field this
   way.
 
@@ -291,6 +299,7 @@ the extensive existing coverage in `docs/re/facts.md`'s "Disease system" and
 `sub_41DFB6` (assign) @288-345, `sub_41E16A`/`sub_41E21E` (pickup dispatch)
 @348-514, `sub_41EB13` (bomb param fill) @729-768.
 `native/src/game/batch_0x41F29B.cpp`: per-player alive/freshness/age/contagion
-block @195-330, reversed-controls flip @379-410, LABEL_246 tail @642-759.
+block @195-330, reversed-controls flip @379-410, end-of-turn action tail
+@642-759.
 Cross-checked against `docs/re/facts.md` "Disease system" (§326-420) and
 "Disease system fidelity audit 2026-07-10" (§2411-2584).

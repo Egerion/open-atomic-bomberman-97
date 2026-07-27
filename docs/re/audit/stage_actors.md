@@ -23,49 +23,57 @@ in "Verified faithful" below with the specific evidence.
 **Original.** `sub_41F29B`, the idle-player (`godir == -1`) conveyor branch
 (`native/src/game/batch_0x41F29B.cpp:779-796`, pseudo.c ≈23417-23427):
 
-```c
-v89 = sub_405654(v25, v24);
-if (!v89 || v89[1] != 2) goto LABEL_155;    // not a conveyor: no effect at all
-v111[23] = *((__int16*)v89 + 22);           // requested-dir field (+46) := belt dir
-v88 = *(int*)(v111+21) >> 16;               // v88 := v111[22] (facing, +44), UNCHANGED so far
-*((_DWORD*)v111 + 29) += <belt budget>;     // move-budget += conveyor_speed only
-if (!sub_41EC84((int)v111)) {               // step the player
-  v111[23] = (__int16)v88;                  // requested-dir  := v88
-  v111[22] = (__int16)v88;                  // facing         := v88
-  goto LABEL_155;
-}
-```
+The branch runs, in this exact order (player record addressed by byte
+offset, actor record likewise):
+
+1. Look up the actor at the player's own tile: `sub_405654(tileX, tileY)`.
+2. If there is **no** actor, or its type field (`+4`) is not 2 (conveyor),
+   jump straight to the shared pose/draw tail (`LABEL_155`) — the conveyor
+   branch has no effect at all.
+3. The player's requested-direction word at `+46` ← the belt's direction
+   word at the actor's `+44`.
+4. `saved_facing` ← the player's facing word at `+44`. This is read here,
+   BEFORE anything in this branch touches it, so it still holds the entry
+   value.
+5. The player's move-budget dword at `+116` += the belt budget — the
+   conveyor speed **only**; no player-speed term is added on this path.
+6. `sub_41EC84(player)` steps the player. **If it returns 0** (the push was
+   not fatal), the requested-direction word at `+46` and the facing word at
+   `+44` are BOTH written back to `saved_facing`, and the branch jumps to
+   the shared tail (`LABEL_155`).
 
 `sub_41EC84` (`native/src/game/batch_0x41DAA7.cpp:771-982`) returns `1`
 *only* at line 962, when a flame kills the player mid-step
 (`sub_41DE63(...)` truthy inside the per-pixel loop); every other path —
 budget fully spent, whether the player actually shifted or was fully blocked
-— falls through to the unconditional `return 0;` at line 981. So
-`!sub_41EC84(...)` is **true on essentially every tick** (false only on the
-rare tick a flamed conveyor kills the player mid-push), meaning **the revert
-of both `v111[23]` (requested direction) and `v111[22]` (facing) to `v88`
+— falls through to the unconditional zero return at line 981. So
+"`sub_41EC84` returned 0" is **true on essentially every tick** (false only
+on the rare tick a flamed conveyor kills the player mid-push), meaning **the
+revert of both the requested-direction word at `+46` and the facing word at
+`+44` to the saved facing
 fires unconditionally**, not "if fully blocked" as `docs/re/stage-actors.md`
 §3 paraphrases it (`docs/re/stage-actors.md:216-221`, "revert if fully
 blocked" — this doc line is itself a mild mischaracterisation worth fixing
 alongside the code).
 
-`v88` is captured from `v111[22]` *before* it is touched this tick — since
-the input-decode sync `v111[22] = v111[23]` (`batch_0x41F29B.cpp:410`) only
-runs when there *was* input this tick (`v111[23] != -1`), and this whole
-branch is gated on `v111[23] == -1` (no input), `v88` is always whatever
+The saved facing is captured from `+44` *before* anything touches it this
+tick — since the input-decode sync (`+44` ← `+46`,
+`batch_0x41F29B.cpp:410`) only runs when there *was* input this tick
+(`+46 != -1`), and this whole branch is gated on `+46 == -1` (no input), the
+saved value is always whatever
 facing the player last held from their most recent tick *with* real input —
 i.e. **facing freezes at the last actively-chosen direction the instant a
 player stops steering, and stays frozen through any number of idle
 conveyor-push ticks**, even though the belt keeps sliding them across tiles.
-Inside `sub_41EC84` itself, the per-pixel loop's own sync (`*(_WORD*)(i+44) =
-*(_WORD*)(i+46)`, `batch_0x41DAA7.cpp:820`) makes facing track the belt
+Inside `sub_41EC84` itself, the per-pixel loop's own sync (the word at `+44`
+← the word at `+46`, `batch_0x41DAA7.cpp:820`) makes facing track the belt
 direction *transiently*, for the duration of that one call only — the
 caller's revert erases it again before anything else reads it.
 
 This is not purely cosmetic: `Player::facing` also drives punch/kick
 direction (`libs/sim/src/systems/bombs.cpp:91,131,133,188`), and it picks the
 stand-vs-walk sprite text at `LABEL_155` (`batch_0x41F29B.cpp:441`, which
-reads the *same* `v111[23]` field the revert just restored to a non﹣`-1`
+reads the *same* `+46` field the revert just restored to a non﹣`-1`
 value, so a pushed-idle player renders in a **walking** pose facing the old
 direction, not the belt direction, and not idle either).
 
@@ -120,9 +128,9 @@ already checks `p.alive` and returns immediately after `move_on_actor`
     const Direction saved_facing = p.facing;
     movement_.move(p, grid::from_godir(belt_dir), belt, &on_step_center, &sctx,
                    /*use_player_speed=*/false, on_pixel, pixel_ctx, delta_ms);
-    p.facing = saved_facing;  // sub_41F29B ~23427: v111[22]/[23] always revert to
-                              // the pre-push facing after a non-fatal push, not
-                              // only when blocked.
+    p.facing = saved_facing;  // sub_41F29B ~23427: the +44/+46 direction words
+                              // always revert to the pre-push facing after a
+                              // non-fatal push, not only when blocked.
 }
 ```
 Also correct `docs/re/stage-actors.md`'s §3 case-(a) snippet ("revert if
@@ -138,10 +146,12 @@ While tracing finding 1 I noticed a structural asymmetry that's worth a
 follow-up but I could not fully confirm as a bug within this audit's budget.
 
 **Original.** For an idle (no-input) player **not** standing on a conveyor,
-`sub_41F29B`'s case-(a) branch does `goto LABEL_155` *before* ever calling
+`sub_41F29B`'s case-(a) branch jumps to the shared tail (`LABEL_155`)
+*before* ever calling
 `sub_41EC84` (`batch_0x41F29B.cpp:784-785`) — i.e. the per-pixel stepper,
-which is the *only* place the warphole/trampoline step-on check (`v35 ==
--1`, `batch_0x41DAA7.cpp:831-858`) lives, is **never invoked** for such a
+which is the *only* place the warphole/trampoline step-on check lives (the
+"this pixel step lands the player exactly on a tile centre" test,
+`batch_0x41DAA7.cpp:831-858`), is **never invoked** for such a
 player. So a player who is *relocated* onto a fresh tile by something other
 than a per-pixel walk step — the warp midpoint teleport (`+28/+32 =
 +20/+24`, `batch_0x41F29B.cpp:574-575`) or the trampoline apex relocation
@@ -149,8 +159,8 @@ than a per-pixel walk step — the warp midpoint teleport (`+28/+32 =
 tile. If that landing tile is itself a warphole or trampoline and the player
 then sits idle off any conveyor, nothing fires until the player actually
 walks off and back onto it (or the tile also happens to be a conveyor, which
-re-enters `sub_41EC84` — I did not trace that sub-case's `v35` value on the
-very first iteration to confirm whether it could immediately re-fire).
+re-enters `sub_41EC84` — I did not trace that sub-case's centre-landing test
+on the very first iteration to confirm whether it could immediately re-fire).
 
 **Port.** `trampoline_after_move`/`warphole_after_move`
 (`libs/sim/src/systems/stage_actors.cpp:173-226`) run once per tick,
@@ -164,8 +174,8 @@ something the original, per the read above, does not do for a genuinely idle
 player.
 
 **Why not promoted to a full finding:** I could not confirm within budget
-whether the original's `sub_41EC84`'s `v35` computation could still yield
-`-1` (or some equivalent immediate-refire condition) on the very first
+whether `sub_41EC84`'s centre-landing test could still fire (or some
+equivalent immediate-refire condition) on the very first
 per-pixel iteration after a conveyor-forced idle push starting exactly at a
 tile centre, which would partially close this gap for the conveyor sub-case.
 This also requires a level with two chained actors (a warphole/trampoline
@@ -176,8 +186,8 @@ none of the current test fixtures place actors this way (§8 of
 **Severity:** Low (narrow level-design precondition). **Confidence:**
 Low-Medium (the asymmetry is real; the practical consequence needs a
 dedicated trace or a repro level to confirm). **Suggested fix:** none yet —
-flag for a follow-up read of `sub_41EC84`'s first-iteration `v35` value when
-called with the player already centred, or build a repro level with two
+flag for a follow-up read of `sub_41EC84`'s first-iteration centre-landing
+test when called with the player already centred, or build a repro level with two
 chained warpholes and compare against the real binary via the oracle.
 
 ## Verified faithful (no change)
@@ -185,11 +195,12 @@ chained warpholes and compare against the real binary via the oracle.
 - **Conveyor "moving" case (b) bonus/penalty** — `sub_41F29B:797-822` vs
   `stage_actors.cpp:142-154`: both the "with belt" bonus (`actor.dir ==
   requested_dir`) and "against belt" penalty (`actor.dir == (requested_dir+2)
-  &3`) read the player's *input* direction (`v111[23]`/`want_godir`), never
+  &3`) read the player's *input* direction (the `+46` word / `want_godir`), never
   the rendered facing, and use the actor at the player's tile *before* this
   tick's move — matches exactly. The doc's note that `+42`-hi and `+44` are
-  the same underlying word (not two fields) is confirmed by the byte math
-  (`(int*)(v90+42)>>16` reads exactly the bytes `*((__int16*)v90+22)` reads).
+  the same underlying word (not two fields) is confirmed by the byte math:
+  reading the actor's dword at `+42` and shifting right 16 lands on exactly
+  the two bytes the 16-bit field at `+44` occupies.
 - **Conveyor speed source & clamp** — VALUELST 189 (count=3) / 190-192
   (250/350/450), `dword_464930` selector clamped `[0, getvalue(189)-1]`
   (pseudo.c 7862-7865) vs `Tuning::conveyor_speed()`
@@ -225,13 +236,15 @@ chained warpholes and compare against the real binary via the oracle.
   place type 0 is consulted. Matches `bombs.cpp:422-433`.
 - **Bomb-on-trampoline never happens** — `grep` over every native batch file
   confirms exactly one call site of `sub_427961(350)`
-  (`batch_0x41DAA7.cpp:856`, inside the player stepper's `v31[1]==3` branch)
-  and no `actor[1]==3` test anywhere in `sub_42331C`. Nothing to port; the
+  (`batch_0x41DAA7.cpp:856`, inside the player stepper's "actor type field
+  `+4` == 3" branch)
+  and no actor-type-3 test anywhere in `sub_42331C`. Nothing to port; the
   port has no bomb-trampoline interaction either.
 - **Bomb-on-warphole blocked like a wall** — `sub_4230A5`
   (`batch_0x422DDD.cpp:264-292`) and `sub_423188`
-  (`batch_0x422DDD.cpp:298-306`) both end `(!v8 || v8[1] != 1) &&
-  sub_425FB9(...) == 0`, i.e. any type-1 actor makes the probed cell
+  (`batch_0x422DDD.cpp:298-306`) both end on the same composite verdict —
+  *(no actor on the probed tile, OR an actor whose type field `+4` is not 1)
+  AND `sub_425FB9(x, y) == 0`* — i.e. any type-1 actor makes the probed cell
   impassable to a bomb regardless of the underlying tile. Matches
   `bombs.cpp:334-335,474-481` (settle probe) and `:480-481` (slide
   cell-entry probe); `sub_405A81` (the warp resolver) has exactly one caller
@@ -241,8 +254,8 @@ chained warpholes and compare against the real binary via the oracle.
 - **Sound mapping** — `sub_427961(350)`/`sub_427961(1330)`, single-id calls,
   vs `Event::Type::TrampolineBounce`/`WarpUsed` → SOUNDLST 350/1330; no
   conveyor/dirarrow sound in either version.
-- **Warphole one-shot knockout** (`sub_4056CA` case 1's
-  `!*(v23+146)` block, `batch_0x404852.cpp:795-826`) — clears the warphole's
+- **Warphole one-shot knockout** (`sub_4056CA` case 1's "the `+146` latch is
+  still clear" block, `batch_0x404852.cpp:795-826`) — clears the warphole's
   own tile then one random in-bounds cardinal neighbour via
   `dword_45BECC`/`45BEDC`; confirmed setup-time-only (uses the same
   setup-only LCG as `-T,H` trampoline placement per `docs/re/

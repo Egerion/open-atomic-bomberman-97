@@ -122,7 +122,8 @@ TEST_CASE("colour fields are hashed state") {
 }
 
 // Brick-reveal cure roll (empty hook, RNG-count only). sub_425107's first
-// statement on every brick ignite is `if (!(rand_() % 30)) sub_42BE0B()`;
+// statement on every brick ignite draws rand() modulo 30 and calls sub_42BE0B
+// on a zero result;
 // sub_42BE0B is empty (pseudo.c 30942), so the roll only CONSUMES one RNG
 // draw with no gameplay effect. The port must reproduce that draw or its
 // whole downstream RNG stream drifts one step per brick reveal. Verified by

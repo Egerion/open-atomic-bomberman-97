@@ -18,11 +18,12 @@ namespace {
 
 // Layout constants, all confirmed literals in sub_41302D (BM95.EXE @ 0x41302D):
 //   - text lines start 34 px from the top of the scroll region, one line per
-//     row at the font's cell height (v35 = j*height + 34; clip is `>= 34`);
-//   - the left inset is 34 px (v37 starts at 34);
+//     row at the font's cell height (a row's y is its index times the line
+//     height, plus 34; the clip keeps only y >= 34);
+//   - the left inset is 34 px (the pen x starts at 34);
 //   - the visible region is 344 px tall, so the on-screen row count is
-//     344 / line_height (v60 = 344 / dword_45C37C());
-//   - PgUp/PgDn move by (visible_rows - 1) lines (v60 - 1).
+//     344 / line_height (344 divided by dword_45C37C()'s reported line height);
+//   - PgUp/PgDn move by (visible_rows - 1) lines, one less than that count.
 // The original draws into a 600x256-ish scroll window (sub_43C734(20,440,600,
 // 256,4)); we paint the same inset text over a dark panel spanning the logical
 // surface, since our front-end is RGBA rather than the paletted VGA page.
@@ -30,8 +31,9 @@ namespace {
 // 440, 600, 256, 4) = y=20, h=440, w=600, x auto-centred -> (20, 20, 600,
 // 440), repainted every frame with the WINZ.PCX 9-patch (sub_41726B @
 // pseudo.c 16423) — the blue tiled border the user compared against. Text
-// insets 34/34 from the window origin (v37 = 34 @ 16437, v35 base 34 @
-// 16456) -> screen (54, 54); per-line clip budget 532 px (v59 @ 16406).
+// insets 34/34 from the window origin (the pen x is set to 34 @ 16437 and the
+// row-y base to 34 @ 16456) -> screen (54, 54); per-line clip budget 532 px
+// (set @ 16406).
 constexpr float kWinX = 20.0f;
 constexpr float kWinY = 20.0f;
 constexpr float kWinW = 600.0f;
@@ -44,7 +46,8 @@ constexpr int kVisibleHeight = 344;
 // Inline images are CENTERED on their text row and clipped to the window band
 // [34, height-62] (window-relative) — sub_41302D @ 16456-16497. In screen
 // space the band is [kTextTop, kImgClipBottom]. The render loop runs ±kImageBleed
-// lines beyond the visible rows (the original's `for (j = -16; j < v39+16)`) so
+// lines beyond the visible rows (the original's row loop runs its index from
+// -16 up to the visible row count plus 16) so
 // a tall centered image whose OWN line is just off-screen still blits the half
 // that pokes into the visible area.
 constexpr float kImgClipBottom = kWinY + (kWinH - 62.0f);  // 398: window height-62
@@ -204,13 +207,13 @@ void BmScreen::enter(const std::string& bm_name) {
 int BmScreen::visible_rows() const {
     int lh = font_ && font_->loaded() ? font_->line_height() : 16;
     if (lh <= 0) lh = 16;
-    return kVisibleHeight / lh;  // v60 = 344 / line_height
+    return kVisibleHeight / lh;  // the original's row count: 344 / line_height
 }
 
 int BmScreen::max_scroll() const {
     int total = static_cast<int>(doc_.lines.size());
     int vis = visible_rows();
-    int m = total - vis;  // sub_41302D clamps top to (count - v60)
+    int m = total - vis;  // sub_41302D clamps top to (count - visible rows)
     return m < 0 ? 0 : m;
 }
 
@@ -225,23 +228,23 @@ void BmScreen::on_key(SDL_Keycode key) {
             done_ = true;
             break;
         case SDLK_UP:
-            if (top_ > 0) --top_;  // one line up (v54--)
+            if (top_ > 0) --top_;  // one line up (the scroll top decrements)
             break;
         case SDLK_DOWN:
-            if (top_ < max_scroll()) ++top_;  // one line down (v54++)
+            if (top_ < max_scroll()) ++top_;  // one line down (the scroll top increments)
             break;
         case SDLK_PAGEUP:
         case SDLK_LEFT: {
             // Left (331) pages up alongside PgUp (329) — sub_41302D treats
             // both identically (chrome audit 2026-07-12).
-            top_ -= visible_rows() - 1;  // v54 -= v60 - 1
+            top_ -= visible_rows() - 1;  // scroll top back by (visible rows - 1)
             if (top_ < 0) top_ = 0;
             break;
         }
         case SDLK_PAGEDOWN:
         case SDLK_RIGHT: {
             // Right (333) pages down alongside PgDn (337).
-            top_ += visible_rows() - 1;  // v54 += v60 - 1
+            top_ += visible_rows() - 1;  // scroll top on by (visible rows - 1)
             int m = max_scroll();
             if (top_ > m) top_ = m;
             break;
@@ -273,18 +276,18 @@ void BmScreen::draw(SDL_Renderer* ren) const {
     // Each line lays its segments left to right: text runs draw with the font,
     // an <IMG> segment blits the named PCX CENTERED on the row and advances the
     // pen by its full width — sub_41302D's per-line split-at-tag draw, clipped
-    // to the 532-px line budget (v59) and the vertical image band.
+    // to the 532-px line budget and the vertical image band.
     const float clip_right = static_cast<float>(kTextLeft + kLineClipW);
     for (int j = -kImageBleed; j < vis + kImageBleed; ++j) {
         int li = top_ + j;
         if (li < 0 || li >= total) continue;
         const bool row_visible = (j >= 0 && j < vis);
-        const float y = static_cast<float>(kTextTop + j * lh);  // row top (v35)
+        const float y = static_cast<float>(kTextTop + j * lh);  // row top
         float x = static_cast<float>(kTextLeft);
         for (const auto& seg : doc_.lines[static_cast<std::size_t>(li)]) {
             if (seg.is_text()) {
                 // Trim the run to the remaining clip budget (sub_41302D
-                // consumes v59 per glyph advance).
+                // consumes that budget per glyph advance).
                 std::string run = seg.value;
                 float w = 0;
                 std::size_t n = 0;
@@ -327,8 +330,9 @@ void BmScreen::draw(SDL_Renderer* ren) const {
                     }
                     if (static_cast<float>(img_top + draw_h) > kImgClipBottom)
                         draw_h = static_cast<int>(kImgClipBottom) - img_top;
-                    // Right clip to the 532-px line budget (v32 = min(width, v36),
-                    // where the remaining budget v36 == clip_right - pen).
+                    // Right clip to the 532-px line budget: the blit width is
+                    // min(image width, remaining budget), the remaining budget
+                    // being clip_right - pen.
                     int draw_w = sp.w;
                     if (x + static_cast<float>(draw_w) > clip_right)
                         draw_w = static_cast<int>(clip_right - x);
@@ -433,7 +437,8 @@ void HelpBrowser::on_key(SDL_Keycode key, AudioEngine& audio) {
         case SDLK_KP_ENTER:
         case SDLK_SPACE:
             audio.play(10);
-            // sub_41302D(v12[v14]): open the selected topic through the same
+            // sub_41302D is called on the highlighted glob entry: open the
+            // selected topic through the same
             // .BM viewer; the list re-shows once close_viewer() is called
             // (the caller drives that on bm_.done(), matching sub_414235's
             // do/while loop-back over the same glob array).

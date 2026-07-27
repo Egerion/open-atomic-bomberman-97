@@ -43,7 +43,8 @@ public:
     int spacing() const { return spacing_; }
 
     // Advance width of one character (glyph width + inter-char spacing), 0 for a
-    // code the font does not cover — mirroring sub_432120's `if (c < count)`.
+    // code the font does not cover — mirroring sub_432120, which only advances
+    // for codes below the glyph count.
     int advance(unsigned char c) const;
     // Pixel width the string would occupy laid left-to-right (sub_432120).
     int measure(const std::string& s) const;
@@ -100,13 +101,13 @@ public:
     bool done() const { return done_; }
 
 private:
-    int visible_rows() const;      // 344 / line_height (sub_41302D v60)
+    int visible_rows() const;      // 344 / line_height (sub_41302D's row count)
     int max_scroll() const;        // clamp target for the top line
 
     const AssetStore* assets_ = nullptr;
     const FontTextures* font_ = nullptr;
     assets::bmtext::BmDocument doc_;
-    int top_ = 0;      // index of the first visible line (sub_41302D v54)
+    int top_ = 0;      // index of the first visible line (sub_41302D's scroll top)
     bool done_ = false;
 };
 
@@ -118,8 +119,9 @@ private:
 // getstring(600) ("Available help files:"), and opens the selected topic
 // through the SAME `.BM` viewer (BmScreen) main-menu row 4/present_bm_screen
 // already use. Selecting a topic and dismissing its viewer re-shows the SAME
-// list (sub_414235's `do { list } while (v14 != -1)` loop indexes the one
-// glob result array rather than re-scanning the directory) until the list
+// list (sub_414235 re-runs the list dialog in a do/while that only ends when
+// the returned selection index is -1, and it indexes the one glob result
+// array rather than re-scanning the directory) until the list
 // itself is cancelled with Esc. This is the SAME routine both the main
 // menu's row 5 (§4) and the in-round F1 key (docs/re/in-match-shell.md §1)
 // invoke; the caller (GameApp) owns the loop and, for the in-round case,

@@ -73,17 +73,17 @@ the mover `sub_401B5C`. Types are the widths the code dereferences.
 | Off | Type | Name (ours) | Meaning / evidence |
 |----:|------|-------------|--------------------|
 | +0  | u16  | `personality` | seeded `rand()%getvalue(900)` in `sub_40A140`; validated in `sub_40A1C6` |
-| +2  | u16  | `has_path_target` | **the path-target FLAG** (RESOLVED §9.1): tested `if (*(_WORD*)(+2))`, set `= 1` on acquire, cleared `= 0`. The 16.16 coord reads `*(int*)(+2)>>16` alias word +4 (X) |
-| +4  | u16  | `path_target_x` | target **tile X** (high half of the goal X / flee bestX). `*(_WORD*)(+4) = v10` in the flee store |
-| +6  | u16  | `path_target_y` | target **tile Y** (high half of the goal Y / flee bestY). `*(_WORD*)(+6) = v11` in the flee store |
-| +8  | u16  | `path_target_cost` | danger score of the goal tile at capture (`sub_40B20F`: `*(_WORD*)(+8) = sub_424D37(v10,v11)`); re-checked (`!*(_WORD*)(+8)`) to invalidate a stale target |
+| +2  | u16  | `has_path_target` | **the path-target FLAG** (RESOLVED §9.1): tested for non-zero, set to 1 on acquire, cleared to 0. Reads that take +2 as a 16.16 dword and shift right 16 therefore alias word +4 (X) |
+| +4  | u16  | `path_target_x` | target **tile X** (high half of the goal X / flee bestX); the flee store writes bestX here |
+| +6  | u16  | `path_target_y` | target **tile Y** (high half of the goal Y / flee bestY); the flee store writes bestY here |
+| +8  | u16  | `path_target_cost` | danger score of the goal tile at capture (`sub_40B20F` stores `sub_424D37(bestX,bestY)` here); tested for zero later to invalidate a stale target |
 | +10 | u16  | `has_pow_target`? | "seeking a powerup-target actor" latch (`sub_40B8C2`) — set on acquire, cleared on timeout/failure |
 | +12 | i32  | `target_timer` | ms accumulator for the +10/+24 pursuits; `+= dword_464958` each tick, times out at `10*dword_46494C` (~10 frames) |
 | +16 | i32ptr | `target_actor` | pointer to the pursued **powerup grid cell** (`sub_40B8C2`: `= sub_422718(...)`, then walked via `sub_4092A1`) |
-| +20 | i32  | `pow_step_dir` | godir of the next step toward the +16 target (`sub_40B8C2`: `= v7-1`) |
+| +20 | i32  | `pow_step_dir` | godir of the next step toward the +16 target (`sub_40B8C2` stores the BFS's returned first-step index minus 1) |
 | +24 | u16  | `has_enemy_target`? | "seeking a powerup within range" latch (`sub_40BAF5`) |
 | +28 | i32  | `enemy_timer` | ms accumulator for the +24 pursuit (same timeout rule) |
-| +32 | i32ptr | `enemy_actor` | pointer to the pursued powerup cell for the ranged-powerup behavior (`sub_40BAF5`: `= v6` from `sub_409C1F`) |
+| +32 | i32ptr | `enemy_actor` | pointer to the pursued powerup cell for the ranged-powerup behavior (`sub_40BAF5` stores the cell `sub_409C1F` returned) |
 | +36 | i32  | `enemy_step_dir` | godir of the next step toward the +32 target |
 | +40 | u16  | `subtile_x` | player sub-tile offset X = `sub_426599(actor.x)` (set in `sub_40A1C6`) |
 | +42 | u16  | `subtile_y` | player sub-tile offset Y = `sub_4265EB(actor.y)` |
@@ -93,7 +93,7 @@ the mover `sub_401B5C`. Types are the widths the code dereferences.
 | +50 | u16  | `pos_y_sub` | low sub-tile Y (bounds-checked ≥0 in `sub_40A1C6`) |
 | +52 | u16  | `state_flag` | AI action state: **9 = "committed to blast bricks / drop"** (set by `sub_40AD8D`, cleared to 0 when the situation clears; also cleared in `sub_40A76E`). The task's "+24 state flag" is actually here at +52 |
 | +58 | u16  | `bump_stop`? | set to -1 in `sub_40A76E` when the intended step hits flame (abort the step) |
-| +62 | dword | `team/self ref` | `BYTE2(...)` used as a base godir in wander (`sub_40A81F` line 10496); also compared team-wise in `sub_40BD44` |
+| +62 | dword | `team/self ref` | its byte at index 2 is used as a base godir in wander (`sub_40A81F` line 10496); also compared team-wise in `sub_40BD44` |
 | +64 | u16  | `wander_dir` | the persistent wander godir (`sub_40A81F`): re-rolled `rand()%4` when blocked |
 
 Notes:
@@ -121,8 +121,9 @@ tick (§7). Flow:
     brain.vel_perp(+44), brain.[+46-lo] = rotate(subtile, actor.godir(+44))
     (offscreen guard: fatal if actor pos < 0)
 5.  personality guard: fatal if brain.personality(+0) != 0
-6.  BEHAVIOR CHAIN:  v15 = off_45BA78;  i = 0
-    do { if (v15[i] && v15[i]()) break; i++; } while (v15[i-1])
+6.  BEHAVIOR CHAIN:  table = off_45BA78;  i = 0
+    repeat: if table[i] is non-null and calling it returns non-0 -> STOP
+            i++;  keep going while the previous entry was non-null
         // walk the 8-entry table; STOP at the first behavior that returns non-0
 7.  brain.pos_x/y(+46/+48) re-read from actor (post-move refresh); offscreen guard
 8.  scratch = alloc(rand()%1000 + 100); free(scratch)   // RNG draw #B (throwaway)
@@ -134,8 +135,9 @@ used. They still advance the global PRNG, so they are part of the RNG
 order/count contract even though their effect is nil. (This looks like a
 debugging/heap-stress artifact left in the shipped build.)
 
-Each behavior reads the brain via `dword_45ED70` and the actor via its `a1`
-parameter; a behavior "acts" by writing the actor's input bytes and returning 1.
+Each behavior reads the brain via `dword_45ED70` and the actor via its single
+(register-passed) actor parameter; a behavior "acts" by writing the actor's
+input bytes and returning 1.
 
 ## 3. The behavior table — `off_45BA78[8]` (data @ 0x45BA78, line 2018)
 
@@ -159,8 +161,8 @@ if !player.grab(+92): return 0
 if player[+148] (carrying a grabbed bomb):        // already holding one
     player.bombkey(+56)=0; player.bombkey_last(+54)=0; return 1    // just HOLD it, act
 else:
-    v3 = bomb_at(pos)                             // sub_422E48 at the brain's tile
-    if v3 and *(v3+62)==*(player+62) and rand()%2:  // RNG: 50%  (own bomb underfoot; +62 is owner, not team)
+    bomb = bomb_at(pos)                           // sub_422E48 at the brain's tile
+    if bomb and bomb(+62) == player(+62) and rand()%2:  // RNG: 50%  (own bomb underfoot; +62 is owner, not team)
         player.bombkey(+56)=1; player.bombkey_last(+54)=0; return 1  // grab it (edge)
     return 0
 ```
@@ -171,8 +173,11 @@ its hands).
 
 **CORRECTION — "hold" is a lob, not an indefinite hold.** When carrying, behaviour
 0 writes `+56=0` (bomb key up) every tick. The mover's carried-bomb throw block
-(`sub_41F29B` LABEL_246, line 23286: `if (+148 /*carried ptr, dword idx 37*/) if
-(v112 || !+56) { throw it; +148=0; }`) fires the throw on `!+56` — i.e. as soon as
+(`sub_41F29B`, line 23286) is nested: outer test "is `+148` non-null?" (the
+carried-bomb pointer, dword index 37), and inside it a two-way OR: some other
+mover-local condition computed earlier in the same pass, OR `+56` being clear.
+On either, the bomb is thrown and `+148` is
+zeroed. So the throw fires on `!+56` — i.e. as soon as
 the key is released. Since behaviour 0 forces `+56=0` while carrying (and it
 short-circuits the chain so nothing re-presses the key), the throw block fires the
 VERY NEXT tick: the grab-AI **grabs its own bomb, then lobs it forward** the
@@ -185,17 +190,20 @@ the identical `!+56` gate — so the carried bomb is lobbed on the next tick jus
 in the original. (`try_grab` also imposes a `pickup_pause` stun, so there is a
 one-tick settle between grab and lob, matching the original's pickup pause.)
 
-**CORRECTED 2026-07-10 (owner, not team):** `+62` on BOTH operands
-(`*(bomb+62) == *(actor+62)`, line 11025) is the **owner/self index** — the
-same HIWORD(+60) id `sub_4245DA` counts (§9.3) — not a team byte; it is not
+**CORRECTED 2026-07-10 (owner, not team):** `+62` on BOTH operands — the
+comparison at line 11025 is bomb `+62` against actor `+62` — is the
+**owner/self index**, the
+same id that lives in the high word of `+60` and that `sub_4245DA` counts
+(§9.3) — not a team byte; it is not
 gated on the team-mode global `dword_464964` the way behaviour 4's genuine
 `+84` team compare is (§3.4/§5.3). So this is unconditionally "the bomb is
 mine" (`bomb.owner == self`) in every match, team or not — the same reduction
 the mover's own grab block uses (`under->owner == i`, simulation.cpp) and our
 port's `own` check reproduces exactly, with no `same_team()` call. (An earlier
 draft of this note mislabeled +62 as a team word and, worse, the port's
-`random_below(s_, 2)` polarity was inverted from the actual `&& rand()%2`
-truthy-to-grab condition below — both wording and code are now RESOLVED; see
+`random_below(s_, 2)` polarity was inverted from the actual condition below,
+where the `rand()%2` is the last term of an AND chain and a **truthy** roll
+grabs — both wording and code are now RESOLVED; see
 the boxed pseudocode's `rand()%2` line, unchanged and correct.) **Draw:** the
 `rand()%2` (row b0, §8) fires ONLY when grab is held, not carrying, and a
 matching bomb is underfoot (resting OR sliding — `sub_422E48` excludes only
@@ -263,8 +271,9 @@ Key facts:
   correctly transcribed here, but our C++ port had drifted from its own doc:
   `behave_walk_path` hard-coded `return true` after `flame_veto()` in BOTH the
   directed and flee sub-branches, instead of returning whether the veto left a
-  real step (`g != -1`). Byte-exact re-read of pseudo.c 10841-10842
-  (`sub_40A76E(v4); return *(int*)(v4+44)>>16 != -1;`) confirms the doc: when
+  real step (`g != -1`). Byte-exact re-read of pseudo.c 10841-10842 — the veto
+  is called as a bare statement, and the very next line returns "the actor dword
+  at +44, shifted right 16, is not -1" — confirms the doc: when
   the veto cancels the chosen step, behaviour 2 must **return 0 (pass down)**,
   giving behaviours 3-7 a turn — and their draws — on that tick, not stall
   silently. This is RNG-order-critical (the realized draw list depends on
@@ -307,12 +316,15 @@ moved off / the situation resolves. (State 9 is otherwise inert in the versus AI
 except this self-clear; it exists for the original's anim/telemetry.)
 
 **`sub_423188(x,y)` is NOT an escape-route search** (correcting the earlier "can
-I escape?" gloss). Byte-exact (0x423188):
-```
-if sub_422E48(x,y): return 0                 // a bomb already on this tile -> can't drop here
-v5 = sub_405654(x,y)                         // STAGE-ACTOR lookup (dword_45E0A8, stride 38 dwords)
-return (!v5 || v5[1] != 1) && sub_425FB9(x,y) == 0   // NOT a warphole (type +4 == 1) AND cell type == 0
-```
+I escape?" gloss). Byte-exact (0x423188), in order:
+
+1. `sub_422E48(x,y)` — if a bomb is already on this tile, return 0 (can't drop
+   here).
+2. `sub_405654(x,y)` — STAGE-ACTOR lookup (`dword_45E0A8`, stride 38 dwords).
+3. The result is the AND of two terms: **(a)** the lookup found nothing OR the
+   record it found has type word **+4 != 1** (i.e. NOT a warphole), and
+   **(b)** `sub_425FB9(x,y) == 0` (the cell type is blank floor).
+
 It is a **drop-tile clearance** predicate: "may a bomb be placed on THIS tile" —
 no bomb here (`sub_422E48`), **no WARPHOLE here** (`sub_405654`), and the cell is
 blank floor (`sub_425FB9==0`, NOT a wall/brick). Called with the AI's own standing
@@ -321,13 +333,15 @@ afterward, it does not verify an escape exists before dropping. This is the same
 clearance predicate behaviour 4 uses.
 
 > **CORRECTION 2026-07-26 — `sub_405654` is the STAGE-ACTOR registry, not a
-> campaign rover/ghost list.** This section previously glossed `v5 =
-> sub_405654(x,y)` as "an ENTITY (rover/ghost) here? — empty in versus" and told
+> campaign rover/ghost list.** This section previously glossed the
+> `sub_405654(x,y)` lookup as "an ENTITY (rover/ghost) here? — empty in versus"
+> and told
 > the port it "drops out". That is wrong. `sub_405654` (0x405654) linearly scans
-> `dword_45E0A8` at stride 38 dwords matching the record's tile fields `i[7]`/
-> `i[8]` (= actor +28/+32) — the EXTRA*.RES stage-actor registry
-> (docs/re/stage-actors.md §1) — and `v5[1]` is the actor **type word at +4**
-> (0=dirarrow, 1=warphole, 2=conveyor, 3=trampoline). So `v5[1] != 1` is a
+> `dword_45E0A8` at stride 38 dwords, matching the record's tile fields at dword
+> indices 7 and 8 (= actor +28/+32) — the EXTRA*.RES stage-actor registry
+> (docs/re/stage-actors.md §1) — and the field the predicate then reads (dword
+> index 1) is the actor **type word at +4**
+> (0=dirarrow, 1=warphole, 2=conveyor, 3=trampoline). So "type +4 != 1" is a
 > **warphole rejection**, and it is populated in versus mode on every warphole
 > stage. The identical tail appears in `sub_4230A5`, the sliding-bomb cell-entry
 > probe, where stage-actors.md §4 note 4 already read it correctly ("whenever the
@@ -356,12 +370,13 @@ if abs(tileX(+20)) + abs(tileY(+24)) >= 3:             // Manhattan gate over th
 return 0
 ```
 `sub_421CB5(x,y)` is **confirmed** to return the live **player** (`dword_461BC4`
-stride-152 scan; pseudo.c 24207 `*i && !i[2]` = `+0` active and `+8` NOT-DEAD —
-`i[2]` is offset +8, the died-this-round flag, NOT the +58 head-hit stun;
-CORRECTED 2026-07-10, an earlier pass mislabelled `+8` "not-stunned"), matching
-tile via `sub_42665C/sub_4266A3`. The caller zeroes its own actor `+0` across the
-probe
-(`v5=*a1; *a1=0; sub_421CB5(...); *a1=v5`) so **self is excluded** — our port
+stride-152 scan; pseudo.c 24207 requires the record's `+0` non-zero (active) AND
+its third dword clear — that third dword is offset **+8**, the died-this-round
+flag, NOT the +58 head-hit stun; CORRECTED 2026-07-10, an earlier pass
+mislabelled `+8` "not-stunned"), matching
+tile via `sub_42665C/sub_4266A3`. Around the probe the caller stashes its own
+actor's `+0`, writes 0 over it, calls `sub_421CB5`, then restores the saved
+value — so **self is excluded** — our port
 skips the self slot instead. The loop does NOT continue after the first hit: the
 first enemy found (in cross order) either drops or `return 0`s the whole behaviour.
 
@@ -379,9 +394,12 @@ read, never a fault in practice. Our port reproduces the exact constants
 (`kEnemyScanX[5]={-1,0,0,0,1}`, `kEnemyScanY[5]={0,-1,0,1,0}`). Index 2 is the
 self tile, excluded by the self-skip.
 
-**[RESOLVED] the Manhattan gate operands.** `(int)v3 + HIDWORD(v3) >= 3` is
-`abs(sub_42665C(a1[5])) + abs(sub_4266A3(a1[6])) >= 3`, where `a1[5]/a1[6]` are
-the actor's `+20/+24` — a 16.16 **snapshot** of the actor position. `+20/+24` are
+**[RESOLVED] the Manhattan gate operands.** The decompiler had folded the two
+absolute values into a single 64-bit temporary and tested it by summing its low
+and high 32-bit halves against 3 — a chained-register-argument artifact. The
+real gate is `abs(sub_42665C(actor +20)) + abs(sub_4266A3(actor +24)) >= 3`,
+over the actor's `+20/+24` — a 16.16 **snapshot** of the actor position.
+`+20/+24` are
 written to the current position only at spawn and at punch-init
 (`*(+20)=*(+28); *(+24)=*(+32)`, 0x425?), and to the warp destination on warp-out
 — NOT during ordinary walking. `sub_42665C/sub_4266A3` are pixel→tile, so the
@@ -426,7 +444,7 @@ if !brain.has_target(+10): return 0
 brain.timer(+12) += frameDelta
 if brain.timer(+12) >= 10*msPerFrame and !(rand()%50): brain.has_target=0; return 0   // RNG: 1/50 give up on timeout
 p = brain.actor(+16)
-if !p or p.kind!=1 or p.dead(v4[2]=+8): brain.has_target=0; return 0   // v4[2] is +8 (died-this-round), NOT +58 stun
+if !p or p.kind!=1 or p.dead(+8): brain.has_target=0; return 0   // that flag is +8 (died-this-round), NOT the +58 stun
 sub_4092A1(pos, p.tile, maxdist=20, &firstdir, &nsteps, 0)   // DIRECTED BFS toward the foe
 if !nsteps and rand()%2: brain.has_target=0            // RNG: 50% give up if unreachable
 if !firstdir: brain.has_target=0; return 0
@@ -446,18 +464,20 @@ though §8's table lists only the outer draws. The timeout give-up (line 10894) 
 reaches 10 (short-circuit `&&`), and on a FAILED roll the target is KEPT (unlike
 powerup-seek §3.5, whose 10-tick timeout is unconditional). The unreachable
 give-up `if (!nsteps && rand()%2)` (line 10914) draws `%2` only when the BFS found
-no path. Target liveness reload: `!v4 || *v4 != 1 || v4[2]` = target gone / not
-the alive value (+0 != 1) / **DEAD** (`v4[2]` = +8, the died-this-round flag —
-NOT the +58 stun; CORRECTED 2026-07-10, was mislabelled "stunned"). Our port
+no path. Target liveness reload — three OR'd bail conditions, in order: the
+stored target pointer is null (target gone), its `+0` is not the alive value 1,
+or its third dword `+8` is set (**DEAD** — the died-this-round flag, NOT the
++58 stun; CORRECTED 2026-07-10, was mislabelled "stunned"). Our port
 stores the target's **slot** (not a pointer) and reloads liveness as
 `present && alive` each tick (a stunned-but-alive foe stays a valid target).
 
 ### 3.7 — `sub_40A81F`: wander (priority 7, fallback)
 ```
 if !(rand()%25):                                       // RNG: 1/25 chance to pick a NEW random turn
-    v2 = (brain[+62].byte2 + 2*(rand()%2) - 1) & 3      // RNG: turn ±90° off the base dir
+    base    = byte index 2 of the brain dword at +62    // the wander base dir (see §1.1 +62)
+    new_dir = (base + 2*(rand()%2) - 1) & 3             // RNG: turn ±90° off the base dir
     if sub_40A59D(pos + godir[brain.wander(+64)]):      // if the current wander dir is safe...
-        brain.wander(+64) = v2                          //   ...adopt the new turn
+        brain.wander(+64) = new_dir                     //   ...adopt the new turn
 if sub_40A59D(pos + godir[brain.wander(+64)]):          // wander dir walkable+safe?
     player.godir(+46) = brain.wander(+64); return 1     // step that way
 else:
@@ -474,8 +494,8 @@ up; deliberate seeks go through §3.5, but powerup tiles are not walls to the AI
 
 The AI's entire sense of safety is one integer grid.
 
-- **Reader** `sub_424D37(x,y)` (0x424D37): bounds-check, then
-  `return dword_4621F4[y*cols + x]` — a flat `rows*cols` dword grid (size
+- **Reader** `sub_424D37(x,y)` (0x424D37): bounds-check, then return the entry
+  of `dword_4621F4` at index `y*cols + x` — a flat `rows*cols` dword grid (size
   `dword_462204`). 0 = safe; larger = more dangerous.
 - **Writer** `sub_424DFE(x,y,v)` (0x424DFE): `grid[...] = max(grid[...], v)`
   (keeps the strongest threat).
@@ -534,8 +554,9 @@ each tick from `State` (§ADR).
 - A wavefront over a fixed **100-node open list** `dword_45ED68` (6 dwords/node:
   `[alive, x, y, firstdir, camedir, agebits]`), seeded with the ≤4 open neighbors
   of the start (each tagged with the godir `i+1` it came from — the return value).
-- **Tie-break RNG**: `v35 = 2*(rand()%2) - 1` at entry — a per-call ±1 that flips
-  the order the two side-branches `(camedir + v35*±1) & 3` are expanded, so paths
+- **Tie-break RNG**: one `2*(rand()%2) - 1` drawn at entry (line 9705) — a
+  per-call ±1 that flips the order in which the two side-branches are expanded
+  (each perpendicular child direction is `(camedir ± tie) & 3`), so paths
   of equal length pick a randomized-but-deterministic turn.
 - Blocked test = `sub_409083(x,y)` → `dword_45E0E4[20*x + y]` (a **precomputed
   obstacle grid**, stride 20/col; 1 = blocked, out-of-bounds = blocked). This
@@ -548,7 +569,7 @@ each tick from `State` (§ADR).
 
 **CORRECTED 2026-07-10 — boxed-in start reported the wrong `iters`.** The
 original is a `do…while`: it always completes at least one pass and
-increments its ring counter `v32` before testing the loop condition
+increments its ring counter before testing the loop condition
 (9705-9821), so a start tile with **zero** open neighbours (the seed loop
 allocates no nodes) still exits with **`iters = 1`**, never 0. Our port's
 `directed_bfs`/`powerup_scan_bfs` never entered their `while` loop in that
@@ -570,7 +591,8 @@ identical do-while shape.
 **Structural note (not a determinism bug):** the original is not a plain FIFO
 BFS — it is a beam-flood where each node first walks straight along its own
 `camedir` (reusing its array slot in place) and spawns two perpendicular
-children per step in a `v35`-flipped order, deferring same-pass children by
+children per step, in the order set by the per-call ±1 tie-break, deferring
+same-pass children by
 one "age" bit (9761-9812). Our port is a clean 4-neighbour ring BFS with the
 same one-tie-break-per-call contract. When a **unique** shortest path exists,
 both return the identical first step; when several equal-length paths
@@ -583,14 +605,16 @@ higher-risk rewrite for a cosmetic difference).
 
 **SEED-ORDER correction (2026-07-16 movement audit):** within that accepted
 simplification, one nuance was ported wrong. The original SEEDS its runner
-list in fixed godir order 0..3 (`for (i = 0; i < 4; ++i)`, `v20[4] = i` —
-sub_4092A1 9721-9740, sub_40970B 9911-9930); the ±1 draw only flips the
+list by looping the four godirs in **fixed order 0..3**, stamping the loop
+index into each seeded node's "first step" slot (node field 4) — sub_4092A1
+9721-9740, sub_40970B 9911-9930; the ±1 draw only flips the
 ±90° CHILD-spawn order deeper in the walk. The port seeded the four
 first-step candidates in tie-flipped order, so with two equal-cost first
 steps the chosen step flipped ~50% per decide — up to kSubFrames times per
 tick, an oscillation the original does not have. All three BFS seed loops
 (directed/flee/powerup-scan) now seed fixed 0..3; the tie draw still steers
-the expansion loops (its v35/v40 role). Draw count/order unchanged.
+the expansion loops (its sole role in both pathfinders). Draw count/order
+unchanged.
 
 **Overflow note:** past the fixed 100-node frontier the original calls a
 `__noreturn` fatal handler (`sub_4091C9` failing → `sub_4128C9`, 15987); the
@@ -601,7 +625,8 @@ strictly safer than a crash and the game never ships a board that hits it).
 
 ### 5.2 Flee BFS — `sub_40970B` (0x40970B)
 `sub_40970B(sx, sy, &firstdir, maxdepth, &iters, &maxfront, &bestx, &besty)`.
-Same wavefront machinery and same ±1 tie-break RNG (`v40 = 2*(rand()%2)-1`), but
+Same wavefront machinery and same ±1 tie-break RNG (one `2*(rand()%2)-1` drawn
+at entry, line 9900), but
 there is **no goal tile**: each expanded cell is scored by `sub_424D37` (danger),
 tracking the minimum. The moment a **danger-0** tile is reached it returns that
 path's first step immediately; otherwise it exhausts the frontier and returns the
@@ -612,10 +637,12 @@ core "run away from bombs/flame" routine driving §3.2's flee branch.
 Picks a **random** live opponent from the 10-player array `dword_461BC4` (stride
 152). It is **not** nearest-enemy — targeting is random among live foes. Two
 nested passes, byte-exact:
-- **Pass 1** starts at `i = rand()%10` and scans 10 slots forward (wrapping).
-  It SKIPS a slot when: it is self (`a1 == v7`), absent (`!+16`), **another
-  computer player (`+16 == 1`)**, inactive (`!+0`), or **DEAD** (`v7[2]` = +8,
-  the died-this-round flag — NOT the +58 stun; CORRECTED 2026-07-10, pseudo.c
+- **Pass 1** starts at slot index `rand()%10` and scans 10 slots forward
+  (wrapping). It SKIPS a slot when: it is self (the scanned record's address
+  equals the caller's actor), absent (`+16` zero), **another
+  computer player (`+16 == 1`)**, inactive (`+0` zero), or **DEAD** (the
+  record's third dword, `+8`, non-zero — the died-this-round flag, NOT the
+  +58 stun; CORRECTED 2026-07-10, pseudo.c
   24741). The first surviving slot is a live **human** opponent; in a no-team
   match it is returned
   immediately, in team mode only if its team `+84` differs.
@@ -637,8 +664,8 @@ Given the just-chosen godir at actor `+46`, if the tile one step ahead is on fir
 (`sub_42708D`), it zeroes the AI state (+52), sets +58 = -1, and **sets the godir
 to -1** — cancelling the step so the AI never voluntarily walks into flame even
 when its path/flee said to. Called at the end of §3.2's danger branch; its
-return value is discarded by the caller (`sub_40A76E(v4);`, statement, no use of
-the result) — only the +52/+58/godir side effects matter, and it is §3.2's
+return value is discarded by the caller (it is invoked as a bare statement, the
+result never read) — only the +52/+58/godir side effects matter, and it is §3.2's
 *next* statement (the `vel_perp>>16 != -1` return, corrected above) that reads
 the godir it may have just cancelled.
 
@@ -661,13 +688,16 @@ step toward it and the powerup cell. Used by §3.5 with depth = getvalue(920).
 danger==0 (sub_424D37==0)`. The universal "may I stand here" gate used by wander
 and the final step of every pursuit. **[CORRECTED Stage 3]** the middle test is
 `sub_425FB9` — the **CELL-TYPE** reader (0 = blank floor, 2 = brick; any non-zero
-= wall/brick), NOT the powerup test `sub_42542D`. Read fresh from the decompile:
-```
-if (sub_422E48(x,y)) return 0;   // a bomb here
-if (sub_425FB9(x,y)) return 0;   // a solid or brick cell here
-if (sub_42708D(x,y)) return 0;   // flame here
-return sub_424D37(x,y) == 0;     // danger-free
-```
+= wall/brick), NOT the powerup test `sub_42542D`. Re-derived fresh from the
+decompile, the four tests run in this exact order, each an early "no":
+
+| # | Test | Rejects when |
+|--:|------|--------------|
+| 1 | `sub_422E48(x,y)` | a bomb is here |
+| 2 | `sub_425FB9(x,y)` | a solid or brick cell is here |
+| 3 | `sub_42708D(x,y)` | flame is here |
+| 4 | `sub_424D37(x,y)` | the tile's danger is non-zero (the result IS this comparison against 0) |
+
 So `sub_40A59D` does **NOT** reject a floor powerup — it never calls
 `sub_42542D`. The AI MAY step onto a powerup tile; that is how behaviour 5 takes
 its final step onto its target (and how a wandering AI can drift onto a loose
@@ -705,18 +735,20 @@ in the decompile — **[VERIFY]** 905 is likely unused/campaign.)
 
 ## 7. How the brain drives the player — the input-flag bridge (the key fact)
 
-At `sub_41F29B` (the per-player updater), line **23028-23036**:
+At `sub_41F29B` (the per-player updater), line **23028-23036**, the input
+acquisition is one guarded fork. In order:
 
-```c
-if ( v113 && !dword_4621E0 ) {                 // player is eligible to act this frame
-    if ( *((_BYTE*)v111 + 16) == 1 )           // +16 == 1  => COMPUTER player
-        { sub_40179F(); sub_40A1C6(slot, v111); }   //   run the AI brain
-    else                                        // +16 == 2 => local human
-        sub_41E61E(v111);                       //   read DirectInput
-}
-// ...then the SAME code below consumes v111's input bytes (godir +46, +54/+56 bomb,
-//    +55/+57 action) and runs the mover sub_41EC84 — identically for AI or human.
-```
+1. **Gate** — proceed only when the per-player *eligibility flag* (computed
+   earlier in this pass, see the RESOLVED note below) is set AND the global
+   `dword_4621E0` is zero. Otherwise no input is acquired at all this frame.
+2. **Fork on the player-type byte at `+16`:**
+   - `+16 == 1` (**COMPUTER**) ⇒ call `sub_40179F` (scratch-global clear),
+     then `sub_40A1C6(slot, actor)` — run the AI brain.
+   - otherwise (`+16 == 2`, **local human**) ⇒ call `sub_41E61E(actor)` —
+     read DirectInput.
+3. **Then the SAME code below** consumes that actor's input bytes (godir +46,
+   bomb +54/+56, action +55/+57) and runs the mover `sub_41EC84` — identically
+   for AI or human.
 
 So:
 - **`+16` is the player-type tag** (slot-fill loop, line 23788-23801):
@@ -727,14 +759,16 @@ So:
   bytes a keyboard would set:
   - **godir `+46`** (16.16; hi word 0..3 = Up/Right/Down/Left, or -1 = no move)
   - **bomb key `+56`** ("down this frame") and **`+54`** ("down last frame") —
-    the drop is edge-gated on `+56 && !+54` in the mover (see facts.md "Spooger"
-    / LABEL_246). The AI writes `+56=1; +54=0` to force a fresh press.
+    the drop is edge-gated on `+56 && !+54` in the mover (see facts.md
+    "Spooger", and the mover's drop/throw block at `sub_41F29B` line 23286).
+    The AI writes `+56=1; +54=0` to force a fresh press.
   - **action key `+57`** ("down this frame") and **`+55`** ("last frame") — for
     punch/trigger, same edge rule.
 - `sub_40179F` just clears a scratch global (`dword_4646C0 = 0`) before the run.
 
-**RESOLVED 2026-07-10 — `v113` is richer than "present && alive", and our
-caller was missing one piece of it.** `v113` (set true at 22981, the top of
+**RESOLVED 2026-07-10 — the eligibility flag is richer than "present &&
+alive", and our caller was missing one piece of it.** That flag (set true at
+22981, the top of
 this per-player pass) is cleared to false for: a stun/pickup-pause countdown
 (`actor+58 > 0`, i.e. `Player::stun`), and player-type modes 4/5/6/7
 (entering/dying/dead, 23015-23026); `dword_4621E0 > 0` is a separate global
@@ -747,8 +781,8 @@ INPUT FREEZE, armed to `50ms × getvalue(30)` ≈ 1 s by round init
 `sub_4214BC` (pseudo.c ~23959) and counted down per frame at the top of
 `sub_420F07` (23642-23645). Ported as `State::input_freeze` (facts.md
 "Round-start input freeze"); `player_turn`'s acquisition gate now mirrors
-both halves of `v113 && !dword_4621E0`.** The 2026-07-10 pass was also
-missing the
+both halves of the original guard — the eligibility flag AND `dword_4621E0`
+being zero.** The 2026-07-10 pass was also
 missing the **stun** exclusion: a stunned-but-still-`alive` AI player (e.g.
 mid `pickup_pause` after a grab) would still get `AISystem::decide()` called,
 drawing draws A/B (and possibly a behaviour's draws) on a tick the original
@@ -830,29 +864,33 @@ AI's structure. Evidence is quoted inline (no exe code committed — these are
 offsets and control flow only).
 
 1. **[RESOLVED] Brain field packing +2/+4/+6/+8.** From `sub_40B20F`
-   (0x40B20F) and the BFS `sub_4092A1` start-equality test `if ( a1 != a4 ||
-   a2 != a3 )` (line 9711): the directed call passes `(posX, posY, +4>>16,
-   +2>>16)` as `(a1=sx, a2=sy, a3, a4)`, and since a1(sx=posX) is compared to
-   a4 and a2(sy=posY) to a3, the target's X arg is a4 (`+2`) and its Y arg is a3
-   (`+4`). Combined with the flee store (`+4 = bestX (v10)`, `+6 = bestY
-   (v11)`, `+8 = danger(bestX,bestY)`) and the reads `*(int*)(+2)>>16`,
-   `*(int*)(+4)>>16` (which alias the packed words), the layout is a 16.16-style
-   pack:
-     - **word +2** = the "has path target" flag (tested `if (*(_WORD*)(+2))`,
-       set `*(_WORD*)(+2) = 1`, cleared `= 0`);
+   (0x40B20F) and the BFS `sub_4092A1`'s start-equality test at line 9711 —
+   which bails when the start coordinates do not match the goal coordinates,
+   pairing parameter 1 with parameter 4 and parameter 2 with parameter 3. The
+   directed call passes, in argument order, `(posX, posY, +4>>16, +2>>16)`;
+   since parameter 1 (the start X, posX) is the one compared against parameter
+   4 and parameter 2 (the start Y, posY) against parameter 3, the target's X
+   argument is the 4th (`+2`) and its Y argument is the 3rd (`+4`). Combined
+   with the flee store (`+4 ← bestX`, `+6 ← bestY`, `+8 ← danger(bestX,bestY)`)
+   and the two reads that take `+2` and `+4` as dwords and shift right 16
+   (which alias the packed words), the layout is a 16.16-style pack:
+     - **word +2** = the "has path target" flag (tested for non-zero, set to 1
+       on acquire, cleared to 0);
      - **word +4** = target **tile X** (high half of the X coord / bestX);
      - **word +6** = target **tile Y** (high half of the Y coord / bestY);
      - **word +8** = captured **danger cost** of the goal tile
-       (`*(_WORD*)(+8) = sub_424D37(bestX,bestY)`), used to invalidate a stale
-       target (`!*(_WORD*)(+8)` re-check at line 10784).
+       (stored as `sub_424D37(bestX,bestY)`), used to invalidate a stale
+       target — the re-check at line 10784 tests it for zero.
    Our `Brain` mirrors this as `has_path_target` / `path_target_x` /
    `path_target_y` / `path_target_cost` (plain ints, tile granularity).
 2. **[RESOLVED] Bomb field +66 = ELAPSED fuse phase (16.16).** `sub_42331C`
-   line 25685: `v44 = (*(int*)(bomb+66) >> 16) + 100`, propagated along the 4
+   line 25685 computes the danger value as `(bomb dword +66 >> 16) + 100` and
+   propagates that same value along the 4
    rays out to `bomb+76` (flame length) via `dword_45BECC/45BEDC` (the DX/DY
    tables), stopping at a brick/wall (`sub_425FB9`) or a bomb (`sub_422E48`) and
    one tile PAST a floor powerup (`sub_42542D`). `+66` counts UP: the fuse/flame
-   detonation test (line 27409/27422) fires (`*state = 0`) once
+   detonation test (line 27409/27422) fires — clearing the bomb's state word to
+   0 — once
    `(+66 >> 16) > getvalue(10|20) * msPerFrame` — i.e. at end-of-life — so a
    bomb nearer detonation has a LARGER `+66` and thus a LARGER danger value.
    Our integer port uses `danger = 100 + elapsed_ticks`, where `elapsed_ticks =
@@ -864,30 +902,36 @@ offsets and control flow only).
    is neither a column count nor an undefined comparand: it is the standard
    spare-bomb-capacity gate.** Decoded from the raw instruction bytes (PE
    BEGTEXT, raw 0x400 = VA 0x401000; capstone x86-32 over the function
-   regions), because Hex-Rays lifted the comparand as an undefined `v2`/edx:
-   - **The comparand.** In both callers the edx setup the decompiler dropped
-     is right at function entry. `sub_40ABED` at 0x40AC01: `xor edx, edx` then
-     `mov dl, byte ptr [eax+0x56]` (eax = the actor), i.e. edx = zero-extended
-     **player byte +86 = max bombs (bomb capacity)**; then `mov eax,
-     [eax+0x3C]; sar eax, 0x10; call sub_4245DA; cmp eax, edx; jl <proceed>`.
-     `sub_40AD8D` is instruction-for-instruction identical at 0x40ADA1/0x40ADAF
-     (`mov dl, [eax+0x56]` … `cmp eax, edx; jl 0x40ADDB`). So the gates are
+   regions), because Hex-Rays lost the comparand entirely (it lifted it as an
+   undefined temporary, the register the caller had already loaded):
+   - **The comparand.** In both callers the register setup the decompiler
+     dropped sits right at function entry. `sub_40ABED` at 0x40AC01 zeroes the
+     comparand register and then loads into its low byte the **player byte at
+     +86 = max bombs (bomb capacity)**, taken from the actor pointer — so the
+     comparand is the zero-extended bomb capacity. It then loads the actor
+     dword at **+0x3C = +60**, arithmetic-shifts it right 16, calls
+     `sub_4245DA` with that, and branches to "proceed" when the returned count
+     is **less than** the comparand. `sub_40AD8D` is instruction-for-
+     instruction identical at 0x40ADA1/0x40ADAF (same +86 byte load, same
+     compare, its "proceed" target being 0x40ADDB). So both gates are
      `sub_4245DA(...) < maxBombs(+86)` ⇒ proceed, else pass down.
    - **What sub_4245DA counts.** The earlier "bombs in column x" reading was
-     wrong. The argument is the actor dword `+60 >> 16` (`[eax+0x3C]`,
-     `sar 0x10`), and +60 is a PACKED field, not a position: `sub_41EB13`
-     passes its **low byte** and its **high word** as separate bomb-create
-     arguments (line 22513-22517: `25 * (player+60 >> 16) + counter` is the
-     per-player slot allocator; `HIWORD(player+60)` is create-arg a5), and
-     `sub_422EDE` stores that high word into the **bomb word at +62** (word
-     index 31) — the owner player index — while the bomb's real position goes
-     to +28/+32. `sub_4245DA` (disasm: `mov eax, [bomb+0x3C]; sar eax, 0x10;
-     cmp eax, [ebp-0x14]`) reads the bomb dword at +60, whose high word IS
-     that owner word at +62. So `sub_4245DA(idx)` = **count of live bomb
+     wrong. The argument is the actor dword at **+60**, shifted right 16 (that
+     is exactly the `+0x3C` load and shift above), and +60 is a PACKED field,
+     not a position: `sub_41EB13` passes its **low byte** and its **high word**
+     as separate bomb-create arguments (line 22513-22517: the per-player slot
+     allocator is `25 * (player+60 >> 16) + counter`, and the high word of
+     player+60 is create-argument 5), and `sub_422EDE` stores that high word
+     into the **bomb word at +62** (word index 31) — the owner player index —
+     while the bomb's real position goes to +28/+32. `sub_4245DA` itself, per
+     its disassembly, loads each bomb's dword at +60, shifts it right 16, and
+     compares it against its stack-held argument — and that dword's high word
+     IS the owner word at +62. So `sub_4245DA(idx)` = **count of live bomb
      slots owned by player idx** — exactly the count the mover compares
-     against +86 at the normal drop (line 23346 `+86 > sub_4245DA(...)`), the
-     spooge-loop stop (line 23336 `+86 <= sub_4245DA(...)`), and the
-     "last bomb" grunt (line 23363 `+86 - 1 == count`).
+     against +86 at the normal drop (line 23346: proceed while +86 is greater
+     than the count), the spooge-loop stop (line 23336: stop once +86 is less
+     than or equal to the count), and the "last bomb" grunt (line 23363: fires
+     when the count equals +86 − 1).
    - **Consequence for behaviours 3/4:** the gate is simply "do I have a spare
      bomb slot?" — a bomb elsewhere in the AI's tile column is irrelevant, and
      an AI with capacity ≥ 2 may bomb again while its first bomb is still
@@ -897,12 +941,15 @@ offsets and control flow only).
      `Player::bombs_placed` is the sim's maintained equivalent of the
      original's owner scan (same counter `BombSystem::drop` gates on).
 4. **[RESOLVED — byte-confirmed from BM95.EXE] `sub_40ABED` scan geometry
-   (behavior 4, Stage 5 IMPLEMENTED).** i in 0..4: `v7 = posX +
-   dword_45BAB0[i]`, `v8 = posY + dword_45BA9C[i]`, then `who = sub_421CB5(v7,v8)`
-   (a live **player** at the tile — the `dword_461BC4` stride-152 scan,
-   `+0` active and `+8` NOT-DEAD (pseudo.c 24207 `*i && !i[2]`; +8 = died-this-
-   round, NOT the +58 stun — CORRECTED 2026-07-10); self excluded by the `*a1=0`
-   probe trick).
+   (behavior 4, Stage 5 IMPLEMENTED).** For i in 0..4 the probe tile is
+   `(posX + dword_45BAB0[i], posY + dword_45BA9C[i])`, and that tile is fed to
+   `sub_421CB5` — which returns a live **player** at the tile via the
+   `dword_461BC4` stride-152 scan, requiring the record's `+0` (active) to be
+   set and its `+8` (the third dword) to be clear (pseudo.c 24207; +8 =
+   died-this-round, NOT the +58 stun — CORRECTED 2026-07-10). Self is excluded
+   by the probe trick: the caller stashes the actor's own `+0`, zeroes it for
+   the duration of the call, and restores it afterwards, so the scan cannot
+   match itself.
    Tables: `dword_45BA9C[5] = {0,-1,0,1,0}` (Y offsets) and `dword_45BAB0[] =
    {-1}` (ONE element). Reading `dword_45BAB0[0..4]` runs PAST it into the
    adjacent `.data` — an **out-of-bounds read**. **Reading the shipped BM95.EXE
@@ -911,9 +958,11 @@ offsets and control flow only).
    the Y table the 5 offsets are `(-1,0)(0,-1)(0,0)(0,1)(1,0)` = **a clean
    LEFT/UP/SELF/DOWN/RIGHT plus-cross** — the OOB "garbage" is coherent, never a
    fault. Ported verbatim (`kEnemyScanX[5]={-1,0,0,0,1}`,
-   `kEnemyScanY[5]={0,-1,0,1,0}`). The Manhattan gate `(int)v3 + HIDWORD(v3) >= 3`
-   is `abs(sub_42665C(a1[5])) + abs(sub_4266A3(a1[6])) >= 3` where `a1[5]/a1[6]`
-   = the actor's `+20/+24` — a **stale 16.16 spawn/punch position snapshot** (set
+   `kEnemyScanY[5]={0,-1,0,1,0}`). The Manhattan gate — which the decompiler
+   had folded into one 64-bit temporary and tested by summing its low and high
+   halves against 3 — really is
+   `abs(sub_42665C(actor +20)) + abs(sub_4266A3(actor +24)) >= 3`, i.e. over
+   the actor's `+20/+24` — a **stale 16.16 spawn/punch position snapshot** (set
    to `+28/+32` only at spawn/punch, and to the warp exit on warp-out; NOT during
    walking). So the gate is a near-constant TRUE per player (spawn-tile abs-sum
    ≥ 3 for all real starts). We do not track that snapshot; ported as
@@ -947,8 +996,8 @@ cluster of `sub_XXXX` functions end to end and cross-checked them against
 | 1 | Dispatcher & personality | `sub_40A1C6`, `sub_40A140`, `off_45BA78`, `sub_41F29B`/`sub_420F07` | IDENTICAL (dispatcher, chain loop, table order, personality init, outer loop) + **DEVIATION-fixed** (caller-side stun gate, §7) |
 | 2 | Danger grid, flee BFS, walk-the-path | `sub_424D37/DFE`, `sub_426D06`, `sub_42331C` (danger write), the closing-wall writer, `sub_40970B`, `sub_40A76E`, `sub_40B20F` | IDENTICAL, **doc-only fix** (§4 brick/powerup contradiction) + **DEVIATION-fixed** (walk-path veto return value, §3.2) |
 | 3 | Directed BFS, powerup scan, seek-powerup, readers | `sub_4092A1`, `sub_409C1F`, `sub_40BAF5`, `sub_40A59D`, `sub_425FB9`, `sub_422E48`, `sub_42708D`, `sub_42542D`, `sub_409083` | IDENTICAL + **DEVIATION-fixed** (boxed-in `iters`, §5.1) + documented structural caveat (BFS is a faithful shortest-path rewrite, not the original's beam-flood — §5.1) |
-| 4 | Bomb-drop behaviours | `sub_40AD8D`, `sub_40ABED`, `sub_40BD44`, `sub_4245DA`, `sub_423188`, `sub_405654` | ~~IDENTICAL (blast-bricks, bomb-near-enemy, capacity gate, clearance predicate)~~ → **DEVIATION-fixed 2026-07-26** (§3.3 CORRECTION): the clearance predicate `sub_423188` was NOT identical — this pass carried over the wrong "`sub_405654` = rover/ghost list, empty in versus" gloss and so accepted a port that omits the `v5[1] != 1` **warphole** rejection. `sub_405654` is the stage-actor registry; an original AI never bomb-keys a warphole tile, ours did (and span the deny SFX). Also **DEVIATION-fixed** earlier (grab-glove polarity + sliding-bomb exclusion, §3.0) + **doc-only fix** (+62 mislabelled "team", §1.1/§3.0) |
-| 5 | Enemy targeting | `sub_422718`, `sub_421CB5`, `sub_40B8C2`, `sub_40BE02` | ~~IDENTICAL — no deviations found~~ → **DEVIATION-fixed** in a 2026-07-10 follow-up (§12): the target-liveness `q.stun` reads in `behave_bomb_enemy`/`pick_live_enemy`/`behave_seek_enemy` mirrored `+8` (`v7[2]`/`!i[2]`) but this pass mislabelled +8 "stunned" — it is the DEAD flag. The extra `stun` check wrongly skipped stunned-but-alive foes; removed |
+| 4 | Bomb-drop behaviours | `sub_40AD8D`, `sub_40ABED`, `sub_40BD44`, `sub_4245DA`, `sub_423188`, `sub_405654` | ~~IDENTICAL (blast-bricks, bomb-near-enemy, capacity gate, clearance predicate)~~ → **DEVIATION-fixed 2026-07-26** (§3.3 CORRECTION): the clearance predicate `sub_423188` was NOT identical — this pass carried over the wrong "`sub_405654` = rover/ghost list, empty in versus" gloss and so accepted a port that omits the **warphole** rejection (reject when the tile's stage-actor record has type word +4 == 1). `sub_405654` is the stage-actor registry; an original AI never bomb-keys a warphole tile, ours did (and span the deny SFX). Also **DEVIATION-fixed** earlier (grab-glove polarity + sliding-bomb exclusion, §3.0) + **doc-only fix** (+62 mislabelled "team", §1.1/§3.0) |
+| 5 | Enemy targeting | `sub_422718`, `sub_421CB5`, `sub_40B8C2`, `sub_40BE02` | ~~IDENTICAL — no deviations found~~ → **DEVIATION-fixed** in a 2026-07-10 follow-up (§12): the target-liveness `q.stun` reads in `behave_bomb_enemy`/`pick_live_enemy`/`behave_seek_enemy` mirrored the player record's third dword, `+8`, but this pass mislabelled +8 "stunned" — it is the DEAD flag. The extra `stun` check wrongly skipped stunned-but-alive foes; removed |
 | 6 | Team filter | `AISystem::same_team`, the enemy-scan/finder team gates | IDENTICAL — confirmed `slot != self` + nonzero-team-equality matches the `dword_464964`-gated `+84` compares; unaffected by this pass |
 
 **No unlisted `rand()` call site was found anywhere in the AI's reachable
@@ -968,7 +1017,8 @@ a row in §8's table (one precision fix: b5b is `sub_409C1F` line 10128, not
    directed BFS's obstacle grid does not include flame, §5.1/§9, so a chase
    can route straight through a burning tile). Fixed: `return g != -1;`.
 2. **Grab-glove inverted polarity (`behave_grab_drop`, §3.0).** `sub_40BD44`
-   grabs when `rand()%2` is **truthy** (`&& rand()%2`, pseudo.c 11025); the
+   grabs when `rand()%2` is **truthy** — it is the last term of the AND
+   chain, pseudo.c 11025; the
    port checked `random_below(s_,2) == 0` — the opposite branch of the same
    coin flip. Draw count was unaffected (still exactly one draw when eligible)
    but the DECISION was inverted on every seed, diverging state, hash, and
@@ -996,14 +1046,14 @@ a row in §8's table (one precision fix: b5b is `sub_409C1F` line 10128, not
    currently unobservable for `powerup_scan_bfs` specifically (applied for
    structural parity regardless).
 5. **AI dispatch missing the stun gate (`simulation.cpp`, §7).** The
-   original's per-player eligibility flag `v113` excludes a stunned actor
+   original's per-player eligibility flag (§7) excludes a stunned actor
    (`+58 > 0`) from the ENTIRE AI dispatch, draws A/B included. The port
    called `AISystem::decide()` for any `present && alive && ai` player
    regardless of `Player::stun`, drawing spurious RNG on a tick the original
    skips outright (gameplay-invisible, since `player_turn` already no-ops a
    stunned player's turn, but not RNG-invisible). Fixed:
    `if (p.ai && p.stun == 0) ai.decide(i, in);`. Of the other two components
-   of `v113`'s gate, dying/dead is already excluded by the loop's own
+   of that eligibility gate, dying/dead is already excluded by the loop's own
    `present && alive` guard; `dword_4621E0` was later identified as the
    round-start input freeze and ported 2026-07-16 (see the §7 correction
    above / facts.md "Round-start input freeze").
@@ -1025,8 +1075,11 @@ New regression coverage for all five fixes lives in `tests/test_ai.cpp`
 A sixth deviation, missed by §11's pass (which signed off "Enemy targeting —
 IDENTICAL"): every enemy/target-liveness scan in `ai.cpp` read the target's
 `Player::stun` **in addition to** `Player::alive`, on the belief that the
-original's `+8` exclusion (`sub_421CB5` 24207 `!i[2]`; `sub_422718` 24741
-`v7[2]` / 24728 `!v8[2]`; behaviour 6 liveness `v4[2]`) meant "skip stunned".
+original's `+8` exclusion — the same test everywhere: the **third dword of
+the player record, i.e. offset +8**, must be zero, seen at `sub_421CB5`
+pseudo.c 24207 (require it clear), in both of `sub_422718`'s passes at 24741
+and 24728 (skip the slot when it is set), and in behaviour 6's per-tick
+liveness reload — meant "skip stunned".
 It does not — **`+8` is the player's "died this round" flag** (set by the
 death-applier `sub_41DCB2`, never by the head-hit handler `sub_421F7E`, which
 writes the stun countdown to a separate WORD at **`+58`**; full evidence in

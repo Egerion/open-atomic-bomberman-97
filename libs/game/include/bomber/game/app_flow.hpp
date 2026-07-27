@@ -74,7 +74,7 @@ enum class AppState : std::uint8_t {
 //                campaign mode is active with stages remaining (docs/re/
 //                campaign.md "Advances through campaign stages
 //                automatically", sub_401312/sub_40133F gated
-//                `if (dword_46489C)`): routes Results -> Match exactly like
+//                on dword_46489C being set): routes Results -> Match exactly like
 //                RoundContinue, but the SDL shell has already loaded the
 //                NEXT campaign stage's scheme/roster before feeding this
 //                event, rather than replaying the same match. A separate

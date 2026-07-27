@@ -14,7 +14,8 @@ struct Tuning {
     // Timing reference: original runs a nominal 20 frames/second (id 25/30).
     // Round-start input freeze: sub_4214BC arms dword_4621E0 = 50ms ×
     // getvalue(30) at round init (pseudo.c ~23959), and sub_41F29B's
-    // acquisition gate (`v113 && !dword_4621E0`, 23028) skips BOTH the AI
+    // acquisition gate at 23028 (which needs the new-input flag set AND
+    // dword_4621E0 zero) skips BOTH the AI
     // brain and the human DirectInput read while it runs — nobody moves or
     // acts for the first getvalue(30) × 50 ms ≈ 1 s of every round (the
     // sprite colour-shuffle window). getvalue(30)'s own legend is "how many
@@ -28,8 +29,9 @@ struct Tuning {
     std::int32_t skate_speed_bonus = 150;  // id 90
     // Clogs (Goldman wheel booby prize, inventory slot 13) speed PENALTY:
     // subtracted per clogs count in the same walk-speed term as skate_speed_
-    // bonus is added, before disease scaling (sub_41F29B, docs/re/
-    // goldman-roulette.md §9.1: "v20 - v22*v21"). Wheel-only — never a
+    // bonus is added, before disease scaling (sub_41F29B's speed expression
+    // subtracts the clog count times the per-clog penalty from the running
+    // total; docs/re/goldman-roulette.md §9.1). Wheel-only — never a
     // normal-play pickup (§9.2).
     std::int32_t clogs_speed_penalty = 150;  // id 91
     std::int32_t kicked_bomb_speed = 1000;   // id 300

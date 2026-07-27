@@ -22,7 +22,7 @@ constexpr int kDY[4] = {-1, 0, 1, 0};
 // (docs/re/enclosure.md §4), not a from-scratch ring formula — that matters
 // because the original does NOT emit exactly one event per unique tile:
 //
-//   - Every 250 ms cadence slot (LABEL_26) unconditionally re-drops
+//   - Every 250 ms cadence slot (the drop loop's top) unconditionally re-drops
 //     sub_425E9B(x,y) at whatever (x,y) currently is, THEN computes the next
 //     position. Turning a corner without moving (three of a ring's four
 //     corners) leaves (x,y) unchanged, so the NEXT slot re-drops the SAME
@@ -91,7 +91,9 @@ const SpiralData& spiral() {
 // 4 rows, 3 is all the way" — i.e. rings = 2 * depth, capped at the grid's
 // own ring count (6 for 15x11, which is what "all the way" cashes out to).
 // NOTE: a literal transcription of sub_426818's own stop check
-// (`2*dword_464974 <= dword_462240`, evaluated once a ring's traversal wraps
+// (twice the depth setting dword_464974 compared against the current ring
+// counter dword_462240, stopping once the former is <= the latter, evaluated
+// once a ring's traversal wraps
 // back to dir=1) reads as "stop once the ring just closed is ring number
 // 2*depth", i.e. rings 0..2*depth INCLUSIVE — one ring MORE than the
 // comment says, and confirmed (via an exact re-implementation of that check)
@@ -112,11 +114,13 @@ int rings_for(int depth) {
 // once, the frame the walls start closing (native/src/game/batch_0x405B3A.cpp
 // lines 298-325, called from batch_0x42583B.cpp line 695):
 //
-//   for (100 slots) if (active) { t = slot[+4]; if (t) if (t <= 1 || t == 3) active = 0; }
+//   walk all 100 registry slots; for each ACTIVE one, read its type field at
+//   +4 and, if that type is nonzero AND is either <= 1 or exactly 3, clear the
+//   slot's active flag.
 //
-// `t` is the actor TYPE field (0=DirArrow, 1=Warphole, 2=Conveyor,
-// 3=Trampoline, docs/re/stage-actors.md §1) and is unsigned, so with `t != 0`
-// already established `t <= 1` is exactly `t == 1`: the sweep DEACTIVATES
+// The type field is the actor TYPE (0=DirArrow, 1=Warphole, 2=Conveyor,
+// 3=Trampoline, docs/re/stage-actors.md §1) and is unsigned, so with "nonzero"
+// already established, "<= 1" is exactly "== 1": the sweep DEACTIVATES
 // every WARPHOLE and every TRAMPOLINE and leaves dirarrows and conveyors
 // alone. Clearing the slot's active flag removes the actor from BOTH consumers
 // at once — the tile->actor lookup sub_405654 (so the step-on warp/bounce
@@ -147,7 +151,8 @@ void clear_hurry_disabled_actors(State& s) {
                 s.actor_type[y][x] = ActorType::None;
         }
     // NOTE: warp_dest_x/y and actor_dir are deliberately left alone. The
-    // original only zeroes the slot's ACTIVE dword (`*v3 = 0`); every other
+    // original only zeroes the ACTIVE dword at the head of the slot record
+    // (offset +0); every other
     // field of the record survives untouched, and no consumer reads them
     // without first matching on the type (start_warp gates on
     // actor_type == Warphole), so retaining them is the faithful mapping.
@@ -205,8 +210,9 @@ void EnclosureSystem::drop_wall(int wx, int wy) {
             b.fuse = 1;
             // FIX (enclosure F1, docs/re/audit/enclosure.md Finding 1):
             // sub_426818's bomb-crush loop (native/src/game/batch_0x42583B.cpp
-            // lines 769-820; pseudo.c 27262 `sub_423209((int)v6, -1)` then an
-            // unconditional `goto LABEL_47`, pseudo.c 27263) queues only the
+            // lines 769-820; at pseudo.c 27262 it hands the bomb it found to the
+            // pending-detonation queue sub_423209 with mode -1, and at 27263 it
+            // jumps unconditionally out to the loop's exit) queues only the
             // FIRST grounded bomb it finds on the crushed tile per drop event
             // -- there is no path back to the top of that while(1) loop on
             // the ON branch, so the search runs at most once. A second
@@ -215,8 +221,8 @@ void EnclosureSystem::drop_wall(int wx, int wy) {
             // a 1:1 per-cell grid) is left untouched by this event. Break
             // after the first match to match; the OFF branch below
             // deliberately keeps looping to exhaustion (matches
-            // sub_424841's fall-through re-search, no goto LABEL_47 on that
-            // path).
+            // sub_424841's fall-through re-search, which takes no such jump out
+            // of the loop).
             break;
         } else {
             b.active = false;
@@ -267,12 +273,13 @@ void EnclosureSystem::drop_wall(int wx, int wy) {
 }
 
 // CONFIRMED cadence (sub_426818, the enclosure stepper): one drop EVENT every
-// 250 ms of wall clock, gated by timeGetTime() — `dword_46223C += 250`. At
+// 250 ms of wall clock, gated by timeGetTime() — the deadline global
+// dword_46223C is advanced by a hardcoded 250 each time it fires. At
 // the locked 20 Hz tick rate (50 ms/tick, dword_46494C = 1000/getvalue(30))
 // that is exactly ONE event per 5 ticks. It is a HARDCODED constant, NOT a
 // VALUELST getvalue (the only enclosure getvalues are id 27 = depth and
 // id 101 = the hurry threshold). The original's up-to-5-drops-per-frame
-// catch-up (`v22 = 5`) only fires when a frame ran long; in deterministic
+// catch-up (its loop counter is seeded at 5) only fires when a frame ran long; in deterministic
 // lockstep every frame is 50 ms, so the cadence is a clean 5 ticks. Every
 // entry in `spiral().events` — including the phantom corner repeats — is one
 // such event, so this interval applies uniformly to the whole sequence. See
@@ -338,8 +345,9 @@ void EnclosureSystem::update() {
         s.enclose_index = 0;
         // sub_405D0C: warpholes and trampolines are switched off for the rest
         // of the round, globally, on this one edge. NOT depth-gated — the
-        // original runs it inside the `if (!dword_45BE9C)` arm block, which
-        // sits ABOVE the `2*enclosement_depth > ring` drop gate, so even
+        // original runs it inside the arm block guarded by the armed-flag global
+        // dword_45BE9C being clear, which
+        // sits ABOVE the "2*enclosement_depth > ring" drop gate, so even
         // enclosement_depth = 0 (walls never actually close) still kills them.
         clear_hurry_disabled_actors(s);
         return;  // NO drop on the arm tick (original: dword_46223C==now, gate shut);

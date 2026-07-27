@@ -175,7 +175,9 @@ void Renderer::update_gold_sparkles(const sim::State& s) {
         if (!p.present || !p.alive) continue;
         // Team play: dword_46492C holds the clinching player's TEAM id (see
         // bomber::game::assign_gold_player's doc comment), and the original
-        // sparkles every teammate (`byte_461C18[152*i] ? 2 : 0 == dword_46492C`).
+        // sparkles every player whose own team byte — byte_461C18, stride 152 —
+        // maps to the same team id (non-zero selects 2, zero selects 0) as
+        // dword_46492C holds.
         // Solo play: dword_46492C is the player slot index directly.
         const bool is_gold = gold_team_mode_ ? (p.team == gold_player_) : (i == gold_player_);
         if (!is_gold) continue;
@@ -533,7 +535,8 @@ void Renderer::draw_powerups(const sim::State& s) {
             // instant the brick ignites (docs/re/facts.md "Brick crumble
             // timing" — sub_425107's unconditional reveal), but the ORIGINAL's
             // floor-powerup drawer (sub_424F89, pseudo.c ~26247-26261) has its
-            // own separate gate, `*(_DWORD*)v9==2 && !sub_425FB9(j,i)`: it only
+            // own separate gate — the cell's own state dword must read 2 AND
+            // the blank-tile predicate must agree — so it only
             // actually blits the token sprite once the CELL reads blank
             // (sub_425FB9==0). While the brick is still crumbling (cells[y][x]
             // still Brick — it only flips at burning==0) the token is eligible
@@ -670,8 +673,8 @@ void Renderer::draw_world(const sim::State& s) {
             float sy = tile_screen_y(y) + sim::kTileH - 1.0f;
             if (s.burning[y][x] > 0)
                 // Frame pacing: sub_426D06's per-cell counter (+48) is a
-                // monotonic tick counter reset to 0 at ignition (sub_426FCC's
-                // `*(_WORD*)(v8+48)=0`) and advanced by exactly 1 per tick
+                // monotonic tick counter reset to 0 at ignition (sub_426FCC
+                // zeroes the +48 word) and advanced by exactly 1 per tick
                 // (dword_464958==dword_46494C at the locked 20 Hz rate, so the
                 // +50 pacing accumulator fires every call) — NOT rescaled to
                 // fit brick_burn_frames; sub_41DAA7 just wraps it `%
@@ -738,8 +741,9 @@ void Renderer::draw_world(const sim::State& s) {
             // here. See docs/re/facts.md "Flame draw offset".
             //
             // Coordinate math resolved by disassembly (BM95.EXE 0x426ee7-
-            // 0x426f46; the whole Y block was lost as Hex-Rays' "v6 possibly
-            // undefined"). Before the blit's own hotspot subtraction the branch
+            // 0x426f46; the whole Y block was lost to a "possibly undefined
+            // variable" decompiler artefact). Before the blit's own hotspot
+            // subtraction the branch
             // computes:
             //   X = sub_426524(j) + dx            (= X_base + dx)
             //   Y = sub_42655F(i) - tileH/2 + dy  (= Y_base - tileH/2 + dy)
@@ -759,7 +763,8 @@ void Renderer::draw_world(const sim::State& s) {
 
     // Players, bottom-anchored, in FIXED SLOT ORDER 0..9 every frame. The
     // original's per-player loop (sub_420F07, native batch_0x420D4E.cpp:176
-    // `for (i = 0; i < 10; ++i) sub_41F29B(&dword_461BC4[38*i])`, pseudo.c
+    // walks slots 0..9 in order, calling sub_41F29B on each actor record —
+    // dword_461BC4, stride 38 dwords — pseudo.c
     // ~23639; facts.md "Draw order" — "slots 0..9 ascending") has no Y-sort,
     // depth buffer, or re-ordering: the higher SLOT always wins an overlap
     // regardless of screen position. A prior pseudo-3D Y-sort (lower player
@@ -779,8 +784,8 @@ void Renderer::draw_world(const sim::State& s) {
         float sx = kFieldOriginX + ip.x;
         float sy = kFieldOriginY + ip.y + sim::kTileH / 2.0f - 1.0f;
         // Trampoline flight lift. CONFIRMED arc from sub_41F29B state 5 (raw
-        // disasm 0x4204b3..0x420517): the body is blitted at y - v80 where
-        //   v80 = getvalue(681) * (c < len/2 ? c : len - c)
+        // disasm 0x4204b3..0x420517): the body is blitted at y minus a lift of
+        // getvalue(681) * (c < len/2 ? c : len - c),
         // i.e. a linear tent peaking at the apex (c == len/2). c = elapsed frames
         // (the original's +80 up-counter); our Player::bounce is the equivalent
         // down-counter, already decremented for this tick, so c = len - bounce.
@@ -797,8 +802,9 @@ void Renderer::draw_world(const sim::State& s) {
             lift = static_cast<float>(kHopPixelsPerFrame * tent);
         }
         // Shadow ellipse at the player's ground anchor. The original blits it
-        // at the SAME (x,y) as the player (sub_41F29B: shadow then body at
-        // v111+28/+32), its own hotspot doing the centring — no extra offset.
+        // at the SAME (x,y) as the player (sub_41F29B: shadow then body, both
+        // at the actor's +28/+32 position), its own hotspot doing the
+        // centring — no extra offset.
         // EXCEPTION: the trampoline flight (state 5) skips the shadow entirely
         // (the state-5 block jmps to LABEL_246 at 0x420870, past the LABEL_239
         // shadow blit) — the player is high in the air with no ground contact.
@@ -811,8 +817,8 @@ void Renderer::draw_world(const sim::State& s) {
         // (sub_41F29B ~23252, traced 2026-07-09): after the shadow blit, the
         // per-player draw-colour byte (+0x3C) that normally selects the FRAME
         // within the current pose sequence (one frame per player colour, 0-9)
-        // is replaced by `rand() % 10` whenever the disease-timer word's bit 3
-        // is set (`v111[60] & 8`, the +120 countdown WORD, distinct from
+        // is replaced by a fresh rand() modulo 10 whenever bit 3 of the
+        // disease-timer word is set (the +120 countdown WORD, distinct from
         // +0x3C): the body is redrawn in a RANDOM one of the ten real player
         // colours, not an arbitrary tint. `body_colour` reproduces that by
         // swapping in a presentation-RNG colour index for every pose branch
@@ -911,10 +917,11 @@ void Renderer::draw_world(const sim::State& s) {
             if (pickup_pose_[i] > 0 && !up.steps.empty()) {
                 a = &up;
                 // The DISPLAYED frame is walk-phase-driven, NOT elapsed-since-
-                // grab: the original unconditionally recomputes v110 =
-                // sub_41DAA7(seq, (u16)player[+0x30] / 3) at the shared draw
-                // tail (pseudo.c 23410; disasm-confirmed 0x420350-0x420379,
-                // `idiv ebx` with ebx=3), discarding the elapsed-based frame the
+                // grab: the original unconditionally recomputes the frame at the
+                // shared draw tail, calling sub_41DAA7 with the sequence and the
+                // player's +0x30 word (unsigned 16-bit) divided by 3 (pseudo.c
+                // 23410; confirmed in the disassembly at 0x420350-0x420379, an
+                // integer division by 3), discarding the elapsed-based frame the
                 // pickup block computed. Only pickup_pose_'s countdown (the
                 // state's exit timer, set from the sequence length) survives.
                 // Same +48/3 walk leg-cycle as the walk/stand/carry poses above.
@@ -939,14 +946,15 @@ void Renderer::draw_world(const sim::State& s) {
             // 500/502/504/506, "the curve (upwards) of a bomb being picked
             // up"). Pinned consumer: the BOMB tick function `sub_42331C`'s
             // "carried" state-3 branch (pseudo.c ~25488-25497), gated on the
-            // CARRIER's player-state field +78 == 4 ("picking up"):
-            //   v60 = clamp((carrier.+80 elapsed-frames) - 1, 0, 3);
-            //   x = 10*dx[dir] + carrier.x;  bomb.x = x + getvalue(2*v60+500)*dx[dir];
-            //   y = 10*dy[dir] + carrier.y;  bomb.y = y - getvalue(2*v60+501);
+            // CARRIER's player-state field +78 == 4 ("picking up"). It derives a
+            // curve step k = clamp((carrier's +80 elapsed-frame count) - 1, 0, 3),
+            // then places the bomb at the carrier's position nudged 10 px along
+            // the facing direction, plus getvalue(2*k+500) further along that
+            // direction in X, and minus getvalue(2*k+501) in Y —
             // i.e. a small forward nudge (+10px) plus the curve's own forward
             // reach in the facing direction, and a vertical lift that grows
             // from the curve's Y column (10/20/30/40 px) as the carry ages;
-            // v60 clamps at 3 so the bomb settles at the LAST curve point
+            // k clamps at 3 so the bomb settles at the LAST curve point
             // (12,40) for the remainder of the carry, not just a 4-frame pop.
             // carry_ticks_ (sample_movement) mirrors the +80 elapsed-frames
             // counter, already clamped 0..3. Read live off VALUELST so a
@@ -1075,7 +1083,8 @@ void Renderer::draw_hud(const sim::State& s) {
     const Anim& d = seqs_->digits;
     if (d.steps.size() < 11) return;
     int seconds_left = (s.ticks_left + sim::kTicksPerSecond - 1) / sim::kTicksPerSecond;
-    // MESSAGES.TXT id 281 = "%u:%02u" (sub_4105D2's v13/60, v13%60 split);
+    // MESSAGES.TXT id 281 = "%u:%02u" (sub_4105D2 splits the whole seconds by
+    // dividing by 60 and taking the same value modulo 60);
     // getstring falls back to the literal format when the install's own
     // MESSAGES.TXT lacks the id (asset_store.hpp's getstring convention).
     std::string text = format_clock(assets_->getstring(281, "%u:%02u"), seconds_left);

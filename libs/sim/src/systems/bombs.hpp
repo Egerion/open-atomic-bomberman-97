@@ -31,7 +31,8 @@ public:
     void spooge_ahead(Player& p, std::uint8_t owner);
 
     // Kicks the bomb ahead of the player if the path beyond it is clear
-    // (sub_41EC84 `!v35` branch -> sub_424708 -> sub_42464B). A RESTING bomb
+    // (the branch sub_41EC84 takes when its offset-to-tile-centre temporary is
+    // zero -> sub_424708 -> sub_42464B). A RESTING bomb
     // starts sliding; a bomb already SLIDING in another direction is snapped
     // to its tile centre and redirected; one sliding in the same direction is
     // a silent no-op (no event — sub_42464B only plays sound 120 for the

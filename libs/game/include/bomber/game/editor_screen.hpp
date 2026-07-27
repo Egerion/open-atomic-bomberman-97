@@ -51,8 +51,9 @@ namespace bomber::game {
 // font-height multiplier — see list_dialog_geometry.hpp, which carries the
 // whole pinned geometry and the arithmetic proof.
 //
-// Selecting a row cuts the line at its FIRST ':' — `mov edx, 0x3A` @0x40767A
-// feeding sub_45167A/strchr, CORRECTED 2026-07-26 from the earlier "first '.'"
+// Selecting a row cuts the line at its FIRST ':' — the separator loaded
+// @0x40767A is 0x3A, fed to sub_45167A/strchr, CORRECTED 2026-07-26 from the
+// earlier "first '.'"
 // reading — so the stored value KEEPS the extension: "BASIC.SCH", uppercased
 // (sub_412A3B strupr) into the live schemefilename (byte_4648C4). That still
 // loads, because the '.'-strip lives in the READER: sub_403EEE @0x403FE8 does
@@ -236,10 +237,11 @@ public:
     // size, mirroring sub_42665C/sub_4266A3, §5).
     void on_mouse_down(int button, int gx, int gy);
     // Raw mouse PIXEL position (NOT grid-snapped) — feeds the brush-preview
-    // draw, §5d: "The brush preview draws the brush's tile frame AT the
-    // mouse cursor each frame (sub_402206(v53) + sub_415920(mouse_x,
-    // mouse_y, frame))", pseudo.c 5518-5524 (`sub_431804(&v55,&v56)` reads
-    // the live cursor position every loop iteration).
+    // draw, §5d: the brush preview draws the brush's tile frame AT the mouse
+    // cursor each frame (sub_402206 resolves the frame for the current brush
+    // selection, then sub_415920 blits it at the mouse x/y), pseudo.c
+    // 5518-5524, where a sub_431804 call taking pointers to two locals reads
+    // the live cursor position every loop iteration.
     void on_mouse_move(float px, float py) {
         mouse_px_ = px;
         mouse_py_ = py;
@@ -274,7 +276,7 @@ private:
     // yes/no confirm BEFORE flood-filling (the fill itself is the k/j loop
     // over sub_4048EB). ResetConfirm: Ctrl+B's getstring(740)/97 confirm
     // (§5, PINNED — pseudo.c 5584-5599), gated on `dirty_` exactly like the
-    // original's `v49` "touched" flag (see the on_key doc below).
+    // original's own "touched" flag (see the on_key doc below).
     enum class PromptKind : std::uint8_t {
         None,
         Density,
@@ -325,14 +327,15 @@ private:
     bool editing_powerups_ = false;
     PowerupRulesScreen powerups_screen_;
 
-    // sub_4028D2's own `v49` "touched" flag (PINNED, pseudo.c 5513/5555-5710):
+    // sub_4028D2's own "touched" flag (PINNED, pseudo.c 5513/5555-5710):
     // starts false each session; set true by paint, start-move, an ACCEPTED
     // Ctrl+F fill, an ACCEPTED density/name edit, ANY team-flag toggle, and
     // ANY powerup-sub-editor open (whether or not it changes anything) — see
     // each site's own comment below for the exact case-label citation.
     // Gates BOTH Ctrl+B (silent reset while false, confirm-gated once true)
     // AND the Esc/'Q' exit (no save prompt/write at all while false — the
-    // original's exit case wraps its WHOLE confirm+write body in `if (v49)`).
+    // original's exit case wraps its WHOLE confirm+write body in a test of
+    // that same touched flag).
     bool dirty_ = false;
 
     bool done_ = false;

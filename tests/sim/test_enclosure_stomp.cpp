@@ -4,9 +4,10 @@
 //
 // docs/re/audit/enclosure.md Finding 1: `sub_426818`'s bomb-crush loop
 // (native/src/game/batch_0x42583B.cpp lines 769-820) queues the found bomb
-// via `sub_423209((int)v6, -1)` (pseudo.c 27262) and then unconditionally
-// `goto LABEL_47` (pseudo.c 27263) — there is no path back to the top of
-// that `while(1)` on the ON branch, so the search runs at most once per drop
+// by calling sub_423209 on it with -1 as the second argument (pseudo.c 27262)
+// and then jumping unconditionally to LABEL_47 (pseudo.c 27263) — there is no
+// path back to the top of that search loop on the ON branch, so it runs at
+// most once per drop
 // event. `EnclosureSystem::drop_wall`'s ON branch used to have no `break`,
 // so it queued EVERY matching bomb on the tile. Two grounded (non-flying)
 // bombs sharing one tile is not reachable via this port's own placement/kick
@@ -82,7 +83,7 @@ TEST_CASE("wall_detonates ON queues only the FIRST of two grounded bombs sharing
 
 TEST_CASE("wall_detonates OFF still eats every bomb on the crushed tile (unchanged by this fix)") {
     // The OFF branch's loop-to-exhaustion (sub_424841's fall-through
-    // re-search, no goto LABEL_47) is untouched by this fix -- pinned here
+    // re-search, with no jump out to LABEL_47) is untouched by this fix -- pinned here
     // alongside the ON case so a future edit can't silently break the
     // documented ON/OFF asymmetry.
     MatchConfig cfg = stomp_config();

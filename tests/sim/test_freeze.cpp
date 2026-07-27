@@ -1,7 +1,8 @@
 // Round-start input freeze (docs/re/facts.md "Round-start input freeze"):
 // round init sub_4214BC arms dword_4621E0 = 50ms × getvalue(30) ≈ 1000 ms,
 // the player-pass entry sub_420F07 counts it down, and sub_41F29B's
-// acquisition gate (`v113 && !dword_4621E0`, pseudo.c 23028) skips BOTH the
+// acquisition gate (pseudo.c 23028 requires the per-actor acquire flag to be
+// set AND dword_4621E0 to have reached zero) skips BOTH the
 // AI brain and the human input read while it runs — nobody moves or acts
 // through the opening colour-shuffle second of every round.
 //

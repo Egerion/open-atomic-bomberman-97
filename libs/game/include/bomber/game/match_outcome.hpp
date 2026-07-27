@@ -63,7 +63,8 @@ inline int round_winner(const sim::State& s) {
 // (setup_type[i] == 1), i.e. no human/joystick player survives this round —
 // regardless of whether an AI side is still alive and would otherwise be
 // sim::winning_side()'s pick. The original force-ends (and, via
-// `--dword_4648B0` undoing sub_40133F's next `++`, REPLAYS) the stage the
+// a decrement of dword_4648B0 that undoes sub_40133F's next increment,
+// REPLAYS) the stage the
 // instant this holds, so an AI "winning" a campaign round with no human left
 // standing must NOT be credited as a win. Strictly wider than round_winner()'s
 // plain draw (mutual total wipeout) — this also fires when a COMPUTER side is
@@ -71,8 +72,9 @@ inline int round_winner(const sim::State& s) {
 inline bool campaign_no_human_survivor(bool campaign_active, const sim::State& s,
                                        const std::array<int, sim::kMaxPlayers>& setup_type) {
     // sub_4016DA clauses 4-5 (docs/re/campaign.md "Round pacing"), confirmed
-    // against pseudo.c 4634-4648: `for (i=0;i<10;++i) { sub_421DD2(i,&type,0);
-    // if (type!=1 && type && sub_4228C4(i)) return; }` — bail (no override)
+    // against pseudo.c 4634-4648, which walks slots 0..9, asks sub_421DD2 for
+    // each slot's type through an out-param, and returns as soon as one slot's
+    // type is neither 0 nor 1 AND sub_4228C4 reports it alive — bail (no override)
     // the instant ANY present, non-COMPUTER, ALIVE slot is found; falling
     // through the loop means every human/joystick slot is dead. type==1 is
     // COMPUTER (setup_type's own convention, matching sub_421DD2's "type"
@@ -128,10 +130,10 @@ inline int match_clinch(const sim::State& s, bool team_play,
     // §1 v73 (sub_42A3F6, batch_0x4293E5.cpp:1189-1255): the clinch splits on
     // TEAM mode (dword_464964). The team branch is ALWAYS wins-based; the
     // kill-count clinch (win_by_kills_clinch: highest round-kill total >=
-    // target, unique leader v78==1) lives ONLY in the NON-team branch's
+    // target, with the leader count equal to 1) lives ONLY in the NON-team branch's
     // dword_46497C sub-case (line 1243). win_by_kills is inherently a non-team
-    // feature — team play forces it OFF (batch_0x405B3A.cpp:685-686
-    // `if (dword_464964) dword_46497C = 0;`, mirrored at
+    // feature — team play forces it OFF (batch_0x405B3A.cpp:685-686 clears
+    // dword_46497C whenever dword_464964 is set, mirrored at
     // options_screen.cpp's activate_row). The old `is_team_mode() &&
     // win_by_kills` gate was therefore DEAD (never true), silently falling the
     // "Win Matches By Kill Total" mode through to the round-win loop. Both call

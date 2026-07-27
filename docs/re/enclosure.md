@@ -21,10 +21,10 @@ animation, and the actual tile drops.
 | addr        | as    | meaning                                                   |
 |-------------|-------|-----------------------------------------------------------|
 | dword_45BE9C | flag | armed (1 = walls closing)                                |
-| dword_462230 | int  | current wall tile X (`v11`)                              |
-| dword_462234 | int  | current wall tile Y (`v12`)                              |
-| dword_462238 | int  | current spiral direction (`v13`), indexes cos/sin below  |
-| dword_462240 | int  | current ring depth (`v14`)                               |
+| dword_462230 | int  | current wall tile X                                      |
+| dword_462234 | int  | current wall tile Y                                      |
+| dword_462238 | int  | current spiral direction, indexes cos/sin below          |
+| dword_462240 | int  | current ring depth                                       |
 | dword_46223C | DWORD| last-drop timestamp, ms (`timeGetTime()`)                |
 | dword_462244 | int  | `rand()%3` — which of 3 drop SOUNDS (presentation)       |
 | dword_464974 | int  | `getvalue(27)` = enclosement_depth (loaded once at match init, `sub_41095A`, pseudo.c 14651) |
@@ -46,54 +46,56 @@ match clock only counts down, so disarm never fires again after that.
 
 ## 2. Trigger time — TWO distinct, non-overlapping windows  [RE-CONFIRMED 2026-07-10]
 
-```
-v1     = getvalue(101);        // hurry_seconds
-result = sub_410578();         // = SECONDS REMAINING (dword_4601A4)
-if ( result <= v1 - 5 ) {      // remaining <= hurry_seconds - 5   (NON-STRICT)
-    if ( !dword_45BE9C ) {     // ARM
-        dword_462244 = rand() % 3;
-        dword_45BE9C = 1;
-        dword_46223C = sub_43ACF8();   // = timeGetTime(), the drop clock
-        sub_405D0C();          // *** IS an actor-registry sweep: deactivates
-                               // every WARPHOLE and TRAMPOLINE. RE-CONFIRMED
-                               // 2026-07-26; the 2026-07-20 "correction" that
-                               // called this an inert lobby-table cleanup was
-                               // itself wrong and is retracted. See §5.1. ***
-    }
-} else if ( dword_45BE9C ) {   // DISARM (only if time somehow went back up)
-    dword_45BE9C = 0;
-    dword_462230 = 0; dword_462234 = 0; dword_462240 = 0; dword_462238 = 1;
-}
-```
+Per frame, in this order:
+
+1. read `hurry_seconds = getvalue(101)`;
+2. read `remaining = sub_410578()` — SECONDS REMAINING (`dword_4601A4`);
+3. test `remaining <= hurry_seconds - 5` — **NON-STRICT `<=`**;
+4. if that holds AND `dword_45BE9C` is still 0, **ARM**, writing in exactly
+   this order:
+
+   | # | write | meaning |
+   |--:|-------|---------|
+   | a | `dword_462244 ← rand() % 3` | which of the 3 drop SOUNDS, latched once (presentation) |
+   | b | `dword_45BE9C ← 1` | armed |
+   | c | `dword_46223C ← sub_43ACF8()` | = `timeGetTime()`, seeds the drop clock |
+   | d | call `sub_405D0C()` | *** IS an actor-registry sweep: deactivates every WARPHOLE and TRAMPOLINE. RE-CONFIRMED 2026-07-26; the 2026-07-20 "correction" that called this an inert lobby-table cleanup was itself wrong and is retracted. See §5.1. *** |
+
+   (if the predicate holds but `dword_45BE9C` is already 1, nothing at all
+   happens — arming is edge-triggered);
+5. otherwise (predicate false) and only if `dword_45BE9C` is set, **DISARM**
+   — the branch reachable only if time somehow went back up:
+   `dword_45BE9C ← 0`, `dword_462230 ← 0`, `dword_462234 ← 0`,
+   `dword_462240 ← 0`, `dword_462238 ← 1`.
 
 - `sub_410578()` returns `dword_4601A4`, set in `sub_4105D2` as
   `(dword_4601AC - dword_4601B8) / 1000` = **whole seconds remaining, FLOORED**
   (total match ms minus elapsed ms, over 1000, clamped ≥ 0, C integer
   division truncates toward zero for non-negative operands = floor).
 - **The banner is a SEPARATE check, in the HUD routine (~29533,
-  `sub_42A191`), with the OPPOSITE strictness on both sides:**
-  ```
-  remaining = sub_410578();
-  hurry_s   = getvalue(101);
-  if ( remaining < hurry_s ) {              // STRICT '<'
-      hurry_s2   = getvalue(101);
-      remaining2 = sub_410578();            // unchanged within the same frame
-      if ( remaining2 > hurry_s2 - 5 ) {    // STRICT '>'
-          if ( !dword_464984 ) { dword_464984 = 1; sub_427961(2700); }  // "HURRY!" once
-          draw the blinking "Hurry" HUD text (every frame this branch is taken)
-      }
-  }
-  ```
-  (The pseudocode shows the comparisons' LEFT operands as bare, unassigned-
-  looking calls — `sub_410578();` / `sub_412135(101);` with no `v5 = `/`v7 = `
-  prefix. That is a Hex-Rays artifact of Watcom's REGISTER calling convention
-  (confirmed: `sub_412135`'s own signature is
-  `int __usercall sub_412135@<eax>(int a1@<eax>)` — argument AND return both
-  in EAX), not a discarded value: the compiler evaluates the first call,
-  parks its EAX result in EDX to survive the second call's own EAX-argument
-  handoff, and Hex-Rays doesn't reconstruct that as an explicit assignment.
-  The SAME pattern appears in §1's arm check above — `v1` there is
-  `getvalue(101)`, preserved the same way.)
+  `sub_42A191`), with the OPPOSITE strictness on both sides.** It runs, in
+  this order:
+  1. read `remaining = sub_410578()` and `hurry_s = getvalue(101)`;
+  2. test `remaining < hurry_s` — **STRICT `<`**; if false, nothing below
+     runs;
+  3. inside, re-read both (`getvalue(101)` then `sub_410578()` — the value is
+     unchanged within the same frame) and test
+     `remaining > hurry_s - 5` — **STRICT `>`**;
+  4. inside that: if the latch `dword_464984` is still 0, set it to 1 and
+     call `sub_427961(2700)` — the "HURRY!" cue, ONCE;
+  5. still inside that: draw the blinking "Hurry" HUD text — every frame this
+     branch is taken.
+
+  (In the decompiled listing both comparisons' LEFT operands appear as bare,
+  unassigned-looking calls — `sub_410578()` / `sub_412135(101)` with no
+  named local receiving the result. That is a decompiler artifact of Watcom's
+  REGISTER calling convention (confirmed from `sub_412135`'s own signature:
+  argument AND return both travel in EAX), not a discarded value: the
+  compiler evaluates the first call, parks its EAX result in EDX to survive
+  the second call's own EAX-argument handoff, and the decompiler doesn't
+  reconstruct that as an explicit assignment. The SAME pattern appears in
+  §1's arm check above, where the `getvalue(101)` result is preserved the
+  same way.)
 - Combined, the banner is active exactly while
   **`hurry_seconds - 5 < remaining < hurry_seconds`** (open both ends) — i.e.
   remaining ∈ {hurry_seconds−4, …, hurry_seconds−1}, a 4-whole-second window —
@@ -145,25 +147,30 @@ see `EnclosureSystem::update()`.
 
 ## 3. Cadence — 250 ms per EVENT = 5 ticks  [CONFIRMED 2026-07-04, refined 2026-07-10]
 
-The drop loop (`LABEL_26`, ~27225):
+The drop loop (`LABEL_26`, ~27225) runs, per iteration, in this order — with
+`now` = `timeGetTime()` and a per-frame drop budget initialised to 5:
 
-```
-LABEL_26:
-  if ( dword_46223C + 250 >= now /*timeGetTime()*/ )  return;  // <250ms since last: wait
-  if ( v22-- <= 0 )                                    return;  // cap 5 drops per frame
-  dword_46223C += 250;                                          // advance drop clock 250ms
-  sub_4278F2(dword_462244 + 140);          // play wall-drop sound (140 + rand%3)
-  sub_425E9B(dword_462230, dword_462234, 1);  // DROP the wall at (x,y), UNCONDITIONALLY
-  ...clear player/flame/powerup/bomb on that tile...
-  ...advance the spiral to the next (x,y)...  (§4 — may or may not actually move)
-  goto LABEL_26;                            // loop: catch up any further 250ms buckets
-```
+1. if `dword_46223C + 250 >= now`, **RETURN** — fewer than 250 ms since the
+   last drop, so wait;
+2. decrement the per-frame budget and **RETURN** once it has been exhausted
+   — cap 5 drops per frame;
+3. `dword_46223C += 250` — advance the drop clock by exactly one 250 ms
+   bucket (not "set to now");
+4. `sub_4278F2(dword_462244 + 140)` — play the wall-drop sound
+   (id 140 + the `rand()%3` variant latched at arm time);
+5. `sub_425E9B(dword_462230, dword_462234, 1)` — DROP the wall at the current
+   (x, y), **UNCONDITIONALLY**;
+6. clear player / flame / powerup / bomb on that tile (§5);
+7. advance the spiral to the next (x, y) — §4, and it may or may not actually
+   move;
+8. loop back to step 1, to catch up any further 250 ms buckets.
 
 - **The interval is a HARDCODED 250 ms** (`+= 250`), gated by `timeGetTime()`.
   It is NOT a VALUELST getvalue — the only enclosure getvalues are id 27
   (depth) and id 101 (threshold). `dword_46494C = 1000/getvalue(30) = 1000/20
   = 50` ms/tick, so 250 ms = **exactly 5 ticks** at the locked 20 Hz rate.
-- `v22 = 5` caps drops at 5 per frame — a wall-clock catch-up for dropped
+- The per-frame budget of 5 (step 2) caps drops at 5 per frame — a
+  wall-clock catch-up for dropped
   frames. In deterministic lockstep every frame is 50 ms, so at most one 250 ms
   bucket elapses per 5 ticks and the cap never engages: a clean **1 EVENT / 5
   ticks**, uniformly (§4 explains why "event" and "newly-solidified tile" are
@@ -185,25 +192,24 @@ perimeter formula" gets it subtly wrong.** The advance logic
 (`LABEL_47`/`LABEL_60`/`LABEL_61`, ~27267-27298), reached after EVERY drop
 (phantom or not):
 
-```
-v3 = cos[dir] + x;  v4 = sin[dir] + y;                    // tile ahead in the current dir
-if ( width-depth > v3 && height-depth > v4 && v3 >= depth && v4 >= depth )
-{
-    (x, y) = (v3, v4);                                    // ACCEPT: still inside the ring box
-}
-else
-{
-    dir = (dir + 1) & 3;                                  // turn clockwise
-    if ( dir == 1 )                                       // wrapped a full turn back to Right
-    {
-        if ( 2*getvalue(27) <= depth ) return;            // reached the target ring: STOP for good
-        ++depth; ++x; ++y;                                // step inward one ring (diagonal)
-    }
-    // else: (x, y) UNCHANGED — the NEXT LABEL_26 iteration re-drops this
-    // same tile (same sound, same crush/detonate checks) before trying the
-    // new direction.
-}
-```
+State: current tile `(x, y)`, current direction `dir`, current ring `depth`.
+Per advance, in this order:
+
+1. Compute the tile AHEAD in the current direction:
+   `ahead = (x + cos[dir], y + sin[dir])`.
+2. **ACCEPT** it — `(x, y) ← ahead` — if and only if **all four** of these
+   hold (i.e. `ahead` is still inside the ring box):
+   `ahead.x < width − depth`, `ahead.y < height − depth`,
+   `ahead.x ≥ depth`, `ahead.y ≥ depth`.
+3. Otherwise **TURN CLOCKWISE**: `dir ← (dir + 1) & 3`, and then:
+   - if `dir` has wrapped a full turn back to **1 (Right)**:
+     - if `2 × getvalue(27) ≤ depth`, **RETURN** — the target ring has been
+       reached, and the spiral STOPS for good;
+     - otherwise step inward one ring, diagonally:
+       `depth += 1; x += 1; y += 1`.
+   - else `(x, y)` is left **UNCHANGED** — the NEXT `LABEL_26` iteration
+     re-drops this same tile (same sound, same crush/detonate checks) before
+     trying the new direction.
 
 Two consequences fall directly out of this that a "one event per unique
 tile" model misses:
@@ -307,8 +313,8 @@ observably):
    unconditional destruction, NO skull-relocation compensation here (that only
    happens on the flame-walk's OWN powerup-burn call site, which additionally
    checks `diseases_destroyable` and calls `sub_4255B2`; `sub_4254F3` itself
-   has no such logic — confirmed by reading its body, `*a1 = 0` and an
-   optional redraw hint, nothing else).
+   has no such logic — confirmed by reading its body: it zeroes the powerup
+   record's first dword and sets an optional redraw hint, nothing else).
 3. **Grounded bomb** (`sub_422E48` finder, motion states 2/3 = flying/carried
    excluded, up to 100 retries — so an airborne bomb sails over, and a
    sliding-but-grounded bomb IS a valid target):
@@ -356,20 +362,23 @@ backwards, in opposite directions, and both are retracted here:
 **The body** (`native/src/game/batch_0x405B3A.cpp` lines 298-325, called from
 `sub_426818`'s arm branch at `batch_0x42583B.cpp` line 695):
 
-```c
-int sub_405D0C() {                       // 100 slots, stride 152
-  for (v3 = dword_45E0A8, v2 = 0; v2 < 100; ++v2, v3 += 38) {
-    if ( *v3 ) {                         // slot active?
-      v1 = v3[1];                        // +4 = actor TYPE (unsigned)
-      if ( v1 )                          //   0 = DirArrow  -> skipped
-        if ( v1 <= 1 || v1 == 3 )        //   1 = Warphole, 3 = Trampoline
-          *v3 = 0;                       //   -> DEACTIVATE the slot
-    }                                    //   2 = Conveyor  -> untouched
-  }
-}
-```
+`sub_405D0C` walks the whole actor pool at `dword_45E0A8` — **100 slots,
+stride 152 bytes (38 dwords)** — start to finish, no early exit. Per slot, in
+this order:
 
-`v1` is unsigned and already known non-zero, so `v1 <= 1` is exactly `v1 == 1`.
+| step | test / write | notes |
+|-----:|--------------|-------|
+| 1 | slot's ACTIVE dword (+0) non-zero? | if not, skip this slot entirely |
+| 2 | read the actor TYPE dword at **+4**, as UNSIGNED | |
+| 3 | type == 0 → skip | 0 = DirArrow, left alone |
+| 4 | type ≤ 1 **OR** type == 3 → write **0** to the slot's ACTIVE dword (+0) | 1 = Warphole, 3 = Trampoline → DEACTIVATE the slot |
+| 5 | anything else → untouched | 2 = Conveyor |
+
+Nothing else in the record is written, and every one of the 100 slots is
+visited.
+
+The type field is read UNSIGNED and step 3 has already established it is
+non-zero, so the `≤ 1` test in step 4 is exactly `== 1`.
 Net: **every warphole and every trampoline is switched off, globally, on the
 single frame the walls arm; dirarrows and conveyors are left alone.**
 
@@ -381,9 +390,9 @@ dword removes the actor from both of the registry's consumers at once:
   (warp) again — **warpholes and trampolines stop WORKING**. The same lookup
   backs `sub_4230A5`'s sliding-bomb entry probe, so a kicked bomb that used to
   be blocked by a warphole tile (§stage-actors.md §6 item 4) now rolls onto it.
-- `sub_4056CA` (the animator) iterates the same 100 slots and only draws
-  `if (*(_DWORD*)slot)` — **so the art disappears too**, all four at once,
-  independent of where the spiral is.
+- `sub_4056CA` (the animator) iterates the same 100 slots and only draws a
+  slot whose active dword (+0) is non-zero — **so the art disappears too**,
+  all four at once, independent of where the spiral is.
 
 **Why those two types and not the other two.** `sub_41DE63`, the shared
 player-kill routine the wall crush itself calls (§5 item 1), early-outs while
@@ -498,11 +507,11 @@ Traced `sub_423209`'s queue end-to-end:
   dword_464994; }` — i.e. **the drain runs at most ONCE per rendered frame**
   (`dword_464994` is the frame counter, incremented once per frame in
   `sub_42A191`). The drain force-sets each queued bomb's elapsed-fuse word
-  (+68) to its OWN threshold (+74) — `*(_WORD*)(bomb+68) =
-  *(_WORD*)(bomb+74)` — and stamps its "incoming direction" byte (+56) from
+  (+68) to its OWN threshold — a straight word copy, **+68 ← +74** — and
+  stamps its "incoming direction" byte (+56) from
   the queued reason. `sub_42331C`'s own per-bomb loop, LATER IN THE SAME
-  CALL, unconditionally checks `if (fuse(+68) >= threshold(+74)) { ...explode...
-  }` (this check is NOT gated by the dud/kind exclusion that guards the
+  CALL, unconditionally checks whether fuse (+68) ≥ threshold (+74) and, if
+  so, explodes (this check is NOT gated by the dud/kind exclusion that guards the
   fuse-INCREMENT a few lines above it) — so a freshly force-set bomb detonates
   within that SAME `sub_42331C` call.
 - `sub_42A191`'s per-frame order calls `sub_42331C` **TWICE**: once via
@@ -581,25 +590,26 @@ match" flag set once at round start, and concluded the walls keep closing
 through the round-decided window. `sub_421969` is not static: it is
 **recomputed every single frame**.
 
-```c
-// native/src/game/batch_0x42583B.cpp 678-682 — the ENTIRE stepper is inside it
-result = sub_421969();
-if ( result > 1 )
-{
-    if ( sub_40C06A() != 1 && sub_412135(dword_46499C + 340) )
-        sub_426704();          // per-level tile regen (level 7) — also gated
-    ... arm/disarm, preview, the 250 ms drop loop ...
-}
-```
+The ENTIRE stepper sits inside that gate (`native/src/game/
+batch_0x42583B.cpp` 678-682). Per frame, in order:
 
-```c
-// native/src/game/batch_0x420D4E.cpp 525-532
-int sub_421969() {
-  if ( dword_46489C ) return 2;              // campaign: forced 2 -> never freezes
-  if ( dword_464964 ) return dword_4621DC;   // team mode: TEAMS still in play
-  return dword_4621D4;                       // free-for-all: PLAYERS still in play
-}
-```
+1. call `sub_421969()` and compare its result with 1 — if it is **not > 1**,
+   return immediately, doing nothing at all;
+2. inside the gate, first: if `sub_40C06A() != 1` (not the editor) AND
+   `sub_412135(dword_46499C + 340)` (= `getvalue(dword_46499C + 340)`) is
+   non-zero, call `sub_426704()` — the
+   per-level tile regen (level 7), so that is *also* gated by the same check;
+3. then the arm/disarm check (§2), the preview pass (§7) and the 250 ms drop
+   loop (§3) — all of them inside the same `> 1` body.
+
+`sub_421969` itself (`native/src/game/batch_0x420D4E.cpp` 525-532) is three
+tests, evaluated in this order — the first that hits wins:
+
+| # | test | returns | meaning |
+|--:|------|---------|---------|
+| 1 | `dword_46489C` (campaign active) non-zero | **2**, hardcoded | campaign is forced to 2 ⇒ it can never freeze |
+| 2 | else `dword_464964` (team mode) non-zero | `dword_4621DC` | TEAMS still in play |
+| 3 | else | `dword_4621D4` | free-for-all: PLAYERS still in play |
 
 `dword_4621D4` is latched from the accumulator `dword_4621D0` at the tail of
 the per-frame player pass `sub_420F07` (`batch_0x420D4E.cpp` 170-222), and
@@ -677,7 +687,7 @@ of this section was confidently wrong:
 | sub_426818  | enclosure stepper: arm/disarm (§2), 250 ms cadence (§3), spiral (§4) |
 | sub_410578  | seconds-remaining accessor (`dword_4601A4`)                |
 | sub_4105D2  | clock update: `dword_4601A4 = (total_ms - elapsed_ms)/1000`|
-| sub_412135  | `getvalue(id)` — Watcom register convention, `@<eax>` both ways (confirms the edx-preserved-across-a-call reading in §2) |
+| sub_412135  | `getvalue(id)` — Watcom register convention, argument AND return both in EAX (confirms the edx-preserved-across-a-call reading in §2) |
 | sub_43ACF8  | `timeGetTime()` — the ms drop clock                        |
 | sub_425E9B  | set a tile solid (the wall drop)                           |
 | sub_405D0C  | **NOT actor-grid clear (corrected 2026-07-20)** — a level-select lobby broadcast-table cleanup (batch_0x405B3A.cpp ~298-325); no gameplay-actor effect. Port correctly does nothing here. audit/enclosure.md F0 |

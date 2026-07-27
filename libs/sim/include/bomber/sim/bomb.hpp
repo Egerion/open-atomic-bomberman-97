@@ -19,9 +19,9 @@ struct Bomb {
     std::uint8_t owner = 0;
     // Render colour, a SEPARATE field from `owner`: the original packs both
     // into the dword at bomb +60 — low byte = the placer's colour, written
-    // once at creation (sub_422EDE `+60 = v16`); high word (+62) = the owner
-    // id. A flame-arm chain hit transfers ONLY the owner word (sub_42331C
-    // pseudo.c 25644 `*(_WORD*)(v48+62) = *(_WORD*)(v75+62)`), so kill
+    // once at creation by sub_422EDE; high word (+62) = the owner
+    // id. A flame-arm chain hit copies ONLY the +62 owner word from the
+    // detonating bomb into the bomb it ignites (sub_42331C, pseudo.c 25644), so kill
     // credit moves to the chainer while the bomb — and every flame it casts
     // (sub_426FCC takes colour from bomb +60 and owner from +62 separately)
     // — keeps wearing the original placer's colour. Stored as the placer's
@@ -35,7 +35,7 @@ struct Bomb {
     // word +74 for EVERY kind, trigger included; our running `fuse` is the
     // original's elapsed counter +68 recast as a countdown). Two consumers,
     // both faithful ports: a thrown carried bomb restarts from this value
-    // (sub_41F29B LABEL_246 zeroes elapsed +68 before the launch), and a
+    // (sub_41F29B's bomb-action tail zeroes elapsed +68 before the launch), and a
     // trigger bomb downgraded by a Trigger EVICTION relights with it
     // (sub_424C47 sets kind 0, elapsed 0). facts.md "Core-feel audit" §2/§5.
     std::int32_t fuse_init = 0;
@@ -53,8 +53,9 @@ struct Bomb {
     bool moving = false;          // kicked
     // Kick+action2 "stop my bombs" (sub_4247C5 sets bomb byte +57 on the
     // owner's sliding non-jelly bombs): the slide loop consumes it by snapping
-    // the bomb onto the next tile centre it reaches (sub_42331C `+57 && at-or-
-    // past-centre`). A DIRARROW clears it (~25535). facts.md "Core-feel audit" §4.
+    // the bomb onto the next tile centre it reaches (sub_42331C fires it when
+    // +57 is set and the bomb is at or past that centre). A DIRARROW clears it
+    // (~25535). facts.md "Core-feel audit" §4.
     bool stop_pending = false;
     Direction dir = Direction::Up;
     // Airborne (punched/thrown): travels from_* -> to_* in fly_total ticks.

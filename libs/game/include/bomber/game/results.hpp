@@ -46,7 +46,7 @@ inline void tally_kills(const std::vector<sim::Event>& events,
 // The §1 v73 match-clinch check's win_by_kills branch: "in team mode with
 // win_by_kills set, the clinch compares the highest round-kill total
 // (sub_421B0F) against dword_464A7C (the wins-needed target), breaking ties
-// by requiring a single unique leader (v78 == 1)". Returns the clinching
+// by requiring the leader count to be exactly 1". Returns the clinching
 // player's index, or -1 if no single player has both reached the target AND
 // uniquely holds the highest kill total.
 //
@@ -69,7 +69,7 @@ inline int win_by_kills_clinch(const std::array<int, sim::kMaxPlayers>& kill_cou
         }
     }
     if (best < 0 || best_count < target) return -1;  // nobody reached the target
-    if (leaders != 1) return -1;                     // v78 == 1: unique leader required
+    if (leaders != 1) return -1;                     // leader count 1: unique leader required
     return best;
 }
 
@@ -145,9 +145,10 @@ inline std::vector<int> seed_campaign_ai_slots(std::uint32_t& lcg, int ai_count)
 }
 
 // Campaign round-pacing clauses 4-5 (docs/re/campaign.md "Round pacing",
-// sub_4016DA), confirmed against pseudo.c 4634-4648: `for (i=0;i<10;++i) {
-// sub_421DD2(i,&type,0); if (type!=1 && type && sub_4228C4(i)) return; }` —
-// bail (false, "a human/joystick survivor exists") the instant ANY present,
+// sub_4016DA), confirmed against pseudo.c 4634-4648, which walks slots 0..9,
+// asks sub_421DD2 for each slot's type through an out-param, and returns as
+// soon as one slot has a type that is neither 0 nor 1 AND sub_4228C4 says it is
+// alive — bail (false, "a human/joystick survivor exists") the instant ANY present,
 // non-COMPUTER, ALIVE slot is found; falling through the loop means every
 // human/joystick slot is dead (true). `slot_type[i]==1` is COMPUTER, matching
 // setup_type_'s own convention (0=OFF, 1=COMPUTER, 2/3=human). Strictly wider

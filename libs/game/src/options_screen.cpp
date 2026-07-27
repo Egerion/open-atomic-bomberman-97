@@ -78,11 +78,11 @@ void OptionsScreen::enter(const OptionsSnapshot& current, std::string backdrop) 
 }
 
 // CONFIRMED 2026-07-09 re-read of sub_4080DC's key-dispatch tail (pseudo.c
-// 9297-9406): `v165` is the raw key code; the ONLY branch that sets the
-// loop's exit flag (`v167 = 1`) is `v165 == 0x1B` (Escape) — Enter (13) and
-// Space (32) both `goto LABEL_29`, the EXACT SAME per-row switch Right
-// (`v165 == 0x14D`) dispatches to (toggle / cycle-forward / open sub-screen).
-// Left (`v165 == 0x14B`) runs a second, separately-listed switch with the
+// 9297-9406): the tail switches on the raw key code; the ONLY branch that
+// raises the loop's exit flag is key code 0x1B (Escape) — Enter (13) and
+// Space (32) both jump to LABEL_29, the EXACT SAME per-row switch Right
+// (key code 0x14D) dispatches to (toggle / cycle-forward / open sub-screen).
+// Left (key code 0x14B) runs a second, separately-listed switch with the
 // SAME 19 cases: toggles do the SAME toggle (direction is ignored for them,
 // matching this file's existing per-row comments), cyclers decrement instead
 // of increment, and every "opens a sub-screen" row (2/8/14/15/16/17/18)
@@ -126,7 +126,7 @@ void OptionsScreen::activate_row(int dir) {
             // in the original) stays a no-op here rather than inventing one.
             break;
         case OptionRow::SchemeFile:
-            // CONFIRMED (pseudo.c 9342-9343 `goto LABEL_46` in the forward
+            // CONFIRMED (pseudo.c 9342-9343 jumps to LABEL_46 in the forward
             // switch, 9443-9445 in the Left switch): BOTH directions open
             // sub_407582 — the *.SCH file-picker list dialog. (The §3
             // table's earlier "sub_4076FE(±1) stepper" label for this row
@@ -209,7 +209,7 @@ void OptionsScreen::activate_row(int dir) {
             break;
         case OptionRow::KeyRemap:
             // CONFIRMED (pseudo.c case 15, both the LABEL_29 forward switch
-            // AND the Left-arrow switch `goto LABEL_53`): all four of
+            // AND the Left-arrow switch, which jumps to LABEL_53): all four of
             // Left/Right/Enter/Space open the remap sub-screen — not
             // Enter/Space only.
             open_keyremap_ = true;
@@ -233,7 +233,7 @@ void OptionsScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
     audio.play(20);
     switch (key) {
         case SDLK_UP:
-            // CONFIRMED off-by-one (pseudo.c 9086/9391-9392, `v168 = 18`):
+            // CONFIRMED off-by-one (pseudo.c 9086/9391-9392, wrap count 18):
             // wraps over kCursorRowCount (18), not kCount (19) — row 18 is
             // never reachable. See options_screen.hpp's file doc. Arrow-only
             // (batch_0x4074DC.cpp:860,871): the old W/S aliases were invented.
@@ -255,7 +255,8 @@ void OptionsScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
             // (present_options_screen) decides whether to persist based on
             // changed(), same on Enter or Esc. Only the *screen's* dismissal
             // semantics differ (Back vs Advance) for the app-flow graph.
-            // CONFIRMED (pseudo.c 9374-9378, `v165 <= 0x1B` -> `v167 = 1`):
+            // CONFIRMED (pseudo.c 9374-9378 raises the exit flag exactly when
+            // the raw key code is <= 0x1B):
             // Escape is the ONLY key that sets sub_4080DC's own exit flag.
             done_ = true;
             break;

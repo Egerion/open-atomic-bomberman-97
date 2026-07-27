@@ -72,9 +72,10 @@ bool AISystem::behave_grab_drop(int i, PlayerInput& out) {
     // pickup, bombs.cpp "motion states 0 AND 1 both qualify").
     const Bomb* under = grid::bomb_at(s_, p.tile_x(), p.tile_y());
     const bool own = under != nullptr && under->owner == static_cast<std::uint8_t>(i);
-    // rand()%2 TRUTHY (== 1) -> grab it: pseudo.c 11025 is
-    // `v3 && *(v3+62)==*(a1+62) && rand()%2` used directly as the branch
-    // condition, not `!(rand()%2)` (RESOLVED: an earlier `== 0` here was an
+    // rand()%2 TRUTHY (== 1) -> grab it: the branch condition at pseudo.c 11025
+    // requires a bomb underfoot, its +62 owner word to equal the AI's own +62,
+    // and rand()%2 to be NONZERO — the draw is used as-is, not negated
+    // (RESOLVED: an earlier `== 0` here was an
     // inverted-polarity deviation from both the binary and ai.md §3.0's own
     // transcription, which already read it correctly as "and rand()%2").
     if (own && random_below(s_, 2) != 0) {
@@ -104,7 +105,8 @@ bool AISystem::behave_walk_path(int i, PlayerInput& out) {
 
         // Stale-target invalidation: if a target is held whose captured cost was 0
         // (!cost, i.e. it was safe when chosen) but the tile is now dangerous, drop
-        // it. Mirrors `if (+2 && !+8 && danger(target)) +2 = 0` (line 10784).
+        // it. Mirrors the original at line 10784: with the +2 target-held flag
+        // set and the +8 captured cost zero, a dangerous target tile clears +2.
         if (br.has_path_target && br.path_target_cost == 0 &&
             danger_at(br.path_target_x, br.path_target_y) != 0) {
             br.has_path_target = false;
@@ -123,9 +125,10 @@ bool AISystem::behave_walk_path(int i, PlayerInput& out) {
             }
             const int g = flame_veto(i, px, py, first);  // sub_40A76E veto
             write_move(out, g);
-            // The original's return here is `vel_perp(+44)>>16 != -1`, i.e. the
-            // godir word the veto may have just set to -1 (pseudo.c 10841-10842:
-            // `sub_40A76E(v4); return *(int*)(v4+44)>>16 != -1;`) -- NOT an
+            // The original's return value here is the high half of the +44 field
+            // compared against -1, i.e. the
+            // godir word the veto may have just set to -1 (pseudo.c 10841-10842
+            // calls the veto sub_40A76E and then returns that comparison) -- NOT an
             // unconditional 1. A flame-vetoed step makes behaviour 2 PASS DOWN
             // (return 0), giving 3-7 a turn (and their draws) this tick, rather
             // than stalling. RNG-order-critical: fixing a fall-through this
@@ -141,7 +144,8 @@ bool AISystem::behave_walk_path(int i, PlayerInput& out) {
         // passes down" correction over-reached by folding them together
         // (re-pinned 2026-07-16 movement audit, pseudo.c 10816-10829):
         //
-        //  1. FULLY BOXED IN (flee found no first dir at all, v5 == 0): the
+        //  1. FULLY BOXED IN (the flee search came back with no first direction
+        //     at all): the
         //     original CLEARS the target flag and returns 0 — behaviours 3-7
         //     DO get this frame's turn (whims, drop gates, wander re-rolls:
         //     the trapped-in-danger fidget, with all its RNG draws).
@@ -149,7 +153,7 @@ bool AISystem::behave_walk_path(int i, PlayerInput& out) {
             br.has_path_target = false;
             return false;
         }
-        //  2. NO STRICTLY-SAFER TILE (`here <= min`, 10824-10829): latch the
+        //  2. NO STRICTLY-SAFER TILE (own danger <= the best found, 10824-10829): latch the
         //     OWN tile as target, write godir -1 and return 1 — behaviours
         //     3-7 never run and draw NOTHING that frame.
         const std::int32_t here = danger_at(px, py);
@@ -178,7 +182,7 @@ bool AISystem::behave_walk_path(int i, PlayerInput& out) {
         br.path_target_cost = danger_at(bx, by);
         const int g = flame_veto(i, px, py, first);
         write_move(out, g);
-        // Same `vel_perp(+44)>>16 != -1` return as the directed branch above
+        // Same "+44's high half != -1" return as the directed branch above
         // (pseudo.c 10841-10842): a flame-vetoed flee step passes down instead
         // of stalling, letting 3-7 take this tick's turn (docs/re/ai.md §3.2
         // RESOLVED). The "can't improve" branch above (line ~569) is unaffected
@@ -190,8 +194,10 @@ bool AISystem::behave_walk_path(int i, PlayerInput& out) {
     // Danger-clear (safe). The original: if trigger held (and no punch) roll
     // rand()%10 to detonate remote bombs (Stage 5 — the whim's draw lands here in
     // the §8 order, before the neighbour scan). The && short-circuits so the %10
-    // draw is taken ONLY when trigger && !punch, matching `if (+95 && !+91 &&
-    // !(rand()%10)) +57=1`. Setting action2 routes to detonate_triggered in
+    // draw is taken ONLY when trigger && !punch, matching the original: the
+    // trigger flag +95 set, the punch flag +91 clear and rand()%10 coming up
+    // zero together set the action2 byte +57.
+    // Setting action2 routes to detonate_triggered in
     // player_turn (edge-gated on action2 && !prev_action2). Then check whether ANY
     // neighbour is walkable+safe; if boxed in with nowhere safe, "act" (stall) so
     // the chain stops, else pass down to let a lower behaviour (wander) drift.
@@ -237,8 +243,8 @@ bool AISystem::behave_blast_bricks(int i, PlayerInput& out) {
     }
 
     // (2) Constipation (+134): can't drop at all. (No state clear on this branch,
-    // matching the original — the `if (+134) return 0` is inside the capacity-ok
-    // block, before the brick count / state handling.)
+    // matching the original — its "+134 set -> return 0" test is inside the
+    // capacity-ok block, before the brick count / state handling.)
     if (p.sick(Disease::Constipation)) return false;
 
     // (3) Count orthogonally-adjacent BRICK tiles (sub_425FB9 == 2 -> Cell::Brick).
@@ -332,7 +338,8 @@ bool AISystem::behave_seek_powerup(int i, PlayerInput& out) {
         return false;
     }
 
-    // Path toward the powerup (maxdist = range+1, the original's v3+1). One BFS
+    // Path toward the powerup (maxdist = range+1, i.e. the original's own
+    // getvalue(920) range plus one). One BFS
     // tie-break draw. If unreachable (0 iters) give up 50% of the time BEFORE the
     // firstdir check, exactly as the original orders it (line 10989).
     int iters = 0;
@@ -405,8 +412,9 @@ bool AISystem::behave_punch(int i, PlayerInput& out) {
 //      (ai.md finding 1, disasm-confirmed 0x40AC24-0x40AC6D — the summary in
 //      ai.md §3.4/§9.4 that called this "near-always TRUE" is corrected);
 //   3. scan the 5-tile plus/cross (kEnemyScanX/Y, the OOB tables) for a live
-//      (active +0, not-dead +8) ENEMY player (sub_421CB5 `*i && !i[2]`, pseudo.c
-//      24207 — `!i[2]` is +8/died-this-round, NOT the +58 stun), self excluded
+//      (active +0, not-dead +8) ENEMY player — sub_421CB5 at pseudo.c 24207
+//      requires the candidate's leading +0 dword to be nonzero and its +8 dword
+//      to be zero, where +8 is died-this-round, NOT the +58 stun — self excluded
 //      (the original zeroes its own actor +0 across the probe; we skip the self);
 //   4. per hit: in team mode skip a teammate (dword_464964 gate; same_team()
 //      below — see docs/re/ai.md §3.4/§5.3, "our semantics" note at same_team's
@@ -428,8 +436,9 @@ bool AISystem::behave_bomb_enemy(int i, PlayerInput& out) {
     // (2) Manhattan gate (ai.md finding 1; sub_40ABED, disasm-confirmed
     // 0x40AC24-0x40AC6D): the original gate is the Manhattan DISTANCE the AI
     // has travelled since its last spawn/warp snapshot (+20/+24) >= 3 tiles —
-    // `abs(currentTileX - snapX) + abs(currentTileY - snapY) >= 3`, an explicit
-    // `sub` before each `abs_`, NOT the absolute-coordinate magnitude the old
+    // abs(currentTileX - snapX) + abs(currentTileY - snapY) >= 3, with the
+    // subtraction done before each absolute-value call in the raw code, NOT the
+    // absolute-coordinate magnitude the old
     // port (and ai.md §3.4's summary) used. The snapshot lives in warp_to_x/y
     // (the port's +20/+24: set to the spawn tile at setup.cpp, to the warp exit
     // at start_warp). So the gate is near-constant FALSE right after a spawn or
@@ -460,7 +469,7 @@ bool AISystem::behave_bomb_enemy(int i, PlayerInput& out) {
         if (who < 0) continue;
 
         // (4) Team gate (dword_464964 && me.team == cell.team -> skip; §3.4). A
-        // same-team hit is not an enemy: the ORIGINAL's `return 0` here ends the
+        // same-team hit is not an enemy: the ORIGINAL returns 0 here, ending the
         // whole behaviour (it does NOT continue scanning the rest of the cross),
         // so we mirror that exactly. On an all-zero roster same_team() is always
         // false, so this never fires there (byte-identical to before). Then the
@@ -494,8 +503,9 @@ bool AISystem::same_team(int a, int b) const {
 // nearest). Two passes, byte-exact:
 //   pass 1: start = rand()%10, scan 10 slots forward (wrapping); accept the
 //           first that is NOT self, present (+16 != 0), NOT another AI/computer
-//           (+16 != 1), active (+0), NOT DEAD (+8, `v7[2]` in pseudo.c 24741 —
-//           NOT the +58 stun), and (team mode) not a teammate. This pass draws
+//           (+16 != 1), active (+0), NOT DEAD (the zero-test at pseudo.c 24741
+//           is on the candidate's +8 dword, NOT the +58 stun), and (team mode)
+//           not a teammate. This pass draws
 //           ONE rand()%10 for its start index.
 //   pass 2 (only if pass 1 finds nothing): start = a SECOND rand()%10; the same
 //           scan but RELAXED to include other AI players (drops the +16 != 1
@@ -513,11 +523,11 @@ int AISystem::pick_live_enemy(int self) {
     const int start1 = static_cast<int>(random_below(s_, 10));
     for (int n = 0; n < kMaxPlayers; ++n) {
         const int j = (start1 + n) % kMaxPlayers;
-        if (j == self) continue;  // a1 == v7 (self)
+        if (j == self) continue;  // the original's self-vs-candidate identity test
         const Player& q = s_.players[j];
         if (!q.present) continue;          // !+16 (absent)
         if (q.ai) continue;                // +16 == 1 (another computer player)
-        if (!q.alive) continue;            // !+0 (inactive) / v7[2] (+8 dead) — NOT +58 stun
+        if (!q.alive) continue;            // !+0 (inactive) / +8 set (dead) — NOT +58 stun
         if (same_team(self, j)) continue;  // team mode: skip a teammate
         return j;  // the first live, non-teammate human opponent (slot != self)
     }
@@ -525,10 +535,10 @@ int AISystem::pick_live_enemy(int self) {
     const int start2 = static_cast<int>(random_below(s_, 10));
     for (int n = 0; n < kMaxPlayers; ++n) {
         const int j = (start2 + n) % kMaxPlayers;
-        if (j == self) continue;  // a1 == v8 (self)
+        if (j == self) continue;  // the original's self-vs-candidate identity test
         const Player& q = s_.players[j];
         if (!q.present) continue;          // !+16 (absent)
-        if (!q.alive) continue;            // !+0 (inactive) / v8[2] (+8 dead) — NOT +58 stun
+        if (!q.alive) continue;            // !+0 (inactive) / +8 set (dead) — NOT +58 stun
         if (same_team(self, j)) continue;  // team mode: skip a teammate
         return j;                          // any live, non-teammate opponent
     }
@@ -545,8 +555,10 @@ int AISystem::pick_live_enemy(int self) {
 //     powerup-seek, whose timeout is unconditional — this one keeps the target if
 //     the roll fails and the timer keeps growing);
 //   - liveness: drop the target if its slot is now gone / inactive / dead
-//     (original: `!v4 || *v4 != 1 || v4[2]` — v4[2] is +8/died-this-round =
-//     our !alive, NOT the +58 stun, so a stunned-but-alive foe is still chased);
+//     (the original drops it when the reloaded actor pointer is null, when the
+//     record's leading +0 dword is not 1, or when its +8 dword is set — +8 being
+//     died-this-round = our !alive, NOT the +58 stun, so a stunned-but-alive foe
+//     is still chased);
 //   - path: directed BFS toward the target's tile (maxdist 20); if unreachable
 //     (0 iters) give up 50% of the time BEFORE the firstdir check; then step one
 //     tile if the next tile is safe (sub_40A59D), else hold.
@@ -576,8 +588,9 @@ bool AISystem::behave_seek_enemy(int i, PlayerInput& out) {
 
     // Timeout: accrue the frame delta, then at >= 500 ms give up on a 1/50
     // roll. The %50 is evaluated ONLY when the timer condition holds
-    // (short-circuit &&), exactly as the original orders
-    // `(10*msPerFrame <= +12) && !(rand()%50)` — +12 accrues frameDelta per
+    // (short-circuit &&), exactly as the original orders it: the "+12 has
+    // reached 10 frame-times" test first, the zero-result rand()%50 draw
+    // second — +12 accrues frameDelta per
     // displayed frame, so the threshold is 10 × 50 ms of wall clock.
     br.enemy_seek.timer += delta_ms_;
     if (br.enemy_seek.timer >= 10 * kMsPerTick && random_below(s_, 50) == 0) {
@@ -585,10 +598,11 @@ bool AISystem::behave_seek_enemy(int i, PlayerInput& out) {
         return false;
     }
 
-    // Liveness: the original reloads the actor pointer and drops the target if it
-    // is null / not the alive value / DEAD (`!v4 || *v4 != 1 || v4[2]` — v4[2] is
-    // +8/died-this-round = our !alive, NOT the +58 stun; a stunned-but-alive foe
-    // is still pursued). Our slot image: give up if the slot is no longer a live
+    // Liveness: the original reloads the actor pointer and drops the target if
+    // the pointer is null, if the record's leading +0 dword is not 1, or if its
+    // +8 dword is set — +8 is died-this-round = our !alive, NOT the +58 stun; a
+    // stunned-but-alive foe
+    // is still pursued. Our slot image: give up if the slot is no longer a live
     // player.
     // bugprone-signed-char-misuse (NOLINT below) — target_slot (std::int8_t)
     // is a genuine signed small int; the negative-slot check right below
@@ -636,12 +650,13 @@ bool AISystem::behave_wander(int i, PlayerInput& out) {
     const int px = p.tile_x(), py = p.tile_y();
 
     if (random_below(s_, 25) == 0) {
-        // Turn +-90 off the current wander dir. The original's base is
-        // BYTE2(*(brain+62)) (sub_40A81F, batch_0x40A140.cpp:275): the dword at
-        // +62 spans bytes 62-65, so BYTE2 is the byte at +64 — which IS
-        // wander_dir's own storage. So the base genuinely is the current
-        // wander_dir (via the byte alias, NOT via any "personality 0 seeds 0"
-        // reasoning). v2 = (wander_dir + 2*(rand%2) - 1) & 3.
+        // Turn +-90 off the current wander dir. sub_40A81F takes its base from
+        // an aliased read of the brain: it loads the dword at brain +62 and
+        // keeps its high half, and since that dword spans bytes 62-65 the half
+        // it keeps IS wander_dir's own storage at +64. So the base genuinely is
+        // the current wander_dir (via the alias, NOT via any "personality 0
+        // seeds 0" reasoning), and the new dir is
+        // (wander_dir + 2*(rand()%2) - 1) & 3.
         const int turn = (br.wander_dir + 2 * static_cast<int>(random_below(s_, 2)) - 1) & 3;
         // Adopt the new turn only if the CURRENT wander dir is itself safe to
         // step (mirrors the original's guard before overwriting wander_dir).

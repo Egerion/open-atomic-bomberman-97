@@ -99,7 +99,8 @@ TEST_CASE("brick fill: solid and blank cells never become bricks") {
     }
 }
 
-// Warphole knockout (Gap: sub_4056CA case 1 `if (!+146)` block). A warphole's
+// Warphole knockout (Gap: sub_4056CA case 1's block, the one guarded on the
+// actor's +146 field being clear). A warphole's
 // one-time activation clears its own tile AND one RANDOM adjacent tile. Ported
 // into apply_actors off the setup-only LCG (never State::rng). See
 // docs/re/stage-actors.md.

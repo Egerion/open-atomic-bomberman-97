@@ -18,8 +18,8 @@ void FlameSystem::burn_powerup_here(int tx, int ty) {
     // "Diseases Can Be Destroyed" OFF (dword_464990=0, options.ini
     // diseases_destroyable= / VALUELST 120): a burned skull is not lost —
     // a fresh one relocates to a random free tile. The flame walk's
-    // powerup branch (sub_42331C ~25626/25653) runs `if (kind == 2 &&
-    // !dword_464990) sub_4255B2(2)` right after the destruction;
+    // powerup branch (sub_42331C ~25626/25653) calls sub_4255B2 for kind 2
+    // whenever dword_464990 is clear, right after the destruction;
     // scatter() IS our sub_4255B2, so order and count of the RNG draws
     // mirror the original. Destroying the token itself is unconditional.
     if (burned == PowerupType::Disease && !s.tuning.diseases_destroyable)
@@ -66,13 +66,15 @@ bool FlameSystem::spread_to(int tx, int ty, std::uint8_t owner, std::uint8_t col
 
     if (Bomb* hit = grid::bomb_at(s, tx, ty)) {
         // Ownership transfers to the triggering bomb RIGHT NOW (pseudo.c
-        // 25644, `v48[+62] = v75[+62]`, executed before the sub_423209
+        // 25644 copies the detonating bomb's +62 owner word into the bomb it
+        // ignites, executed before the sub_423209
         // push) — so flame_owner/kill attribution for the eventual chain
         // explosion credits whoever's blast actually set it off, not the
         // chained bomb's original owner. The bomb itself detonates next
         // tick (queue_chain), skipping a re-blast back toward this arm's
-        // direction (bomb+56 = opposite(from_dir), pseudo.c
-        // `((k+2)&3)+1`).
+        // direction: the bomb's +56 skip field takes the opposite of the arm's
+        // direction, computed in the original as the arm's godir k rotated by
+        // two ((k+2) & 3) and then biased by one so 0 can mean "no skip".
         //
         // The PLACEMENT SLOT moves with the owner word: the original keeps
         // no per-player bomb counter — capacity is a live scan (sub_4245DA
@@ -115,7 +117,8 @@ bool FlameSystem::spread_to(int tx, int ty, std::uint8_t owner, std::uint8_t col
         // place the cell actually flips, once `burning` hits 0, mirroring
         // sub_426D06's later, conditional `sub_425E9B(x,y,0)`. The hidden
         // powerup, however, reveals RIGHT NOW (sub_425107, called
-        // immediately after ignition, pseudo.c 26274-26343 `LABEL_33`) —
+        // immediately after ignition, in the reveal block at pseudo.c
+        // 26274-26343) —
         // well before the tile opens up, so it visibly fades in over the
         // still-burning brick instead of popping in only once the brick is
         // fully gone. Re-hitting an already-crumbling brick (another arm
@@ -126,8 +129,9 @@ bool FlameSystem::spread_to(int tx, int ty, std::uint8_t owner, std::uint8_t col
         s.burning[ty][tx] = static_cast<std::uint8_t>(
             std::clamp<std::int32_t>(s.tuning.brick_burn_frames, 1, 255));
         // sub_425107's very FIRST statement, before any relocate/reveal work,
-        // is `if (!(rand_() % 30)) sub_42BE0B();` (pseudo.c 26288-26291). But
-        // sub_42BE0B is an EMPTY function (pseudo.c 30942 `{ ; }` — a dead/
+        // draws rand() % 30 and calls sub_42BE0B when that comes up zero
+        // (pseudo.c 26288-26291). But
+        // sub_42BE0B has an EMPTY body (pseudo.c 30942 — a dead/
         // stubbed debug hook), so the roll has NO gameplay effect — it only
         // CONSUMES one RNG draw per brick ignite. Reproduce that draw (result
         // discarded) so the RNG stream stays byte-aligned with the original:
@@ -141,8 +145,8 @@ bool FlameSystem::spread_to(int tx, int ty, std::uint8_t owner, std::uint8_t col
         (void)random_below(s, 30);
         // Punch/Grab/SuperDisease may relocate instead of revealing here —
         // see relocate_overpowered_here. Runs BEFORE the reveal check below,
-        // exactly where sub_425107 sits relative to LABEL_33 in the original
-        // (both are part of the SAME ignition call, relocate-then-reveal).
+        // exactly where sub_425107 sits relative to the reveal block in the
+        // original (both are part of the SAME ignition call, relocate-then-reveal).
         relocate_overpowered_here(tx, ty);
         if (s.hidden[ty][tx] != PowerupType::None) {
             s.floor[ty][tx] = s.hidden[ty][tx];
@@ -161,8 +165,9 @@ bool FlameSystem::spread_to(int tx, int ty, std::uint8_t owner, std::uint8_t col
     s.flame_owner[ty][tx] = owner;
     s.flame_colour[ty][tx] = colour;
     // kind = godir (a TIP) only at the arm's FULL configured reach, else
-    // godir+4 (a MID) — pseudo.c 25673-25677 `if (reach-1==m) v45=k; else
-    // v45=k+4;`, decided here (only on the "arm continues" path) exactly
+    // godir+4 (a MID) — pseudo.c 25673-25677 stores the arm's godir when the
+    // step index equals reach-1 and that godir plus 4 otherwise, decided here
+    // (only on the "arm continues" path) exactly
     // like the original. FlameKind's tip/mid pairs are declared in the same
     // compass order as godir, so godir+4 lands on the matching mid piece.
     s.flame_kind[ty][tx] = static_cast<FlameKind>(
@@ -225,7 +230,8 @@ void FlameSystem::relocate_overpowered_here(int tx, int ty) {
     // tries. A second, independent 200-try search for a completely EMPTY
     // brick (no record at all) — a plain MOVE, not a swap: this tile ends up
     // with nothing, so the caller's reveal check below fires on NOTHING
-    // (matching the original's early `return` before its own LABEL_33).
+    // (matching the original, which returns early before reaching its own
+    // reveal block).
     for (int i = 0; i < 200; ++i) {
         const int rx = static_cast<int>(random_below(s, kGridWidth));
         const int ry = static_cast<int>(random_below(s, kGridHeight));
@@ -252,8 +258,9 @@ void FlameSystem::explode(std::size_t bomb_index, int skip_dir) {
                         static_cast<std::int8_t>(cx), static_cast<std::int8_t>(cy), 0});
     ignite_epicentre(cx, cy, b.owner, b.colour);
     // Cast the four arms in ASCENDING GODIR order 0,1,2,3 = Up,Right,Down,Left
-    // (flames.md finding 1; sub_42331C's `for (k=0; k<4; ++k)` indexes
-    // dword_45BECC/dword_45BEDC directly by k, so k IS the godir). The prior
+    // (flames.md finding 1; sub_42331C's arm loop runs its index k from 0 to 3
+    // and indexes the X/Y delta tables dword_45BECC/dword_45BEDC directly by k,
+    // so k IS the godir). The prior
     // enum-declaration braced list {Up,Down,Left,Right} visited godir 0,2,3,1 —
     // a different permutation. The arms are otherwise independent, so the order
     // is inert EXCEPT where an arm draws State::rng (relocate_overpowered_here /
@@ -263,8 +270,9 @@ void FlameSystem::explode(std::size_t bomb_index, int skip_dir) {
     for (int g = 0; g < 4; ++g) {
         const Direction d = grid::from_godir(g);
         // A chain-triggered bomb (skip_dir >= 0) never re-casts an arm back
-        // toward the flame that triggered it (bomb+56, pseudo.c 25621:
-        // `if (!field56 || k+1 != field56)`) — every OTHER direction still
+        // toward the flame that triggered it (the bomb's +56 skip field,
+        // pseudo.c 25621: an arm is cast when that field is 0 or when the arm's
+        // godir plus one differs from it) — every OTHER direction still
         // gets its normal full-reach arm.
         if (skip_dir >= 0 && g == skip_dir) continue;
         for (int i = 1; i <= reach; ++i) {
@@ -323,8 +331,9 @@ void FlameSystem::age_flames_and_bricks() {
             if (s.flame[y][x] > 0) --s.flame[y][x];
             if (s.burning[y][x] > 0 && --s.burning[y][x] == 0) {
                 // The powerup already revealed at ignition (spread_to); this
-                // is only the deferred cell-type flip (sub_426D06's
-                // `if (sub_425FB9(x,y)==2) sub_425E9B(x,y,0)`), guarded the
+                // is only the deferred cell-type flip (sub_426D06 asks
+                // sub_425FB9 for the cell type and, only when it answers 2
+                // (brick), calls sub_425E9B to write the cell back to 0), guarded the
                 // same way — only clear it if it is still Brick (in case
                 // something else, e.g. the enclosure/regen systems,
                 // already overwrote the tile).

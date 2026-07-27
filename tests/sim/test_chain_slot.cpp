@@ -4,8 +4,9 @@
 // SCAN — sub_4245DA counts the active bomb slots whose owner word (+62)
 // equals the player, and the drop/spooge gates compare max_bombs (+86)
 // against that count every time (sub_41F29B ~23336/23345). The chain
-// transfer (sub_42331C flame walk, pseudo.c 25644: `v48[+62] = v75[+62]`)
-// overwrites the SAME +62 word the scan matches on, so chaining someone
+// transfer (sub_42331C flame walk, pseudo.c 25644 copies the exploding bomb's
+// +62 owner word straight into the chained bomb's own +62) overwrites the
+// SAME +62 word the scan matches on, so chaining someone
 // else's bomb moves the placement slot too: the victim's capacity frees
 // IMMEDIATELY at transfer time, and the chained bomb counts against the
 // CHAINER until it explodes (next tick, via the sub_423209 queue).

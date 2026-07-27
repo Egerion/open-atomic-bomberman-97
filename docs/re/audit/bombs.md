@@ -35,34 +35,32 @@ by two independent call sites elsewhere in the binary with matching
 **Original.** `sub_42331C`'s per-bomb tail (pseudo.c 25601-25680,
 `native/src/game/batch_0x422DDD.cpp:799-882`) gates the *entire* fuse-elapsed
 accrual **and** the explosion-timeout check — and therefore the flame-arm
-spread loop nested inside it — behind:
+spread loop nested inside it — behind a single outer test at pseudo.c
+25603: **`sub_421969() > 1`**. Everything below happens only inside that
+gate, in this order:
 
-```c
-// pseudo.c 25603
-if ( sub_421969() > 1 )
-{
-  if ( *(_DWORD *)v75 != 2 && *(_WORD *)(v75+46) != 2 && *(_WORD *)(v75+46) != 3
-    && *(_DWORD *)(v75+4) != 1 && *(_BYTE *)(v75+16) == 9 )
-    *(_WORD *)(v75 + 68) += dword_464958;                 // fuse-elapsed accrual
-  if ( *(_WORD *)(v75 + 68) >= *(_WORD *)(v75 + 74) )      // timeout check
-  {
-    *(_DWORD *)v75 = 0;
-    ...
-    for ( k = 0; k < 4; ++k ) { ... flame-arm spread ... }  // pseudo.c 25640-25706
-  }
-}
-```
+1. **Fuse-elapsed accrual**, itself gated on ALL FIVE of these holding at
+   once: the bomb's state dword at `+0` is not 2; the motion word at `+46`
+   is not 2 (flying); the motion word at `+46` is not 3 (carried); the dword
+   at `+4` is not 1; and the byte at `+16` is 9. When they all hold,
+   `+68` (fuse elapsed) += `dword_464958` (this frame's measured ms delta).
+   *(annotated in the original read as "fuse-elapsed accrual".)*
+2. **Timeout check**: `+68` (fuse elapsed) >= `+74` (this bomb's fuse
+   length). *(annotated "timeout check".)* When that holds:
+   - the bomb's state dword at `+0` ← 0,
+   - …the rest of the explosion bookkeeping…,
+   - the **flame-arm spread loop**, `k` = 0..3, runs here — nested inside
+     the timeout branch and therefore inside the outer gate too (pseudo.c
+     25640-25706).
 
-`sub_421969` (pseudo.c 24048-24056, `batch_0x420D4E.cpp:524-532`):
+`sub_421969` (pseudo.c 24048-24056, `batch_0x420D4E.cpp:524-532`) is a
+three-way "how many sides are still in it" helper, tested in this order:
 
-```c
-int sub_421969()
-{
-  if ( dword_46489C ) return 2;        // campaign mode: force "always >1"
-  if ( dword_464964 ) return dword_4621DC;  // team mode: teams-alive count
-  return dword_4621D4;                 // standard match: players-alive count
-}
-```
+| condition | result | meaning |
+|---|---|---|
+| `dword_46489C` nonzero | returns `2` | campaign mode: force "always >1" |
+| else `dword_464964` nonzero | returns `dword_4621DC` | team mode: teams-alive count |
+| else | returns `dword_4621D4` | standard match: players-alive count |
 
 `dword_46489C` is the campaign-mode flag (set only from the campaign-select
 menu, `batch_0x401010.cpp:354`; cleared at `batch_0x4293E5.cpp:954`) — so
@@ -73,9 +71,9 @@ matches**. The chain-detonation queue drain (top of `sub_42331C`, pseudo.c
 duration (`+68 = +74`), but that write is inert without this same gate —
 so **chain reactions, trigger presses, and slide/land-into-flame contact all
 stop propagating too**, not just plain fuse timeout. A second call site
-(`batch_0x4293E5.cpp:1060`, `if (sub_421969() <= 1) sub_410522();`) fires a
-distinct "round decided" handler on the exact same predicate, reinforcing
-the reading.
+(`batch_0x4293E5.cpp:1060`) tests the very same helper for `<= 1` and, when
+it holds, dispatches `sub_410522` — a distinct "round decided" handler on
+the exact same predicate, reinforcing the reading.
 
 **Port.** `BombSystem::tick_fuses` (`libs/sim/src/systems/bombs.cpp:554-567`)
 decrements every armed bomb's fuse and calls `flames_.explode(i)` on
@@ -116,21 +114,30 @@ after the native oracle contradicted it.** The port's base-speed slide was
 already correct.
 
 **The misread.** `sub_42331C`'s case 0 (bomb resting on a conveyor) and case
-1 (kicked bomb already sliding) both fall into `LABEL_21` (pseudo.c
-25393-25400, `batch_0x422DDD.cpp:512-554`). The finding quoted only the first
-two lines and elided the rest with `...`:
+1 (kicked bomb already sliding) both fall into a **shared slide tail**
+(pseudo.c 25393-25400, `batch_0x422DDD.cpp:512-554`). That tail does four
+things, in this order, before the switch breaks out into the shared
+per-frame move loop:
 
-```c
-case 1:
-  *(_DWORD *)(v75 + 116) += dword_464958 * *(_DWORD *)(v75 + 112) / (unsigned int)dword_46494C;  // += speed
-LABEL_21:
-  *(_DWORD *)(v75 + 116) += 100;                          // budget += 100
-  *(_DWORD *)(v75 + 28) -= dword_45BECC[*(int *)(v75 + 42) >> 16];  // pos_x -= dir step  <-- ELIDED
-  *(_DWORD *)(v75 + 32) -= dword_45BEDC[*(int *)(v75 + 42) >> 16];  // pos_y -= dir step  <-- ELIDED
-  break;
-```
+| # | operation | note |
+|---|---|---|
+| 1 | *(case 1 only, i.e. an already-sliding kicked bomb)* `+116` (move budget) += this frame's ms delta `dword_464958` × the bomb's speed at `+112` ÷ `dword_46494C` (=50) — the divisor read as unsigned | `// += speed` |
+| 2 | `+116` (move budget) += 100 — flat, unconditional; this is the point case 0 (conveyor) falls in at | `// budget += 100` |
+| 3 | `+28` (pixel X) −= `dword_45BECC[dir]` | `// pos_x -= dir step` — **ELIDED by the original finding** |
+| 4 | `+32` (pixel Y) −= `dword_45BEDC[dir]` | `// pos_y -= dir step` — **ELIDED by the original finding** |
 
-The two elided lines are a **one-step position backoff**: before the shared
+`dir` in steps 3-4 is the bomb's own direction, taken as the high half of
+the dword at `+42`, indexing the same godir step tables the rest of the
+binary uses (`dword_45BECC` = x steps, `dword_45BEDC` = y steps).
+
+**What the earlier finding omitted, precisely:** it reproduced only steps 1
+and 2 (the speed accrual and the flat `+= 100`) and replaced the remainder
+with an ellipsis — so the two operations it dropped are exactly steps 3 and
+4, the paired X/Y position-backoff subtractions. Having only seen the two
+budget additions, it read the `+100` as a free per-frame speed bonus.
+
+Those two elided operations (steps 3-4) are a **one-step position
+backoff**: before the shared
 per-frame move loop runs, the bomb's position is stepped back one direction
 unit. The move loop spends budget at 100 units per step, so the `+= 100`
 funds exactly one step forward — which just re-establishes the position the
@@ -173,11 +180,13 @@ matches).
 
 **Original.** Case 0 (pseudo.c 25362-25392, `batch_0x422DDD.cpp:512-547`)
 is re-entered from the top of the per-bomb switch **every tick**, and
-re-checks whether the bomb's *current* tile still carries a conveyor actor
-(`v59 = sub_405654(col,row); if (v59 && v59[1]==2)`). If it does, the bomb
-is pushed (case 0's body, falling into the shared movement loop via
-`LABEL_21`, same as a kicked bomb). If it does **not** (the belt ended, or
-never started), the case falls straight to `goto LABEL_115` — **skipping
+re-checks whether the bomb's *current* tile still carries a conveyor actor:
+`sub_405654(col,row)` must return a stage-actor record **and** that
+record's kind field at `+4` must be 2 (conveyor). If it does, the bomb
+is pushed (case 0's body, falling into the shared slide tail — the same
+tail a kicked bomb uses, dissected under Finding 2). If it does **not**
+(the belt ended, or never started), the case jumps straight to the
+per-bomb epilogue — **skipping
 the entire movement loop for that tick** — and, critically, the bomb's
 motion word (`+46`) is **never written to 1** anywhere in case 0. So a
 conveyor-only bomb's motion state stays 0 forever; the moment its resting
@@ -186,7 +195,8 @@ processed — it does not carry kicked-bomb momentum onto the next tile.
 (Only `sub_42464B`, the kick handler, ever writes motion state 1 — see
 `batch_0x42459A.cpp:120-144`, pseudo.c 25815-25839.) Also visible from this:
 `sub_4247C5` ("kick + action2: stop my sliding bombs", pseudo.c 25877-25890)
-gates on `*(_WORD*)(v4+46) == 1` — motion state **1 specifically** — so the
+gates on the bomb's motion word at `+46` being exactly 1 — motion state
+**1 specifically** — so the
 "stop own bombs" ability can halt a kicked bomb but structurally **cannot**
 touch a conveyor-riding one (state stays 0).
 
@@ -232,27 +242,28 @@ unflagged arithmetic).
 
 **Original.** `sub_424B41` (pseudo.c 26027-26067,
 `batch_0x42459A.cpp:332-371`) scans for the OWNER's oldest live trigger
-bomb by minimum creation stamp, seeded with the **current** tick:
+bomb by minimum creation stamp, seeded with the **current** tick. The scan
+keeps two running accumulators and walks the bomb slots in order:
 
-```c
-v5 = dword_464994;   // this tick's stamp — the seed/threshold, not +infinity
-v6 = -1;
-...
-if ( ... && *(_DWORD *)(v4 + 64) < v5 )   // STRICTLY earlier than the running best
-{ v5 = *(_DWORD *)(v4 + 64); v6 = v3; }
-...
-if ( v6 != -1 ) sub_423209(...);          // only fires if something matched
-```
+| accumulator | seeded with | updated when |
+|---|---|---|
+| best stamp | `dword_464994` — **this tick's stamp**, used as the seed/threshold rather than +infinity | a candidate passes the owner/kind/motion filters **and** its creation stamp at `+64` is **strictly** less than the current best stamp |
+| best index | `-1` (no match) | same condition — takes that candidate's slot index |
 
-A bomb's creation stamp (`+64`) is set to `dword_464994` at placement time
-(`sub_422EDE`, pseudo.c 25113 `v18[16] = dword_464994;`). Since
-`dword_464994` only increases and is incremented once per frame *before*
-the player-action pass (`docs/re/facts.md` "Per-tick call order" step 3), a
-bomb placed **this same tick** has `+64 == v5` at the moment of the scan —
-which fails the strict `<` test. If a player's only candidate trigger
-bomb(s) were all placed this same tick, `v6` stays `-1` and **nothing
-detonates this tick** (the player must wait at least one tick before their
-freshly-placed trigger bomb becomes remote-detonable).
+After the walk, the chain-detonate call `sub_423209` fires **only if the
+best index is no longer `-1`** — i.e. only if something actually matched.
+
+A bomb's creation stamp (`+64`) is set from `dword_464994` at placement
+time (`sub_422EDE`, pseudo.c 25113, writes the current global stamp into
+the new bomb record's `+64` field). Since `dword_464994` only increases and
+is incremented once per frame *before* the player-action pass
+(`docs/re/facts.md` "Per-tick call order" step 3), a bomb placed **this
+same tick** has `+64` exactly equal to the seed value at the moment of the
+scan — which fails the strict "less than" test. If a player's only
+candidate trigger bomb(s) were all placed this same tick, the best index
+stays `-1` and **nothing detonates this tick** (the player must wait at
+least one tick before their freshly-placed trigger bomb becomes
+remote-detonable).
 
 **Port.** `BombSystem::detonate_triggered`
 (`bombs.cpp:196-218`) returns on the first matching bomb in vector order
@@ -323,7 +334,8 @@ cited deviation:
   and 1 both qualify (can grab your own sliding bomb); flying/carried
   excluded. Matches `try_grab` (`bombs.cpp:139-169`).
 - **Throw restarts the fuse from the creation-time duration, not the
-  frozen remnant** (`sub_41F29B` LABEL_246 `+68 = 0` before launch) —
+  frozen remnant** (`sub_41F29B`'s end-of-turn action tail zeroes the
+  fuse-elapsed word at `+68` before launch) —
   matches `throw_carried`'s use of `fuse_init` (`bombs.cpp:171-194`).
 - **Bomb/warphole reconciliation** — bombs never warp; a warphole tile
   blocks a sliding bomb exactly like a wall (`sub_4230A5`/`sub_423188`),
@@ -332,7 +344,8 @@ cited deviation:
   probe (`bombs.cpp:474-481`) and `fly()`'s landing verdict
   (`bombs.cpp:332-364`); extensively tested in `tests/test_stage_actors.cpp`.
 - **Dirarrow re-steer gated on exact tile-centre on both axes**
-  (`!v79 && !v80`, pseudo.c ~25532-25542) — matches `slide()`'s
+  (both of the original's x- and y-offset-from-centre locals must be zero,
+  pseudo.c ~25532-25542) — matches `slide()`'s
   `at_centre` check (`bombs.cpp:404-434`).
 - **Jelly bounce vs non-jelly stop** on both a blocked cell and a
   flame-contact — jelly reverses `(dir+2)&3` and keeps moving (ping-pong,
@@ -342,7 +355,8 @@ cited deviation:
   side `rand()%2`, rolled only once the bomb has travelled ≥3 tiles
   (`+72 >= 3`), only for kind==2. The port's per-hop `to_x/to_y`
   bounds check is structurally different from the original's per-pixel
-  `v66/v65` in-bounds check but provably equivalent at the only boundary
+  in-bounds test on its own scratch pixel coordinates, but provably
+  equivalent at the only boundary
   crossings that matter (crossings before the 3-tile threshold are inert
   in the original regardless of bounds, and the port's launch geometry
   already only checks at the hop-completing boundary). `bombs.cpp:271-283`.
@@ -383,7 +397,8 @@ cited deviation:
   (`k<4` direction fan, kick-safe-dir `+56` skip) live mostly in
   `flames.cpp` — this pass only touched the parts of that machinery visible
   from `bombs.cpp` (`queue_chain` call sites, `stop_pending`).
-- Case 3 of the bomb-mover switch (`*(WORD*)(v75+46)==3`, "punch-chain
+- Case 3 of the bomb-mover switch (the branch taken when the bomb's motion
+  word at `+46` is 3, "punch-chain
   link," `sub_424AF4`/`sub_42325D`, the `+148` mutual-link pointer and the
   effect-pool records `sub_422991`/`sub_422A9F`) appears to be network-sync
   bookkeeping (remote-client bomb reconciliation), not local gameplay

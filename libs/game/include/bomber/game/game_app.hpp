@@ -494,7 +494,8 @@ private:
     // key/mouse/pad input resets `menu_idle_since_ms_`'s deadline; hitting it
     // sets attract_, calls roll_attract_match() (the sub_4224E2 save + the
     // roster/stage rolls), and returns StartMatch exactly as if row 0 (Play)
-    // had been selected — matching the original's `v10 = 0` force. This is
+    // had been selected — matching the original's own force of the selected
+    // row back to 0. This is
     // presentation-level gating around the EXISTING Menu->StartMatch edge in
     // app_flow.hpp; no new AppState/AppInput was needed (task brief: prefer
     // the existing StartMatch edge). run_app's StartMatch handler checks
@@ -522,7 +523,8 @@ private:
     // In attract_ mode this ALSO returns MatchOver the instant ANY key,
     // mouse-button, or gamepad-button input arrives (docs/re/frontend-flow.md
     // "Attract mode" point 3 / doc's abort requirement, mirroring sub_42A3F6's
-    // round-loop tail `if (dword_464938) goto LABEL_34` on a keypress) — a
+    // round-loop tail, which jumps to LABEL_34 as soon as a keypress has set
+    // dword_464938) — a
     // real (non-attract) match only reacts to the specific keys already wired
     // above (Ctrl+Q, Esc, F1), so this abort check is additive and attract_-
     // gated, never firing for a human-played round. run_app's StartMatch

@@ -24,9 +24,10 @@
 // `sub_43C734(x, y, w, h, colormode=256, flags=0x14)` @0x42DC81, passing its
 // OWN a5/a6 straight through as x/y -- and sub_407582 passes the literal pair
 // (100, 100) @0x407641. sub_43C734 really is 6-arg (`ret 8` + the four Watcom
-// register args); its a1/a2 reach sub_43D398 @0x43C8C2, which bounds-checks
-// `[win+0x18] (width) + edx` against the right clip edge and `[win+0x1c]
-// (height) + ebx` against the bottom -- so a1 = x, a2 = y, decisively. This
+// register args); its a1/a2 reach sub_43D398 @0x43C8C2, which bounds-checks the
+// window's +0x18 width plus the first of them against the right clip edge, and
+// the +0x1c height plus the second against the bottom -- so a1 = x, a2 = y,
+// decisively. This
 // CONFIRMS the rescued `worktree-dialog-chrome-todo-re` branch (commit
 // 0c0b00d) and retires dialog_chrome.hpp's old "X is never an explicit
 // parameter anywhere in this family" note.
@@ -39,10 +40,11 @@
 namespace bomber::game {
 
 // sub_42DBCC's own visible-row count. @0x42DC44 it seeds TWO separate
-// counters: `[esp+0xA8] = 10` (the rows it will actually draw) and `ebp = 13`
-// (the font-height multiplier for the window it asks sub_43C734 for). Both are
-// decremented together when the window allocation fails (`cmp ebp, 8; jg`
-// @0x42DCA2 -> heights 13..9, rows 10..6), which cannot happen in the port.
+// counters: a stack slot set to 10 (the rows it will actually draw) and a
+// register set to 13 (the font-height multiplier for the window it asks
+// sub_43C734 for). Both are decremented together when the window allocation
+// fails — the retry @0x42DCA2 loops back only while that multiplier is still
+// above 8, i.e. heights 13..9 and rows 10..6 — which cannot happen in the port.
 // The invariant across that retry is `height_multiplier == rows + 3`, which is
 // what list_dialog_geometry() encodes.
 //
@@ -109,9 +111,10 @@ inline ListDialogGeometry list_dialog_geometry(int x, int y, int item_text_w, in
                                                int footer_lines = 0) {
     ListDialogGeometry g;
 
-    // @0x42DC24-0x42DC49: esi = itemw + 16; if textwidth(title) > esi then the
-    // title wins and itemw is bumped to keep `itemw + 16 == esi`; window width
-    // is esi + 20. So item_w is always win_w - 36.
+    // @0x42DC24-0x42DC49: a working width is taken as itemw + 16; if the
+    // title's text width exceeds it, the title wins and itemw is bumped so
+    // that itemw + 16 still equals that working width; the window width is
+    // that working width + 20. So item_w is always win_w - 36.
     g.win_x = x;
     g.win_y = y;
     g.win_w = list_dialog_width(item_text_w, title_w);

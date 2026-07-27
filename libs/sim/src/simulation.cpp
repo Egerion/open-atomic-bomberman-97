@@ -88,7 +88,8 @@ bool resolve_player_field(State& s, int i, PowerupSystem& powerups, DiseaseSyste
         // 5/6/7) — the same immunity already ported for the wall crush
         // (EnclosureSystem::drop_wall) and the rover landing kill. An immune
         // player falls through to the pickup below, exactly like the
-        // original's `!sub_41DE63(...)` continuation (pseudo.c 22915-22917).
+        // original, which falls on through whenever sub_41DE63 reports no kill
+        // (pseudo.c 22915-22917).
         if (p.bounce == 0 && p.warp == 0) {
             p.alive = false;
             if (p.carrying) {
@@ -209,7 +210,7 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
     // The tick's EFFECTIVE input for the bomb-action tail: a human's sample
     // as-is; for an AI, the action-key edges are OR-accumulated from its
     // per-sub-frame decisions in the loop below (the original consumes +56/
-    // +57 in the same frame's LABEL_246; our tail runs once per tick, so a
+    // +57 in the same frame's bomb-action tail; our tail runs once per tick, so a
     // press in any sub-frame must survive to it).
     PlayerInput in = tick_in;
 
@@ -228,7 +229,8 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
     // fields and facts.md "Player state machine (+78) — COMPLETE". They used
     // to share one field (`stun`), which meant a grab clobbered an
     // in-progress head-stun countdown (or vice versa); split 2026-07-11.
-    // Either counter clears v113 in the original (sub_41F29B ~22981-23027),
+    // Either counter clears the original's new-input flag (sub_41F29B
+    // ~22981-23027),
     // blocking ONLY new-input acquisition — the sub_41E61E / AI-decide call
     // that would set a new direction (+46) and the bomb-key bytes (+56/+57) —
     // plus one cosmetic standing-anim pick (~23086). Neither gates the mover:
@@ -258,26 +260,28 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
     const bool paused = p.pickup_pause > 0;
     if (advance_timers && p.pickup_pause > 0) --p.pickup_pause;
 
-    // The four LABEL_246 blocks (sub_41F29B 23277-23380), in the original's
+    // The four blocks of sub_41F29B's bomb-action tail (23277-23380), in the original's
     // exact order: auto-drop force (diarrhea +135 / super +137) -> carried-
     // bomb throw (+37) -> action2 edge (kick-stop +89 / punch +91 / trigger
     // +95) -> drop edge (grab +92 / spooge +93 / plain drop), gated !+134.
     // CONFIRMED (facts.md "Player state machine (+78) — COMPLETE" and
-    // "Diarrhea/super auto-drop x grab-glove"): LABEL_246 runs on EVERY alive
+    // "Diarrhea/super auto-drop x grab-glove"): the tail runs on EVERY alive
     // tick regardless of the +78 state — state 5 (bounce) reaches it via an
-    // explicit `goto LABEL_246` (23198), states 6/7 (warp out/in) and 20-39
-    // fall through LABEL_239 into it, and nothing in the v113 gate (the ONE
+    // explicit jump straight into it (23198), states 6/7 (warp out/in) and 20-39
+    // fall through the state-dispatch join just above it, and nothing in the
+    // new-input gate (the ONE
     // thing a head-hit stun / grab pause / bounce / warp actually blocks)
-    // touches LABEL_246 itself — v113 only guards the EARLIER new-input
+    // touches the tail itself — that gate only guards the EARLIER new-input
     // acquisition call that would set the raw key bytes +56/+57 from the
     // controller. `blocked` mirrors that: while blocked, this tick's
     // effective key bytes start at their per-tick reset of 0 (22976-22979,
     // which the original runs unconditionally every alive tick, so a fresh
     // edge NEVER materialises while acquisition is skipped) UNLESS the
     // auto-drop disease force overrides +56=1 below (that override lives
-    // INSIDE LABEL_246 itself, so it fires regardless of `blocked`). This is
-    // why a carried bomb is released on the very first blocked tick (`!+56`
-    // reads true immediately — the release-throw the user can trigger by
+    // INSIDE the tail itself, so it fires regardless of `blocked`). This is
+    // why a carried bomb is released on the very first blocked tick (the
+    // throw's "key not down" test on +56 passes immediately — the
+    // release-throw the user can trigger by
     // walking into a head-stun while carrying) and why the diarrhea/super
     // auto-drop keeps cycling grab/throw/drop straight through a stun or a
     // bounce/warp flight, while a genuine NEW manual action (kick-stop/punch/
@@ -296,7 +300,7 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
     // p.prev_action1/2 (the original's +54/+55) are updated HERE, to the
     // EFFECTIVE key values just used (post auto-drop-force, post blocked-
     // zeroing) — not the raw controller input — mirroring the original's
-    // literal `+54 = +56` copy at the top of the NEXT tick. This also fixes a
+    // literal copy of +56 into +54 at the top of the NEXT tick. This also fixes a
     // latent divergence: the previous port latched the RAW `in.action1/2`
     // unconditionally, which only matched the original whenever auto-drop
     // was inactive (auto-drop's own in-block override made the raw-vs-
@@ -311,14 +315,15 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
         const bool a2_last = p.prev_action2;                                     // +55
         const bool drop_edge = a1_now && !a1_last;
 
-        // (2) Throw block (`+37`): a carried bomb is thrown when auto-drop forces
-        //     it (v112) OR the key is released (`!+56`) — not gated by
+        // (2) Throw block (the +37 carrying flag): a carried bomb is thrown when
+        //     the auto-drop force fires OR the key is released (+56 clear) — not gated by
         //     constipation. While blocked (and not auto-dropping) `a1_now` is
         //     always false, so this fires on the FIRST blocked tick.
         if (p.carrying) {
             if (auto_drop || !a1_now) bombs.throw_carried(p, i);
         }
-        // (3) Action2 (`+57 && !+55`): stop own sliding bombs, punch, trigger-
+        // (3) Action2 (a fresh edge: +57 set with the previous-frame copy +55
+        //     clear): stop own sliding bombs, punch, trigger-
         //     detonate. `a2_now` is forced false while blocked, so this never
         //     fires without a fresh real key press.
         if (a2_now && !a2_last) {
@@ -326,7 +331,8 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
             if (p.punch && !a1_now) bombs.try_punch(p, static_cast<std::uint8_t>(i));
             if (p.trigger) bombs.detonate_triggered(i);
         }
-        // (4) Drop block (`+56 && !+54 && !+134`): grab own bomb underfoot, else
+        // (4) Drop block (a fresh edge: +56 set with the previous-frame copy +54
+        //     clear, and the constipation flag +134 clear): grab own bomb underfoot, else
         //     spooger line (suppressed under auto-drop), else plain drop. Only
         //     THIS block is gated by constipation. While blocked, only the
         //     auto-drop-forced edge can reach it.
@@ -351,12 +357,14 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
     // an in-place bounce; see docs/re/stage-actors.md §4). The apex relocation draws
     // RNG, so it runs here inside the state gate, before any other per-tick draw.
     //
-    // CONFIRMED (pseudo.c ~23198/23248, the v86==5 branch's `goto LABEL_246` and
-    // the fall-through from states 6/7 into the same label): the original's
-    // LABEL_246 — all four blocks, not just the carried-bomb throw-release check
+    // CONFIRMED (pseudo.c ~23198/23248, the state-5 branch's jump straight into
+    // the bomb-action tail and
+    // the fall-through from states 6/7 into that same tail): the original's
+    // tail — all four blocks, not just the carried-bomb throw-release check
     // — is NOT skipped during a bounce or warp; it runs every tick regardless of
     // +78. Because input is fully blocked the whole time (+56 stays 0, never
-    // re-set, unless auto-drop forces it), `!+56` is true from the very first
+    // re-set, unless auto-drop forces it), the throw's "+56 clear" test passes
+    // from the very first
     // tick, so a player who enters a bounce/warp WHILE CARRYING has the bomb
     // thrown at their current tile almost immediately, not held through the
     // whole flight — and a diarrhea/super auto-drop keeps grabbing/throwing/
@@ -399,8 +407,8 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
     // the fix for the "stuck on entering a warp" report: the prior instantaneous
     // teleport skipped these phases; now the player warps and, once warp==0, moves
     // again. See docs/re/stage-actors.md §5. Bomb actions: see the bounce branch
-    // above (same LABEL_246 fall-through argument, incl. the pickup-pause carve-
-    // out, applies to states 6/7).
+    // above (the same bomb-action-tail fall-through argument, incl. the
+    // pickup-pause carve-out, applies to states 6/7).
     if (stage.warping(p)) {
         // Same per-frame +58 + ice-buffer note as the bounce branch above.
         for (int f = 0; f < n_sub; ++f) {
@@ -425,21 +433,23 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
     // canonical 60 fps frame: acquire (the AI re-decides — its whims and
     // timers run at frame rate), decode, push the ice buffer, accrue
     // frame_budget(speed, delta) and step the per-pixel mover. The
-    // bomb-action tail (LABEL_246) stays once per tick after the loop: its
+    // bomb-action tail stays once per tick after the loop: its
     // blocks are edge-gated, so the only cadence difference is the auto-drop
     // diseases' intra-tick attempt density (documented in the same entry).
     FieldCtx fctx{&s, i, &powerups, &diseases};
-    // Round-start input freeze (dword_4621E0, sub_41F29B's `v113 &&
-    // !dword_4621E0` gate at 23028): while it runs, the AI brain and the
+    // Round-start input freeze (dword_4621E0; sub_41F29B's acquisition gate at
+    // 23028 demands the new-input flag be set AND dword_4621E0 be zero): while
+    // it runs, the AI brain and the
     // human input read are BOTH skipped — same slot as the stun gate below,
     // but without consuming stun (their countdowns are independent). Stage
-    // actors, the ice-buffer flow and the LABEL_246 tail (with its inputs
+    // actors, the ice-buffer flow and the bomb-action tail (with its inputs
     // dead, so only auto-drop can act) all run normally underneath it.
     const bool frozen = s.input_freeze > 0;
     std::int32_t walk_budget = 0;  // summed accruals -> the PlayerWalking event
     for (int sub = 0; sub < n_sub; ++sub) {
-        // +58 head-stun: gate first, then decrement — the original's
-        // per-frame `if (+58 > 0) { v113 = 0; --+58; }` (22982-22984).
+        // +58 head-stun: gate first, then decrement — the original's per-frame
+        // block at 22982-22984 clears the new-input flag and decrements +58
+        // whenever +58 is above zero, in that order.
         const bool sub_stunned = p.stun > 0 || paused;
         if (p.stun > 0) --p.stun;
         // A flight entered in an earlier sub-frame (trampoline/warp step-on
@@ -454,7 +464,7 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
         }
 
         // Acquisition. A computer player's brain runs HERE, once per frame
-        // (sub_40A1C6 in sub_41F29B's v113-gated slot — an AI blocked by
+        // (sub_40A1C6 in sub_41F29B's new-input-gated slot — an AI blocked by
         // stun/pickup-pause must draw NOTHING this frame, same as the
         // original skipping the call outright); its action-key presses are
         // OR-latched into `in` for the once-per-tick tail below.
@@ -466,19 +476,21 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
         }
 
         // Input decode -> want_godir (0=Up,1=Right,2=Down,3=Left, -1 = none).
-        // A stunned player acquires NO new direction: the v113 gate skips
+        // A stunned player acquires NO new direction: the new-input gate skips
         // sub_41E61E, so its input direction is not updated this frame. Force
         // want_godir = -1 and skip the whole opposite-key / reversed-disease
         // decode for it — the mover then takes the idle branch (stage actors
         // still drive it), never a keyed one.
         // Rebuilding want_godir = -1 fresh each sub-frame IS faithful: sub_41F29B
-        // resets the native input direction +46 (`v111[23] = -1`, the word at
-        // offset 46) UNCONDITIONALLY at the top of every per-frame pass
-        // (batch_0x41F29B.cpp:329), BEFORE the input gate re-writes it — so a
+        // resets the native input direction to -1 UNCONDITIONALLY at the top of
+        // every per-frame pass (batch_0x41F29B.cpp:329) — the write is indexed
+        // as word 23 of the player record, i.e. byte offset +46 — BEFORE the
+        // input gate re-writes it, so a
         // human who holds no key, or an AI whose behaviour chain commits no
-        // direction, is left at -1 and STOPS (the `+46 != -1` movement gate at
-        // :394 fails). The W3-A audit's "+46 is sticky / never reset" claim was
-        // a FALSE POSITIVE (2026-07-22): its `"+ 46) ="` grep missed this
+        // direction, is left at -1 and STOPS (the movement gate at :394 requires
+        // +46 != -1 and so fails). The W3-A audit's "+46 is sticky / never reset"
+        // claim was a FALSE POSITIVE (2026-07-22): its grep for a byte-offset
+        // write to +46 missed this
         // index-notation reset. So the port's stop-when-the-chain-writes-nothing
         // is exact, not a divergence — verified, no change.
         int want_godir = -1;
@@ -487,7 +499,8 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
                        right = sub_in.right;
 
             // Opposite-key resolution, faithful to the original input decoder
-            // (sub_41E61E, LABEL_58): collect the four direction flags in GODIR
+            // (sub_41E61E, its multi-key resolution block): collect the four
+            // direction flags in GODIR
             // order (0=Up,1=Right,2=Down,3=Left); if more than one is pressed and
             // at least one leads to an open tile, drop the pressed dirs that are
             // blocked; then the LAST surviving index wins. That last-index bias
@@ -556,8 +569,8 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
         // tail (pseudo.c 22699-22717): flame death then pickup at every pixel
         // step. A mid-move kill abandons the rest of the budget AND the rest
         // of this turn (the original returns straight into the death branch,
-        // skipping the kick probe, the step-on latches and LABEL_246's bomb
-        // actions). A mid-move pickup is usable the SAME tick — it lands
+        // skipping the kick probe, the step-on latches and the bomb-action
+        // tail). A mid-move pickup is usable the SAME tick — it lands
         // before the bomb-action block below. docs/re/facts.md "Per-tick call
         // order — END-TO-END" finding 1.
         stage.move_on_actor(p, eff_godir, moving, sched[sub], &on_move_pixel, &fctx);
@@ -566,12 +579,13 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
             p.prev_action2 = in.action2;
             return;
         }
-        // Kick probe (sub_41EC84 `!v35` branch): the kick fires whenever the
+        // Kick probe (the branch sub_41EC84 takes when its offset-to-tile-centre
+        // temporary is zero): the kick fires whenever the
         // player sits EXACTLY on the tile centre along the travel axis with a
         // bomb directly ahead — evaluated inside the pixel loop, so a player
         // WALKING into a bomb kicks it on the ARRIVAL tick (the mover pins
-        // them at the centre; the same-tick loop iteration with v35 == 0
-        // dispatches sub_424708), not one tick later as the old stall gate
+        // them at the centre; the same-tick loop iteration, with that offset
+        // now zero, dispatches sub_424708), not one tick later as the old stall gate
         // did. Post-move "centred along the axis" is the same predicate: a
         // blocked player cannot end the tick anywhere else, and a re-probe
         // while parked matches the original's every-iteration re-kick (a
@@ -626,17 +640,18 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
     // A settle on a trampoline centre launches an in-place hop; a settle on a
     // warphole centre teleports to the linked exit (no RNG). Both use a one-shot
     // latch (cleared on leaving the tile) so a player parked on the tile fires
-    // exactly once, mirroring the original's centring trigger (v35 == -1).
+    // exactly once, mirroring the original's centring trigger (its
+    // offset-to-tile-centre temporary reaching -1).
     stage.trampoline_after_move(p, i);
     stage.warphole_after_move(p, i);
 
-    // The bomb key (action1) and action key (action2) drive the four LABEL_246
-    // blocks (auto-drop force, throw, action2, drop) — see the shared
+    // The bomb key (action1) and action key (action2) drive the four
+    // bomb-action-tail blocks (auto-drop force, throw, action2, drop) — see the shared
     // `bomb_actions` lambda defined above (with its full citation) for the exact
     // semantics. A head-hit stun (p.stun>0) maps to `blocked=true`: new-input
     // acquisition never ran this tick, so the key bytes are at their per-tick 0
     // reset (unless auto-drop overrides them), exactly matching the original's
-    // LABEL_246 reached from ANY player state. p.pickup_pause>0 instead fully
+    // tail as reached from ANY player state. p.pickup_pause>0 instead fully
     // skips `bomb_actions` (its own, different, forced-HELD rule — see the
     // carve-out comment above); the two never coincide entering this tail
     // (a fresh grab needs an input edge, which stun already blocks, and
@@ -645,11 +660,11 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
         p.prev_action1 = in.action1;
         p.prev_action2 = in.action2;
     } else {
-        // The round-start freeze reaches LABEL_246 with the key bytes never
-        // acquired (their per-frame 0 reset stands), exactly like a stun tick
-        // — blocked=true reproduces that; auto-drop still overrides, as the
-        // original's v112 force is computed at LABEL_246 itself, outside the
-        // acquisition gate.
+        // The round-start freeze reaches the bomb-action tail with the key bytes
+        // never acquired (their per-frame 0 reset stands), exactly like a stun
+        // tick — blocked=true reproduces that; auto-drop still overrides, as the
+        // original computes its forced-drop flag inside the tail itself, outside
+        // the acquisition gate.
         bomb_actions(/*blocked=*/p.stun > 0 || frozen);
     }
 }
@@ -730,9 +745,10 @@ void run_tick(State& s, const TickInputs& inputs, Cadence cad = {},
         // movement in slot order, as the original interleaves the brain and
         // the mover per player.
         //
-        // The original gates the dispatch (including draws A/B) on `v113 &&
-        // !dword_4621E0` (sub_41F29B ~23028) — head-hit stun, pickup-pause,
-        // and the flight states 5/6/7 all clear v113 (see player_turn's
+        // The original gates the dispatch (including draws A/B) on its new-input
+        // flag being set AND dword_4621E0 being zero (sub_41F29B ~23028) —
+        // head-hit stun, pickup-pause,
+        // and the flight states 5/6/7 all clear that flag (see player_turn's
         // sub-frame loop, which re-evaluates that gate per frame; a blocked
         // AI draws NOTHING that frame, the same as the original skipping the
         // call outright — RESOLVED, docs/re/ai.md §2/§7; facts.md "Player
@@ -791,9 +807,10 @@ void run_tick(State& s, const TickInputs& inputs, Cadence cad = {},
     // switch cases BEFORE the 25603 gate) is NOT frozen; only the fuse/
     // explosion/chain tail is.
     //
-    // The SAME `sub_421969() > 1` predicate is the TOP-LEVEL gate of the
-    // enclosure stepper sub_426818 (native/src/game/batch_0x42583B.cpp lines
-    // 678-679: `result = sub_421969(); if (result > 1) { ...everything... }`),
+    // The SAME "sub_421969() > 1" predicate is the TOP-LEVEL gate of the
+    // enclosure stepper sub_426818: at native/src/game/batch_0x42583B.cpp lines
+    // 678-679 the routine calls sub_421969 first and wraps its ENTIRE body in a
+    // "greater than 1" test on the result,
     // so the closing walls and the per-level tile regen inside it freeze on the
     // very same edge — see step 8. Both sites read the same latched
     // dword_4621D4 that the frame's player pass (sub_420F07) just recomputed,
@@ -806,8 +823,9 @@ void run_tick(State& s, const TickInputs& inputs, Cadence cad = {},
     // bomb, a trigger-button press, a flying bomb landing on flame, or a
     // sliding bomb entering flame all QUEUE their target instead of
     // exploding it synchronously. The original drains this queue once, at
-    // the very top of its per-frame bomb pass (`sub_42331C`'s
-    // `dword_462210 != dword_464994` guard) — the first bomb phase after
+    // the very top of its per-frame bomb pass (sub_42331C runs the drain only
+    // when its queue stamp dword_462210 differs from the current tick counter
+    // dword_464994) — the first bomb phase after
     // the player pass in the rotated stream — so a trigger-button press
     // (queued during step 1, above) is caught by THIS drain with no player
     // move in between, while a flame-arm/slide/landing hit (queued during
@@ -850,7 +868,7 @@ void run_tick(State& s, const TickInputs& inputs, Cadence cad = {},
     // enclosure F2 (docs/re/enclosure.md §8, rewritten 2026-07-26):
     // sub_426818's whole body — the per-level regen call sub_426704, the
     // arm/disarm edge, the fading preview, and the 250 ms drop loop — sits
-    // inside `if (sub_421969() > 1)` (native batch_0x42583B.cpp lines
+    // inside the same "sub_421969() > 1" test (native batch_0x42583B.cpp lines
     // 678-682). So once the round is decided down to <= 1 side the spiral
     // STOPS DEAD, on the same edge that freezes the bombs, and it never
     // restarts (sub_421969 only falls further; the outer match loop also

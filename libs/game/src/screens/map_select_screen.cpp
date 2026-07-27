@@ -62,7 +62,7 @@ AppInput MapSelectScreen::run() {
     const int pxsize = static_cast<int>(ctx_.values.column_or(730, 2, 5));
     const int pysize = static_cast<int>(ctx_.values.column_or(730, 3, 5));
 
-    int row = 0;  // 0 = level, 1 = wins (v34 = 2 rows in sub_406DDE)
+    int row = 0;  // 0 = level, 1 = wins (sub_406DDE navigates exactly 2 rows)
     // WORKING COPIES (sub_406DDE 8092-8093: dword_45E0B8/45E0B4 seeded from
     // the committed globals on entry): edits touch only these; Enter/Space
     // commits them (LABEL_101, 8261-8271) and Escape DISCARDS them — the old
@@ -76,7 +76,8 @@ AppInput MapSelectScreen::run() {
     std::uint64_t accept_after_ms = SDL_GetTicks() + 1000;
     // The sample-block pattern (which cells are blank/solid/brick, and which
     // level's tile art each drawn cell uses) is re-rolled only on screen
-    // entry and on a LEVEL row change (sub_406AA3's v35 re-arm), NEVER every
+    // entry and on a LEVEL row change (sub_406AA3 re-arms its own roll flag
+    // there), NEVER every
     // frame — pinned in the doc above. -2 is a sentinel forcing the first
     // roll below.
     int pattern_level = -2;
@@ -105,7 +106,7 @@ AppInput MapSelectScreen::run() {
     // lambda so the F1 help browser composites over the identical frame.
     auto draw_frame = [&]() {
         // Re-roll the sample-block pattern on entry and whenever the LEVEL
-        // changes (sub_406AA3's v35 re-arm) — never every frame.
+        // changes (sub_406AA3 re-arms its own roll flag) — never every frame.
         if (level != pattern_level) {
             pattern_level = level;
             int max_n = level_count > 1 ? level_count : 1;
@@ -147,7 +148,8 @@ AppInput MapSelectScreen::run() {
         // 2026-07-12): border fill = the general WHITE byte_49D38F —
         // (240,248,252), NOT the old invented (40,40,60) — at (378,80,
         // 224x202); the field swatch is a 1:1 CROP of FIELDn.PCX starting 48
-        // rows down (the `&v17[12*640]` int-indexing = 48 scanlines; NOT a
+        // rows down (the source is taken 12*640 int-sized steps into the
+        // 640-byte-wide bitmap — 4 bytes a step, so 48 scanlines; NOT a
         // stretch — sub_4428B4 is a plain rect copy), 220x198 at (380,82),
         // which lines the backdrop's own board grid up under the drawn
         // tiles; then the 5x5 solid/brick grid at native 40x36 cells.

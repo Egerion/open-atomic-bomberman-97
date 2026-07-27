@@ -113,7 +113,8 @@ void inject_kicked_bomb(State& s, bool jelly = false) {
 // CONVEYOR scenario (bombs F2 belt speed + F3 belt-exit freeze): a short EAST
 // belt on tiles (2,0)+(3,0) with open floor at (4,0)+, and a RESTING bomb
 // (motion 0, NOT kicked) on the belt's first tile. The belt pushes it east at
-// the base conveyor_speed() (the LABEL_21 +100 is backoff-cancelled) and it
+// the base conveyor_speed() (sub_42331C's shared slide tail adds 100 to the
+// move budget, but its one-step position backoff cancels it) and it
 // FREEZES the instant it steps off the belt onto (4,0). The native oracle sets
 // up the identical belt (sub_404E3C actor records) + resting bomb.
 void inject_belt_bomb(State& s) {

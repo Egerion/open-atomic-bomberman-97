@@ -32,26 +32,23 @@ excerpts).
 ## Finding 1 — Explosion arm direction iteration order does not match the original's ascending godir order
 
 **Original**: `sub_42331C`'s explosion block, `native/src/game/batch_0x422DDD.cpp`
-lines 815-881 (pseudo.c ~25617-25678):
+lines 815-881 (pseudo.c ~25617-25678). The structure, in execution order:
 
-```c
-for ( k = 0; k < 4; ++k )
-{
-  if ( !*(_BYTE *)(v75 + 56) || k + 1 != *(unsigned __int8 *)(v75 + 56) )
-  {
-    v54 = sub_42665C(*(_DWORD *)(v75 + 28));   // epicentre x
-    v53 = sub_4266A3(*(_DWORD *)(v75 + 32));   // epicentre y
-    sub_426FCC(v54, v53, ..., 8, ...);          // epicentre re-ignite
-    ...powerup destroy on epicentre...
-    for ( m = 0; *(unsigned __int8 *)(v75 + 76) > m; ++m )
-    {
-      v54 += dword_45BECC[k];
-      v53 += dword_45BEDC[k];
-      ...bomb/powerup/solid/brick/blank arm-tile logic...
-    }
-  }
-}
-```
+- **Outer loop**: `k` counts **0, 1, 2, 3 ascending**.
+- **Skip guard**: the direction is processed unless the bomb's kick-safe-dir
+  byte at `+56` is nonzero **and** equals `k + 1` (the byte stores the
+  skipped direction 1-based, 0 meaning "skip nothing").
+- Per direction actually processed, in this order:
+  1. Arm cursor **x** ← tile-x of the bomb's pixel X at `+28`, via
+     `sub_42665C` *(`// epicentre x`)*; arm cursor **y** ← tile-y of the
+     bomb's pixel Y at `+32`, via `sub_4266A3` *(`// epicentre y`)*.
+  2. `sub_426FCC(x, y, …, 8, …)` — the **epicentre re-ignite**, kind 8
+     *(`// epicentre re-ignite`)*.
+  3. **powerup destroy on the epicentre**.
+  4. **Inner arm loop**: `m` counts up from 0 while `m` is less than the
+     bomb's reach byte at `+76`. Each iteration first advances the cursor —
+     `x += dword_45BECC[k]`, `y += dword_45BEDC[k]` — and then runs the
+     per-tile **bomb / powerup / solid / brick / blank arm-tile logic**.
 
 `k` is used directly as the index into `dword_45BECC`/`dword_45BEDC`
 (confirmed values `{0,1,0,-1}`/`{-1,0,1,0}`, `docs/re/facts.md` lines
@@ -135,13 +132,15 @@ exactly as the port already does.**
 
 The gap in the original analysis: the arm's per-tile check order in
 `sub_42331C` (`batch_0x422DDD.cpp:837-872`) is bomb → **VISIBLE powerup** →
-solid → brick. The visible-powerup branch at lines 849-861 —
-`v49 = sub_42542D(x,y); if (v49 && *v49 == 2) { …destroy…; break; }` — fires on
+solid → brick. The visible-powerup branch at lines 849-861 — query the
+tile's powerup record with `sub_42542D(x,y)`, and if a record comes back
+**and** its state byte at `+0` is 2, destroy the token and `break` the arm —
+fires on
 a token whose state byte is 2 (revealed) REGARDLESS of the cell still being a
 crumbling brick (`sub_42542D` returns the record for any non-empty state and
 does not consult the cell type). It `break`s the arm BEFORE the brick branch at
 line 865 that calls `sub_425107`. So once the FIRST hit has revealed the token
-(`sub_425107`'s `LABEL_33` flips state 1→2), a SECOND arm reaching the same
+(`sub_425107`'s unconditional reveal tail flips state 1→2), a SECOND arm reaching the same
 still-crumbling tile hits line 850, burns the now-visible token, and stops —
 `sub_425107` is never entered again, and its kind-based relocate gate never
 gets the chance to re-fire. (This is exactly the "visible floor powerup
@@ -156,9 +155,10 @@ burns it and stops in the port too. Both sides agree: no relocate on re-hit,
 no RNG drawn, token destroyed. **No code change; no golden move.**
 
 Separately noted while confirming the draw picture (OUT OF SCOPE, pre-existing,
-not introduced here): `sub_425107` opens with an UNCONDITIONAL
-`if (!(rand_() % 30)) sub_42BE0B();` cure roll (`batch_0x42459A.cpp:587`,
-pseudo.c 26290) on EVERY brick reveal. The port's brick-reveal path draws no
+not introduced here): `sub_425107` opens with an UNCONDITIONAL cure roll on
+EVERY brick reveal — it draws `rand() % 30` and, on a 0 (1-in-30), calls the
+cure helper `sub_42BE0B` (`batch_0x42459A.cpp:587`,
+pseudo.c 26290). The port's brick-reveal path draws no
 such value — a systematic RNG-count omission on every brick ignite, orthogonal
 to this finding and to batch 2. Flagged for a future batch (fixing it re-shifts
 every golden with bricks).
@@ -169,34 +169,40 @@ every golden with bricks).
 
 **Original**: `sub_425107`, `native/src/game/batch_0x42459A.cpp` lines
 571-644 (pseudo.c 26274-26343). The relocate gate reads only the powerup
-record's **kind** field, never its **state** byte:
+record's **kind** field, never its **state** byte. Record layout and order
+of operations:
 
-```c
-v12 = (_DWORD *)(...);              // this cell's powerup record (state @+0, kind @+4)
-if ( !sub_40C06A() )
-{
-  v3 = sub_4105B0(); v2 = sub_412135(102);
-  if ( v3 < v2 )                    // within overpowered_relocate_seconds
-  {
-    v5 = v12[1];                    // KIND — read unconditionally, regardless of v12[0] (state)
-    if ( v5 >= 5 && (v5 <= 6 || v5 == 11) )
-    { /* pass 1: 200-try swap; pass 2: 200-try move */ }
-  }
-}
-LABEL_33:
-if ( *v12 == 1 )                    // reveal only gates on STATE == 1 (hidden)
-{ v12[16] = dword_464994; *v12 = 2; }
-```
+| record field | offset | role here |
+|---|---|---|
+| state | `+0` | 0 = empty, 1 = hidden (under a brick), 2 = revealed on the floor |
+| kind | `+4` | the powerup type; **the only field the relocate gate reads** |
+| reveal stamp | `+64` | written with `dword_464994` at the moment of reveal |
+
+1. Take this cell's powerup record.
+2. If `sub_40C06A()` (the net-role predicate) is false — always, locally:
+   - read the elapsed match seconds (`sub_4105B0`) and the deadline
+     `getvalue(102)` (`sub_412135(102)`);
+   - if elapsed < deadline (i.e. still *within
+     `overpowered_relocate_seconds`*), read the record's **KIND** at `+4` —
+     read unconditionally, **regardless of the state byte at `+0`** — and if
+     that kind is >= 5 and (<= 6 or == 11), run pass 1 (200-try swap) and
+     then pass 2 (200-try move).
+3. **Unconditional tail** (reached whether or not step 2's relocate ran, and
+   the only place the state byte is consulted): if the state at `+0` is 1
+   (hidden), stamp `dword_464994` into `+64` and set the state to 2. *The
+   reveal gates on STATE == 1 and nothing else.*
 
 Because `sub_425EFC`'s cell-type flip is a same-call no-op (already
 established, "Brick crumble timing"), a brick stays `Cell::Brick` for the
 whole `brick_burn_frames` window — so a **second** flame arm reaching the
 SAME tile before the crumble finishes re-enters this same brick branch and
 calls `sub_425107` again. If the FIRST hit already revealed the token
-(`*v12` flipped 1→2), this SECOND call's relocate gate still fires purely
-off `v12[1]` (the kind, untouched by the reveal) — it does not check
-`*v12` at all. Pass 1's swap is a raw 152-byte struct copy
-(`qmemcpy(v4,v12,152); qmemcpy(v12,v9,0x98); qmemcpy(v9,v4,0x98)`) that
+(the state byte at `+0` flipped 1→2), this SECOND call's relocate gate
+still fires purely off the kind at `+4` (untouched by the reveal) — it does
+not consult the state byte at all. Pass 1's swap is a raw three-way
+152-byte (0x98) record copy through a scratch buffer — this cell's record
+into scratch, the candidate's record into this cell, scratch into the
+candidate — which
 carries the STATE byte along with the kind, so an already-visible
 overpowered token can be swapped away (potentially replaced by whatever
 the candidate held, in whatever state — visible or hidden — the candidate
@@ -271,14 +277,15 @@ lower priority than Finding 1.
 ## Informational (out of scope here, flagged for the renderer audit, ledger item #9)
 
 **Brick-burn cells carry no colour in `State`.** `sub_426FCC`'s brick-branch
-call (`native/src/game/batch_0x422DDD.cpp` line 867,
-`sub_426FCC(v54, v53, *(_BYTE*)(v75+60), 9, -1)`) still passes the
+call (`native/src/game/batch_0x422DDD.cpp` line 867) passes, in order, the
+arm cursor's tile x and y, the exploding bomb's colour byte read from `+60`,
+kind 9, and owner `-1` — so it still passes the
 exploding bomb's **colour** byte (owner is explicitly `-1`/unowned, which
 is inert — nothing ever reads a kind-9 cell's owner, since a player can
 never physically stand on a still-`Brick` tile and the two bomb-related
 kind-9 exemptions already skip it, "Chain-reaction timing"). `sub_426D06`'s
-kind-9 draw branch (`native/src/game/batch_0x426C4C.cpp` line 267,
-`v11 = *(unsigned __int8*)(v16+60)`) reads that colour byte for the blit —
+kind-9 draw branch (`native/src/game/batch_0x426C4C.cpp` line 267) reads
+that same colour byte back out of the cell record's `+60` for the blit —
 so brick-burn animations ARE tinted with the exploding bomb's colour in the
 original, same as real flame. `State::burning` (`state.hpp` line 104) is a
 bare `uint8_t` countdown with no paired colour array (unlike `flame`'s
@@ -334,7 +341,7 @@ meta-system (lifetime stats file, not per-match sim state), not a
   true no-op, confirmed again directly in
   `native/src/game/batch_0x42583B.cpp` lines 385-407); the hidden powerup
   reveals immediately at ignition, well before the tile opens
-  (`sub_425107`'s unconditional `LABEL_33` tail); a re-hit mid-crumble
+  (`sub_425107`'s unconditional reveal tail); a re-hit mid-crumble
   re-enters the brick branch and resets the timer (re-confirmed: cell type
   is still `Brick` at the re-hit, so `spread_to` naturally re-enters that
   branch — no separate "already burning" guard exists in either the
@@ -351,17 +358,21 @@ meta-system (lifetime stats file, not per-match sim state), not a
   separate parameters (`a3`=colour byte, `a5`=owner hiword,
   `native/src/game/batch_0x426C4C.cpp` lines 284-310) and the arm-hit
   transfer's single `+62`-word write (`native/src/game/batch_0x422DDD.cpp`
-  line 840, `*(_WORD*)(v48+62) = *(_WORD*)(v75+62)` — the colour byte at
+  line 840 copies the owner word at `+62` from the exploding bomb's record
+  into the chained bomb's record — and only that word; the colour byte at
   `+60` is untouched). Matches the existing "Bomb/flame colour is not the
   owner" facts.md entry and `flames.cpp`'s `Bomb::colour`/`flame_colour`
   fields.
 - **`age_flames_and_bricks`**: per-cell independent decrement (no RNG, no
   cross-cell interaction), cell-type flip guarded on still reading `Brick`
-  — matches `sub_426D06`'s `if (sub_425FB9(j,i)==2) sub_425E9B(j,i,0)`
-  guard (`native/src/game/batch_0x426C4C.cpp` line 210-211) and the
+  — matches `sub_426D06`'s guard, which only writes the cell state back to
+  0 (via `sub_425E9B`) when the tile-state query `sub_425FB9(col,row)`
+  still returns 2 = brick
+  (`native/src/game/batch_0x426C4C.cpp` line 210-211) — and the
   already-confirmed "Flame/burn frame pacing" timing (both real-flame and
-  brick-burn expire on `elapsed_ms > tuning_frames * 50ms`, read via the
-  original's `*(int*)(cell+66)>>16` idiom — a decompiler-visible but
+  brick-burn expire on `elapsed_ms > tuning_frames * 50ms`, which the
+  original reads as the high half of the dword at `cell+66` — a
+  decompiler-visible but
   behaviourally-identical way of reading the WORD at `cell+68`, the same
   field the top-of-loop `+= dword_464958` accumulates into; not a distinct
   field, not a bug).

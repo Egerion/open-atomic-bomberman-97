@@ -134,7 +134,8 @@ TEST_CASE("move_start / toggle_start_team ignore out-of-range slots") {
 
 TEST_CASE(
     "toggle_editor_tileset — '0' key's dword_45B7B8 increment-clamp, PINNED pseudo.c 5654-5657") {
-    // `if (++v > 0) v = -1;` — NOT a plain flip: from 0 it increments to 1,
+    // The original increments the value and clamps it to -1 whenever the
+    // incremented result is above 0 — NOT a plain flip: from 0 it goes to 1,
     // which is >0, so it clamps to -1; from -1 it increments to 0, which is
     // NOT >0, so it stays 0. Net effect over {0,-1} is a strict toggle, but
     // the exact arithmetic matters if the session ever starts from some

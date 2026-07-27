@@ -166,7 +166,8 @@ actors are pinned to ring 2.
   user sees the actor GONE ⇒ some gate hides it.
 - §5.1 INFERRED that gate is per-tile (`!sub_425FB9`, cell-not-solid), mirroring
   the confirmed powerup drawer `sub_424F89`. **But the powerup drawer's gate keys
-  off the powerup's OWN cell-state grid (`*(_DWORD*)==2 && !sub_425FB9`); actors
+  off the powerup's OWN cell-state grid (its record's first dword must read 2
+  — revealed/floor — AND `sub_425FB9` must say the cell is not solid); actors
   have no such per-tile "revealed" state — they live only in the registry
   `dword_45E0A8`.** The analogy is therefore weaker than §5.1 presents: it is not
   obvious `sub_4056CA` performs a per-actor `sub_425FB9` solid test at all.

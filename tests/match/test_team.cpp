@@ -305,9 +305,10 @@ TEST_CASE(
     "white (only team==2 is red)") {
     // Our setup only ever produces team in {0,1,2} (setup byte+1), so this is
     // a defensive/degenerate input, not a real scenario. The rule mirrors
-    // sub_4214BC's `*(byte*)(v6+84) ? 2 : 0` literally: only an exact match on
-    // the "team B" value is red; anything else nonzero falls to the `: 0`
-    // (white) arm, same as team == 1 does.
+    // The rule mirrors sub_4214BC's colour pick off the player's +84 team byte
+    // literally: only an exact match on the "team B" value selects red (2);
+    // anything else nonzero falls to the other arm, 0 (white), same as
+    // team == 1 does.
     CHECK(bomber::match::team_render_colour(9, 3) == 0);
     CHECK(bomber::match::team_render_colour(255, 7) == 0);
 }

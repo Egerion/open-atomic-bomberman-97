@@ -132,7 +132,8 @@ TEST_CASE("a player WALKING onto a warphole warps mid-walk (Gap 1 regression)") 
     // never lands the tick exactly on the centre pixel (9 px/tick stride skips
     // it), so a post-walk-only trigger never fired and the player just crossed
     // the warphole. The per-pixel stepper now fires the step-on the instant a
-    // 1-px step settles on the centre (sub_41EC84 v35 == -1). Warp pair
+    // 1-px step settles on the centre (sub_41EC84's predictive check for the
+    // along-axis offset reaching -1). Warp pair
     // (2,0) -> (8,0); player starts a tile away at (0,0) and walks east.
     Simulation s(open_config());
     State& st = s.state();
@@ -367,12 +368,14 @@ TEST_CASE("a bomb resting on a belt is blocked by a warphole ahead") {
     CHECK_FALSE(saw_warp(s));
 }
 
-// A flying bomb's landing check (sub_42331C ~25453: `!v62 || exp_ &&
-// v62[1] != 1`) treats a warphole the same way it treats a wall/bomb/
-// powerup: it cannot land there. `exp_` decompiles to a bare reference to
-// the statically-linked, NEVER-CALLED CRT exp() routine — confirmed dead
-// code by direct disassembly (the ONLY xref to it anywhere in the binary is
-// a `dr_O` load of its address, immediately tested and always non-zero) —
+// A flying bomb's landing check (sub_42331C ~25453) treats a warphole the same
+// way it treats a wall/bomb/powerup: it cannot land there. The tile is
+// accepted when there is no actor record at all, or when an `exp_` operand
+// holds AND the actor's type byte (the record's second byte) is not 1.
+// That `exp_` is a bare reference to the statically-linked, NEVER-CALLED CRT
+// exp() routine — confirmed dead code by direct disassembly (the ONLY xref to
+// it anywhere in the binary is a load of its address, immediately tested and
+// always non-zero) —
 // so the real condition is just "actor type != Warphole", the same rule
 // already ported for the sliding-bomb probe above. facts.md "Chain-reaction
 // timing" (exp_ resolution).

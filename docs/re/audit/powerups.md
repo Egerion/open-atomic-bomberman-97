@@ -44,7 +44,8 @@ in-batch forward-decl comment in `batch_0x42459A.cpp:69` mislabels it
 (`batch_0x401010.cpp:68`, `batch_0x40A140.cpp:46`, `batch_0x41F29B.cpp:115`,
 `batch_0x422DDD.cpp:92`) — and its real definition,
 `batch_0x420D4E.cpp:663-679` — agree it is the live-player-at-tile lookup
-(`*i && !i[2] && ...` = present && !dead). The port's `grid::player_at` and
+(it walks the player array and requires the present flag set and the
+died flag clear, i.e. present && !dead). The port's `grid::player_at` and
 its citation are correct; the one mislabeled comment is a guess-comment
 artifact of that TU's own forward-decl block, not a second definition.
 
@@ -53,12 +54,9 @@ artifact of that TU's own forward-decl block, not a second definition.
 ### 1. Round-start powerup baseline is only seeded for ExtraBomb/Flame, not all 13 kinds
 
 **Original.** `sub_4214BC` (`batch_0x420D4E.cpp:360-458`, pseudo.c
-~23880-23935), the per-round player reset, includes (`@427-428`):
-
-```c
-for ( j = 0; j < 15; ++j )
-  *((_BYTE *)v6 + j + 86) = sub_412135(j + 50);
-```
+~23880-23935), the per-round player reset, includes a two-line loop
+(`@427-428`): for `j` = 0..14 ascending, the player record's byte at
+`+86 + j` ← `getvalue(50 + j)` (i.e. `sub_412135(j + 50)`).
 
 This directly writes **every** kind's accumulated-count byte (`+86..+100`,
 kinds 0..14 — the 13 real kinds plus 2 unused pad slots) from its VALUELST
@@ -175,15 +173,18 @@ finding — noted for whoever eventually revisits `maybe_cure_on_pickup`.
   stores directly. Confirmed equivalent by construction, not just by
   default-tuning coincidence.
 - **Head-hit scatter** (`PowerupSystem::head_hit` vs `sub_421F7E`,
-  `batch_0x421E80.cpp:112-166`): stun write (`a1[29]=16`), drop count
+  `batch_0x421E80.cpp:112-166`): the stun write (the stun countdown word at
+  `+58` ← 16), drop count
   `powers_lost_min + rand()%max(1,powers_lost_rand)` — computed with the
-  identical clamp-then-modulus order — the `while(--v8 != -1)` decrement
-  loop running exactly `n` times, the inner `rand()%15` kind roll (up to
+  identical clamp-then-modulus order — the original's pre-decrement
+  "count down until it passes −1" loop running exactly `n` times, the inner
+  `rand()%15` kind roll (up to
   200 tries) gated on `held_count(kind) > start_with[kind]` (strict
-  greater-than, matching `v5 > v3` at `@151`), and the break-on-first-hit
-  semantics all match line-for-line. `sub_425BED(a1,v7)` is confirmed
+  greater-than: the held count must exceed the baseline, at `@151`), and the
+  break-on-first-hit
+  semantics all match line-for-line. `sub_425BED(player, kind)` is confirmed
   (`batch_0x42583B.cpp:258-263`) to be a **thin wrapper that ignores its
-  player-base argument and just calls `sub_4255B2(v7)`** (scatter) — the
+  player-base argument and just calls `sub_4255B2(kind)`** (scatter) — the
   original scatters *then* decrements the counter byte, while the port
   calls `remove()` then `scatter()` (reversed order). Confirmed harmless:
   `remove()` draws no RNG and never touches board state, so the swap
@@ -208,7 +209,8 @@ finding — noted for whoever eventually revisits `maybe_cure_on_pickup`.
   RNG draws per roll (x via `rand()%w`, y via a *second* `rand()` whose
   remainder is taken — not a re-use of the x draw), matching the port's
   `random_below` × 2. The inner guard is decremented *before* the tile-type
-  test (`if (--v7<=0) break` precedes `sub_425FB9`), so the 100th roll of
+  test (the pre-decrement "inner budget exhausted → break" test runs ahead
+  of the `sub_425FB9` call), so the 100th roll of
   an inner budget is drawn but never tested — matching the port's
   `if (--guard <= 0) return` placement exactly (both draw-then-check).
   Outer retry cap of 100, each with a fresh inner budget of 100, matches.
@@ -233,7 +235,8 @@ finding — noted for whoever eventually revisits `maybe_cure_on_pickup`.
   case `0xC`, `@476-483`): up to 200 tries of `rand()%12` (Random itself,
   kind 12, excluded from the modulus range), accept the first roll whose
   `dword_4647E0[kind]` (scheme-forbidden table, `s.forbidden` in the port)
-  is false, re-dispatch (`goto LABEL_6`) as that kind — one draw per try,
+  is false, then re-enter the pickup-dispatch switch from the top as that
+  kind — one draw per try,
   same order, same 200-try cap, same "fully exhausted → no effect" fallback
   when every kind is scheme-forbidden. Matches.
 - **Mutual-exclusion eviction** (`PowerupSystem::apply`'s per-case `evict()`
@@ -253,7 +256,7 @@ finding — noted for whoever eventually revisits `maybe_cure_on_pickup`.
   when the flag actually cleared.
 - **Death scatter** (`PowerupSystem::death_scatter` vs `sub_41DBFE`,
   `batch_0x41DAA7.cpp:121-164`, confirmed via its real call site at
-  `batch_0x41F29B.cpp:826-850` — the death-animation-complete `LABEL_26`
+  `batch_0x41F29B.cpp:826-850` — the death-animation-complete
   path, exactly as the port's own citation claims; one in-batch forward-decl
   comment elsewhere mislabels this function "clear disease timers", another
   guess-comment artifact like the `sub_421CB5` one above, contradicted by
@@ -270,8 +273,9 @@ finding — noted for whoever eventually revisits `maybe_cure_on_pickup`.
   timing collapse is already explicitly flagged as a deliberate, documented
   divergence in the port's own comment — not re-litigated here.
 - **Goldflame stored as a flag, not `flame=99`** (`PowerupSystem::apply`
-  case `Goldflame`): confirmed against `sub_41E21E` case 8
-  (`++*(a1+94)`, no interaction with the flame counter byte at `+87`) —
+  case `Goldflame`): confirmed against `sub_41E21E` case 8, which
+  increments the player record's byte at `+94` and nothing else — no
+  interaction with the flame counter byte at `+87` —
   the blast-reach computation itself is outside `powerups.cpp`
   (`BombSystem::place`, ledger item #2); not re-derived here.
 - **Hidden-under-brick reveal/relocate** (`sub_425107`) — this audit's

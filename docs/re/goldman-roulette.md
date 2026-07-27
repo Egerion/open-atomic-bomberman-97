@@ -47,36 +47,35 @@ Rounds within one match re-init through `sub_410B6E` only (call sites
 **Who becomes the gold player (PINNED, pseudo.c 30004-30022):**
 `sub_42A3F6`'s RESULTS tier writes `dword_46492C` unconditionally on every
 RESULTS pass — i.e. whenever `sub_4219B0(...) != -1` (a round SURVIVOR
-exists, pseudo.c 29823) and the tier is entered at `LABEL_102`; a no-survivor
-round instead falls straight into the separate DRAW.PCX branch and never
-reaches this write at all, so `dword_46492C` is left untouched on a draw —
-using `v73` — **NOT the round winner**, but the **match-clinch winner**: `v73` is
+exists, pseudo.c 29823) and the tier is entered at its own head label; a
+no-survivor round instead falls straight into the separate DRAW.PCX branch
+and never reaches this write at all, so `dword_46492C` is left untouched on a
+draw. The value it writes is the tier's **clinch-winner index** — **NOT the
+round winner**, but the **match-clinch winner**. That index is
 reset to -1 at the top of every RESULTS pass (pseudo.c 29890) and only set
 inside the per-player/per-team tally loop when that slot's cumulative match
 tally (`sub_421AC8`, the win count) reaches `dword_464A7C`
 (`num_to_win_match`) — or, in team mode with `win_by_kills`
 (`dword_46497C`) on, when `sub_421B0F`'s round-kill count reaches the target
-AND uniquely leads (`v78 == 1`). This is the exact same `v73` already ported
+AND that slot is the **unique** leader (the tally loop's own "exactly one at
+the target" counter equals 1). This is the exact same index already ported
 as `GameApp::match_clinch()` (`docs/re/results-and-options.md` §1) — the
 "we have a winner" match-over check, not the per-round survivor. So the gold
 player only changes **when a match is actually clinched** (VICTORY screen),
 never on an ordinary mid-match round win:
 
-```
-if ( sub_40C06A() )            // networked, non-host: no-op (not ported)
-  dword_46492C = -1;
-else if ( dword_4648BC )       // goldman on
-{
-  if ( dword_464964 )          // team mode
-    dword_46492C = sub_4223E7(v73) ? 2 : 0;   // v73's team id, encoded 0/2
-  else
-    dword_46492C = v73;        // v73's player index (-1 if not yet clinched)
-}
-else
-  dword_46492C = -1;           // goldman off
-```
+The write is a three-way decision, tested in this order:
 
-`sub_4223E7(v73)` (pseudo.c, already cited in `results-and-options.md` §1)
+| condition | `dword_46492C` ← |
+| --- | --- |
+| `sub_40C06A()` truthy — a networked, non-host machine | **-1** (no gold player; this path is not ported) |
+| else, `dword_4648BC` clear — goldman option OFF | **-1** |
+| else (goldman ON), `dword_464964` set — **team mode** | **2** if the clinch winner's team byte, fetched by `sub_4223E7`, is non-zero; **0** otherwise |
+| else (goldman ON, not team mode) | the clinch winner's **player index** — which is **-1** itself when nobody has clinched yet |
+
+Note the team branch encodes the team as **0 or 2**, not 0/1.
+
+`sub_4223E7` (pseudo.c, already cited in `results-and-options.md` §1)
 maps a **player index** to its raw 0/1 team-slot byte; the encoding `? 2 : 0`
 is the original's own internal representation for `dword_46492C` (a single
 global reused as both a player index and a doubled team id elsewhere in the
@@ -92,7 +91,7 @@ undocumented, and previously mis-ported as "back one screen" rather than an
 abort), the Options-screen Gold Bomberman toggle AND Team Play toggle (both
 row 0 and row 6, pseudo.c 9310-9311/9334-9335/9410-9412/9436-9437 — the Team
 Play half was previously undocumented, see §2.1), Ctrl+Q mid-round abort
-(`LABEL_34`, pseudo.c 29737), the net-game screens (30280/30504, N/A —
+(the round loop's abort branch, pseudo.c 29737), the net-game screens (30280/30504, N/A —
 no netplay in this port), and boot init (14661). The three net-only clear
 sites (`sub_4046F5` pseudo.c 6563, `sub_410BBA` pseudo.c 14738/14817/14843)
 are `sub_40C06A()`-gated and never reachable in a local-only port; not
@@ -108,8 +107,9 @@ against the port, both presentation-only (no `libs/sim`/golden-hash impact —
 1. **The LEVEL & ROUNDS screen's Esc was ported as "back to the player
    screen"; the original aborts the WHOLE Play flow to the menu.**
    `sub_406DDE` (§2's own citation, "the following level/rounds screen") is
-   called from `sub_410F81`'s own TAIL (pseudo.c 15504-15517: `if
-   (!dword_464A68) { sub_4100B9(); sub_40EA1E(v61); sub_406DDE(); }`), with
+   called from `sub_410F81`'s own TAIL (pseudo.c 15504-15517 — guarded on
+   `dword_464A68` being clear, the tail runs `sub_4100B9()`, then a net pump
+   `sub_40EA1E`, then `sub_406DDE()`), with
    nothing after that call but `sub_401312()` and return — there is no loop
    anywhere that re-shows the player screen on `sub_406DDE`'s Esc. Its own Esc
    handler (pseudo.c 8186-8191, inside `sub_406DDE`'s frame loop) sets
@@ -222,14 +222,17 @@ which the player presses Enter** (the constant-speed phase advances the
 relative phase every frame); after the keypress the wind-down is fully
 deterministic.
 
-**Result resolution** (pseudo.c 6060-6074), once both budgets are 0:
+**Result resolution** (pseudo.c 6060-6074), once both budgets are 0, in this
+order:
 
-```
-offset = ring - wheel;  if (ring < wheel) offset += T;
-prize  = dword_45B7BC[offset / 70];
-```
+1. **offset** ← ring position **−** wheel rotation.
+2. If the ring position was **below** the wheel rotation, **add T** to the
+   offset — the unsigned-wrap fix-up, so offset always lands in 0..T-1.
+3. **prize** ← entry `offset / 70` (integer divide by the segment size) of
+   the wheel-slot table `dword_45B7BC`.
 
-`dword_45B7BC[6] = {0, 1, 3, 8, 4, 13}` (pseudo.c 1934) — the six wheel
+That table (pseudo.c 1934) holds six entries, in slot order: **0, 1, 3, 8, 4,
+13** — the six wheel
 slots as **inventory powerup ids**: extra bomb (0), flame (1), kick (3),
 goldflame (8), skate/speed (4), and **13 = the CLOGS**, a speed-DOWN booby
 prize (VALUELST's own legend for id 91 calls it the "special roulette
@@ -296,7 +299,8 @@ presentation-side rand draws per spawn attempt. So the gold player sparkles
 for the first ~5 s of every round while goldman is pending.
 
 **One correction to the above:** `sub_420D4E`'s 100-record pool loop finds
-only the FIRST currently-inactive slot (`!*v7`) and returns immediately after
+only the FIRST currently-inactive slot (the first record whose active flag is
+zero) and returns immediately after
 its spawn-roll for that one slot — it does NOT scan/fill every free slot on
 each call. So each call (once per applicable player per `sub_420F07` HUD-pass
 invocation) attempts to spawn **at most one** new particle, not a batch.
@@ -315,14 +319,13 @@ after goldman is toggled off or the gold player changes mid-round, since
 nothing here checks those flags — only `sub_420D4E` stops making NEW ones.
 
 **Asset — the ANI sequence is named `"goldman"` (`aGoldman_0`, pseudo.c
-1555), resolved ONCE and cached (pseudo.c 23598-23602):**
-```c
-if ( !dword_4621EC )                              // resolved once, ever
-{
-  dword_45BE40 = sub_41D957((int)aGoldman_0);      // resolve "goldman" by name
-  dword_4621EC = sub_41DA5C(dword_45BE40);         // cache its FRAME COUNT
-}
-```
+1555), resolved ONCE and cached (pseudo.c 23598-23602):** guarded on
+`dword_4621EC` still being zero — i.e. it happens on the first pass only,
+ever, and never again for the life of the process — the function resolves the
+name `"goldman"` through `sub_41D957` into the handle `dword_45BE40`, then
+stores `sub_41DA5C` of that handle into `dword_4621EC`, its **frame count**.
+The guard is on the frame-count cache itself, not on a separate "resolved"
+flag.
 `sub_41DA5C(seq)` (pseudo.c 21815-21821) reads the resolved sequence record's
 `+52` field, which `sub_41DAA7` (the standard frame-fetch pair used
 throughout the engine — same pair the wheel's `"ring"`/prize icons use, §3)
@@ -334,23 +337,32 @@ duration. Per the established MISC.ANI sequence table (`cursor1` / `goldman`
 `DATA/ANI/MISC.ANI`** alongside the wheel's own `"ring"` pointer — not a
 new/separate asset to locate.
 
-**Per-frame draw + expire (pseudo.c 23603-23616), for each of the 100 pool
-slots:**
-```c
-v1 = 0; v2 = (DWORD*)dword_4621CC;   // the SAME pool sub_420D4E seeds into
-while ( v1 < 100 ) {
-  if ( *v2 ) {                                          // slot active
-    v3 = sub_41DAA7(dword_45BE40, v2[3]);                // frame v2[3] of "goldman"
-    sub_415A9F(v2[1], v2[2], 0, v3);                     // plain sprite draw at (x, y)
-    if ( dword_4621F0 != dword_464994 && ++v2[3] > dword_4621EC )
-      *v2 = 0;                                           // one full playthrough -> deactivate
-  }
-  ++v1; v2 += 4;
-}
-result = dword_464994;
-dword_4621F0 = dword_464994;                             // remember this frame's tick
-return result;
-```
+**Per-frame draw + expire (pseudo.c 23603-23616).** The pool is at
+`dword_4621CC` — the SAME pool `sub_420D4E` seeds into — and each record is
+**4 dwords wide**:
+
+| slot dword | meaning |
+| --- | --- |
+| +0 | the **active** flag (0 = free) |
+| +1 | particle **x** |
+| +2 | particle **y** |
+| +3 | this particle's own **frame counter** (reset to 0 at seed time) |
+
+It walks all **100** records in index order and, for each record whose active
+flag is non-zero, does exactly this, in order:
+
+1. Fetch frame **+3** of the cached `"goldman"` sequence (`sub_41DAA7` on the
+   handle `dword_45BE40`).
+2. Draw it with `sub_415A9F` at (**+1**, **+2**), with a third argument of 0.
+3. **Only if** the remembered tick `dword_4621F0` differs from the current
+   real-frame counter `dword_464994`: increment **+3**, and if the
+   incremented value **exceeds** the cached frame count `dword_4621EC`, clear
+   the active flag — one full playthrough and the slot is freed. Note the
+   short-circuit: on a repeat call within the same real frame the counter is
+   not incremented at all.
+
+After the loop it stores the current `dword_464994` into `dword_4621F0`
+(remembering this frame's tick) and returns that same value.
 Three facts this pins that §6 alone did not:
 
 - **The draw call is `sub_415A9F`, the ordinary player-sprite draw routine**
@@ -364,8 +376,9 @@ Three facts this pins that §6 alone did not:
   ANI's frame count (`dword_4621EC`), NOT by getvalue(1010).** getvalue(1010)
   only gates whether §6's `sub_420D4E` keeps rolling NEW spawns; once a
   particle exists it plays through the `"goldman"` sequence exactly once (no
-  looping — `v2[3]` only ever counts up, `sub_41DAA7`'s own internal modulo
-  is never allowed to wrap it back because the `++v2[3] > dword_4621EC` guard
+  looping — the per-particle frame counter only ever counts up, and
+  `sub_41DAA7`'s own internal modulo is never allowed to wrap it back,
+  because the "incremented counter exceeds the cached frame count" guard
   deactivates the slot the frame AFTER the last real frame) and then
   disappears, INDEPENDENT of whether goldman/round-elapsed/the gold player
   changed in the meantime. A practical consequence: a particle spawned right
@@ -448,28 +461,33 @@ scheme's `-P bornwith` column). Two mapping notes for the port:
 
 The per-tick player mover (pseudo.c 22740-23498, cited by `movement.cpp` for
 its disease-scaling order) computes the walk budget added each tick in its
-non-trigger-carrying branch (pseudo.c 23430-23440, the `else` of
-`*((int*)v111+11)>>16 == -1`):
+non-trigger-carrying branch (pseudo.c 23430-23440 — the `else` arm of the
+test "the upper half of the player-struct dword at **+44** equals -1", the
+carried-trigger-bomb marker).
 
-```c
-v18 = sub_412135(90);                       // getvalue(90) = "speed added per skate"
-v20 = v18 * v19 + *((_DWORD *)v111 + 28);   // v19 = skate count; +28*4=+112 = base speed (getvalue(42))
-v21 = sub_412135(91);                       // getvalue(91) = clogs speed penalty
-v91 = v20 - v22 * v21;                      // v22 = clogs count (player_byte[86+13])
-if ( *((_BYTE *)v111 + 132) )               // Slow (molasses) disease flag
-  v91 /= 3;
-if ( *((_BYTE *)v111 + 133) || *((_BYTE *)v111 + 137) )  // Fast/Super disease flags
-  v91 = 3 * v91 / 2;
-v91 = dword_464958 * v91 / (unsigned int)dword_46494C;   // frame-ratio scale (~1 at 20 Hz)
-```
+The walk budget is built in exactly this order:
 
-(`v19`/`v22` are IDA "possibly undefined" register temporaries at this
-address — the decompiler lost their producer across an earlier branch/goto
-in this large state-machine function — but the positional pairing with
-getvalue(90)="speed added per skate"/getvalue(91)="clogs speed penalty"
-(`docs/valuelst-map.md` ids 90/91) and the identical shape to the port's own
-`skates * skate_speed_bonus` term pins them unambiguously as the skate and
-clogs counts respectively.)
+| step | operation |
+|---|---|
+| 1 | read `getvalue(90)` — "speed added per skate" |
+| 2 | budget ← that value **×** the **skate count**, **plus** the player's base speed, the dword at player-struct **+112** (seeded from `getvalue(42)`) |
+| 3 | read `getvalue(91)` — "clogs speed penalty" |
+| 4 | budget ← budget **−** (**clogs count** × that penalty). The clogs count is the inventory byte at `+86 + 13` |
+| 5 | if the **Slow (molasses) disease flag** at player-struct **+132** is set: budget ← budget **/ 3** (integer divide) |
+| 6 | if either the **Fast** flag at **+133** **or** the **Super** flag at **+137** is set: budget ← **3 × budget / 2** (multiply first, then divide) |
+| 7 | budget ← `dword_464958` × budget / `dword_46494C`, the frame-ratio scale (≈1 at 20 Hz) — the divide is **unsigned** |
+
+Steps 5 and 6 are two independent `if`s, not an if/else, and they apply in
+that order — so a player who is both slowed and hyped gets the `/3` first
+and the `×3/2` on the already-divided value.
+
+(The skate count and the clogs count are both registers the decompiler flags
+"possibly undefined" at this address — it lost their producer across an
+earlier branch in this large state-machine function — but the positional
+pairing with getvalue(90)="speed added per skate" / getvalue(91)="clogs speed
+penalty" (`docs/valuelst-map.md` ids 90/91) and the identical shape to the
+port's own `skates * skate_speed_bonus` term pins them unambiguously as the
+skate and clogs counts respectively.)
 
 Pinned rule: **base speed (getvalue 42) + skates·getvalue(90) −
 clogs·getvalue(91)**, THEN disease scaling (molasses /3 first, then
@@ -477,8 +495,8 @@ hyper/super ×3/2) — clogs and skates are mirror-image LINEAR terms folded
 into the SAME pre-disease base, added/subtracted in that order, before any
 disease multiplier touches the total. No separate duration or decay: like
 skates, the count is a per-round-reset inventory value (born-with only,
-§9.2), not a timed effect. No floor: the arithmetic does not clamp `v91` to
-a minimum before disease scaling (matches the port's existing unclamped
+§9.2), not a timed effect. No floor: the arithmetic does not clamp the
+budget to a minimum before disease scaling (matches the port's existing unclamped
 `p.speed` for skates); in practice clogs is capped at exactly 0 or 1 per
 round (§9.3 — no cross-round stacking), so `base + 0 - 1*150 = 923-150 =
 773` is the only non-zero case, well above zero.
@@ -520,7 +538,7 @@ already models this correctly (a plain overlay re-applied fresh each
 follow the identical "set, not accumulate across calls" contract.
 
 Skates and clogs are independent counters (`+90` vs `+99` in the original)
-that both fold linearly into the same `v91` expression — no interaction
+that both fold linearly into the same walk-budget expression — no interaction
 beyond both terms being present in the sum (a player who is simultaneously
 the wheel's gold player AND has picked up real skates in-round nets `base +
 skates*90 - clogs*91`, exactly the port's formula, §9.4).
@@ -535,7 +553,8 @@ skates*90 - clogs*91`, exactly the port's formula, §9.4).
   outside that space per §8).
 - Speed formula (`setup.cpp` and `PowerupSystem::apply/remove` for Skate)
   becomes `start_speed + skates * skate_speed_bonus - clogs *
-  clogs_speed_penalty`, mirroring §9.1's `v20 - v22*v21` exactly (skate term
+  clogs_speed_penalty`, mirroring §9.1's "(base + skates·getvalue(90)) −
+  clogs·getvalue(91)" exactly (skate term
   added, clogs term subtracted, both before the per-tick disease scaling
   already ported in `movement.cpp`).
 - `Tuning::clogs_speed_penalty` (VALUELST id 91) added alongside the
@@ -571,29 +590,34 @@ skates*90 - clogs*91`, exactly the port's formula, §9.4).
 
 `sub_425C7F` @ 0x425C7F (pseudo.c 26718-26735) is the shared floor-powerup
 icon drawer the wheel calls for every one of its 6 slots (§3's per-frame
-icon-draw loop, pseudo.c 6022-6031: `sub_425C7F(v5, v6, v4)` where `v4 =
-dword_45B7BC[k]`, the slot's raw inventory kind id — `13` for the clogs
-slot, no special-casing):
+icon-draw loop, pseudo.c 6022-6031, which passes the slot's screen x, its
+screen y, and its **raw inventory kind id** read straight out of the wheel-slot
+table `dword_45B7BC` — `13` for the clogs slot, no special-casing).
 
-```c
-int __usercall sub_425C7F@<eax>(int a1@<eax>, int a2@<edx>, int a3@<ebx>)
-{
-  char v5[100];
-  sub_4518D0((int)v5, aPowerS, (char)off_45BE50[a3]);   // v5 = "power " + off_45BE50[a3]
-  v9 = sub_41D957((int)v5);                              // resolve ANI sequence by name
-  v3 = sub_41DAA7(v9, 0);
-  return sub_415920(v8, v6, v3);                         // draw it at (a1, a2)
-}
-```
+`sub_425C7F` takes three register arguments (x in EAX, y in EDX, kind in EBX)
+and does four things, in order:
+
+1. **Build the sequence name** into a 100-byte local buffer: sprintf
+   (`sub_4518D0`) of the format string `aPowerS` with the kind's entry from
+   the name table `off_45BE50`, i.e. `"power " + <kind name>`.
+2. **Resolve** that name to an ANI sequence with `sub_41D957`.
+3. **Fetch frame 0** of it with `sub_41DAA7`.
+4. **Draw** it with `sub_415920` at the (x, y) it was given, and return that
+   call's result.
+
+No palette, tint or colour argument appears anywhere in the chain.
 
 `aPowerS` (pseudo.c 1566) is the literal format string `"power %s"`.
-`off_45BE50[18]` (pseudo.c 2261-2280, "weak"-typed `char*[18]`) is:
+`off_45BE50` (pseudo.c 2261-2280) is an 18-entry table of name strings,
+"weak"-typed in the decompile. Its contents, by index:
 
-```
-{ "bomb", "flame", "disease", "kicker", "skate", "punch", "grab", "spooge",
-  "goldflame", "trigger", "jelly", "disease3", "random", "clog",
-  "?1", "?2", "?3", "?4" }
-```
+| 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+|---|---|---|---|---|---|---|---|---|
+| bomb | flame | disease | kicker | skate | punch | grab | spooge | goldflame |
+
+| 9 | 10 | 11 | 12 | **13** | 14 | 15 | 16 | 17 |
+|---|---|---|---|---|---|---|---|---|
+| trigger | jelly | disease3 | random | **clog** | (unused) | (unused) | (unused) | (unused) |
 
 Index **13 = `"clog"`** — so for the clogs wheel slot `sub_425C7F` builds
 the sequence name `"power clog"` and resolves it the identical way as the
@@ -630,8 +654,9 @@ pseudo.c 1934; accessor `sub_403A9C` pseudo.c 6133-6136; award site
 pseudo.c 23627-23716/23549-23585; trigger `sub_410F81` head pseudo.c
 15043-15057 (def 14924), caller `sub_42A3F6` pseudo.c 29696-29697; gold
 player assignment pseudo.c 30004-30022; mover speed arithmetic `sub_41F29B`
-pseudo.c 23430-23440 (function def 22740, "possibly undefined" v19/v22
-flagged at pseudo.c-relative 41FD13/41FD30 in the disassembly listing);
+pseudo.c 23430-23440 (function def 22740; the skate-count and clogs-count
+registers are the two the decompiler flags "possibly undefined", at
+addresses 0x41FD13 and 0x41FD30);
 pickup dispatcher `sub_41E21E` pseudo.c 22148-22265 (no case 13/14); head-hit
 drop roll `sub_421F7E` pseudo.c 24332-24378; VALUELST rows 90/91/805/
 1000-1010; SOUNDLST 1300/1310/1320; MESSAGES ids 790/791/800-813.)

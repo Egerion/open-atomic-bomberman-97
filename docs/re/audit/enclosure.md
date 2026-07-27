@@ -53,13 +53,15 @@ arm branch — see Finding 0), `docs/re/enclosure.md` (full), `docs/re/facts.md`
 > it (`clear_hurry_disabled_actors` in `libs/sim/src/systems/enclosure.cpp`).
 >
 > **Where this went wrong — worth remembering.** The reasoning below is not
-> based on reading the disassembly (which it quotes correctly and completely);
+> based on reading the disassembly (which it read correctly and completely);
 > it is based on trusting `batch_0x405B3A.cpp`'s own **file header comment**
 > for what `dword_45E0A8` is. That header calls it a level-select broadcast
 > table. It is not. There is exactly ONE `dword_45E0A8` in the program —
 > `native/src/globals.h` line 678 labels it *"the 100-slot × 152-byte 'extra
 > object' pool"*, allocated by `sub_404D16` (`sub_418511(152, 100)`), looked
-> up per tile by `sub_405654` (`if (*i && i[7]==x && i[8]==y)` — note it skips
+> up per tile by `sub_405654` (whose match test is: the slot's active dword
+> (+0) non-zero AND dword index 7 (byte +28) == x AND dword index 8 (byte
+> +32) == y — note it skips
 > slots whose active dword is 0, which is precisely the dword `sub_405D0C`
 > clears) and drawn by `sub_4056CA`. `batch_0x405B3A.cpp` is the actor pool's
 > **network-sync** code (`sub_405B3A` writes actor fields, `sub_405BBA`
@@ -74,20 +76,15 @@ arm branch — see Finding 0), `docs/re/enclosure.md` (full), `docs/re/facts.md`
 > hypothesis on map geometry because the actual mechanism had been ruled out
 > on paper. Ege reported it from live play twice before it was believed.
 >
-> *(The text below is retained verbatim. Do not act on it.)*
+> *(The reasoning below is retained unchanged, apart from its pasted code
+> listings having since been replaced by equivalent descriptions. Do not act
+> on it.)*
 
 **Original**: `sub_426818`'s arm branch (`native/src/game/batch_0x42583B.cpp`
-lines 690-696):
-
-```c
-if ( !dword_45BE9C )
-{
-  dword_462244 = rand_() % 3;
-  dword_45BE9C = 1;
-  dword_46223C = sub_43ACF8();
-  result = sub_405D0C();
-}
-```
+lines 690-696), taken only while `dword_45BE9C` is still 0, writes in exactly
+this order: `dword_462244 ← rand_() % 3`; `dword_45BE9C ← 1`;
+`dword_46223C ← sub_43ACF8()`; then calls `sub_405D0C()`, whose result is the
+branch's own result value.
 
 `docs/re/enclosure.md` §2 (line 57) glosses this call as `// clear
 warpholes+trampolines from the actor grid`, and its §9 addresses table
@@ -99,37 +96,13 @@ later "clear warpholes" gloss already).
 
 **The actual function**, transliterated later and more carefully from the
 real disassembly in `native/src/game/batch_0x405B3A.cpp` (lines 298-325),
-does something completely different:
-
-```c
-int sub_405D0C()
-{
-  int result;
-  unsigned int v1;
-  int v2;
-  _DWORD *v3;
-
-  v2 = 0;
-  result = dword_45E0A8;
-  v3 = (_DWORD *)dword_45E0A8;
-  while ( v2 < 100 )
-  {
-    if ( *v3 )
-    {
-      v1 = v3[1];
-      if ( v1 )
-      {
-        if ( v1 <= 1 || v1 == 3 )
-          *v3 = 0;
-      }
-    }
-    ++v2;
-    result = (int)v3;
-    v3 += 38;
-  }
-  return result;
-}
-```
+does something completely different: it
+walks all **100 slots** of the table based at `dword_45E0A8`, stride 38 dwords
+(152 bytes), never exiting early, and per slot in this order: skip unless the
+slot's first dword (+0) is non-zero; read the dword at **+4** as unsigned;
+skip if it is 0; and if it is **≤ 1 or == 3**, write **0** back to the slot's
+first dword (+0). Nothing else in the record is touched. The function returns
+the address of the last slot visited.
 
 `dword_45E0A8` is a **100-slot "broadcast/session record" table** used by the
 **LEVEL SELECT / setup-screen** UI (`batch_0x405B3A.cpp`'s own header
@@ -181,37 +154,32 @@ note. No `libs/sim` change needed.
 **Original**: `sub_426818`'s bomb-crush loop (`native/src/game/batch_0x42583B.cpp`
 lines 769-820):
 
-```c
-v19 = 100;
-while ( 1 )
-{
-  v6 = (_DWORD *)sub_422E48(dword_462230, dword_462234);
-  if ( v6 )
-  {
-    if ( dword_464940 )                    // wall_detonates ON
-    {
-      sub_423209((int)v6, -1);             // queue THIS bomb
-LABEL_47:
-      v20 = 100;
-      do {                                  // flame-cell cleanup (unconditional)
-        v5 = (_DWORD *)sub_42708D(dword_462230, dword_462234);
-        if ( v5 ) sub_427115(v5);
-        --v20;
-      } while ( v5 && v20 > 0 );
-      ...compute next spiral position...
-      goto LABEL_26;                        // <-- next DROP EVENT, not a retry
-    }
-    sub_424841(v6);                         // wall_detonates OFF: eat this bomb
-  }
-  --v19;
-  if ( !v6 || v19 <= 0 )
-    goto LABEL_47;                          // OFF path loops back to re-search
-}
-```
+The crush search is an unbounded loop with its own retry budget of 100. Per
+iteration, in order:
 
-When `dword_464940` (`wall_detonates`, VALUELST id 46) is **ON**, finding a
-bomb immediately queues it via `sub_423209` and `goto LABEL_47` **unconditionally**
-— there is no path back to the top of the `while(1)` loop in that branch, so
+1. `sub_422E48(dword_462230, dword_462234)` — find a grounded bomb at the
+   tile the wall just landed on.
+2. If one was found:
+   - **`dword_464940` (`wall_detonates`, VALUELST id 46) set (ON)**:
+     `sub_423209(bomb, -1)` queues THIS bomb, and control jumps
+     **unconditionally and immediately** to `LABEL_47` — the search is over.
+   - **OFF**: `sub_424841(bomb)` eats this bomb in place, and execution falls
+     through to step 3.
+3. Decrement the retry budget; if no bomb was found this iteration, OR the
+   budget has run out, jump to `LABEL_47`. Otherwise loop back to step 1 —
+   re-querying `sub_422E48` at the SAME tile.
+4. `LABEL_47` (also the ON branch's landing point), in order:
+   - flame-cell cleanup, unconditional: up to 100 iterations of
+     `sub_42708D(dword_462230, dword_462234)` → `sub_427115(found_cell)`,
+     stopping as soon as a query comes back empty or the budget runs out;
+   - compute the next spiral position (§4 of `docs/re/enclosure.md`);
+   - jump to `LABEL_26` — i.e. on to the NEXT DROP EVENT, not a retry of this
+     one.
+
+When `wall_detonates` is **ON**, finding a
+bomb immediately queues it via `sub_423209` and jumps to `LABEL_47`
+**unconditionally**
+— there is no path back to the top of the search loop in that branch, so
 the search runs **at most once** per drop event. A second bomb occupying the
 exact same crushed tile (in principle reachable — `sub_422E48` is a linear
 scan over a 100-slot bomb array by cell coordinate, not a 1:1 per-cell grid
@@ -220,11 +188,12 @@ matching the same `(x,y)`) is **not found or detonated by this event** —
 only the flame-cell cleanup and spiral advance still run.
 
 When `wall_detonates` is **OFF**, by contrast, `sub_424841` (silent eat)
-does *not* jump to `LABEL_47`; the loop falls through to `--v19` and
-re-enters the `while(1)`, re-querying `sub_422E48` at the same `(x,y)` — so
+does *not* jump to `LABEL_47`; the loop falls through to the retry-budget
+decrement and re-enters the search, re-querying `sub_422E48` at the same
+`(x,y)` — so
 the OFF path *does* keep eating bombs at that tile until none remain (up to
 100 tries). This asymmetry — ON stops after one hit, OFF exhausts all hits
-— is intentional-looking in the disassembly (the `goto LABEL_47` is baked
+— is intentional-looking in the disassembly (the jump to `LABEL_47` is baked
 into the ON branch's very next instruction after `sub_423209`), not an
 artifact of the transliteration.
 
@@ -288,9 +257,11 @@ both are eaten when OFF.
   identified as the bomb freeze, which should have been the tell. So the
   spiral FREEZES when the round is decided. Corrected in
   `docs/re/enclosure.md` §8 and ported (`round_frozen` in `simulation.cpp`).
-- **Arm/disarm trigger arithmetic** (`v1 = sub_412135(101); result =
-  sub_410578(); if (result <= v1 - 5) {...} else if (dword_45BE9C) {...}`,
-  `batch_0x42583B.cpp` 686-705) matches `EnclosureSystem::update()`'s
+- **Arm/disarm trigger arithmetic** — read `getvalue(101)` via `sub_412135`,
+  then the seconds remaining via `sub_410578`, then take the ARM branch when
+  `remaining <= hurry_seconds - 5` and otherwise the disarm branch when
+  `dword_45BE9C` is set (`batch_0x42583B.cpp` 686-705) — matches
+  `EnclosureSystem::update()`'s
   `closing = seconds_left <= s.tuning.hurry_seconds - 5` exactly, including
   the non-strict `<=`. The disarm branch's reset values (`x=0,y=0,depth=0,
   dir=1`) are unreachable in a real match (clock only counts down) and the
@@ -326,14 +297,16 @@ both are eaten when OFF.
 - **Player-crush order and exemptions**: `sub_421D3F`'s own search
   predicate (`present && !dead && type != 4 && tile match`,
   `batch_0x420D4E.cpp` lines 682-697) already excludes type-4
-  (network-spectator) internally — the caller's redundant `*((_BYTE*)v8+16)
-  != 4` re-check in `sub_426818` (line 755) is dead code given the finder's
+  (network-spectator) internally — the caller's redundant re-read of the
+  found player's own type byte at **+16** and comparison against 4
+  in `sub_426818` (line 755) is dead code given the finder's
   own filter, not a second, different check; no double-standard to port.
   `sub_41DE63`'s bounce/warp early-out (movement-state 5/6/7,
   `batch_0x41DAA7.cpp` lines 248-255) is correctly mirrored by
   `drop_wall`'s `p.bounce == 0 && p.warp == 0` guard.
 - **Powerup destroy**: `sub_4254F3` (`batch_0x42459A.cpp` lines 693-703) is
-  confirmed to be an unconditional `*a1 = 0` with no skull-relocation
+  confirmed to unconditionally zero the record's first dword, with no
+  skull-relocation
   compensation (unlike `sub_425107`'s reveal-time relocation logic, a
   different function entirely) — matches `docs/re/enclosure.md` §5 point 2
   and the port's unconditional `s.hidden[...] = s.floor[...] =

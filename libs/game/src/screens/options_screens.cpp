@@ -99,7 +99,8 @@ AppInput OptionsScreenRunner::run() {
     // §3 19-item list's LIVE subset, over a random GLUE<n> backdrop like
     // present_setup's documented convention (docs/re/setup-screens.md). F1
     // opens the generic *.BM help browser — CORRECTED 2026-07-08: reading
-    // sub_4080DC's own F1 dispatch (pseudo.c, `if (v165 <= 0x13B) sub_41431C();`)
+    // sub_4080DC's own F1 dispatch (pseudo.c calls sub_41431C when the raw key
+    // code is <= 0x13B)
     // shows it calls the SAME sub_41431C generic browser row 5 and the
     // in-round F1 key open (§4), not a fixed OPTIONS.BM cut. OPTIONS.BM is
     // just one entry in that browser's *.BM glob, same as EDITOR.BM (§3's
@@ -291,7 +292,7 @@ void SchemePickerRunner::run(OptionsScreen& opt, const std::string& backdrop) {
     }
     if (picker.cancelled()) return;
     // sub_407582's selection write-back @0x40767A-0x4076B8, CORRECTED
-    // 2026-07-26 against the binary: the cut character is `mov edx, 0x3A` —
+    // 2026-07-26 against the binary: the cut character loaded there is 0x3A —
     // a COLON, not a '.' — fed to sub_45167A/strchr. Cutting the display line
     // "BASIC.SCH: Basic Bomberman" at its first ':' therefore recovers the
     // filename WITH its extension, and that is what is strcpy'd into

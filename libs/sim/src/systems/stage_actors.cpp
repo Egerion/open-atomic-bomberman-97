@@ -108,7 +108,8 @@ bool StageActorSystem::start_bounce(Player& p, int player_index, int tx, int ty)
 
 // Movement step-on trampoline for MovementSystem: fires the warphole/trampoline
 // trigger the instant a per-pixel step centres the player on a tile — the port
-// of sub_41EC84's in-loop v35 == -1 check. ctx is a StepOnCtx.
+// of sub_41EC84's in-loop check for an offset-to-tile-centre of -1. ctx is a
+// StepOnCtx.
 void StageActorSystem::on_step_center(void* ctx, Player& p, int tx, int ty) {
     auto* c = static_cast<StepOnCtx*>(ctx);
     // Warphole first, then trampoline (a tile carries only one actor, so at
@@ -129,7 +130,8 @@ bool StageActorSystem::move_on_actor(Player& p, int want_godir, bool moving,
     const std::int32_t belt = s_.tuning.conveyor_speed();
 
     // The per-pixel stepper fires the warphole/trampoline step-on mid-walk
-    // (sub_41EC84 v35 == -1), so a player WALKING onto a warp triggers it — the
+    // (sub_41EC84's offset-to-centre == -1 check), so a player WALKING onto a
+    // warp triggers it — the
     // old post-walk-only test almost never landed on the exact centre pixel and
     // left the player unable to warp ("stuck"). Player index is recovered from
     // the array offset (players live in a contiguous std::array in State).
@@ -166,7 +168,8 @@ bool StageActorSystem::move_on_actor(Player& p, int want_godir, bool moving,
         // stage_actors.md finding 1 (sub_41F29B 779-796, batch_0x41F29B.cpp:
         // 789-795): after a non-fatal belt-forced push the original ALWAYS
         // reverts both the requested dir (+46) and the facing (+44) to the
-        // pre-push value — `!sub_41EC84(...)` is true on every tick except the
+        // pre-push value — the revert is gated on sub_41EC84 reporting no kill,
+        // which holds on every tick except the
         // rare one a flamed belt kills the player mid-step (and simulation.cpp
         // returns on !p.alive before facing is read again). So an idle player
         // parked on a belt keeps FACING (and posing walking in) whatever

@@ -81,7 +81,8 @@ private:
     // (sub_425FB9 == 0). NOT an escape search. Gates behaviours 3 and 4.
     bool drop_tile_clear(int tx, int ty) const;
 
-    // The behaviours-3/4 entry gate, `sub_4245DA(me) < maxBombs(+86)` inverted:
+    // The behaviours-3/4 entry gate — "sub_4245DA's own-bomb count is below the
+    // +86 max-bomb byte" — inverted:
     // sub_4245DA counts the player's OWN live bomb slots (owner word at bomb
     // +62), and the comparand is the bomb capacity byte +86 — both byte-
     // confirmed from the raw disasm (docs/re/ai.md §9.3 RESOLVED). bombs_placed

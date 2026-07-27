@@ -114,9 +114,10 @@ bool RoverSystem::step(Rover& r, int rover_index) {
 
         // sub_401B5C computes the CANDIDATE next pixel position first (one
         // pixel forward in the current dir -- dword_45BECC/BEDC are unit
-        // deltas), tests ITS along-axis offset from tile centre (v31), and
-        // only runs the turn logic when that candidate lands EXACTLY on a
-        // tile centre pixel (v31==0) -- equivalent to "current position is
+        // deltas), tests ITS along-axis offset from the tile centre, and
+        // only runs the turn logic when that offset is zero, i.e. the candidate
+        // lands EXACTLY on a
+        // tile centre pixel -- equivalent to "current position is
         // one pixel before centre", but expressed on the candidate so the
         // ahead-tile probe below can reuse the same candidate tile.
         const Fixed cand_x = r.x + kDx[r.dir] * kScale;
@@ -125,7 +126,8 @@ bool RoverSystem::step(Rover& r, int rover_index) {
         const int cpx = cand_x / kScale, cpy = cand_y / kScale;
         const int off_x = ((cpx % kTileW) + kTileW) % kTileW - kTileW / 2;
         const int off_y = ((cpy % kTileH) + kTileH) % kTileH - kTileH / 2;
-        // along = dx*offX + dy*offY (matches v31's dy*v34+dx*v33 up to the
+        // along = dx*offX + dy*offY (the same sum the original forms from its
+        // two per-axis offsets, up to the
         // operand-order rewrite the raw axis helpers sub_426599/sub_4265EB
         // already fold in -- see MovementSystem::move's own along/perp for
         // the same rotation formula on the player's per-pixel stepper).
@@ -159,8 +161,8 @@ bool RoverSystem::step(Rover& r, int rover_index) {
             if (!passable(r.kind, cand_tx + kDx[r.dir], cand_ty + kDy[r.dir])) r.move_budget = 0;
         }
 
-        // Commit: the original always writes v29/v30 (the ORIGINAL
-        // candidate, computed with the PRE-turn direction) as the new
+        // Commit: the original always writes back its two candidate
+        // coordinates (computed with the PRE-turn direction) as the new
         // position -- a turn taken this pixel only steers the NEXT step, it
         // does not redirect the pixel already in flight. So commit cand_x/
         // cand_y, not a recompute with the (possibly just-changed) r.dir.
@@ -178,12 +180,13 @@ bool RoverSystem::step(Rover& r, int rover_index) {
         // port status: campaign scoring lives above the sim, like the
         // AI-kill-score id 1300 already does).
         // FIX (rovers F1, docs/re/audit/tileregen_rovers.md Finding 1):
-        // sub_401B5C (raw disasm 0x401E24-0x401E82, confirmed via
-        // `native/tools/disasm.py 0x401B5C 0x401F76`) does NOT branch out of
+        // sub_401B5C (verified over the 0x401E24-0x401E82 range with the
+        // repo's own disassembly helper across 0x401B5C-0x401F76) does NOT
+        // branch out of
         // the pixel-budget loop on flame contact -- it sets the dead flag
         // and falls straight through into the same-tile landing-kill check
-        // below, then unconditionally `jmp`s (0x401ED3 -> 0x401c0f) back to
-        // the loop's own top, consuming the REST of this tick's
+        // below, then jumps unconditionally from 0x401ED3 back to the loop's
+        // own top at 0x401C0F, consuming the REST of this tick's
         // move_budget. That can re-enter this very branch on a later tile
         // crossed in the same tick, re-awarding the flame owner's kill-score
         // each time (the dead flag is never consulted inside the loop, only

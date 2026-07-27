@@ -156,9 +156,11 @@ TEST_CASE("flame arm stops at a bomb it chain-detonates, without igniting past i
 }
 
 // A chain-triggered bomb's own explosion skips re-casting an arm back toward
-// the flame that hit it (bomb+56, pseudo.c 25621: `if (!field56 || k+1 !=
-// field56)`, pushed as `((k+2)&3)+1` — the OPPOSITE of the triggering arm's
-// direction). The other three directions still fire at full reach.
+// the flame that hit it: pseudo.c 25621 casts an arm only when the bomb's +56
+// word is zero, or when the 1-based arm index does not equal it. The value
+// stored there is (arm index + 2) mod 4, plus 1 — the OPPOSITE of the
+// triggering arm's direction, in the same 1-based space. The other three
+// directions still fire at full reach.
 TEST_CASE("a chain-detonated bomb skips re-blasting back toward its trigger") {
     Simulation s(open_config());
     // Row 0: no pillars there (the (odd,odd) pattern never hits an even row).
@@ -797,7 +799,8 @@ TEST_CASE("arming the walls switches off warpholes and trampolines, not belts or
 }
 
 TEST_CASE("the walls stop closing the moment the round is decided") {
-    // sub_426818's whole body sits inside `if (sub_421969() > 1)`
+    // sub_426818's whole body only runs when sub_421969 reports more than one
+    // side left
     // (native/src/game/batch_0x42583B.cpp 678-679), and sub_421969 is
     // recomputed every frame from the player pass's alive tally
     // (dword_4621D0 -> dword_4621D4). So once one side is left the spiral
@@ -996,18 +999,18 @@ TEST_CASE("a bomb landing on a head stuns and scatters powerups") {
 }
 
 // docs/re/facts.md "Head hit" (gate-fidelity follow-up, 2026-07-10): the
-// disease audit flagged sub_41F29B's `if (!*((_DWORD*)v111+2))` gate
+// disease audit flagged sub_41F29B's "player dword at +8 is zero" gate
 // (~22904, mirrored locally in sub_41EC84 ~22699) as "adjacent, not acted
 // on" because it also wraps the flame-death check and the floor-powerup
 // pickup dispatch. Full brace-traced re-read: that DWORD at offset+8 is NOT
 // the stun countdown -- it is the player's "already died this round" flag,
-// set only by sub_41DCB2 (~21956, `*(_DWORD*)(v5+8) = 1`, itself guarded on
+// set to 1 only by sub_41DCB2 (~21956, itself guarded on
 // "not already dead") and cleared only by the round-entry reset (~22874),
 // which never re-fires after a death (no mid-round respawn). The REAL
-// head-hit stun counter is a SEPARATE WORD field at offset+58 (sub_421F7E's
-// `a1[29] = 16`, confirmed by its explicit `_WORD *a1` parameter typing) --
+// head-hit stun counter is a SEPARATE WORD field at offset+58, which
+// sub_421F7E sets to 16 (its parameter is typed as a word pointer) --
 // it is read at pseudo.c ~22982/~23086 and gates only ONE thing: new-input
-// acquisition (the `v113` local at ~23028, which skips sub_41E61E/AI so the
+// acquisition (the acquire-gate local at ~23028, which skips sub_41E61E/AI so the
 // player can't change direction or fire a new action) plus a cosmetic
 // standing-animation frame pick. A merely-stunned-but-ALIVE player leaves
 // offset+8 at 0, so sub_42708D/sub_41DE63 (flame death) and sub_42542D/

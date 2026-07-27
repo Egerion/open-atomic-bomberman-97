@@ -825,11 +825,13 @@ ScreenDef victory_screen(bool team_mode, int player, int team) {
                      /*skippable*/ false};
 }
 // The main-menu model (sub_42B9CE) — the MenuItem struct, the seven-row
-// kMenuItems table (v10 dispatch order), and kMenuCount moved to
+// kMenuItems table (the original's selection-index dispatch order), and
+// kMenuCount moved to
 // screens/menu_screen.cpp with present_menu.
 
 // Cursor anchor over MAINMENU.PCX — CONFIRMED getvalue(700/701/702) (sub_42B9CE:
-// v11=getvalue(700)=X, v1=getvalue(701)=Y, getvalue(702)=Y-step; the bomb-
+// X comes from getvalue(700), Y from getvalue(701), the Y-step from
+// getvalue(702); the bomb-
 // trigger sprite is blitted at x=X, y=Y + Ystep*row). Read live from VALUELST
 // (columns of the multi-value row 700, whose own legend reads "X, Y - first item
 // / YS - y-spacing"); these fallbacks are that install's values (332,140,38) so
@@ -2073,7 +2075,7 @@ void GameApp::restore_from_attract() {
     setup_team_ = attract_saved_.team;
     selected_level_ = attract_saved_.level;
     team_play_ = attract_saved_.team_play;
-    attract_ = false;  // dword_464938 = 0
+    attract_ = false;  // the original clears dword_464938 here
 }
 
 void GameApp::reset_match_scores() {
@@ -2263,8 +2265,8 @@ int GameApp::run_app() {
                     // only (always true), and a gold player actually pending
                     // from a previous match's rounds. An Esc abort forfeits
                     // the whole Play flow (skip straight back to the menu,
-                    // mirroring sub_410F81's post-call `if (dword_464A68)
-                    // return`).
+                    // mirroring sub_410F81, which returns right after the call
+                    // whenever dword_464A68 is set).
                     if (options_.goldman && gold_player_ >= 0) {
                         AppInput wheelResult = present_goldman_wheel();
                         if (wheelResult == AppInput::Quit) return 0;
@@ -2361,7 +2363,7 @@ int GameApp::run_app() {
                 // Gold player assignment (docs/re/goldman-roulette.md §2,
                 // pseudo.c 30004-30022, LABEL_102): sub_42A3F6 only reaches
                 // the RESULTS tier (and its unconditional dword_46492C
-                // write) when sub_4219B0(...) != -1, i.e. a ROUND SURVIVOR
+                // write) when sub_4219B0 returns anything but -1, i.e. a ROUND SURVIVOR
                 // exists (`w >= 0` below) — a DRAW falls through to the
                 // separate DRAW.PCX branch instead and never touches
                 // dword_46492C at all, so a pending gold player survives a
@@ -2384,7 +2386,7 @@ int GameApp::run_app() {
                     // on the clinching round (with the "WINS THE MATCH!" outcome
                     // line) and plays the 2000 "we have a winner" voice UNDER it
                     // — the ONLY site that voice fires (batch_0x4293E5.cpp:1298,
-                    // inside the v73 != -1 clinch branch) — THEN cuts to VICTORY.
+                    // inside the branch taken when v73 is not -1) — THEN cuts to VICTORY.
                     // The port formerly skipped the scoreboard and jumped straight
                     // to VICTORY (and mis-fired 2000 on every round win too).
                     audio_.start_music(kDrawMusicId);  // 1130 under RESULTS/VICTORY (doc §2)
@@ -2397,7 +2399,7 @@ int GameApp::run_app() {
                             victory_screen(is_team_mode(), clinched, setup_team_[clinched]));
                     // Campaign stage advance (docs/re/campaign.md
                     // "Advances through campaign stages automatically",
-                    // sub_401312/sub_40133F gated `if (dword_46489C)`): a
+                    // sub_401312/sub_40133F, both gated on dword_46489C): a
                     // decided match steps dword_4648B0 to the next stage and
                     // loads its scheme/roster instead of returning to the
                     // menu. sub_4016DA's per-tick round pacing (RE'd
@@ -2418,7 +2420,7 @@ int GameApp::run_app() {
                     // original's own post-last-stage behaviour is unpinned
                     // — see ROADMAP.md).
                     if (campaign_active_ && ev != AppInput::Quit) {
-                        ++campaign_stage_index_;  // ++dword_4648B0
+                        ++campaign_stage_index_;  // the original bumps dword_4648B0 here
                         if (campaign_stage_index_ < static_cast<int>(campaign_stages_.size()) &&
                             load_campaign_stage(campaign_stage_index_, campaign_state())) {
                             reset_match_scores();
@@ -2444,8 +2446,8 @@ int GameApp::run_app() {
                 } else if (w >= 0) {
                     // Round win, match not over: show the running scores. NO
                     // winner voice here — sub_42A3F6 fires sub_427BFB(2000) only
-                    // in the clinch branch (v73 != -1); a non-clinching RESULTS
-                    // pass (v73 == -1, batch_0x4293E5.cpp:1260-1272) plays no
+                    // when the clinch index is a real player; a non-clinching
+                    // RESULTS pass (index -1, batch_0x4293E5.cpp:1260-1272) plays no
                     // "we have a winner" cue. (The port formerly fired it every
                     // round win.)
                     audio_.start_music(kDrawMusicId);  // 1130 under RESULTS (doc §2 correction)
@@ -2479,7 +2481,7 @@ int GameApp::run_app() {
                     // prefix to RESULTS", raw 0x42A875-0x42A88B: the DRAW wait
                     // loop ends with NO jump and execution lands in LABEL_102,
                     // which loads RESULTS.PCX; the RESULTS-only path is the
-                    // `goto LABEL_102` taken when a survivor EXISTS). So a drawn
+                    // jump to LABEL_102 taken when a survivor EXISTS). So a drawn
                     // round shows both screens and dismisses both wait loops.
                     // The port showed DRAW alone until this was pinned.
                     if (ev != AppInput::Quit && ev != AppInput::Back) ev = present_scoreboard();

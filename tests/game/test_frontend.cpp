@@ -268,8 +268,9 @@ TEST_CASE("a full lap of the cycle returns to OFF, for any joystick count") {
     }
 }
 
-// Locks the setup-screen's TEAM default (sub_4049C0, pseudo.c line 6716:
-// `dword_46481C[12*j+8] = j & 1`, re-applied on EVERY entry to the setup
+// Locks the setup-screen's TEAM default (sub_4049C0, pseudo.c line 6716 writes
+// each slot's team field — dword_46481C, stride 12, offset +8 — with the slot
+// index's low bit, i.e. slot parity; re-applied on EVERY entry to the setup
 // screen via sub_410F81 -> sub_4046CC -> sub_403EEE -> sub_4049C0 —
 // docs/re/setup-screens.md "TEAM default — CORRECTED 2026-07-09"). Before
 // this fix `present_setup()` left every slot's team at its all-0 default, so
@@ -382,7 +383,8 @@ TEST_CASE("tally_kills counts an owner kill, skips a self-kill and a no-killer d
     CHECK(kills[0] == 2);
 }
 
-// §1's v78==1 tie-break: "the clinch instead compares the highest round-kill
+// §1's unique-leader tie-break (leader count exactly 1): "the clinch instead
+// compares the highest round-kill
 // total against the target, breaking ties by requiring a single unique
 // leader". win_by_kills_clinch (results.hpp) mirrors that predicate exactly.
 TEST_CASE("win_by_kills_clinch requires reaching the target AND a unique leader") {
@@ -398,7 +400,7 @@ TEST_CASE("win_by_kills_clinch requires reaching the target AND a unique leader"
     CHECK(win_by_kills_clinch(kills, present, /*target=*/5) == -1);
 
     kills[0] = 5;
-    kills[1] = 5;  // tied at the target: v78 != 1, no clinch
+    kills[1] = 5;  // tied at the target: leader count != 1, no clinch
     CHECK(win_by_kills_clinch(kills, present, /*target=*/5) == -1);
 
     // An absent slot's always-0 kill count must not fake a tie against a
@@ -425,7 +427,7 @@ TEST_CASE("assign_gold_player mirrors dword_46492C's RESULTS-tier write") {
     // goldman on, solo: the clinching player's own index passes through
     // untouched (v73 IS a player index outside team mode).
     CHECK(assign_gold_player(true, false, 2, team_of) == 2);
-    // No clinch yet this RESULTS pass (v73 == -1): no pending gold player.
+    // No clinch yet this RESULTS pass (clinch index -1): no pending gold player.
     CHECK(assign_gold_player(true, false, -1, team_of) == -1);
 
     // goldman on, team mode: dword_46492C stores the clinching player's team
@@ -491,8 +493,9 @@ TEST_CASE(
 }
 
 // docs/re/campaign.md "Round pacing" clauses 4-5 (sub_4016DA, pseudo.c
-// 4634-4648): `for (i=0;i<10;++i) { sub_421DD2(i,&type,0); if (type!=1 &&
-// type && sub_4228C4(i)) return; }` falling through -> replay the stage.
+// 4634-4648): the scan over slots 0..9 returns early once sub_421DD2 reports a
+// slot type that is neither 0 nor 1 and sub_4228C4 reports that slot alive;
+// falling through the whole loop instead -> replay the stage.
 TEST_CASE("campaign_round_needs_replay: an all-COMPUTER roster replays even with a live side") {
     std::array<bool, kMaxPlayers> present{};
     std::array<bool, kMaxPlayers> alive{};
@@ -542,7 +545,7 @@ TEST_CASE("campaign_round_needs_replay: a fully empty roster replays (vacuous fa
 }
 
 // docs/re/in-match-shell.md §3 (sub_4105D2): MM:SS via MESSAGES.TXT id 281 =
-// "%u:%02u" (v13/60, v13%60 on whole seconds remaining).
+// "%u:%02u", fed the whole seconds remaining divided by 60 and modulo 60.
 TEST_CASE("format_clock splits whole seconds into MM:SS via the 281 format") {
     CHECK(format_clock("%u:%02u", 0) == "0:00");
     CHECK(format_clock("%u:%02u", 5) == "0:05");

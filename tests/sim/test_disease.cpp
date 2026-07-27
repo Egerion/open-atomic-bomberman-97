@@ -138,10 +138,11 @@ TEST_CASE("swap exchanges position only, not move_budget") {
 
 TEST_CASE("a swap roll with no valid target still emits the pickup announce") {
     // diseases.md finding 1: sub_41DFB6 (batch_0x41DAA7.cpp:308-315, pseudo.c
-    // 22041+) plays the pickup voice line as soon as the disease roll (v7) and
-    // announce flag (a2) are known — strictly BEFORE the `if (v7 == 7)` Swap
-    // target scan. A Swap that finds nobody alive to swap with therefore STILL
-    // announces (the sound is a pure function of v7 + a2). The earlier port
+    // 22041+) plays the pickup voice line as soon as the disease roll and
+    // announce flag (a2) are known — strictly BEFORE the branch on the roll
+    // being 7 that runs the Swap target scan. A Swap that finds nobody alive to
+    // swap with therefore STILL announces (the sound is a pure function of the
+    // roll and the announce flag). The earlier port
     // `continue`d past give() on a no-target Swap and silenced the whole pickup
     // (its own "A skull token always emits an Infected event" comment was the
     // exact assumption this case disproves). Here player 1 is dead, so player 0
@@ -169,7 +170,8 @@ TEST_CASE("a swap roll with no valid target still emits the pickup announce") {
 TEST_CASE("a stunned-but-alive player still ages its disease") {
     // CORRECTED 2026-07-10 (facts.md "Stun does NOT gate flame-death or
     // pickup"): sub_41F29B's freshness--/age/cure block is nested inside the
-    // ALIVE gate `if (!+8)` (~22904) — +8 is the died-this-round flag, NOT the
+    // ALIVE gate at ~22904, which requires +8 to be clear — +8 is the
+    // died-this-round flag, NOT the
     // +58 head-hit stun countdown (which is decremented INSIDE that same block
     // at ~22982; a field cannot gate a block that only decrements itself). So a
     // merely-stunned-but-alive player ages its disease normally — only a DEAD
@@ -210,9 +212,10 @@ TEST_CASE("disease freshness burns kSubFrames per tick, like the head-stun") {
 TEST_CASE("a stunned-but-alive player still spreads and catches a disease") {
     // CORRECTED 2026-07-10 (facts.md "Stun does NOT gate flame-death or
     // pickup"): both ends of sub_41F29B's contagion scan gate on ALIVE, not
-    // stun. The source sits inside the same `if (!+8)` block as the ager; the
-    // target validity check is `!v103[2]` (+8/not-dead, pseudo.c 22951), NOT
-    // the +58 stun. So a stunned-but-alive player both spreads and catches.
+    // stun. The source sits inside the same block as the ager, the one guarded
+    // by the +8 dead flag being clear; the target validity check likewise tests
+    // the candidate's +8 not-dead dword (pseudo.c 22951), NOT the +58 stun. So a
+    // stunned-but-alive player both spreads and catches.
     // Pins against the earlier mislabel's spurious `stun > 0` skips.
     Simulation source_stunned(open_config());
     infect(source_stunned.state().players[0], Disease::Fast, 300);
@@ -233,7 +236,10 @@ TEST_CASE("a stunned-but-alive player still spreads and catches a disease") {
 
 TEST_CASE("a stunned-but-alive player is still a valid swap target") {
     // sub_41DFB6's Swap target scan (pseudo.c 22073) validates a candidate with
-    // `v3 != v5 && +16 && (…||*v3) && !v3[2]` — `!v3[2]` is +8/not-dead, NOT the
+    // four conjuncts: the candidate is not the diseased player itself, its +16
+    // field is set, a disjunction one of whose arms is its first field being
+    // nonzero holds, and its
+    // +8 dead flag is clear. That last conjunct is +8/not-dead, NOT the
     // +58 stun. open_config has exactly two players, so player 0's ONLY possible
     // swap target is the (stunned) player 1: when the skull rolls Swap the two
     // must exchange positions. Under the earlier mislabel (`stun == 0` in

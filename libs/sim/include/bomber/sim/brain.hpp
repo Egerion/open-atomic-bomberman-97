@@ -13,7 +13,8 @@
 //  - Pointers -> indices. The original keeps raw actor/cell pointers (+16/+32);
 //    we store the player SLOT or the TILE (snapshot-safe, hashable). Behaviours
 //    only ever read the target's tile + liveness, both recoverable each tick.
-//  - Timers in TICKS. The original accumulates ms (`+= dword_464958`) and times
+//  - Timers in TICKS. The original accumulates ms (each frame adds the frame
+//    delta held in dword_464958 to the timer) and times
 //    out at 10*msPerFrame; at the locked 20 Hz that is exactly 10 ticks, stored
 //    here as an integer countdown (no wall clock enters the sim, ADR-0003).
 //  - Tile granularity. The original packs 16.16 coords (tile in the high word);

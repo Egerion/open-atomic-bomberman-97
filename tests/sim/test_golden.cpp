@@ -143,7 +143,8 @@ MatchConfig pillars_config() {
 //      hashed dud_gate VALUE grew x20 (same single setup RNG draw). Within
 //      3000/1500-tick runs the gate (>= 3600 ticks) never opens, so B's and
 //      C's in-run dud re-arm+roll draws VANISH.
-//   2. Kick fidelity (sub_41EC84 `!v35` in-loop probe): the kick now fires on
+//   2. Kick fidelity (sub_41EC84's in-loop kick probe, the branch taken when
+//      the along-axis offset to the tile centre is zero): the kick now fires on
 //      the ARRIVAL tick (was one tick later), and a bomb sliding in another
 //      direction is snapped + REDIRECTED (sub_42464B). Kick+action2 stops own
 //      sliding bombs (sub_4247C5). Reaches B (kick players) and E (the
@@ -173,7 +174,8 @@ MatchConfig pillars_config() {
 //      and a surviving disease transmits its post-age value, not last
 //      tick's.
 //   2. Disease aging and contagion (both source and target eligibility) are
-//      now frozen for stunned players (`if (!+8)` wraps the whole block in
+//      now frozen for stunned players (a gate on +8 being clear wraps the
+//      whole block in
 //      the original), matching the "present && alive && stun==0" valid-
 //      other-player test used everywhere else in this codebase (ai.cpp
 //      etc.).
@@ -191,7 +193,7 @@ MatchConfig pillars_config() {
 //
 // CORRECTION 2026-07-10 (offset +8/+58 mislabel, docs/re/facts.md "Stun does
 // NOT gate flame-death or pickup" + "Disease system fidelity audit" point 3
-// CORRECTED): the disease audit above got point 2 WRONG. The `if (!+8)` block
+// CORRECTED): the disease audit above got point 2 WRONG. The +8-is-clear block
 // that wraps disease aging/contagion is the ALIVE gate (+8 = died-this-round
 // flag), NOT a "not stunned" gate — the +58 head-hit stun is a separate WORD,
 // decremented INSIDE that same block (~22982). The spurious `stun == 0` /

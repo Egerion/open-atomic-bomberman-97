@@ -18,12 +18,24 @@ nodename.ini
 .claude/
 
 # Never commit original Atomic Bomberman assets (Interplay/Konami property).
-# The engine reads them from your own game install (see README).
+# The engine reads them from your own game install (see README). Both cases:
+# the 1997 files ship upper-case, extraction tools tend to write lower-case.
 DATA/
 *.ANI
+*.ani
 *.RSS
+*.rss
 *.PCX
+*.pcx
 *.SCH
+*.sch
+*.RES
+*.res
+*.BM
+*.FON
+*.fon
+*.RMP
+*.rmp
 extracted/
 
 # Reverse-engineering working material — facts only live in docs/re/*.md.
@@ -38,6 +50,18 @@ extracted/
 *.nam
 *.til
 pseudo.c
+pseudo*.c
+*.pseudo
+
+# Disassembly listings and RE tool output are exe-derived too: docs quote
+# addresses and describe behaviour in prose, never the generated text itself.
+*.asm
+*.lst
+*.dis
+disasm*.txt
+idalog.txt
+*debug.log
+3debug.log
 
 # The 1:1 native transliteration project (native/) is DERIVED from the
 # binary's decompilation — it lives on disk for local work and as the

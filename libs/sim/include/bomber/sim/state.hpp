@@ -24,8 +24,9 @@ struct State {
     std::int32_t ticks_left = 0;  // match countdown; 0 = time up (draw)
     // Round-start input freeze, in ticks (dword_4621E0: armed to 50ms ×
     // getvalue(30) ≈ 1 s by round init sub_4214BC, counted down at the top
-    // of every player pass, and while nonzero sub_41F29B's `v113 &&
-    // !dword_4621E0` gate skips BOTH the AI brain and the human input read —
+    // of every player pass, and while nonzero sub_41F29B's acquisition gate —
+    // which needs its new-input flag set AND dword_4621E0 zero — skips BOTH the
+    // AI brain and the human input read —
     // nobody moves or acts during the opening colour-shuffle second). Armed
     // by build_state from Tuning::input_freeze_ticks; 0 on raw test states.
     // docs/re/facts.md "Round-start input freeze".
@@ -108,7 +109,8 @@ struct State {
     // (sub_423209's queue: dword_4621F8/FC, 100 slots). Drained once per
     // tick, right after players act and before bombs move
     // (FlameSystem::drain_chain_queue) — mirroring the once-per-tick
-    // `dword_462210 != dword_464994` drain guard at the top of sub_42331C,
+    // drain guard at the top of sub_42331C (which fires only while the queue
+    // stamp dword_462210 still differs from the tick counter dword_464994),
     // which likewise follows the whole player pass. A trigger-button press
     // (queued DURING the player pass) is therefore caught by THAT SAME
     // tick's drain; a flame-arm/slide/landing hit (queued DURING bomb

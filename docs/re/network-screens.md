@@ -44,15 +44,17 @@ row 1 = START (host) but `sub_42B0CE` sets mode **2**, which every doc read as
 
 Four independent proofs:
 
-1. **`sub_40C035`** (the setter, 0x40C035): `dword_460058 = a1;` and **only**
-   for `a1 == 2` it also does `dword_4600D4 = HIWORD(dword_46013C)` — i.e.
+1. **`sub_40C035`** (the setter, 0x40C035): it stores its argument into
+   `dword_460058`, and **only** when that argument is **2** does it also copy
+   the **upper 16 bits of `dword_46013C`** (this machine's own node id) into
+   `dword_4600D4` — i.e.
    mode 2 makes the machine *its own session authority*. On mode 1
    `dword_4600D4` stays 0 until a JOIN ACCEPT fills it with the host's node
    id (`sub_40D12D`).
 2. **`sub_40CD1C`** (packet framing, 0x40CD1C): the datagram header's
    authority field is `dword_4600D4` when `dword_460058 == 1` (the host I am
-   attached to) and `HIWORD(dword_46013C)` — my own id — when
-   `dword_460058 == 2`.
+   attached to), and the **upper 16 bits of `dword_46013C`** — my own id —
+   when `dword_460058 == 2`.
 3. **`sub_4105D2`** (match clock, 0x4105D2): mode 1 *copies* the clock from
    the received value; mode 2 computes it from the wall clock and broadcasts
    it (`sub_40FCA1`). The clock authority is mode 2.
@@ -60,12 +62,12 @@ Four independent proofs:
    only: the game announce, the start broadcast, and the options push. Only a
    host does those.
 
-Raw bytes at the two screen heads (settles the assignment itself):
-
-```
-0x42B0DC  mov eax, 2 ; call 0x40C839   ; sub_42B0CE → HOST
-0x42B48B  mov eax, 1 ; call 0x40C839   ; sub_42B47D → GUEST
-```
+Raw bytes at the two screen heads settle the assignment itself: at
+**0x42B0DC** (inside `sub_42B0CE`) the literal **2** is loaded into the
+argument register immediately before the call to `sub_40C839` → **HOST**; at
+**0x42B48B** (inside `sub_42B47D`) the literal **1** is loaded the same way
+→ **GUEST**. Nothing else intervenes between the load and the call in either
+case.
 
 Corroborated three more ways: VALUELST's own section comments label 750-763
 "JOIN NET GAME SCREEN" (the ids `sub_42B47D` reads) and 765-778 "START NET
@@ -85,7 +87,8 @@ client table while Screen B reads the 10-entry server table.
 ## 2. Entry gate — `sub_40C839(role)` @0x40C839
 
 Called as the first statement of both screens; **a non-zero return aborts the
-screen immediately** (`test eax,eax / jne <epilogue>`), returning to the menu
+screen immediately** — the raw bytes test the returned value and branch
+straight to the screen's epilogue when it is not zero — returning to the menu
 with no further drawing. Returns `dword_4600D0 == 0`, i.e. non-zero = failed.
 
 Sequence:
@@ -100,10 +103,13 @@ Sequence:
    - else pop the **protocol picker**: 5 strings `getstring(630+i)` are
      loaded, the widget is called as
      `sub_41485A(prompt=getstring(620), items, 0, count=getvalue(1110), 150,
-     150, ink=byte_49D38F)` and it renders exactly `count` rows
-     (`sub_42FEF0(list, count)`'s `for (i = 0; i < a2; …)`).
-4. **`if (dword_46012C < 1 || dword_46012C > 3) → fail`** (raw:
-   `cmp [46012C],1 / jl` … `cmp [46012C],3 / jle`): `dword_4600D0 = 0`,
+     150, ink=byte_49D38F)` and it renders exactly `count` rows — the list
+     renderer `sub_42FEF0` loops from 0 up to (but not including) its own
+     second argument, that same count.
+4. **Range check — `dword_46012C` must be in 1..3, inclusive; anything else
+   fails.** Confirmed against the raw bytes: two signed comparisons against
+   the literals **1** and **3**, the first branching away when below, the
+   second falling through when at or below. On failure: `dword_4600D0 = 0`,
    `sub_40C035(0)`, **return 1** — silently, no modal.
 5. Bind the transport (`sub_43B81D(dword_46012C, &table@0x4600F0)` fills a
    60-byte vtable at 0x4600F0), open it (`dword_4600F4()`), and for
@@ -146,7 +152,7 @@ shipped executable supports **IPX / modem / serial** and TCP/IP is dead data.
 
 | global | meaning |
 |---|---|
-| `dword_46013C` | HIWORD = **this machine's node id**, a nonzero random 16-bit value drawn once at boot (`sub_40C74C`: `do { HIWORD = rand(); } while (!HIWORD);`). LOWORD = the machine count once a session forms. |
+| `dword_46013C` | Its **upper 16 bits** are **this machine's node id**, a nonzero random 16-bit value drawn once at boot — `sub_40C74C` redraws `rand()` into that half in a loop until it comes out non-zero. Its **lower 16 bits** are the machine count once a session forms. |
 | `unk_460140` | **this machine's node name**, ≤40 chars. `sub_40FE34()` returns `&unk_460140`. Loaded from install-root **`NODENAME.INI`** (first line, `fgets(buf,40)`, `\n` stripped — `sub_40C08C`, called from the boot init `sub_40C74C`); if the file is missing, a random default `getstring(500 + rand() % getvalue(47))`, `getvalue(47) = 49` names. Written back by `sub_40C140` (`fopen("nodename.ini","wt")` + `fputs`) from the **shutdown hook `sub_40C4DB`** (registered with `sub_410EBF`, the same atexit-style registrar `options.ini`'s `sub_405DE3` uses) — so an edited name persists, and a randomly-assigned one becomes permanent after the first run. Editable from Options row 2 (`sub_4074DC` → `sub_40FE55`, 30-char edit field). |
 | `word_45FFA4[4]` / `dword_45FFFC[4]` | **HOST-side client table**: node id + a 41-byte name buffer per connected client. Cap **4 clients**. Cleared by `sub_40F290()`. |
 | `word_4600D8[10]` / `dword_45FF04[10]` / `dword_45FF54[10]` | **GUEST-side server table**: node id + 41-byte name + the announced client count, per discovered server. Cap **10 servers seen**. Cleared by `sub_40F243()`. |
@@ -155,13 +161,15 @@ shipped executable supports **IPX / modem / serial** and TCP/IP is dead data.
 | `word_460130[5]` | the final session node list — `[0]` = host, `[1..4]` = clients. **The 5-machine cap**: `sub_40E765` drops any datagram whose sender is not one of these 5. |
 | `dword_45BAC4` | **network packet version = 21356**; stamped into every datagram header and checked on receive (`sub_40E765`). Mismatched builds simply never see each other — the original's version of ADR-0011's `build_hash`. |
 
-Accessors the two screens use (all `@<eax>` in, `@<eax>` out):
+Accessors the two screens use (all one-argument, taking the index in the
+first register-argument slot and returning in the same register, per the
+Watcom convention noted at the top of this doc):
 
 | fn | returns |
 |---|---|
-| `sub_40F1E9(i)` 0x40F1E9 | `(int16)word_45FFA4[i]` — client i's node id, 0 = empty slot |
+| `sub_40F1E9(i)` 0x40F1E9 | `word_45FFA4[i]` as a signed 16-bit value — client i's node id, 0 = empty slot |
 | `sub_40F217(i)` 0x40F217 | `dword_45FFFC[i]` — **char\*** to client i's name |
-| `sub_40F163(i)` 0x40F163 | `(int16)word_4600D8[i]` — server i's node id, 0 = empty slot |
+| `sub_40F163(i)` 0x40F163 | `word_4600D8[i]` as a signed 16-bit value — server i's node id, 0 = empty slot |
 | `sub_40F191(i)` 0x40F191 | `dword_45FF04[i]` — **char\*** to server i's name |
 | `sub_40F1BD(i)` 0x40F1BD | `dword_45FF54[i]` — **how many clients server i already has** |
 
@@ -204,16 +212,21 @@ Accessors the two screens use (all `@<eax>` in, `@<eax>` out):
 ### The 4th VALUELST column is CLIP WIDTH, not colour — CORRECTION
 
 `setup-screens.md` and `multiplayer-deep.md` §2 both record 763/778 as "the
-colour". They are the **max-width / clip** argument. Raw bytes (Screen B's
-title draw, mirrored exactly on Screen A):
+colour". They are the **max-width / clip** argument. Read out of the raw
+bytes of Screen B's title draw (mirrored exactly on Screen A), the arguments
+`sub_41696C` receives are, by position:
 
-```
-push [0x495390]      ; a7 outline
-push [0x497F8F]      ; a6 ink
-eax=0x2EF(751); call getvalue; push eax   ; a5 = Y
-eax=0x2EE(750); call getvalue; mov ecx,eax ; a3 = X      (HR-dropped)
-eax=0x2F1(753); call getvalue; mov ebx,eax ; a4 = CLIP W
-```
+| arg | source | meaning |
+|---|---|---|
+| 3rd (in ECX) | `getvalue(750)` | **X** — *HR-dropped*, the decompile never shows it |
+| 4th (in EBX) | `getvalue(753)` | **CLIP WIDTH** — the value the older docs called "colour" |
+| 5th (stacked) | `getvalue(751)` | **Y** |
+| 6th (stacked) | the global at `0x497F8F` | **ink** |
+| 7th (stacked) | the global at `0x495390` | **outline** |
+
+Note that 750/751 are fetched and consumed as X and Y, while 753 goes to the
+width slot — the ids are NOT read in numeric order, and 752 is not read at
+all by this call.
 
 Inks are never VALUELST ids on these screens — they are the fixed COLOR.PAL
 LUT byte globals (§8). This is the same correction the 2026-07-12 pixel pass
@@ -258,12 +271,15 @@ Row *i* is drawn at `y = Y + YSTEP*i`.
 3. Title: `sprintf(buf, getstring(73), sub_40FE34())` — **1 arg, `%s` = our
    node name** — at (120, 80), clip 400, ink `byte_497F8F`, outline black.
 4. Header: `getstring(70)` at (120, 120), clip 250, ink `byte_49D38F`.
-5. **Client list, `for i in 0..3`** — `v = sub_40F1E9(i)`:
-   - `v != 0` → `sprintf(buf, getstring(71), sub_40F217(i), v)` and
-     `sum += v`. Format is `%s`, `%u` = **client name, client node id**
-     (raw: `push v ; push name ; push fmt ; push buf ; call sprintf ;
-     add esp,0x10` — the second arg is *HR-dropped*).
-   - `v == 0` → `sprintf(buf, getstring(72))`, **no args**.
+5. **Client list, rows `i = 0..3`** — each row keys off that client's node
+   id, `sub_40F1E9(i)`:
+   - **node id non-zero** → one sprintf of `getstring(71)` whose format is
+     `%s`, `%u` = **client name (`sub_40F217(i)`), client node id**; and the
+     node id is added into the running `sum`. Confirmed against the raw
+     bytes: the call pushes node id, then name, then the format string, then
+     the destination buffer, cleaning up **0x10 = 4 dwords** afterwards — the
+     second data arg is *HR-dropped*.
+   - **node id zero** → one sprintf of `getstring(72)`, **no args**.
    - drawn at (120, 140 + 20·i), clip 400, ink white, outline black.
    - **There is no selection cursor and no per-row interaction on Screen A.**
 6. If `sum != last_sum` → `t_change = now; last_sum = sum` (the client set
@@ -323,7 +339,8 @@ close the transport, `sub_43B86D`, `sub_40C035(0)`, `dword_4600D4 = 0`),
 
 Entry: `sub_40C839(1)` → `sub_4121FF` → `dword_4646BC = 0` → `sub_411CF8` →
 `sub_4224E2` → `sub_40FF57` → music 1040.
-**`LABEL_3` @0x42B4C5** (jumped to by three of the error paths):
+**The restart point, @0x42B4C5** (jumped to by three of the error paths;
+called `[RESTART]` in the state machine below):
 `dword_46492C = -1`, `sub_4148E5()` (a **new random backdrop**),
 **`sub_40F243()`** (clear the server list), `sel = 0`, `done = 0`.
 
@@ -338,12 +355,13 @@ inserts/refreshes each server by node id and stores its name and client count.
 2. Title: `sprintf(buf, getstring(66), sub_40FE34())` — `%s` = our node name —
    at (120, 80), clip 400, ink `byte_497F8F`, outline black.
 3. Header: `getstring(60)` at (120, 120), clip 250, ink white.
-4. **Server list, `for i in 0..9`** — `v = sub_40F163(i)`:
+4. **Server list, rows `i = 0..9`** — each row keys off that server's node id,
+   `sub_40F163(i)`:
 
    | state | line |
    |---|---|
-   | `v != 0` (a server is present) | `sprintf(buf, getstring(62), sub_40F191(i), sub_40F1BD(i), v)` — **3 args in this order: `%s` server name, `%u` how many clients it already has, `%u` its node id**. Raw: `push v ; push sub_40F1BD(i) ; push name ; push fmt ; push buf ; call sprintf ; add esp,0x14`. **Two of the three were HR-dropped** — the decompile shows only the name. |
-   | `v == 0` | `sprintf(buf, getstring(63))` — **no args** (the decompile's third argument is a phantom). |
+   | node id non-zero (a server is present) | the row is one sprintf of `getstring(62)` with **3 args in this order: `%s` = the server name (`sub_40F191(i)`), `%u` = how many clients it already has (`sub_40F1BD(i)`), `%u` = its node id**. Confirmed against the raw bytes: the call pushes node id, then client count, then name, then the format string, then the destination buffer, and cleans up **0x14 = 5 dwords** of stack afterwards — proving five arguments. **Two of the three data args were HR-dropped** — the decompile shows only the name. |
+   | node id zero | one sprintf of `getstring(63)` — **no args** (the decompile's third argument is a phantom). |
 
    drawn at (120, 140 + 20·i), clip 400, ink `byte_49D38F`, outline black.
 5. **Selection cursor** — `sub_413BD6(x, y)` with, raw:
@@ -376,8 +394,8 @@ inserts/refreshes each server by node id and stores its name and client count.
 ```
 [SELECT]  Enter/Space
    |  SFX 10
-   |  v = sub_40F163(sel)
-   +-- v == 0 ------------> modal(95, 65)  "must select a server"   -> [SELECT]
+   |  id = sub_40F163(sel)
+   +-- id == 0 -----------> modal(95, 65)  "must select a server"   -> [SELECT]
    +-- sub_40F1BD(sel) >= 4 -> modal(96, 7) "server already full"   -> [SELECT]
    |        (this one is NOT wrapped in sub_431178/sub_431360)
    v
@@ -389,7 +407,7 @@ inserts/refreshes each server by node id and stores its name and client count.
                 sub_413CB0(1000);           // 1000 ms  (10 x Sleep(100))
                 t1 = timeGetTime(); }
            while (!sub_40F386() && t0 + 3000 > t1)     // ~3 attempts
-   +-- timed out ---------> modal(95, 100) "unable to connect"  -> LABEL_3
+   +-- timed out ---------> modal(95, 100) "unable to connect"  -> [RESTART]
    v   (accepted: dword_4600D4 = host id, via kind 18)
 [WAIT]     sub_40F320(0)                    // clear the start flag
            loop {
@@ -401,7 +419,7 @@ inserts/refreshes each server by node id and stores its name and client count.
              pump; sub_415C1F(); pump
              if (sub_40F342()) started = 1              // kind-14 arrived
              if (!sub_40F163(sel))                      // host vanished
-                 modal(95, 110) -> LABEL_3
+                 modal(95, 110) -> [RESTART]
              if (getkey() == 27) -> leave the screen
            } until started
    v
@@ -459,9 +477,9 @@ shared local screens**, not from the network screens. Their net behaviour:
   clear it. Type 4 is the only marker of "someone else's player".
 - **Guests are read-only** on both shared screens: every edit path is guarded
   by `sub_40C06A() != 1`, and a guest that presses an edit key or Enter falls
-  through to a shared `sub_427961(40)` label (`LABEL_159` in `sub_410F81`,
-  `LABEL_97` in `sub_406DDE` — the SFX-40 sites `multiplayer-deep` §2.5 asked
-  about). They mean exactly "a guest touched a host-only control", nothing
+  through to that screen's single shared `sub_427961(40)` label — one such
+  label in `sub_410F81`, one in `sub_406DDE` (the SFX-40 sites
+  `multiplayer-deep` §2.5 asked about). They mean exactly "a guest touched a host-only control", nothing
   about a wait state.
 - The **host** makes every change and broadcasts it: roster type
   (`sub_40EE16`, kind 40), team flag (`sub_40EE59`, kind 58), **level index
@@ -528,10 +546,12 @@ ink is element `addr - 0x495390` of COLOR.PAL's 32768-byte RGB555→index LUT;
 `byte_497F8F`'s LUT-true value is new here — `results-and-options.md` only had
 the superseded nearest-search reading ("cyan-ish").
 
-The modal ink pair is unusual and was traced end to end:
-`sub_414340(EAX=line1, EDX=line2, EBX=ink, ECX=outline)` →
-`sub_4172BA(win, text, cx, y, [+0x10]=EBX, [+0x14]=ECX)` →
-`sub_41696C(..., a6=[+0x10], a7=[+0x14])`, and a6 is the last (top) pass.
+The modal ink pair is unusual and was traced end to end. `sub_414340` takes
+line 1, line 2, the ink and the outline in EAX, EDX, EBX and ECX
+respectively; it forwards the ink and outline into the window record at
+**+0x10** and **+0x14**; `sub_4172BA` reads those two slots back out and
+passes them as `sub_41696C`'s **6th and 7th** arguments — and the 6th is the
+last (top) pass.
 So the net modals are **dark-red glyphs with a bright-yellow outline**, not
 the usual white-on-black. Both lines share the pair; the box is centred, width
 `max(measure(l1), measure(l2))` clamped to ≥80 then +64, height
@@ -581,11 +601,12 @@ with an OK button (`sub_432298`) and a `getstring(27)` label.
 player × 10 … holds per-slot: active flag, the assigned controller/type … and
 the team."* That is wrong, and neither net screen touches it.
 
-`unk_4632CC` is the **Win32 joystick capabilities array**:
-`sub_42965C` @0x42965C does `pjc = (LPJOYCAPSA)((char*)&unk_4632CC + 404*i);
-joyGetDevCapsA(i, pjc, 0x194u);` — `0x194 = 404 = sizeof(JOYCAPSA)`. And
-`sub_429A61(i)` (bounds `0..9`) returns `&unk_4632CC + 404*i + 4` =
-`JOYCAPSA::szPname`, the stick's product name.
+`unk_4632CC` is the **Win32 joystick capabilities array**: `sub_42965C`
+@0x42965C computes the address `&unk_4632CC + 404*i` and passes it to
+`joyGetDevCapsA` for device `i` with a size argument of `0x194` — and
+`0x194 = 404 = sizeof(JOYCAPSA)`. And `sub_429A61(i)` (bounds `0..9`)
+returns `&unk_4632CC + 404*i + 4`, i.e. the `szPname` field of that
+`JOYCAPSA`, the stick's product name.
 
 The real per-slot stores are: the **152-byte player records** at
 `dword_461BC4` (type at +16, sub-index at +17 — `setup-screens.md`
