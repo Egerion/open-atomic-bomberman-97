@@ -1,0 +1,206 @@
+#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <doctest/doctest.h>
+
+#include <filesystem>
+#include <set>
+#include <string>
+
+#include "bomber/assets/install.hpp"
+#include "bomber/audio/sound_bank.hpp"
+
+using bomber::game::SoundBank;
+
+namespace {
+
+// A SOUNDLST stand-in: `n` consecutive ids from `base`, named base_i.
+void add_run(bomber::assets::res::SoundList& list, int base, int n, const std::string& prefix) {
+    for (int i = 0; i < n; ++i) list.names[base + i] = prefix + std::to_string(i);
+}
+
+SoundBank loaded(const bomber::assets::res::SoundList& list, std::uint32_t seed = 7) {
+    SoundBank bank;
+    bank.load(list, seed);
+    return bank;
+}
+
+}  // namespace
+
+TEST_SUITE("sound_bank") {
+
+TEST_CASE("a group is the contiguous run of occupied slots from the base") {
+    bomber::assets::res::SoundList list;
+    add_run(list, 20, 2, "blip");   // 20,21 then a gap
+    add_run(list, 40, 2, "buzz");   // 40,41
+    add_run(list, 160, 1, "drop");  // a lone slot
+    SoundBank bank = loaded(list);
+
+    CHECK(bank.group(20).size() == 2);
+    CHECK(bank.group(40).size() == 2);
+    CHECK(bank.group(160).size() == 1);
+    // Mid-group entry is legal (the run just starts later); an empty slot is not
+    // a group at all.
+    CHECK(bank.group(21).size() == 1);
+    CHECK(bank.group(22).empty());
+    CHECK(bank.pick(22) == -1);
+}
+
+TEST_CASE("the pick is least-played-first, not uniform") {
+    bomber::assets::res::SoundList list;
+    add_run(list, 100, 4, "clip");
+    SoundBank bank = loaded(list);
+
+    // Four draws must cover the whole group exactly once — an equal-use
+    // shuffle, which a uniform draw would not guarantee.
+    std::set<int> cycle;
+    for (int i = 0; i < 4; ++i) cycle.insert(bank.pick(100));
+    CHECK(cycle == std::set<int>{100, 101, 102, 103});
+
+    // ...and it keeps doing that, cycle after cycle.
+    for (int c = 0; c < 5; ++c) {
+        std::set<int> next;
+        for (int i = 0; i < 4; ++i) next.insert(bank.pick(100));
+        CHECK(next.size() == 4);
+    }
+}
+
+TEST_CASE("a two-member group alternates but is not a fixed round-robin") {
+    // The nav blip (20 letter1/letter2) and the drop-refused buzz (40
+    // enrt1/enrt2) are both two-member groups. Least-played-first means the two
+    // never repeat back to back ACROSS a pair boundary is not guaranteed, but
+    // each pair of draws always covers both members.
+    bomber::assets::res::SoundList list;
+    add_run(list, 20, 2, "blip");
+    SoundBank bank = loaded(list);
+    for (int pair = 0; pair < 20; ++pair) {
+        const int a = bank.pick(20);
+        const int b = bank.pick(20);
+        CHECK(a != b);
+    }
+}
+
+TEST_CASE("the load-time cull trims each block to its keep count") {
+    bomber::assets::res::SoundList list;
+    // Every culled block, at full authored size (the real file's counts).
+    add_run(list, 200, 20, "expl");
+    add_run(list, 400, 84, "get");
+    add_run(list, 701, 282, "taunt");  // note: 700 itself is NOT authored
+    add_run(list, 1200, 80, "many");
+    add_run(list, 1400, 144, "awesome");
+    add_run(list, 2300, 88, "disease");
+    add_run(list, 2700, 39, "hurry");
+    add_run(list, 2800, 11, "intro");  // NOT culled
+    SoundBank bank = loaded(list);
+
+    CHECK(bank.group(200).size() == 3);
+    CHECK(bank.group(400).size() == 7);
+    CHECK(bank.group(1200).size() == 2);
+    CHECK(bank.group(1400).size() == 7);
+    CHECK(bank.group(2300).size() == 8);
+    CHECK(bank.group(2700).size() == 5);
+    // The title intro block is absent from the cull table: all eleven takes
+    // survive every launch, which is why the boot sting has the most variety.
+    CHECK(bank.group(2800).size() == 11);
+}
+
+TEST_CASE("the cull COMPACTS, so a base the author never wrote still resolves") {
+    // SOUNDLST has no id 700 — the death-taunt block starts at 701 — yet the
+    // binary's call site is sub_427961(700). The compaction pass inside the
+    // cull is what makes that work.
+    bomber::assets::res::SoundList list;
+    add_run(list, 701, 282, "taunt");
+    SoundBank bank = loaded(list);
+    CHECK(bank.name(700) != nullptr);
+    CHECK(bank.group(700).size() == 7);
+    CHECK(bank.name(707) == nullptr);  // the run is terminated right after
+}
+
+TEST_CASE("a fresh session culls to a DIFFERENT random subset") {
+    bomber::assets::res::SoundList list;
+    add_run(list, 701, 282, "taunt");
+
+    auto survivors = [&](std::uint32_t seed) {
+        SoundBank bank = loaded(list, seed);
+        std::set<std::string> names;
+        for (int id : bank.group(700)) names.insert(*bank.name(id));
+        return names;
+    };
+    // Same data, different seed -> a different seven. (Two 7-of-282 subsets
+    // colliding is astronomically unlikely, so an exact-equality check is safe.)
+    CHECK(survivors(1) != survivors(2));
+    CHECK(survivors(1) == survivors(1));  // and the seed fully determines it
+}
+
+TEST_CASE("play counts are charged even when the group is smaller than the block") {
+    // A group of one is still a group: the counter advances and the same slot
+    // comes back every time.
+    bomber::assets::res::SoundList list;
+    add_run(list, 160, 1, "bmdrop3");
+    SoundBank bank = loaded(list);
+    for (int i = 0; i < 5; ++i) CHECK(bank.pick(160) == 160);
+}
+
+TEST_CASE("the jelly debounce swallows re-triggers within three frames") {
+    bomber::assets::res::SoundList list;
+    add_run(list, 135, 3, "boun");
+    SoundBank bank = loaded(list);
+
+    CHECK(bank.pick_debounced(135, 100) >= 0);
+    CHECK(bank.pick_debounced(135, 100) == -1);  // same frame
+    CHECK(bank.pick_debounced(135, 101) == -1);
+    CHECK(bank.pick_debounced(135, 102) == -1);
+    CHECK(bank.pick_debounced(135, 103) >= 0);  // last + 3
+    CHECK(bank.pick_debounced(135, 104) == -1);
+    // A backwards jump (new match, counter reset) is not swallowed.
+    CHECK(bank.pick_debounced(135, 5) >= 0);
+}
+
+TEST_CASE("against the real SOUNDLST.RES") {
+    // Pins the group sizes the shipped data actually produces. SKIPs without an
+    // install, the same way tests/visual does.
+    const std::filesystem::path dir = bomber::assets::default_game_dir();
+    if (dir.empty() || !std::filesystem::exists(dir / "DATA" / "RES" / "SOUNDLST.RES")) {
+        MESSAGE("no original install found - skipping");
+        return;
+    }
+    const auto list = bomber::assets::res::load_sounds(dir / "DATA" / "RES" / "SOUNDLST.RES");
+    SoundBank bank = loaded(list, 12345);
+
+    // Uncalled blocks keep every take (docs/re/sound-engine.md §3).
+    CHECK(bank.group(2800).size() == 11);  // the title intro sting
+    CHECK(bank.group(20).size() == 2);     // nav blip: letter1 / letter2
+    CHECK(bank.group(40).size() == 2);     // drop refused: enrt1 / enrt2
+    CHECK(bank.group(10).size() == 1);     // accept sting: menuexit alone
+    CHECK(bank.group(170).size() == 6);    // grab + the four "dead" bmbthrw clips
+    CHECK(bank.group(360).size() == 4);    // bombhit1..4 - the old range missed one
+    CHECK(bank.group(130).size() == 3);
+    CHECK(bank.group(135).size() == 3);
+    CHECK(bank.group(350).size() == 4);
+    CHECK(bank.group(1330).size() == 3);
+    CHECK(bank.group(160).size() == 1);  // bmdrop3 really is alone
+
+    // Culled blocks land exactly on their keep counts.
+    CHECK(bank.group(200).size() == 3);
+    CHECK(bank.group(400).size() == 7);
+    CHECK(bank.group(700).size() == 7);  // and 700 exists only thanks to the compaction
+    CHECK(bank.group(1200).size() == 2);
+    CHECK(bank.group(1400).size() == 7);
+    CHECK(bank.group(2300).size() == 8);
+    CHECK(bank.group(2700).size() == 5);
+
+    // Music ids must survive untouched - the cull may not move a track.
+    CHECK(bank.name(1000) != nullptr);  // TITLE.RSS
+    CHECK(bank.name(1010) != nullptr);  // MENU.RSS
+    CHECK(bank.name(1120) != nullptr);  // the generic stage-track fallback
+}
+
+TEST_CASE("an empty sound list is inert rather than fatal") {
+    SoundBank bank;
+    bomber::assets::res::SoundList list;
+    bank.load(list, 1);
+    CHECK(bank.size() == 0);
+    CHECK(bank.pick(20) == -1);
+    CHECK(bank.name(20) == nullptr);
+    CHECK(bank.pick_debounced(135, 0) == -1);
+}
+
+}  // TEST_SUITE

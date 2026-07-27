@@ -2841,7 +2841,16 @@ sound** in the original.
   facing); p[+37] = 0; } }`. `sub_424987` is the SAME launch primitive the punch
   uses — but here there is **NO `sub_427961` call anywhere in the block**. The
   throw is silent.
-- **The "bmbthrw" sounds are dead assets.** SOUNDLST lists `172,bmbthrw1`,
+- ~~**The "bmbthrw" sounds are dead assets.**~~ **RETRACTED 2026-07-27** — the
+  scan below is correct about the CALL SITES and wrong about the consequence.
+  `sub_427961` does not play the id it is given; it picks one member of the
+  CONTIGUOUS RUN starting there (see "The sound selection engine" below /
+  `docs/re/sound-engine.md`). SOUNDLST loads 170-175 with no gap, and 170 is not
+  a culled block, so `sub_427961(170)` — the bomb grab — picks across all six of
+  `grab1, grab2, bmbthrw1, bmbthrw3, bmbthrw4, bmbthrw5`. Nothing *names* 172;
+  the group walk reaches it anyway. The section's actual conclusion (the throw
+  RELEASE is silent) is unaffected. Original text kept below for the call-site
+  census, which stands:
   `173,bmbthrw3`, `174,bmbthrw4`, `175,bmbthrw5` (right after grab `170,grab1` /
   `171,grab2`). An exhaustive scan of every `sub_427961(N)` literal call site in
   the whole decompile shows the audio player is **never** invoked with any of
@@ -5401,6 +5410,54 @@ map or AI UI.
 | Constant | Current value | Status |
 |---|---|---|
 | _(none — the last entry, the spawn-pocket clear, was RESOLVED 2026-07-21)_ | — | The spawn-pocket clear is no longer a "guess": a native `sub_4260F5` fill probe PROVED the original places a brick on the spawn ~90% of the time and never clears it (see "Spawn-pocket clear" above). The port's radius-2 clear is a proven DIVERGENCE (a workaround for a clean-room AI-flee bug), not an unextracted citation. Follow-up is a port AI fix, not an RE extraction. |
+
+## The sound selection engine — CONFIRMED (2026-07-27, `sub_427961`/`sub_427F1B`)
+
+Full write-up with addresses, the cull table and the live evidence:
+**`docs/re/sound-engine.md`**. Summary of the facts, because they invalidate the
+"one call site = one clip" reading that several older entries in this file
+assume:
+
+- **A call site names a GROUP BASE, never a clip.** `sub_427961(id)` (@0x427961,
+  70 call sites — effectively every SFX and voice in the game) walks
+  `dword_463094` from `id` to the first empty slot and picks one member of that
+  contiguous run. Groups of one behave like a plain play; groups of two (nav blip
+  20 `letter1/letter2`, drop-refused 40 `enrt1/enrt2`) alternate; the grab (170)
+  is a group of SIX.
+- **The pick is LEAST-PLAYED-FIRST, not uniform.** Each slot carries a play
+  counter (`dword_463088`); the draw is rejection-sampled against the group
+  minimum, capped at 200 tries (`0xC8`). Every member is heard once before any
+  repeats, in a fresh random order each cycle. The counter is incremented even
+  when the concurrency cap then drops the voice.
+- **A LOAD-TIME CULL reduces each large block to a random subset.**
+  `sub_427F1B(base, end, keep)` first COMPACTS the block down to `base` (which is
+  why `sub_427961(700)` works although SOUNDLST has no id 700), then deletes
+  uniformly random members until `keep` remain. `sub_42814B` runs it over 16
+  ranges: 200→3, 400→7, 700→7, 1200→2, 1400→7, 2300→8, 2700→5, and 3000+50k→4 for
+  k=0..8. So the 282 authored death taunts become **seven** for that launch, and
+  the next launch has a different seven. `keep` becomes 1 for every block when
+  the low-memory flag `dword_464824` is set. Confirmed live: the `debug=3` log
+  prints `culling the %u series down from %u to %u (culled out %u)` per range.
+- **`sub_427BFB` (@0x427BFB) does NOT block.** It is the same pick onto an
+  UNCAPPED, uncounted voice (`sub_427B36`), used by the four screen stings: 2800
+  title intro, 2600 menu quit, 1700 draw, 2000 winner. The quit path follows it
+  with `Sleep(4000)` — proof the call returns immediately.
+- **The concurrent-voice cap is `getvalue(8)` = 5**, checked at the top of
+  `sub_427859` as `if (getvalue(8) < active) return;`. **No eviction**: the new
+  sound is dropped, a playing voice is never stolen. VALUELST's own comment: "how
+  many concurrent sounds do we want to allow?".
+- **One sound is debounced.** `sub_427ABB` (@0x427ABB) = `sub_427961` plus
+  `if (last[id] + 3 > now) return;` on the game-frame counter `dword_464994`. Its
+  only caller is the **jelly** bomb's wall reversal (SOUNDLST 135, `sub_423776`).
+
+Ported: `libs/audio`'s new `SoundBank` (selection, cull, debounce — SDL-free and
+unit-tested, `ctest -R sound_bank`) plus `AudioEngine::play/play_exact/
+play_sting/play_debounced`. `AudioEngine`'s cosmetic generator is now seeded from
+the wall clock — the old fixed seed is why the title sting never varied between
+launches. **The original draws sound picks from the same `rand()` as gameplay;
+the port deliberately does not** (determinism rule 6) — `SoundBank` owns its own
+generator and never sees `State::rng`. **No golden impact** — SoundDirector reads
+unhashed events only; the full suite is byte-identical.
 
 ## Getting exactness where it matters (recommended path)
 

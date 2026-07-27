@@ -28,8 +28,7 @@ constexpr int kMenuMusicId = 1010;  // 0x3F2 — MENU.RSS, started on menu entry
 
 // The menu-quit / exit sting group (sub_427BFB(2600) in the quit handler
 // sub_412987): 2600..2699 = "go outside and play now!" takes (quitgame/EOFM7*/…).
-constexpr int kQuitStingLo = 2600;
-constexpr int kQuitStingHi = 2699;
+constexpr int kQuitStingLo = 2600;  // group base; the run itself ends at 2648
 
 // The main-menu ATTRACT idle timeout — CONFIRMED getvalue(92) = 30 (VALUELST
 // `92,30`), gated `> 5` (the file's own legend: values < 5 disable attract
@@ -236,7 +235,7 @@ AppInput MenuScreen::run() {
                         // looping under it — then Sleep(0xFA0) so the sting is
                         // audible rather than cut off by window teardown.
                         ctx_.audio.stop_music();
-                        ctx_.audio.play_random_in_range(kQuitStingLo, kQuitStingHi);  // 2600 group
+                        ctx_.audio.play_sting(kQuitStingLo);  // sub_427BFB(2600)
                         SDL_Delay(4000);
                         return AppInput::Quit;
                     case SDLK_N:

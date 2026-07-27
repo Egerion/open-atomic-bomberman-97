@@ -10,8 +10,7 @@ namespace bomber::game {
 namespace {
 
 constexpr int kBootMusicId = 1000;  // 0x3E8 — TITLE.RSS, the continuous boot track
-constexpr int kTitleStingLo = 2800;
-constexpr int kTitleStingHi = 2899;
+constexpr int kTitleStingLo = 2800;  // group base; the run itself ends at 2810
 constexpr std::uint32_t kBootDwellMs = 7000;  // getvalue(12) == 7 s
 
 ScreenDef logo_screen(const char* bg) {
@@ -59,14 +58,19 @@ AppInput BootScreen::run() {
     if (ev == AppInput::Quit) return ev;
 
     // The one-shot title intro sting, fired right before the title image. In the
-    // binary this is sub_427BFB(2800), which is NOT a fixed clip: it picks a
-    // RANDOM member of the contiguous SOUNDLST run starting at 2800 (the "ATOMIC
-    // BOMBERMAN!" intro group 2800..2810 — GEN8A/GEN8B/GEN8C/… ; the file's own
-    // "2899 is the last intro" comment bounds it). So each boot can voice a
-    // different take. play_random_in_range picks across exactly the loaded ids in
-    // that span, matching the group pick; it is a one-shot SFX voice, so it plays
-    // over the still-running boot track without disturbing it.
-    ctx_.audio.play_random_in_range(kTitleStingLo, kTitleStingHi);
+    // binary this is sub_427BFB(2800): a group pick over the contiguous SOUNDLST
+    // run starting at 2800 — the eleven "ATOMIC BOMBERMAN!" takes GEN8A, GEN8B,
+    // GEN8C, GEN8C2, ZAI08A..ZAI08G (the file's own "2899 is the last intro"
+    // comment bounds the block). The 2800 block is NOT in the load-time cull
+    // table, so all eleven survive every launch, and the play counters are zero
+    // at boot — which makes this first pick a flat 1-in-11. Four consecutive
+    // launches of the original picked ZAI08A, GEN8C2, GEN8A, ZAI08F.
+    //
+    // sub_427BFB does NOT block: the binary's other use of it (the menu quit
+    // sting) is followed by an explicit Sleep(4000) precisely because playback
+    // keeps running after the call returns. So the title art appears immediately
+    // and the sting plays over it, as here.
+    ctx_.audio.play_sting(kTitleStingLo);
 
     // The title: a normal waited screen. present_asset_screen returns Advance on
     // a real accept OR the 7 s timeout — both fall through to the menu here,
