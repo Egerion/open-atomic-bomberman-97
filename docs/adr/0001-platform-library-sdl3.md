@@ -12,6 +12,13 @@ The rewrite needs a C++-friendly layer for window/renderer, 2D sprite blitting (
 
 Use **SDL3** (vcpkg port `sdl3`, currently 3.4.10) for platform, rendering, audio, and input. No sdl3-image/mixer needed — PCX/ANI/RSS get custom loaders anyway.
 
+> **How SDL3 is acquired has since changed** (ADR-0002's 2026-07-28 amendment):
+> every preset that builds SDL3 — `windows-fetch`, `linux`, `macos` — fetches
+> and statically links it from source (`cmake/BomberSDL3.cmake`, tag
+> `release-3.4.10`, so the version above is still current). Only `windows-msvc`
+> uses the vcpkg port, and `headless` builds no SDL at all. The choice OF SDL3,
+> which is what this ADR decides, is unaffected.
+
 ## Options Considered
 
 | Dimension | SDL3 | SDL2 | raylib | SFML 3 |
