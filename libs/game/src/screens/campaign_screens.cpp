@@ -206,12 +206,15 @@ AppInput CampaignBannerScreen::run() {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
-            if (ev.type == SDL_EVENT_KEY_DOWN &&
-                (ev.key.key == SDLK_RETURN || ev.key.key == SDLK_KP_ENTER ||
-                 ev.key.key == SDLK_SPACE || ev.key.key == SDLK_ESCAPE)) {
-                ctx_.audio.play(10);  // accept sting, sub_427961(10)
+            if (ev.type != SDL_EVENT_KEY_DOWN) continue;
+            // sub_40133F puts this up through sub_414340, whose key loop blips
+            // (20) on EVERY real key and closes on Enter/Space/Escape with NO
+            // accept sting — @0x414532 is the only play call in the routine.
+            // The port used to fire a 10 here, which sub_414340 never does.
+            ctx_.audio.play(20);
+            if (ev.key.key == SDLK_RETURN || ev.key.key == SDLK_KP_ENTER ||
+                ev.key.key == SDLK_SPACE || ev.key.key == SDLK_ESCAPE)
                 return AppInput::Advance;
-            }
         }
         if (SDL_GetTicks() - start >= kDwellMs) return AppInput::Advance;
         ctx_.audio.update_music();

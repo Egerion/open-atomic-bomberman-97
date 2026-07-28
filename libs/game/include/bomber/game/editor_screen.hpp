@@ -167,7 +167,10 @@ public:
     // powerups() vector) — the original edits the live globals with no
     // cancel path for the sub-editor as a whole.
     void enter(std::vector<assets::sch::PowerupRule>* rows);
-    void on_key(SDL_Keycode key, AudioEngine& audio);
+    // No AudioEngine: the powerup sub-editor and its four prompts are SILENT in
+    // the original (sub_402595 / sub_4023A2 / sub_42E938 / sub_42EDE0 contain no
+    // play call), so there is nothing for it to talk to.
+    void on_key(SDL_Keycode key);
     // Digits typed while a text-entry prompt of the sub_4023A2 chain is
     // open arrive here (the chain's numeric prompts are generic text fields
     // + atoi in the original; we accept digits only since both fields are
@@ -182,7 +185,7 @@ private:
     enum class ChainStep : std::uint8_t { None, BornWith, Forbidden, HasOverride, OverrideValue };
 
     void begin_chain();
-    void advance_chain(AudioEngine& audio);
+    void advance_chain();
 
     const AssetStore* assets_ = nullptr;
     const FontTextures* font_ = nullptr;
@@ -230,7 +233,10 @@ public:
     // routing to the grid (sub_402595 returning into sub_4028D2's loop).
     void close_powerups() { editing_powerups_ = false; }
 
-    void on_key(SDL_Keycode key, AudioEngine& audio);
+    // No AudioEngine: the editor screen itself is SILENT in the original
+    // (sub_4028D2 and its prompts/confirms make no sound at all) — see the
+    // definition's header comment for the call-site evidence.
+    void on_key(SDL_Keycode key);
     void on_text_input(const char* text);
     // Mouse: `gx`/`gy` are already-converted grid cell coordinates (the
     // caller does the pixel->cell mapping via the drawn grid's origin/cell

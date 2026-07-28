@@ -131,7 +131,7 @@ void EditorRunner::run() {
                 if (eev.type == SDL_EVENT_QUIT) return;
                 if (editor.editing_powerups()) {
                     if (eev.type != SDL_EVENT_KEY_DOWN) continue;
-                    editor.powerups_screen().on_key(eev.key.key, ctx_.audio);
+                    editor.powerups_screen().on_key(eev.key.key);
                     // sub_402595 returns into sub_4028D2's loop on its exit
                     // keys — mirror that by closing the sub-editor here (the
                     // screen sets done() but cannot clear the parent's
@@ -180,7 +180,7 @@ void EditorRunner::run() {
                 // ungated.
                 bool needs_ctrl = editor_key_needs_ctrl(eev.key.key);
                 bool ctrl_down = (eev.key.mod & SDL_KMOD_CTRL) != 0;
-                if (!needs_ctrl || ctrl_down) editor.on_key(eev.key.key, ctx_.audio);
+                if (!needs_ctrl || ctrl_down) editor.on_key(eev.key.key);
             }
             ctx_.audio.update_music();
             SDL_SetRenderDrawColor(ctx_.sdl, 0, 0, 0, 255);

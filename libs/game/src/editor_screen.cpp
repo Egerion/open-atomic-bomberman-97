@@ -101,27 +101,28 @@ void SchemeFilePicker::on_key(SDL_Keycode key, AudioEngine& audio) {
         }
         return;
     }
+    // THE LIST DIALOG IS SILENT (docs/re/sound-engine.md §8). sub_407582's only
+    // reachable sound is the empty-glob sub_414340 box handled above; the
+    // widget it hands the glob to — sub_41485A -> sub_42DB80 -> sub_42DBCC —
+    // has no play call anywhere in its 344-function closure. Navigating and
+    // accepting a scheme make no sound at all.
     int count = static_cast<int>(entries_.size());
     switch (key) {
         case SDLK_UP:
         case SDLK_W:
             row_ = (row_ + count - 1) % count;
-            audio.play(20);
             break;
         case SDLK_DOWN:
         case SDLK_S:
             row_ = (row_ + 1) % count;
-            audio.play(20);
             break;
         case SDLK_RETURN:
         case SDLK_KP_ENTER:
         case SDLK_SPACE:
-            audio.play(10);
             done_ = true;
             cancelled_ = false;
             break;
         case SDLK_ESCAPE:
-            audio.play(10);
             done_ = true;
             cancelled_ = true;
             break;
@@ -213,13 +214,21 @@ void EditorChooserScreen::enter(std::string backdrop) {
 EditorChooserResult EditorChooserScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
     // §5: '1' -> edit existing (sub_4028D2(0), via the *.SCH file picker
     // sub_407582 first); '2' -> new (sub_4028D2(1)); Esc/'Q'/'q' exit; F1
-    // (315) help. SFX 20 blip on any key (§5: "SFX 20 blip on any key").
+    // (315) help.
+    //
+    // This chooser is the ONLY part of the editor that makes a sound, and the
+    // blip is UNCONDITIONAL: sub_403184 @0x403288 fires SFX 20 for every real
+    // key (only the -1/-2 no-key codes skip it) BEFORE its dispatch switch at
+    // 0x403292, so an unmapped key still clicks. No branch of that switch plays
+    // anything else — there is no accept sting on '1'/'2'/Esc/F1. Blip first,
+    // then dispatch, so the two cannot drift apart.
+    audio.play(20);
     switch (key) {
-        case SDLK_1: audio.play(20); return EditorChooserResult::EditExisting;
-        case SDLK_2: audio.play(20); return EditorChooserResult::New;
+        case SDLK_1: return EditorChooserResult::EditExisting;
+        case SDLK_2: return EditorChooserResult::New;
         case SDLK_ESCAPE:
-        case SDLK_Q: audio.play(20); return EditorChooserResult::Exit;
-        case SDLK_F1: audio.play(20); return EditorChooserResult::Help;
+        case SDLK_Q: return EditorChooserResult::Exit;
+        case SDLK_F1: return EditorChooserResult::Help;
         default: return EditorChooserResult::None;
     }
 }
@@ -271,7 +280,7 @@ void PowerupRulesScreen::begin_chain() {
     entry_ = std::to_string((*rows_)[static_cast<std::size_t>(row_)].born_with);
 }
 
-void PowerupRulesScreen::advance_chain(AudioEngine& audio) {
+void PowerupRulesScreen::advance_chain() {
     // Move to the next prompt of sub_4023A2's fixed order; prompt 4 is asked
     // only when has-override is set, else the value is FORCED to 0 (the
     // original's else-branch unconditionally zeroes that row's entry in
@@ -292,10 +301,12 @@ void PowerupRulesScreen::advance_chain(AudioEngine& audio) {
         case ChainStep::OverrideValue:
         default: step_ = ChainStep::None; break;
     }
-    audio.play(20);
+    // No cue: sub_4023A2's four prompts are the generic text-entry sub_42E938
+    // and yes/no sub_42EDE0 widgets, and NEITHER makes a sound — their call
+    // closures (155 and 143 functions) contain no play primitive at all.
 }
 
-void PowerupRulesScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
+void PowerupRulesScreen::on_key(SDL_Keycode key) {
     if (!rows_ || rows_->empty()) {
         if (key == SDLK_ESCAPE || key == SDLK_RETURN) done_ = true;
         return;
@@ -321,9 +332,9 @@ void PowerupRulesScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
                 pr.born_with = v;
             else
                 pr.override_value = v;
-            advance_chain(audio);
+            advance_chain();
         } else if (key == SDLK_ESCAPE) {
-            advance_chain(audio);  // cancel: keep the old value, continue the chain
+            advance_chain();  // cancel: keeps the old value, chain continues
         }
         return;
     }
@@ -336,30 +347,30 @@ void PowerupRulesScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
                 pr.forbidden = v;
             else
                 pr.has_override = v;
-            advance_chain(audio);
+            advance_chain();
         } else if (key == SDLK_ESCAPE) {
-            advance_chain(audio);
+            advance_chain();
         }
         return;
     }
 
+    // SILENT, like the rest of the editor: sub_402595's own body contains no
+    // play call, and the only sound-bearing function it can reach at all is the
+    // F1 help browser's error box.
     int count = static_cast<int>(rows_->size());
     switch (key) {
         case SDLK_UP:
         case SDLK_W:
             row_ = (row_ + count - 1) % count;
-            audio.play(20);
             break;
         case SDLK_DOWN:
         case SDLK_S:
             row_ = (row_ + 1) % count;
-            audio.play(20);
             break;
         case SDLK_E:
         case SDLK_RIGHT:
             // Our keyboard substitute for the original's mouse click on the
             // row button (id 5000+row) — starts sub_4023A2's prompt chain.
-            audio.play(20);
             begin_chain();
             break;
         case SDLK_ESCAPE:
@@ -370,7 +381,6 @@ void PowerupRulesScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
         case SDLK_P:
             // sub_402595's exit keys: Enter(13)/Esc(27)/Space(32)/'Q'/'q'
             // ('P' kept as our symmetric close of the §5 open gesture).
-            audio.play(10);
             done_ = true;
             break;
         default: break;
@@ -569,7 +579,17 @@ void EditorScreen::on_text_input(const char* text) {
     prompt_text_ += text;
 }
 
-void EditorScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
+// THE EDITOR SCREEN IS SILENT. sub_4028D2's own body has no play call, and
+// neither does any direct callee of it: at call depth <= 3 the only
+// sound-bearing functions reachable at all are the two generic modals
+// (sub_414340 via the *.SCH picker's empty-glob error, sub_41456C via
+// sub_402942 -> sub_402AE6), and those blip because they are modals, not
+// because the editor asked. The confirms and prompts it actually uses —
+// sub_42EDE0 (yes/no) and sub_42E938 (text entry) — make no sound at all: 143
+// and 155 functions of closure, zero play calls. So painting, brush changes,
+// Ctrl+F/Ctrl+B, the density/name prompts, the save confirm and the exit are
+// ALL noiseless. The port had ~35 invented cues in here. Do not add any.
+void EditorScreen::on_key(SDL_Keycode key) {
     if (editing_powerups_) return;  // caller routes to powerups_screen() instead
 
     if (prompt_kind_ == PromptKind::Density) {
@@ -583,10 +603,8 @@ void EditorScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
             grid_.set_density(prompt_text_.empty() ? 0 : std::atoi(prompt_text_.c_str()));
             prompt_kind_ = PromptKind::None;
             dirty_ = true;  // case 68/100 bumps touched only when ACCEPTED, pseudo.c 5678
-            audio.play(10);
         } else if (key == SDLK_ESCAPE) {
             prompt_kind_ = PromptKind::None;  // discard the in-progress edit
-            audio.play(10);
         }
         return;
     }
@@ -599,10 +617,8 @@ void EditorScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
             grid_.set_name(prompt_text_);
             prompt_kind_ = PromptKind::None;
             dirty_ = true;  // case 78/110 bumps touched only when ACCEPTED, pseudo.c 5688
-            audio.play(10);
         } else if (key == SDLK_ESCAPE) {
             prompt_kind_ = PromptKind::None;
-            audio.play(10);
         }
         return;
     }
@@ -612,11 +628,9 @@ void EditorScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
         if (key == SDLK_Y || key == SDLK_RETURN || key == SDLK_KP_ENTER) {
             save_requested_ = true;
             done_ = true;
-            audio.play(10);
         } else if (key == SDLK_N || key == SDLK_ESCAPE) {
             save_requested_ = false;
             done_ = true;
-            audio.play(10);
         }
         return;
     }
@@ -630,10 +644,8 @@ void EditorScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
             grid_.flood_fill(brush_);
             dirty_ = true;
             prompt_kind_ = PromptKind::None;
-            audio.play(10);
         } else if (key == SDLK_N || key == SDLK_ESCAPE) {
             prompt_kind_ = PromptKind::None;
-            audio.play(10);
         }
         return;
     }
@@ -645,10 +657,8 @@ void EditorScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
         if (key == SDLK_Y || key == SDLK_RETURN || key == SDLK_KP_ENTER) {
             grid_.reset(kEditorGridWidth, kEditorGridHeight, default_starts_);
             prompt_kind_ = PromptKind::None;
-            audio.play(10);
         } else if (key == SDLK_N || key == SDLK_ESCAPE) {
             prompt_kind_ = PromptKind::None;
-            audio.play(10);
         }
         return;
     }
@@ -657,22 +667,18 @@ void EditorScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
     switch (key) {
         case SDLK_1:
             brush_ = EditorBrush::Blank;
-            audio.play(20);
             break;
         case SDLK_2:
             brush_ = EditorBrush::Solid;
-            audio.play(20);
             break;
         case SDLK_3:
             brush_ = EditorBrush::Brick;
-            audio.play(20);
             break;
         case SDLK_TAB:
         case SDLK_RETURN:
         case SDLK_KP_ENTER:
         case SDLK_SPACE:
             cycle_brush();
-            audio.play(20);
             break;
         case SDLK_F:
             // Ctrl+F (raw code 6, §5) — SDL reports Ctrl+letter as the plain
@@ -682,7 +688,6 @@ void EditorScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
             // so this opens the FillConfirm prompt rather than filling
             // immediately.
             prompt_kind_ = PromptKind::FillConfirm;
-            audio.play(20);
             break;
         case SDLK_B:
             // Ctrl+B (raw code 2, §5) — gated on KMOD_CTRL by the caller
@@ -699,7 +704,6 @@ void EditorScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
                 grid_.reset(kEditorGridWidth, kEditorGridHeight, default_starts_);
             }
             dirty_ = true;
-            audio.play(20);
             break;
         case SDLK_0:
             // '0' (48, §5/§5d): sub_402206's dword_45B7B8 tileset toggle —
@@ -708,36 +712,29 @@ void EditorScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
             // (see refresh_tile_sequences' correction note).
             tileset_ = toggle_editor_tileset(tileset_);
             refresh_tile_sequences();
-            audio.play(20);
             break;
         case SDLK_EQUALS:
         case SDLK_KP_PLUS:
             selected_start_ = (selected_start_ + 1) % kEditorMaxStarts;
-            audio.play(20);
             break;
         case SDLK_MINUS:
         case SDLK_KP_MINUS:
             selected_start_ = (selected_start_ + kEditorMaxStarts - 1) % kEditorMaxStarts;
-            audio.play(20);
             break;
         case SDLK_T:
             grid_.toggle_start_team(selected_start_);
             dirty_ = true;  // case 84/116 bumps touched unconditionally, pseudo.c 5699
-            audio.play(20);
             break;
         case SDLK_D:
             start_density_prompt();
-            audio.play(20);
             break;
         case SDLK_N:
             start_name_prompt();
-            audio.play(20);
             break;
         case SDLK_P:
             editing_powerups_ = true;
             powerups_screen_.enter(&grid_.powerups());
             dirty_ = true;  // case 80/112 bumps touched unconditionally, pseudo.c 5694
-            audio.play(20);
             break;
         case SDLK_ESCAPE:
         case SDLK_Q:
@@ -752,7 +749,6 @@ void EditorScreen::on_key(SDL_Keycode key, AudioEngine& audio) {
                 save_requested_ = false;
                 done_ = true;
             }
-            audio.play(20);
             break;
         default: break;
     }

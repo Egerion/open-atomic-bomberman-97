@@ -402,41 +402,47 @@ void HelpBrowser::on_key(SDL_Keycode key, AudioEngine& audio) {
         // and "no .BM files found" (getstring(4)/(95)) — share the same
         // sub_414340 two-line dismiss shape: any dismiss key closes the whole
         // browser, same as SchemeFilePicker's empty-glob path.
+        //
+        // This branch is the ONE audible thing in the whole browser: sub_414340
+        // opens its key loop with an unconditional nav blip @0x414532 for every
+        // real key (only the -1/-2 no-key codes skip it), and dismisses on
+        // Enter/Space/Escape with NO accept sting. The LIST below is silent.
+        audio.play(20);
         if (key == SDLK_ESCAPE || key == SDLK_RETURN || key == SDLK_SPACE) done_ = true;
         return;
     }
+    // THE LIST DIALOG IS SILENT. sub_41431C -> sub_414235 -> sub_41485A ->
+    // sub_42DB80 -> sub_42DBCC: the transitive closure of the widget is 344
+    // functions and NOT ONE of them calls a play primitive (see the census in
+    // docs/re/sound-engine.md §8). No nav blip, no accept sting, no letter-jump
+    // click — the only audible thing the help browser can produce is the
+    // sub_414340 error box above, and that is a modal, not the list. The port
+    // invented every cue that used to be in this switch.
     int count = static_cast<int>(entries_.size());
     switch (key) {
         case SDLK_UP:
             // Arrow-only: the native list widget has no W/S alias (the removed
             // W/S cases were invented).
             row_ = (row_ + count - 1) % count;
-            audio.play(20);
             break;
         case SDLK_DOWN:
             row_ = (row_ + 1) % count;
-            audio.play(20);
             break;
         case SDLK_PAGEUP:
             row_ = std::max(0, row_ - kVisibleRows);  // 329
-            audio.play(20);
             break;
         case SDLK_PAGEDOWN:
             row_ = std::min(count - 1, row_ + kVisibleRows);  // 337
-            audio.play(20);
             break;
         case SDLK_HOME:
             row_ = 0;  // 327
-            audio.play(20);
             break;
         case SDLK_END:
             row_ = count - 1;  // 335
-            audio.play(20);
             break;
         case SDLK_RETURN:
         case SDLK_KP_ENTER:
         case SDLK_SPACE:
-            audio.play(10);
             // sub_41302D is called on the highlighted glob entry: open the
             // selected topic through the same
             // .BM viewer; the list re-shows once close_viewer() is called
@@ -446,12 +452,12 @@ void HelpBrowser::on_key(SDL_Keycode key, AudioEngine& audio) {
             viewing_ = true;
             break;
         case SDLK_ESCAPE:
-            audio.play(10);
             done_ = true;
             break;
         default:
             // Letter-jump (sub_42FEB0 @ 32603): a printable key selects the
             // first entry whose filename starts with it (case-insensitive).
+            // sub_42FEB0 is a leaf — it makes no calls at all, sound included.
             if (key >= SDLK_A && key <= SDLK_Z) {
                 const char want = static_cast<char>('a' + (key - SDLK_A));
                 for (int i = 0; i < count; ++i) {
@@ -459,7 +465,6 @@ void HelpBrowser::on_key(SDL_Keycode key, AudioEngine& audio) {
                     if (!f.empty() &&
                         std::tolower(static_cast<unsigned char>(f[0])) == want) {
                         row_ = i;
-                        audio.play(20);
                         break;
                     }
                 }

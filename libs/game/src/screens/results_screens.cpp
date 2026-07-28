@@ -92,7 +92,12 @@ AppInput ScoreboardScreen::run() {
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
             if (ev.type == SDL_EVENT_KEY_DOWN) {
-                ctx_.audio.play(20);  // any-key blip then accept sting (sub_42A088)
+                // sub_42A3F6's RESULTS tally loop @0x42ADE9 — NOT sub_42A088's.
+                // Any real key blips (0x42AE04); the accept codes 13/32 reach
+                // the sting at 0x42AEF5; Escape (0x42AE9E) does NOT — it sets
+                // the abort flag `dword_464A68 = 2`, raises done and jumps to
+                // the loop tail without touching the sound engine.
+                ctx_.audio.play(20);
                 // ONLINE between-rounds (net_round_gate.hpp): the original's
                 // RESULTS wait loop is dismissed by the machine driving the game,
                 // never by a client — a `sub_40C06A() == 1` peer that presses a
@@ -108,7 +113,7 @@ AppInput ScoreboardScreen::run() {
                         state_.net_gate->accept();
                     continue;
                 }
-                ctx_.audio.play(10);
+                if (ev.key.key != SDLK_ESCAPE) ctx_.audio.play(10);  // Escape leaves silently
                 result = ev.key.key == SDLK_ESCAPE ? AppInput::Back : AppInput::Advance;
                 waiting = false;
             }
@@ -133,6 +138,13 @@ AppInput ScoreboardScreen::run() {
             // all-AI/attract roster; a human match waits for Enter
             // (auto_advance_results()). An online match always has a human, and
             // both peers must leave together — so the dwell never applies there.
+            //
+            // The timeout is not a silent exit: @0x42AE4C it forces key = 13,
+            // which falls straight into the accept path and plays the sting.
+            // It does NOT blip, because the override lands AFTER the blip test
+            // and the key it replaced was -1 (no key). So: 10 alone. The port
+            // used to advance in complete silence here.
+            ctx_.audio.play(10);
             waiting = false;
         }
         ctx_.audio.update_music();

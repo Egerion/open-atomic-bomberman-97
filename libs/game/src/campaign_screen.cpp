@@ -31,30 +31,34 @@ void CampaignFilePicker::enter(const std::filesystem::path& install_root, std::s
 
 void CampaignFilePicker::on_key(SDL_Keycode key, AudioEngine& audio) {
     if (entries_.empty()) {
+        // The empty-glob acknowledge box (sub_414340): unconditional nav blip on
+        // any real key @0x414532, dismissed by Enter/Space/Escape with no sting.
+        audio.play(20);
         if (key == SDLK_ESCAPE || key == SDLK_RETURN) { done_ = true; cancelled_ = true; }
         return;
     }
+    // THE LIST DIALOG IS SILENT (docs/re/sound-engine.md §8). sub_4015C6 is the
+    // *.cam picker; the only sound-bearing functions it can reach are that same
+    // sub_414340 box and — through the LOADER sub_401085, not the list —
+    // sub_4074A3's SFX-40 load-failure buzz. Its list navigation and its accept
+    // make no sound, because the shared list widget makes none.
     int count = static_cast<int>(entries_.size());
     switch (key) {
         case SDLK_UP:
         case SDLK_W:
             row_ = (row_ + count - 1) % count;
-            audio.play(20);
             break;
         case SDLK_DOWN:
         case SDLK_S:
             row_ = (row_ + 1) % count;
-            audio.play(20);
             break;
         case SDLK_RETURN:
         case SDLK_KP_ENTER:
         case SDLK_SPACE:
-            audio.play(10);
             done_ = true;
             cancelled_ = false;
             break;
         case SDLK_ESCAPE:
-            audio.play(10);
             done_ = true;
             cancelled_ = true;
             break;

@@ -337,15 +337,23 @@ AppInput SetupScreen::run() {
             // general dispatch below so 'C' itself never falls into the
             // row-navigation switch.
             if (k == SDLK_C) {
+                // THE BLIP COMES FIRST, ALWAYS. sub_410F81's key loop fires
+                // sub_427961(20) @0x411724 for every real key BEFORE its
+                // dispatch switch at 0x411729 — 'c' (0x63) is just another case
+                // in that switch (it lands at 0x41186D). This port-only early
+                // `continue` used to jump the queue and swallow the blip.
+                ctx_.audio.play(20);
                 // LOCAL ONLY — the original gates the whole campaign trigger on
                 // `sub_40C06A()` (docs/re/campaign.md §4). That guard used to be
                 // omitted here because the port had no netplay; now it does, so
                 // it is real again: a campaign roster/stage pick is a local-only
                 // concept that would never reach the peer.
-                if (net_mode) {
-                    ctx_.audio.play(40);
-                    continue;
-                }
+                //
+                // The guard is SILENT: 0x41186D tests sub_40C06A() and, when it
+                // is non-zero, jumps straight to the loop tail (0x41188E) with
+                // no sound at all. The SFX-40 buzz that used to be here was
+                // invented — there is no "you can't do that" for this key.
+                if (net_mode) continue;
                 // CUMULATIVE, not consecutive (sub_410F81 pseudo.c 840,
                 // 1193-1197): ONLY the 'C' handler touches this counter — no
                 // other key resets it — so 5 total 'C' presses across the
@@ -354,7 +362,12 @@ AppInput SetupScreen::run() {
                 // demanded.)
                 if (++state_.campaign_trigger_count == 5) {
                     state_.campaign_trigger_count = 0;
-                    ctx_.audio.play(10);  // accept sting (SFX 10), mirrors the editor trigger
+                    // NO accept sting. This trigger is NOT the menu's Ctrl+E x6
+                    // editor trigger it was written to "mirror": that one really
+                    // does play 10 (0x42BD50, right before sub_40330E), but the
+                    // campaign arm at 0x411882 calls sub_4015C6 and zeroes its
+                    // counter with nothing in between. The 20 blip above is the
+                    // only sound five C presses make.
                     CampaignPickerScreen(ctx_, campaign_, backdrop_).run();
                 }
                 continue;

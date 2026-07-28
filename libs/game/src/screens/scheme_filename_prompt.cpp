@@ -32,11 +32,13 @@ std::string SchemeFilenamePrompt::run(const std::string& seed) {
                 if (ev.key.key == SDLK_BACKSPACE) {
                     if (!entry.empty()) entry.pop_back();
                 } else if (ev.key.key == SDLK_RETURN || ev.key.key == SDLK_KP_ENTER) {
-                    ctx_.audio.play(10);  // accept sting
+                    // SILENT, both ways. sub_42E938 is the generic text-entry
+                    // widget and it makes no sound at all — its call closure
+                    // (155 functions) contains no play primitive. The accept
+                    // sting and the cancel blip here were both invented.
                     result = entry.empty() ? seed : entry;  // "or press <Enter>" keeps the seed
                     waiting = false;
                 } else if (ev.key.key == SDLK_ESCAPE) {
-                    ctx_.audio.play(20);  // nav blip
                     result = seed;  // cancel: keep the source filename
                     waiting = false;
                 }
