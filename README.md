@@ -31,12 +31,16 @@ The human's role was product direction and reverse-engineering guidance — "her
 ## Layout
 
 ```
+libs/core     shared vocabulary: fixed-point unit, field geometry, limits — header-only, no deps
 libs/assets   loaders for the original formats (ANI, PCX, SCH, RES, RSS) — SDL-free
 libs/sim      deterministic 20 Hz gameplay core (state + systems) — dependency-free
 libs/match    scheme + VALUELST -> MatchConfig glue (header-only)
-libs/net      online netcode: input codec, lockstep + rollback sessions, UDP transport — SDL-free
-libs/game     SDL3 presentation: asset store, renderer, audio, input, app shell
+libs/net      online netcode: input codec, lockstep + rollback sessions, UDP transport, lobby client — SDL-free
+libs/audio    AudioEngine + SoundBank (the ported selection engine) + SoundDirector
+libs/platform engine base: frame clock and pacing (SDL3)
+libs/game     SDL3 presentation and front-end: asset store, renderer, screens, input, app shell
 apps/         bomber_game (OPEN-BM95), bomber_viewer, abtool (thin mains)
+services/     matchmaker (Go, separate build): lobby control plane + STUN + relay
 tests/        doctest suites incl. golden-hash behaviour pins + netcode determinism
 ```
 
@@ -47,7 +51,7 @@ See `CLAUDE.md` for the full architecture and project rules, `docs/re/facts.md` 
 - An original Atomic Bomberman installation (the game data is **not** included and must never be committed — see `.gitignore`)
 - CMake ≥ 3.25
 - Windows: Visual Studio 2022; SDL3 comes via FetchContent (`windows-fetch` preset, no vcpkg) or vcpkg (`windows-msvc` preset, `VCPKG_ROOT` set)
-- Linux/macOS: any C++20 compiler (SDL3 via FetchContent or system)
+- Linux/macOS: any C++20 compiler; SDL3 comes via FetchContent (`linux` / `macos` presets). Linux additionally needs the X11/Wayland/ALSA development headers SDL3 builds against — see the *Build* section.
 
 ## Build
 
@@ -58,7 +62,26 @@ cmake --preset windows-fetch
 cmake --build --preset windows-fetch
 ```
 
-Headless tools only (no SDL required):
+Linux and macOS (same shape — SDL3 is fetched and built from source):
+
+```
+cmake --preset linux        # or: --preset macos
+cmake --build --preset linux
+```
+
+On Linux, SDL3 needs the X11/Wayland/audio development headers to build its
+backends; the exact package list CI installs is at the top of
+[`.github/workflows/c-cpp.yml`](.github/workflows/c-cpp.yml). On macOS,
+`scripts/package_macos.sh /path/to/your/BOMBRMAN` goes one step further and
+assembles a double-clickable, self-contained `dist/Open Bomberman.app` — SDL3 is
+statically linked, so there are no dylibs to bundle, and the game data you point
+it at is copied into the app's `Resources/`. Run it on a Mac; it is unsigned, so
+the first launch needs right-click → Open.
+
+Headless — no SDL, so no display, X11 or audio headers needed. This is the
+configuration the pre-push gate builds, and it is **not** dependency-free: it
+still builds the online lobby stack, which fetches IXWebSocket, nlohmann/json
+and mbedTLS and compiles mbedTLS from source.
 
 ```
 cmake --preset headless
@@ -119,11 +142,17 @@ make survey
 | `make run` | builds, then runs from the build directory | no (auto-detected) |
 | `make deploy` | builds, then copies `OPEN-BM95.exe` **into your install** so it runs next to the original assets (plus `SDL3.dll`, only if you configured a dynamic SDL) | yes |
 | `make survey` | validates your install's assets with `abtool` | yes |
-| `make test` | builds headless and runs the test suite | no |
+| `make test` | builds the **full** game (same preset as `make build` — *not* headless) and runs the test suite | no |
 
 `deploy` and `survey` take the path from `GAME_DIR=<path>` if you pass one, else
 from `gamedir.txt`. With neither they stop and tell you, rather than guessing at
 a directory and writing somewhere surprising.
+
+Every target above shares one build tree — `windows-fetch` on Windows,
+`build/make` elsewhere — so all of them, `make test` included, build the SDL3
+game and viewer. The headless configuration is a separate preset you invoke
+directly (`cmake --preset headless`); that is what `bash scripts/test.sh` and
+the pre-push hook use.
 
 ## Running
 
@@ -227,9 +256,12 @@ Still open:
 **Cross-platform** is structural rather than aspirational: the sim is
 integer-only, the wire is little-endian, and a compile-time `build_hash` is
 checked at the lobby door and again before tick 0, so mismatched builds are
-refused loudly instead of desyncing. Only Windows is regularly built and tested
-today. See `docs/adr/`, `docs/re/network-screens.md` and
-`services/matchmaker/PROTOCOL.md`.
+refused loudly instead of desyncing. All three platforms build and run the test
+suite in CI — the matrix is Linux (GCC), macOS (Clang) and Windows (MSVC), one
+job per preset. What is *not* claimed is equal play-testing: Windows is the only
+one exercised by hand against a real install every day, so treat Linux and macOS
+as building-and-passing rather than polished. See `docs/adr/`,
+`docs/re/network-screens.md` and `services/matchmaker/PROTOCOL.md`.
 
 ## Contributing
 
