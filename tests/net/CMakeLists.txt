@@ -50,6 +50,12 @@ target_link_libraries(bomber_net_build_hash_tests PRIVATE bomber::net)
 bomber_add_test(bomber_net_rendezvous_tests net_rendezvous test_rendezvous.cpp)
 target_link_libraries(bomber_net_rendezvous_tests PRIVATE bomber::net)
 
+# LinkProbe: the mutual path verification between the punch (or a relay
+# allocation) and Ready — both directions proven, a dead path expiring, and the
+# punch echo that stops a winner starving a peer that is still punching.
+bomber_add_test(bomber_net_link_probe_tests net_link_probe test_link_probe.cpp)
+target_link_libraries(bomber_net_link_probe_tests PRIVATE bomber::net)
+
 # MatchConfig wire codec: the full-field round-trip that guards the determinism
 # boundary (a forgotten field = a desync), plus the malformed-input rejections.
 bomber_add_test(bomber_net_match_config_tests net_match_config test_match_config_codec.cpp)

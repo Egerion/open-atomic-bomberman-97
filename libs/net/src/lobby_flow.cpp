@@ -21,6 +21,20 @@ constexpr int kPunchTimeoutMs = 5000;
 // unreachable. Generous: it covers a server round trip plus a STUN probe that is
 // still timing out, and costs nothing when the exchange already completed.
 constexpr std::int64_t kCandidateWaitMs = 6000;
+
+// How long to keep verifying the DIRECT path, measured from the START of the
+// punch rather than from our own success. It has to outlast the PEER's punch
+// window: winning ours in one round trip says nothing about how long the other
+// side needs, and giving up before its kPunchTimeoutMs would relay a pair whose
+// direct path was about to work. The slack covers the peer's own
+// verification-and-linger on top.
+constexpr int kDirectVerifyMs = kPunchTimeoutMs + 2000;
+// How long to keep verifying a RELAY allocation. Long, because the peer may
+// still be spending its whole punch window before it asks for its own handle,
+// and the relay drops everything aimed at a seat that has not allocated yet
+// (services/matchmaker/internal/relay/relay.go's drop_unknown_dst) — so the
+// wait is genuinely "until the other side arrives", not a round trip.
+constexpr int kRelayVerifyMs = 15000;
 }  // namespace
 
 LobbyFlow::LobbyFlow(Config cfg, UdpTransport& game_transport, LobbyClient& client)
@@ -244,7 +258,12 @@ void LobbyFlow::begin_rendezvous(std::int64_t now_ms) {
         punch_ = std::make_unique<Rendezvous>(transport_, std::move(targets),
                                              seat_nonce(my_seat_), kPunchTimeoutMs);
     }
+    punch_start_ms_ = now_ms;
     punch_->step(now_ms);
+}
+
+bool LobbyFlow::can_relay() const {
+    return std::popcount(match_start_.all_seats_mask) <= 2;
 }
 
 void LobbyFlow::begin_relay_fallback() {
@@ -257,13 +276,52 @@ void LobbyFlow::begin_relay_fallback() {
     // guest↔guest reflection, so a relayed hub would silently deliver a guest's
     // input to nobody. Say so instead: a half-connected match desyncs on tick 0,
     // and there is no half-relayed topology to fall back to.
-    if (std::popcount(match_start_.all_seats_mask) > 2) {
+    if (!can_relay()) {
         fail("NO DIRECT PATH - RELAY NEEDS 2 PLAYERS");
         return;
     }
     relay_requested_ = true;
+    probe_.reset();  // whatever we were verifying, we are leaving it
     phase_ = Phase::Relaying;
     client_.send(encode_allocate_relay(lobby_id_, my_seat_));
+}
+
+void LobbyFlow::step_verify(std::int64_t now_ms) {
+    // THE CONVERGENCE STEP. A punch outcome is per-peer and unsynchronised: one
+    // side can hold a genuine round-trip proof while the other is still punching
+    // or has already given up and asked for a relay handle. Whichever path we
+    // are on, nothing is handed to the match layer until the peer has proved it
+    // is on the SAME one (link_probe.hpp).
+    if (!probe_) {
+        // Deadline for the DIRECT path is measured from the punch's start so it
+        // outlasts the peer's own punch window; the relay's is a flat wait for
+        // the other seat to allocate.
+        int deadline = kRelayVerifyMs;
+        if (!relay_) {
+            const std::int64_t base = punch_start_ms_ >= 0 ? punch_start_ms_ : now_ms;
+            const std::int64_t left = static_cast<std::int64_t>(kDirectVerifyMs) - (now_ms - base);
+            deadline = static_cast<int>(std::max<std::int64_t>(left, kProbeIntervalMs * 4));
+        }
+        probe_ = std::make_unique<LinkProbe>(transport(), seat_nonce(my_seat_), deadline);
+    }
+    probe_->step(now_ms);
+    if (probe_->verified()) {
+        phase_ = Phase::Ready;
+        return;
+    }
+    if (!probe_->expired()) return;
+
+    if (relay_) {
+        // The relay was the last resort and the peer never showed up on it.
+        // Failing loudly beats handing the match layer a transport that carries
+        // nothing — which is exactly the silent half-match this phase exists to
+        // stop.
+        fail("NO PATH TO THE OTHER PLAYER");
+        return;
+    }
+    // The direct path did not carry both ways. The relay is where both peers
+    // converge, because it is the one path neither of them ever leaves.
+    begin_relay_fallback();
 }
 
 void LobbyFlow::handle_server_message(const LobbyServerMessage& msg) {
@@ -369,7 +427,13 @@ void LobbyFlow::handle_server_message(const LobbyServerMessage& msg) {
                 break;
             }
             relay_ = std::make_unique<RelayedTransport>(transport_, host, port, alloc, dst);
-            phase_ = Phase::Ready;  // relayed, but ready to play
+            // NOT Ready yet. An allocation is a handle, not a path: the relay
+            // drops everything aimed at a seat that has not allocated its own
+            // (drop_unknown_dst), and the peer only allocates when ITS punch
+            // gives up — which may be seconds away or may never happen. Verify
+            // before handing this to the match layer.
+            probe_.reset();  // a new path: the old verdict is about the old one
+            phase_ = Phase::Verifying;
             break;
         }
 
@@ -432,7 +496,12 @@ void LobbyFlow::step(std::int64_t now_ms) {
     // the waiting room alone. The control link now outlives the punch — the
     // online setup screens keep pumping this flow so lobby chat stays live
     // there — and a member that stops speaking is reaped (PROTOCOL.md §3).
-    if (my_seat_ >= 0 && (phase_ == Phase::InLobby || phase_ == Phase::Ready) &&
+    //
+    // The connect phases are included, not skipped: a reaped member loses its
+    // RELAY ALLOCATION too (the manager Releases it), so going quiet while
+    // punching or while waiting for the peer to allocate would destroy the very
+    // handle the wait is for.
+    if (my_seat_ >= 0 && phase_ != Phase::Idle && phase_ != Phase::Failed &&
         (last_heartbeat_ms_ < 0 || now_ms - last_heartbeat_ms_ >= kHeartbeatMs)) {
         client_.heartbeat();
         last_heartbeat_ms_ = now_ms;
@@ -471,10 +540,18 @@ void LobbyFlow::step(std::int64_t now_ms) {
                     guests.push_back({w.addr.host, w.addr.port});
                 star_ = std::make_unique<StarHubTransport>(transport_, std::move(guests));
             }
-            phase_ = Phase::Ready;
+            // A punch proves the path to whoever received the PONG and nothing
+            // about what the OTHER end concluded, so a 2-seat match verifies
+            // before it plays. A star does not: it has no relay to converge on
+            // (begin_relay_fallback refuses one), and its punch already required
+            // both halves per guest — the single-sided latch is the 2-peer
+            // form's alone.
+            phase_ = can_relay() ? Phase::Verifying : Phase::Ready;
         } else if (punch_->failed()) {
             begin_relay_fallback();  // no direct path — go through the server
         }
+    } else if (phase_ == Phase::Verifying) {
+        step_verify(now_ms);
     }
     // Phase::Relaying just waits for RelayAllocated (handled above); the poll
     // at the top of this function is what delivers it.

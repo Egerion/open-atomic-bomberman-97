@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "bomber/net/link_probe.hpp"
 #include "bomber/net/lobby_messages.hpp"
 #include "bomber/net/relayed_transport.hpp"
 #include "bomber/net/rendezvous.hpp"
@@ -46,7 +47,8 @@ public:
         Connecting,  // WebSocket opening; the create/join request is queued
         InLobby,     // in the waiting room: roster live, candidates exchanging
         Rendezvous,  // START received; punching a path to the peer
-        Relaying,    // the punch failed; falling back through the server's relay
+        Relaying,    // no verified path; waiting for the server's relay allocation
+        Verifying,   // a path exists; proving BOTH peers are on it (link_probe.hpp)
         Ready,       // connected — match_start() is valid, transport() is usable
         Failed,      // error() explains; the GUI returns to the menu
     };
@@ -155,7 +157,15 @@ private:
     void begin_candidate_gathering(std::int64_t now_ms);
     void publish_candidates();
     void begin_rendezvous(std::int64_t now_ms);
-    void begin_relay_fallback();  // punch failed → ask the server for an allocation
+    void begin_relay_fallback();  // no verified path → ask the server for an allocation
+    // Enter Verifying on whatever transport() currently is: build the probe (if
+    // it is not already up), pump it, and act on its verdict.
+    void step_verify(std::int64_t now_ms);
+    // Does this match have a relay fallback at all? RelayedTransport addresses
+    // exactly ONE destination seat, so only a 2-seat match can escalate — and
+    // only a match that can escalate is worth verifying, since a star has
+    // nowhere to converge TO (begin_relay_fallback says so explicitly).
+    bool can_relay() const;
     // Every peer derives every seat's punch nonce identically from the shared
     // seed, so an inbound ping's nonce names its sender's seat.
     std::uint32_t seat_nonce(int seat) const;
@@ -189,8 +199,12 @@ private:
     std::vector<PublicLobby> public_lobbies_;
     MatchStart match_start_;
     std::unique_ptr<Rendezvous> punch_;
-    // Relay fallback (Phase 2). Requested only after the punch gives up; once
-    // the allocation arrives the wrapper becomes the match transport.
+    // The mutual path check that stands between a punch (or an allocation) and
+    // Ready. Rebuilt from scratch when the path changes, because "does THIS path
+    // carry?" is a question about one transport.
+    std::unique_ptr<LinkProbe> probe_;
+    // Relay fallback (Phase 2). Requested only after no direct path verified;
+    // once the allocation arrives the wrapper becomes the match transport.
     std::unique_ptr<RelayedTransport> relay_;
     // The >2-seat star (Phase 4): built on the HUB only, from the punched
     // address of every guest. Guests need nothing extra — their socket is
@@ -202,6 +216,10 @@ private:
     // When START arrived with the peers' candidates not yet in hand (see
     // begin_rendezvous): the deadline is measured from here, not from the punch.
     std::int64_t candidate_wait_start_ms_ = -1;
+    // When the punch began. The DIRECT verification budget is measured from
+    // here, not from our own success, so it still covers the peer's whole punch
+    // window however early we won ours (step_verify).
+    std::int64_t punch_start_ms_ = -1;
     std::int64_t last_chat_ms_ = -1;  // the bucket's last refill instant
     std::int64_t chat_credit_ms_ = kChatCreditPerMsgMs * kChatBurstMsgs;
 
