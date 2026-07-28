@@ -4,6 +4,8 @@
 
 #include <cstdint>
 
+#include "bomber/platform/frame_pacer.hpp"
+
 namespace bomber::platform {
 
 // Refresh-boundary frame pacer — the single home for what used to be GameApp's
@@ -19,25 +21,21 @@ namespace bomber::platform {
 // engine-base layer so front-end code never re-implements pacing.
 class FrameClock {
 public:
-    explicit FrameClock(SDL_Window* window) : period_ns_(period_for(window)) {
-        target_ns_ = SDL_GetTicksNS() + period_ns_;
-    }
+    explicit FrameClock(SDL_Window* window)
+        : pacer_(period_for(window), SDL_GetTicksNS()) {}
 
     // Nanoseconds per displayed frame at the window's refresh (60 Hz fallback).
-    std::uint64_t period_ns() const { return period_ns_; }
+    std::uint64_t period_ns() const { return pacer_.period_ns(); }
 
     // Sleep until the next refresh boundary after the just-issued present. A
-    // no-op when present already blocked past the target (the else-branch keeps
-    // the target phase-locked to the real vblank train); supplies the missing
-    // block when it didn't.
+    // no-op when present already blocked past the target (FramePacer's Resync
+    // rule keeps the target phase-locked to the real vblank train); supplies
+    // the missing block when it didn't. The decision itself lives in
+    // FramePacer::plan_resync so it is unit-testable without SDL — this is the
+    // SDL-facing half only, and the rule is unchanged.
     void pace() {
-        const std::uint64_t now = SDL_GetTicksNS();
-        if (now < target_ns_) {
-            SDL_DelayNS(target_ns_ - now);
-            target_ns_ += period_ns_;
-        } else {
-            target_ns_ = now + period_ns_;
-        }
+        const FramePacer::Wait wait = pacer_.plan_resync(SDL_GetTicksNS());
+        if (wait.sleep_ns) SDL_DelayNS(wait.sleep_ns);
     }
 
 private:
@@ -52,8 +50,7 @@ private:
         return period;
     }
 
-    std::uint64_t period_ns_;
-    std::uint64_t target_ns_;
+    FramePacer pacer_;
 };
 
 }  // namespace bomber::platform

@@ -29,6 +29,7 @@ add_subdirectory(match)
 add_subdirectory(net)
 add_subdirectory(assets)
 add_subdirectory(audio)
+add_subdirectory(platform)
 add_subdirectory(game)
 
 # The renderer "visual_golden" ctest is NOT registered here: it needs the
