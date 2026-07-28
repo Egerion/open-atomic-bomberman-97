@@ -31,8 +31,26 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 option(BOMBER_BUILD_VIEWER "Build the SDL3 apps (game + asset viewer)" ON)
 option(BOMBER_FETCH_SDL3 "Download and build SDL3 via FetchContent instead of find_package/vcpkg" OFF)
 # Online lobby control plane (ADR-0011): pulls IXWebSocket (WS/TLS) into
-# libs/net. OFF by default so the headless CI gate + pure sim/net builds need no
-# TLS backend; the GUI presets (windows-fetch/msvc, linux, macos) turn it ON.
+# libs/net.
+#
+# OFF is the DEFAULT, not the recommendation, and no preset uses it: all five in
+# CMakePresets.json pin it ON, `headless` included. The default exists so a
+# consumer embedding libs/sim + libs/net for the deterministic core alone can
+# opt out of the WS/JSON/TLS dependencies; it is not the configuration this repo
+# builds or tests.
+#
+# `headless` in particular means NO SDL, not "no dependencies". It was OFF there
+# and that was a hole in the pre-push gate, not a feature: the whole lobby half
+# of tests/net (protocol, stun, flow, setup, match_config, tls) sits inside an
+# `if(BOMBER_ENABLE_LOBBY)` block, so the gate silently skipped every one of them
+# and a broken suite reached main. Turning it on costs one FetchContent fetch.
+#
+# BOMBER_LOBBY_TLS (cmake/BomberIXWebSocket.cmake) is pinned ON in the presets
+# for a sharper reason — see that file. Short version: with TLS off,
+# tests/net/test_lobby_tls.cpp compiles to its "this build has no TLS support"
+# variant and PASSES, so the certificate- and hostname-verification cases — the
+# only checks that separate a verifying client from one that trusts anything —
+# never run, and the suite reports green having verified nothing.
 option(BOMBER_ENABLE_LOBBY "Build the online lobby client (WebSocket/TLS via IXWebSocket)" OFF)
 
 # Shared warning flags (bomber::warnings), linked PRIVATE by every target.
