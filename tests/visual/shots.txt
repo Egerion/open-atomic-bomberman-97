@@ -114,6 +114,22 @@
 # per-colour shades. Every shot with a player body shifts; the white player in
 # particular is no longer the old "blown-out blob". Verified by eye (walking +
 # powerup_revealed) before pinning. Debug == Release byte-identical.
+# NOT recaptured 2026-07-28 -- the hashes below are the SAME five bytes-for-bytes
+# they have been since 2026-07-22, and the reason the suite was red is that the
+# BUILD could no longer reproduce them, not that they were wrong. Two options.ini
+# keys reached the scripted match unpinned: random_start (the spawn-slot shuffle,
+# which rewrites the match from tick 1) and conveyor_speed (the belt speed; the
+# demo's first bomb rides level 10's conveyor loop). The pins were captured while
+# the install's file said random_start=1 / conveyor_speed=2; a later real session
+# saved random_start=0, and from then on the same source rendered five different
+# frames on the same machine. Bisect found nothing because there was nothing to
+# find: 137c8ef (the capture commit) and today's main produce byte-identical
+# output as each other, and neither matched. load_config now pins both on
+# capture_run() to the values the pins encode, so these rows became reproducible
+# again instead of being replaced -- which is why they keep the 2026-07-22
+# eyeball review recorded above. Verified: 5/5 against the real install, and 5/5
+# across a full random_start x conveyor_speed x team_play sweep of options.ini,
+# which before the pin produced twelve different sets of five.
 walking                 10    4acce93f8e799b24cc24d2833777f270ad112c8d67ce9b86414adf24f173820e
 bomb_pulse               40    2186552552f598614849aedf072547ce3e3cd6f773f204ee5320610e39f2cb88
 explosion_mid_flame     65    89281f200ffb75b36e0daf637a5b417488f00e7123a5fecadac781d46f05bf32
