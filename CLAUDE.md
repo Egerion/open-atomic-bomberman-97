@@ -51,7 +51,10 @@ services/matchmaker (Go, separate build) ◄── libs/net's lobby layer, over 
     (headless tests), `RelayedTransport` (the server-forwarded fallback when a
     punch fails), `StarHubTransport` (the >2-seat hub's fan-out + reflection).
   - *pre-match*: `LobbyClient` (WebSocket control plane), `StunClient`,
-    `Rendezvous` (the NAT punch), `SetupSession` (the host's authoritative
+    `Rendezvous` (the NAT punch), `LinkProbe` (the MUTUAL path proof — a punch
+    that only proves one direction used to start a match one side could not
+    play, and the winner then stopped echoing, which made the loser's failure
+    certain rather than unlucky), `SetupSession` (the host's authoritative
     `MatchConfig` over the wire), and `LobbyFlow`, the state machine that
     drives all of it. `build_hash` is the cross-build door both peers check.
     These are behind `BOMBER_ENABLE_LOBBY`, whose OFF *default* lets a consumer
@@ -67,8 +70,19 @@ services/matchmaker (Go, separate build) ◄── libs/net's lobby layer, over 
   and never touches `State::rng` (determinism rule 6). Note the namespace is
   still `bomber::game` pending a mechanical rename.
 - **libs/platform** (`bomber::platform`) — the engine-base layer (ADR-0008):
-  SDL-backed frame clock and pacing, game-agnostic, so screens never
-  re-implement the main loop. Header-only so far (`FrameClock`).
+  frame clock and pacing, game-agnostic, so screens never re-implement the main
+  loop. Header-only: `FrameClock` (SDL-backed) over `FramePacer`, which is
+  SDL-FREE and therefore unit-testable (`tests/platform`) — the pacing DECISION
+  is a pure function of the last frame's end time, so a change to it is pinned
+  by a headless test rather than by eyeballing an FPS counter.
+  The uncapped (F8) path targets the next **sub-frame instant**, not a
+  wall-clock period. That distinction is load-bearing and was measured: a
+  conventional catch-up pacer reaches 180 fps by re-presenting sub-frames it has
+  already shown (265 of 1081 presents were duplicates), so the counter improves
+  while the motion does not. Renderer interpolation quantises a tick into
+  exactly `kSubFrames` steps, so the only honest target is one distinct step per
+  present. The number on the overlay therefore means "distinct images
+  delivered" and will read below 180 on a machine that cannot make them.
 - **libs/game** (`bomber::game`) — SDL3 presentation and the front-end:
   `AssetStore` (textures, recoloring), `SequenceSet`, `Renderer`,
   `KeyboardMapper`, the per-screen classes under `src/screens/` (ADR-0009), and
@@ -102,6 +116,16 @@ The sim is deterministic lockstep (`docs/adr/0003`). Rules:
    update the constants in the same commit and cite the `facts.md` entry.
 6. Cosmetic randomness (sound picks, death-anim choice, disease flash) uses
    presentation-side RNGs, NEVER `State::rng`.
+7. A sim behaviour change must MOVE `build_hash` (`libs/net/src/build_hash.cpp`)
+   — that digest is the only thing stopping two disagreeing builds from meeting
+   at the lobby door and desyncing mid-match. It is one fixed scenario per
+   MECHANIC CLASS, and it is only as good as what those scenarios EXECUTE, so
+   after a behaviour change build the digest before and after and confirm it
+   moved. Coverage by coincidence is not coverage: three separate fixes have
+   left it byte-identical, most recently the warphole/trampoline trigger, whose
+   mechanic *was* present in two scenarios — they PLACED actors without ever
+   driving a player onto one. Placement is not coverage either. `kSubFrames`
+   pacing and other presentation work do NOT belong here; only `libs/sim`.
 
 ## Reverse-engineering workflow
 

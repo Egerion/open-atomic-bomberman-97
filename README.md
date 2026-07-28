@@ -37,7 +37,7 @@ libs/sim      deterministic 20 Hz gameplay core (state + systems) — dependency
 libs/match    scheme + VALUELST -> MatchConfig glue (header-only)
 libs/net      online netcode: input codec, lockstep + rollback sessions, UDP transport, lobby client — SDL-free
 libs/audio    AudioEngine + SoundBank (the ported selection engine) + SoundDirector
-libs/platform engine base: frame clock and pacing (SDL3)
+libs/platform engine base: SDL3 frame clock + an SDL-free, unit-tested frame pacer
 libs/game     SDL3 presentation and front-end: asset store, renderer, screens, input, app shell
 apps/         bomber_game (OPEN-BM95), bomber_viewer, abtool (thin mains)
 services/     matchmaker (Go, separate build): lobby control plane + STUN + relay
@@ -178,7 +178,7 @@ Player 0: arrows + Right Ctrl/Space (bomb), Right Shift (throw/grab/trigger/punc
 | **Host LAN Game** | no | Hosts on UDP port 8000 and waits (the original direct path). |
 | **Join by IP Address** | no | Enter the host's `IP:port` (default `127.0.0.1:8000`). |
 
-The four **online** rows land in the same **waiting room**: the lobby code sits in the window title, the roster lists every seat (name, host marker, ready state), `Space` toggles your ready flag, the host presses `Enter` to start, `Esc` leaves. Once the host starts, the peers punch a direct UDP path (STUN/hole-punch) — or fall back to the server's relay if their NAT refuses — and the match begins with the **server's** seed and seat assignment. **Join Network Game** (the menu row below) remains the direct `IP:port` join, unchanged.
+The four **online** rows land in the same **waiting room**: the lobby code sits in the window title, the roster lists every seat (name, host marker, ready state), `Space` toggles your ready flag, the host presses `Enter` to start, `Esc` leaves. Once the host starts, the peers punch a direct UDP path (STUN/hole-punch) — or fall back to the server's relay if their NAT refuses — and the match begins with the **server's** seed and seat assignment. A direct path has to prove itself in **both** directions before the match starts: a peer that can hear you but cannot be heard sends the pair to the relay instead of starting a match only one side can play. On a clean punch that check costs a fraction of a second; on a bad NAT it is why you now watch the connect dialog a moment longer instead of a match that starts and then never moves. **Join Network Game** (the menu row below) remains the direct `IP:port` join, unchanged.
 
 #### Matchmaker configuration
 
@@ -252,11 +252,25 @@ Still open:
   and returns to the menu rather than half-connecting.
 - **Host migration** — if the host drops, the match ends rather than re-electing
   a new hub. The design is in ADR-0011 (§ Risks) and the server half is built.
+- **A path that dies mid-match is not detected.** The mutual check above runs
+  *before* tick 0; past that point nothing re-verifies, so the two-generals tail
+  of the handover window is still open. The shape of the fix (a guest keepalive
+  plus a switchable transport) is written up in
+  `docs/online-multiplayer-design.md` § 4.1 rather than left implicit.
+- **The netcode has never met a real NAT in a test.** Everything in `tests/net`
+  runs over loopback; asymmetry is *modelled* (a black-hole address) rather than
+  produced by hardware. That proves the state machine converges given a
+  particular asymmetry — not that every asymmetry real NATs produce looks like
+  it. Live play is currently the only evidence for that half.
 
 **Cross-platform** is structural rather than aspirational: the sim is
 integer-only, the wire is little-endian, and a compile-time `build_hash` is
 checked at the lobby door and again before tick 0, so mismatched builds are
-refused loudly instead of desyncing. All three platforms build and run the test
+refused loudly instead of desyncing. The honest limit on that guarantee: the
+digest is the folded `state_hash` of fixed reference scenarios, so it catches
+exactly the behaviour those scenarios execute. Adding a mechanic without
+extending them leaves the door open — which has happened, and is why
+`build_hash.cpp` carries the measurement procedure and a named uncovered class. All three platforms build and run the test
 suite in CI — the matrix is Linux (GCC), macOS (Clang) and Windows (MSVC), one
 job per preset. What is *not* claimed is equal play-testing: Windows is the only
 one exercised by hand against a real install every day, so treat Linux and macOS
@@ -276,7 +290,7 @@ Contributions are welcome — issues and pull requests both. A few house rules k
 
 Open Bomberman is an independent, **clean-room re-implementation**. It is **not** affiliated with, endorsed by, or connected to Interplay Entertainment or Konami.
 
-- **No original code or assets are included.** This repository contains only original source authored by the contributors, written from observing data formats and behaviour. It contains no Interplay/Konami code, artwork, audio, level data, or other assets, and the reverse-engineering working material (the binary, disassembly, decompiler output) is never committed either (see `.gitignore`).
+- **No original code or assets are included.** This repository contains only original source authored by the contributors, written from observing data formats and behaviour. It ships no Interplay/Konami code, audio, level data, or game data of any kind, and the reverse-engineering working material (the binary, disassembly, decompiler output) is never committed either (see `.gitignore`). One thing is worth naming rather than glossing: the screenshot and animation at the top of this page are captures of *this* engine running, so they do show the original's artwork on screen. They are documentation of what the port looks like — nothing in the repository lets you play without your own copy of the game.
 - **You must own the original game.** The engine loads Atomic Bomberman's data at runtime from *your own* legally-obtained copy; it ships none of it. Without an original install there is nothing to play.
 - **Trademarks.** "Atomic Bomberman" and "Bomberman" and all related names, logos, characters, and artwork are the property of their respective owners (Interplay / Konami). They are used here only nominatively, to describe what this software is compatible with.
 - **License.** The original source and documentation in this repository are released under the MIT License — see [`LICENSE`](LICENSE). That license covers the contributors' code **only**; it grants no rights to any third-party names, trademarks, or assets.
