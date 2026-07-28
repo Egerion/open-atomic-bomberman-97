@@ -5,6 +5,8 @@
 // VALUELST.RES, and picks stages from the enabled rotation. SDL-free.
 
 #include <algorithm>
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -16,10 +18,40 @@
 
 namespace bomber::match {
 
+// Per-slot TEAM roster a scheme asks for (docs/re/facts.md "The .SCH -S row's
+// 4th field is the per-slot TEAM"). Reproduces sub_403EEE's two-step exactly:
+//
+//   1. sub_4049C0 — called by the reader BEFORE it opens the file — seeds
+//      every one of the 10 start records with the low bit of its slot index,
+//      so the standing default is the alternating 0,1,0,1,… pattern, NOT a
+//      flat 0.
+//   2. the reader's 'S' case overwrites that dword for a slot whose row
+//      carries a 4th field, storing it as a boolean.
+//
+// The reader's tail loop then pushes each slot's value into the player
+// record's +84 team byte (sub_422437). In the port that byte is the setup
+// screen's own per-slot team, which the user may still flip with 'T'
+// afterwards — the original's precedence, since sub_410F81 loads the scheme
+// before it enters its key loop.
+template <std::size_t N>
+constexpr void scheme_setup_teams(const assets::sch::Scheme& scheme, std::array<int, N>& team) {
+    for (std::size_t i = 0; i < N; ++i) team[i] = static_cast<int>(i) & 1;  // sub_4049C0
+    for (const auto& sp : scheme.spawns)
+        if (sp.has_team && sp.player >= 0 && static_cast<std::size_t>(sp.player) < N)
+            team[static_cast<std::size_t>(sp.player)] = sp.team != 0 ? 1 : 0;
+}
+
+// `team_play` is the Options-screen team gate (dword_464964): the original
+// writes the team byte either way and the flag decides whether anything reads
+// it as a team, and sim::Player::team's own convention reserves 0 for "no
+// team / solo side". So an OFF gate leaves every cfg.team[] at 0 (every player
+// its own side) and an ON gate shifts the scheme's 0/1 byte up by one into the
+// sim's 1/2. Defaults false, so every caller that predates this argument keeps
+// an all-zero roster and is byte-identical.
 inline sim::MatchConfig build_match_config(const assets::sch::Scheme& scheme, int player_count,
                                            std::uint32_t seed,
                                            const assets::res::ValueList* values = nullptr,
-                                           bool random_start = false) {
+                                           bool random_start = false, bool team_play = false) {
     sim::MatchConfig cfg;
     cfg.player_count = player_count;
     cfg.seed = seed;
@@ -70,8 +102,7 @@ inline sim::MatchConfig build_match_config(const assets::sch::Scheme& scheme, in
     }
 
     for (const auto& sp : scheme.spawns) {
-        if (sp.player >= static_cast<int>(cfg.spawns.size()))
-            cfg.spawns.resize(sp.player + 1);
+        if (sp.player >= static_cast<int>(cfg.spawns.size())) cfg.spawns.resize(sp.player + 1);
         cfg.spawns[sp.player] = {std::clamp(sp.x, 0, sim::kGridWidth - 1),
                                  std::clamp(sp.y, 0, sim::kGridHeight - 1)};
     }
@@ -105,11 +136,42 @@ inline sim::MatchConfig build_match_config(const assets::sch::Scheme& scheme, in
         }
     }
 
+    // Per-spawn TEAM (the -S 4th field), gated by the Options team flag — see
+    // scheme_setup_teams above for the parity default and the precedence.
+    if (team_play) {
+        std::array<int, sim::kMaxPlayers> slot_team{};
+        scheme_setup_teams(scheme, slot_team);
+        for (int i = 0; i < sim::kMaxPlayers; ++i)
+            cfg.team[i] = static_cast<std::uint8_t>(slot_team[i] + 1);
+    }
+
     for (const auto& pr : scheme.powerups) {
         if (pr.id < 0 || pr.id >= sim::kPowerupKinds) continue;
         if (pr.forbidden) cfg.forbidden[pr.id] = true;
-        if (pr.born_with) cfg.born_with[pr.id] = true;
         if (pr.has_override) cfg.spawn_override[pr.id] = pr.override_value;
+        // "Born with" is a COUNT that REPLACES the VALUELST starting-inventory
+        // baseline, not an additive one-shot grant (docs/re/facts.md "The .SCH
+        // -P row's 2nd field is a COUNT that REPLACES the starting
+        // inventory"). sub_403EEE's tail loop calls the value-table SETTER
+        // sub_4121BF(50 + kind, count) for every kind whose count is > 0, so
+        // the scheme overwrites the very id sub_4214BC reads when it seeds a
+        // fresh player's inventory byte — and the id the death-scatter /
+        // head-hit surplus tests read too. Writing it into Tuning::start_with
+        // (which build_state already applies to all 13 kinds, and
+        // PowerupSystem already uses as the surplus threshold) reproduces both
+        // readers for free.
+        //
+        // Order: this runs AFTER the VALUELST pass above, matching the
+        // original (the value table is loaded at boot, the scheme overwrites
+        // it at load). The `> 0` gate is the original's own — a row with count
+        // 0 cannot zero the default 1 bomb / 2 flame, it just leaves the
+        // baseline alone.
+        //
+        // Divergence, deliberate: sub_4121BF's write is global and nothing
+        // restores it, so in the original a scheme's counts leak into the next
+        // match. Tuning is rebuilt per match here, so each match sees only its
+        // own scheme.
+        if (pr.born_with > 0) cfg.tuning.start_with[pr.id] = pr.born_with;
     }
     return cfg;
 }
@@ -124,9 +186,7 @@ inline sim::MatchConfig build_match_config(const assets::sch::Scheme& scheme, in
 inline void apply_actors(sim::MatchConfig& cfg, const std::vector<assets::extra::Actor>& actors,
                          std::uint32_t seed) {
     using assets::extra::Kind;
-    auto occupied = [&](int x, int y) {
-        return cfg.actor_type[y][x] != sim::ActorType::None;
-    };
+    auto occupied = [&](int x, int y) { return cfg.actor_type[y][x] != sim::ActorType::None; };
     auto place = [&](int x, int y, sim::ActorType t, int dir) {
         if (x < 0 || x >= sim::kGridWidth || y < 0 || y >= sim::kGridHeight) return;
         cfg.actor_type[y][x] = t;
@@ -141,7 +201,10 @@ inline void apply_actors(sim::MatchConfig& cfg, const std::vector<assets::extra:
         cfg.cells[y][x] = sim::Cell::Blank;
     };
     std::uint32_t lcg = seed ? seed : 0x1234567u;  // setup-only stream
-    auto roll = [&]() { lcg = lcg * 1664525u + 1013904223u; return lcg >> 16; };
+    auto roll = [&]() {
+        lcg = lcg * 1664525u + 1013904223u;
+        return lcg >> 16;
+    };
 
     // Warphole one-time setup knockout (sub_4056CA case 1, the block guarded by
     // the +146 latch still being clear): when a warphole is first activated it
@@ -174,7 +237,9 @@ inline void apply_actors(sim::MatchConfig& cfg, const std::vector<assets::extra:
     // Track placed warpholes so their idno/linkto links can be resolved into
     // destination tiles after all actors are down (mirrors sub_405A81, which
     // scans the whole registry). Kept as (x, y, idno, linkto).
-    struct Warp { int x, y, idno, linkto; };
+    struct Warp {
+        int x, y, idno, linkto;
+    };
     std::vector<Warp> warps;
 
     for (const auto& a : actors) {

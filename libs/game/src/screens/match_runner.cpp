@@ -8,17 +8,17 @@
 #include <cstdio>
 #include <string>
 
-#include "bomber/assets/extra.hpp"                // assets::extra::load_for_board
-#include "bomber/game/dialog_chrome.hpp"          // kDialogInkR/G/B (fps overlay)
-#include "bomber/game/goldman_wheel.hpp"          // kClogsPrizeId / wheel_prize_to_powerup
-#include "bomber/game/input.hpp"                  // SlotInputType
-#include "bomber/game/match_outcome.hpp"          // is_team_mode
-#include "bomber/game/renderer.hpp"               // kScreenW
-#include "bomber/game/results.hpp"                // tally_kills
+#include "bomber/assets/extra.hpp"                   // assets::extra::load_for_board
+#include "bomber/game/dialog_chrome.hpp"             // kDialogInkR/G/B (fps overlay)
+#include "bomber/game/goldman_wheel.hpp"             // kClogsPrizeId / wheel_prize_to_powerup
+#include "bomber/game/input.hpp"                     // SlotInputType
+#include "bomber/game/match_outcome.hpp"             // is_team_mode
+#include "bomber/game/renderer.hpp"                  // kScreenW
+#include "bomber/game/results.hpp"                   // tally_kills
 #include "bomber/game/screens/campaign_screens.hpp"  // HelpBrowserModal (the in-round F1)
-#include "bomber/game/sprites.hpp"                // Sprite (player-row "xxx" marker)
-#include "bomber/match/match_factory.hpp"         // build_match_config / pick_stage / apply_actors
-#include "bomber/net/rollback_session.hpp"        // net::RollbackSession (netplay drive, seam is fwd-only)
+#include "bomber/game/sprites.hpp"                   // Sprite (player-row "xxx" marker)
+#include "bomber/match/match_factory.hpp"   // build_match_config / pick_stage / apply_actors
+#include "bomber/net/rollback_session.hpp"  // net::RollbackSession (netplay drive, seam is fwd-only)
 
 namespace bomber::game {
 
@@ -79,9 +79,19 @@ sim::MatchConfig MatchRunner::build_config(std::uint32_t seed) const {
     // — CONFIRMED as the original's 200-pair-swap over the 10 start slots
     // (sub_421793; match_factory.hpp mirrors the loop, docs/re/facts.md
     // "Options toggles").
+    // `team_play` makes build_match_config lay down the scheme's own "-S"
+    // per-spawn teams (facts.md "The .SCH -S row's 4th field is the per-slot
+    // TEAM"). The setup-screen roster below then overwrites cfg.team[]
+    // wholesale — which is not a contradiction: setup_team[] was itself seeded
+    // from this same scheme on entry to the PLAYER INPUT screen, so the two
+    // agree unless the user pressed 'T', in which case the user's choice wins,
+    // exactly as it does in sub_410F81 (scheme load first, key loop after).
+    // Passing it here keeps the SDL-free path (abtool, a headless host)
+    // honest on its own, rather than leaving the field readable only through
+    // the GUI.
     sim::MatchConfig cfg =
         match::build_match_config(state_.scheme, sim::kMaxPlayers, seed, &ctx_.values,
-                                  state_.options.random_start);
+                                  state_.options.random_start, state_.team_play);
     // Roster from the PLAYER INPUT screen (present_setup): OFF slots are inactive,
     // COMPUTER slots are AI-driven, KEYBOARD slots are local human(s). The per-slot
     // team feeds MatchConfig::team[] -> the hashed Player::team.
@@ -436,8 +446,7 @@ AppInput MatchRunner::run() {
                 return true;  // straight into the outcome tier, nothing to wait for
             }
             for (int i = 0; i < sim::kMaxPlayers; ++i)
-                if (s.players[i].present && s.players[i].alive)
-                    std::printf("player %d wins!\n", i);
+                if (s.players[i].present && s.players[i].alive) std::printf("player %d wins!\n", i);
             // NETPLAY keeps the old fixed linger. The death-sequence pool and
             // each sequence's step count come from the LOCAL install's DATA/ANI
             // files, which build_hash does not cover, so an animation-driven
@@ -597,78 +606,81 @@ AppInput MatchRunner::run() {
             // pickup poses play ~9x too fast in native cadence).
             // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
             state_.renderer.on_events(state_.sim.state(), state_.sim.state().tick != tick_before);
-            state_.renderer.advance_tick(state_.sim.state());  // NOLINT(bugprone-unchecked-optional-access)
+            state_.renderer.advance_tick(
+                state_.sim.state());  // NOLINT(bugprone-unchecked-optional-access)
             tally_kills(state_.sim.state().events, state_.kill_count);
             for (std::uint64_t t = tick_before; t < state_.sim.state().tick; ++t)
                 if (advance_round_end()) return AppInput::MatchOver;
             acc = 0;  // the fixed-tick accumulator is dormant on this path
         } else {
-        // Long-stall guard (spiral-of-death / teleport clamp). A window drag,
-        // alt-tab, asset stall, or a debugger break can hand us a multi-hundred-
-        // ms delta; without a cap the `while` below fires that many catch-up
-        // ticks in one frame — the sim lurches (entities snap-teleport across
-        // the board, past the 32 px interp snap threshold) and, worse, the loop
-        // can wedge trying to out-run real time. Cap the queue at a few ticks'
-        // worth: excess wall-time is DROPPED (the match briefly runs in slow
-        // motion) rather than fast-forwarded. Does not touch determinism — the
-        // sim still advances one deterministic tick per crossing; only how many
-        // crossings a single frailty-induced hitch produces is bounded.
-        constexpr std::uint64_t kMaxCatchupTicks = 4;
-        if (acc > kMaxCatchupTicks * tick_ns) acc = kMaxCatchupTicks * tick_ns;
-        while (acc >= tick_ns) {
-            // Consume the frame-sampled latch on the FIRST tick of a catch-up
-            // burst only (a later tick in the same burst re-reads the live
-            // state, matching the original's one-edge-check-per-update under
-            // a slow frame — its clamped ms delta produces exactly one
-            // sub_41E61E read per displayed frame too).
-            //
-            // Build this tick's input from the frame sample + the latched taps.
-            // The latch-clear + `acc -= tick_ns` move to AFTER the tick; on the
-            // LOCAL path this is behaviourally identical to the old consume-then-
-            // tick order (nothing reads the latch or `acc` between here and there).
-            sim::TickInputs in = frame_in;
-            for (int i = 0; i < sim::kMaxPlayers; ++i) {
-                in.players[i].action1 = in.players[i].action1 || tap_latch[i].action1;
-                in.players[i].action2 = in.players[i].action2 || tap_latch[i].action2;
-            }
-            // Netplay drives the SAME borrowed sim through the ROLLBACK session
-            // (deterministic tick() only — never frame()): advance() sends our
-            // seats, PREDICTS the peer's still-missing input (repeat-last), ticks
-            // the predicted frame, and transparently rolls back + re-simulates when
-            // the real input arrives and differs. So the local player sees ZERO
-            // input delay and the match runs at real time — no stalling on the
-            // network the way input-delay lockstep did. A local match ticks
-            // directly, exactly as before (net_session is null everywhere else).
-            if (state_.net_session) {
-                state_.net_session->advance(in);
-            } else {
-                state_.sim.tick(in);
-            }
-            // The tick actually happened — NOW consume the taps and one tick's
-            // worth of the accumulator, then run the per-tick bookkeeping.
-            for (int i = 0; i < sim::kMaxPlayers; ++i) {
-                tap_latch[i].action1 = false;
-                tap_latch[i].action2 = false;
-            }
-            acc -= tick_ns;
-            ctx_.sounds.on_tick(state_.sim.state());
-            state_.renderer.on_events(state_.sim.state());  // NOLINT(bugprone-unchecked-optional-access)
-            // Roll the renderer's inter-tick snapshots forward for THIS tick,
-            // inside the catch-up loop — so a frame that advances the sim two
-            // ticks still leaves interp `prev` at the penultimate tick (a clean
-            // 1-tick lerp span) instead of two ticks back (the snap/double-speed
-            // jitter). Tick-keyed, so draw_frame's own trailing call is a no-op
-            // on the live path and still primes the demo/screenshot path.
-            state_.renderer.advance_tick(state_.sim.state());  // NOLINT(bugprone-unchecked-optional-access)
-            // §1's kill tally (sub_421B0F): a GameApp-side pass over this
-            // tick's events, separate from the renderer's own on_events walk
-            // (renderer_ never mutates GameApp state — CLAUDE.md's libs/game
-            // boundary). Cumulative for the whole match (see kill_count_'s
-            // doc comment); reset only in reset_match_scores().
-            tally_kills(state_.sim.state().events, state_.kill_count);
+            // Long-stall guard (spiral-of-death / teleport clamp). A window drag,
+            // alt-tab, asset stall, or a debugger break can hand us a multi-hundred-
+            // ms delta; without a cap the `while` below fires that many catch-up
+            // ticks in one frame — the sim lurches (entities snap-teleport across
+            // the board, past the 32 px interp snap threshold) and, worse, the loop
+            // can wedge trying to out-run real time. Cap the queue at a few ticks'
+            // worth: excess wall-time is DROPPED (the match briefly runs in slow
+            // motion) rather than fast-forwarded. Does not touch determinism — the
+            // sim still advances one deterministic tick per crossing; only how many
+            // crossings a single frailty-induced hitch produces is bounded.
+            constexpr std::uint64_t kMaxCatchupTicks = 4;
+            if (acc > kMaxCatchupTicks * tick_ns) acc = kMaxCatchupTicks * tick_ns;
+            while (acc >= tick_ns) {
+                // Consume the frame-sampled latch on the FIRST tick of a catch-up
+                // burst only (a later tick in the same burst re-reads the live
+                // state, matching the original's one-edge-check-per-update under
+                // a slow frame — its clamped ms delta produces exactly one
+                // sub_41E61E read per displayed frame too).
+                //
+                // Build this tick's input from the frame sample + the latched taps.
+                // The latch-clear + `acc -= tick_ns` move to AFTER the tick; on the
+                // LOCAL path this is behaviourally identical to the old consume-then-
+                // tick order (nothing reads the latch or `acc` between here and there).
+                sim::TickInputs in = frame_in;
+                for (int i = 0; i < sim::kMaxPlayers; ++i) {
+                    in.players[i].action1 = in.players[i].action1 || tap_latch[i].action1;
+                    in.players[i].action2 = in.players[i].action2 || tap_latch[i].action2;
+                }
+                // Netplay drives the SAME borrowed sim through the ROLLBACK session
+                // (deterministic tick() only — never frame()): advance() sends our
+                // seats, PREDICTS the peer's still-missing input (repeat-last), ticks
+                // the predicted frame, and transparently rolls back + re-simulates when
+                // the real input arrives and differs. So the local player sees ZERO
+                // input delay and the match runs at real time — no stalling on the
+                // network the way input-delay lockstep did. A local match ticks
+                // directly, exactly as before (net_session is null everywhere else).
+                if (state_.net_session) {
+                    state_.net_session->advance(in);
+                } else {
+                    state_.sim.tick(in);
+                }
+                // The tick actually happened — NOW consume the taps and one tick's
+                // worth of the accumulator, then run the per-tick bookkeeping.
+                for (int i = 0; i < sim::kMaxPlayers; ++i) {
+                    tap_latch[i].action1 = false;
+                    tap_latch[i].action2 = false;
+                }
+                acc -= tick_ns;
+                ctx_.sounds.on_tick(state_.sim.state());
+                state_.renderer.on_events(
+                    state_.sim.state());  // NOLINT(bugprone-unchecked-optional-access)
+                // Roll the renderer's inter-tick snapshots forward for THIS tick,
+                // inside the catch-up loop — so a frame that advances the sim two
+                // ticks still leaves interp `prev` at the penultimate tick (a clean
+                // 1-tick lerp span) instead of two ticks back (the snap/double-speed
+                // jitter). Tick-keyed, so draw_frame's own trailing call is a no-op
+                // on the live path and still primes the demo/screenshot path.
+                state_.renderer.advance_tick(
+                    state_.sim.state());  // NOLINT(bugprone-unchecked-optional-access)
+                // §1's kill tally (sub_421B0F): a GameApp-side pass over this
+                // tick's events, separate from the renderer's own on_events walk
+                // (renderer_ never mutates GameApp state — CLAUDE.md's libs/game
+                // boundary). Cumulative for the whole match (see kill_count_'s
+                // doc comment); reset only in reset_match_scores().
+                tally_kills(state_.sim.state().events, state_.kill_count);
 
-            if (advance_round_end()) return AppInput::MatchOver;
-        }
+                if (advance_round_end()) return AppInput::MatchOver;
+            }
         }  // end else: the deterministic fixed-tick accumulator path
 
         ctx_.audio.update_music();
@@ -687,10 +699,10 @@ AppInput MatchRunner::run() {
         // F9: glide fraction for the 50 ms-stepped entities (flying/sliding
         // bombs, rovers) = how far into the current 50 ms tick this frame falls.
         // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — emplaced in init()
-        state_.renderer.set_entity_interp(
-            state_.native_cadence ? static_cast<float>(state_.sim.systems_accum_ms()) /
-                                        static_cast<float>(sim::kMsPerTick)
-                                  : 1.0f);
+        state_.renderer.set_entity_interp(state_.native_cadence
+                                              ? static_cast<float>(state_.sim.systems_accum_ms()) /
+                                                    static_cast<float>(sim::kMsPerTick)
+                                              : 1.0f);
         // Inter-tick interpolation fraction (renderer.hpp's draw_frame doc):
         // acc < tick_ns after the catch-up loop, so this is in [0,1) — how far
         // into the current 50 ms tick this displayed frame falls. The original

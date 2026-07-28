@@ -68,7 +68,7 @@ void EditorGrid::load_from_scheme(const assets::sch::Scheme& scheme) {
     for (const auto& sp : scheme.spawns) {
         if (sp.player < 0 || sp.player >= kEditorMaxStarts) continue;
         starts_[static_cast<std::size_t>(sp.player)] = EditorStart{
-            std::clamp(sp.x, 0, width_ - 1), std::clamp(sp.y, 0, height_ - 1), sp.extra != 0};
+            std::clamp(sp.x, 0, width_ - 1), std::clamp(sp.y, 0, height_ - 1), sp.team != 0};
     }
 
     powerups_ = scheme.powerups;
@@ -86,7 +86,7 @@ assets::sch::Scheme EditorGrid::to_scheme() const {
         sp.player = i;
         sp.x = st.x;
         sp.y = st.y;
-        sp.extra = st.team ? 1 : 0;
+        sp.team = st.team ? 1 : 0;
         s.spawns.push_back(sp);
     }
     s.powerups = powerups_;

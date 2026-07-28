@@ -1896,6 +1896,7 @@ SetupState GameApp::setup_state() {
     return SetupState{.setup_type = setup_type_,
                       .setup_sub = setup_sub_,
                       .setup_team = setup_team_,
+                      .scheme = scheme_,
                       .setup_lcg = setup_lcg_,
                       .campaign_trigger_count = campaign_trigger_count_,
                       .team_play = team_play_,

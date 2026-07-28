@@ -5708,6 +5708,141 @@ Corrects `docs/re/in-match-shell.md`'s "a correct constant wired into a
 different point in the sequence" paragraph, which read `sub_421947` as an
 alive count.
 
+## The `.SCH` `-S` row's 4th field is the per-slot TEAM — CONFIRMED + PORTED (2026-07-28, `sub_403EEE`/`sub_4049C0`/`sub_422437`)
+
+The scheme reader is `sub_403EEE` (@`0x403EEE`), the counterpart to the writer
+`sub_403C16` already documented in `docs/re/results-and-options.md` §5. Its
+`'S'` case accepts a row with **three or four** comma fields after the tag. The
+first three are the slot index, X and Y (wrapped/clamped into the board). The
+fourth is only read when the row has four, and it is stored as a **boolean**
+(`value != 0`) into the third dword of that slot's 12-byte start record
+(base `dword_46481C`, stride 12, offset `+8`).
+
+Two independent uses pin that dword as a TEAM, not an "alt flag":
+
+- **The reader pushes it into the player record's team byte.** After the parse
+  loop closes the file, `sub_403EEE` runs a 10-iteration tail loop calling
+  `sub_422437(slot, record[+8])`. `sub_422437` (@`0x422437`) writes the low
+  byte of `dword_461BC4[38*slot + 21]` — the player record at stride `0x98`,
+  byte offset **`+0x54` = +84**. That is exactly the byte the team-play round
+  award reads (see "Team round wins are MIRRORED across the team" above,
+  `sub_421B56`) and the byte the AI's teammate filter reads
+  (`dword_464964 && a[+84] == b[+84]`, inside the `sub_40A140` match-start
+  block). `sub_4223E7` (@`0x4223E7`) is its getter.
+- **The map editor draws it as a team ring.** `sub_4028D2` (@`0x4028D2`)
+  formats a `teamring%u` sequence name from the same `+8` dword once per
+  spawn marker, and one of its key handlers flips that dword between 0 and 1.
+  So the field is authored, per spawn, in the editor's own UI.
+
+**The default is slot parity, not zero.** `sub_4049C0` (@`0x4049C0`), which
+`sub_403EEE` calls before it opens the file, seeds every slot's `+8` dword
+with the low bit of the slot index — 0,1,0,1,… A `-S` row with only three
+fields therefore leaves the alternating default standing; a four-field row
+overrides that one slot.
+
+**Precedence: the scheme seeds, the user overrides.** All of this happens
+inside `sub_410F81`, the pre-match driver. Its first statements call
+`sub_4046CC` (@`0x4046CC`) → `sub_403EEE`, so the scheme's layout is already
+in the `+84` bytes before the screen draws a frame. Only later, in the same
+function's interactive loop, does the `'T'` key handler read a slot's byte
+back with `sub_4223E7` and write the inverse with `sub_422437`. A user 'T'
+press therefore wins over the scheme, because it happens afterwards — but a
+user who presses nothing plays the layout the map author drew.
+
+The Options-screen gate `dword_464964` is orthogonal and downstream: the team
+byte is written either way, and the flag decides whether anything *reads* it
+as a team (the win mirror, the AI teammate filter, the own-colour reveal).
+
+**Live evidence.** 19 of the 67 shipped `DATA/SCHEMES/*.SCH` carry a
+four-field `-S` block whose layout is NOT slot parity: `BACK`, `BACK2`,
+`BORDER`, `DEADEND`, `DOGRACE`, `E_VS_W`, `FORT`, `FREEWAY`, `GRIDLOCK`,
+`LEAK`, `N_VS_S`, `OG`, `PINGPONG`, `RAIL1`, `RAILROAD`, `TENNIS`, `UTURN`,
+`VOLLEY`, `WALLYBOM`. Fifteen of them are the same split — slots 0-4 on team
+0, slots 5-9 on team 1 — which is exactly what the names promise
+(`E_VS_W`, `N_VS_S`, `TENNIS`, `VOLLEY`, `PINGPONG`). A further 17 schemes
+write the parity default explicitly, and 31 omit the field entirely.
+
+**Port (2026-07-28).** `assets::sch::Spawn::extra` (parsed and then discarded,
+its comment reading "purpose TBD (team/alt flag?)") is renamed `team` and
+consumed in two places: `match::scheme_setup_teams()` reproduces the
+`sub_4049C0` parity seed plus the `-S` override and feeds the setup screen's
+per-slot team roster, and `match::build_match_config` writes the same layout
+into `sim::MatchConfig::team[]` behind an explicit `team_play` argument (the
+port's `dword_464964`). Before this the 19 maps above played with whatever the
+parity default left behind, i.e. teams unrelated to the authored map.
+
+This also corrects a wrong conclusion that was sitting in
+`libs/game/src/screens/setup_screen.cpp`: that `sub_403EEE` "only ever
+overwrites a slot's COLOUR from disk, never TEAM, unless a rare `-S`
+5-field profile line is present … a hidden colour-profile file this port
+doesn't implement". The `+0`/`+4` dwords it called colour are the spawn X and
+Y, the file being parsed is the scheme itself (the reader strips the extension
+off the current scheme name and re-appends `.SCH`), and the four-field row is
+neither rare nor hidden.
+
+## The `.SCH` `-P` row's 2nd field is a COUNT that REPLACES the starting inventory — CONFIRMED + PORTED (2026-07-28, `sub_403EEE`/`sub_4121BF`/`sub_4214BC`)
+
+Same reader. `sub_403EEE`'s `'P'` case requires five fields and stores them in
+four parallel 13-entry tables: the "born with" **count** (negatives floored to
+0), a has-override flag, an override value, and a forbidden flag. Then the
+same tail loop that pushes the team bytes runs a 13-iteration pass:
+
+- when the born-with count is **> 0**, it calls `sub_4121BF(50 + kind, count)`;
+- when the has-override flag is set, it calls `sub_4121BF(400 + kind, value)`.
+
+`sub_4121BF` (@`0x4121BF`) is the **setter** for the VALUELST value table —
+the exact table `sub_412135` (@`0x412135`, `getvalue`) reads, same base
+pointer, same index arithmetic. So a scheme's `-P` born-with field does not
+open a second, additive grant channel: it **overwrites VALUELST id 50+kind**,
+the per-kind starting-inventory baseline, and every existing reader of that id
+then sees the scheme's number. `sub_4214BC`'s per-round placement loop writes
+`getvalue(50+j)` straight into each player's inventory byte at `+86+j`, so a
+scheme saying "3 bombs" starts every player on exactly 3 — not on the
+VALUELST's 1 plus one grant.
+
+The `> 0` gate matters in both directions: a `-P` row with born-with 0 leaves
+the VALUELST baseline alone (it cannot zero the default 1 bomb / 2 flame), and
+a nonzero one replaces it outright rather than accumulating.
+
+Two consequences fall out of the setter being the *shared* value table:
+
+- **The override reaches the other id-50 readers too.** The death-scatter and
+  head-hit surplus tests (in the `0x41DAA7` block, and one more at `0x421E80`)
+  ask `getvalue(kind + 50)` for the "how much of this is above baseline"
+  threshold. Under a scheme granting 3 bombs, a corpse scatters only what is
+  above 3. A private per-match born-with channel could not reproduce that.
+- **The write is global and persistent.** Nothing restores ids 50-62 when the
+  match ends, so in the original a scheme's counts leak into the next match
+  until another scheme's own `> 0` rows overwrite them. The port deliberately
+  does NOT reproduce that: it rebuilds `Tuning` from `VALUELST.RES` per match
+  and layers the scheme on top, so each match sees only its own scheme.
+
+**Port (2026-07-28).** `sim::MatchConfig::born_with` — a
+`std::array<bool, kPowerupKinds>` that `match_factory` collapsed the parsed
+integer into, and that `setup.cpp` then replayed through
+`PowerupSystem::apply` once, additively, on top of the baseline — is
+**removed**. `build_match_config` now writes
+`cfg.tuning.start_with[id] = count` for `count > 0`, after the VALUELST pass,
+and `setup.cpp`'s existing baseline block (which already seeds all 13 kinds
+from `start_with`) does the rest. `born_with_extra` (the Goldman wheel's
+per-player `+1`) is untouched — that one IS a genuine post-baseline increment
+in `sub_4214BC` and stays on the `apply` path.
+
+Going through `apply` was wrong in a second, subtler way: `apply` runs the
+pickup dispatcher's mutual-exclusion evictions (`sub_41E16A` — grab↔spooger,
+punch↔trigger, trigger↔jelly), which SCATTER the evicted token and draw
+`State::rng`. `sub_4214BC`'s baseline write is a raw byte store with no
+eviction and no RNG, so a scheme granting both Grab and Spooger kept both in
+the original while the port silently evicted one and burned a scatter draw.
+Golden B/C move for this reason — see `tests/sim/test_golden.cpp`.
+
+This **supersedes** `docs/re/audit/setup.md`'s Finding 2 closing note
+("`born_with` (scheme) and `start_with` (VALUELST) ARE two independent,
+additive mechanisms"). That conclusion was reached by observing that
+`sub_4214BC` contains no scheme-table access and inferring a separate path
+from its absence; the actual path is the scheme writing into the value table
+`sub_4214BC` reads. That document has been corrected in place.
+
 ## Still guessed — not yet extracted from the binary
 
 | Constant | Current value | Status |

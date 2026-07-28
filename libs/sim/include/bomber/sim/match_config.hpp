@@ -51,14 +51,21 @@ struct MatchConfig {
     // Per-scheme powerup overrides (-P rows): >= -999 replaces the spawn count.
     std::array<std::int32_t, kPowerupKinds> spawn_override;
     std::array<bool, kPowerupKinds> forbidden{};
-    std::array<bool, kPowerupKinds> born_with{};
+    // NOTE: there is deliberately no `born_with` array here. The scheme's -P
+    // "born with" field is a COUNT that REPLACES the VALUELST starting
+    // inventory, which the original expresses by writing the value table id
+    // the baseline is read from — so it lands in `tuning.start_with[]`, not in
+    // a second channel of its own (docs/re/facts.md "The .SCH -P row's 2nd
+    // field is a COUNT that REPLACES the starting inventory";
+    // match::build_match_config is the writer).
+    //
     // Per-player born-with OVERLAY (docs/re/goldman-roulette.md §4/§8): the
     // Goldman wheel's +1 starting-inventory award for the gold player (whole
-    // team in team mode), applied at setup.cpp AFTER the global born_with
-    // loop above via the same PowerupSystem::apply path. Unlike born_with
-    // (global, every player), this is per-SLOT so only the gold
-    // player/team receives the bump. Default all-false everywhere: a config
-    // with no goldman award behaves byte-identical to before this field
+    // team in team mode), applied at setup.cpp AFTER the start_with baseline
+    // via PowerupSystem::apply. This one IS a genuine post-baseline increment
+    // in sub_4214BC (`++inventory[86 + prize]`), and it is per-SLOT so only
+    // the gold player/team receives the bump. Default all-false everywhere: a
+    // config with no goldman award behaves byte-identical to before this field
     // existed (golden hashes unaffected).
     std::array<std::array<bool, kPowerupKinds>, kMaxPlayers> born_with_extra{};
     // Per-player Goldman wheel CLOGS overlay (docs/re/goldman-roulette.md
