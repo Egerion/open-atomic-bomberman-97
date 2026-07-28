@@ -142,6 +142,50 @@ std::uint64_t ai_scenario_hash() {
     return sim.hash();
 }
 
+// Seat 0 walks right along the cleared row 0, then STOPS and idles, then walks
+// again. The idle is the point: the actor trigger predicate and the re-entry
+// guard only diverge for a player that comes to rest ON an actor tile.
+sim::TickInputs actor_inputs(int t) {
+    sim::TickInputs in;
+    in.players[0].right = (t < 100) || (t >= 200);
+    return in;
+}
+
+// 4. STAGE ACTORS, DRIVEN. Scenarios 2 and 3 both PLACE warpholes and
+// trampolines, and neither discriminates a change to them: #2's four seats walk
+// to the centre and never reach the actor tiles, #3's AI seat sits in the warp
+// states rather than deciding anything (see its comment). Measured the way this
+// file demands: the "trigger is the -1 APPROACH, not arrival" fix plus the
+// removal of the tramp_latch/warp_latch player fields left the digest
+// BYTE-IDENTICAL across all three, so a peer without that fix was still
+// admitted and would desync on any board carrying an actor — which every stock
+// warphole map does. This scenario exists to make that impossible: it walks a
+// player ONTO a trampoline and THROUGH a warphole whose exit is itself a
+// warphole (the ping-pong case the removed latch used to suppress).
+std::uint64_t stage_actor_scenario_hash() {
+    using namespace sim;
+    MatchConfig cfg = pillar_arena();
+
+    // A clear corridor so the walk actually reaches the actors; row 0 carries no
+    // pillars (y % 2 == 1 is false) but does carry the brick fill.
+    for (int x = 0; x < kGridWidth; ++x) cfg.cells[0][x] = Cell::Blank;
+
+    cfg.actor_type[0][4] = ActorType::Trampoline;
+    // Paired warpholes: the exit is a warphole too, so arriving re-satisfies the
+    // entry predicate and only the guard stops an infinite hop.
+    cfg.cells[4][2] = Cell::Blank;
+    cfg.actor_type[0][8] = ActorType::Warphole;
+    cfg.warp_dest_x[0][8] = 2;
+    cfg.warp_dest_y[0][8] = 4;
+    cfg.actor_type[4][2] = ActorType::Warphole;
+    cfg.warp_dest_x[4][2] = 8;
+    cfg.warp_dest_y[4][2] = 0;
+
+    Simulation sim(cfg);
+    for (int t = 0; t < 300; ++t) sim.tick(actor_inputs(t));
+    return sim.hash();
+}
+
 std::uint32_t fold64(std::uint64_t h) {
     return static_cast<std::uint32_t>(h ^ (h >> 32));
 }
@@ -153,7 +197,8 @@ std::uint32_t build_hash() {
         // Order matters and is part of the digest; append new scenarios, never
         // reorder, or every existing build looks incompatible for no reason.
         std::uint64_t h = core_scenario_hash();
-        for (const std::uint64_t s : {enclosure_scenario_hash(), ai_scenario_hash()}) {
+        for (const std::uint64_t s :
+             {enclosure_scenario_hash(), ai_scenario_hash(), stage_actor_scenario_hash()}) {
             h ^= s + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2);
         }
         std::uint32_t v = fold64(h);

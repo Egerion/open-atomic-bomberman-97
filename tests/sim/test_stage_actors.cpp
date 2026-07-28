@@ -44,6 +44,39 @@ bool saw_warp(const Simulation& s) {
     return false;
 }
 
+// The warp is 18 ticks (9 warp-out + 9 warp-in), and the TRIGGER tick is the
+// first of them — sub_41F29B runs the mover before the state dispatch, so the
+// state-6 block already burns a frame on the frame sub_41EC84 sets it. So the
+// countdown reads 17 once the launch tick is over, the exit relocation lands 8
+// ticks after that (countdown 9), and control returns 17 ticks after that.
+constexpr int kWarpAfterLaunch = 17;
+constexpr int kWarpMid = 9;
+
+TickInputs east_input() {
+    TickInputs in;
+    in.players[0].right = true;
+    return in;
+}
+
+void park_on(State& st, int tx, int ty) {
+    st.players[0].x = centre_x(tx);
+    st.players[0].y = centre_y(ty);
+}
+
+// Walk player 0 east onto (tx,ty) from the centre of the tile to its west and
+// stop on the tick the warp launches. Every warp test has to do this: the
+// original's ONLY trigger is the mover's along-axis offset reading -1, i.e. the
+// approach INTO a centre, so a player parked on a warphole is never taken.
+bool walk_east_into(Simulation& s, int tx, int ty) {
+    park_on(s.state(), tx - 1, ty);
+    const TickInputs east = east_input();
+    for (int t = 0; t < 20; ++t) {
+        s.tick(east);
+        if (s.state().players[0].warp > 0) return true;
+    }
+    return false;
+}
+
 }  // namespace
 
 // ---- Dirarrows (type 0): players are NOT steered, bombs ARE. ---------------
@@ -89,42 +122,88 @@ TEST_CASE("a dirarrow re-steers a sliding bomb onto its godir") {
 
 // ---- Warpholes (type 1): teleport, no RNG. --------------------------------
 
-TEST_CASE("a player centred on a warphole warps (two-phase) to the linked exit") {
+TEST_CASE("walking into a warphole warps (two-phase) to the linked exit") {
     Simulation s(open_config());
     State& st = s.state();
-    // Two linked warpholes at (0,0) and (6,0). Pre-resolve their destinations
+    // Two linked warpholes at (4,0) and (10,0). Pre-resolve their destinations
     // the way apply_actors would (the sim reads warp_dest_* directly, no RNG).
-    st.actor_type[0][0] = ActorType::Warphole;
-    st.warp_dest_x[0][0] = 6;
-    st.warp_dest_y[0][0] = 0;
-    st.actor_type[0][6] = ActorType::Warphole;
-    st.warp_dest_x[0][6] = 0;
-    st.warp_dest_y[0][6] = 0;
+    st.actor_type[0][4] = ActorType::Warphole;
+    st.warp_dest_x[0][4] = 10;
+    st.warp_dest_y[0][4] = 0;
+    st.actor_type[0][10] = ActorType::Warphole;
+    st.warp_dest_x[0][10] = 4;
+    st.warp_dest_y[0][10] = 0;
 
     Player& p = st.players[0];
-    p.x = kTileWF / 2;  // centred on (0,0)
-    p.y = kTileHF / 2;
-
+    park_on(st, 3, 0);
     const std::uint32_t rng_before = st.rng;
-    s.tick(TickInputs{});  // settle -> START the warp (warp=18; state-gated)
 
-    CHECK(saw_warp(s));              // WarpUsed fired on step-on
-    CHECK(p.warp == 18);            // warp in progress (warp-out phase)
-    CHECK(p.tile_x() == 0);         // has NOT moved yet — the two-phase warp
+    REQUIRE(walk_east_into(s, 4, 0));
 
-    // warp-out runs until warp reaches the midpoint (9), where the relocation
-    // fires. From warp=18 that is 9 more ticks.
-    run(s, 8, TickInputs{});         // warp -> 10, still at the entry
-    CHECK(p.tile_x() == 0);
-    s.tick(TickInputs{});            // this tick decrements to 9 -> relocate
-    CHECK(p.warp == 9);
-    CHECK(p.tile_x() == 6);          // relocated to the exit at the midpoint
+    CHECK(saw_warp(s));                    // WarpUsed fired on step-on
+    CHECK(p.warp == kWarpAfterLaunch);     // the launch tick is frame 1 of 18
+    CHECK(p.tile_x() == 4);                // has NOT moved yet — two-phase warp
+
+    // warp-out runs until the countdown reaches the midpoint (9), where the
+    // relocation fires. From 17 that is 8 more ticks.
+    run(s, 7, TickInputs{});               // countdown -> 10, still at the entry
+    CHECK(p.tile_x() == 4);
+    s.tick(TickInputs{});                  // this tick decrements to 9 -> relocate
+    CHECK(p.warp == kWarpMid);
+    CHECK(p.tile_x() == 10);               // relocated to the exit at the midpoint
     CHECK(p.tile_y() == 0);
 
-    run(s, 9, TickInputs{});         // finish warp-in (9 -> 0)
-    CHECK(p.warp == 0);             // warp complete: the player can move again
-    CHECK(st.rng == rng_before);     // the whole warp drew NO RNG (contract)
-    CHECK(p.warp_latch);             // latched against immediate re-warp
+    run(s, 9, TickInputs{});               // finish warp-in (9 -> 0)
+    CHECK(p.warp == 0);                    // complete: the player can move again
+    CHECK(st.rng == rng_before);           // the whole warp drew NO RNG (contract)
+}
+
+TEST_CASE("a player left standing on a warphole is NOT taken") {
+    // THE negative case, and the one that would have passed before this fix too
+    // if it only checked that entry works. sub_41EC84 fires when the along-axis
+    // offset-to-tile-centre reads exactly -1 — the approach INTO the centre. A
+    // player sitting on the centre reads 0; one pressing into a wall from beyond
+    // it is settled back to 0; neither is -1. This port used to take both, via a
+    // post-tick "standing on one" fallback the original does not have.
+    Simulation s(open_config());
+    State& st = s.state();
+    st.actor_type[0][4] = ActorType::Warphole;
+    st.warp_dest_x[0][4] = 10;
+    st.warp_dest_y[0][4] = 0;
+    Player& p = st.players[0];
+    park_on(st, 4, 0);
+
+    run(s, 10, TickInputs{});  // no input at all
+    CHECK(p.warp == 0);
+    CHECK(p.tile_x() == 4);
+    CHECK_FALSE(saw_warp(s));
+
+    // ...and pressing INTO a wall while parked on the mouth does not either.
+    st.cells[0][5] = Cell::Solid;
+    run(s, 10, east_input());
+    CHECK(p.warp == 0);
+    CHECK(p.tile_x() == 4);
+    CHECK_FALSE(saw_warp(s));
+}
+
+TEST_CASE("a player walking the NEIGHBOURING row is not taken") {
+    // The predicate reads only the travel axis, but it looks the actor up at the
+    // player's OWN tile — so a walk along the row below a warphole crosses any
+    // number of tile centres and is never taken. This is the "walk around one"
+    // case.
+    Simulation s(open_config());
+    State& st = s.state();
+    st.actor_type[0][4] = ActorType::Warphole;
+    st.warp_dest_x[0][4] = 10;
+    st.warp_dest_y[0][4] = 0;
+    Player& p = st.players[0];
+    park_on(st, 0, 2);  // row 2: even, so clear of open_config's (odd,odd) pillars
+
+    run(s, 40, east_input());
+    CHECK(p.tile_x() > 4);  // walked clean past the warphole column
+    CHECK(p.tile_y() == 2);
+    CHECK(p.warp == 0);
+    CHECK_FALSE(saw_warp(s));
 }
 
 TEST_CASE("a player WALKING onto a warphole warps mid-walk (Gap 1 regression)") {
@@ -172,71 +251,46 @@ TEST_CASE("a player WALKING onto a warphole warps mid-walk (Gap 1 regression)") 
     const Fixed y0 = p.y;
     run(s, 20, down);
     CHECK(p.y > y0);                  // not frozen — control returned
-    CHECK_FALSE(p.warp_latch);        // latch cleared once off the warphole
-}
-
-TEST_CASE("a warped player can move again after the warp (not stuck)") {
-    // Regression for Gap 2: the old instantaneous-teleport model left the player
-    // unable to move. Now the warp completes in 18 ticks and control returns.
-    Simulation s(open_config());
-    State& st = s.state();
-    st.actor_type[0][0] = ActorType::Warphole;
-    st.warp_dest_x[0][0] = 6;
-    st.warp_dest_y[0][0] = 0;
-    st.actor_type[0][6] = ActorType::Warphole;
-    st.warp_dest_x[0][6] = 0;
-    st.warp_dest_y[0][6] = 0;
-    Player& p = st.players[0];
-    p.x = kTileWF / 2;
-    p.y = kTileHF / 2;
-
-    run(s, 19, TickInputs{});        // full warp: start (1) + 18 countdown ticks
-    REQUIRE(p.tile_x() == 6);
-    REQUIRE(p.warp == 0);
-
-    // Walk DOWN off the exit warphole (column 6 is open on the pillars board).
-    TickInputs down;
-    down.players[0].down = true;
-    const Fixed y0 = p.y;
-    run(s, 20, down);
-    CHECK(p.y > y0);                 // the player actually moved: not stuck
-    CHECK_FALSE(p.warp_latch);       // latch cleared once off the warphole tile
 }
 
 TEST_CASE("a warped player does not ping-pong at the exit") {
+    // The original's guard against warping straight back out is GEOMETRIC, not a
+    // latch: tick_warp drops the player exactly on the destination tile centre
+    // (sub_426524/sub_42655F), where the along-axis offset is 0, and only -1
+    // triggers. So the player rests on the exit indefinitely — no latch field is
+    // involved on either side.
     Simulation s(open_config());
     State& st = s.state();
-    st.actor_type[0][0] = ActorType::Warphole;
-    st.warp_dest_x[0][0] = 6;
-    st.warp_dest_y[0][0] = 0;
-    st.actor_type[0][6] = ActorType::Warphole;
-    st.warp_dest_x[0][6] = 0;
-    st.warp_dest_y[0][6] = 0;
+    st.actor_type[0][4] = ActorType::Warphole;
+    st.warp_dest_x[0][4] = 10;
+    st.warp_dest_y[0][4] = 0;
+    st.actor_type[0][10] = ActorType::Warphole;
+    st.warp_dest_x[0][10] = 4;
+    st.warp_dest_y[0][10] = 0;
     Player& p = st.players[0];
-    p.x = kTileWF / 2;
-    p.y = kTileHF / 2;
 
-    run(s, 19, TickInputs{});        // full warp to (6,0), latch set
-    REQUIRE(p.tile_x() == 6);
-    run(s, 5, TickInputs{});         // sit on the exit warphole
+    REQUIRE(walk_east_into(s, 4, 0));
+    run(s, kWarpAfterLaunch, TickInputs{});  // finish the warp
+    REQUIRE(p.tile_x() == 10);
+    REQUIRE(p.warp == 0);
 
-    CHECK(p.tile_x() == 6);          // stayed put: no bounce back to (0,0)
-    CHECK(p.warp_latch);
+    run(s, 30, TickInputs{});  // sit on the exit warphole
+    CHECK(p.tile_x() == 10);   // stayed put: no bounce back to (4,0)
+    CHECK(p.warp == 0);
 }
 
 TEST_CASE("a warphole with no partner leaves the player in place") {
     Simulation s(open_config());
     State& st = s.state();
     // Lone warphole: apply_actors would set its dest to itself; emulate that.
-    st.actor_type[0][0] = ActorType::Warphole;
-    st.warp_dest_x[0][0] = 0;
-    st.warp_dest_y[0][0] = 0;
+    st.actor_type[0][4] = ActorType::Warphole;
+    st.warp_dest_x[0][4] = 4;
+    st.warp_dest_y[0][4] = 0;
     Player& p = st.players[0];
-    p.x = kTileWF / 2;
-    p.y = kTileHF / 2;
 
-    run(s, 19, TickInputs{});  // a self-linked warp is a harmless in-place hop
-    CHECK(p.tile_x() == 0);
+    REQUIRE(walk_east_into(s, 4, 0));
+    run(s, kWarpAfterLaunch, TickInputs{});  // a self-link is an in-place hop
+    CHECK(p.tile_x() == 4);
     CHECK(p.tile_y() == 0);
     CHECK(p.warp == 0);
 }
@@ -446,9 +500,8 @@ TEST_CASE("no bomb can be dropped while standing on a warphole (sub_41F29B ~2335
     st.warp_dest_y[0][6] = 0;
 
     Player& p = st.players[0];
-    p.x = centre_x(2);  // parked on the warp mouth...
-    p.y = centre_y(0);
-    p.warp_latch = true;  // ...latched (just arrived through it), so no re-warp
+    p.x = centre_x(2);  // parked on the warp mouth (parking never warps: the
+    p.y = centre_y(0);  // along offset there is 0, and only -1 triggers)
 
     s.tick(press1(0));
     CHECK(st.bombs.empty());  // the drop was refused

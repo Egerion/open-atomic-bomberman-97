@@ -13,6 +13,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Point at the clean-room sim. Default assumes this dir sits at <repo>/tools/oracle_mirror.
 set(BOMBER_SIM_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../libs/sim" CACHE PATH "libs/sim path")
+# libs/sim's public headers include bomber/core/geometry.hpp (ADR-0008), so the
+# standalone build needs libs/core on the include path too.
+set(BOMBER_CORE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../libs/core" CACHE PATH "libs/core path")
 
 file(GLOB SIM_SYS "${BOMBER_SIM_ROOT}/src/systems/*.cpp")
 add_executable(mirror
@@ -23,4 +26,5 @@ add_executable(mirror
     ${SIM_SYS})
 target_include_directories(mirror PRIVATE
     "${BOMBER_SIM_ROOT}/include"
-    "${BOMBER_SIM_ROOT}/src")
+    "${BOMBER_SIM_ROOT}/src"
+    "${BOMBER_CORE_ROOT}/include")
