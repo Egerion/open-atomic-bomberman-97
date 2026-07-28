@@ -436,6 +436,17 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
     // bomb-action tail stays once per tick after the loop: its
     // blocks are edge-gated, so the only cadence difference is the auto-drop
     // diseases' intra-tick attempt density (documented in the same entry).
+    //
+    // INCOMPLETE, 2026-07-28 (facts.md "AI key presses manufacture their own
+    // edge", the second-gap paragraph): edge-gating is not the tail's only
+    // frame-sensitive property. Its POSITION-dependent tests — the grab/spooge
+    // "own bomb underfoot" probe and the drop tile — read the END-of-tick
+    // position, up to eight frames after the frame whose decision set the key.
+    // The original evaluates them in the deciding frame. It shows up as an AI
+    // that wins behaviour 0's grab roll early in a tick, steps away on a later
+    // sub-frame it loses, and finds no bomb underfoot at tail time — the grab
+    // is silently dropped. Fixing it means running the tail inside this loop,
+    // a cadence change with its own golden/build_hash cost; not done here.
     FieldCtx fctx{&s, i, &powerups, &diseases};
     // Round-start input freeze (dword_4621E0; sub_41F29B's acquisition gate at
     // 23028 demands the new-input flag be set AND dword_4621E0 be zero): while

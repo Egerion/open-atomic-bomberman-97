@@ -1766,6 +1766,102 @@ recorded in "Bomb/warphole reconciliation 2026-07-10" and `stage-actors.md` §1'
 registry layout. Live-play observation by Ege is the finding's origin and its
 independent confirmation.)
 
+## AI key presses manufacture their own edge — CONFIRMED (`sub_40BD44` / `sub_40BE02` / `sub_40AD8D` / `sub_40ABED`, 2026-07-28)
+
+**Observation first.** Ege, playing the original and then the port, reported
+that **the port's AI players never use the grab glove** — the powerup that lets
+a player pick a bomb up and throw it — while the original's AI does once it has
+picked the powerup up. The port has had behaviour 0 (`sub_40BD44`) since Stage 4
+and a green test for it, so the report looked like a candidate for refutation.
+It is not: the behaviour was reachable only in a board state the game does not
+actually produce.
+
+**What the original does.** The mover resets both key bytes at the top of every
+per-frame pass (`sub_41F29B`: `+54 = +56; +55 = +57; +56 = 0; +57 = 0`), and the
+drop block near the bottom of the same frame is edge-gated on `+56 && !+54`
+(and `+57 && !+55` for the action key). Between those two points the frame runs
+the input acquisition, which for a computer player is `sub_40A1C6` and the
+behaviour chain. **Every behaviour that presses a key writes the edge itself —
+the key byte AND the previous-frame copy, as a pair:**
+
+| behaviour | function | writes |
+|---|---|---|
+| 0 grab, carrying | `sub_40BD44` | `+56 = 0; +54 = 0` |
+| 0 grab, snatch | `sub_40BD44` | `+56 = 1; +54 = 0` |
+| 1 punch | `sub_40BE02` | `+57 = 1; +55 = 0` |
+| 3 blast bricks | `sub_40AD8D` | `+54 = 0; +56 = 1` |
+| 4 bomb near enemy | `sub_40ABED` | `+54 = 0; +56 = 1` |
+
+A census of the whole AI batch (0x40A140-0x40BEE7) finds exactly these five
+key-byte write sites plus **one** exception, and the exception is deliberate:
+behaviour 2's safe-branch remote-detonation whim (`sub_40B20F`, the
+`+95 && !+91 && !(rand()%10)` arm) writes `+57 = 1` **alone**, leaving `+55` as
+the mover set it. So a trigger AI that wins the 1-in-10 roll on consecutive
+frames really does detonate only on the first — that asymmetry is the
+original's, not an oversight. Note `ai.md` §7 already recorded the rule ("The AI
+writes `+56=1; +54=0` to force a fresh press"); only the port had missed it.
+
+**Our divergence (fixed here).** `AISystem::press_bomb`/`press_action`
+(`libs/sim/src/systems/ai.cpp`) set only `PlayerInput::action1`/`action2` and
+left `Player::prev_action1`/`prev_action2` — our `+54`/`+55` — alone, on the
+reasoning recorded in their own doc comment: "the AI never sets prev_action1
+itself, so a single-tick action1=true is a fresh press". That holds only when
+the key happened to be up on the previous tick, and **the one situation
+behaviour 0 exists for is precisely the one where it is not**: you are standing
+on a bomb because you just dropped it, which latched the key down. The port's
+sub-frame cadence then makes the latch permanent — the AI brain runs once per
+canonical frame (`kSubFrames = 9`) and its presses are OR-latched into the
+tick's input, so a behaviour gated on a bare `rand()%2` presses in at least one
+of the nine frames **511 times in 512**. The key never comes back up, no edge
+ever forms again, and `try_grab` is never reached. Measured in the port before
+the fix: an AI seeded with the glove and its own bomb underfoot, with the key
+latched, did not grab once in 200 ticks; an AI that dropped its own bomb and
+stood on it did not grab once in 400. The AI picks the glove up and keeps it,
+exactly as reported.
+
+The fix is the original's pair of writes: `press_bomb`/`press_action` clear
+`prev_action1`/`prev_action2` alongside setting the key, `release_bomb` mirrors
+the carrying branch's `+56 = 0; +54 = 0`, and behaviour 2's whim keeps the
+original's unpaired write via `press_action_sustained`. After it, the same
+board grabs on the first winning roll, and a 4-seat pillar match with a
+grab+punch AI produces 6 grabs and 6 throws over 7 drops.
+
+**A second, RELATED gap, diagnosed but NOT fixed here — the deferred tail.**
+The original evaluates the bomb-action tail every frame, so the tail sees the
+position the brain decided at. The port runs the brain per sub-frame but the
+tail once per tick, at the END-of-tick position, and `bomb_actions` re-tests
+"own bomb underfoot" there. An AI that wins the grab roll in one sub-frame but
+loses it in a later one steps away (behaviour 0 short-circuits the chain only
+on the frames it wins), and the tail then finds no bomb underfoot and the grab
+is silently lost. This is why the fixed AI grabs on ~6 of 7 drops rather than
+essentially all of them, and why it grabs less often the more freely it can
+flee. `simulation.cpp`'s standing claim that the once-per-tick tail differs
+from the original "only [in] the auto-drop diseases' intra-tick attempt
+density" is therefore incomplete: the tail's POSITION-dependent tests
+(grab/spooge underfoot, drop tile) can be up to eight frames stale. Closing it
+means running the tail inside the sub-frame loop, which is a cadence change of
+its own and wants its own entry; recorded here so the next reader does not
+re-derive it.
+
+**RNG / golden impact.** No draw is added or removed and no draw order changes
+— the fix writes an already-hashed player field at sites that already ran. All
+five golden scenarios are **byte-identical** (verified): none of them sets
+`MatchConfig::ai`, so no golden has an AI player at all. That makes
+`build_hash` the only cross-build door for this change, and scenario 3 did not
+discriminate it — the digest was byte-identical at 3780851729 before and after.
+`libs/net/src/build_hash.cpp` therefore gains **scenario 5**, built against the
+brain's decision path (an AI born with grab + punch + a spare bomb in a brick
+pocket, on plain floor and a full clock); with it the digest moves
+1599681701 → 150405641. `tests/sim/test_ai.cpp` replicates that board and
+asserts the grab actually happens, so the coverage cannot silently lapse.
+
+(Provenance: `sub_40BD44` @ 0x40BD44; `sub_40BE02` @ 0x40BE02; `sub_40AD8D` @
+0x40AD8D; `sub_40ABED` @ 0x40ABED; `sub_40B20F` @ 0x40B20F; `sub_41F29B`'s
+per-frame key reset and its `+56 && !+54 && !+134` drop block. The `+54`/`+55`
+write census covers the whole AI batch 0x40A140-0x40BEE7. Live-play observation
+by Ege is the finding's origin; the port-side numbers above are measured in
+headless tests, not inferred.)
+
 ## Chain-reaction timing — CONFIRMED (`sub_423209` queue, `sub_42331C` drain, 2026-07-10 flame-system audit)
 
 A full line-by-line re-read of the flame system (facts.md's own "Core-feel

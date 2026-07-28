@@ -112,16 +112,16 @@ std::uint64_t enclosure_scenario_hash() {
 // is not hypothetical — it is what a combined scenario actually did). The AI
 // seat spawns ON a warphole whose destination is a second warphole.
 //
-// KNOWN GAP, measured and not yet closed: this scenario does NOT yet
-// discriminate the "AI never bombs a warphole" fix — the digest is byte-
-// identical with and without it, so a peer missing that fix would still be
-// admitted. Seating the AI on a warphole was not enough; the likely reason is
-// that a player on a warphole spends its time in the warp movement states
-// rather than deciding to drop, so the guarded branch is never reached. Closing
-// this needs a scenario built against the AI's actual decision path, verified
-// the same way everything here must be: build the digest before and after the
-// fix and confirm it moves. Until then, treat AI behaviour as UNCOVERED by
-// build_hash.
+// KNOWN GAP, still open FOR THIS SCENARIO: it does NOT discriminate the "AI
+// never bombs a warphole" fix — the digest is byte-identical with and without
+// it. Seating the AI on a warphole was not enough; the likely reason is that a
+// player on a warphole spends its time in the warp movement states rather than
+// deciding to drop, so the guarded branch is never reached. That diagnosis is
+// now corroborated: scenario 5 below covers the brain by seating the AI on
+// PLAIN FLOOR and giving it something to decide about, and it discriminates its
+// fix immediately. AI DECISIONS are therefore no longer uncovered wholesale —
+// but the warphole drop-refusal specifically still is, and closing it wants the
+// same treatment (drive an AI onto a warphole with a reason to drop).
 std::uint64_t ai_scenario_hash() {
     using namespace sim;
     MatchConfig cfg = pillar_arena();
@@ -186,6 +186,60 @@ std::uint64_t stage_actor_scenario_hash() {
     return sim.hash();
 }
 
+// 5. THE AI's KEY PRESSES — the glove path. Scenario 3 seats an AI but, as its
+// own comment records, does not discriminate a change to the brain's DECISIONS.
+// This one is built against the decision path itself: the AI seat is BORN
+// holding the grab and punch gloves, so a run drives behaviour 3's drop, then
+// behaviour 0's grab of the bomb it is standing on, then behaviour 0's carrying
+// release (the throw), then behaviour 1's punch — every one of the four AI
+// key-write sites, each of which manufactures its own input edge (facts.md "AI
+// key presses manufacture their own edge").
+//
+// Every constant here was MEASURED, not guessed, because getting a brain to
+// exercise a branch is exactly what this file's history says goes wrong. The
+// obvious version — spare bomb, one brick, 300 ticks — reaches only two drops
+// and grabs on neither, because the AI leaves its own bomb's tile before the
+// once-per-tick action tail evaluates. The brick POCKET is what fixes that: it
+// keeps behaviour 3 supplied with adjacent targets and, with the spare bomb,
+// keeps the AI penned close enough that it is still on the bomb at tail time.
+// As tuned the run makes 4 drops, 3 grabs, 3 throws and a punch (first grab at
+// tick 11). If you edit this scenario, re-measure those — tests/sim/test_ai.cpp
+// "build_hash scenario 5 really drives the glove path" replicates the board and
+// asserts the grab, so it fails loudly if a future edit makes the brain idle.
+//
+// Verified as this file demands: with the 2026-07-28 edge fix reverted and this
+// scenario present the digest changes (1599681701 -> 150405641), so a peer
+// missing that fix is now refused at the door. With only scenarios 1-4 the same
+// revert left the digest byte-identical at 3780851729 — that is the AI gap this
+// scenario closes. Do not fold this into scenario 3: a full clock and a spawn
+// OFF an actor tile are both load-bearing (the warp states and the wall crush
+// each starve the brain in their own way).
+std::uint64_t ai_gloves_scenario_hash() {
+    using namespace sim;
+    MatchConfig cfg = pillar_arena();
+    const int rx = kGridWidth - 1, by = kGridHeight - 1;
+    cfg.ai[3] = true;  // seat 3 spawns at (rx, by), plain floor, full clock
+
+    // Born with the gloves whose behaviours press keys — grab (kind 6) drives
+    // behaviour 0, punch (kind 5) drives behaviour 1 — plus the spare bomb that
+    // lets behaviour 3 re-drop while an earlier bomb is still live.
+    cfg.born_with_extra[3][static_cast<std::size_t>(PowerupType::Grab)] = true;
+    cfg.born_with_extra[3][static_cast<std::size_t>(PowerupType::Punch)] = true;
+    cfg.born_with_extra[3][static_cast<std::size_t>(PowerupType::ExtraBomb)] = true;
+
+    // The brick pocket: fill the AI's 5x5 corner (its own spawn tile excepted)
+    // and leave exactly one open step out of the corner.
+    for (int y = by - 4; y <= by; ++y)
+        for (int x = rx - 4; x <= rx; ++x)
+            if (cfg.cells[y][x] == Cell::Blank && !(x == rx && y == by))
+                cfg.cells[y][x] = Cell::Brick;
+    cfg.cells[by - 1][rx] = Cell::Blank;
+
+    Simulation sim(cfg);
+    for (int t = 0; t < 400; ++t) sim.tick(canned_inputs(t, 3));  // seat 3 is AI-driven
+    return sim.hash();
+}
+
 std::uint32_t fold64(std::uint64_t h) {
     return static_cast<std::uint32_t>(h ^ (h >> 32));
 }
@@ -197,8 +251,8 @@ std::uint32_t build_hash() {
         // Order matters and is part of the digest; append new scenarios, never
         // reorder, or every existing build looks incompatible for no reason.
         std::uint64_t h = core_scenario_hash();
-        for (const std::uint64_t s :
-             {enclosure_scenario_hash(), ai_scenario_hash(), stage_actor_scenario_hash()}) {
+        for (const std::uint64_t s : {enclosure_scenario_hash(), ai_scenario_hash(),
+                                      stage_actor_scenario_hash(), ai_gloves_scenario_hash()}) {
             h ^= s + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2);
         }
         std::uint32_t v = fold64(h);
