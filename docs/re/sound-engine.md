@@ -144,8 +144,19 @@ owner reported is real and this is where it comes from.
   are the enclosure wall-slam (`sub_426818`, which draws its own `rand() % 3`
   once per arm and then replays that one id — already ported) and the death
   handler at 0x41DDE4, which follows `sub_427961(300)` with
-  `sub_4278F2(actor[+4] + 340)`. Only id 341 (`burnedup`) exists in that span;
-  what `actor[+4]` holds could **not** be pinned, so that overlay is not ported.
+  `sub_4278F2(actor[+4] + 340)`. `actor[+4]` was pinned 2026-07-28 — it is the
+  **death-animation index** — and the overlay is now ported; §10 has it, and
+  corrects this entry's old claim that "only id 341 exists in that span".
+  - **It does not increment the play counter, it OVERWRITES it.** Where
+    `sub_427961` ends `counts[pick] += 1` (0x427AB0), `sub_4278F2` ends
+    `counts[id] = dword_464994` (0x427950-0x427956) — the same `dword_463088`
+    array, but assigned the game-FRAME counter. So any slot an exact play
+    touches is left with a play count in the thousands, and §2's least-played
+    rejection sampler will not choose it again for the rest of the session
+    (until VALUELST id 7's periodic re-roll zeroes the counters). Live
+    consequence: a death that rolls anim 10-13 quietly retires that member of
+    the trampoline group. NOT yet ported — `SoundBank::play_exact` has no frame
+    to assign — and left as a follow-up rather than guessed at.
 - **`sub_427BFB`** picks identically but plays through `sub_427B36`, which builds
   its own sound object outside the counted pool. Its four callers:
   `sub_42B060` → 2800 (title intro), `sub_412987` → 2600 (menu quit),
@@ -260,9 +271,18 @@ failure to find one.
 | `0x41DDE4` (`sub_4278F2`) | `340 + actor[+4]` | the death overlay, field still unidentified |
 | `0x426A55` (`sub_4278F2`) | `140 + dword_462244` | the wall slam, `rand() % 3` latched per arm |
 
-No site, literal or computed, can produce **360-363**. `bombhit1..4` load and
-are never requested. `sub_421F7E`, the head-hit handler itself, makes no audio
-call of any kind.
+No site loads **360-363** as a literal — `mov eax,0x168` occurs nowhere in the
+image — and `sub_421F7E`, the head-hit handler itself, makes no audio call of any
+kind. **The port's removal of the HeadHit cue therefore stands** and the silence
+`tests/audio/test_sound_director.cpp` pins is correct: a bomb landing on a head
+is silent.
+
+> **CORRECTION, 2026-07-28.** This paragraph used to read "no site, *literal or
+> computed*, can produce 360-363", and the computed half of that was wrong.
+> `0x41DDE4` computes `340 + actor[+4]` and `actor[+4]` reaches 24, so the death
+> overlay **does** address 360-363 — and 350-353 — whenever the death-animation
+> roll lands there. `bombhit1..4` are not unreachable; they are reachable from a
+> cue that has nothing to do with head hits. See §10.
 
 **Screens that are SILENT.** Reachability over the same call graph settles a
 whole class of questions the port had been guessing at:
@@ -323,3 +343,175 @@ trigger in the boot/menu/results path" and was "correctly absent in the port".
 The front-end sites are indeed `sub_40C06A() == 1` guest guards, but the
 in-match warphole refusal at `0x420C2B` has no such gate — it is a purely local
 event, and the port plays it. Corrected in that file.
+
+## 9. MUSIC: every track, every switch (2026-07-28)
+
+§1-§8 are about SFX. This section is the same treatment for the music channel,
+and it closes a batch of audit findings in one go.
+
+**Method: exhaustive.** The same byte-level `E8 rel32` sweep as §8, run over
+every offset in the image. `sub_42741E` has **six** direct call sites and its
+literal address appears **zero** times anywhere in the image, in code or data —
+so there is no table, no function pointer, and "six" is complete, not
+best-effort.
+
+| # | site | id | track | who |
+|---|---|---|---|---|
+| 1 | `0x42B073` | 1000 | TITLE | `sub_42B060`, the boot/title sequence |
+| 2 | `0x42BB0C` | 1010 | MENU | `sub_42B9CE`, the main menu |
+| 3 | `0x42A436` | 1020 | WIN | `sub_42A3F6`, the Play handler's head |
+| 4 | `0x42A6DD` | 1130 | DRAW | `sub_42A3F6`, the round-end outcome tier |
+| 5 | `0x42B11B` | 1040 | NETWORK | `sub_42B0CE`, START NET GAME |
+| 6 | `0x42B4C0` | 1040 | NETWORK | `sub_42B47D`, JOIN NET GAME |
+
+There is no seventh. In particular **nothing starts 1030** (`lose`) — SOUNDLST
+names it and the game never plays it — and nothing re-starts 1020 after site 3.
+
+### 9.1 The menu owns the switch BACK
+
+Sites 5 and 6 have no counterpart that restores the menu track, and they need
+none. `sub_42B9CE` is an OUTER loop (one iteration per menu *visit*) around an
+INNER one (the per-frame poll). The outer body raises a local restart flag at
+`0x42BA69`; the inner loop's head tests it at `0x42BB01`, starts 1010, and
+clears it. **Every** dispatch arm — Play `sub_42A3F6`, START NET `sub_42B0CE`,
+JOIN NET `sub_42B47D`, Options `sub_4080DC`, Credits `sub_41302D`, the help
+browser `sub_41431C`, a cancelled quit `sub_412987` — ends in `jmp 0x42BE06` →
+`jmp 0x42B9EA`, the top of the outer body, which re-raises the flag. So
+returning to the menu from anywhere restarts 1010 from sample 0.
+
+That also means `sub_42741E` is **not** idempotent on the current id and must not
+be made so in a port: coming back from the (silent) help browser genuinely
+restarts the menu track in the original.
+
+### 9.2 Round music: the guard is the OPTION, and only the option
+
+The round init `sub_410B6E` ends with, at `0x410E88`:
+
+```
+if (dword_4648C0 == 0) tunes_play_wave_tune();   /* 0x410E98 */
+else                   free_music();             /* 0x410E91, sub_427342 */
+```
+
+`dword_4648C0` is options.ini's **`disable_game_music=`** — the parser at
+`0x40650D` matches that exact key string and the writer at `0x405F6F` formats it
+back out. Three things follow, all of which the port had wrong:
+
+1. **No network arm.** The guard is a bare test. The port skipped the option
+   entirely for online matches on the theory that music is "presentation-only,
+   so netplay just keeps music on" — which inverts the argument: being
+   presentation-only is precisely why each peer can honour its own setting
+   without agreement, traffic or a hash change.
+2. **No stage-art arm.** The tune start is not downstream of anything visual;
+   `sub_4293E5` is called from the round init, not from the art loader. The port
+   had both branches nested inside `if (load_stage(...))`, so a stage whose PCX
+   failed to load ran silent.
+3. **The ON arm silences the round** rather than leaving the setup track
+   running.
+
+The one place this path *does* consult the network is inside `sub_4293E5`
+itself (`sub_40C06A` at `0x4294D2`), and it only chooses GENERIC (1120) over the
+per-level track — never whether music plays.
+
+`sub_4293E5` is `tunes_play_wave_tune` by its own log string (`0x45A81F`). It
+reads `names[1100 + level]`, falls back to **1120** when that slot is empty, and
+resolves through the `.hds` ("hard-disk sound") extension; it also builds a
+`.cds` ("CD sound") name at `0x42946E` and then never uses it — a vestige of a
+cut CD-audio path.
+
+### 9.3 The outcome track is NOT unconditional
+
+`0x42A6DD` (1130) sits behind two gates the round-loop exit passes first:
+
+- **attract**, `dword_464938` at `0x42A6CB`;
+- **campaign**, `dword_46489C` at `0x42A63B`.
+
+The campaign gate is the interesting one. A campaign round end branches away
+completely: it shows at most one modal (`sub_414340`, only when the pacing flag
+`dword_464894` is 2, set by `sub_4016DA`), then calls the round init
+`sub_410B6E` again at `0x42A68B` for the next stage. **It never reaches 1130, and
+it never reaches DRAW, the RESULTS tally or VICTORY either.** The port shows all
+three under 1130; the music half is fixed, the screens half is a known open
+divergence recorded here and in `campaign.md`.
+
+### 9.4 There is NO music/SFX mix — the duck was invented
+
+The port ducked music to 55 % of the SFX bus with an uncited constant. The
+original attenuates nothing:
+
+- **Master volume** is set exactly once in the whole program, at `0x4194F0`,
+  to `0x7FFF` = maximum, during sound-system bring-up. `sub_41AF93`, the setter,
+  has one direct caller and its literal address appears nowhere.
+- **Per-object volume** defaults to `0x7FFF` too, stored by the object
+  constructor at `0x4197A9`.
+- **`sub_41A50D`**, the only wrapper around `IDirectSoundBuffer::SetVolume`
+  (the single `call [edx+0x3c]` in the image, at `0x41A5A5`, with
+  `E_INVALIDARG`/`DSERR_CONTROLUNAVAIL` handling to confirm it), has five direct
+  callers and **all five are inside the sound library**, each re-applying an
+  object's already-stored level. No game code ever requests a volume.
+
+So music and effects share one bus at full scale, and their relative loudness is
+whatever the authored `.RSS` files carry. The duck is removed.
+
+## 10. The death-anim overlay — PINNED (2026-07-28, task #22 closed)
+
+§4 recorded `sub_4278F2(340 + actor[+4])` at `0x41DDE4` as unportable because
+`actor[+4]` could not be identified. It is the **death-animation index**.
+
+**Where it comes from.** `sub_41DCB2` is the death handler holding the overlay
+call. It has exactly **two** direct callers and its literal address appears zero
+times, so the writer set below is complete:
+
+- `sub_41DE63` — the local roll. `n = getvalue(105)`, clamped to `>= 1`, then
+  `actor[+4] = rand() % n + 1`, stored at `0x41DF04` immediately before the call.
+  **VALUELST id 105 is authored 24**, so the domain is a uniform **1..24** on
+  every fresh death. It bails before rolling for a network-owned player (type
+  byte 4 — it logs *"Ignoring a network player's supposed death."*).
+- `sub_41DE04` — the network apply, storing the peer's value verbatim at
+  `0x41DE4E`, except that the LOWMEM flag `dword_464824` forces it to 1. Its
+  packet carries three 16-bit words (player, anim, killer), which is exactly what
+  the local path packs and sends.
+
+**Three independent locks on the reading**, beyond the arithmetic:
+
+1. VALUELST 105's own comment — *"how many different death animations do we
+   have? (die 1 through die 24) \*\*\* if you modify this and play over the net,
+   make sure the other guys have EXACTLY the same number of death anims!!!"* —
+   matches both the modulo and the fact that the value is replicated.
+2. `sub_41F29B` at `0x41F43A` special-cases `actor[+4] == 9` to move the body
+   upwards by `getvalue(106)`; VALUELST 106's comment is *"how many pixels per
+   reference frame does death anim #9 move upwards (the angel)?"*.
+3. SOUNDLST's own comment above 341: *"death anim sounds BASED on which anim is
+   chosen (this is just clunk-type sound effects to sync with the anim, no
+   screams or anything)"*.
+
+**Which of the 24 are audible — and the old "1 in 24" estimate was wrong.**
+`340 + v` spans 341..364. That range is neither culled nor compacted (§3's table
+covers 200-299 and 400-499, not 300-399), so authored ids stand. SOUNDLST
+occupies **nine** of the twenty-four:
+
+| v | id | clip | what it was authored as |
+|---|---|---|---|
+| 1 | 341 | `burnedup` | the death overlay itself |
+| 10-13 | 350-353 | `1017`, `1036`, `1045`, `trampo` | *"step on a trampoline"* |
+| 20-23 | 360-363 | `bombhit1..4` | *"stunned by a bomb landing on your head"* |
+
+So **37.5 % of deaths make an overlay sound, and only 1 in 24 is the clip the
+author meant.** The other eight audible values are an **authoring collision in
+the original data**: the trampoline and head-hit blocks were written inside the
+index space the `340 + N` overlay reserved, and because `sub_4278F2` addresses a
+slot directly rather than walking a group, it reaches them. The remaining 15
+values hit empty slots and the routine returns without a sound.
+
+This is reproduced faithfully, collision included. Note the contrast that makes
+it clearly a collision rather than a design: the trampoline TILE has its own real
+caller (`sub_427961(350)` at `0x41EE4C`, gated on tile type 3) and that one is a
+four-member **group** pick, whereas the death overlay always plays the same exact
+member — anim 10 is always `1017`, anim 13 always `trampo`.
+
+**Port divergence, stated up front.** The port draws the index on the
+presentation RNG (root `CLAUDE.md` rule 6), so two peers can hear different
+overlays for the same death. In the original the index is a genuine gameplay
+value — it selects the death sprite and is replicated — so if the port ever
+renders per-anim death visuals the index must move into `State` and be hashed.
+As a sound-only feature it stays cosmetic. The LOWMEM force-to-1 arm is not
+ported (the port has no LOWMEM mode), consistent with §6.

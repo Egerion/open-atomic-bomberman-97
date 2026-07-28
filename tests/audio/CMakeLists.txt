@@ -22,3 +22,14 @@ target_link_libraries(bomber_sound_director_tests
 target_include_directories(bomber_sound_director_tests
   PRIVATE ${CMAKE_SOURCE_DIR}/libs/audio/include)
 add_test(NAME sound_director COMMAND bomber_sound_director_tests)
+
+# The round-init music decision (round_music.hpp). Header-only and SDL-free, so
+# the suite needs no sources beyond itself. It pins the guard the LOCAL and the
+# NETPLAY round loops now share — they used to keep separate copies and the
+# netplay one had dropped the "Disable music during gameplay" option.
+add_executable(bomber_round_music_tests test_round_music.cpp)
+target_link_libraries(bomber_round_music_tests
+  PRIVATE doctest::doctest bomber::warnings)
+target_include_directories(bomber_round_music_tests
+  PRIVATE ${CMAKE_SOURCE_DIR}/libs/audio/include)
+add_test(NAME round_music COMMAND bomber_round_music_tests)

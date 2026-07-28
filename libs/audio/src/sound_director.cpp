@@ -2,6 +2,19 @@
 
 namespace bomber::game {
 
+namespace {
+
+// The death-anim overlay's two constants (see the PlayerDied case).
+// `340 + anim`, where anim is 1-based: SOUNDLST 341 is `burnedup`.
+constexpr int kDeathOverlayBase = 340;  // the literal added at 0x41DDDF
+// VALUELST id 105, authored 24 — the death-animation count the original's roll
+// takes its modulo from (sub_41DE63 @0x41DEFD). Not read live from VALUELST:
+// SoundDirector talks only to SoundSink and has no values handle, so a modified
+// VALUELST would not move this. Authored-24 is the shipped install's value.
+constexpr int kDeathAnimCount = 24;
+
+}  // namespace
+
 void SoundDirector::reset() {
     pending_.clear();
     pickups_.fill(0);
@@ -245,6 +258,39 @@ void SoundDirector::on_tick(const sim::State& s) {
             }
             case sim::Event::Type::PlayerDied: {
                 audio_.play(300);
+                // The death-ANIM overlay, PINNED 2026-07-28 (docs/re/
+                // sound-engine.md §10 — task #22, previously open because the
+                // field could not be identified). The death handler sub_41DCB2
+                // follows its scream group with `sub_4278F2(340 + actor[+4])` at
+                // 0x41DDE4, an EXACT-slot play with no group walk. `actor[+4]`
+                // is the DEATH ANIMATION INDEX: its caller sub_41DE63 rolls
+                // `rand() % getvalue(105) + 1` and stores it at 0x41DF04, and
+                // VALUELST id 105 is authored 24 with the comment "how many
+                // different death animations do we have? (die 1 through die
+                // 24)". Two further locks on the reading: sub_41F29B special-
+                // cases `actor[+4] == 9` to float the body upwards by
+                // getvalue(106) ("death anim #9 ... the angel"), and the index is
+                // replicated to peers as its own network field.
+                //
+                // WHY MOST DEATHS ARE STILL SILENT, and why some of them are not
+                // silent in the way you would expect: 340+v spans 341..364, and
+                // SOUNDLST only occupies NINE of those slots. 341 is `burnedup`,
+                // the clip the overlay was written for. But 350-353 and 360-363
+                // are the `trampo`/`bombhit` blocks, authored for entirely
+                // different cues INSIDE the range this overlay reserved — and
+                // because sub_4278F2 addresses a slot directly, a death that
+                // rolls anim 10-13 or 20-23 plays one of those. That is the
+                // ORIGINAL's data collision, reproduced here deliberately; see
+                // the doc before "fixing" it. The other 15 values hit empty slots
+                // and sub_4278F2 returns without a sound, which SoundBank's own
+                // null-name early-out already reproduces.
+                //
+                // The draw is on the PRESENTATION rng (root CLAUDE.md rule 6).
+                // In the original this index is a real gameplay value — it picks
+                // the death sprite and travels over the wire — so peers hear the
+                // same overlay; here they need not, which is a cosmetic-only
+                // divergence and the price of keeping State::rng untouched.
+                audio_.play_exact(kDeathOverlayBase + audio_.roll(kDeathAnimCount) + 1);
                 // Post-death taunt from a survivor (VALUELST id 95: 1-in-N,
                 // sub_427961(700) call site). FIXED (docs/re/id-audit.md):
                 // the taunt group is SOUNDLST 700..999 ("after a player

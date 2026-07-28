@@ -9,6 +9,7 @@
 #include <string>
 
 #include "bomber/assets/extra.hpp"                   // assets::extra::load_for_board
+#include "bomber/audio/round_music.hpp"              // round_music_id (the sub_410B6E guard)
 #include "bomber/game/dialog_chrome.hpp"             // kDialogInkR/G/B (fps overlay)
 #include "bomber/game/goldman_wheel.hpp"             // kClogsPrizeId / wheel_prize_to_powerup
 #include "bomber/game/input.hpp"                     // SlotInputType
@@ -22,17 +23,6 @@
 
 namespace bomber::game {
 
-namespace {
-
-// Per-level in-round stage-track fallback (sub_4293E5, docs/re/in-match-shell.md
-// §2): SOUNDLST 1100+level, or this id when the level has no entry. A local copy
-// of the constant that lived beside start_match in game_app.cpp before this
-// extraction (its only user moved here — same pattern as results_screens.cpp's
-// local kWinMusicId copy).
-constexpr int kStageMusicFallback = 1120;  // 0x460 — GENERIC.RSS
-
-}  // namespace
-
 void MatchRunner::start_match(std::uint32_t seed) {
     // The config build was split out VERBATIM into build_config() so the ONLINE
     // setup stage can produce the SAME config from the SAME screens without
@@ -42,27 +32,31 @@ void MatchRunner::start_match(std::uint32_t seed) {
     const sim::MatchConfig cfg = build_config(seed);
     state_.sim = sim::Simulation(cfg);
     const int stage = cfg.tuning.level_index;
-    if (ctx_.assets.load_stage(stage)) {
-        ctx_.seqs.resolve_stage(ctx_.assets, stage);
-        // Disable music during gameplay (options.ini "disable_game_music=" /
-        // Options row 13, §3): the original's round init (sub_410B6E
-        // LABEL_48) FREES the music outright (sub_427342) when the option is
-        // set — the round is SILENT, the setup-screens track (1020) does not
-        // bleed into it. Menu/results music is untouched (the option is
-        // specifically "during gameplay"; round end starts 1130 regardless).
-        //
-        // Per-level stage track (docs/re/in-match-shell.md §2, sub_4293E5):
-        // SOUNDLST 1100+level, falling back to 1120 ("generic") when the level
-        // has no entry — our 11 built-in stages all have one (SOUNDLST.RES
-        // 1100..1110), so this only matters for a stripped/modified install.
-        if (!state_.options.disable_game_music) {
-            int stage_music = 1100 + stage;
-            if (!ctx_.audio.has_track(stage_music)) stage_music = kStageMusicFallback;  // 1120
-            ctx_.audio.start_music(stage_music);
-        } else {
-            ctx_.audio.stop_music();  // sub_427342: silent round, not "keep 1020 playing"
-        }
-    }
+    if (ctx_.assets.load_stage(stage)) ctx_.seqs.resolve_stage(ctx_.assets, stage);
+    // The round's music is NOT downstream of the stage art. Both of these lines
+    // used to live inside the load_stage() branch above, so a stage whose
+    // FIELD<n>.PCX failed to load ran in silence — a coupling the original does
+    // not have. In the binary the two are not even in the same function: the
+    // round init sub_410B6E ends with a bare `if (dword_4648C0) free_music()
+    // else tunes_play_wave_tune()` at 0x410E88, with no art precondition of any
+    // kind reaching it (docs/re/sound-engine.md §9).
+    //
+    // Disable music during gameplay (options.ini "disable_game_music=" /
+    // Options row 13, dword_4648C0): the original FREES the music outright
+    // (sub_427342 @0x410E91) when the option is set — the round is SILENT, the
+    // setup-screens track (1020) does not bleed into it. Menu/results music is
+    // untouched (the option is specifically "during gameplay").
+    //
+    // Per-level stage track (docs/re/in-match-shell.md §2, sub_4293E5):
+    // SOUNDLST 1100+level, falling back to 1120 ("generic") when the level has
+    // no entry — our 11 built-in stages all have one (SOUNDLST.RES 1100..1110),
+    // so that only matters for a stripped/modified install.
+    const int track = round_music_id(stage, state_.options.disable_game_music,
+                                     [this](int id) { return ctx_.audio.has_track(id); });
+    if (track == kRoundMusicSilent)
+        ctx_.audio.stop_music();  // sub_427342: a silent round, not "keep 1020 playing"
+    else
+        ctx_.audio.start_music(track);
     // Untimed round HUD (docs/re/in-match-shell.md §3): the 1001 sentinel is a
     // presentation-only concept (see cfg.tuning.game_seconds's own comment in
     // build_config — the sim gets a very long but finite clock instead), so

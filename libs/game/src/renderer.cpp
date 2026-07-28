@@ -23,6 +23,29 @@ constexpr int kHopPixelsPerFrame = 35;
 // (WALK.ANI, sub_41F29B states 6/7) advances by elapsed = kWarpTicks - warp.
 constexpr int kWarpTicks = 18;
 
+// HURRY! banner duration — DERIVED from the id-101 window, not chosen.
+//
+// The original's HUD (sub_42A191) draws the banner while BOTH
+// `remaining < getvalue(101)` and `remaining > getvalue(101) - 5` hold, each
+// comparison STRICT; the enclosure arm-check uses the non-strict
+// `remaining <= getvalue(101) - 5`. Over whole seconds (sub_410578 returns a
+// FLOORED second count) that open interval is exactly
+// remaining ∈ {101−4, …, 101−1} — FOUR whole seconds — and the walls arm on the
+// very tick it closes, with no gap and no overlap. docs/re/enclosure.md §2.
+//
+// So the banner's length is not a free presentation choice: it is the distance
+// between the two thresholds, less the one second the strict `>` excludes. The
+// sim raises Event::Hurry on the first tick of that window (enclosure.cpp's
+// `warn` edge), so counting kHurryBannerSeconds forward from the event lands the
+// banner's last frame on the tick the walls start dropping.
+//
+// This was a literal `+ 60` ("~3 s of flashing banner"), which turned the banner
+// off a second early and left a silent beat before the walls moved.
+constexpr int kHurryWallArmLeadSeconds = 5;  // the `- 5` in getvalue(101) - 5
+constexpr int kHurryBannerSeconds = kHurryWallArmLeadSeconds - 1;  // strict `>` drops one
+constexpr std::uint64_t kHurryBannerTicks =
+    static_cast<std::uint64_t>(kHurryBannerSeconds) * sim::kTicksPerSecond;
+
 // Inter-tick interpolation snap threshold (see draw_frame's doc comment in
 // renderer.hpp). Anything a moving entity legitimately covers in ONE 20 Hz
 // tick stays well under this: a max-skate hyper walker ~30 px, a kicked slide
@@ -285,7 +308,7 @@ void Renderer::on_events(const sim::State& s, bool tick_advanced) {
     for (const auto& ev : s.events) {
         switch (ev.type) {
             case sim::Event::Type::Hurry:
-                hurry_until_ = s.tick + 60;  // ~3 s of flashing banner
+                hurry_until_ = s.tick + kHurryBannerTicks;
                 break;
             case sim::Event::Type::BombKicked:
                 // The kick pose plays for exactly the KICK.ANI sequence's own

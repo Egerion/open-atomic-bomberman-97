@@ -698,9 +698,22 @@ matched up:
      Immediately after, the round clock is armed: `sub_410494(dword_464948)`
      (total seconds) → `sub_4104C2()` (reset elapsed) → `sub_4104F0()`
      (set the timer-running flag).
-   - **Round end** (29820): **1130** replaces the stage track and carries
-     through DRAW/RESULTS/VICTORY; on a multi-round loop-back the next
+   - **Round end** (29820, `0x42A6DD`): **1130** replaces the stage track and
+     carries through DRAW/RESULTS/VICTORY; on a multi-round loop-back the next
      `sub_410B6E` replaces it with the next stage track.
+     **"Unconditionally" above is too strong — CORRECTED 2026-07-28**
+     (`docs/re/sound-engine.md` §9.3). It is unconditional *with respect to the
+     survivor test*, which is what that sentence was about, but the round-loop
+     exit passes two earlier gates to get there: **attract** (`dword_464938`
+     @`0x42A6CB`) and **campaign** (`dword_46489C` @`0x42A63B`). A campaign
+     round end reaches neither 1130 nor any outcome screen — see
+     `docs/re/campaign.md` "Round end".
+     Two further notes on the round-init bullet above, both settled by the same
+     pass: the guard on `dword_4648C0` has **no network arm and no stage-art
+     arm** (the `sub_40C06A` check lives inside `sub_4293E5` and only picks
+     GENERIC over the per-level track), and `sub_4274AB`'s extension is `.hds`
+     — `sub_4293E5` also builds a `.cds` name and discards it, a vestige of a
+     cut CD-audio path.
    `docs/re/frontend-flow.md`'s "Results MUSIC — 1020 (win) played under
    the VICTORY screen" is therefore **wrong on the VICTORY half** (its DRAW
    half — 1130 under DRAW.PCX — is right but incomplete): the port's
