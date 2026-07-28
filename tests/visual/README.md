@@ -62,9 +62,35 @@ identical:
   fixed number of times and calls `renderer_->draw_frame` once per tick —
   no `SDL_Delay`, no vsync-paced frame count, nothing that varies with how
   fast the host machine runs.
+- **`options.ini` cannot reach a capture.** The install-root `options.ini` is
+  a *mutable* file: the game rewrites it whenever a real session touches an
+  Options row, and the original BM95.EXE writes it too. Any value from it
+  that reaches the sim or the frame is therefore a per-session variable, and
+  a pinned frame must not depend on one. `GameApp::load_config` pins each
+  such key on `capture_run()`:
+
+  | key | pinned to | why it matters |
+  |-----|-----------|----------------|
+  | `random_start`   | `true` (`kCaptureRandomStart`) | shuffles which spawn slot each player index gets (`sub_421793`'s 200-pair swap) — rewrites the whole match from tick 1 |
+  | `conveyor_speed` | `2` / High (`kCaptureConveyorSpeed`) | belt speed (ids 190-192); the demo's first bomb rides level 10's conveyor loop |
+  | `team_play`      | `false` | team red/white vs each player's own slot colour |
+  | `playtime`       | `150` s | the clock HUD is inside the hashed frame |
+  | `show_fps`, `native_cadence`, `vsync` | off / off / on | an overlay over every frame; a wall-clock-driven sim |
+
+  The remaining `options.ini` keys (`goldman`, `stomped_bombs_detonate`,
+  `diseases_destroyable`, `win_by_kills`, `enclosement_depth`,
+  `num_to_win_match`, `disable_game_music`, `levelno`, `smallmemory`) were
+  swept 2026-07-28 across their whole ranges and move no pinned frame — the
+  scripted match is over at tick 76, long before an enclosure or a second
+  round. They are left reading the file. If the demo script ever grows past
+  a round end, re-run that sweep before trusting them.
 
 Proven empirically (2026-07-11): two independent `--demo-shots` runs against
 the real install produced identical SHA-256 hashes for all 5 pinned shots.
+Re-proven 2026-07-28 the harder way: the five hashes are now unchanged across
+a full sweep of `random_start` × `conveyor_speed` × `team_play` in the
+install's `options.ini`, which before the pins above produced twelve
+different sets of five.
 
 ## The pinned shots
 

@@ -354,6 +354,24 @@ bool GameApp::capture_run() const {
            !opts_.bm_shot_name.empty() || !opts_.menu_shot_out.empty();
 }
 
+// The two GAMEPLAY options.ini values a capture run pins (load_config). Both are
+// deliberate scenario parameters of the scripted demo match, in exactly the same
+// class as its fixed seed (0xB0BB1E5) and its fixed LCG literals — chosen for
+// what they make the match cover, not read from whatever the player last saved.
+// They are the values the five frames in tests/visual/shots.txt were captured
+// under, so this pin makes those frames reproducible rather than replacing them.
+//
+// Random Start ON is also the ORIGINAL's own default (VALUELST id 40 = 1,
+// docs/valuelst-map.md), so a capture plays the spawn assignment a fresh install
+// plays. Conveyor Speed 2 (High, 450 — ids 190-192) is the setting under which
+// the scripted match actually exercises level 10's conveyor loop: the first bomb
+// rides the belt across the board, so the belt draw and the belt-carried bomb are
+// covered by the pins instead of being dead code the harness never reaches.
+namespace {
+constexpr bool kCaptureRandomStart = true;
+constexpr int kCaptureConveyorSpeed = 2;
+}  // namespace
+
 bool GameApp::resolve_install_paths(fs::path& game, fs::path& scheme_path) {
     // SDL_GetBasePath is the exe's own folder; libs/assets is SDL-free so it
     // cannot ask for it itself. Without this the auto-detect only ever saw the
@@ -411,7 +429,14 @@ bool GameApp::load_config(const fs::path& game, const fs::path& scheme_path) {
         // (write-on-exit, §2 — flush_options() is the sole writer).
         options_path_ = game / "options.ini";
         assets::Options loaded_opts = assets::load_options(options_path_);
-        conveyor_speed_index_ = loaded_opts.conveyor_speed;
+        // Conveyor Speed ("conveyor_speed=") is PINNED on a capture, for the
+        // same reason team_play and playtime below are: it feeds the sim
+        // (Tuning::conveyor_speed, ids 190-192), so leaving it on the file made
+        // the visual golden depend on a Options-screen setting the player can
+        // change between two runs of the same build. It is not theoretical —
+        // it is one half of why the harness went red (see kCaptureRandomStart).
+        conveyor_speed_index_ =
+            capture_run() ? std::optional<int>{kCaptureConveyorSpeed} : loaded_opts.conveyor_speed;
         // Team Play ("team_play="): absent key ⇒ OFF, matching the confirmed
         // team-mode default (docs/re/setup-screens.md: "Team mode is toggled on
         // the OPTIONS game-type screen, OFF by default"). PINNED OFF on the
@@ -430,7 +455,16 @@ bool GameApp::load_config(const fs::path& game, const fs::path& scheme_path) {
         // all other powerups?" = 1) — and options.ini then overrides (the
         // shipped file sets all three to 1 as well). docs/re/facts.md
         // "Options toggles: stomped_bombs_detonate / diseases_destroyable".
-        options_.random_start = loaded_opts.random_start.value_or(values_.at_or(40, 1) != 0);
+        // Random Start ("random_start=") is PINNED on a capture too. It shuffles
+        // which of the scheme's spawn slots each player index gets (the 200-pair
+        // swap, sub_421793), so it rewrites the scripted demo match from tick 1
+        // — every pinned frame moves. This was THE reason visual_golden went
+        // red: the pins were captured while the install's options.ini said
+        // random_start=1, a later session saved random_start=0, and the same
+        // source then rendered five different frames on the same machine.
+        options_.random_start = capture_run()
+                                    ? kCaptureRandomStart
+                                    : loaded_opts.random_start.value_or(values_.at_or(40, 1) != 0);
         options_.conveyor_speed_index = conveyor_speed_index_.value_or(1);
         options_.stomped_bombs_detonate =
             loaded_opts.stomped_bombs_detonate.value_or(values_.at_or(46, 1) != 0);
