@@ -5847,6 +5847,123 @@ additive mechanisms"). That conclusion was reached by observing that
 from its absence; the actual path is the scheme writing into the value table
 `sub_4214BC` reads. That document has been corrected in place.
 
+## Warphole/trampoline entry predicate — CONFIRMED + PORTED (2026-07-28, `sub_41EC84`/`sub_41F29B`)
+
+Raised as a feel report ("in the original you pass through a warp hole
+comfortably, and it is easier to walk *around* one without being taken; ours is
+harder to avoid"). The predicate was read off the binary and cross-checked
+against the native transliteration's oracle harness. Result: the trigger
+*geometry* was already faithful for a walking player, but the port had **two
+extra trigger sites the binary does not have**, and both the warp and the hop
+ran **longer than the original's**.
+
+### The trigger, exactly
+
+`sub_41EC84` is the per-pixel stepper. Its loop spends the move budget 100 units
+at a time and the whole body is gated on the requested-direction word (+46) not
+being -1 — with no direction there is no loop, so a standing player can never
+trigger anything. Each iteration, before any movement:
+
+1. takes the two offset-to-tile-centre values, `sub_426599` for x (`((x-originX)
+   mod 40) - 20`) and `sub_4265EB` for y (`((y-originY-17) mod 36) - 18`);
+2. rotates them by the requested direction through the cos/sin tables
+   `dword_45BECC`/`dword_45BEDC` into an ALONG component and a PERP component;
+3. **if the ALONG component is exactly -1**, looks the stage actor up at the
+   player's *current* tile (`sub_42665C`/`sub_4266A3` → `sub_405654`) and, on
+   type 1, sets player state 6 + stores the `sub_405A81` exit in +20/+24 + plays
+   1330; on type 3, sets the actor's +48 and player state 5 + plays 350.
+
+Three consequences, all load-bearing:
+
+- **-1, not 0.** The trigger is the *approach* to the centre, one pixel short,
+  and from -1 the step is always +1 along the axis (the advance branch
+  short-circuits on `along < 0`). So the only way to fire it is to walk INTO a
+  centre from outside the tile. A player already parked on the centre reads 0; a
+  blocked player shoved back onto it by the settle-back reads > 0 → 0; a player
+  whose step is fully blocked never changes. **None of those are ever taken.**
+- **Only the axis of travel.** The PERP component is never consulted, so an
+  off-lane walker still triggers on its own row/column — and a player crossing
+  the *neighbouring* row/column cannot, because the actor lookup uses the
+  player's own tile.
+- **No latch, and no player-side re-entry state.** The guard against warping
+  straight back out of the exit is geometric: the relocation puts the player
+  exactly on the destination tile centre (`sub_426524`/`sub_42655F`), where
+  ALONG is 0. The actor's +146 byte is the one-shot *load-time* knockout latch (a
+  different mechanism, already ported in `match_factory`). The trampoline needs
+  no guard either — its apex always relocates to a tile differing from the
+  origin on BOTH axes.
+
+Warphole and trampoline are gated **identically**: the two type tests are
+independent `if`s on the same lookup inside the same -1 block.
+
+### What the port did differently
+
+- `MovementSystem::move` fired the step-on hook on the **post-step** position
+  whenever the travel axis landed on a centre. For a genuine crossing that is the
+  same iteration as the original's -1 test, which is why walking in matched. But
+  it also fired for a zero-length step and for the blocked settle-back, i.e. for
+  a player *parked* on the tile pushing into a wall. Now ported literally:
+  `along == -1`, pre-step, at the pre-step tile.
+- `StageActorSystem::warphole_after_move` / `trampoline_after_move` were a
+  post-tick "is the player standing on one" fallback with **no counterpart in the
+  binary** — `sub_41EC84`'s in-loop test is the only trigger site in the whole
+  program. Removed, together with `Player::warp_latch`/`tramp_latch`, which only
+  existed to stop that fallback re-firing every tick. On level 9 (eight
+  trampolines) the fallback could also re-launch a player off a *second*
+  trampoline the apex had dropped them on — an oscillation the original cannot
+  produce.
+- **Duration.** `sub_41F29B` runs the mover — and therefore the trigger — BEFORE
+  the animation/state dispatch (the mover's exit is a jump to the dispatch head
+  at LABEL_155), so the frame that sets state 5/6/7 falls straight into the
+  matching state block and its per-phase frame counter (+80) already reads 1 by
+  the end of it. The port's flight gate sits at the top of the player turn, so
+  the triggering tick advanced nothing: **every warp and hop sat one tick late
+  and ran one tick long.** Fixed by advancing the state timer once at the end of
+  the tick a flight starts (before the bomb-action tail, matching LABEL_246's
+  position).
+- **Trampoline duration, second tick.** The apex block ends with an extra
+  `++counter` (0x4204af). A prior note dismissed it as a re-fire guard our
+  down-counter does not need — true, but it is *also* a frame of the flight: the
+  counter skips 15 outright (…14, 16, …), so the original reaches
+  `getvalue(680)` one tick sooner and the hop is 29 counter steps of wall clock,
+  not 30. Ported as a second decrement at the apex.
+
+Unchanged and re-confirmed: the 9+9 = 18-tick warp, input ignored throughout
+(states 6/7 skip the mover), and the exit landing exactly on the destination tile
+centre. Both counters are wall-clock paced — `dword_464958` is a real
+`now - last` millisecond delta (clamped to `getvalue(31)`) and the accrual sheds
+`dword_46494C` (= 50) per increment — so they advance at 20 Hz regardless of the
+original's free-running frame rate. 900 ms of warp is not a cadence artefact.
+
+### Verification
+
+The oracle harness (`tools/oracle_mirror` vs the native transliteration's
+`--oracle … warp` / `… tramp`, same board and script) previously diverged: the
+native relocated the warping player on tick 30 and ours on 31, and the native's
+hop ran ticks 13-40 against ours 13-42. After this change the **warp digest is
+byte-identical to the native's for all 60 ticks**, and the trampoline's state and
+counter tokens match tick for tick (the apex *landing tile* still differs, as
+designed — the native draws the C LCG, the clean-room draws xorshift32).
+
+`tests/sim/test_golden.cpp` is **unmoved**: the golden scenarios place no stage
+actors, so no trigger site is reachable, and the two removed hash bits (62/63,
+`tramp_latch`/`warp_latch`) were constant 0 there — dropping the terms leaves the
+mixed word bit-identical. All 76 ctest suites pass.
+
+### Still open — needs a play session, not more disassembly
+
+Whether this fully accounts for the reported feel is **not settled**. What is
+proven is that the port took players in situations the original leaves alone
+(parked/blocked on the tile) and held them ~50 ms (warp) / ~100 ms (hop) too
+long. What could not be checked without running the game is whether a *walking*
+player experiences anything further — the entry geometry itself is now
+identical, so if a difference remains it is in the presentation (where the hole
+is drawn versus the tile it occupies, the `"spin"` animation, or sound 1330), not
+in the predicate. To settle it: on level 4 (`EXTRA4.RES`, warp holes at (2,2),
+(12,2), (12,8), (2,8)), walk the warp hole's own row at several vertical offsets
+and the two rows either side, from each of the four directions, and note every
+case where one build takes you and the other does not.
+
 ## Still guessed — not yet extracted from the binary
 
 | Constant | Current value | Status |

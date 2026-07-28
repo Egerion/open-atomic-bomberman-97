@@ -105,12 +105,14 @@ std::uint64_t state_hash(const State& s) {
             // Computer-AI flag (ADR-0005): a gameplay input source, so hashed.
             // 0 on every non-AI player → golden scenarios unchanged (bit was
             // previously a constant 0). bits 56..60 hold bombs_placed (small).
-            (static_cast<std::uint64_t>(p.ai) << 61) |
-            // Stage-actor re-entry latches (#7): gameplay state (they gate re-
-            // warp / re-bounce), so hashed. Both 0 on boards with no warpholes/
-            // trampolines → golden scenarios unchanged. See stage-actors.md §4-5.
-            (static_cast<std::uint64_t>(p.tramp_latch) << 62) |
-            (static_cast<std::uint64_t>(p.warp_latch) << 63));
+            // Bits 62/63 formerly hashed the stage-actor re-entry latches
+            // (tramp_latch/warp_latch); removed 2026-07-28 (facts.md
+            // "Warphole/trampoline entry predicate") — the original has no such
+            // player state, its guard against re-entering the exit is geometric.
+            // Both were always 0 on boards with no warpholes/trampolines, so
+            // dropping the two terms leaves this word bit-identical there and
+            // the golden scenarios (no actors) unchanged.
+            (static_cast<std::uint64_t>(p.ai) << 61));
         // Trigger-bomb allowance (player byte +85): its own word so the counter
         // is not truncated. Part of the hashed contract now that #9 caps it.
         mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.trigger_placed)));

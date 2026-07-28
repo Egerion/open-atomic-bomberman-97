@@ -95,10 +95,6 @@ struct Player {
     // open tile (StageActorSystem::tick_bounce, the confirmed 0x4203a7 loop). This
     // is a countdown (30→0); the apex fires once at bounce == 15. Hashed. §4.
     std::int32_t bounce = 0;
-    // Trampoline one-shot latch: set when a bounce fires, cleared once the player
-    // leaves the trampoline tile — so a player parked on the centre bounces once,
-    // not every tick (the original re-fires only on the stepper's centring).
-    bool tramp_latch = false;
     // Warphole two-phase warp (player states 6=warp-out, 7=warp-in in the
     // original, sub_41F29B ~23155/23215; step-on in sub_41EC84 ~22590). CONFIRMED
     // timing: warp-out animates until its frame counter passes 8 (9 ticks), then
@@ -122,12 +118,6 @@ struct Player {
     // last dest afterward — always 0 on boards with no warpholes, so it does not
     // perturb the golden (no-actor) scenarios. See stage-actors.md §5.
     std::int32_t warp_to_x = 0, warp_to_y = 0;
-    // Warphole one-shot latch (docs/re/stage-actors.md §5). Set when a warp
-    // STARTS; while set the player will NOT re-warp, and it clears the moment the
-    // player is no longer centred on a warphole tile (the exit is itself a
-    // warphole, so without this it would ping-pong). Together with `warp` this
-    // gives exactly one warp per entry.
-    bool warp_latch = false;
     // Carried bomb (picked up with the grab glove); its fuse is frozen.
     bool carrying = false;
     std::int32_t carried_fuse = 0, carried_flame = 2;

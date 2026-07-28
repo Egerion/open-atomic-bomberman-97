@@ -230,10 +230,11 @@ void PowerupSystem::head_hit(int victim, int tx, int ty) {
     // player no longer takes). Our port keeps these as separate fields, so
     // mirror the overwrite explicitly — without this, "bouncing/warping while
     // head-stunned" is a flag combination the original cannot express
-    // (facts.md "Player state machine (+78) — COMPLETE"). The latches
-    // (tramp_latch/warp_latch) are deliberately left set: the original only
-    // re-triggers an actor via the stepper's centring check, which needs a
-    // fresh walk onto the tile — our latch models exactly that.
+    // (facts.md "Player state machine (+78) — COMPLETE"). A player left
+    // standing on the actor's tile by the cancel does NOT immediately re-trigger
+    // it: the only trigger is the mover's along-axis offset reaching -1, which
+    // needs a fresh walk INTO the centre from outside (facts.md
+    // "Warphole/trampoline entry predicate").
     p.pickup_pause = 0;
     p.bounce = 0;
     p.warp = 0;

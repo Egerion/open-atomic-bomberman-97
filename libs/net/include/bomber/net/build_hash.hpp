@@ -48,6 +48,12 @@ std::uint32_t build_hash();
 //             inventory"). Refusing pre-v6 peers at the lobby door is the point:
 //             a v5 peer decoding a v6 blob would read every field after
 //             `forbidden` shifted by 13 bytes.
-inline constexpr std::uint32_t kWireProtocolVersion = 6;
+//   v6 -> v7: added MsgType::Probe — the mutual path verification both peers now
+//             run over the CHOSEN transport before the match layer is handed
+//             anything (link_probe.hpp). A v6 peer answers no probe, so its
+//             partner would verify nothing and relay for no reason; refusing the
+//             pair at the lobby door is cheaper than a match that connects and
+//             then delivers nothing, which is the exact failure this closes.
+inline constexpr std::uint32_t kWireProtocolVersion = 7;
 
 }  // namespace bomber::net

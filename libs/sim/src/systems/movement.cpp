@@ -13,15 +13,33 @@ namespace bomber::sim {
 // distance threshold — the assist is governed purely by which side of the
 // tile centre the player is on, exactly like the original.
 //
-// on_center (if non-null) fires the instant a per-pixel step lands the player
-// exactly on a tile centre — the port of the original's in-loop step-on check,
-// which tests its running offset-to-tile-centre temporary for exactly -1 (one
-// pixel short of the centre). The original tests this at the START of each pixel iteration
-// (position at centre-1 about to become centre); measured post-step it is the
-// same physical event (arrival at the centre pixel), and because steps are
-// exactly ±1px along the axis, every centre crossing is caught. This fixes the
-// warp/trampoline "stuck": a walking player's budget steps OVER the exact
-// centre pixel, so a post-walk-only test almost never fired. See §5.
+// on_center (if non-null) is the warphole/trampoline step-on hook, and it is
+// sub_41EC84's in-loop test EXACTLY: at the TOP of each pixel iteration the
+// original rotates the two offset-to-tile-centre values (sub_426599 for x,
+// sub_4265EB for y) by the requested direction and, when the resulting ALONG
+// component reads exactly -1, looks the stage actor up at the player's current
+// tile. Three properties come out of that literal reading and all three matter:
+//
+//   * -1, not 0 — the trigger is the APPROACH to the centre, one pixel short,
+//     and from -1 the step is always +1 along the axis (the "free to advance"
+//     branch below short-circuits on `along < 0`). So the only way to hit it is
+//     to walk INTO the centre from outside; a player already parked on the
+//     centre (along == 0), one shoved back onto it by the blocked settle-back
+//     (along > 0 -> 0), and one whose step is fully blocked all read something
+//     other than -1 and are left alone. Testing the POST-step position for
+//     "landed on the centre" (what this used to do) collapses those three cases
+//     into a trigger and is why the port grabbed players the original does not.
+//   * only the travel axis — the perpendicular component is never consulted, so
+//     an off-lane walker still triggers on its own row/column, and a player
+//     crossing the NEIGHBOURING row/column cannot, because the actor lookup
+//     uses the player's own tile.
+//   * pre-step tile — the actor is read at the position the offsets were taken
+//     from, not after the move.
+//
+// Because every axis step is exactly ±1px, every genuine centre approach is
+// caught, so a walking player still warps mid-walk (the original "stuck" fix:
+// a 9px/tick stride steps OVER the centre, so a post-walk-only test at the end
+// of the tick almost never fired). See docs/re/stage-actors.md §5.
 void MovementSystem::move(Player& p, Direction d, std::int32_t extra_budget, StepOnFn on_center,
                           void* ctx, bool use_player_speed, PixelFn on_pixel, void* pixel_ctx,
                           std::int32_t delta_ms) {
@@ -87,6 +105,15 @@ void MovementSystem::move(Player& p, Direction d, std::int32_t extra_budget, Ste
         const int along = sx * dxg + sy * dyg;  // signed distance along the facing axis
         const int perp = sy * dxg - sx * dyg;   // signed offset from the lane centreline
 
+        // sub_41EC84's step-on test, ported verbatim (see the header comment):
+        // fire when the ALONG component is exactly -1, BEFORE the step, at the
+        // player's CURRENT tile. Only the travel axis is consulted; `perp` is
+        // not, so an off-lane walker still triggers, and a player crossing the
+        // NEIGHBOURING row/column never does (the tile lookup lands elsewhere).
+        // The callee filters by actor type, so crossings of ordinary tiles are
+        // no-ops.
+        if (on_center && along == -1) on_center(ctx, p, tx, ty);
+
         int mdx = 0, mdy = 0;
         if (along < 0 || passable(tx + dxg, ty + dyg)) {
             // Free to advance: step forward; if off-lane, also step one pixel
@@ -122,27 +149,6 @@ void MovementSystem::move(Player& p, Direction d, std::int32_t extra_budget, Ste
 
         p.x = (px + mdx) * kScale;
         p.y = (py + mdy) * kScale;
-
-        // sub_41EC84's step-on check (its offset-to-centre temporary hitting
-        // -1): fire the step-on the moment this pixel step
-        // brings the player to the tile centre ALONG THE TRAVEL AXIS. The
-        // original rotates the offset by the facing, so that temporary holds the
-        // ALONG-axis offset, and tests only that axis — the companion
-        // perpendicular offset is not required to
-        // be centred — and looks the actor up at the player's CURRENT tile. So
-        // match that: horizontal travel fires at the x-centre (any row),
-        // vertical at the y-centre (any column). Whole-pixel positions make the
-        // centre exactly representable (20 px in x, 18 px in y within a tile);
-        // 1-px axis steps guarantee every centre crossing is caught. The callee
-        // filters by actor type + latch, so crossings of ordinary tiles are
-        // harmless no-ops.
-        if (on_center) {
-            const int nx = p.x / kScale, ny = p.y / kScale;
-            const bool at_x_centre = ((nx % kTileW) + kTileW) % kTileW == kTileW / 2;
-            const bool at_y_centre = ((ny % kTileH) + kTileH) % kTileH == kTileH / 2;
-            if ((dxg != 0 && at_x_centre) || (dyg != 0 && at_y_centre))
-                on_center(ctx, p, nx / kTileW, ny / kTileH);
-        }
 
         // sub_41EC84's post-commit tail (pseudo.c 22699-22717): flame death,
         // then pickup, at the tile of the CURRENT pixel position — every

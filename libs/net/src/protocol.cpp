@@ -40,6 +40,7 @@ constexpr std::size_t kHashFrameBytes = 1 + 4 + 8;   // tag + tick u32 + hash u6
 constexpr std::size_t kRangeHeaderBytes = 1 + 4 + 1 + 2;  // tag + first_tick u32 + count u8 + mask u16
 constexpr std::size_t kHelloFrameBytes = 1 + 4 + 1;  // tag + seed u32 + is_ack u8
 constexpr std::size_t kPunchFrameBytes = 1 + 4 + 1;  // tag + nonce u32 + is_pong u8
+constexpr std::size_t kProbeFrameBytes = 1 + 4 + 1;  // tag + nonce u32 + seen_peer u8
 constexpr std::size_t kDropFrameBytes = 1 + 1 + 4;   // tag + seat u8 + at_tick u32
 constexpr std::size_t kAckFrameBytes = 1 + 4 + 4 + 1;  // tag + revision + checksum + seat u8
 // tag + revision u32 + level_index u8 + rounds u8 + name_len u8
@@ -85,6 +86,14 @@ std::vector<std::uint8_t> encode_punch(std::uint32_t nonce, bool is_pong) {
     b.push_back(static_cast<std::uint8_t>(MsgType::Punch));
     put_u32_le(b, nonce);
     b.push_back(is_pong ? 1U : 0U);
+    return b;
+}
+
+std::vector<std::uint8_t> encode_probe(std::uint32_t nonce, bool seen_peer) {
+    std::vector<std::uint8_t> b;
+    b.push_back(static_cast<std::uint8_t>(MsgType::Probe));
+    put_u32_le(b, nonce);
+    b.push_back(seen_peer ? 1U : 0U);
     return b;
 }
 
@@ -181,6 +190,13 @@ bool decode(const std::uint8_t* data, std::size_t size, Message* out) {
         out->type = MsgType::Punch;
         out->punch.nonce = get_u32_le(data + 1);
         out->punch.is_pong = data[1 + 4] != 0;
+        return true;
+    }
+    if (tag == MsgType::Probe) {
+        if (size != kProbeFrameBytes) return false;
+        out->type = MsgType::Probe;
+        out->probe.nonce = get_u32_le(data + 1);
+        out->probe.seen_peer = data[1 + 4] != 0;
         return true;
     }
     if (tag == MsgType::Drop) {
