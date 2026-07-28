@@ -396,7 +396,7 @@ confirming the `+25` idiom already seen elsewhere in the codebase.
 | 13 | 263 | Disable music during gameplay | `dword_4648C0` (`disable_game_music=`) | toggle |
 | 14 | 264 | Modem: P/I/B/# | `dword_464970`/`dword_46482C`/`dword_4648B8`/string (`modemport=`/`modembaud=`/`modemirq=`/`modemdial=`) | `sub_40798B` — a nested modem-config sub-screen |
 | 15 | 265 | Define keyboard layouts | `dword_4645BC[]` (`keydef=`) | `sub_407B9D` — the key-remap UI, §2 |
-| 16 | 266 | Set Default Network Protocol | `dword_464824`? (`netprotocol=`) | `sub_407F4F` — nested protocol picker |
+| 16 | 266 | Set Default Network Protocol | `dword_464824`? (`netprotocol=`) — **but this row and row 17 cannot both be right**: the options.ini table below gives `netprotocol` → `dword_464828`, and row 17's `dword_464824` is confirmed independently (it is the flag `sub_42814B`'s sound cull reads). The `?` was already there; treat `dword_464828` as the likelier reading and settle it with a binary read before anything depends on it. | `sub_407F4F` — nested protocol picker |
 | 17 | 267 | Use Enhanced Memory Model | `dword_464824` (`smallmemory=`, inverted: label shows `(dword_464824==0)+25`) | `sub_407FEE` |
 | 18 | 268 | Adjust Audio | — (no options.ini key) | `sub_407542` — nested volume sub-screen |
 
