@@ -173,8 +173,13 @@ TEST_CASE("a head hit cancels an in-flight bounce, warp and pickup-pause") {
         add_warp_pair(st, 0, 0, 8, 0);
         p.x = centre_x(0);
         p.y = centre_y(0);
-        s.tick(TickInputs{});  // step-on: warp starts (warp-out, still at entry)
-        REQUIRE(p.warp > 0);
+        // Warp-out, white-box like the bounce subcase above (a real step-on
+        // needs a WALK into the centre — see test_stage_actors.cpp). 17 is the
+        // countdown a genuine launch leaves behind, i.e. the state the player is
+        // in for the whole warp-out phase.
+        p.warp = 17;
+        p.warp_to_x = 8;
+        p.warp_to_y = 0;
         REQUIRE(p.tile_x() == 0);
 
         land_bomb_on(st, 0, 0);
@@ -232,8 +237,7 @@ TEST_CASE("a bomb landing on a warphole tile still head-hits the player standing
     add_warp_pair(st, 0, 0, 8, 0);
     Player& p = st.players[0];
     p.x = centre_x(0);
-    p.y = centre_y(0);
-    p.warp_latch = true;  // already warped here: stranded on the exit warphole
+    p.y = centre_y(0);  // standing on the exit warphole; parking never re-warps
 
     land_bomb_on(st, 0, 0);
     s.tick(TickInputs{});

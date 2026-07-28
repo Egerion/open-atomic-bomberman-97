@@ -52,10 +52,8 @@ void StageActorSystem::tick_bounce(Player& p, int /*player_index*/) {
     // (both ALWAYS, before any test), offsets the current tile by [-2,+2] on each
     // axis, and accepts the first candidate that differs from the origin on BOTH
     // axes and is neither solid (!sub_425FB9) nor occupied by a bomb
-    // (!sub_422E48). The equality of our down-counter passing through each value
-    // exactly once fires this once per hop (the original needs an extra ++c guard
-    // because its counter can stall; ours cannot). No trampolines on a board ⇒
-    // never reached ⇒ zero RNG draws ⇒ the golden RNG stream is untouched.
+    // (!sub_422E48). No trampolines on a board ⇒ never reached ⇒ zero RNG draws
+    // ⇒ the golden RNG stream is untouched.
     if (c == len / 2) {
         const int cx = p.tile_x(), cy = p.tile_y();
         for (int m = 0; m < 100; ++m) {
@@ -67,11 +65,18 @@ void StageActorSystem::tick_bounce(Player& p, int /*player_index*/) {
                 break;
             }
         }
+        // The extra `++c` at 0x4204af, right after the relocation loop. A prior
+        // note dismissed it as a re-fire guard our down-counter does not need —
+        // true, but it is ALSO a frame of the flight: the counter skips 15
+        // outright (…14, 16, …), so the original reaches getvalue(680) one tick
+        // sooner and the whole hop is 29 counter steps of wall clock, not 30.
+        // Dropping it made our hop a tick longer than the original's.
+        --p.bounce;
     }
 }
 
 bool StageActorSystem::start_warp(Player& p, int player_index, int tx, int ty) {
-    if (p.warp_latch || p.warp > 0) return false;  // latched / already warping
+    if (p.warp > 0) return false;  // already warping
     if (actor_at(s_, tx, ty) != ActorType::Warphole) return false;
 
     // START the two-phase warp (sub_41EC84 sets player state 6 and STORES the
@@ -79,11 +84,18 @@ bool StageActorSystem::start_warp(Player& p, int player_index, int tx, int ty) {
     // idno/linkto scan (sub_405A81). Capture the dest tile NOW — the walk that
     // triggered this can slide the player off the warphole later this tick, so
     // tick_warp must relocate to the stored dest, not a midpoint tile lookup.
-    // The latch suppresses a re-warp at the exit (itself a warphole) until the
-    // player walks off it. A warphole with no partner has dest == its own tile,
-    // so the warp is a harmless in-place hop. Sound 1330 fires here.
+    // A warphole with no partner has dest == its own tile, so the warp is a
+    // harmless in-place hop. Sound 1330 fires here.
+    //
+    // NO re-entry latch, and the original has none either: the guard against
+    // warping straight back out of the exit is GEOMETRIC. tick_warp drops the
+    // player exactly on the destination tile centre (sub_426524/sub_42655F), so
+    // its along-axis offset there is 0, and the trigger needs -1 — which is only
+    // reachable by approaching a centre from outside it. The `warp_latch` this
+    // port used to carry existed solely to protect the post-tick "safety net"
+    // trigger (removed with it); the actor's own +146 byte is the one-shot
+    // LOAD-TIME knockout latch, a different thing, and lives in match_factory.
     p.warp = kWarpTicks;
-    p.warp_latch = true;
     p.warp_to_x = s_.warp_dest_x[ty][tx];
     p.warp_to_y = s_.warp_dest_y[ty][tx];
     s_.events.push_back({Event::Type::WarpUsed, static_cast<std::int8_t>(player_index),
@@ -93,13 +105,22 @@ bool StageActorSystem::start_warp(Player& p, int player_index, int tx, int ty) {
 }
 
 bool StageActorSystem::start_bounce(Player& p, int player_index, int tx, int ty) {
-    if (p.bounce > 0 || p.tramp_latch) return false;  // bouncing / already fired here
+    if (p.bounce > 0) return false;  // already bouncing
     if (actor_at(s_, tx, ty) != ActorType::Trampoline) return false;
 
     // Bounce length = VALUELST id 680 (=30), the bounce-state frame count read
     // by sub_41F29B (~23160). A confirmed VALUELST value, not a guess. See §4.
+    //
+    // No latch, same argument as start_warp: the apex always relocates the
+    // player to a tile centre (and one that differs from the trampoline's on
+    // BOTH axes), where the along offset is 0, so the -1 trigger cannot re-fire
+    // without the player walking in again. The `tramp_latch` this port used to
+    // carry was a consequence of the removed post-tick trigger — and on level 9
+    // (eight trampolines) that trigger could land a player on a SECOND
+    // trampoline's centre and re-launch them off it, which the original cannot
+    // do. The actor's own +48 "triggered" word is the bounce ANIMATION flag, not
+    // a re-entry guard; the renderer derives it from Player::bounce.
     p.bounce = s_.tuning.trampoline_bounce_frames;
-    p.tramp_latch = true;  // one bounce per entry until the player leaves the tile
     s_.events.push_back({Event::Type::TrampolineBounce,
                          static_cast<std::int8_t>(player_index),
                          static_cast<std::int8_t>(tx), static_cast<std::int8_t>(ty), 0});
@@ -112,9 +133,11 @@ bool StageActorSystem::start_bounce(Player& p, int player_index, int tx, int ty)
 // StepOnCtx.
 void StageActorSystem::on_step_center(void* ctx, Player& p, int tx, int ty) {
     auto* c = static_cast<StepOnCtx*>(ctx);
-    // Warphole first, then trampoline (a tile carries only one actor, so at
-    // most one of these fires). Both are latched, so a walk across the centre
-    // triggers exactly once.
+    // Warphole first, then trampoline. The original's -1 block tests
+    // `actor.type == 1` and `actor.type == 3` as two independent ifs on the SAME
+    // lookup, in that order; a tile carries at most one actor, so sequencing
+    // them is equivalent. The two are gated identically — there is no extra
+    // condition on either — so a change to this hook is a change to both.
     if (!c->self->start_warp(p, c->player_index, tx, ty))
         c->self->start_bounce(p, c->player_index, tx, ty);
 }
@@ -183,26 +206,6 @@ bool StageActorSystem::move_on_actor(Player& p, int want_godir, bool moving,
     return p.x != bx || p.y != by;
 }
 
-bool StageActorSystem::trampoline_after_move(Player& p, int player_index) {
-    const int tx = p.tile_x(), ty = p.tile_y();
-    const bool on_tramp = actor_at(s_, tx, ty) == ActorType::Trampoline;
-
-    // The latch clears the instant the player is off a trampoline tile, so a
-    // fresh entry can bounce again. Off a trampoline entirely: nothing to do.
-    if (!on_tramp) {
-        p.tramp_latch = false;
-        return false;
-    }
-    if (p.bounce > 0 || p.tramp_latch) return false;  // bouncing / already fired here
-
-    // Post-walk safety net for the case the per-pixel step-on could not fire:
-    // a player that is ALREADY centred on the trampoline without stepping (e.g.
-    // spawned/left there). A moving player is caught mid-walk by on_step_center;
-    // here we only act if the player ends the tick exactly on the centre.
-    if (p.x != grid::tile_center_x(tx) || p.y != grid::tile_center_y(ty)) return false;
-    return start_bounce(p, player_index, tx, ty);
-}
-
 void StageActorSystem::tick_warp(Player& p) const {
     if (p.warp <= 0) return;
     --p.warp;
@@ -216,26 +219,6 @@ void StageActorSystem::tick_warp(Player& p) const {
             p.y = grid::tile_center_y(p.warp_to_y);
         }
     }
-}
-
-bool StageActorSystem::warphole_after_move(Player& p, int player_index) {
-    const int tx = p.tile_x(), ty = p.tile_y();
-    const bool on_warp = actor_at(s_, tx, ty) == ActorType::Warphole;
-
-    // The latch clears the instant the player is off the warphole tile, so a
-    // fresh entry can warp again (mirrors leaving the warp state 6/7 and walking
-    // back on). Off a warphole entirely: nothing to do.
-    if (!on_warp) {
-        p.warp_latch = false;
-        return false;
-    }
-    if (p.warp_latch || p.warp > 0) return false;  // warp already latched / in progress
-
-    // Post-walk safety net (mirrors trampoline_after_move): a player ALREADY
-    // centred on the warphole without stepping this tick. Moving players are
-    // caught mid-walk by on_step_center.
-    if (p.x != grid::tile_center_x(tx) || p.y != grid::tile_center_y(ty)) return false;
-    return start_warp(p, player_index, tx, ty);
 }
 
 }  // namespace bomber::sim

@@ -364,13 +364,28 @@ untouched and the golden scenarios (which place no actors) are byte-identical. N
 new hashed field: the relocation mutates `Player::x/y` and `State::rng`, both
 already hashed, and reuses the already-hashed `Player::bounce` countdown.
 
-### Step-on trigger point (port detail, unchanged)
+### Step-on trigger point  [CORRECTED 2026-07-28]
 
-The original triggers inside the stepper (at its centre-landing test); our port fires it
-mid-walk via the `MovementSystem::move` step-on callback (see §5) with a post-walk
-safety net for the standing-still case. The one-shot latch `Player::tramp_latch`
-(set on launch, cleared on leaving the tile) keeps a stationary centred player to
-one hop per entry.
+The original's ONLY trigger is `sub_41EC84`'s in-loop test for an along-axis
+offset of exactly **-1** — the approach to the centre, not arrival on it. Our
+port now fires the `MovementSystem::move` step-on callback on that same
+condition. The former post-walk "safety net" for the standing-still case, and
+the `Player::tramp_latch` that existed to stop it re-firing, are **gone**: the
+binary has no such path, a player merely standing on a trampoline is never
+launched, and the apex always relocates to a tile differing on both axes so no
+re-entry guard is needed. Full reading and evidence: facts.md
+"Warphole/trampoline entry predicate".
+
+### Flight DURATION — CORRECTED 2026-07-28 (two ticks too long)
+
+`sub_41F29B` runs the mover *before* the state dispatch (the mover's exit jumps
+to the dispatch head at LABEL_155), so the frame that sets state 5 also runs the
+state-5 block once — the counter reads 1 at the end of the triggering frame. And
+the apex's trailing `++c` (0x4204af) is a frame of the flight as well as a
+re-fire guard: the counter skips 15, so `getvalue(680)` is reached one tick
+sooner. The port had neither, making every hop two ticks (100 ms) long. Both are
+now ported; the oracle's `tramp` scenario matches the native's state/counter
+tokens tick for tick.
 
 ### Warp/teleport animation — sequence name `"spin"`  [CONFIRMED 2026-07-04]
 
@@ -454,15 +469,23 @@ so input is ignored.
 No RNG anywhere on the path.
 
 **Port.** `Player::warp` is an 18-tick countdown (hashed — it gates movement
-every active tick). The warp STARTS on centring (sets `warp = kWarpTicks(=18)`,
-the re-entry latch, captures the exit tile into `Player::warp_to_*`, and emits
-`WarpUsed`/sound 1330) but does NOT move the player. `StageActorSystem::tick_warp`
-decrements it each tick and, at the midpoint (`warp == kWarpMid = 9`), relocates
-the player to the captured exit. `simulation.cpp` state-gates the whole warp
-exactly like a trampoline bounce: `if (warping) { tick_warp; return; }`. The
-one-shot latch (`Player::warp_latch`, cleared on leaving the warphole tile) stops
-a re-warp at the exit (itself a warphole). A warphole with no partner has its
-dest == its own tile, so the warp is a harmless in-place hop.
+every active tick). The warp STARTS on the -1 approach (sets
+`warp = kWarpTicks(=18)`, captures the exit tile into `Player::warp_to_*`, and
+emits `WarpUsed`/sound 1330) but does NOT move the player.
+`StageActorSystem::tick_warp` decrements it each tick and, at the midpoint
+(`warp == kWarpMid = 9`), relocates the player to the captured exit.
+`simulation.cpp` state-gates the whole warp exactly like a trampoline bounce:
+`if (warping) { tick_warp; return; }`. A warphole with no partner has its dest ==
+its own tile, so the warp is a harmless in-place hop.
+
+**CORRECTED 2026-07-28**: the triggering tick is the FIRST of the 18, not the one
+before them (the mover runs above the state dispatch, so state 6 burns a frame
+immediately) — `simulation.cpp` advances the timer once at the end of the tick a
+warp starts. And there is **no `Player::warp_latch`**: the original has no
+player-side re-entry state, because the exit relocation lands the player exactly
+on the destination tile centre, where the along offset is 0 and the trigger needs
+-1. With that fix the oracle's `warp` scenario is byte-identical to the native's.
+See facts.md "Warphole/trampoline entry predicate".
 
 **The step-on MUST fire mid-walk, not after — root cause of "STILL stuck".**
 The original triggers the warp INSIDE the per-pixel stepper (`sub_41EC84`, the
@@ -479,17 +502,15 @@ and NOT an exit-resolution problem (`apply_actors`/`sub_405A81` resolve the
 partner correctly). It was purely the trigger point.
 
 Fix: `MovementSystem::move` takes a step-on callback (`StepOnFn`, a plain
-function pointer — no heap, deterministic) invoked the instant a per-pixel step
-settles the player on a tile centre. `StageActorSystem::move_on_actor` passes it,
-so a walking player fires `start_warp`/`start_bounce` mid-walk exactly like the
-original's centre-landing test.
-`warphole_after_move`/`trampoline_after_move` remain as a post-walk
-safety net for the standing-still case (player already centred, no step). Both
-paths call the same latched `start_warp`/`start_bounce`, so a walk across the
-centre fires exactly once. Verified equivalent to the original: it fires post-
-step (arrival at centre) vs the original's pre-step (the centre-landing test
-firing at centre−1, about to step to centre) — the same physical event, and both continue the loop
-from the centre with identical remaining budget.
+function pointer — no heap, deterministic) invoked from inside the per-pixel
+loop. **CORRECTED 2026-07-28**: it is invoked on the original's own condition —
+the along-axis offset reading exactly -1, evaluated BEFORE the step, at the
+pre-step tile — not on "the step landed on a centre". For a genuine crossing the
+two are the same loop iteration, which is why walking in already worked; but the
+post-step form ALSO fired for a zero-length step and for the blocked settle-back,
+so a player parked on the tile pushing into a wall was taken. The
+`warphole_after_move`/`trampoline_after_move` post-walk safety nets are removed
+outright — the binary has exactly one trigger site and this is it.
 
 **Destination captured at step-on.** The exit tile is stored into
 `Player::warp_to_*` when the warp starts (mirrors the original storing the dest
@@ -503,7 +524,9 @@ does NOT warp at all — see §6 item 4, rewritten.** `warp`, `bounce`, and
 `warp_to_*` pack into ONE hash word (each fits a byte: bounce ≤ 30,
 warp ≤ 18, dest tiles ≤ 14); ALL are 0 on boards with no warpholes/trampolines,
 so that word is `mix(0)` there — byte-identical to before, and the golden
-scenarios (no actors) are unchanged.
+scenarios (no actors) are unchanged. (The former latch bits 62/63 of the flags
+word went the same way when the latches were removed 2026-07-28: constant 0 on
+actor-free boards, so dropping the terms left the word bit-identical.)
 
 Note the 8-frame per-phase threshold is a HARDCODED constant in the state
 machine (`+40 > 8`), not a VALUELST id — like the head-hit stun of 16. Confirmed

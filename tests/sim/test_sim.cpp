@@ -789,12 +789,15 @@ TEST_CASE("arming the walls switches off warpholes and trampolines, not belts or
     // the record survives, so the port leaves the exit coordinates in place.
     CHECK(s.state().warp_dest_x[4][6] == 8);
 
-    // ...and the mechanic really is dead: parking a player dead-centre on the
-    // ex-warphole no longer starts a warp.
-    s.state().players[0].x = 6 * kTileWF + kTileWF / 2;
+    // ...and the mechanic really is dead: WALKING into the ex-warphole's centre
+    // — the original's one and only trigger (sub_41EC84's along-axis offset
+    // reaching -1) — no longer starts a warp.
+    s.state().players[0].x = 5 * kTileWF + kTileWF / 2;
     s.state().players[0].y = 4 * kTileHF + kTileHF / 2;
-    s.state().players[0].warp_latch = false;
-    run(s, 1);
+    TickInputs east;
+    east.players[0].right = true;
+    for (int t = 0; t < 10; ++t) s.tick(east);
+    CHECK(s.state().players[0].tile_x() >= 6);  // walked onto/past the dead tile
     CHECK(s.state().players[0].warp == 0);
 }
 
