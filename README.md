@@ -164,7 +164,7 @@ set BOMBER_MATCHMAKER_URL=ws://127.0.0.1:8080/ws  # 2. environment
 
 > **The signaling connection is `wss://`.** It has to be: it carries the lobby **`host_token`**, which is what authorises *start the match*, plus the lobby code and the relay allocation id — an observer on the path who reads them takes host authority over your lobby. (An older note here claimed the signaling "carries no credentials". That was wrong, and it is the reason this is spelled out.) The TLS backend is **mbedTLS**, statically linked, built from source next to IXWebSocket; certificate verification and hostname checking are on and are covered by a test that asserts a bad certificate is *refused*, not just that a good one connects (`tests/net/test_lobby_tls.cpp`, `ctest -R net_lobby_tls` with `BOMBER_TLS_LIVE=1`). A build configured with `-DBOMBER_LOBBY_TLS=OFF` has no TLS backend and **refuses** a `wss://` URL outright rather than downgrading it. Plain `ws://` is still the right scheme for a matchmaker you run yourself on localhost, which has no certificate.
 >
-> Remaining gap: the deployed server still accepts plain `ws://` as well (`force_https = false`), so an *old* client keeps connecting in the clear. See S1 in [`services/matchmaker/SECURITY.md`](services/matchmaker/SECURITY.md) for the flip.
+> The deployed server matches: since 2026-07-26 it runs with `force_https = true`, so a plaintext request is answered with a 301 that a WebSocket client cannot follow. There is no cleartext path to the public lobby left — which does mean an executable built before the `wss://` default cannot connect to it at all. See S1 in [`services/matchmaker/SECURITY.md`](services/matchmaker/SECURITY.md).
 
 The UDP **STUN** echo resolves the same way (`--matchmaker-stun <host[:port]>`, `BOMBER_MATCHMAKER_STUN_HOST` / `BOMBER_MATCHMAKER_STUN_PORT`) and defaults to the matchmaker URL's own host on **port 8081**. To run a server locally:
 
@@ -209,7 +209,10 @@ reach), host-authoritative **match setup** through the game's own screens,
 **up to ten machines in one lobby** over the host-relay star, round rotation, a
 deterministic **peer-drop → AI handoff**, and lobby chat. The matchmaking
 service that makes it work lives in `services/matchmaker` and is deployed; the
-game reaches it with no configuration.
+game reaches it with no configuration. Its control plane is **`wss://` only**
+(closed 2026-07-26) — see the security review in
+[`services/matchmaker/SECURITY.md`](services/matchmaker/SECURITY.md), which is
+written to be readable as a record rather than a checklist.
 
 Still open:
 
@@ -220,13 +223,6 @@ Still open:
   and returns to the menu rather than half-connecting.
 - **Host migration** — if the host drops, the match ends rather than re-electing
   a new hub. The design is in ADR-0011 (§ Risks) and the server half is built.
-- **Cleartext signaling is still *accepted* by the deployment.** The client now
-  speaks `wss://` by default and verifies certificates, but the server has not
-  yet been flipped to `force_https = true`, so an older build still connects in
-  the clear and leaks its `host_token` to the path. The flip is a deploy-time
-  change with a deliberate ordering (update clients first, or they are cut off);
-  it is written out in S1 of
-  [`services/matchmaker/SECURITY.md`](services/matchmaker/SECURITY.md).
 
 **Cross-platform** is structural rather than aspirational: the sim is
 integer-only, the wire is little-endian, and a compile-time `build_hash` is

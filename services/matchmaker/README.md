@@ -96,6 +96,12 @@ Two options — pick one:
 2. **Standalone `wss://`.** Pass `-tls-cert`/`-tls-key` (or the env vars) and the
    binary serves TLS itself. Useful for self-hosting / LAN with your own cert.
 
+Whichever you pick, close the plaintext door as well as opening the TLS one.
+Serving HTTPS does not by itself stop a client from being answered over `http://`
+— on Fly that is the separate `force_https` flag, which the deployed instance
+sets (SECURITY.md S1). A local `go run` has no certificate and is `ws://` on
+purpose; that is the one case where plaintext is the right answer.
+
 ## Deploy
 
 ### Docker
@@ -114,7 +120,9 @@ warns at startup.
 
 ### Fly.io (free tier)
 
-See [`fly.toml`](./fly.toml). TLS is terminated at Fly's edge (`force_https`).
+See [`fly.toml`](./fly.toml). TLS is terminated at Fly's edge, and
+`force_https = true` makes it the only way in — a plaintext request is 301'd, not
+served.
 UDP needs a dedicated IPv4 and binding the Fly address:
 
 ```sh
@@ -188,12 +196,14 @@ forwarder.
 checked, what was found, what was fixed and what was accepted, with the residual
 risk of each spelled out. The short version:
 
-- **The deployed control plane still *accepts* cleartext** (`fly.toml`,
-  `force_https = false`). The game client now speaks `wss://` and verifies
-  certificates, so a current build is protected; a build from before that change
-  still leaks its `host_token` and lobby `code` to anyone on the path. Flipping
-  `force_https` closes the door on those clients — and cuts them off, so it is
-  ordered deliberately. SECURITY.md S1 has the sequence.
+- **The deployed control plane is `wss://` only** (`fly.toml`,
+  `force_https = true`, since 2026-07-26). The game client speaks `wss://` and
+  verifies both the certificate chain and the hostname; the edge answers a
+  plaintext request with a 301 a WebSocket client cannot follow, so a pre-TLS
+  build fails to connect rather than leaking its `host_token` and lobby `code` to
+  the path. Stranding those builds was deliberate — a compatibility window that
+  still accepted cleartext would have been the vulnerability. SECURITY.md S1 has
+  the full record, including how to verify the flip (the 301, not `/healthz`).
 - **No game data, no PII beyond a chosen display name.** State is soft, in-RAM,
   and evicted on disconnect/timeout — nothing is persisted.
 - **Authn is capability-based:** knowing a 6-char lobby `code` lets you join;

@@ -144,9 +144,14 @@
 //                                      value (the row fetches string id 25
 //                                      plus one more when dword_464824 is
 //                                      zero, pseudo.c 9280) — smallmemory==0
-//                                      shows "YES", ==1 shows "NO". No
-//                                      consumer (no memory-model concept in
-//                                      a modern build); round-trips.
+//                                      shows "YES", ==1 shows "NO". Not
+//                                      consumed by THIS port; the ORIGINAL
+//                                      does consume it — sub_42814B forces
+//                                      the sound cull's keep=1 for every
+//                                      range when it is set (docs/re/
+//                                      sound-engine.md §3), an arm this port
+//                                      deliberately does not mirror.
+//                                      Round-trips.
 //   18 Adjust Audio                  — SHOWN, PERMANENTLY UNREACHABLE (see
 //                                      the 18-row wrap-count note above) —
 //                                      drawn every
