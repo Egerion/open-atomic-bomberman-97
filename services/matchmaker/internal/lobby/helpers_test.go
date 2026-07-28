@@ -120,6 +120,13 @@ func decode[T any](t *testing.T, raw []byte) T {
 
 func newTestManager(t *testing.T) *Manager {
 	t.Helper()
+	return newTestManagerWithRelayLimits(t, relay.Limits{})
+}
+
+// newTestManagerWithRelayLimits is newTestManager with the relay's cost caps
+// dialled down, for the suites that need one of them to actually fire.
+func newTestManagerWithRelayLimits(t *testing.T, limits relay.Limits) *Manager {
+	t.Helper()
 	cfg := config.Config{
 		HeartbeatInterval: time.Second,
 		HeartbeatMiss:     3,
@@ -128,7 +135,7 @@ func newTestManager(t *testing.T) *Manager {
 		RelayIdle:         time.Minute,
 	}
 	log := zap.NewNop()
-	return NewManager(cfg, relay.NewTable(cfg.RelayIdle, log), log)
+	return NewManager(cfg, relay.NewTable(cfg.RelayIdle, limits, log), log)
 }
 
 func dispatchMap(m *Manager, c ClientConn, v map[string]any) {

@@ -41,6 +41,12 @@ type Config struct {
 	ConnIdleTimeout time.Duration // close a connection that holds no seat and says nothing
 	ClientIPHeader  string        // trusted edge header naming the real client IP ("" ⇒ off)
 
+	// Relay cost caps. The relay is the one component that spends the operator's
+	// money (README "Relay: bandwidth & cost"), and these are the two ceilings on
+	// it. Both refuse NEW allocations only — see relay.Limits.
+	MaxRelayAllocs int // concurrent relay allocations (2 per relayed match)
+	RelayBudgetGB  int // total relay egress budget for this PROCESS, in GB
+
 	// Shutdown (app.Run). DrainDelay is the pause between /readyz going down and
 	// the listener closing, so a load balancer has time to stop routing new
 	// connections here; ShutdownTimeout bounds the whole drain.
@@ -56,6 +62,40 @@ const (
 	kDefaultMaxConnsPerIP   = 16
 	kDefaultMaxLobbies      = 5000
 	kDefaultConnIdleTimeout = 120 * time.Second
+
+	// Both relay caps are sized off a MEASURED per-match rate, not a guess. Two
+	// real RollbackSessions over a metered transport send exactly 2 datagrams per
+	// peer per 20 Hz tick (an InputRange of 8+W bytes and a fixed 13-byte Hash),
+	// which for the 2-seat match a relay always carries is ~4.5 KB/s of BILLED
+	// egress — 56 B/peer/tick through the forwarder plus the 28 B of IPv4+UDP
+	// header the host charges for and this process never sees. That is ~16 MB per
+	// relayed match-hour. Latency barely moves it (+1 B/peer/tick per 100 ms of
+	// RTT, capped at the 8-tick prediction window) and loss moves it less than
+	// half a percent, so the whole plausible range is 16–17 MB/h.
+	//
+	// kDefaultMaxRelayAllocs is 256 rows = 128 concurrent relayed 2-seat matches
+	// (a relayed match is ALWAYS exactly two seats — the client refuses to relay
+	// anything bigger). It is chosen from the RATE that many matches imply rather
+	// than from the table's memory cost: 128 × 4.5 KB/s ≈ 573 KB/s ≈ 4.6 Mbit/s
+	// sustained, which is a credible ceiling for one small machine's NIC, and
+	// which would spend the whole default budget below in ~26 hours of full
+	// saturation. So the two caps agree rather than overlap: this one bounds the
+	// instantaneous rate, the other bounds the total. Observed use is single-digit
+	// concurrent lobbies and the relay is only the FALLBACK for those, so 128 sits
+	// two orders of magnitude above real traffic. It is well under -max-conns
+	// (2000) on purpose: every allocation needs a seated connection, so without a
+	// relay-specific cap the connection ceiling would be the only bound and it is
+	// far too loose to be one.
+	kDefaultMaxRelayAllocs = 256
+
+	// kDefaultRelayBudgetGB is deliberately generous: at the measured ~4.5 KB/s
+	// it is ~3300 relayed match-hours, which organic play cannot come near, so it
+	// never bites a real player. It is insurance against a runaway bug or
+	// deliberate abuse, NOT a monthly quota — the counter lives in RAM and starts
+	// again at zero on every deploy, restart or crash. SECURITY.md A7 states
+	// exactly what that does and does not promise, and names the Fly spend alert
+	// as the backstop no code in this process can be.
+	kDefaultRelayBudgetGB = 50
 
 	// kDefaultShutdownTimeout bounds the whole drain. It has to fit inside the
 	// platform's own SIGTERM→SIGKILL window (Fly's default is 5 s, extended by
@@ -94,10 +134,38 @@ func (c Config) WithDefaults() Config {
 	if c.ConnIdleTimeout == 0 {
 		c.ConnIdleTimeout = kDefaultConnIdleTimeout
 	}
+	if c.MaxRelayAllocs == 0 {
+		c.MaxRelayAllocs = kDefaultMaxRelayAllocs
+	}
+	if c.RelayBudgetGB == 0 {
+		c.RelayBudgetGB = kDefaultRelayBudgetGB
+	}
 	if c.ShutdownTimeout == 0 {
 		c.ShutdownTimeout = kDefaultShutdownTimeout
 	}
 	return c
+}
+
+// RelayEgressBudgetBytes converts the operator-facing GB figure into the bytes
+// the relay counts. GB is the unit the flag speaks because the number is an
+// egress allowance an operator reads off a hosting invoice, and "50" is a value
+// somebody can check at a glance where 53687091200 is not. It is a BINARY GB
+// (GiB, 1024³) — the larger reading, so the cap is never tighter than the
+// operator asked for.
+//
+// A negative budget (the documented "disabled") stays negative, which relay.Limits
+// reads as unlimited. The clamp stops a preposterous value from overflowing into
+// a NEGATIVE byte count, which would silently disable the very cap it was set to
+// tighten.
+func (c Config) RelayEgressBudgetBytes() int64 {
+	const gib = int64(1) << 30
+	if c.RelayBudgetGB < 0 {
+		return -1
+	}
+	if int64(c.RelayBudgetGB) > (1<<62)/gib {
+		return 1 << 62
+	}
+	return int64(c.RelayBudgetGB) * gib
 }
 
 // AdvertisedRelay is the "host:port" put in RelayAllocated. When -relay-advertise
@@ -144,6 +212,8 @@ func Parse(args []string) Config {
 	maxConnsPerIP := fs.Int("max-conns-per-ip", envInt("MATCHMAKER_MAX_CONNS_PER_IP", 0), "max concurrent WebSocket connections from one client IP (0 ⇒ default, <0 ⇒ unlimited)")
 	maxLobbies := fs.Int("max-lobbies", envInt("MATCHMAKER_MAX_LOBBIES", 0), "max live lobbies (0 ⇒ default, <0 ⇒ unlimited)")
 	connIdle := fs.Duration("conn-idle-timeout", envDur("MATCHMAKER_CONN_IDLE_TIMEOUT", 0), "close a seatless, silent connection after this long (0 ⇒ default, <0 ⇒ never)")
+	maxRelayAllocs := fs.Int("max-relay-allocs", envInt("MATCHMAKER_MAX_RELAY_ALLOCS", 0), "max concurrent relay allocations, 2 per relayed match (0 ⇒ default, <0 ⇒ unlimited)")
+	relayBudgetGB := fs.Int("relay-budget-gb", envInt("MATCHMAKER_RELAY_BUDGET_GB", 0), "total relay egress this PROCESS may forward, in GB; resets on restart (0 ⇒ default, <0 ⇒ unlimited)")
 	clientIPHeader := fs.String("client-ip-header", envStr("MATCHMAKER_CLIENT_IP_HEADER", ""), "trusted edge header carrying the real client IP, e.g. Fly-Client-IP (empty ⇒ use the socket peer)")
 	drainDelay := fs.Duration("drain-delay", envDur("MATCHMAKER_DRAIN_DELAY", kDefaultDrainDelay), "pause between /readyz going down and the listener closing, so a load balancer can stop routing here")
 	shutdownTimeout := fs.Duration("shutdown-timeout", envDur("MATCHMAKER_SHUTDOWN_TIMEOUT", 0), "bound on the whole graceful drain (0 ⇒ default)")
@@ -167,6 +237,8 @@ func Parse(args []string) Config {
 		MaxLobbies:        *maxLobbies,
 		ConnIdleTimeout:   *connIdle,
 		ClientIPHeader:    *clientIPHeader,
+		MaxRelayAllocs:    *maxRelayAllocs,
+		RelayBudgetGB:     *relayBudgetGB,
 		DrainDelay:        *drainDelay,
 		ShutdownTimeout:   *shutdownTimeout,
 	}.WithDefaults()

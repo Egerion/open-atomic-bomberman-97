@@ -78,7 +78,10 @@ func New(cfg config.Config, log *zap.Logger) (*App, error) {
 	// One allocation table, two owners: the control plane mints and frees
 	// entries, the UDP listener reads them. Constructed here so neither has to
 	// reach into the other.
-	relayTable := relay.NewTable(cfg.RelayIdle, log)
+	relayTable := relay.NewTable(cfg.RelayIdle, relay.Limits{
+		MaxAllocations:    cfg.MaxRelayAllocs,
+		EgressBudgetBytes: cfg.RelayEgressBudgetBytes(),
+	}, log)
 	a.mgr = lobby.NewManager(cfg, relayTable, log)
 
 	var err error
@@ -263,6 +266,15 @@ func (a *App) logStartup() {
 	a.log.Info("STUN echo listening", zap.String("addr", stunAddr))
 	a.log.Info("UDP relay listening", zap.String("addr", relayAddr),
 		zap.String("advertise", a.cfg.AdvertisedRelay()), zap.Duration("idle", a.cfg.RelayIdle))
+	// The relay is the only component that spends money, so its two cost caps
+	// are stated at startup next to the address they apply to. The budget is
+	// per-process and per-uptime: printing it here is also the reminder that it
+	// started again at zero when this line was written.
+	a.log.Info("relay cost caps (refuse NEW allocations only; a match already forwarding is never cut)",
+		zap.Int("max_relay_allocs", a.cfg.MaxRelayAllocs),
+		zap.Int("relay_budget_gb", a.cfg.RelayBudgetGB),
+		zap.Int64("relay_budget_bytes", a.cfg.RelayEgressBudgetBytes()),
+		zap.String("budget_scope", "this process only — resets on restart/deploy"))
 	if !config.HasRoutableHost(a.cfg.AdvertisedRelay()) {
 		// A wildcard listen address is not something a client can dial; without
 		// -relay-advertise every RelayAllocated would hand out a dead address.

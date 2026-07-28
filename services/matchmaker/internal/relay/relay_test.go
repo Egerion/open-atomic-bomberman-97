@@ -49,7 +49,7 @@ type fixture struct {
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	f := &fixture{code: "AAAAAA", now: time.Now()}
-	f.tbl = NewTable(time.Minute, testLogger())
+	f.tbl = NewTable(time.Minute, Limits{}, testLogger())
 	f.tbl.now = func() time.Time { return f.now }
 	var err error
 	if f.allocA, err = f.tbl.Allocate(f.code, 0); err != nil {
@@ -109,7 +109,7 @@ func TestAllocIDIsThirtyTwoHexCharsAndUnique(t *testing.T) {
 // ---- data plane: end-to-end forwarding ---------------------------------------
 
 func TestRelayForwardsEndToEnd(t *testing.T) {
-	tbl := NewTable(time.Minute, testLogger())
+	tbl := NewTable(time.Minute, Limits{}, testLogger())
 	srv, err := Start("127.0.0.1:0", tbl, testLogger())
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -187,7 +187,7 @@ func TestRelayForwardsEndToEnd(t *testing.T) {
 
 // A short datagram must not crash the listener or draw a reply.
 func TestRelayIgnoresShortDatagramOverUDP(t *testing.T) {
-	tbl := NewTable(time.Minute, testLogger())
+	tbl := NewTable(time.Minute, Limits{}, testLogger())
 	srv, err := Start("127.0.0.1:0", tbl, testLogger())
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -217,7 +217,7 @@ func TestRelayIgnoresShortDatagramOverUDP(t *testing.T) {
 // 3 KB packet ended the forwarder (as would an ICMP port-unreachable from a
 // peer that simply quit, which needs no attacker at all).
 func TestRelayStillForwardsAfterAnOversizedDatagram(t *testing.T) {
-	tbl := NewTable(time.Minute, testLogger())
+	tbl := NewTable(time.Minute, Limits{}, testLogger())
 	srv, err := Start("127.0.0.1:0", tbl, testLogger())
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -333,7 +333,7 @@ func TestRelayDropPaths(t *testing.T) {
 
 func TestRelayIdleExpiry(t *testing.T) {
 	now := time.Now()
-	tbl := NewTable(60*time.Second, testLogger())
+	tbl := NewTable(60*time.Second, Limits{}, testLogger())
 	tbl.now = func() time.Time { return now }
 
 	idA, err := tbl.Allocate("AAAAAA", 0)
@@ -376,7 +376,7 @@ func TestRelayIdleExpiry(t *testing.T) {
 
 func TestRelayIdleZeroDisablesExpiry(t *testing.T) {
 	now := time.Now()
-	tbl := NewTable(0, testLogger())
+	tbl := NewTable(0, Limits{}, testLogger())
 	tbl.now = func() time.Time { return now }
 	if _, err := tbl.Allocate("AAAAAA", 0); err != nil {
 		t.Fatalf("allocate: %v", err)

@@ -857,7 +857,22 @@ func (m *Manager) handleAllocateRelay(c ClientConn, raw []byte) {
 	}
 	allocID, err := m.relay.Allocate(lb.code, mem.seat)
 	if err != nil {
-		m.sendErr(c, "internal", "relay allocation failed")
+		// A cost cap (relay.Limits) refuses NEW allocations here; a match
+		// already forwarding is untouched, and a seat re-allocating its own
+		// existing handle still succeeds.
+		//
+		// IT TRAVELS AS THE EXISTING `internal` REFUSAL, DELIBERATELY. There is
+		// no "relay is full" code to reach for: PROTOCOL.md §6.1 is FROZEN and
+		// permits exactly not_in_lobby / bad_message / internal in answer to
+		// AllocateRelay, and a deployed client is written against that. Nothing
+		// is lost by reusing it, because the client does not branch on the code
+		// at all here — LobbyFlow::handle_server_message turns ANY Error
+		// arriving in Phase::Relaying into fail("RELAY UNAVAILABLE - CANNOT
+		// CONNECT"), which is the correct outcome and the same one an older
+		// server without a relay produces. The reason goes in `message`, which
+		// §4 defines as diagnostic text. Minting a new code would have been a
+		// one-sided change to a frozen contract for zero client-visible gain.
+		m.sendErr(c, "internal", relayRefusal(err))
 		return
 	}
 	c.Send(protocol.RelayAllocatedMsg{
@@ -866,6 +881,26 @@ func (m *Manager) handleAllocateRelay(c ClientConn, raw []byte) {
 		AllocID:   allocID,
 	})
 	m.log.Info("relay allocated", zap.String("code", lb.code), zap.Int("seat", mem.seat))
+}
+
+// relayRefusal is the diagnostic text for a refused allocation. It names the
+// cap that fired so an operator reading a player's screenshot can tell a cost
+// ceiling from a genuine fault, and it says nothing about how much budget is
+// left or how full the table is — a refused caller learns THAT it was refused,
+// never how close it got.
+//
+// The relay logs the refusals itself, aggregated; nothing is logged here,
+// because AllocateRelay is a frame a client can repeat at its own rate and rule
+// 4 of SECURITY.md says untrusted input never sets the log's pace.
+func relayRefusal(err error) string {
+	switch {
+	case errors.Is(err, relay.ErrEgressBudget):
+		return "relay egress budget exhausted"
+	case errors.Is(err, relay.ErrAllocationLimit):
+		return "relay is at its allocation capacity"
+	default:
+		return "relay allocation failed"
+	}
 }
 
 // handleChat relays one typed line to the sender's own lobby (§7).
