@@ -208,14 +208,62 @@ routes through a public-IP forwarder on the server.
 `RelayedTransport` implements the `Transport` interface: `send()` prepends
 `alloc_id` and aims at `relay_addr`; `poll()` strips the header. **The
 `RollbackSession` above it is byte-for-byte identical to the direct-P2P case** —
-relay vs direct is one `Transport` swap decided by the `Rendezvous` outcome. The
-relay never inspects the payload (it forwards opaque `libs/net` datagrams), so it
-still "never simulates."
+relay vs direct is one `Transport` swap. The relay never inspects the payload (it
+forwards opaque `libs/net` datagrams), so it still "never simulates."
 
 Cost (ADR-0011 Risks): relayed matches put *all* per-tick traffic through the
 server for the match's whole duration; bandwidth = concurrent relayed matches ×
 seats × per-tick frame size. This is the expensive, ops-heavy component and the
 reason relay is a later phase.
+
+### 4.1 The swap is NOT decided by the `Rendezvous` outcome
+
+It used to be, and that was a bug — a live one, match `9V9BHE`, Turkey ↔
+Lithuania. The punch's verdict is **per-peer and unsynchronised**: the 2-peer
+`Rendezvous` declares `Connected` on receiving the PONG for its own PING, which
+is a genuine round-trip proof *for the peer that received it* and says nothing
+about whether the other peer completed its own round before `kPunchTimeoutMs`.
+Worse, the winner then went **silent** — `LobbyFlow` stops pumping the punch once
+it is connected, and `Rendezvous::step()` returns early when it is no longer
+`Punching` — so the peer's still-in-flight PINGs stopped being echoed and its
+failure became self-fulfilling. One peer played direct; the other asked for a
+relay allocation the first never made; every datagram it pushed into the relay
+was discarded for want of a destination (`drop_unknown_dst`). The match connected
+and delivered 147 bytes.
+
+`AllocateRelay` is answered **only to the sender** (PROTOCOL.md §6 is frozen and
+carries no broadcast that could tell the other seat), so the peers have to
+converge by themselves. They do it with a **mutual path verification** between
+the punch and the match (`libs/net/link_probe.hpp`, `Phase::Verifying`):
+
+    MsgType::Probe { nonce, seen_peer }, over the CHOSEN Transport
+
+    receiving a probe            ⇒ peer→me carries
+    receiving one with seen_peer ⇒ me→peer carries too
+
+Both together are `verified()`, and only a verified path is handed to the match
+layer. Three properties make it converge rather than merely usually work:
+
+1. **The probe answers hole-punch PINGs.** Whoever is verifying is still on the
+   air for a peer that is still punching, so the winner's silence can no longer
+   starve it. Most of the production failure never happens now.
+2. **A direct path that does not verify escalates to the relay**, on a budget
+   measured from the *punch's* start so it outlasts the peer's own punch window.
+3. **The relay is absorbing.** Nobody ever leaves it, so a peer that goes there
+   makes the other's direct verification fail, which sends it to the relay too.
+   The relay's own verification just waits for the other seat to allocate.
+
+`Transport` is the seam that makes this invisible: which one delivers changes,
+the session above never sees it (determinism rule 1).
+
+**Residual, honestly stated.** The peer that completes the exchange last cannot
+know its final probe arrived — the two-generals shape, which TCP answers with
+TIME_WAIT and this answers with `kProbeLingerMs` of continued probing after
+mutual proof. Losing *every* probe in that window still splits the pair, and past
+`Phase::Ready` there is no detector: `LobbyFlow` is pumped through the setup
+screens but not during the match, and setup traffic is host→guest only, so
+"silence" is not a valid signal there. Closing that fully needs a guest-side
+keepalive in `SetupSession` plus a late transport swap behind an indirection.
 
 ---
 
@@ -232,7 +280,11 @@ reason relay is a later phase.
      │  (host only) all ready & press Start → StartMatch
      │  receive StartMatch(seed, seats, …)
      ▼
-    RENDEZVOUS  (gather candidates → §2 STUN → §3 punch → §4 relay if needed)
+    RENDEZVOUS  (gather candidates → §2 STUN → §3 punch)
+     │
+     ▼
+    VERIFYING   (§4.1 mutual probe over the chosen path; not carrying → §4 relay,
+     │           which is absorbing: the relay verifies but never escalates)
      │  Transport ready → SeedHandshake(seed) → build_hash Hello check
      │  build mismatch / unreachable → error → IN_LOBBY (or IDLE)
      ▼

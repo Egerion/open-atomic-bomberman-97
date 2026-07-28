@@ -576,7 +576,13 @@ LobbyRoomResult LobbyScreen::run_online(net::LobbyFlow& flow, ChatOverlay& chat,
                                     ok_label, kDialogInkR, kDialogInkG, kDialogInkB);
         } else if (flow.phase() == net::LobbyFlow::Phase::InLobby) {
             draw_room(ctx_, flow, local_ready, max_seats);
-        } else if (flow.phase() == net::LobbyFlow::Phase::Rendezvous) {
+        } else if (flow.phase() == net::LobbyFlow::Phase::Rendezvous ||
+                   flow.phase() == net::LobbyFlow::Phase::Verifying ||
+                   flow.phase() == net::LobbyFlow::Phase::Relaying) {
+            // One prompt for the whole connect step. Which path won — punched,
+            // or forwarded after the punch failed — is not the player's problem,
+            // and Verifying is where a one-sided punch is now caught and
+            // rerouted rather than becoming a match that carries nothing.
             draw_acknowledge_dialog(ctx_.sdl, ctx_.front_font, winz, "STARTING MATCH",
                                     "CONNECTING TO PLAYERS...", ok_label, kDialogInkR, kDialogInkG,
                                     kDialogInkB);

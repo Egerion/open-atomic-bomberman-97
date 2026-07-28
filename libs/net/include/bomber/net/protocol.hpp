@@ -28,7 +28,8 @@ enum class MsgType : std::uint8_t {
     Drop = 5,
     SetupPreview = 6,
     SetupChunk = 7,
-    SetupAck = 8
+    SetupAck = 8,
+    Probe = 9
 };
 
 // A peer's claimed Simulation::hash() at the end of tick `tick_index`. The
@@ -61,6 +62,23 @@ struct HelloFrame {
 struct PunchFrame {
     std::uint32_t nonce = 0;
     bool is_pong = false;
+};
+
+// One PATH-VERIFICATION probe (link_probe.hpp). The punch proves a path to the
+// peer that RECEIVED the pong; it proves nothing about whether the peer reached
+// the same conclusion before its own deadline, and a peer that decides
+// differently ends up on a transport the other one is not on. The probe is the
+// mutual half: it runs over the CHOSEN Transport (direct socket or relay) and
+// both ends must agree before the match layer is handed anything.
+//
+// `nonce` is the sender's per-seat punch nonce, so a reflected copy of our own
+// datagram (the star hub reflects) is recognised and ignored. `seen_peer` is the
+// whole protocol: "I have already received a datagram from you on this path".
+// Receiving a probe proves peer→me; receiving one with seen_peer set proves
+// me→peer as well, which is the mutual proof neither side can derive alone.
+struct ProbeFrame {
+    std::uint32_t nonce = 0;
+    bool seen_peer = false;
 };
 
 // The peer-drop control message (ADR-0011 Risks, "Dropped/late peers"): the
@@ -183,6 +201,7 @@ struct Message {
     HashFrame hash;
     HelloFrame hello;
     PunchFrame punch;
+    ProbeFrame probe;
     DropFrame drop;
     SetupPreviewFrame setup_preview;
     SetupChunkFrame setup_chunk;
@@ -211,6 +230,10 @@ std::vector<std::uint8_t> encode_hello(std::uint32_t seed, bool is_ack);
 // [MsgType::Punch][nonce u32-LE][is_pong u8] — 6 bytes. A hole-punch PING
 // (is_pong=false) or the PONG echo of one (is_pong=true, same nonce).
 std::vector<std::uint8_t> encode_punch(std::uint32_t nonce, bool is_pong);
+
+// [MsgType::Probe][nonce u32-LE][seen_peer u8] — 6 bytes. A path-verification
+// probe over the chosen Transport (link_probe.hpp).
+std::vector<std::uint8_t> encode_probe(std::uint32_t nonce, bool seen_peer);
 
 // [MsgType::Drop][seat u8][at_tick u32-LE] — 6 bytes. Decode rejects a seat
 // index outside [0, sim::kMaxPlayers).

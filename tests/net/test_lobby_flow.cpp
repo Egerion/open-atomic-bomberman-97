@@ -10,13 +10,17 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "bomber/net/lobby_client.hpp"
 #include "bomber/net/lobby_flow.hpp"
+#include "bomber/net/relayed_transport.hpp"
 #include "bomber/net/udp_transport.hpp"
 
 using namespace bomber::net;  // NOLINT(google-build-using-namespace) — test-local
@@ -70,6 +74,87 @@ LobbyServerMessage chat_from(int seat, const std::string& name, const std::strin
     m.chat_text = text;
     return m;
 }
+
+LobbyServerMessage relay_allocated(const std::string& addr, const std::string& alloc_id) {
+    LobbyServerMessage m;
+    m.type = LobbyMsgType::RelayAllocated;
+    m.relay_addr = addr;
+    m.alloc_id = alloc_id;
+    return m;
+}
+
+// A stand-in for services/matchmaker's UDP forwarder, faithful in the ONE
+// respect the asymmetric case turns on: a datagram whose DESTINATION seat holds
+// no allocation is DROPPED and counted. That counter is `drop_unknown_dst` in
+// internal/relay/relay.go's Table.Forward, and it is what the production logs
+// showed climbing while `forwarded` sat at seven datagrams — one seat had a
+// relay handle and the other never asked for one.
+class FakeRelay {
+public:
+    explicit FakeRelay(UdpTransport& socket) : socket_(&socket) {}
+
+    // Mint a handle for one seat and return its 32-hex control-plane form.
+    std::string allocate(int seat) {
+        Alloc a;
+        a.seat = seat;
+        a.id.fill(static_cast<std::uint8_t>(0xA0 + seat));
+        allocs_.push_back(a);
+        static const char* kHex = "0123456789abcdef";
+        std::string out;
+        for (const std::uint8_t byte : a.id) {
+            out.push_back(kHex[byte >> 4]);
+            out.push_back(kHex[byte & 0x0FU]);
+        }
+        return out;
+    }
+
+    // Forward everything currently queued. Learns each seat's return path off its
+    // own datagrams, exactly as the real forwarder does.
+    void pump() {
+        std::vector<std::uint8_t> in;
+        std::string ip;
+        std::uint16_t port = 0;
+        while (socket_->poll_from(&in, &ip, &port)) {
+            if (in.size() <= kRelayHeaderBytes) continue;
+            Alloc* from = nullptr;
+            for (Alloc& a : allocs_)
+                if (std::equal(a.id.begin(), a.id.end(), in.begin())) from = &a;
+            if (from == nullptr) continue;
+            from->ip = ip;
+            from->port = port;
+            from->known = true;
+
+            const int dst_seat = in[kRelayAllocIdBytes];
+            Alloc* to = nullptr;
+            for (Alloc& a : allocs_)
+                if (a.seat == dst_seat) to = &a;
+            if (to == nullptr) {
+                ++drop_unknown_dst_;  // the production symptom, reproduced
+                continue;
+            }
+            if (!to->known) continue;
+
+            std::vector<std::uint8_t> out(to->id.begin(), to->id.end());
+            out.push_back(static_cast<std::uint8_t>(from->seat));
+            out.insert(out.end(), in.begin() + kRelayHeaderBytes, in.end());
+            socket_->send_to(to->ip, to->port, out.data(), out.size());
+        }
+    }
+
+    int drop_unknown_dst() const { return drop_unknown_dst_; }
+
+private:
+    struct Alloc {
+        std::array<std::uint8_t, kRelayAllocIdBytes> id{};
+        std::string ip;
+        int seat = 0;
+        std::uint16_t port = 0;
+        bool known = false;
+    };
+    UdpTransport* socket_;
+    std::vector<Alloc> allocs_;
+    int drop_unknown_dst_ = 0;
+};
 
 LobbyFlow::Config test_config(const std::string& name, std::uint16_t sink_port) {
     LobbyFlow::Config c;
@@ -386,6 +471,103 @@ TEST_CASE("three LobbyFlows form the star: hub punches both guests, frames refle
     CHECK(at_g2);
 }
 
+TEST_CASE("an ASYMMETRIC punch outcome still converges on a path that carries") {
+    // THE PRODUCTION BUG (match 9V9BHE, Turkey <-> Lithuania). The punch decision
+    // is per-peer and unsynchronised: one side can hold a genuine round-trip
+    // proof while the other's own proof never lands, so one played direct and the
+    // other asked for a relay handle its partner never made. The matchmaker's
+    // logs told the whole story — "relay allocated seat=0" exactly once, then
+    // `drop_unknown_dst` climbing while `forwarded` stayed at 7 datagrams.
+    //
+    // Modelled here by giving ONE peer a black hole for its partner's address:
+    // A can reach B, B can never reach A, so A's punch completes and B's cannot,
+    // however long it tries. What must happen is that BOTH ends end up somewhere
+    // a datagram actually crosses — asserted at the bottom by crossing one.
+    //
+    // The symmetric cases (both punch, both fail) passed before this fix and
+    // still do; this is the case that did not exist.
+    UdpTransport ta;
+    UdpTransport tb;
+    UdpTransport relay_sock;
+    UdpTransport black_hole;  // bound and silent: reachable, never answers
+    UdpTransport sink;
+    if (!ta.bind(0) || !tb.bind(0) || !relay_sock.bind(0) || !black_hole.bind(0) || !sink.bind(0)) {
+        MESSAGE("UDP sockets unavailable in this environment; skipping");
+        return;
+    }
+    LobbyClient ca;
+    LobbyClient cb;
+    LobbyFlow a(test_config("Ege", sink.local_port()), ta, ca);
+    LobbyFlow b(test_config("Ada", sink.local_port()), tb, cb);
+
+    a.handle_server_message(lobby_created("9V9BHE", 0));
+    b.handle_server_message(join_accepted(1));
+    a.handle_server_message(peer_candidates(1, "127.0.0.1:" + std::to_string(tb.local_port())));
+    b.handle_server_message(
+        peer_candidates(0, "127.0.0.1:" + std::to_string(black_hole.local_port())));
+    a.handle_server_message(start_match(0xC0FFEEu, 0b01));
+    b.handle_server_message(start_match(0xC0FFEEu, 0b10));
+
+    // The test plays matchmaker: it answers each AllocateRelay the flow decides
+    // to send, exactly as handleAllocateRelay does — only to the sender, with no
+    // push telling the other seat anything (PROTOCOL.md is frozen; the fix is
+    // client-side or it does not exist).
+    FakeRelay forwarder(relay_sock);
+    const std::string relay_addr = "127.0.0.1:" + std::to_string(relay_sock.local_port());
+    bool a_allocated = false;
+    bool b_allocated = false;
+
+    std::int64_t now = 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(40);
+    while ((a.phase() != LobbyFlow::Phase::Ready || b.phase() != LobbyFlow::Phase::Ready) &&
+           a.phase() != LobbyFlow::Phase::Failed && b.phase() != LobbyFlow::Phase::Failed &&
+           std::chrono::steady_clock::now() < deadline) {
+        a.step(now);
+        b.step(now);
+        if (!a_allocated && a.phase() == LobbyFlow::Phase::Relaying) {
+            a_allocated = true;
+            a.handle_server_message(relay_allocated(relay_addr, forwarder.allocate(0)));
+        }
+        if (!b_allocated && b.phase() == LobbyFlow::Phase::Relaying) {
+            b_allocated = true;
+            b.handle_server_message(relay_allocated(relay_addr, forwarder.allocate(1)));
+        }
+        forwarder.pump();
+        now += 20;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    INFO("a=" << static_cast<int>(a.phase()) << " '" << a.error() << "' b="
+              << static_cast<int>(b.phase()) << " '" << b.error() << "' at t=" << now);
+    REQUIRE(a.phase() == LobbyFlow::Phase::Ready);
+    REQUIRE(b.phase() == LobbyFlow::Phase::Ready);
+
+    // Both, not one: converging means the peer that WON its punch followed the
+    // one that could not, because the relay is the only path neither ever leaves.
+    CHECK(a.is_relayed());
+    CHECK(b.is_relayed());
+    // And the failure really was reproduced on the way: datagrams aimed at a seat
+    // that had not allocated yet were dropped, precisely as in production. The
+    // difference is that it no longer stays that way.
+    CHECK(forwarder.drop_unknown_dst() > 0);
+
+    // The assertion the old code could never have satisfied: a datagram put in at
+    // one end comes out at the other. A match that "connects" and carries nothing
+    // is what the logs recorded.
+    const std::vector<std::uint8_t> payload = {0xBE, 0xEF};
+    std::vector<std::uint8_t> got;
+    bool crossed = false;
+    const auto d2 = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!crossed && std::chrono::steady_clock::now() < d2) {
+        a.transport().send(payload.data(), payload.size());
+        forwarder.pump();
+        while (b.transport().poll(&got))
+            if (got == payload) crossed = true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    CHECK(crossed);
+}
+
 TEST_CASE("two LobbyFlows punch each other and both reach Ready") {
     UdpTransport ta;
     UdpTransport tb;
@@ -418,7 +600,8 @@ TEST_CASE("two LobbyFlows punch each other and both reach Ready") {
 
     std::int64_t now = 0;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-    while ((a.phase() == LobbyFlow::Phase::Rendezvous || b.phase() == LobbyFlow::Phase::Rendezvous) &&
+    while ((a.phase() != LobbyFlow::Phase::Ready || b.phase() != LobbyFlow::Phase::Ready) &&
+           a.phase() != LobbyFlow::Phase::Failed && b.phase() != LobbyFlow::Phase::Failed &&
            std::chrono::steady_clock::now() < deadline) {
         a.step(now);
         b.step(now);
