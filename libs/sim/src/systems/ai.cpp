@@ -41,18 +41,32 @@ void AISystem::write_move(PlayerInput& out, int godir) {
     }
 }
 
-// The bomb-key edge (+56=1; +54=0 in the original) -> action1. player_turn's drop
-// block is edge-gated on action1 && !prev_action1; the AI never sets prev_action1
-// itself, so a single-tick action1=true is a fresh press (docs/re/ai.md §7).
-void AISystem::press_bomb(PlayerInput& out) {
+// The bomb-key edge -> action1. player_turn's drop block is edge-gated on
+// action1 && !prev_action1, and the original's behaviours write BOTH halves of
+// that test themselves: `+56 = 1` AND `+54 = 0` (docs/re/ai.md §7, facts.md
+// "AI key presses manufacture their own edge"). Clearing prev_action1 is the
+// +54 write — it is what lets a behaviour that fires on back-to-back frames
+// keep producing edges instead of holding a key nothing can re-trigger.
+void AISystem::press_bomb(int i, PlayerInput& out) {
     out.action1 = true;
+    s_.players[i].prev_action1 = false;  // the original's +54 = 0
 }
 
-// The action-key edge (+57=1; +55=0 in the original) -> action2. player_turn's
-// action block is edge-gated on action2 && !prev_action2, so a single-tick
-// action2=true is a fresh press routed to punch (+91) / trigger (+95). The AI
-// never sets prev_action2 itself (docs/re/ai.md §7).
-void AISystem::press_action(PlayerInput& out) {
+// The bomb-key release (+56 = 0; +54 = 0) — behaviour 0's carrying branch.
+void AISystem::release_bomb(int i, PlayerInput& out) {
+    out.action1 = false;
+    s_.players[i].prev_action1 = false;  // the original's +54 = 0
+}
+
+// The action-key edge (+57 = 1; +55 = 0) -> action2, routed to punch (+91) /
+// trigger (+95). Behaviour 1 only; see press_action_sustained for behaviour 2.
+void AISystem::press_action(int i, PlayerInput& out) {
+    out.action2 = true;
+    s_.players[i].prev_action2 = false;  // the original's +55 = 0
+}
+
+// The action key set WITHOUT the paired +55 clear — behaviour 2's whim alone.
+void AISystem::press_action_sustained(PlayerInput& out) {
     out.action2 = true;
 }
 
