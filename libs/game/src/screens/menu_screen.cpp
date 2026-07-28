@@ -211,7 +211,14 @@ AppInput MenuScreen::run() {
             // present_video_settings). Not an RE'd key — a port entry point that
             // keeps the modern video/cadence toggles off the faithful Options
             // screen. Ignored while the quit-confirm modal is up.
+            //
+            // It still blips. sub_42B9CE fires sub_427961(20) @0x42BB2E for
+            // EVERY real key before its dispatch (0x42BBCC), and F10 (raw 0x144)
+            // is simply unmapped there — it falls to the default arm, which
+            // resets the Ctrl+E counter and loops. An unmapped key clicking is
+            // the original's behaviour; this early `continue` used to swallow it.
             if (!quit_confirm && ev.key.key == SDLK_F10) {
+                ctx_.audio.play(20);
                 VideoSettingsScreen(ctx_, {.uncap_fps = &state_.uncap_fps,
                                            .native_cadence = &state_.native_cadence,
                                            .show_fps = &state_.show_fps,

@@ -15,19 +15,20 @@ void Screen::enter(const ScreenDef& def, std::uint64_t now_ms) {
 }
 
 bool Screen::on_key(SDL_Keycode key) {
-    // sub_42A088's wait loop: ANY real key first plays the nav blip (SOUNDLST
-    // 20 == sub_427961(20)). Only the three accept keys Enter / Space / Escape
-    // additionally play the accept sting (SOUNDLST 10 == sub_427961(10)) and end
-    // the wait; every other key just blips and keeps the screen up. (In the
-    // original, Escape/Enter/Space are the codes that reach the sound(10) accept
-    // path; higher codes exit the wait without an accept — we model that as
-    // "not accepted, no finish", collapsing to the same visible result: the
-    // screen only advances on a real accept or the dwell timeout.)
+    // See WaitLoop for where each of these three behaviours is in the binary.
     const bool accept = key == SDLK_RETURN || key == SDLK_KP_ENTER || key == SDLK_SPACE ||
                         key == SDLK_ESCAPE;
+    if (def_.wait == WaitLoop::TimedCut) {
+        // No key loop at all under a timed cut — the display is a blocking
+        // delay. Report the accept so the caller can still route an Escape,
+        // but make no sound the original does not make.
+        if (accept && def_.skippable) done_ = true;
+        return accept;
+    }
     audio_->play(20);
     if (accept) {
-        audio_->play(10);
+        const bool silent_escape = def_.wait == WaitLoop::RoundEnd && key == SDLK_ESCAPE;
+        if (!silent_escape) audio_->play(10);
         if (def_.skippable) done_ = true;
     }
     return accept;
@@ -35,18 +36,24 @@ bool Screen::on_key(SDL_Keycode key) {
 
 void Screen::update(std::uint64_t now_ms) {
     ++frame_;
-    // Dwell timeout == the original's getvalue(12) attract auto-advance. In
-    // sub_42A088's wait loop the timeout does NOT just exit: it forces key=13
-    // (Enter), which then falls through the SAME sound path a real accept takes
-    // — `if (key != -1 && key != -2) sub_427961(20)` fires the nav blip, then
-    // the key==13 branch reaches `sub_427961(10)`. So the synthesized-Enter
-    // auto-advance plays BOTH SFX 20 (blip) and SFX 10 (accept), exactly like a
-    // manual keypress. We reproduce that here so the dwell advance is audible,
-    // not silent. (The blip/accept are one-shot SFX voices, so the looping boot
-    // music is untouched — only the screen ends.)
+    // Dwell timeout: both loops implement it by forcing key = 13 (Enter) and
+    // letting it fall through the ordinary accept path, but they do it at
+    // DIFFERENT POINTS, and that changes what you hear.
+    //
+    // sub_42A088 overrides FIRST (0x42A117) and only then tests the key against
+    // the -1/-2 no-key codes (0x42A11E), so the synthesized 13 is seen as a real
+    // key: the blip fires, then the accept sting. Both, exactly like a manual
+    // press.
+    //
+    // The round-end loops read the key and blip on it (0x42A73F-0x42A75A /
+    // 0x42ADE9-0x42AE04) and only override AFTERWARDS (0x42A79D / 0x42AE4C). On
+    // an idle dwell the real key was -1, so the blip is SKIPPED and the accept
+    // sting plays alone. The port used to play both on every screen.
     if (def_.dwell_ms != 0 && !done_ && now_ms - entered_ms_ >= def_.dwell_ms) {
-        audio_->play(20);
-        audio_->play(10);
+        if (def_.wait != WaitLoop::TimedCut) {
+            if (def_.wait == WaitLoop::AssetScreen) audio_->play(20);
+            audio_->play(10);
+        }
         done_ = true;
     }
 }

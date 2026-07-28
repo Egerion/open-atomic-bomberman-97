@@ -33,6 +33,32 @@ struct ScreenOverlay {
     int x = 0, y = 0;                  // top-left blit origin (screen space)
 };
 
+// WHICH wait loop the original puts this picture behind. All three show the
+// image the same way (sub_42A088 blits and cuts — no wipe); they differ only in
+// what they do afterwards, and that difference is entirely audible.
+//
+// The port ran every screen on the first rule, which invented an Escape sting
+// on DRAW, an auto-advance blip on the round-end screens, and a whole key
+// handler on VICTORY, where the original reads no key at all.
+enum class WaitLoop : std::uint8_t {
+    // sub_42A088(name, 1) — the routine's OWN wait loop (boot logos, TITLE).
+    // Blip 20 on any real key. Escape is one of its three accept codes
+    // (0x42A136-0x42A155 admits 27, 32 and 13), so it stings like Enter. The
+    // getvalue(12) timeout is applied at 0x42A117, BEFORE the -1/-2 no-key test
+    // at 0x42A11E, so an auto-advance is seen as a real Enter: blip AND sting.
+    AssetScreen,
+    // sub_42A3F6's own round-end loops — DRAW at 0x42A73A, the RESULTS tally at
+    // 0x42ADE9. Same blip on any real key, but Escape (0x42A7EF / 0x42AE9E)
+    // only sets the abort flag `dword_464A68 = 2` and leaves: no sting. And the
+    // 6 s timeout is applied at 0x42A79D / 0x42AE4C, AFTER the blip test, so an
+    // idle auto-advance blips not at all and plays the accept sting alone.
+    RoundEnd,
+    // sub_42A088(name, 0) followed by a blocking sub_413CB0 delay — the
+    // VICTORY/TEAM tail at 0x42AF80. No key is read for the whole display, so
+    // nothing here can make a sound: not a keypress, not the timeout.
+    TimedCut,
+};
+
 // The declarative description of a screen. Enough to render title/logo/results
 // with no per-screen code; a polished interactive screen keeps this as its
 // backdrop and adds its own input handling on top.
@@ -44,6 +70,7 @@ struct ScreenDef {
     // resolution-independent. 0 = wait indefinitely for a key.
     std::uint32_t dwell_ms = 0;
     bool skippable = true;             // an accept key may cut the dwell short
+    WaitLoop wait = WaitLoop::AssetScreen;
 };
 
 // A running screen. draw() blits background + overlays each frame; the app
@@ -58,13 +85,14 @@ public:
     // started once for the whole boot chain, not per screen (see header note).
     void enter(const ScreenDef& def, std::uint64_t now_ms);
 
-    // A key was pressed while this screen is up. Mirrors the sub_42A088 wait
-    // loop's key handling exactly: ANY real key plays the nav blip (SOUNDLST 20,
-    // sub_427961(20)); the accept keys Enter / Space / Escape additionally play
-    // the accept sting (SOUNDLST 10, sub_427961(10)) and, on a skippable screen,
-    // finish it. Music is never stopped by a skip — only the screen changes.
-    // Returns true iff this key was an accept (Enter/Space/Escape), so the caller
-    // can distinguish an Escape "back" from an Enter/Space "advance".
+    // A key was pressed while this screen is up. ANY real key plays the nav blip
+    // (SOUNDLST 20, sub_427961(20)) — both wait loops agree on that. Enter and
+    // Space additionally play the accept sting (SOUNDLST 10) and, on a skippable
+    // screen, finish it. Escape finishes either way but only stings on a
+    // NON-round-end screen (see ScreenDef::round_end). Music is never stopped by
+    // a skip — only the screen changes. Returns true iff this key was an accept
+    // (Enter/Space/Escape), so the caller can distinguish an Escape "back" from
+    // an Enter/Space "advance".
     bool on_key(SDL_Keycode key);
 
     // Advance the frame counter (call once per rendered frame) and re-evaluate

@@ -21,6 +21,28 @@ void SoundDirector::on_tick(const sim::State& s) {
     for (const auto& ev : s.events) {
         switch (ev.type) {
             case sim::Event::Type::BombPlaced: {
+                // THE SPOOGER RUN IS SILENT — the whole block below belongs to
+                // the PLAIN drop only. sub_41F29B's spooge loop (0x420AAE-
+                // 0x420B6E) walks one tile at a time in the facing direction and
+                // its ONLY call is the bomb constructor sub_41EB13 (@0x420B69);
+                // every one of its four exits (occupied tile / powerup / blocked /
+                // allotment spent) jumps to 0x420B73, which jumps to 0x420CEC —
+                // PAST the entire sound block at 0x420C26-0x420CC1 (the 40 buzz,
+                // the 1200 taunt, the 550 splat and the 100 drop). So a spooged
+                // string of bombs makes no noise at all, however long it is. The
+                // port used to fire a drop SFX per bomb in the string, which under
+                // the 5-voice cap also swallowed everything else in that frame.
+                //
+                // Telling the two apart WITHOUT a sim change: the original's own
+                // arithmetic separates them. The plain drop places at the player's
+                // OWN tile (sub_41F29B's drop branch reads the player's cell);
+                // the spooge loop advances `cx += dx` BEFORE its first placement,
+                // so it can never target the tile the player stands on. Compare
+                // the event's tile against the player's and take the run as silent.
+                if (ev.player >= 0 && ev.player < sim::kMaxPlayers) {
+                    const sim::Player& layer = s.players[ev.player];
+                    if (layer.tile_x() != ev.x || layer.tile_y() != ev.y) break;
+                }
                 // "Fire In The Hole" taunt (docs/re/id-audit.md item 1; VALUELST
                 // 650/651, SOUNDLST 1200 group; sub_41F29B pseudo.c ~23360-23368,
                 // the plain single-bomb-drop path — the file's own comment reads
@@ -44,13 +66,11 @@ void SoundDirector::on_tick(const sim::State& s) {
                 // incremented by BombSystem::place before this event, equals
                 // max_bombs) rolls a 1-in-id-650 chance. Layering: the counter
                 // reads straight off the already-hashed sim state the event
-                // carries (no new State field), and the roll uses AudioEngine's
+                // carries (no new State field), and the roll uses the sink's
                 // RNG, never State::rng (determinism contract rule 6) — purely
-                // cosmetic, no golden impact. Not gated to the single-drop-only
-                // path the original uses (spooge's multi-drop loop shares
-                // BombSystem::place and could also complete the cap) — an
-                // unobservable, cosmetic-only widening, not worth a new event
-                // field to disambiguate.
+                // cosmetic, no golden impact. The spooge run can no longer reach
+                // it: the plain-drop gate above returns first, matching the
+                // original's jump PAST this whole block (0x420B73 -> 0x420CEC).
                 //
                 // SOUNDLST correction: id-audit.md described 1200-1203 ("clear/
                 // fireinh/lookout/litemup") as the taunt and 1204+ as an
@@ -149,22 +169,42 @@ void SoundDirector::on_tick(const sim::State& s) {
                 // group walk reaches them. See docs/re/sound-engine.md.
                 audio_.play(170);
                 break;
+            // THE TWO SILENT BOMB EVENTS. Grouped because they behave
+            // identically (nothing), but they are silent for different reasons.
+            //
+            // BombThrown: the carried-bomb RELEASE in sub_41F29B's +37 block
+            // (~0x41F3E5) launches the held bomb via sub_424987 with NO
+            // sub_427961 call, so throwing makes no sound at the release
+            // instant. (No call site names 171-175, but they are NOT dead
+            // assets: they sit inside the 170 "grab" group's contiguous run, so
+            // the grab pick reaches them — see BombGrabbed above.) The audible
+            // part of a throw is the in-flight/settle "bmdrop3" (160), emitted
+            // as BombBounced from the flight code — verified by an exhaustive
+            // sub_42331C census: its only calls are 160 (fly, case 2), 130 (kick
+            // stop, NOT flying), 200 (explode), 120 (kick). A thrown bomb
+            // therefore never plays 130.
+            //
+            // HeadHit: SETTLED 2026-07-28, closing the contested item. SOUNDLST
+            // 360-363 (bombhit1..4) is a real, loaded group that NOTHING ever
+            // asks for. An exhaustive byte-level scan of every `call rel32` in
+            // BEGTEXT finds 87 direct calls into the play primitives (70 x
+            // sub_427961, 4 x sub_427BFB, 2 x sub_4278F2, 1 x sub_427ABB, plus
+            // the internals) and not one names 360-363. The five sites whose id
+            // is not a literal are all accounted for: 3000+50*disease
+            // (0x41E03B), the powerup local (0x41E549 — its only four writers
+            // store -1, 400, 135, 1400), sub_427ABB forwarding its own argument
+            // (0x427B13), the death overlay 340+field (0x41DDE4) and the wall
+            // slam 140+rand%3 (0x426A55). No indirect path exists either: the
+            // literal address of sub_427961, or of any sibling primitive,
+            // appears NOWHERE in the image, code or data, so there is no
+            // function-table dispatch the scan could have stepped over. And
+            // sub_421F7E, the head-hit handler itself, makes no audio call at
+            // all. The 2026-07-27 note that "widened" this group from 360-362 to
+            // 360-363 answered the wrong question — the range was never the
+            // issue, the CALL was. Do not re-add a cue here;
+            // tests/audio/test_sound_director.cpp pins both silences.
             case sim::Event::Type::BombThrown:
-                // Silent by design. The carried-bomb RELEASE in sub_41F29B's +37
-                // block (~0x41F3E5) launches the held bomb via sub_424987 with NO
-                // sub_427961 call — throwing plays no sound at the release instant.
-                // (No call site names 171-175, but they are NOT dead assets: they
-                // sit inside the 170 "grab" group's contiguous run, so the grab
-                // pick reaches them. See BombGrabbed below.)
-                // The audible part of a throw is the in-flight/settle "bmdrop3"
-                // (160), emitted as BombBounced from the flight code — verified by
-                // an exhaustive sub_42331C sound census: its only calls are
-                // 160 (fly, case 2), 130 (kick stop, NOT flying), 200 (explode),
-                // 120 (kick). A thrown bomb therefore never plays 130.
-                break;
-            // 360 is a FOUR-member group (bombhit1..4) — the old 360..362 range
-            // silently dropped bombhit4.
-            case sim::Event::Type::HeadHit: audio_.play(360); break;
+            case sim::Event::Type::HeadHit: break;
             // Stage actors (docs/re/stage-actors.md §7): sub_427961(350) /
             // sub_427961(1330) — group bases like every other call site, so the
             // trampoline picks across 350..353 and the warp across 1330..1332.

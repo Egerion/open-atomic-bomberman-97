@@ -1145,7 +1145,20 @@ See the `kDrawMusicId`/`kWinMusicId` comment block and every
 `run_match`/`run_app`. (0x3FC=1020, 0x46A=1130 — hex confirmed; the SOUNDLST
 labels `win`/`draw` describe the clips, not where the code plays them.)
 
-**SFX 40 (enrt1, "you can't do that here") — NETWORK-ONLY, N/A to our build.**
+**SFX 40 (enrt1, "you can't do that here") — the FRONT-END sites are guest
+guards; the sound itself is NOT network-only. CORRECTED 2026-07-28.** The
+paragraph below is right about the front end and wrong about the conclusion it
+draws. `sub_427961(40)` also fires from **`0x420C2B`, inside `sub_41F29B`'s bomb
+drop** — the warphole refusal — and that site has no `sub_40C06A` gate at all: it
+tests only the player's own diarrhea/super flags. A local single-player game
+buzzes every time you try to drop a bomb while standing on a warp exit, which is
+exactly what the port does (`SoundDirector`'s `DropRefused`). So SFX 40 is a
+live, local sound, and "correctly absent in the port" was never true of our
+build. It is also more widely gated in the front end than the old text implies:
+`sub_406DDE` (LEVEL/ROUNDS) buzzes a guest on **every** key except Escape, not
+just the value-changing ones — see `docs/re/sound-engine.md` §8 for the full
+census. What follows is the (accurate) account of the front-end guards.
+
 The results/draw wait loops fire `sub_427961(40)` when a key is pressed but
 `sub_40C06A() == 1`. `sub_40C06A` is a bare `return dword_460058;` — the game-mode
 global (0 = local, 1/2 = the two network roles; CORRECTED: mode 2 is NOT a
@@ -1343,7 +1356,7 @@ randomness (SFX group pick) uses `AudioEngine`'s own LCG, never `State::rng`.
 | SOUNDLST 1100+level, 1120 | per-level in-round stage music (`sub_4293E5` @ 0x4293E5, called from `sub_410B6E` round init unless the "Disable music during gameplay" option frees the music instead); 1120 (0x460) is the fallback when the level has no entry | per-level RSS | CONFIRMED (`docs/re/in-match-shell.md` step 2); PORTED — `GameApp::start_match` starts `1100+stage` with the `has_track` 1120 fallback, and (2026-07-12) the disabled path now calls `AudioEngine::stop_music()` (the sub_427342 free) so a disabled round is SILENT instead of leaking the 1020 setup track into it |
 | SOUNDLST 10 | menu-exit / accept sting (`menuexit`), one-shot | MENUEXIT.RSS | CONFIRMED (`sub_427961(10)` accept path in `sub_42A088` + every menu select in `sub_42B9CE`) |
 | SOUNDLST 20 | nav blip (`letter1`), one-shot, on ANY key | LETTER1.RSS | CONFIRMED (`sub_427961(20)` in `sub_42A088`/`sub_42B9CE`/`sub_42A3F6`) |
-| SOUNDLST 40 | "you can't do that here" buzz (`enrt1`), one-shot | ENRT1.RSS | CONFIRMED **NETWORK-ONLY** (`sub_427961(40)` gated on `sub_40C06A()==1` in the results/setup wait loops); never fires in local play — correctly absent in the port |
+| SOUNDLST 40 | "you can't do that here" buzz (`enrt1`), one-shot | ENRT1.RSS | CONFIRMED, and **NOT network-only** (corrected 2026-07-28). Its FRONT-END sites are `sub_40C06A()==1` guest guards (results/draw/setup/level wait loops), but `sub_41F29B`'s warphole drop refusal @0x420C2B is ungated and purely local. Live in the port both ways: `SoundDirector`'s `DropRefused`, and the net-guest buzzes on the shared setup screens |
 | SOUNDLST 1700 | draw-screen sting group (`draw`/gump1, 1700..1999), one-shot random pick | GUMP1.RSS + group | CONFIRMED (`sub_427BFB(1700)` in `sub_42A3F6`); port uses `play_random_in_range(1700, 1999)` |
 | SOUNDLST 2000 | "we have a winner" voice group (2000..2299), one-shot random pick | PROUD.RSS + group | CONFIRMED (`sub_427BFB(2000)` on VICTORY); port `play_random_in_range(2000, 2299)` |
 | SOUNDLST 2600 | menu-quit / exit sting group (2600..2699), one-shot random pick | QUITGAME.RSS + group | CONFIRMED (`sub_427BFB(2600)` in quit handler `sub_412987`); port plays it on menu Quit/Escape |

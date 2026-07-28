@@ -213,8 +213,108 @@ handler's `sub_4278F2(340 + actor[+4])` overlay (field unidentified).
   gap — `grab1, grab2, bmbthrw1, bmbthrw3, bmbthrw4, bmbthrw5` — and 170 is not
   a culled block, so `sub_427961(170)` (bomb grab) picks across all **six**. No
   call site names 172; the group walk reaches it anyway.
-- **`HeadHit` was one clip short.** SOUNDLST 360-363 is `bombhit1..4`; the port
-  spanned 360-362.
+- **`HeadHit` was not one clip short — it should not exist.** SOUNDLST 360-363
+  is `bombhit1..4` and the 2026-07-27 pass widened the port's group from 360-362
+  to 360-363 on that basis. That answered the wrong question. The range was
+  never the issue: **nothing in the binary ever calls 360**, so no member of the
+  group is ever heard and the whole cue is invented. See §8, which enumerates
+  every call site. The cue was removed 2026-07-28 and the silence is pinned by
+  `tests/audio/test_sound_director.cpp`.
 - The audit's three suspicions all survive: the six single-slot SFX, the
   two-member nav blip / refused buzz, and the load-time cull to a random subset
   picked least-played-first. All three are now mechanism, not conjecture.
+
+## 8. The complete call-site census (2026-07-28)
+
+§2-§4 explain how a group is chosen. This section answers the other half — WHO
+asks, and for what — and it is the evidence behind every "the original is silent
+here" claim in `libs/audio` and `libs/game`.
+
+**Method, and why it is exhaustive.** A byte-level sweep of the whole `BEGTEXT`
+section for the `E8 rel32` encoding, at every offset rather than every
+instruction boundary, cannot miss a direct call. It finds **87** into the play
+primitives: 70 x `sub_427961`, 6 x `sub_42741E` (music), 4 x `sub_427BFB`,
+2 x `sub_4278F2`, 2 x `sub_427859`, 2 x `sub_427B36`, 1 x `sub_427ABB` — the
+last three groups being the engine's own internals. The 70 matches §4's count,
+which is the cross-check.
+
+Direct calls are the only kind there are: the **literal address of every one of
+these routines appears nowhere in the image**, in code or in data. There is no
+function-pointer table, no dispatch through a global, nothing an `E8` scan could
+have stepped over. So "id N has no call site" is a complete statement, not a
+failure to find one.
+
+**The ids named.** 65 of the 70 `sub_427961` sites load a literal into EAX
+(Watcom's first register argument). The other five are:
+
+| site | argument | what it is |
+|---|---|---|
+| `0x41E03B` | `3000 + 50*idx` | the per-disease voice block |
+| `0x41E549` | a local | the powerup voice — its only four writers store **-1, 400, 135, 1400** and nothing else |
+| `0x427B13` | its own argument | `sub_427ABB` forwarding, i.e. always 135 |
+| `0x41DDE4` (`sub_4278F2`) | `340 + actor[+4]` | the death overlay, field still unidentified |
+| `0x426A55` (`sub_4278F2`) | `140 + dword_462244` | the wall slam, `rand() % 3` latched per arm |
+
+No site, literal or computed, can produce **360-363**. `bombhit1..4` load and
+are never requested. `sub_421F7E`, the head-hit handler itself, makes no audio
+call of any kind.
+
+**Screens that are SILENT.** Reachability over the same call graph settles a
+whole class of questions the port had been guessing at:
+
+| routine | what it is | sound in its closure |
+|---|---|---|
+| `sub_42DBCC` / `sub_42DB80` / `sub_41485A` | the generic LIST DIALOG | **none** — 344 functions, zero play calls |
+| `sub_42E938` | the generic text-entry widget | **none** — 155 functions |
+| `sub_42EDE0` | the generic yes/no dialog | **none** — 143 functions |
+| `sub_42FEB0` | the list's letter-jump | **none** — a leaf, no calls at all |
+| `sub_4028D2` | the map/scheme EDITOR screen | **none in its own body or any direct callee** |
+| `sub_402595` / `sub_4023A2` | the powerup sub-editor + its prompt chain | **none** |
+
+So the three pickers built on the list dialog — the help/`.BM` browser
+(`sub_41431C` -> `sub_414235`), the `*.SCH` picker (`sub_407582`) and the `*.cam`
+campaign picker (`sub_4015C6`) — navigate and accept in complete silence. The
+only audible thing any of them can produce is the **error box** on an empty glob,
+and that is `sub_414340`'s doing, not the list's.
+
+**The two modals, by contrast, DO blip.** `sub_414340` (two-line acknowledge,
+blip @`0x414532`) and `sub_41456C` (one-line yes/no, blip @`0x4147B0`) both open
+their key loop with an unconditional `sub_427961(20)` for every real key — only
+the `-1`/`-2` no-key codes skip it — and **neither plays an accept sting on any
+answer**. Every screen in the port that puts up one of these shapes should blip
+on any key and sting on none.
+
+**The unconditional any-key blip is the rule, not the exception.** Every front-end
+key loop fires `sub_427961(20)` before its dispatch switch, so even an unmapped
+key clicks: the menu `sub_42B9CE` @`0x42BB2E`, the player setup `sub_410F81`
+@`0x411724`, the level/rounds screen `sub_406DDE` @`0x407094`, the editor chooser
+`sub_403184` @`0x403288`, the DRAW loop @`0x42A755`, the RESULTS tally
+@`0x42AE04`. A port-only key handler that returns early therefore has to blip
+first or it is dropping a sound the original makes.
+
+**The two round-end wait loops differ from `sub_42A088`.** This is the source of
+several fidelity bugs and is worth stating plainly:
+
+| | `sub_42A088`'s own loop (boot logos, TITLE) | `sub_42A3F6`'s DRAW @`0x42A73A` / RESULTS @`0x42ADE9` |
+|---|---|---|
+| any real key | blip 20 | blip 20 |
+| Enter / Space | sting 10 | sting 10 |
+| **Escape** | **sting 10** (it is one of the three accept codes, `0x42A136`-`0x42A155`) | **nothing** — `0x42A7EF` / `0x42AE9E` set `dword_464A68 = 2` and leave |
+| **idle timeout** | forced key 13 applied at `0x42A117`, BEFORE the no-key test — so **blip AND sting** | forced key 13 applied at `0x42A79D` / `0x42AE4C`, AFTER it — so **sting ALONE** |
+
+The VICTORY/TEAM tail is a third shape again: `sub_42A088(name, 0)` then a
+blocking `sub_413CB0(3000)`. No key is read for the whole display, so that
+screen makes no sound at all beyond the 2000 winner voice fired under it.
+
+**The spooger run is silent.** `sub_41F29B`'s spooge loop (`0x420AAE`-`0x420B6E`)
+calls only the bomb constructor `sub_41EB13`, and all four of its exits — bomb
+already there, powerup there, tile blocked, allotment spent — jump to `0x420B73`
+and from there to `0x420CEC`, **past the entire sound block** at `0x420C26`-
+`0x420CC1` (the 40 buzz, the 1200 taunt, the 550 splat, the 100 drop). Only the
+plain drop, which places at the player's OWN tile, reaches any of them.
+
+**SFX 40 is not network-only.** `frontend-flow.md` used to claim it "can never
+trigger in the boot/menu/results path" and was "correctly absent in the port".
+The front-end sites are indeed `sub_40C06A() == 1` guest guards, but the
+in-match warphole refusal at `0x420C2B` has no such gate — it is a purely local
+event, and the port plays it. Corrected in that file.

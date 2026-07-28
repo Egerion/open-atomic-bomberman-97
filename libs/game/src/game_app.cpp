@@ -797,7 +797,12 @@ ScreenDef draw_screen() {
     // random member of the contiguous "tie game/draw game" SOUNDLST run at 1700),
     // fired once by run_app on entering Results via audio_.play_random_in_range —
     // NOT looped: a screen carries no music id, so nothing restarts the sting.
-    return ScreenDef{"DRAW", {}, kResultsDwellMs, /*skippable*/ true};
+    // round_end = true: DRAW is NOT presented by sub_42A088's own wait loop.
+    // sub_42A3F6 calls sub_42A088("draw", 0) — argument ZERO, i.e. show the
+    // picture and return immediately (0x42A710) — and then runs its OWN loop at
+    // 0x42A73A. That loop gives Escape no accept sting and gives the 6 s
+    // auto-advance no nav blip. See ScreenDef::round_end.
+    return ScreenDef{"DRAW", {}, kResultsDwellMs, /*skippable*/ true, WaitLoop::RoundEnd};
 }
 // The SOUNDLST "tie game/draw game" voice group begins at 1700 (the file's own
 // "; tie game/draw game" comment) and runs contiguously to its "1999 is the last
@@ -819,10 +824,16 @@ ScreenDef victory_screen(bool team_mode, int player, int team) {
     // and reads NO game key. So the VICTORY/TEAM PCX shows for exactly 3 s and
     // cannot be skipped (unlike the 6 s keypress-skippable port model this
     // replaces). Non-skippable + 3000 ms reproduces both (Quit still exits).
+    // WaitLoop::TimedCut because "reads NO game key" is also an AUDIO fact: with
+    // no key loop there is no nav blip and no accept sting, and the timeout is a
+    // sleep expiring rather than a synthesized Enter, so it stings nothing
+    // either. This screen is completely silent apart from the 2000 winner voice
+    // the caller fires under it.
     return ScreenDef{victory_background_name(team_mode, player, team),
                      {},
                      /*dwell_ms*/ 3000,
-                     /*skippable*/ false};
+                     /*skippable*/ false,
+                     WaitLoop::TimedCut};
 }
 // The main-menu model (sub_42B9CE) — the MenuItem struct, the seven-row
 // kMenuItems table (the original's selection-index dispatch order), and

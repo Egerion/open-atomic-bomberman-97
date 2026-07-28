@@ -267,6 +267,14 @@ AppInput MapSelectScreen::run() {
                 // 0x13B -> sub_41431C (pseudo.c 8208-8216): the same generic
                 // *.BM help browser, composited over this screen.
                 ctx_.audio.play(20);
+                // CORRECTED 2026-07-28: F1 is guest-gated too. sub_406DDE's F1
+                // arm @0x407481 opens with the same `sub_40C06A() == 1` test
+                // every other arm uses and buzzes (0x407490) instead of opening
+                // the browser. See the read-only note below.
+                if (net_guest) {
+                    ctx_.audio.play(40);
+                    continue;
+                }
                 HelpBrowser browser(ctx_.assets, ctx_.front_font);
                 browser.enter(ctx_.values.at_or(15, 1) != 0);
                 while (!browser.done()) {
@@ -306,11 +314,17 @@ AppInput MapSelectScreen::run() {
                 break;
             }
             ctx_.audio.play(20);
-            // §7's read-only gate: Up/Down (pure navigation) and F1 stay live on
-            // a guest; every value-changing key buzzes instead, the same shape as
-            // `sub_406DDE`'s `sub_40C06A() != 1` guards.
-            if (net_guest && (k == SDLK_LEFT || k == SDLK_RIGHT || k == SDLK_PAGEUP ||
-                              k == SDLK_PAGEDOWN)) {
+            // §7's read-only gate — CORRECTED 2026-07-28. The old comment here
+            // claimed "Up/Down (pure navigation) and F1 stay live on a guest;
+            // every value-changing key buzzes", citing sub_406DDE. sub_406DDE
+            // has no such carve-out: EVERY arm of its dispatch opens with the
+            // same `sub_40C06A() == 1` test and the same SFX-40 buzz — Up
+            // (0x4071A5), Down (0x4071D6), the 0x174 stepper (0x407209), Right
+            // (0x4072B3), Left (0x407355), Enter/Space (0x4073F4), F1
+            // (0x407490) and Alt+D (0x4074AD). The ONLY ungated key is Escape
+            // (0x407464), which sets its flags and leaves silently. The host
+            // owns this screen completely; a guest can look and leave.
+            if (net_guest && k != SDLK_ESCAPE) {
                 ctx_.audio.play(40);
                 continue;
             }
