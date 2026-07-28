@@ -42,6 +42,7 @@ constexpr std::size_t kHelloFrameBytes = 1 + 4 + 1;  // tag + seed u32 + is_ack 
 constexpr std::size_t kPunchFrameBytes = 1 + 4 + 1;  // tag + nonce u32 + is_pong u8
 constexpr std::size_t kProbeFrameBytes = 1 + 4 + 1;  // tag + nonce u32 + seen_peer u8
 constexpr std::size_t kDropFrameBytes = 1 + 1 + 4;   // tag + seat u8 + at_tick u32
+constexpr std::size_t kMatchCtlFrameBytes = 1 + 1 + 4;  // tag + kind u8 + at_tick u32
 constexpr std::size_t kAckFrameBytes = 1 + 4 + 4 + 1;  // tag + revision + checksum + seat u8
 // tag + revision u32 + level_index u8 + rounds u8 + name_len u8
 constexpr std::size_t kPreviewHeaderBytes = 1 + 4 + 1 + 1 + 1;
@@ -101,6 +102,14 @@ std::vector<std::uint8_t> encode_drop(std::uint8_t seat, std::uint32_t at_tick) 
     std::vector<std::uint8_t> b;
     b.push_back(static_cast<std::uint8_t>(MsgType::Drop));
     b.push_back(seat);
+    put_u32_le(b, at_tick);
+    return b;
+}
+
+std::vector<std::uint8_t> encode_match_ctl(MatchCtlKind kind, std::uint32_t at_tick) {
+    std::vector<std::uint8_t> b;
+    b.push_back(static_cast<std::uint8_t>(MsgType::MatchCtl));
+    b.push_back(static_cast<std::uint8_t>(kind));
     put_u32_le(b, at_tick);
     return b;
 }
@@ -205,6 +214,14 @@ bool decode(const std::uint8_t* data, std::size_t size, Message* out) {
         out->type = MsgType::Drop;
         out->drop.seat = data[1];
         out->drop.at_tick = get_u32_le(data + 2);
+        return true;
+    }
+    if (tag == MsgType::MatchCtl) {
+        if (size != kMatchCtlFrameBytes) return false;
+        if (data[1] > static_cast<std::uint8_t>(MatchCtlKind::Rematch)) return false;
+        out->type = MsgType::MatchCtl;
+        out->match_ctl.kind = static_cast<MatchCtlKind>(data[1]);
+        out->match_ctl.at_tick = get_u32_le(data + 2);
         return true;
     }
     if (tag == MsgType::SetupAck) {

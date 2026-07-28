@@ -41,6 +41,16 @@
 // confirmed-hash exchange keeps agreeing. See DropPolicy below (gated on the
 // RE'd Options row 12) and the `handoff_` schedule at the bottom of the class
 // (the rollback-safe part).
+//
+// ROUND ABANDON -> DRAW (wire v8, MatchCtlKind::EndRound). Esc during an online
+// round is a LOCAL keypress and therefore must not be a local ACT: a peer that
+// stopped its own sim would have simulated — and tallied — a different number of
+// ticks than its partner, which is the same divergence class the drop handoff
+// exists to avoid. So Esc routes through request_end_round(): the HOST schedules
+// an end tick and broadcasts it, a GUEST only asks. Every peer then stops at
+// exactly that tick and the round is a DRAW BY DECREE (nobody inspects the
+// frozen state for a winner), so the match shell above can replay a round
+// instead of tearing the connection down.
 
 namespace bomber::net {
 
@@ -63,7 +73,11 @@ namespace bomber::net {
 // own authority, it only obeys the host's Drop message.
 struct DropPolicy {
     bool revert_to_ai = false;  // Options row 12; see above
-    bool is_host = false;       // only the hub/host schedules + broadcasts a handoff
+    // Only the hub/host schedules + broadcasts a handoff — and, since wire v8,
+    // the round-end abandon (request_end_round). It is the session's one bit of
+    // "am I the machine driving the game", so both host-authoritative decisions
+    // read it rather than carrying two copies of the same flag.
+    bool is_host = false;
     // Pumps of TOTAL SILENCE from a seat before it is declared dropped. 0 (the
     // default) disables drop detection entirely, so existing callers and every
     // pre-existing scenario behave exactly as before. At 20 Hz a pump is 50 ms.
@@ -132,7 +146,30 @@ public:
     // on — the caller polls this and ends the match (it never hangs).
     bool aborted() const { return aborted_; }
 
+    // --- round abandon (Esc), wire v8 ----------------------------------------
+
+    // "The player at THIS machine wants out of this round." On the HOST that is
+    // the decision itself: an end tick is scheduled and broadcast at once. On a
+    // GUEST it only sends MatchCtlKind::EndRoundRequest, re-sent every pump
+    // until the host's EndRound comes back — a guest NEVER ends a round on its
+    // own authority. Idempotent: a second press while an end is already
+    // scheduled does nothing.
+    void request_end_round();
+
+    // An end tick is agreed (on either peer). The match shell reads this to tell
+    // an ABANDONED round — which is a DRAW by decree and tallies nothing — from
+    // a round that ended on its own terms.
+    bool end_round_scheduled() const { return end_tick_ != kNoEndRound; }
+    // The agreed first tick NOBODY simulates, or kNoEndRound. Equal on every
+    // peer once the announcement has propagated.
+    std::uint32_t end_round_tick() const { return end_tick_; }
+    // The sim has reached the agreed end: stop the round loop. advance() still
+    // receives, re-announces and re-sends local input from here on, so a peer
+    // that has not caught up yet still can.
+    bool round_ended() const { return end_tick_ != kNoEndRound && tick_ >= end_tick_; }
+
     static constexpr std::uint32_t kNoHandoff = 0xFFFFFFFFU;
+    static constexpr std::uint32_t kNoEndRound = 0xFFFFFFFFU;
 
 private:
     struct Slot {
@@ -163,6 +200,13 @@ private:
     void schedule_handoff(int seat, std::uint32_t at_tick);
     void detect_drops();        // hard-timeout scan; host schedules, everyone can abort
     void broadcast_handoffs();  // host-side redundant re-send, like send_local's
+    // Adopt an announced end tick. Order-free and idempotent exactly as
+    // schedule_handoff is: the EARLIEST tick wins, so a duplicate, a re-send and
+    // an out-of-order copy all reduce to a no-op and every peer converges.
+    void schedule_end_round(std::uint32_t at_tick);
+    // Redundant re-send of whatever this role owes the shell: the host's
+    // EndRound once one is scheduled, a guest's EndRoundRequest until it is.
+    void broadcast_end_round();
 
     sim::Simulation* sim_;  // BORROWED
     Transport* transport_;
@@ -204,6 +248,14 @@ private:
     std::array<std::uint32_t, sim::kMaxPlayers> remote_next_{};
     std::uint16_t dropped_ = 0;
     bool aborted_ = false;
+
+    // The agreed round-abandon tick (kNoEndRound = the round runs to its own
+    // end). Deliberately OUTSIDE sim::State — like the handoff schedule, it is
+    // shell bookkeeping and must survive a rollback untouched; unlike it, it
+    // never reaches the sim at all, so no golden hash can move because of it.
+    std::uint32_t end_tick_ = kNoEndRound;
+    // GUEST only: our Esc is outstanding, so keep asking every pump.
+    bool end_requested_ = false;
 
     bool desynced_ = false;
     std::uint32_t desync_tick_ = 0;

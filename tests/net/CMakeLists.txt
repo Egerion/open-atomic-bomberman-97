@@ -35,6 +35,14 @@ target_link_libraries(bomber_net_round_rotation_tests PRIVATE bomber::net)
 bomber_add_test(bomber_net_peer_drop_tests net_peer_drop test_peer_drop.cpp)
 target_link_libraries(bomber_net_peer_drop_tests PRIVATE bomber::net)
 
+# Match shell (wire v8): the host-authoritative round ABANDON (Esc -> one agreed
+# end tick -> draw, instead of a local freeze that dropped the connection) and
+# the post-match REMATCH rendezvous that hands the same transport back to the
+# setup screens. Both peers are driven over a LoopbackLink — a one-sided test is
+# what let the previous connection bug through.
+bomber_add_test(bomber_net_match_shell_tests net_match_shell test_match_shell.cpp)
+target_link_libraries(bomber_net_match_shell_tests PRIVATE bomber::net)
+
 # SeedHandshake: the pre-match seed exchange (ADR-0010 §3.3 step 5) over both a
 # headless LoopbackLink and real UDP on localhost (soft-skips without sockets).
 bomber_add_test(bomber_net_handshake_tests net_handshake test_handshake.cpp)

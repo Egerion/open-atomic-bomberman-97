@@ -54,6 +54,18 @@ std::uint32_t build_hash();
 //             partner would verify nothing and relay for no reason; refusing the
 //             pair at the lobby door is cheaper than a match that connects and
 //             then delivers nothing, which is the exact failure this closes.
-inline constexpr std::uint32_t kWireProtocolVersion = 7;
+//   v7 -> v8: added MsgType::MatchCtl — the host-authoritative MATCH SHELL
+//             (protocol.hpp's MatchCtlKind): "this round is abandoned, it ends
+//             at tick X and counts as a draw", a guest's request for the same,
+//             and the post-match "back to the setup screens" handoff that keeps
+//             the transport alive between matches. A v7 peer answers none of it:
+//             it would keep simulating a round its partner has already left, and
+//             would drop the socket the moment a match ended. Both are silent
+//             divergences rather than loud ones, so the pair has to be refused
+//             at the lobby door.
+//             NOTE FOR WHOEVER MERGES SECOND: the unmerged host-migration branch
+//             also needs a bump. This one took 8; move the other to 9 (and
+//             re-check this file against main before merging).
+inline constexpr std::uint32_t kWireProtocolVersion = 8;
 
 }  // namespace bomber::net

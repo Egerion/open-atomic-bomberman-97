@@ -29,7 +29,61 @@ enum class MsgType : std::uint8_t {
     SetupPreview = 6,
     SetupChunk = 7,
     SetupAck = 8,
-    Probe = 9
+    Probe = 9,
+    MatchCtl = 10
+};
+
+// THE MATCH-SHELL CONTROL MESSAGE (wire v8). Everything above is about the
+// CONTENT of a match — inputs, hashes, the config it is built from. This one is
+// about the SHELL around it: when a round stops and when the peers leave the
+// outcome screens. Both used to be LOCAL decisions on each machine, which is a
+// desync by construction — one peer's Esc froze its own sim while the other kept
+// ticking, and "the match is over" was reached (and the socket dropped) whenever
+// each peer independently felt like it.
+//
+// HOST-AUTHORITATIVE, exactly like the original's network screens
+// (docs/re/network-screens.md §7): the machine driving the game decides and
+// broadcasts; a client (`sub_40C06A() == 1`) may only ask. That is what the four
+// kinds encode — see MatchCtlKind.
+enum class MatchCtlKind : std::uint8_t {
+    // HOST -> everyone. "Stop this round; `at_tick` is the first tick NOBODY
+    // simulates." The outcome is a DRAW by DECREE, not by inspecting the frozen
+    // state: an abandoned round tallies nothing, so the two peers cannot
+    // disagree about who won it. Idempotent and order-free like MsgType::Drop —
+    // the EARLIEST announced tick wins — and re-sent every pump, because a peer
+    // that misses it keeps simulating into a round the host has already left.
+    //
+    // `at_tick` is in the FUTURE (the host's own speculative tick plus a lead
+    // above the prediction cap), unlike DropFrame's deliberately retroactive
+    // one. The reasons are opposite: a drop tick must be reachable when a seat's
+    // input will NEVER arrive, whereas here every seat is live and still
+    // sending, so a future tick is reachable by definition — and it has to be
+    // future, because a peer that has already speculated past it would stop
+    // having simulated (and tallied) more ticks than the host did.
+    EndRound = 0,
+    // GUEST -> host. "The player at this machine pressed Esc." A REQUEST, never
+    // an act: a guest that ended its own round would be simulating a different
+    // number of ticks than the host, which is the whole class of bug this
+    // message exists to remove. Carries no tick (the host owns that). Re-sent
+    // every pump until the host's EndRound comes back.
+    EndRoundRequest = 1,
+    // HOST -> everyone. Pure LIVENESS while the host is reading the post-match
+    // RESULTS/VICTORY screens. Without it a guest waiting on the host cannot
+    // tell "still deciding" from "gone", and the only safe reading of silence is
+    // "gone" — which is precisely the connection drop this whole change removes.
+    RematchWait = 2,
+    // HOST -> everyone. "I am leaving the outcome screens for the setup screens
+    // now." The guests follow, and the SAME transport carries the next
+    // SetupSession — so finishing a match returns both peers to map selection
+    // with the session intact instead of tearing it down.
+    Rematch = 3,
+};
+
+// One match-shell control datagram. `at_tick` is meaningful for EndRound only;
+// every other kind sends 0 and ignores it.
+struct MatchCtlFrame {
+    std::uint32_t at_tick = 0;
+    MatchCtlKind kind = MatchCtlKind::EndRound;
 };
 
 // A peer's claimed Simulation::hash() at the end of tick `tick_index`. The
@@ -192,8 +246,8 @@ inline constexpr std::size_t kMaxSetupChunks =
     (kMaxMatchConfigBytes + kSetupChunkPayloadBytes - 1) / kSetupChunkPayloadBytes;
 
 // One decoded datagram: exactly one of `input` / `range` / `hash` / `hello` /
-// `punch` / `drop` / `setup_preview` / `setup_chunk` / `setup_ack` is meaningful
-// per `type`.
+// `punch` / `drop` / `setup_preview` / `setup_chunk` / `setup_ack` /
+// `match_ctl` is meaningful per `type`.
 struct Message {
     MsgType type = MsgType::Input;
     InputFrame input;
@@ -206,6 +260,7 @@ struct Message {
     SetupPreviewFrame setup_preview;
     SetupChunkFrame setup_chunk;
     SetupAckFrame setup_ack;
+    MatchCtlFrame match_ctl;
 };
 
 // [MsgType::Input][input_codec frame] — the seats in `seat_mask`, stamped `tick`.
@@ -238,6 +293,12 @@ std::vector<std::uint8_t> encode_probe(std::uint32_t nonce, bool seen_peer);
 // [MsgType::Drop][seat u8][at_tick u32-LE] — 6 bytes. Decode rejects a seat
 // index outside [0, sim::kMaxPlayers).
 std::vector<std::uint8_t> encode_drop(std::uint8_t seat, std::uint32_t at_tick);
+
+// [MsgType::MatchCtl][kind u8][at_tick u32-LE] — 6 bytes. Decode rejects a kind
+// above Rematch, exactly as MsgType::Drop rejects an out-of-range seat: an
+// unknown kind means a peer that disagrees with us about the protocol, and the
+// build_hash door is what is supposed to have caught that.
+std::vector<std::uint8_t> encode_match_ctl(MatchCtlKind kind, std::uint32_t at_tick);
 
 // [MsgType::SetupPreview][revision u32-LE][level_index u8][rounds u8]
 //   [name_len u8][name_len bytes][10 * slot_kind u8][10 * team u8] — 28..60
