@@ -116,8 +116,12 @@ rule 2). Concretely, per AI player per tick, in slot order:
 
 Decision: **keep draws A and B.** They are almost certainly heap-debug residue
 (their allocated bytes are unused), but they advance the PRNG, and reproducing
-them costs one line each and guarantees exact stream parity if we ever cross-
-check against the original. `random_below` with the modulus discarded, or a bare
+them costs one line each and keeps our per-tick draw COUNT equal to the
+original's. (Corrected 2026-07-28: this used to say "guarantees exact stream
+parity if we ever cross-check against the original". It cannot — the port is
+xorshift32, the original is the wall-clock-seeded CRT generator, so no
+cross-check of *values* is possible in either direction. A count cross-check is,
+and that is what these draws preserve. See `docs/re/ai.md` §8.) `random_below` with the modulus discarded, or a bare
 `next_random(s)`, models a bare `rand()`. (If a future decision drops them, do it
 in one commit and re-baseline any AI-bearing golden — there are none today.)
 

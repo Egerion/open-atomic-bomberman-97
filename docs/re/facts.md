@@ -5481,12 +5481,16 @@ no state write.
 `sub_42BE0B` is an EMPTY function (pseudo.c 30942, an empty body — a
 dead/stubbed debug hook; its only other caller sits behind an equally-inert
 path). So the roll has **no gameplay effect** — it merely CONSUMES one
-`rand_()` draw per brick ignite. That still matters: the RNG stream is the
-determinism contract, so a port that skips this draw runs one step short per
-brick reveal, and every downstream random outcome (which powerup a *later*
-reveal shows, a disease roll, a head-hit or death scatter tile) drifts out of
-step with the original on any brick-bearing match — the classic "small
-differences everywhere."
+`rand_()` draw per brick ignite. That still matters: the draw COUNT is part of
+the determinism contract, so a port that skips this draw runs one step short per
+brick reveal, and every downstream consumer (which powerup a *later* reveal
+shows, a disease roll, a head-hit or death scatter tile) is fed the word that
+belonged to the draw before it. Note what this does NOT mean: the port's
+xorshift32 stream is not the original's CRT stream and never was (see
+`docs/re/ai.md` §8), so the loss is not "drifting out of step with the
+original's values" — it is the port taking a different number of steps than the
+original at the same point, which breaks the one comparison that IS available
+(structure) and the port's own reproducibility.
 
 **Ported** in `FlameSystem::spread_to`'s brick branch as `(void)random_below(s,
 30)`, unconditional and BEFORE the relocate/reveal work (exactly where

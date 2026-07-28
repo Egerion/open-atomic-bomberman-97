@@ -802,7 +802,36 @@ design in `docs/adr/0005-ai-architecture.md`.
 ## 8. The full `rand()` order/count contract (per AI-controlled player, per tick)
 
 The sim's determinism hinges on reproducing **the order and count of PRNG draws**
-(CLAUDE.md rule 2). Within one computer player's update, draws happen in this
+(CLAUDE.md rule 2).
+
+> **What draw parity does and does not prove.** The two sides do not share a
+> generator. `libs/sim/include/bomber/sim/rng.hpp` is a xorshift32 seeded per
+> match; the original pulls from the Watcom CRT's `rand_()`, seeded from the wall
+> clock exactly once at process boot and never again (facts.md, "The original
+> seeds its C `rand()` from the wall clock exactly ONCE"). So the port's stream
+> is **never** the original's stream, at any tick, in any match — there is no
+> baseline to "stay in step with" and no run of the original that can be
+> bit-matched.
+>
+> Reproducing a draw site therefore buys **structure, not values**: the port
+> makes the same decision, at the same place, with the same probability, and
+> consumes the same number of words doing it. That is what makes goldens stable
+> across refactors, what lets two peers agree tick-for-tick, and what the oracle
+> diff can actually check — which is why `tools/oracle_mirror` compares observable
+> state and deliberately never emits `rng`. Where a deviation is
+> distribution-preserving, say so in those terms (facts.md's Swap-target entry is
+> the model: "the CHOSEN target's distribution is provably identical; only the
+> RNG draw COUNT differs").
+>
+> One trap worth naming, because it cost time once: for xorshift32 the raw `rng`
+> word is a pure function of seed and draw COUNT. Two runs that reach the same
+> count by completely different routes land on the same word, so a matching `rng`
+> value is evidence about draw count and nothing else. A golden's `rng` returning
+> to a previously-recorded value read as a suspicious revert and was not one —
+> only the state hash, which encodes the board, could tell them apart
+> (`tests/sim/test_golden.cpp`, the footnote on golden E's final `rng`).
+
+Within one computer player's update, draws happen in this
 exact sequence. Draws inside the BFS helpers happen *when that helper is called*
 by the active behavior; only ONE behavior runs to completion per tick (the chain
 short-circuits), so the realized draw list depends on which behavior fires — but
@@ -842,7 +871,8 @@ Init-time (once at match setup, not per tick):
    draws per AI player per tick, regardless of behavior. Our port must reproduce
    both (or, if we drop the vestigial scratch-alloc, do so *uniformly* and
    re-baseline any AI golden — but since golden has no AI players, see ADR, it is
-   simplest to keep the two draws for exactness).
+   simplest to keep the two draws, so the port's per-tick draw COUNT matches the
+   original's; it can never match its values, §8).
 2. Only ONE behavior body's draws occur per tick (short-circuit). The realized
    list is A, then the fired behavior's draws (which include its BFS tie-break
    draw if it calls a pathfinder), then B.
@@ -976,7 +1006,8 @@ offsets and control flow only).
    file's comments — not a gameplay read. So getvalue(905) is a reserved slot
    between 900 (personalities) and the 910-block; it feeds nothing.
 6. **[NOTE, not a blocker]** the two scratch-alloc `rand()` draws (A/B) are
-   almost certainly heap-debug residue; kept for exact RNG parity (§8).
+   almost certainly heap-debug residue; kept so the draw COUNT matches (§8 —
+   "parity" here is count, never value).
 
 Also updated inline from this pass: §1.1 (+2 = has-target flag, +4/+6 =
 target tile X/Y, +8 = captured cost), §4.2 (+66 = elapsed phase), §3.4 (the
