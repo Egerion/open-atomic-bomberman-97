@@ -11,8 +11,14 @@
 #include <vector>
 
 #include "bomber/game/anim_pace.hpp"
+#include "bomber/game/carry_pose.hpp"
 
 using bomber::game::anim_step_index;
+using bomber::game::carried_bomb_offset;
+using bomber::game::carry_arc_index;
+using bomber::game::PlayerPose;
+using bomber::game::PoseFlags;
+using bomber::game::select_player_pose;
 
 TEST_CASE("frame selection wraps modulo the step count") {
     // A 4-step looping sequence, exactly like the original's counter % statecnt.
@@ -47,4 +53,89 @@ TEST_CASE("the STAT HEAD timing field cannot affect frame selection") {
         // never consults head0, so the mapping above is total and stable.
         (void)head0[shown];
     }
+}
+
+// ---------------------------------------------------------------------------
+// The glove (grab / carry / throw) sequence — carry_pose.hpp. See that header
+// for the sub_41F29B / sub_42331C citations behind each expectation.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("the base pose keys off walking and the carried-bomb pointer") {
+    PoseFlags f;
+    CHECK(select_player_pose(f) == PlayerPose::Stand);
+    f.moving = true;
+    CHECK(select_player_pose(f) == PlayerPose::Walk);
+    f.carrying = true;
+    CHECK(select_player_pose(f) == PlayerPose::WalkBomb);
+    f.moving = false;
+    CHECK(select_player_pose(f) == PlayerPose::StandBomb);
+}
+
+TEST_CASE("an action state overwrites the carry pose, not the other way round") {
+    // sub_41F29B formats "walkbomb %s" first and then lets the +78 switch
+    // overwrite the buffer with "kick %s" — a carrying player who kicks a bomb
+    // shows the KICK pose. The port had this precedence inverted.
+    PoseFlags f;
+    f.moving = true;
+    f.carrying = true;
+    f.kick = true;
+    CHECK(select_player_pose(f) == PlayerPose::Kick);
+    f.kick = false;
+    f.punch = true;
+    CHECK(select_player_pose(f) == PlayerPose::Punch);
+    f.punch = false;
+    f.pickup = true;
+    CHECK(select_player_pose(f) == PlayerPose::Pickup);
+}
+
+TEST_CASE("the pickup pose survives the throw") {
+    // State 4 is exited by its own animation length; the release clears +148
+    // (carrying) and never touches +78. Grab, throw one tick later, and the
+    // remaining "pickup <dir>" frames still play — empty-handed.
+    PoseFlags f;
+    f.pickup = true;
+    f.carrying = false;
+    CHECK(select_player_pose(f) == PlayerPose::Pickup);
+    f.moving = true;
+    CHECK(select_player_pose(f) == PlayerPose::Pickup);
+}
+
+TEST_CASE("warp and the boxed-in fidget sit at the ends of the precedence") {
+    PoseFlags f;
+    f.carrying = true;
+    f.cornerhead = true;
+    CHECK(select_player_pose(f) == PlayerPose::Cornerhead);  // beats the carry pose
+    f.pickup = true;
+    CHECK(select_player_pose(f) == PlayerPose::Pickup);  // state 0 is required to fidget
+    f.warping = true;
+    CHECK(select_player_pose(f) == PlayerPose::Spin);  // states 6/7 gate everything
+}
+
+TEST_CASE("the pickup curve index lags the grab by two frames and saturates") {
+    // k = clamp(+80 - 1, 0, 3), and the bomb pass reads +80 one frame stale
+    // (sub_4245B9 runs before sub_420F07), so k = clamp(frames - 2, 0, 3).
+    CHECK(carry_arc_index(0) == 0);
+    CHECK(carry_arc_index(1) == 0);
+    CHECK(carry_arc_index(2) == 0);
+    CHECK(carry_arc_index(3) == 1);
+    CHECK(carry_arc_index(4) == 2);
+    CHECK(carry_arc_index(5) == 3);
+    CHECK(carry_arc_index(500) == 3);
+}
+
+TEST_CASE("the held bomb leaves the curve and rides above the head") {
+    // The shipped curve (VALUELST 500/502/504/506) is (12,10)/(25,20)/(25,30)/
+    // (12,40); the forward reach is the curve's X PLUS a flat 10 px nudge.
+    CHECK(carried_bomb_offset(true, 12, 10).forward == 22);
+    CHECK(carried_bomb_offset(true, 12, 10).lift == 10);
+    CHECK(carried_bomb_offset(true, 25, 30).forward == 35);
+    CHECK(carried_bomb_offset(true, 25, 30).lift == 30);
+    // Once the pickup animation ends, sub_42331C's else branch drops the curve
+    // entirely: 10 px forward, 40 px up, whatever the curve said. Feeding it
+    // the last curve point proves the X term really is gone (22 -> 10) while
+    // the lift happens to agree.
+    CHECK(carried_bomb_offset(false, 12, 40).forward == 10);
+    CHECK(carried_bomb_offset(false, 12, 40).lift == 40);
+    CHECK(carried_bomb_offset(false, 25, 30).forward == 10);
+    CHECK(carried_bomb_offset(false, 25, 30).lift == 40);
 }

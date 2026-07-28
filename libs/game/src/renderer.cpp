@@ -7,6 +7,7 @@
 #include <string>
 
 #include "bomber/game/anim_pace.hpp"
+#include "bomber/game/carry_pose.hpp"
 #include "bomber/game/hud_format.hpp"
 #include "bomber/match/team_colour.hpp"
 
@@ -321,6 +322,13 @@ void Renderer::on_events(const sim::State& s, bool tick_advanced) {
                         seqs_->kick[render_colour(s, ev.player)]
                                    [static_cast<int>(s.players[ev.player].facing)];
                     kick_pose_[ev.player] = static_cast<int>(seq.steps.size());
+                    // +78 is ONE word, so entering a state ends whichever was
+                    // running: the kick dispatch writes `+78 = 1` outright
+                    // (sub_41EC84 22617-22624), clobbering an in-progress punch
+                    // or pickup animation. Our three countdowns are independent
+                    // timers, so reproduce the clobber explicitly.
+                    punch_pose_[ev.player] = 0;
+                    pickup_pose_[ev.player] = 0;
                 }
                 break;
             case sim::Event::Type::BombPunched:
@@ -332,6 +340,8 @@ void Renderer::on_events(const sim::State& s, bool tick_advanced) {
                         seqs_->punch[render_colour(s, ev.player)]
                                     [static_cast<int>(s.players[ev.player].facing)];
                     punch_pose_[ev.player] = static_cast<int>(seq.steps.size());
+                    kick_pose_[ev.player] = 0;  // same +78 clobber as BombKicked
+                    pickup_pose_[ev.player] = 0;
                 }
                 break;
             case sim::Event::Type::BombGrabbed:
@@ -344,6 +354,8 @@ void Renderer::on_events(const sim::State& s, bool tick_advanced) {
                     const auto& seq = seqs_->pickup[render_colour(s, ev.player)]
                                                    [static_cast<int>(s.players[ev.player].facing)];
                     pickup_pose_[ev.player] = static_cast<int>(seq.steps.size());
+                    kick_pose_[ev.player] = 0;  // same +78 clobber as BombKicked
+                    punch_pose_[ev.player] = 0;
                 }
                 break;
             case sim::Event::Type::PlayerDied: {
@@ -451,12 +463,13 @@ void Renderer::sample_movement(const sim::State& s) {
         }
 
         // Bomb-pickup carry arc bookkeeping (docs/re/id-audit.md item 4):
-        // ticks elapsed since carrying started, clamped 0..3, mirroring the
-        // original's player+80 "elapsed since state entry" counter (see the
-        // carried-bomb draw in draw_world for the full citation).
+        // ticks elapsed since carrying started, 0 on the grab tick, mirroring
+        // the original's player+80 "elapsed since state entry" counter (see the
+        // carried-bomb draw in draw_world for the full citation). Clamped at 5
+        // because carry_arc_index saturates at 3 = 5 - 2.
         const bool carrying_now = p.present && p.alive && p.carrying;
         if (carrying_now)
-            carry_ticks_[i] = carrying_prev_[i] ? std::min(carry_ticks_[i] + 1, 3) : 0;
+            carry_ticks_[i] = carrying_prev_[i] ? std::min(carry_ticks_[i] + 1, 5) : 0;
         carrying_prev_[i] = carrying_now;
     }
     // F9 mid-tick frame: nothing tick-cadenced to advance; leave last_tick_ so
@@ -877,7 +890,27 @@ void Renderer::draw_world(const sim::State& s) {
         int body_colour = disease_flash
                               ? disease_flash_colour()
                               : match::round_start_body_colour(s.tick, reveal_ticks, p.team, i);
-        const Anim* a = moving_[i] ? &q.walk[body_colour][dir] : &q.stand[body_colour][dir];
+        // Which pose family the body is drawn from — carry_pose.hpp's
+        // select_player_pose, a straight encoding of sub_41F29B's name-build
+        // order: the walk/idle flag and the carried-bomb pointer (+148) choose
+        // the BASE name, then the action-state word (+78) overwrites it. Each
+        // flag is dropped and the choice re-run if the ANI it needs is missing,
+        // so a partial install degrades to the next pose down instead of
+        // blanking the player out.
+        PoseFlags pf;
+        pf.moving = moving_[i];
+        pf.carrying = p.carrying;
+        pf.kick = kick_pose_[i] > 0;
+        pf.punch = punch_pose_[i] > 0;
+        // The pickup pose is NOT gated on `carrying`: the original's state 4
+        // outlives the bomb, since the release (bomb-action block 2) clears
+        // +148 and never touches +78. Throwing the instant the grab's 2-tick
+        // pause (VALUELST 665) ends leaves ~8 frames of "pickup <dir>" still
+        // to play — empty-handed, exactly as the original draws it.
+        pf.pickup = pickup_pose_[i] > 0;
+        pf.cornerhead = panic_active_[i];
+        pf.warping = p.warp > 0;
+        const Anim* a = nullptr;
         // Leg-cycle pacing: ONE anim frame per THREE pixels walked. The
         // original's pose frame is `(u16)player[+48] / 3 % statecnt`
         // (sub_41F29B pseudo.c 23410), and +48 advances once per PIXEL step
@@ -888,81 +921,91 @@ void Renderer::draw_world(const sim::State& s) {
         // hit a multiple of the sequence length (the reported "walk anim
         // stops after some skates" — e.g. 10 px/tick vs a 10-frame WALK.ANI).
         // docs/re/facts.md "Walk leg-cycle pacing".
-        std::size_t ph = moving_[i] ? walk_phase_[i] / (native_cadence_ ? 48u : 3u) : 0;
-        // Boxed-in idle: replace the pose with the current "cornerhead" fidget
-        // (direction-independent). sample_movement already rolled the variant/
-        // duration this tick; the phase just rides the sim tick so the frames
-        // advance. NOT gated on moving_: the original's fidget states 20-39
-        // are entered off enclosure alone (sub_41F29B 23006-23013) and held
-        // keys don't exit them — a boxed-in player mashing into the walls
-        // still fidgets, it doesn't pedal. Falls back to stand if the CORNER
-        // ANI is missing.
-        if (panic_active_[i] &&
-            !q.cornerhead[body_colour][panic_variant_[i]].steps.empty()) {
-            a = &q.cornerhead[body_colour][panic_variant_[i]];
-            // Elapsed-since-entry phase (sub_41F29B draws the fidget at its own
-            // up-counter, pseudo.c ~23238), so each rolled variant plays a clean
-            // 0..statecnt-1 cycle before sample_movement re-rolls the next one —
-            // not a raw global-tick phase that could start mid-animation.
-            ph = static_cast<std::size_t>(panic_elapsed_[i]);
-        }
-        // A recent kick/punch overrides walk/stand with the action pose, played
-        // once over its lifetime (falls back to walk/stand if the ANI is
-        // missing so nothing ever blanks out).
-        // elapsed = the sequence's own length - the remaining countdown (which
-        // on_events seeded FROM that same length, F3) — the original's
-        // elapsed-from-0 frame, ticking up to statecnt.
-        if (kick_pose_[i] > 0 && !q.kick[body_colour][dir].steps.empty()) {
-            a = &q.kick[body_colour][dir];
-            ph = static_cast<std::size_t>(static_cast<int>(a->steps.size()) - kick_pose_[i]);
-        } else if (punch_pose_[i] > 0 && !q.punch[body_colour][dir].steps.empty()) {
-            a = &q.punch[body_colour][dir];
-            ph = static_cast<std::size_t>(static_cast<int>(a->steps.size()) - punch_pose_[i]);
-        }
-        // Carrying a grabbed bomb wins over the idle fidget and the kick/punch
-        // poses (a carrying player can't kick/punch): show the "holding a bomb"
-        // walk/stand pose (BWALK*.ANI), same phase convention as walk/stand.
-        // Falls back to the plain walk/stand already selected if the ANI is
-        // missing so nothing ever blanks out.
-        if (p.carrying) {
-            const Anim* c =
-                moving_[i] ? &q.walkbomb[body_colour][dir] : &q.standbomb[body_colour][dir];
-            if (!c->steps.empty()) {
-                a = c;
-                // Same +48/3 pacing as walk/stand above — the original's
-                // carry poses share the one counter and the one /3 site.
-                ph = moving_[i] ? walk_phase_[i] / (native_cadence_ ? 48u : 3u) : 0;
+        const std::size_t walk_ph = moving_[i] ? walk_phase_[i] / (native_cadence_ ? 48u : 3u) : 0;
+        std::size_t ph = walk_ph;
+        // At most one flag is dropped per pass, so the loop always terminates
+        // well inside its guard.
+        for (int pass = 0; pass < 8; ++pass) {
+            bool* drop = nullptr;  // flag to clear and retry if this ANI is absent
+            switch (select_player_pose(pf)) {
+                case PlayerPose::Spin:
+                    // Warp/teleport (states 6/7): the original draws the "spin"
+                    // sequence (sub_41F29B strcpy'd @0x45a213) for both phases,
+                    // advancing its frame by the per-phase counter (+80).
+                    // Player::warp counts 18->0, so elapsed = kWarpTicks - warp
+                    // drives the frame; draw_anim's `% statecnt` cycles the spin
+                    // art across the 9-out + 9-in ticks.
+                    a = &q.spin[body_colour];
+                    ph = static_cast<std::size_t>(kWarpTicks - p.warp);
+                    drop = &pf.warping;
+                    break;
+                case PlayerPose::Kick:
+                case PlayerPose::Punch:
+                    // States 1/2, played once over their lifetime. elapsed = the
+                    // sequence's own length - the remaining countdown (which
+                    // on_events seeded FROM that same length) — the original's
+                    // elapsed-from-0 frame, ticking up to statecnt. Both branches
+                    // `goto LABEL_239` straight after, so unlike the pickup pose
+                    // below they keep this +80-based frame instead of the shared
+                    // tail's walk-phase recompute.
+                    if (pf.kick) {
+                        a = &q.kick[body_colour][dir];
+                        ph = static_cast<std::size_t>(static_cast<int>(a->steps.size()) -
+                                                      kick_pose_[i]);
+                        drop = &pf.kick;
+                    } else {
+                        a = &q.punch[body_colour][dir];
+                        ph = static_cast<std::size_t>(static_cast<int>(a->steps.size()) -
+                                                      punch_pose_[i]);
+                        drop = &pf.punch;
+                    }
+                    break;
+                case PlayerPose::Pickup:
+                    // State 4. The DISPLAYED frame is walk-phase-driven, NOT
+                    // elapsed-since-grab: the original unconditionally recomputes
+                    // the frame at the shared draw tail, calling sub_41DAA7 with
+                    // the sequence and the player's +0x30 word (unsigned 16-bit)
+                    // divided by 3 (pseudo.c 23410; confirmed in the disassembly
+                    // at 0x420350-0x420379, an integer division by 3), discarding
+                    // the elapsed-based frame the pickup block computed. Only
+                    // pickup_pose_'s countdown (the state's exit timer, set from
+                    // the sequence length) survives.
+                    a = &q.pickup[body_colour][dir];
+                    ph = walk_ph;
+                    drop = &pf.pickup;
+                    break;
+                case PlayerPose::Cornerhead:
+                    // Boxed-in idle fidget (states 20-39, direction-independent).
+                    // sample_movement already rolled the variant this tick. NOT
+                    // gated on moving_: the original enters off enclosure alone
+                    // (sub_41F29B 23006-23013) and held keys don't exit it — a
+                    // boxed-in player mashing into the walls still fidgets, it
+                    // doesn't pedal. Elapsed-since-entry phase (the fidget draws
+                    // at its own up-counter, pseudo.c ~23238), so each rolled
+                    // variant plays a clean 0..statecnt-1 cycle before
+                    // sample_movement re-rolls the next one.
+                    a = &q.cornerhead[body_colour][panic_variant_[i]];
+                    ph = static_cast<std::size_t>(panic_elapsed_[i]);
+                    drop = &pf.cornerhead;
+                    break;
+                case PlayerPose::WalkBomb:
+                case PlayerPose::StandBomb:
+                    // Carrying (+148): the "holding a bomb" walk/stand pose
+                    // (BWALK*.ANI). Same +48/3 pacing as walk/stand — the
+                    // original's carry poses share the one counter and the one
+                    // /3 site.
+                    a = pf.moving ? &q.walkbomb[body_colour][dir] : &q.standbomb[body_colour][dir];
+                    ph = walk_ph;
+                    drop = &pf.carrying;
+                    break;
+                case PlayerPose::Walk:
+                case PlayerPose::Stand:
+                    a = pf.moving ? &q.walk[body_colour][dir] : &q.stand[body_colour][dir];
+                    ph = walk_ph;
+                    break;
             }
-            // The "picking up" transitional pose (PUP*.ANI, sub_41F29B
-            // action-state 4) wins over the steady carry pose while its
-            // countdown runs — the original enters state 4 on the grab and
-            // only then settles into the carry poses. Played once, front to
-            // back (its length was set from this very sequence's step count).
-            const Anim& up = q.pickup[body_colour][dir];
-            if (pickup_pose_[i] > 0 && !up.steps.empty()) {
-                a = &up;
-                // The DISPLAYED frame is walk-phase-driven, NOT elapsed-since-
-                // grab: the original unconditionally recomputes the frame at the
-                // shared draw tail, calling sub_41DAA7 with the sequence and the
-                // player's +0x30 word (unsigned 16-bit) divided by 3 (pseudo.c
-                // 23410; confirmed in the disassembly at 0x420350-0x420379, an
-                // integer division by 3), discarding the elapsed-based frame the
-                // pickup block computed. Only pickup_pose_'s countdown (the
-                // state's exit timer, set from the sequence length) survives.
-                // Same +48/3 walk leg-cycle as the walk/stand/carry poses above.
-                ph = moving_[i] ? walk_phase_[i] / (native_cadence_ ? 48u : 3u) : 0;
-            }
-        }
-        // Warp/teleport pose wins over everything: while warping the player is
-        // fully state-gated (states 6/7, no walk/kick/carry), and the original
-        // draws the "spin" sequence (sub_41F29B strcpy'd @0x45a213) both phases,
-        // advancing its frame by the per-phase counter (+80). Player::warp counts
-        // 18→0, so elapsed = kWarpTicks - warp drives the frame; draw_anim's
-        // `% statecnt` cycles the spin art across the 9-out + 9-in ticks. Falls
-        // back to the pose already selected if WALK.ANI has no "spin".
-        if (p.warp > 0 && !q.spin[body_colour].steps.empty()) {
-            a = &q.spin[body_colour];
-            ph = static_cast<std::size_t>(kWarpTicks - p.warp);
+            if (drop == nullptr || !a->steps.empty()) break;
+            *drop = false;
         }
         draw_anim(*a, ph, sx, sy);
         if (p.carrying) {  // held bomb rides above the head
@@ -970,39 +1013,43 @@ void Renderer::draw_world(const sim::State& s) {
             // Bomb-pickup carry arc (docs/re/id-audit.md item 4; VALUELST
             // 500/502/504/506, "the curve (upwards) of a bomb being picked
             // up"). Pinned consumer: the BOMB tick function `sub_42331C`'s
-            // "carried" state-3 branch (pseudo.c ~25488-25497), gated on the
-            // CARRIER's player-state field +78 == 4 ("picking up"). It derives a
-            // curve step k = clamp((carrier's +80 elapsed-frame count) - 1, 0, 3),
-            // then places the bomb at the carrier's position nudged 10 px along
-            // the facing direction, plus getvalue(2*k+500) further along that
-            // direction in X, and minus getvalue(2*k+501) in Y —
-            // i.e. a small forward nudge (+10px) plus the curve's own forward
-            // reach in the facing direction, and a vertical lift that grows
-            // from the curve's Y column (10/20/30/40 px) as the carry ages;
-            // k clamps at 3 so the bomb settles at the LAST curve point
-            // (12,40) for the remainder of the carry, not just a 4-frame pop.
-            // carry_ticks_ (sample_movement) mirrors the +80 elapsed-frames
-            // counter, already clamped 0..3. Read live off VALUELST so a
-            // modified install's curve/columns change the arc; falls back to
-            // the shipped values. dx/dy match our Direction enum order
-            // (Up,Down,Left,Right — grid::dir_dx/dir_dy are sim-internal, so
-            // this mirrors them locally for the renderer).
+            // "carried" state-3 branch (pseudo.c ~25488-25497), which has TWO
+            // branches on the CARRIER's player-state field +78:
+            //   +78 == 4 (the pickup animation): curve step
+            //     k = clamp((carrier's +80 elapsed-frame count) - 1, 0, 3), then
+            //     x = carrier_x + dx * (10 + getvalue(2*k+500))
+            //     y = carrier_y + dy * 10 - getvalue(2*k+501)
+            //     — a 10 px forward nudge plus the curve's own forward reach,
+            //     and a vertical lift growing through the curve's Y column
+            //     (10/20/30/40 px) as the pickup animation plays.
+            //   any other state (the steady carry): NO curve at all —
+            //     x = carrier_x + dx * 10, y = carrier_y + dy * 10 - 40,
+            //     i.e. the bomb sits straight above the head.
+            // The port used to run the arc for the whole carry with k saturated
+            // at 3, leaving the bomb permanently 12 px too far forward — half a
+            // tile off to the side whenever the carrier faced west/east.
+            // carry_ticks_ (sample_movement) is our +80 equivalent; the curve
+            // columns are read live off VALUELST so a modified install's curve
+            // changes the arc, falling back to the shipped values. dx/dy match
+            // our Direction enum order (Up,Down,Left,Right — grid::dir_dx/dir_dy
+            // are sim-internal, so this mirrors them locally for the renderer).
             static constexpr int kCarryArcIds[4] = {500, 502, 504, 506};
-            static constexpr float kCarryArcXDefault[4] = {12, 25, 25, 12};
-            static constexpr float kCarryArcYDefault[4] = {10, 20, 30, 40};
+            static constexpr int kCarryArcXDefault[4] = {12, 25, 25, 12};
+            static constexpr int kCarryArcYDefault[4] = {10, 20, 30, 40};
             static constexpr float kCarryDirDx[4] = {0, 0, -1, 1};  // Up,Down,Left,Right
             static constexpr float kCarryDirDy[4] = {-1, 1, 0, 0};
-            const int t = carry_ticks_[i];
-            const float cx =
-                values_ ? static_cast<float>(values_->column_or(
-                              kCarryArcIds[t], 0, static_cast<std::int64_t>(kCarryArcXDefault[t])))
-                        : kCarryArcXDefault[t];
-            const float cy =
-                values_ ? static_cast<float>(values_->column_or(
-                              kCarryArcIds[t], 1, static_cast<std::int64_t>(kCarryArcYDefault[t])))
-                        : kCarryArcYDefault[t];
-            const float bx = sx + kCarryDirDx[dir] * (cx + 10.0f);
-            const float by = sy + kCarryDirDy[dir] * 10.0f - cy;
+            const int t = carry_arc_index(carry_ticks_[i]);
+            const int cx =
+                values_
+                    ? static_cast<int>(values_->column_or(kCarryArcIds[t], 0, kCarryArcXDefault[t]))
+                    : kCarryArcXDefault[t];
+            const int cy =
+                values_
+                    ? static_cast<int>(values_->column_or(kCarryArcIds[t], 1, kCarryArcYDefault[t]))
+                    : kCarryArcYDefault[t];
+            const CarryOffset off = carried_bomb_offset(pickup_pose_[i] > 0, cx, cy);
+            const float bx = sx + kCarryDirDx[dir] * static_cast<float>(off.forward);
+            const float by = sy + kCarryDirDy[dir] * 10.0f - static_cast<float>(off.lift);
             draw_anim(q.bomb[bo], pulse, bx, by);
         }
     }

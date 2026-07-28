@@ -5964,6 +5964,86 @@ in the predicate. To settle it: on level 4 (`EXTRA4.RES`, warp holes at (2,2),
 and the two rows either side, from each of the four directions, and note every
 case where one build takes you and the other does not.
 
+## Grab / carry / throw presentation — CONFIRMED + PORTED (2026-07-28, `sub_41F29B`/`sub_42331C`)
+
+Audit of the glove sequence (grab a bomb, carry it, throw it) after a report
+that the throw animation looked wrong. Three separate findings; the third is
+the visible one.
+
+**The asset side is correct and needs no change.** `MASTER.ALI` loads
+`BWALK1..4.ANI` (`walkbomb <dir>` 15 steps + `standbomb <dir>` 1 step, one
+direction per file), `PUP1..4.ANI` (`pickup <dir>`, 10 steps) and
+`PUNBOMB1..4.ANI` — never `BOMBWALK.ANI` or `BPICKUP.ANI`, which ship but are
+dead art (the "ANI sequence-name audit" entry already established this).
+`SequenceSet::resolve` probes the four files per name, so no direction index
+can be off by construction. Verified against the shipped install with
+`abtool ani`.
+
+**There is no throw animation, and that is correct.** The bomb-action block's
+carried-release (block 2 of the truth table in "Player state machine (+78) —
+COMPLETE") launches via `sub_424987` and writes `+148 = 0`; it never touches
+`+78`. So a throw is depicted purely by the base name reverting from
+`walkbomb`/`standbomb` to `walk`/`stand`. The port matches — nothing draws a
+throw pose, and `BombThrown` is silent for the same reason (see
+`sound_director.cpp`'s "two silent bomb events").
+
+1. **Action poses OUTRANK the carry pose.** `sub_41F29B`'s name build
+   (LABEL_155) formats the BASE name first — `stand %s`/`walk %s`, or
+   `standbomb %s`/`walkbomb %s` when the carried-bomb pointer `+148` is set —
+   and only THEN lets the `+78` switch overwrite that same buffer with
+   `kick %s` (1), `punch %s` (2) or `pickup %s` (4). Our renderer applied the
+   carry pose LAST, so a carrying player who kicked a bomb (reachable: the kick
+   probe lives in the mover and never checks `+148`) kept the carry pose where
+   the original swings. Fixed; the precedence now lives in
+   `libs/game/include/bomber/game/carry_pose.hpp` (`select_player_pose`) so the
+   headless suite can pin it.
+2. **The pickup pose outlives the bomb.** State 4 exits on its own animation
+   length (`+80 > statecnt`, 10 frames), while the grab's movement pause is
+   only `getvalue(665)` = 2 ticks and the release clears `+148` without
+   touching `+78`. Throwing the instant the pause ends therefore leaves ~8
+   frames of `pickup <dir>` still playing, empty-handed. Our renderer nested
+   the pickup pose inside `if (p.carrying)`, so it snapped back to walk/stand
+   on the throw. Fixed. (The three presentation countdowns now also clobber
+   each other on entry, mirroring the fact that `+78` is ONE word.)
+3. **A carried bomb rides ABOVE THE HEAD, not ahead of it.** `sub_42331C`'s
+   bomb motion-state 3 ("carried") branch reads the CARRIER's `+78` and has two
+   arms, not one:
+   - `+78 == 4` (the pickup animation): curve step
+     `k = clamp((carrier's +80) - 1, 0, 3)`, then
+     `x = carrier_x + dx*(10 + getvalue(2k+500))`,
+     `y = carrier_y + dy*10 - getvalue(2k+501)`.
+   - **any other state**: no curve at all —
+     `x = carrier_x + dx*10`, `y = carrier_y + dy*10 - 40` (both literals).
+
+   The port ran the curve for the WHOLE carry with `k` saturated at 3, so the
+   bomb stayed at the last curve point's forward reach forever: 22 px along the
+   facing direction instead of 10, i.e. **12 px — over a quarter of a 40 px
+   tile — too far to the side** for every west/east-facing carry, for as long
+   as the bomb was held. The lift was already right (the curve's last Y column
+   is 40, the same number the else-arm hardcodes), which is why only the
+   horizontal drift showed. Fixed: `carried_bomb_offset` picks the arm off the
+   pickup state, and `carry_arc_index` reproduces the `-1` plus the one-frame
+   staleness (`sub_4245B9` → `sub_42331C` runs BEFORE `sub_420F07` →
+   `sub_41F29B` in the frame loop, so the `+80` a carried bomb reads is always
+   last frame's).
+
+Presentation only: no `libs/sim` change, no golden hash and no `build_hash`
+movement. `tests/visual/` is unmoved — the scripted demo never grabs a bomb
+(verified green). Tests: `tests/game/test_anim.cpp` (five new cases).
+
+### Adjacent, NOT fixed here
+
+- **The head-stun pose spins.** In the idle branch the direction byte fed to
+  `stand %s` is `+80 & 3` when `+58` (head-hit stun) is non-zero, not the
+  player's facing — a stunned player's sprite cycles through all four facings.
+  Our renderer draws the plain stand pose in the facing direction. Separate
+  mechanic (head hit, not the glove); left for its own pass.
+- **The grab tick's first frame.** The original's bomb pass has already run
+  when the grab happens, so on that one frame the bomb is still drawn resting
+  on the floor; our sim deactivates the bomb slot immediately, so we draw it
+  already held. A one-frame artifact of where the slot lives, not of the offset
+  math.
+
 ## Still guessed — not yet extracted from the binary
 
 | Constant | Current value | Status |
