@@ -92,7 +92,18 @@ bool AudioEngine::init(const std::filesystem::path& game_dir,
     music_stream_ =
         SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
     if (music_stream_) {
-        SDL_SetAudioStreamGain(music_stream_, 0.55f);  // sit under the effects
+        // NO music duck. The original attenuates NOTHING: the master volume is
+        // set exactly once, at sound-system bring-up (0x4194F0), to 0x7FFF =
+        // maximum, and every sound object — music and SFX alike — is born at
+        // 0x7FFF too (the constructor's own store at 0x4197A9). The per-object
+        // SetVolume wrapper sub_41A50D has five callers and ALL five live inside
+        // the sound library, replaying an object's already-stored level; no game
+        // code ever asks for a level. So music and effects share one bus at full
+        // scale and their relative loudness is whatever the authored .RSS files
+        // carry. (docs/re/sound-engine.md §9. This line used to apply a 0.55
+        // gain "to sit under the effects" — an invented constant with no
+        // citation, and audibly wrong: it made every music track two thirds the
+        // level the 1997 mix intended.)
         SDL_ResumeAudioStreamDevice(music_stream_);
     }
     sting_stream_ =

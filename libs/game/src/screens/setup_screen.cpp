@@ -18,17 +18,11 @@
 
 namespace bomber::game {
 
-namespace {
-
 // The Play-handler music (sub_42A3F6, docs/re/in-match-shell.md §2): id 1020
-// (0x3FC, "win" in SOUNDLST) is actually the SETUP-SCREENS backdrop track, not
-// victory music — started here at player-select entry and inherited by the
-// LEVEL & ROUNDS screen; a looping track (start_music). game_app.cpp keeps its
-// own copy for the goldman wheel / scoreboard (the fuller RE note lives there,
-// beside kDrawMusicId for the outcome tier) until those screens extract too.
-constexpr int kWinMusicId = 1020;  // 0x3FC — WIN.RSS, setup-screens backdrop (NOT victory)
-
-}  // namespace
+// (0x3FC, "win" in SOUNDLST) is the SETUP-SCREENS backdrop track, not victory
+// music. This screen and the LEVEL & ROUNDS screen both merely INHERIT it, so
+// the constant is not needed here at all — game_app.cpp owns kWinMusicId and
+// starts it once per Play entry (docs/re/sound-engine.md §9).
 
 // Cycle a slot's input type FORWARD one step (sub_421E80 @0x421E80): 0 off ->
 // 1 computer -> 2 keyboard sub 0 -> 2 keyboard sub 1 -> 3 joystick per present
@@ -52,7 +46,11 @@ void SetupScreen::cycle_input_type(int slot) {
 // (OFF->CPU->KBD0->KBD1->OFF), Left/'0' set it OFF, 'T' toggles its team, Enter
 // goes on to the LEVEL screen, Escape cancels to the menu. Presentation only.
 AppInput SetupScreen::run() {
-    ctx_.audio.start_music(kWinMusicId);  // 1020, the Play-handler track (sub_42A3F6)
+    // NO music call here, deliberately. sub_410F81 starts none: the 1020 track
+    // is already running, started by its caller sub_42A3F6 at 0x42A436 (the
+    // port's run_app StartMatch handler does the same). This screen used to
+    // restart it, which restarted WIN.RSS from the top whenever the goldman
+    // wheel ran first — the wheel had the identical bug. docs/re/sound-engine.md §9.
     // ONLINE ROSTER (docs/re/network-screens.md §7, net_setup_link.hpp): the same
     // screen, wired to the host-authoritative setup session. `net_mode` false is
     // the ordinary local path and every branch below it is inert.

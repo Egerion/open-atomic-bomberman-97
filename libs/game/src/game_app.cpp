@@ -17,6 +17,7 @@
 #include "bomber/game/anim_pace.hpp"
 #include "bomber/game/bmscreen.hpp"
 #include "bomber/game/dialog_chrome.hpp"
+#include "bomber/audio/round_music.hpp"  // round_music_id (shared with MatchRunner)
 #include "bomber/game/dos_scancode.hpp"
 #include "bomber/game/frontend_util.hpp"
 #include "bomber/game/hud_format.hpp"
@@ -761,12 +762,35 @@ namespace {
 // this file; setup_screen.cpp keeps its own copy too.
 // The outcome-tier music this file still owns (sub_42A3F6), CORRECTED by
 // docs/re/in-match-shell.md §2 (supersedes this file's earlier "1020 under
-// VICTORY" reading): at Round end (pseudo.c 29820) sub_42741E(0x46A) = 1130
-// ("draw") replaces the stage track UNCONDITIONALLY, before the survivor test —
-// so DRAW, the RESULTS tally, AND VICTORY/TEAM all play under 1130; nothing
-// restarts 1020 anywhere in the outcome tier. A looping track (start_music),
-// replacing the menu/stage music.
+// VICTORY" reading): at Round end sub_42741E(0x46A) = 1130 ("draw") replaces
+// the stage track before the survivor test — so DRAW, the RESULTS tally, AND
+// VICTORY/TEAM all play under 1130; nothing restarts 1020 anywhere in the
+// outcome tier. A looping track (start_music), replacing the menu/stage music.
+//
+// "UNCONDITIONALLY" was too strong and is CORRECTED 2026-07-28
+// (docs/re/sound-engine.md §9): the 1130 start at 0x42A6DD sits behind TWO
+// gates that the round-loop exit passes through first.
+//   * ATTRACT (0x42A6CB, `dword_464938`) — an attract round skips the whole
+//     outcome tier. The port already bypasses it (run_app's attract_ branch).
+//   * CAMPAIGN (0x42A63B, `dword_46489C`) — this one the port was getting
+//     wrong. A campaign round end takes an entirely separate arm that shows at
+//     most one modal (`sub_414340`, and only when the pacing flag dword_464894
+//     is 2) and then goes STRAIGHT back into the round init sub_410B6E for the
+//     next stage. It never reaches 1130, and it never reaches DRAW, the RESULTS
+//     tally or VICTORY either.
 constexpr int kDrawMusicId = 1130;  // 0x46A — DRAW.RSS, DRAW *and* RESULTS *and* VICTORY backdrop
+// The SETUP-SCREENS track, started ONCE per Play entry at the head of
+// sub_42A3F6 (0x42A436) — before sub_410F81, and so before both the goldman
+// wheel and the player-select screen, which merely INHERIT it. Owned here
+// because run_app's StartMatch handler is this port's sub_42A3F6 head; the
+// screens themselves must not restart it (docs/re/sound-engine.md §9).
+constexpr int kWinMusicId = 1020;  // 0x3FC — WIN.RSS, setup-screens backdrop (NOT victory)
+// NETWORK.RSS, the net front end's own track: sub_42B0CE (START NET GAME,
+// 0x42B11B) and sub_42B47D (JOIN NET GAME, 0x42B4C0) each start it as their
+// first act. Nothing switches it back explicitly — the menu's outer loop
+// (sub_42B9CE @0x42B9EA) re-arms its music flag on every re-entry and restarts
+// 1010, which is what reclaims the loop when either screen returns.
+constexpr int kNetMusicId = 1040;  // 0x410 — NETWORK.RSS
 // kStageMusicFallback (1120, 0x460 GENERIC.RSS — the per-level in-round stage
 // track fallback) moved to screens/match_runner.cpp with start_match, its only
 // user (sub_4293E5, docs/re/in-match-shell.md §2).
@@ -1193,15 +1217,27 @@ AppInput GameApp::run_netplay_match_seats(net::Transport& transport, std::uint16
         // config here): stage art + a live music track + a fresh renderer/HUD +
         // sound state. Re-run every round because a RANDOM level rotates the
         // stage between rounds exactly as it does locally (the host's
-        // build_config resolves it from that round's seed). disable_game_music is
-        // presentation-only (never sim), so netplay just keeps music on.
-        if (assets_.load_stage(stage)) {
-            seqs_.resolve_stage(assets_, stage);
-            int stage_music = 1100 + stage;
-            if (!audio_.has_track(stage_music))
-                stage_music = 1120;  // GENERIC.RSS fallback (sub_4293E5)
-            audio_.start_music(stage_music);
-        }
+        // build_config resolves it from that round's seed).
+        //
+        // "disable_game_music is presentation-only (never sim), so netplay just
+        // keeps music on" — that stood here and was wrong twice over. Being
+        // presentation-only is exactly why the option can be honoured online: it
+        // needs no agreement with the peer, it moves no hash, and each player's
+        // own options.ini is the only thing that should decide whether their
+        // machine plays music. The original agrees — the guard at 0x410E88 is a
+        // bare test of dword_4648C0 with no network arm (docs/re/sound-engine.md
+        // §9), and the ONE place the round-music path does consult sub_40C06A is
+        // inside sub_4293E5, choosing GENERIC over the per-level track, never
+        // whether music plays at all. So this shares round_music_id() with the
+        // local path rather than keeping a second, divergent copy.
+        if (assets_.load_stage(stage)) seqs_.resolve_stage(assets_, stage);
+        // Not gated on the art loading, for the same reason as the local path.
+        const int track = round_music_id(stage, options_.disable_game_music,
+                                         [this](int id) { return audio_.has_track(id); });
+        if (track == kRoundMusicSilent)
+            audio_.stop_music();
+        else
+            audio_.start_music(track);
         // Untimed HUD from the AGREED config, not from this peer's own
         // options.ini. Play Time travels as part of the host's Tuning, so the
         // CLOCK was already the host's — but this flag was hardcoded false, so
@@ -1612,6 +1648,13 @@ std::string url_host(const std::string& url) {
 }  // namespace
 
 AppInput GameApp::present_net_host() {
+    // NETWORK.RSS (1040) is started by the MENU DISPATCH, not here — see the
+    // AppState::NetHost/NetJoin arms in run_app. It has to be, because this
+    // function can reach present_net_join() through the lobby menu's JoinDirect
+    // row, and starting the track in both bodies would restart it from the top
+    // on that hop (the same defect the goldman wheel -> player select hand-off
+    // had). The original has no such nesting: sub_42B0CE and sub_42B47D are two
+    // separate menu rows, each starting 1040 as its own first act.
     // START NET GAME (menu row 1) now opens the NETWORK GAME menu (ADR-0011
     // Phase 1d): the online lobby entry points plus the ADR-0010 direct/LAN
     // rows, which need no server and must keep working. Menu row 2 (JOIN NET
@@ -1809,6 +1852,9 @@ AppInput GameApp::present_net_join() {
     // 127.0.0.1:kNetDefaultPort), connect, run the handshake as guest (adopting
     // the host's seed), then watch the host's roster/map screens read-only and
     // run the match as seat 1 with the config the host confirmed.
+    //
+    // NETWORK.RSS (1040) — started by the menu dispatch, see present_net_host's
+    // note for why it is not started here.
     net::UdpTransport transport;
     NetplayConnectResult r = NetplayConnectScreen(sctx()).run_join(transport, kNetDefaultPort);
     if (r.window_closed) return AppInput::Quit;
@@ -2246,6 +2292,22 @@ int GameApp::run_app() {
                     // so we reset FIRST, then let the level screen adjust
                     // win_target_.
                     reset_match_scores();
+                    // The SETUP-SCREENS track (1020), started ONCE for the whole
+                    // Play flow — this line is sub_42A3F6's own 0x42A436, which
+                    // sits between the campaign reset above and the call to
+                    // sub_410F81 below and is the ONLY site in the binary that
+                    // ever names 1020 (exhaustive: six music call sites in the
+                    // whole image, docs/re/sound-engine.md §9).
+                    //
+                    // It lives here, not in the screens, because start_music is
+                    // a genuine restart — sub_42741E frees the handle and
+                    // reloads from sample 0, with no same-id no-op — so the
+                    // goldman wheel and the player-select screen each calling it
+                    // meant WIN.RSS audibly jumped back to the top as the wheel
+                    // handed over. Both of those screens carried a comment
+                    // saying they inherit the track and start no music of their
+                    // own; now they actually do.
+                    audio_.start_music(kWinMusicId);
                     // ATTRACT short-circuit (docs/re/frontend-flow.md
                     // "Attract mode" point 1, sub_410F81 pseudo.c 15125-15143):
                     // present_menu() already rolled the demo roster/stage into
@@ -2358,6 +2420,27 @@ int GameApp::run_app() {
                 // carries its own backdrop music — previously our DRAW/
                 // RESULTS/VICTORY screens played under whatever music was
                 // left running, a silent-vs-original gap now closed.
+                // The outcome-tier backdrop, CAMPAIGN-GATED. sub_42A3F6's round
+                // loop tests dword_46489C at 0x42A63B and a campaign round end
+                // branches away entirely: at most one modal (sub_414340, and
+                // only when the pacing flag dword_464894 is 2), then straight
+                // back into the round init sub_410B6E for the next stage. It
+                // never reaches the 1130 start at 0x42A6DD.
+                //
+                // SCOPE, stated plainly: the same branch means a campaign round
+                // end shows no DRAW, no RESULTS tally and no VICTORY either, and
+                // the port DOES show all three. That is a real divergence and it
+                // is NOT fixed here — reshaping the campaign round end touches
+                // the stage advance, the gold-player assignment and the
+                // scoreboard, which is its own change with its own tests. What
+                // this gate does fix is the invented CUE: those screens no
+                // longer swap the track out from under a campaign, so they run
+                // on the stage music the round init left playing, which is what
+                // the original is actually doing at that moment.
+                const auto start_outcome_music = [this] {
+                    if (campaign_active_) return;
+                    audio_.start_music(kDrawMusicId);
+                };
                 int w = round_winner();
                 // Round-pacing clauses 4-5 override (docs/re/campaign.md
                 // "Round pacing", sub_4016DA, PORTED 2026-07-09): in campaign
@@ -2411,7 +2494,7 @@ int GameApp::run_app() {
                     // inside the branch taken when v73 is not -1) — THEN cuts to VICTORY.
                     // The port formerly skipped the scoreboard and jumped straight
                     // to VICTORY (and mis-fired 2000 on every round win too).
-                    audio_.start_music(kDrawMusicId);  // 1130 under RESULTS/VICTORY (doc §2)
+                    start_outcome_music();  // 1130 under RESULTS/VICTORY (doc §2), not in campaign
                     audio_.play_random_in_range(2000, 2299);  // winner voice — clinch only
                     ev = present_scoreboard();  // the clinch scoreboard (WINS THE MATCH!)
                     // Then VICTORY<player>.PCX / TEAM<0/1>.PCX (frontend-flow.md
@@ -2472,7 +2555,7 @@ int GameApp::run_app() {
                     // RESULTS pass (index -1, batch_0x4293E5.cpp:1260-1272) plays no
                     // "we have a winner" cue. (The port formerly fired it every
                     // round win.)
-                    audio_.start_music(kDrawMusicId);  // 1130 under RESULTS (doc §2 correction)
+                    start_outcome_music();  // 1130 under RESULTS (doc §2), not in campaign
                     ev = present_scoreboard();
                 } else {
                     // DRAW (no survivor / time-up), OR the campaign_no_human_
@@ -2489,7 +2572,7 @@ int GameApp::run_app() {
                     // (an AI side surviving with no human left): both land
                     // here, "replay a round" is exactly "replay the same
                     // campaign stage", with no separate decrement needed.
-                    audio_.start_music(kDrawMusicId);  // 1130 draw track under DRAW
+                    start_outcome_music();  // 1130 under DRAW (doc §2), not in campaign
                     audio_.play_random_in_range(kDrawStingLo, kDrawStingHi);
                     // sub_42A3F6's DRAW loop only auto-advances (6 s) for an
                     // all-AI/attract roster; a human match waits for Enter. A
@@ -2538,8 +2621,22 @@ int GameApp::run_app() {
             // the seed handshake then a 2-player UDP lockstep match, returning
             // Quit (window closed) or Advance (match over / cancelled) — next()
             // routes both leaves back to the menu (increment 5c, ADR-0010).
-            case AppState::NetHost: ev = present_net_host(); break;
-            case AppState::NetJoin: ev = present_net_join(); break;
+            // NETWORK.RSS (1040), the track that was unreachable in this port
+            // until 2026-07-28. These two arms ARE the original's menu rows 1
+            // and 2, and each of its two net screens starts 1040 as its first
+            // act: sub_42B0CE @0x42B11B and sub_42B47D @0x42B4C0 (an exhaustive
+            // sweep finds six music call sites in the whole image and two of
+            // them are these — docs/re/sound-engine.md §9). Nothing switches
+            // back explicitly: present_menu() restarts 1010 on every menu entry,
+            // which is exactly how the original reclaims the loop.
+            case AppState::NetHost:
+                audio_.start_music(kNetMusicId);
+                ev = present_net_host();
+                break;
+            case AppState::NetJoin:
+                audio_.start_music(kNetMusicId);
+                ev = present_net_join();
+                break;
             case AppState::Credits: ev = present_bm_screen("CREDITS"); break;
             case AppState::Quit: break;
         }
