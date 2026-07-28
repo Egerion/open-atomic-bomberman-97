@@ -568,6 +568,38 @@ small campaign-pacing helper:
 Clause 2 needed no change. See "Sim port" and "Presentation" below for file-
 level detail.
 
+## Round end — a campaign round SKIPS the whole outcome tier (2026-07-28)
+
+Evidence class: exhaustive read of `sub_42A3F6`'s round-loop exit, cross-checked
+against every reference to `dword_46489C` and `dword_464894` in the image.
+
+The round loop's exit tests the campaign flag `dword_46489C` at **`0x42A63B`**,
+before anything else in the outcome path, and a campaign match branches away
+entirely:
+
+| | normal match | CAMPAIGN |
+|---|---|---|
+| where `0x42A63B` goes | `0x42A6A9`, into the outcome tier | stays, into the campaign arm |
+| music | `sub_42741E(0x46A)` = 1130 @`0x42A6DD` | **none** — never reaches that call |
+| DRAW / RESULTS / VICTORY | shown per survivor count | **none of them** |
+| what it does instead | the tally, the clinch, the wheel award | at most ONE modal — `sub_414340` with getstring(1240)/getstring(1245) — and only when the pacing flag `dword_464894` is **2** |
+| next | back to `0x42A47C` for the next round | `sub_410B6E` @`0x42A68B` (the round init) for the next stage, then out through the same `0x42AFF8` exit |
+
+`dword_464894` is written only by `sub_4016DA`, the round pacing above (2 at
+`0x4016F7` and `0x40178C`, 1 at `0x401730`, cleared at `0x401548`), plus the
+`= 1` at `0x42A5BE` on this same path. So it is the pacing verdict, and only
+verdict 2 gets a banner.
+
+**Port status — PARTIALLY divergent, deliberately.** The port routes a campaign
+round end through the ordinary Results tier, so it shows DRAW / RESULTS /
+VICTORY where the original shows none of them. As of 2026-07-28 the MUSIC half
+is fixed — `game_app.cpp`'s `start_outcome_music()` returns early when
+`campaign_active_`, so those screens no longer swap 1130 in over the stage track
+the round init left playing. The SCREENS half is not fixed: removing them
+touches the stage advance, the gold-player assignment and the scoreboard, and
+wants its own change with its own tests. Recorded here so it is a known,
+scoped gap rather than an unnoticed one.
+
 ## Stage banner — CONFIRMED (`sub_40133F`, pseudo.c 4443-4504) and PORTED 2026-07-09
 
 `sub_40133F` (called from `sub_410B6E`, the same end-of-round/stage-advance

@@ -18,16 +18,14 @@ namespace bomber::game {
 
 namespace {
 
-// Local copies of the two RESULTS-tier ids/timings (game_app.cpp keeps its own
-// for the outcome tier it still owns — kDrawMusicId under DRAW/VICTORY, and
-// kResultsDwellMs for the DRAW ScreenDef — the fuller RE note lives there,
-// beside kDrawMusicId).
-//   kWinMusicId (0x3FC, "win" in SOUNDLST) is actually the SETUP-SCREENS backdrop
-// track, not victory music (docs/re/in-match-shell.md §2): the goldman wheel
-// inherits it from the Play handler sub_42A3F6 and starts no new music.
-//   kResultsDwellMs is sub_42A3F6's 6 s auto-advance dwell for an all-AI/attract
-// RESULTS loop (a human match waits for Enter — auto_advance_results()).
-constexpr int kWinMusicId = 1020;                // 0x3FC — WIN.RSS, setup-screens backdrop (NOT victory)
+// sub_42A3F6's 6 s auto-advance dwell for an all-AI/attract RESULTS loop (a
+// human match waits for Enter — auto_advance_results()). game_app.cpp keeps its
+// own copy for the outcome tier it still owns, alongside kDrawMusicId.
+//
+// There is no music id here any more: 1020 is the SETUP-SCREENS backdrop track
+// (docs/re/in-match-shell.md §2) and the goldman wheel genuinely inherits it
+// from the Play handler sub_42A3F6 rather than starting it, so game_app.cpp is
+// its only owner (docs/re/sound-engine.md §9).
 constexpr std::uint32_t kResultsDwellMs = 6000;  // sub_42A3F6 attract auto-advance
 
 }  // namespace
@@ -303,7 +301,12 @@ AppInput ScoreboardScreen::run() {
 // Esc-abort's gold_player_ clear (doc §2 "Cleared to -1 by: Esc on the
 // wheel").
 AppInput GoldmanWheelScreen::run() {
-    ctx_.audio.start_music(kWinMusicId);  // 1020 inherits from the Play handler (doc §7); no new music
+    // NO music call here — the wheel inherits 1020 from the Play handler, which
+    // is what this screen's own comment always claimed while the code did the
+    // opposite. sub_4034BC starts no track; the port's run_app StartMatch
+    // handler starts 1020 once, before both this and the setup screen, mirroring
+    // sub_42A3F6 @0x42A436. Restarting it here made WIN.RSS jump back to the top
+    // on the hand-off to player select. docs/re/sound-engine.md §9.
     const int segment_steps = static_cast<int>(ctx_.values.column_or(1004, 0, kWheelSegmentSteps));
     const int cx = static_cast<int>(ctx_.values.column_or(1000, 0, 320));
     const int cy = static_cast<int>(ctx_.values.column_or(1000, 1, 240));
