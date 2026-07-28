@@ -10,6 +10,12 @@ When the match clock runs low, solid wall tiles drop in a clockwise spiral from
 the top-left corner inward, crushing whatever they land on. This is the
 pressure mechanic that ends drawn-out rounds.
 
+> Citations below to `native/src/...` and `native/tools/...` point at a
+> local-only 1:1 transliteration of the binary. It is gitignored as exe-derived
+> material and is **not** published with this repository, so those paths will not
+> resolve for a reader — the checkable citation is the `sub_XXXX` address next to
+> them. See `docs/re/method.md`.
+
 ## 1. The stepper — `sub_426818`
 
 `sub_426818` is called once per rendered frame from the in-game main loop

@@ -10,6 +10,16 @@ original BM95.EXE arithmetic) must emit the **same digest format** for the
 at the first tick where the two implementations diverge = the first mechanic the
 clean-room sim gets wrong.
 
+> **`native/` is not in this repository.** It is a 1:1 transliteration of the
+> decompiled binary, kept locally and gitignored under the same rule as
+> `pseudo.c` and the original assets: exe-derived material is never committed
+> (root `CLAUDE.md`, `.gitignore`). So the `native/...` commands below, and the
+> `native/...` citations throughout `docs/re/`, will not run or resolve for
+> anyone cloning this repo — they document how the findings were reached, not
+> something the repo ships. `mirror.cpp`, the clean-room half, IS here and runs
+> on its own; it just has nothing to diff against without the other side.
+> `docs/re/method.md` has the fuller explanation.
+
 ## Digest format (both sides MUST match)
 
 ```

@@ -89,10 +89,16 @@ explosion's reach causes **two or more** such RNG-drawing events across
 overpowered-hidden brick to its north and a floor Disease token to its
 east), the original draws those RNGs in the order Up→Right→Down→Left while
 the port draws them in the order Up→Down→Left→Right — the SAME draws
-happen, but interleaved differently, so every RNG value from that tick
-onward diverges from the original's stream for the rest of the match
-(placement rolls, AI decisions, future scatters, everything downstream of
-`State::rng`). This is silent: no assertion catches it, no golden scenario
+happen, but interleaved differently, so the two arms get each other's
+values, and every `State::rng` consumer from that tick onward (placement
+rolls, AI decisions, future scatters) sees a different word than the same
+match with the arms in the original's order would have. (Not "diverges from
+the original's stream", as this said before: the port is xorshift32 and the
+original is the wall-clock-seeded CRT generator, so the port's values were
+never the original's to diverge from — see `docs/re/ai.md` §8. What is lost
+here is the branch-order fidelity that makes the two implementations
+*comparable*, plus the port's own reproducibility across the change.) This
+is silent: no assertion catches it, no golden scenario
 currently triggers it (per `tests/test_golden.cpp`'s existing coverage),
 and the visible symptom would only surface as "the game feels like it
 rolled different powerups/AI moves than a from-scratch replay would" in a

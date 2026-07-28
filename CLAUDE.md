@@ -13,14 +13,21 @@ headers under `include/bomber/<name>/`. Dependencies point one way only:
 
 ```
 apps/game ─────► libs/game ──► libs/match ──► libs/assets   (SDL-free)
-apps/viewer ───► (SDL3)   ├──► libs/net   ──► libs/sim      (dependency-free)
-apps/abtool ──────────────┴──► libs/match, libs/sim, libs/assets
-tests ────────► libs/sim, libs/net (+ doctest)
+apps/viewer ───► (SDL3)   ├──► libs/audio  ─► libs/sim      (dependency-free)
+                          ├──► libs/net   ──┘
+                          └──► libs/platform (SDL3)
+apps/abtool ─────────────────► libs/match, libs/sim, libs/assets
+tests ───────────────────────► libs/sim, libs/net (+ doctest)
+
+libs/core — header-only, depends on NOTHING; anything above may depend on it.
 
 services/matchmaker (Go, separate build) ◄── libs/net's lobby layer, over the
                                              wire only — no code shared
 ```
 
+- **libs/core** (`bomber::core`) — SDL-free, dependency-free shared vocabulary
+  (ADR-0008): the fixed-point pixel unit + field geometry, slot/rate limits,
+  scoped-enum cast helpers. Header-only, at the bottom of the graph.
 - **libs/assets** (`bomber::assets`) — parsers for the original formats (ANI,
   PCX, SCH, RES lists, RSS) + the install locator. No SDL, no sim knowledge.
   Loaders throw `std::runtime_error`/`std::out_of_range`; treat 1997 files as
@@ -47,11 +54,25 @@ services/matchmaker (Go, separate build) ◄── libs/net's lobby layer, over 
     `Rendezvous` (the NAT punch), `SetupSession` (the host's authoritative
     `MatchConfig` over the wire), and `LobbyFlow`, the state machine that
     drives all of it. `build_hash` is the cross-build door both peers check.
-    These are behind `BOMBER_ENABLE_LOBBY` (ON in the GUI presets, OFF in
-    `headless`), so the deterministic core still builds with no WS/JSON deps.
-- **libs/game** (`bomber::game`) — SDL3 presentation: `AssetStore` (textures,
-  recoloring), `SequenceSet`, `Renderer`, `AudioEngine`, `SoundDirector`,
-  `KeyboardMapper`, `GameApp`. Reads `State` + `events`; never mutates them.
+    These are behind `BOMBER_ENABLE_LOBBY`, whose OFF *default* lets a consumer
+    build the deterministic core with no WS/JSON/TLS deps — but every preset
+    including `headless` pins it ON, so that is not a configuration this repo
+    builds or gates on (see "Build & test").
+- **libs/audio** (`bomber::audio`) — the audio module, extracted from
+  `libs/game` (ADR-0008 stage 2): `AudioEngine` (SDL PCM stream pool, music +
+  SFX), `SoundBank` (the SDL-FREE selection engine — group picks, least-played
+  ordering, the load-time cull; a faithful port of `sub_427961` & friends), and
+  `SoundDirector` (sim `Event`s → SOUNDLST id ranges). Depends on assets, sim
+  and SDL3; nothing depends on it but `libs/game`. Its cosmetic RNG is its own
+  and never touches `State::rng` (determinism rule 6). Note the namespace is
+  still `bomber::game` pending a mechanical rename.
+- **libs/platform** (`bomber::platform`) — the engine-base layer (ADR-0008):
+  SDL-backed frame clock and pacing, game-agnostic, so screens never
+  re-implement the main loop. Header-only so far (`FrameClock`).
+- **libs/game** (`bomber::game`) — SDL3 presentation and the front-end:
+  `AssetStore` (textures, recoloring), `SequenceSet`, `Renderer`,
+  `KeyboardMapper`, the per-screen classes under `src/screens/` (ADR-0009), and
+  `GameApp`. Reads `State` + `events`; never mutates them.
 - **services/matchmaker** — a small Go service (NOT part of the C++/CMake
   build) that introduces peers and relays for the ones whose NAT refuses a
   direct path. It never simulates and never sees `State`.
@@ -62,7 +83,7 @@ services/matchmaker (Go, separate build) ◄── libs/net's lobby layer, over 
 When adding a gameplay mechanic: put the rules in an existing system (or a
 new one under `libs/sim/src/systems/`), wire it in `simulation.cpp`'s tick
 order, emit an `Event` for anything the presentation reacts to, map the sound
-in `SoundDirector`, and add a doctest suite.
+in `SoundDirector` (`libs/audio`), and add a doctest suite.
 
 ## Determinism contract (do not break)
 
@@ -91,14 +112,32 @@ The sim is deterministic lockstep (`docs/adr/0003`). Rules:
   dumps, no original assets. Those stay in the BOMBRMAN folder / tmp.
 - Every ported mechanic needs: a facts.md entry → a faithful port (mirror the
   original's arithmetic, don't paraphrase it) → tests.
-- Constants not yet confirmed against the binary are marked "our tunable" in
-  `tuning.hpp` and listed as remaining guesses in facts.md. The former only
-  known guess, fuse pause while a bomb is airborne, was confirmed 2026-07-03
-  against `sub_42331C`. facts.md's "Still guessed" table now holds one entry
-  again: the spawn-pocket clear shape/radius (`libs/sim/src/setup.cpp`) —
-  an exhaustive 2026-07-19 search of every writer to the board's tile array
-  found no original function that clears bricks around a spawn, so the port
-  uses the smallest shape matching live observation instead of a citation.
+- **facts.md's "Still guessed" table is EMPTY.** Every gameplay constant in
+  `tuning.hpp` now traces to a `sub_XXXX` or an asset. The last two entries
+  closed in different ways, and the difference matters:
+  - *Fuse pause while a bomb is airborne* — confirmed 2026-07-03 against
+    `sub_42331C`. A genuine extraction: the guess became a citation.
+  - *Spawn-pocket clear* (`libs/sim/src/setup.cpp`) — closed 2026-07-21 in the
+    OPPOSITE direction, and it left the table rather than being confirmed. A
+    native `sub_4260F5` fill probe showed the original puts a brick on the
+    spawn ~90% of the time and never clears it, so **the port's radius-2 clear
+    is a proven live divergence, not a missing citation.** Do not repeat the
+    older 2026-07-19 justification ("an exhaustive search found no function
+    that clears bricks around a spawn, so the port uses the smallest shape
+    matching live observation") — facts.md retracts both halves of it: the
+    mechanism is proven absent rather than merely unfound, and the "BM95
+    screenshots show ~2-tile pockets" observation is itself marked suspect. The
+    clear stays only as a workaround for a clean-room AI-flee bug the
+    original's AI does not have, so the open item is a PORT fix, not an RE
+    extraction.
+- Not every constant is pinned to an address, and the ones that are not say so
+  where they live rather than in a table. `kSubFrames = 9`
+  (`libs/sim/include/bomber/sim/constants.hpp`) is the notable one: the
+  original's per-frame mechanics run at display rate and it free-runs unlocked,
+  so there is no rate to extract. Nine is **measured** — 33146 frames over a
+  180 s round on the reference Win11 box, ~184 gameplay-driver callbacks a
+  second — and pinned as a canonical rate a deterministic sim can consume
+  (ADR-0006's 2026-07-16 amendment). Treat it as a calibration, not a citation.
 - VALUELST-driven values go through `Tuning::apply(id, value)`; document ids
   in `docs/valuelst-map.md`.
 
@@ -126,8 +165,22 @@ ctest --test-dir build/windows-fetch -C Release --output-on-failure
 make run / make viewer / make test / make survey / make deploy         # convenience wrapper
 ```
 
-Presets: `windows-msvc` (vcpkg), `windows-fetch` (SDL3 via FetchContent),
-`headless` (no SDL: sim + abtool + tests only). Runtime verification against
+Presets: `windows-fetch` (SDL3 via FetchContent — the default everywhere:
+the Makefile, CI, and the README's build instructions), `linux` and `macos`
+(the same, per-platform), `windows-msvc` (the one preset that uses the vcpkg
+toolchain, and only for SDL3), and `headless`.
+
+`headless` means **no SDL** — not "no dependencies". It builds the sim,
+`abtool`, the tests **and the full lobby stack**: all five presets pin
+`BOMBER_ENABLE_LOBBY=ON` and `BOMBER_LOBBY_TLS=ON`, so `headless` fetches
+IXWebSocket, nlohmann/json and mbedTLS and compiles mbedTLS from source. Both
+pins are deliberate and both were bugs before they were pins. `ENABLE_LOBBY`
+OFF put the whole lobby half of `tests/net` inside a skipped
+`if(BOMBER_ENABLE_LOBBY)` block, so the pre-push gate never ran it and a broken
+suite reached `main`. `LOBBY_TLS` OFF is worse: `test_lobby_tls.cpp` compiles
+to its "this build has no TLS support" variant, the certificate- and
+hostname-rejection cases are preprocessed away, and the suite PASSES — green,
+having verified nothing. Runtime verification against
 a real install: `abtool survey <game_dir>` and `bomber_viewer <game_dir>
 --selftest`. The game auto-detects the install via `BOMBER_GAME_DIR`,
 `gamedir.txt`, or the standard paths (`libs/assets/src/install.cpp`).

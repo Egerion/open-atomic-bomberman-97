@@ -118,8 +118,11 @@ struct Options {
     // Not consumed by this port (no network play); round-tripped typed.
     std::optional<int> netprotocol;
     // "smallmemory=" — dword_464824, Options row 17 ("Use Enhanced Memory
-    // Model", inverted display). Normalized 0/1. Not consumed (no memory-model
-    // concept in a modern build); round-tripped typed.
+    // Model", inverted display). Normalized 0/1. Not consumed by THIS port (no
+    // memory-model concept in a modern build), but it is NOT inert in the
+    // original: sub_42814B's sound cull keeps 1 clip per voice group instead of
+    // the authored 2-8 when it is set (docs/re/sound-engine.md §3).
+    // Round-tripped typed.
     std::optional<bool> smallmemory;
     // "keydef=<set>,<action>,<scancode>" x20 — dword_4645BC[10*set+action],
     // Options row 15 ("Define keyboard layouts", sub_407B9D, §2). The reader

@@ -10,6 +10,16 @@ include(FetchContent)
 # that authorises StartMatch, so it must not cross the wire readable
 # (services/matchmaker/SECURITY.md S1).
 #
+# ON by default is not enough, which is why every preset pins it explicitly:
+# option() honours a cached value, so an existing build tree keeps whatever it
+# was first configured with. That drift is not cosmetic. With TLS off,
+# tests/net/test_lobby_tls.cpp compiles to its "this build has no TLS support"
+# variant — cases 2 and 3, the certificate- and wrong-hostname rejections, are
+# #if'd out entirely — and the suite PASSES. A full green run on a stale OFF
+# cache is exactly what happened once. A test that cannot fail is worse than an
+# absent one, so the shipped configuration is stated in CMakePresets.json rather
+# than left to a default.
+#
 # The backend is mbedTLS, built from source next to IXWebSocket — the only TLS
 # stack that fits this repo's constraints at once: FetchContent-only (no vcpkg,
 # no system packages), statically linked so the shipped exe still has no DLLs

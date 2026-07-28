@@ -396,7 +396,7 @@ confirming the `+25` idiom already seen elsewhere in the codebase.
 | 13 | 263 | Disable music during gameplay | `dword_4648C0` (`disable_game_music=`) | toggle |
 | 14 | 264 | Modem: P/I/B/# | `dword_464970`/`dword_46482C`/`dword_4648B8`/string (`modemport=`/`modembaud=`/`modemirq=`/`modemdial=`) | `sub_40798B` — a nested modem-config sub-screen |
 | 15 | 265 | Define keyboard layouts | `dword_4645BC[]` (`keydef=`) | `sub_407B9D` — the key-remap UI, §2 |
-| 16 | 266 | Set Default Network Protocol | `dword_464824`? (`netprotocol=`) | `sub_407F4F` — nested protocol picker |
+| 16 | 266 | Set Default Network Protocol | `dword_464824`? (`netprotocol=`) — **but this row and row 17 cannot both be right**: the options.ini table below gives `netprotocol` → `dword_464828`, and row 17's `dword_464824` is confirmed independently (it is the flag `sub_42814B`'s sound cull reads). The `?` was already there; treat `dword_464828` as the likelier reading and settle it with a binary read before anything depends on it. | `sub_407F4F` — nested protocol picker |
 | 17 | 267 | Use Enhanced Memory Model | `dword_464824` (`smallmemory=`, inverted: label shows `(dword_464824==0)+25`) | `sub_407FEE` |
 | 18 | 268 | Adjust Audio | — (no options.ini key) | `sub_407542` — nested volume sub-screen |
 
@@ -510,11 +510,27 @@ Three rows (10 Assign Keyboard Player, 12 Lost net players revert to AI, 17
 Use Enhanced Memory Model) were previously "shown as no-op" candidates but
 turned out to be trivial to wire for real: each is a plain boolean with an
 existing, already-round-tripped `assets::Options` field
-(`assign_keyboards`/`lost_net_revert_ai`/`smallmemory`) and no gameplay
-consumer either way, so they are now LIVE toggles like every other boolean
-row rather than static placeholders — closer to the original (which also has
-no consumer for these beyond the options.ini round-trip) than a hardcoded
-`(N/A)` would have been. Row 12 has since GAINED a consumer: it selects the
+(`assign_keyboards`/`lost_net_revert_ai`/`smallmemory`), so they are now LIVE
+toggles like every other boolean row rather than static placeholders — closer
+to the original than a hardcoded `(N/A)` would have been.
+
+**CORRECTED 2026-07-27 — row 17 is not consumer-less in the original.** This
+paragraph used to add "(which also has no consumer for these beyond the
+options.ini round-trip)". That is wrong about *Use Enhanced Memory Model*.
+`dword_464824` is read by the sound loader: `sub_42814B` culls sixteen id
+ranges down to a random subset right after SOUNDLST is parsed, and the flag
+substitutes `keep = 1` for **every** one of those ranges — so a low-memory boot
+holds exactly one clip per voice group instead of the authored 2-8. It is also
+not a boot-only read: `sub_428AEF` re-runs `sub_42814B` on the VALUELST id 7
+timer (authored 1800 s), so the flag is consulted again mid-session. See
+`docs/re/sound-engine.md` §3 and facts.md's "The sound selection engine" entry
+(both 2026-07-27, i.e. eighteen days after the sentence above was written).
+The row remains display-and-persist-only in *the port*, because the port has no
+low-memory mode and deliberately transliterates only the normal-memory arm
+(`sound_bank.hpp`, `sound-engine.md` §6) — a port omission, not an absence in
+the original. Rows 10 and 12 are unaffected by this correction.
+
+Row 12 has since GAINED a consumer: it selects the
 peer-drop policy in `net::DropPolicy::revert_to_ai` (ADR-0011 Risks,
 "Dropped/late peers") — on, a lost peer's seat goes to the AI; off, the drop
 ends the match. Row 17's displayed label is INVERTED versus its

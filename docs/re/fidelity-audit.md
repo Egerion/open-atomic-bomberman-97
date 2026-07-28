@@ -14,6 +14,16 @@ M3_NOTES "Oracle diff VERDICT"): the native flame-spread harness gap (F=
 fields unreliable), and the tick-rotation offset at explosions (absolute tick
 label differs by one; behaviour identical).
 
+> **`native/` is not in this repository and never will be.** It is a local-only
+> 1:1 transliteration of the binary — decompiler output retyped as compilable
+> C++ — so it falls under the same rule as `pseudo.c`, the IDA database and the
+> original assets: exe-derived material is gitignored, not published. Every
+> `native/...` path below is therefore a record of where the reading was done,
+> not a link you can follow. The checkable half of each citation is the
+> `sub_XXXX` address beside it, plus the port in `libs/` and its tests, which
+> are here in full. `docs/re/method.md` explains what `native/` is and why it
+> stays out of the tree.
+
 ## Process
 
 1. **Audit (read-only):** one agent per system reads clean-room + native +
