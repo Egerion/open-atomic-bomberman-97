@@ -637,13 +637,28 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
              static_cast<std::int8_t>(p.tile_x()), static_cast<std::int8_t>(p.tile_y()),
              static_cast<std::int8_t>(std::clamp<Fixed>(walk_budget / walk_unit, 1, 127))});
     }
-    // A settle on a trampoline centre launches an in-place hop; a settle on a
-    // warphole centre teleports to the linked exit (no RNG). Both use a one-shot
-    // latch (cleared on leaving the tile) so a player parked on the tile fires
-    // exactly once, mirroring the original's centring trigger (its
-    // offset-to-tile-centre temporary reaching -1).
-    stage.trampoline_after_move(p, i);
-    stage.warphole_after_move(p, i);
+    // A trampoline/warphole entered during the sub-frame loop above ALSO burns
+    // its first state frame on this very tick. sub_41F29B runs the mover — and
+    // therefore sub_41EC84's step-on trigger — BEFORE the animation/state
+    // dispatch (the mover's exit is a jump to the dispatch head at LABEL_155),
+    // so the frame that sets state 5/6/7 falls straight into the matching state
+    // block and its per-phase frame counter (+80) already reads 1 by the end of
+    // it. Our flight gate sits at the TOP of player_turn, so the trigger tick
+    // would otherwise advance nothing: the hop/warp landed one tick late and
+    // lasted one tick longer than the original's. Ordering matches the original
+    // too — the state block runs before the bomb-action tail below (LABEL_246).
+    //
+    // There is deliberately NO post-tick step-on check here any more. The
+    // original's only trigger site is the mover's -1 test; a "player is standing
+    // on one" fallback let this port take players it should not (see
+    // StageActorSystem's header and docs/re/facts.md "Warphole/trampoline entry
+    // predicate").
+    if (advance_timers) {
+        if (p.bounce > 0)
+            stage.tick_bounce(p, i);
+        else if (p.warp > 0)
+            stage.tick_warp(p);
+    }
 
     // The bomb key (action1) and action key (action2) drive the four
     // bomb-action-tail blocks (auto-drop force, throw, action2, drop) — see the shared

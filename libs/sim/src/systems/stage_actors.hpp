@@ -13,8 +13,12 @@ namespace bomber::sim {
 // Ownership of the tick step: this system is invoked from simulation.cpp's
 // player turn. The conveyor is a MOVE-BUDGET contribution applied in the SAME
 // step as the input move, so move_on_actor() wraps the movement call. The
-// trampoline and warphole are step-on triggers, so trampoline_after_move()/
-// warphole_after_move() run right after the player has settled for the tick.
+// trampoline and the warphole have exactly ONE trigger site, matching the
+// binary: the step-on hook the per-pixel mover calls when its along-axis
+// offset-to-tile-centre reads -1 (MovementSystem::move's on_center — see its
+// doc comment for the full reading of sub_41EC84). There is deliberately no
+// post-tick "is the player standing on one" fallback: the original has no such
+// path, and ours took players the original leaves alone.
 //
 // Dirarrows (type 0) do NOT steer walking players in the original — they only
 // re-steer sliding BOMBS (bombs.cpp / sub_42331C). The bomb-side conveyor/
@@ -28,6 +32,14 @@ public:
     // frame counter advances past 8 before each state ends — sub_41F29B
     // ~23215). The player relocates to the exit at the midpoint (out→in
     // boundary) and is state-gated + invulnerable for the full duration.
+    //
+    // The FIRST of those 18 is the tick the warp is triggered on: sub_41F29B
+    // runs the mover (and so sub_41EC84's trigger) BEFORE the animation/state
+    // dispatch — the mover's exit jumps straight to the dispatch head — so the
+    // state-6 block already runs once on the triggering frame and its counter
+    // reads 1 by the end of it. simulation.cpp therefore advances this timer
+    // once at the end of the tick a warp/bounce starts; without that the whole
+    // flight sat a tick late and ran a tick long.
     static constexpr std::int32_t kWarpTicks = 18;
     static constexpr std::int32_t kWarpMid = kWarpTicks / 2;  // relocate here (9)
 
@@ -80,30 +92,10 @@ public:
     bool move_on_actor(Player& p, int want_godir, bool moving, std::int32_t delta_ms = kMsPerTick,
                        MovementSystem::PixelFn on_pixel = nullptr, void* pixel_ctx = nullptr);
 
-    // After the player has moved, if it is centred on a trampoline tile and not
-    // already bouncing (nor still latched from a prior bounce on this same
-    // tile), start the hop and emit TrampolineBounce (sub_41EC84 step-on branch,
-    // sound 350). A one-shot latch (Player::tramp_latch), cleared when the player
-    // leaves the tile, stops a player parked on the centre from re-bouncing every
-    // tick — the original only re-fires on the stepper's centring check (its
-    // offset-to-tile-centre temporary hitting -1),
-    // which needs the player to arrive. Returns true if a bounce started.
-    bool trampoline_after_move(Player& p, int player_index);
-
-    // After the player has moved, if it is centred on a warphole (and not
-    // latched from a warp in progress), START the two-phase warp: set the 18-tick
-    // warp countdown, the re-entry latch, and emit WarpUsed (sound 1330,
-    // sub_41EC84 step-on). The player does NOT move yet — tick_warp relocates it
-    // at the midpoint. Clears the latch once the player is no longer centred on a
-    // warphole. Returns true if a warp started. No RNG — the exit is pre-resolved
-    // into State::warp_dest_* at setup. See docs/re/stage-actors.md §5.
-    bool warphole_after_move(Player& p, int player_index);
-
 private:
-    // Shared step-on triggers, called from BOTH the mid-walk callback
-    // (on_step_center, the faithful sub_41EC84 offset-to-centre == -1 point) and the
-    // post-walk safety nets above. Each is latched, so a single walk across a
-    // tile centre fires exactly once. Return true if the warp/bounce started.
+    // The step-on triggers, reached ONLY from on_step_center — i.e. only from
+    // sub_41EC84's along-axis offset-to-centre == -1 point. Return true if the
+    // warp/bounce started.
     bool start_warp(Player& p, int player_index, int tx, int ty);
     bool start_bounce(Player& p, int player_index, int tx, int ty);
 
@@ -113,8 +105,9 @@ private:
         StageActorSystem* self;
         int player_index;
     };
-    // MovementSystem::StepOnFn — fires the warphole/trampoline trigger the
-    // instant a per-pixel step centres the player on a tile (§5).
+    // MovementSystem::StepOnFn — the warphole/trampoline trigger, fired by the
+    // per-pixel mover one pixel short of a tile centre on the axis of travel
+    // (§5). Both actors are gated identically here, as in the binary.
     static void on_step_center(void* ctx, Player& p, int tx, int ty);
 
     State& s_;
