@@ -5,7 +5,7 @@
 #include <utility>
 #include <vector>
 
-#include "bomber/audio/audio_engine.hpp"
+#include "bomber/audio/sound_sink.hpp"
 #include "bomber/sim/state.hpp"
 
 // Maps sim events onto the original SOUNDLST id ranges (docs/RE-NOTES.md):
@@ -16,7 +16,7 @@ namespace bomber::game {
 
 class SoundDirector {
 public:
-    explicit SoundDirector(AudioEngine& audio) : audio_(audio) {}
+    explicit SoundDirector(SoundSink& audio) : audio_(audio) {}
 
     // Call once per sim tick, after the tick ran: drains due scheduled voice
     // lines, then reacts to this tick's events.
@@ -26,7 +26,7 @@ public:
     void reset();
 
 private:
-    AudioEngine& audio_;
+    SoundSink& audio_;
     // Voice lines scheduled a beat after their trigger: (due tick, group base).
     std::vector<std::pair<std::uint64_t, int>> pending_;
     std::array<int, sim::kMaxPlayers> pickups_{};

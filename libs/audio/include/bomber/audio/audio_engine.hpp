@@ -10,6 +10,7 @@
 #include "bomber/assets/reslist.hpp"
 #include "bomber/assets/rss.hpp"
 #include "bomber/audio/sound_bank.hpp"
+#include "bomber/audio/sound_sink.hpp"
 
 // Sound engine: a pool of SDL3 audio streams fed with the original headerless
 // PCM (.RSS) clips. Degrades to silence when no audio device is available
@@ -23,7 +24,10 @@
 
 namespace bomber::game {
 
-class AudioEngine {
+// The mixing half IS the SoundSink the director talks to — callers keep
+// passing `AudioEngine&` and it converts. The vtable buys nothing at runtime
+// here; it exists so the event -> id half can be tested without SDL.
+class AudioEngine : public SoundSink {
 public:
     AudioEngine() = default;
 
@@ -33,7 +37,7 @@ public:
     // non-copyable (a copy would double-free the shared handles). Nothing moves
     // it either — it is a GameApp value member, referenced everywhere else — so
     // the move operations stay implicitly suppressed rather than = default'd.
-    ~AudioEngine();
+    ~AudioEngine() override;
     AudioEngine(const AudioEngine&) = delete;
     AudioEngine& operator=(const AudioEngine&) = delete;
 
@@ -67,26 +71,26 @@ public:
     void update_music();
 
     // Cosmetic 1-in-n chance (presentation-layer RNG, never the sim's).
-    bool chance(int n);
+    bool chance(int n) override;
 
     // Cosmetic uniform draw in [0, n) (presentation-layer RNG, never the
     // sim's). For callers that need to LATCH a random choice across several
     // calls instead of re-picking every time — e.g. the wall-slam SFX, which
     // the original draws once per enclosure arm (`dword_462244 = rand() % 3`,
     // docs/re/facts.md "Wall-slam SFX") and replays for every dropped tile.
-    int roll(int n);
+    int roll(int n) override;
 
     // sub_427961 — the ONE call every gameplay and front-end site uses. `id` is
     // a GROUP BASE, not a clip: one member of the contiguous run starting there
     // is chosen least-played-first. Groups of one (SOUNDLST 10 "menuexit", 160
     // "bmdrop3", …) therefore behave exactly like a plain play.
-    void play(int id);
+    void play(int id) override;
 
     // sub_4278F2 — plays the named slot with NO group pick. Only two call sites
     // in the binary do this: the enclosure wall-slam (which draws its own
     // `rand() % 3` once per arm and then replays the same id, docs/re/facts.md
     // "Wall-slam SFX") and the death handler's cause-specific overlay.
-    void play_exact(int id);
+    void play_exact(int id) override;
 
     // sub_427BFB — the group pick again, but onto a voice that is NOT counted
     // against the concurrency cap and cannot be refused by it. The four screen
@@ -100,7 +104,7 @@ public:
     // same group. `frame` is the caller's game-frame counter (dword_464994; the
     // port passes the sim tick, the same ~20 Hz logic step). Only the jelly
     // bounce uses this.
-    void play_debounced(int id, std::uint64_t frame);
+    void play_debounced(int id, std::uint64_t frame) override;
 
     // Legacy spelling kept for the call sites that name the authored block
     // explicitly. The original's group is the contiguous run from `lo`, so this
