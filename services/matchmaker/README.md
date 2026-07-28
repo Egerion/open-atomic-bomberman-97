@@ -67,6 +67,8 @@ gofmt -l .             # (empty == formatted)
 | `-max-lobbies` | `MATCHMAKER_MAX_LOBBIES` | `5000` | live lobbies (`<0` disables) |
 | `-conn-idle-timeout` | `MATCHMAKER_CONN_IDLE_TIMEOUT` | `120s` | close a connection holding no seat that has said nothing (`<0` never) |
 | `-client-ip-header` | `MATCHMAKER_CLIENT_IP_HEADER` | _(unset)_ | trusted edge header carrying the real client IP |
+| `-max-relay-allocs` | `MATCHMAKER_MAX_RELAY_ALLOCS` | `256` | concurrent relay allocations, 2 per relayed match (`<0` disables) |
+| `-relay-budget-gb` | `MATCHMAKER_RELAY_BUDGET_GB` | `50` | total relay egress this **process** may forward, in GiB; resets on restart (`<0` disables) |
 
 A member that misses `K` heartbeats (`interval × miss`, default 30 s) is dropped
 with a RosterUpdate; a drained lobby is evicted and its code freed.
@@ -164,18 +166,60 @@ bytes/s ≈ 2 × seats × tick_rate × (17 + payload + 28)
                                    ↑header  ↑IP+UDP overhead
 ```
 
-At the sim's 20 Hz, a 2-seat relayed match with ~50-byte payloads is roughly
-**7 KB/s (~58 kbit/s) counting both directions** — about 2 MB per 5-minute
-match. 100 concurrent relayed 2-seat matches ≈ **6 Mbit/s sustained**. Budget
-against your host's egress allowance before advertising a public relay; direct
-P2P (the common case) costs the server nothing.
+A relayed match is **always exactly 2 seats** — `LobbyFlow::begin_relay_fallback`
+refuses anything larger, because `RelayedTransport` addresses one destination
+seat. **Measured** (two real `RollbackSession`s over a metered transport, 2000
+confirmed ticks), each peer sends exactly **2 datagrams per 20 Hz tick**: an
+`InputRange` of 8+W bytes (W = the 1–8 tick prediction window, ≈1 at 100 ms RTT)
+and a fixed 13-byte `Hash`. So, for one relayed match, both directions:
 
-Two caps bound the damage; **both log what they drop** — nothing is truncated:
+| quantity | value |
+|---|---|
+| per peer per tick, through the forwarder | **56 B** |
+| per peer per tick, on the wire (billed) | **112 B** |
+| datagrams/s through the relay | 80 (40 each way) |
+| `bytes` counter | **2.2 KB/s** |
+| **billed egress** | **4.5 KB/s (~36 kbit/s)** = **~16 MB/match-hour** |
+
+That is ~1.3 MB per 5-minute match, and 100 concurrent relayed 2-seat matches ≈
+**3.6 Mbit/s sustained**. Latency barely moves it (+1 B/peer/tick per 100 ms of
+RTT, capped at the prediction window) and 10–20 % loss moves it under 0.5 %, so
+the realistic range is 16–17 MB/h. Budget against your host's egress allowance
+before advertising a public relay; direct P2P (the common case) costs the server
+nothing.
+
+Note the **2× between the last two rows**: the `bytes` counter in `relay stats`
+is UDP payload only, while a host bills the 20 B IPv4 + 8 B UDP header on every
+datagram too. `egress_bytes` in the same line is the billed figure, and is what
+the budget below is spent against. (Over IPv6 the overhead is 48 B ⇒ ~22 MB/h.)
+
+Four caps bound the damage; **all log what they refuse** — nothing is truncated:
 
 | cap | value | behaviour |
 |---|---|---|
 | idle allocation expiry | `-relay-idle` (default `60s`) | an allocation with no traffic **from that seat** is freed, so the table cannot grow unbounded when a client vanishes without a clean disconnect. Logged as `relay allocations expired (idle)`. |
-| max datagram | 2048 bytes (`kRelayMaxDatagram`) | oversized datagrams are **dropped**, never truncated, and reported at WARN (`relay dropped oversized datagrams (not truncated)`). |
+| max datagram | 2048 bytes (`MaxDatagram`) | oversized datagrams are **dropped**, never truncated, and reported at WARN (`relay dropped oversized datagrams (not truncated)`). |
+| max concurrent allocations | `-max-relay-allocs` (default `256` = **128 relayed matches**) | a **new** allocation past the ceiling is refused. 128 matches ≈ 4.6 Mbit/s — two orders of magnitude above observed use, and well under `-max-conns`, so it is the cap that binds for relay. Counted as `alloc_refused_cap`. |
+| total egress budget | `-relay-budget-gb` (default `50`) | once this **process** has forwarded that much billed egress, **new** allocations are refused. ≈ 3300 relayed match-hours. One WARN at exhaustion, then counted as `alloc_refused_budget`. |
+
+**Neither of the last two ever touches a match in progress.** Both are read by
+`Table.Allocate` and never by `Table.Forward`, so an allocation that is already
+forwarding keeps forwarding, byte-identically, for as long as it lasts — and a
+seat that already holds one can still re-request it (the idempotent retry
+PROTOCOL.md §6.1 promises is safe mid-match). Cutting a live match in half is a
+worse outcome than the bill. `internal/relay/limits_test.go` pins exactly that:
+it spends a budget with real traffic through the real UDP listener, checks a new
+lobby is refused, then checks the running pair still forwards both ways.
+
+A refused allocation answers `Error{code:"internal"}` with the cap named in
+`message`. That is the **existing** refusal, not a new one: PROTOCOL.md §6.1 is
+frozen, and the client turns any `Error` received while relaying into
+"RELAY UNAVAILABLE - CANNOT CONNECT" regardless of the code.
+
+> **The egress budget is per-process and resets on every restart or deploy.** It
+> is not a monthly cap and must not be treated as one — SECURITY.md **A7** spells
+> out what it does and does not guarantee. The real ceiling is a hosting **spend
+> alert**, which only the operator can set.
 
 Allocations are also freed on member disconnect, heartbeat timeout, and lobby
 eviction.
@@ -186,9 +230,11 @@ logged per datagram** — untrusted input must not be able to flood the log. One
 aggregated `relay stats` line is emitted every 10 s when a tally moves.
 
 There is deliberately **no per-allocation rate limit**: shaping a lockstep game
-stream would create the desync the whole design avoids. If you need to protect a
-host, cap it outside (firewall / provider quota) rather than inside the
-forwarder.
+stream would create the desync the whole design avoids. The two caps above bound
+the total and the count, never the rate of a stream already flowing — so one pair
+that holds two seats and keeps sending is still unshaped for as long as it stays
+connected (SECURITY.md A2). If you need to protect a host, cap it outside
+(firewall / provider quota / spend alert) rather than inside the forwarder.
 
 ## Security / ops notes
 

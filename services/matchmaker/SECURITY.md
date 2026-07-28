@@ -390,6 +390,76 @@ network this is not a realistic attack, but there is no reason to leave it
 standing between a member and the host's authority. Both now use
 `subtle.ConstantTimeCompare`.
 
+### F13. The relay had no ceiling on total cost or on allocation count
+
+**Severity: medium (financial, not confidentiality). Exploitable by: anyone who
+can hold two seats in a lobby.**
+
+The relay is the one component that spends the operator's money, and the client's
+compile-time default matchmaker URL points every clone of a now-public repository
+at one machine. Two bounds were missing:
+
+- **No ceiling on total relayed bytes.** Nothing anywhere counted them. A runaway
+  bug or a deliberate abuser could forward until the hosting invoice noticed.
+- **No ceiling on the NUMBER of concurrent allocations.** `Table.ReapIdle` only
+  removes rows that have gone *quiet*, so a table fed faster than it drains had
+  no upper bound at all — rows that keep sending are never reaped, by design.
+
+Fixed with two caps (`relay.Limits`), both **admission control and nothing else**:
+
+| cap | default | flag | env |
+|---|---|---|---|
+| concurrent relay allocations | 256 (= 128 relayed 2-seat matches) | `-max-relay-allocs` | `MATCHMAKER_MAX_RELAY_ALLOCS` |
+| total relay egress, per process | 50 GiB | `-relay-budget-gb` | `MATCHMAKER_RELAY_BUDGET_GB` |
+
+Sizing is off a **measured** rate, not a guess: two real `RollbackSession`s over a
+metered transport send exactly 2 datagrams per peer per 20 Hz tick (an
+`InputRange` of 8+W bytes, W = the 1–8 tick prediction window, and a fixed 13-byte
+`Hash`). For the 2-seat match a relay always carries — `LobbyFlow::begin_relay_fallback`
+refuses anything larger — that is **56 B/peer/tick through the forwarder** and
+**~4.5 KB/s of billed egress** once the 28 B IPv4+UDP header per datagram is
+added, i.e. **~16 MB per relayed match-hour**. So 50 GiB ≈ **3300 relayed
+match-hours**, and 128 concurrent matches ≈ 4.6 Mbit/s, which would spend the
+whole budget in ~26 h of full saturation. Both numbers sit two orders of
+magnitude above observed use.
+
+**Where the caps are enforced is the whole design.** Both are read by
+`Table.Allocate`, for an allocation that does not exist yet. `Table.Forward`
+consults neither. Therefore:
+
+| situation | outcome |
+|---|---|
+| new (lobby, seat), under both caps | allocated |
+| new (lobby, seat), budget spent | refused, counted `alloc_refused_budget` |
+| new (lobby, seat), table full | refused, counted `alloc_refused_cap` |
+| **seat that already holds an allocation, either cap reached** | **the same `alloc_id`, as always** (PROTOCOL.md §6.1 idempotency) |
+| **datagram of a match already forwarding, either cap reached** | **forwarded, byte-identical, indefinitely** |
+
+Cutting a live match in half is a worse outcome than the bill, so an exhausted
+budget is a closed door and never a cut cable. `relay/limits_test.go` pins that
+directly — a budget is spent by real traffic through the real UDP listener, a new
+lobby is then refused, and the running pair is asserted to keep forwarding in
+both directions with byte-identical payloads and correctly re-addressed headers.
+
+**The refusal reuses the existing protocol, deliberately.** PROTOCOL.md §6.1 is
+FROZEN and permits exactly `not_in_lobby` / `bad_message` / `internal` in answer
+to `AllocateRelay`, and a deployed client is written against it. Nothing is lost
+by reusing `internal`: the client does not branch on the code here at all —
+`LobbyFlow::handle_server_message` turns ANY `Error` arriving in
+`Phase::Relaying` into `fail("RELAY UNAVAILABLE - CANNOT CONNECT")`, which is
+already the right outcome and the same one an older server without a relay
+produces. The cap that fired goes in the diagnostic `message`, which §4 defines
+as free text. Minting a new code would have been a one-sided change to a frozen
+contract for no client-visible gain.
+
+Refusals are **counted, not logged per frame** — `AllocateRelay` is a frame a
+client can repeat at its own rate, and rule 4 says untrusted input never sets the
+log's pace. The budget running out gets exactly one WARN at the moment it
+happens; after that both refusal tallies are reported at WARN in the periodic
+`relay stats` line whenever they move.
+
+What this does NOT bound is in A2 and A7.
+
 ---
 
 ## Checked and found OK
@@ -451,9 +521,23 @@ There is deliberately no per-allocation rate limit (README "Relay: bandwidth &
 cost"): shaping a lockstep game stream would create the desync the whole design
 exists to avoid. Two seats in one lobby can therefore use the relay as a 1:1 UDP
 forwarder for the price of holding a lobby, and the server pays egress both ways.
-This is the documented cost model, bounded by the lobby/connection caps, the
-2048-byte datagram cap and the 60 s idle expiry. Cap it outside (firewall,
-provider quota) if it matters.
+This is the documented cost model, now bounded in TOTAL by F13's two caps and in
+shape by the lobby/connection caps, the per-source ingress limit (250 datagrams/s),
+the 2048-byte datagram cap and the 60 s idle expiry.
+
+Two things F13 deliberately does **not** bound, both following from "never cut a
+live match":
+
+- **One allocation that keeps sending is never refused and never reaped.** The
+  idle expiry only frees rows that go quiet, and the caps only gate new
+  allocations, so a pair that holds two seats and sends continuously can carry on
+  past the budget for as long as it stays connected. Its rate is bounded (250
+  datagrams/s per source, 2048 B each) but its total is not. What the budget stops
+  is the *next* such pair, and every one after it.
+- **Nothing here is a per-tenant quota.** The caps are process-wide, so a single
+  abuser's traffic and a hundred real players' traffic spend the same budget.
+
+Cap it outside (firewall, provider quota, spend alert) if it matters — see A7.
 
 A seat addressing **itself** is now dropped — that had no legitimate meaning and
 turned the forwarder into a 1:1 reflector for its own sender.
@@ -497,6 +581,42 @@ what makes the service operable. Everything *refused* is aggregated instead
 (`control-plane drops`, `relay stats`, `stun stats`), which is where an attacker
 could otherwise write to the log at their own chosen rate.
 
+### A7. The relay egress budget is per-process, and is NOT a monthly cap
+
+`-relay-budget-gb` is an **in-RAM counter in one process**. It starts at zero
+every time the process starts, which on Fly means every deploy, every machine
+restart, every crash, every scale event, and independently on each machine if
+more than one is ever running.
+
+What it **does** guarantee:
+
+- within one uptime period, this process will not admit a new relayed match after
+  it has forwarded the budget;
+- so a runaway bug or an abuse campaign is bounded to roughly one budget per
+  restart instead of being unbounded;
+- and the moment it bites is loudly visible (one WARN at exhaustion, then the
+  refusal tallies in `relay stats`).
+
+What it **does not** guarantee, and must not be sold as:
+
+- **a monthly bill ceiling.** Ten restarts in a month is ten budgets. Nothing
+  here is persisted, and deliberately so: a durable counter would need storage
+  this service does not have and would introduce a failure mode (storage
+  unavailable ⇒ relay refuses everything) worse than the risk it covers.
+- **anything about the OTHER egress paths.** Only the relay's forwarded
+  datagrams are counted. The WebSocket control plane, the STUN echo (a ~2×
+  reflector by design, A1) and the HTTP surface are not.
+- **that the budget is not overshot.** Matches already forwarding when it runs
+  out keep forwarding and keep being counted, so the final total exceeds the
+  budget by however much the live matches carry (A2).
+
+**The backstop is a hosting spend alert, and setting it is the operator's job —
+no code in this process can do it.** On Fly: set a spend/usage alert on the
+organisation (Billing → usage alerts) at a threshold below where the bill would
+actually hurt, and treat it, not this counter, as the real ceiling. The counter
+is what keeps a bad hour from becoming a bad week; the alert is what tells a
+human to go and look.
+
 ---
 
 ## Operator notes
@@ -517,6 +637,14 @@ could otherwise write to the log at their own chosen rate.
   `join_guess` in `control-plane drops` is the signature of F5. `refused` in
   `ws admission` is F3's cap actually firing — a server sitting at its connection
   ceiling used to look exactly like an idle one from the outside.
+- **Watch `egress_bytes` in `relay stats`, and both refusal tallies.**
+  `egress_bytes` is this process's spend against `-relay-budget-gb` since it
+  last started, in billed bytes (payload + IP/UDP headers). `alloc_refused_budget`
+  or `alloc_refused_cap` moving means players are being turned away — organic
+  traffic never reaches either, so a non-zero tally is either abuse or a cap set
+  too tight. Raise the flag, or find out who is spending it; do not silence it.
+- **Set a Fly spend alert.** The egress budget bounds one uptime period, not a
+  month (A7). The alert is the only real ceiling, and only a human can set it.
 - **`/healthz` can now fail, and a failing liveness probe is an instruction to
   restart the machine.** It reports three components, each of which is a
   restart-only failure: the two UDP read loops (F6) and the lobby reaper. It

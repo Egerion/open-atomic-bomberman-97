@@ -1,6 +1,7 @@
 package config
 
 import (
+	"math"
 	"testing"
 	"time"
 )
@@ -53,5 +54,42 @@ func TestCapacityDefaultsAndDisabling(t *testing.T) {
 	explicit := Parse([]string{"-max-lobbies", "7"})
 	if explicit.MaxLobbies != 7 {
 		t.Fatalf("an explicit cap must win, got %d", explicit.MaxLobbies)
+	}
+}
+
+// The relay's cost caps follow the same 0 ⇒ default, <0 ⇒ disabled convention as
+// every other cap, and the budget is stated in GB because that is the unit an
+// operator reads off a hosting invoice.
+func TestRelayCostCapDefaultsAndConversion(t *testing.T) {
+	cfg := Parse(nil)
+	if cfg.MaxRelayAllocs != kDefaultMaxRelayAllocs || cfg.RelayBudgetGB != kDefaultRelayBudgetGB {
+		t.Fatalf("unset relay caps should take their defaults, got %+v", cfg)
+	}
+	if want := int64(kDefaultRelayBudgetGB) << 30; cfg.RelayEgressBudgetBytes() != want {
+		t.Fatalf("budget bytes = %d, want %d", cfg.RelayEgressBudgetBytes(), want)
+	}
+
+	off := Parse([]string{"-max-relay-allocs", "-1", "-relay-budget-gb", "-1"})
+	if off.MaxRelayAllocs != -1 {
+		t.Fatalf("a negative allocation cap must survive WithDefaults, got %d", off.MaxRelayAllocs)
+	}
+	if got := off.RelayEgressBudgetBytes(); got > 0 {
+		t.Fatalf("a negative budget must stay non-positive (relay.Limits reads that as unlimited), got %d", got)
+	}
+
+	explicit := Parse([]string{"-max-relay-allocs", "8", "-relay-budget-gb", "2"})
+	if explicit.MaxRelayAllocs != 8 {
+		t.Fatalf("an explicit allocation cap must win, got %d", explicit.MaxRelayAllocs)
+	}
+	if want := int64(2) << 30; explicit.RelayEgressBudgetBytes() != want {
+		t.Fatalf("2 GB should be %d bytes, got %d", want, explicit.RelayEgressBudgetBytes())
+	}
+
+	// A preposterous value must not wrap into a NEGATIVE byte count, which
+	// relay.Limits would read as "unlimited" — silently disabling the cap
+	// somebody set to tighten it.
+	huge := Config{RelayBudgetGB: math.MaxInt}.WithDefaults()
+	if got := huge.RelayEgressBudgetBytes(); got <= 0 {
+		t.Fatalf("an overflowing budget must clamp positive, got %d", got)
 	}
 }

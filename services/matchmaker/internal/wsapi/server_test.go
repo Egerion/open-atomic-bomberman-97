@@ -23,7 +23,7 @@ import (
 // protocol.Envelope and the wsConn adapter, not just the Manager.
 func TestWebSocketEndToEnd(t *testing.T) {
 	cfg := config.Config{HeartbeatInterval: time.Minute, HeartbeatMiss: 3, LockedGrace: time.Hour}
-	mgr := lobby.NewManager(cfg, relay.NewTable(time.Minute, zap.NewNop()), zap.NewNop())
+	mgr := lobby.NewManager(cfg, relay.NewTable(time.Minute, relay.Limits{}, zap.NewNop()), zap.NewNop())
 	ws := NewServer(mgr, cfg, zap.NewNop())
 	url := newWSTestServer(t, ws)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -84,7 +84,7 @@ func TestWebSocketEndToEnd(t *testing.T) {
 
 func TestWebSocketBuildMismatchOverWire(t *testing.T) {
 	cfg := config.Config{HeartbeatInterval: time.Minute, HeartbeatMiss: 3, LockedGrace: time.Hour}
-	mgr := lobby.NewManager(cfg, relay.NewTable(time.Minute, zap.NewNop()), zap.NewNop())
+	mgr := lobby.NewManager(cfg, relay.NewTable(time.Minute, relay.Limits{}, zap.NewNop()), zap.NewNop())
 	ws := NewServer(mgr, cfg, zap.NewNop())
 	url := newWSTestServer(t, ws)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -161,7 +161,7 @@ func wsReadUntil(t *testing.T, ctx context.Context, c *websocket.Conn, typ strin
 
 func TestWebSocketConnectionCapRefusesBeforeTheUpgrade(t *testing.T) {
 	cfg := config.Config{HeartbeatInterval: time.Minute, HeartbeatMiss: 3, LockedGrace: time.Hour, MaxConns: 2}
-	mgr := lobby.NewManager(cfg, relay.NewTable(time.Minute, zap.NewNop()), zap.NewNop())
+	mgr := lobby.NewManager(cfg, relay.NewTable(time.Minute, relay.Limits{}, zap.NewNop()), zap.NewNop())
 	ws := NewServer(mgr, cfg, zap.NewNop())
 	url := newWSTestServer(t, ws)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -198,7 +198,7 @@ func TestWebSocketConnectionCapRefusesBeforeTheUpgrade(t *testing.T) {
 
 func TestWebSocketReadLimitClosesAnOversizedFrame(t *testing.T) {
 	cfg := config.Config{HeartbeatInterval: time.Minute, HeartbeatMiss: 3, LockedGrace: time.Hour}
-	mgr := lobby.NewManager(cfg, relay.NewTable(time.Minute, zap.NewNop()), zap.NewNop())
+	mgr := lobby.NewManager(cfg, relay.NewTable(time.Minute, relay.Limits{}, zap.NewNop()), zap.NewNop())
 	ws := NewServer(mgr, cfg, zap.NewNop())
 	url := newWSTestServer(t, ws)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

@@ -93,7 +93,46 @@ const (
 	// kMaxConsecutiveReadErrs stops a genuinely broken socket from spinning the
 	// read loop hot, without letting one bad datagram end it (see Server.serve).
 	kMaxConsecutiveReadErrs = 64
+
+	// kIPv4UDPOverhead is what the HOST bills that this process never sees: a
+	// 20-byte IPv4 header plus an 8-byte UDP header per datagram. The `bytes`
+	// tally stays payload-only (it is what the forwarder moved), but the egress
+	// budget has to be denominated in the thing the invoice is denominated in,
+	// and at ~50-byte game payloads the headers are a third of the bill. A v6
+	// deployment pays 48 rather than 28, so this is a floor there — the Fly
+	// deployment allocates a v4 address for both UDP listeners.
+	kIPv4UDPOverhead = 20 + 8
 )
+
+// Refusals returned by Allocate when a cap is reached. Both mean "no NEW
+// allocation", never "stop forwarding": see Limits.
+var (
+	// ErrEgressBudget: the process has forwarded its whole egress budget.
+	ErrEgressBudget = errors.New("relay egress budget exhausted")
+	// ErrAllocationLimit: the allocation table is at its ceiling.
+	ErrAllocationLimit = errors.New("relay allocation table is at capacity")
+)
+
+// Limits bound what the relay can cost, and are the answer to the one thing the
+// pre-existing caps did not bound: ReapIdle only removes allocations that have
+// gone quiet, so a table fed faster than it drains had no ceiling at all, and
+// nothing anywhere counted the bytes the host actually bills for.
+//
+// BOTH ARE ADMISSION CONTROL AND NOTHING ELSE. They are read by Allocate, for
+// an allocation that does not exist yet. Forward never consults either one, so
+// a match already crossing the relay keeps crossing it after both are reached:
+// cutting a live match in half is a worse outcome than the bill, and the bill
+// is what a refused NEW allocation stops growing.
+//
+// The budget is an IN-PROCESS counter and resets on restart — see SECURITY.md
+// "A7" for exactly what that does and does not promise.
+type Limits struct {
+	// MaxAllocations caps concurrent rows in the table. ≤0 ⇒ unlimited.
+	MaxAllocations int
+	// EgressBudgetBytes caps total forwarded egress (payload + per-datagram
+	// IP/UDP overhead) for the life of the process. ≤0 ⇒ unlimited.
+	EgressBudgetBytes int64
+}
 
 // allocKey pins an allocation to exactly one (lobby, seat) pair.
 type allocKey struct {
@@ -125,8 +164,17 @@ type allocation struct {
 
 // Counters is one snapshot of the aggregated data-plane tallies.
 type Counters struct {
-	Forwarded       uint64
-	Bytes           uint64
+	Forwarded uint64
+	Bytes     uint64
+	// Egress is Bytes plus the per-datagram IP/UDP overhead the host bills for
+	// — the quantity the budget is spent against.
+	Egress uint64
+	// AllocRefusedBudget / AllocRefusedCap count NEW allocations refused by
+	// Limits. Neither can ever be produced by a well-behaved client on a
+	// correctly sized server, so both are raised to WARN when they move.
+	AllocRefusedBudget uint64
+	AllocRefusedCap    uint64
+	// Data-plane drop reasons, one tally each; logStats reports every one.
 	Short           uint64
 	UnknownAlloc    uint64
 	UnknownDst      uint64
@@ -154,11 +202,23 @@ type Table struct {
 
 	idle        time.Duration    // 0 disables idle expiry
 	rebindQuiet time.Duration    // pin window; 0 disables pinning (tests only)
+	limits      Limits           // admission control; see Limits
 	now         func() time.Time // injectable clock (tests)
 	log         *zap.Logger
 
-	forwarded       atomic.Uint64
-	bytes           atomic.Uint64
+	// budgetAnnounced makes the moment the budget runs out exactly one log line
+	// rather than one per refused AllocateRelay — a client can retry that frame
+	// at its own rate, and rule 4 of SECURITY.md says untrusted input never gets
+	// to write to the log at a rate it chooses. The ongoing count is reported by
+	// logStats with everything else.
+	budgetAnnounced atomic.Bool
+
+	forwarded          atomic.Uint64
+	bytes              atomic.Uint64
+	egress             atomic.Uint64
+	allocRefusedBudget atomic.Uint64
+	allocRefusedCap    atomic.Uint64
+	// Data-plane drop reasons, one tally each.
 	short           atomic.Uint64
 	unknownAlloc    atomic.Uint64
 	unknownDst      atomic.Uint64
@@ -175,12 +235,19 @@ type Table struct {
 	lastStats Counters // maintain goroutine only
 }
 
-func NewTable(idle time.Duration, log *zap.Logger) *Table {
+// NewTable builds the allocation registry. Limits is taken at construction
+// rather than set afterwards so a table can never be observed in an uncapped
+// state, and it is a REQUIRED argument rather than an option so that every
+// future call site has to answer the question "what bounds this one?" — a
+// zero-valued Limits is the explicit "unlimited", which is what the unit suites
+// pass.
+func NewTable(idle time.Duration, limits Limits, log *zap.Logger) *Table {
 	return &Table{
 		byID:        map[[AllocIDLen]byte]*allocation{},
 		byKey:       map[allocKey]*allocation{},
 		idle:        idle,
 		rebindQuiet: RebindQuiet,
+		limits:      limits,
 		now:         time.Now,
 		log:         log,
 	}
@@ -190,6 +257,13 @@ func NewTable(idle time.Duration, log *zap.Logger) *Table {
 // its 32-hex-char control-plane form. It is IDEMPOTENT per (lobby, seat): a
 // client that retries after a lost reply gets the SAME alloc_id back and keeps
 // its already-learned address instead of orphaning the old entry.
+//
+// This is the ONLY place Limits is enforced, and the idempotent hit above is
+// deliberately ahead of the check: re-allocating an existing seat succeeds even
+// with both caps reached, so the mid-match retry that PROTOCOL.md §6.1 promises
+// is safe still works on a server that has stopped admitting new matches.
+// Errors are ErrEgressBudget / ErrAllocationLimit, both of which the control
+// plane turns into the refusal the client already understands.
 func (t *Table) Allocate(code string, seat int) (string, error) {
 	key := allocKey{code: code, seat: seat}
 
@@ -198,6 +272,22 @@ func (t *Table) Allocate(code string, seat int) (string, error) {
 	if a, ok := t.byKey[key]; ok {
 		a.lastSeen = t.now()
 		return hex.EncodeToString(a.id[:]), nil
+	}
+	// Budget first: it is the cap that costs money, so when both are reached it
+	// is the reason worth reporting.
+	if t.limits.EgressBudgetBytes > 0 && t.egress.Load() >= uint64(t.limits.EgressBudgetBytes) {
+		t.allocRefusedBudget.Add(1)
+		if t.budgetAnnounced.CompareAndSwap(false, true) {
+			t.log.Warn("relay egress budget exhausted — refusing NEW allocations; matches already forwarding are untouched",
+				zap.Uint64("egress_bytes", t.egress.Load()),
+				zap.Int64("budget_bytes", t.limits.EgressBudgetBytes),
+				zap.Int("allocations", len(t.byKey)))
+		}
+		return "", ErrEgressBudget
+	}
+	if t.limits.MaxAllocations > 0 && len(t.byKey) >= t.limits.MaxAllocations {
+		t.allocRefusedCap.Add(1)
+		return "", ErrAllocationLimit
 	}
 
 	a := &allocation{
@@ -395,22 +485,38 @@ func (t *Table) Size() int {
 	return len(t.byKey)
 }
 
+// countForwarded books one successfully written datagram. It is called ONLY
+// after WriteToUDP has returned without error, because a datagram that was
+// never put on the wire was never billed — the budget must track the invoice,
+// not the intent.
+// forwarded is bumped LAST, deliberately: it is the commit marker. Anything
+// watching the tallies (logStats, the suites) can wait on it and know the byte
+// counts for that datagram are already in.
+func (t *Table) countForwarded(payload int) {
+	t.bytes.Add(uint64(payload))
+	t.egress.Add(uint64(payload + kIPv4UDPOverhead))
+	t.forwarded.Add(1)
+}
+
 func (t *Table) Snapshot() Counters {
 	return Counters{
-		Forwarded:       t.forwarded.Load(),
-		Bytes:           t.bytes.Load(),
-		Short:           t.short.Load(),
-		UnknownAlloc:    t.unknownAlloc.Load(),
-		UnknownDst:      t.unknownDst.Load(),
-		NoAddr:          t.noAddr.Load(),
-		SelfAddressed:   t.selfAddressed.Load(),
-		RebindRefused:   t.rebindRefused.Load(),
-		RebindThrottled: t.rebindThrottled.Load(),
-		Rebound:         t.rebound.Load(),
-		Oversize:        t.oversize.Load(),
-		RateLimited:     t.rateLimited.Load(),
-		ReadErr:         t.readErr.Load(),
-		WriteErr:        t.writeErr.Load(),
+		Forwarded:          t.forwarded.Load(),
+		Bytes:              t.bytes.Load(),
+		Egress:             t.egress.Load(),
+		AllocRefusedBudget: t.allocRefusedBudget.Load(),
+		AllocRefusedCap:    t.allocRefusedCap.Load(),
+		Short:              t.short.Load(),
+		UnknownAlloc:       t.unknownAlloc.Load(),
+		UnknownDst:         t.unknownDst.Load(),
+		NoAddr:             t.noAddr.Load(),
+		SelfAddressed:      t.selfAddressed.Load(),
+		RebindRefused:      t.rebindRefused.Load(),
+		RebindThrottled:    t.rebindThrottled.Load(),
+		Rebound:            t.rebound.Load(),
+		Oversize:           t.oversize.Load(),
+		RateLimited:        t.rateLimited.Load(),
+		ReadErr:            t.readErr.Load(),
+		WriteErr:           t.writeErr.Load(),
 	}
 }
 
@@ -437,9 +543,27 @@ func (t *Table) logStats() {
 			zap.Uint64("count", cur.RebindRefused-t.lastStats.RebindRefused),
 			zap.Duration("quiet", t.rebindQuiet))
 	}
+	// Both caps firing is an operational event, not a client error: somebody is
+	// being turned away. Reported here, once per interval, rather than once per
+	// refused frame — the budget's own edge got its single line in Allocate.
+	if cur.AllocRefusedBudget > t.lastStats.AllocRefusedBudget {
+		t.log.Warn("relay refused NEW allocations: egress budget exhausted (matches already forwarding continue)",
+			zap.Uint64("count", cur.AllocRefusedBudget-t.lastStats.AllocRefusedBudget),
+			zap.Uint64("egress_bytes", cur.Egress),
+			zap.Int64("budget_bytes", t.limits.EgressBudgetBytes))
+	}
+	if cur.AllocRefusedCap > t.lastStats.AllocRefusedCap {
+		t.log.Warn("relay refused NEW allocations: allocation table at capacity (matches already forwarding continue)",
+			zap.Uint64("count", cur.AllocRefusedCap-t.lastStats.AllocRefusedCap),
+			zap.Int("allocations", t.Size()),
+			zap.Int("max_allocations", t.limits.MaxAllocations))
+	}
 	t.log.Info("relay stats",
 		zap.Int("allocations", t.Size()),
 		zap.Uint64("forwarded", cur.Forwarded), zap.Uint64("bytes", cur.Bytes),
+		zap.Uint64("egress_bytes", cur.Egress),
+		zap.Uint64("alloc_refused_budget", cur.AllocRefusedBudget),
+		zap.Uint64("alloc_refused_cap", cur.AllocRefusedCap),
 		zap.Uint64("drop_short", cur.Short), zap.Uint64("drop_unknown_alloc", cur.UnknownAlloc),
 		zap.Uint64("drop_unknown_dst", cur.UnknownDst), zap.Uint64("drop_dst_addr_unknown", cur.NoAddr),
 		zap.Uint64("drop_self_addressed", cur.SelfAddressed),
@@ -543,8 +667,10 @@ func (s *Server) serve() {
 			s.table.writeErr.Add(1)
 			continue
 		}
-		s.table.forwarded.Add(1)
-		s.table.bytes.Add(uint64(len(out)))
+		// NOTE the budget is spent here and checked in Allocate — never in
+		// Forward. Exhausting it stops the NEXT match starting; it never stops
+		// this one mid-flight.
+		s.table.countForwarded(len(out))
 	}
 }
 
