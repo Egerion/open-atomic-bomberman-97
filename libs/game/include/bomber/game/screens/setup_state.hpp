@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "bomber/assets/campaign.hpp"  // assets::res::CampaignStage
+#include "bomber/assets/sch.hpp"       // assets::sch::Scheme
 #include "bomber/sim/constants.hpp"    // sim::kMaxPlayers
 
 // Seam 2 (ADR-0009 §"shared front-end state"): the non-service state the PLAYER
@@ -19,8 +20,12 @@
 // The reference set is EXACTLY what present_setup + cycle_input_type touch:
 //  - setup_type/setup_sub/setup_team — the 10-slot roster (dword_46481C): the
 //    type list Right cycles / Left/'0' clears, each slot's KEYBOARD/JOYSTICK
-//    sub-index, and the per-slot team flag 'T' toggles. reset_setup_teams reseeds
-//    setup_team on entry (the alternating 0/1 default, sub_4049C0).
+//    sub-index, and the per-slot team flag 'T' toggles. On entry setup_team is
+//    reseeded twice, in the original's own order: reset_setup_teams lays down
+//    the alternating 0/1 parity default (sub_4049C0), then
+//    match::scheme_setup_teams overlays the loaded scheme's per-spawn "-S"
+//    team field (sub_403EEE's tail loop into the +84 byte) — hence the
+//    `scheme` reference below.
 //  - setup_lcg — the shared presentation LCG (never sim::State::rng): advanced by
 //    pick_glue for the GLUE<n> backdrop. Shared with every other pre-match screen
 //    (frontend_util.hpp's pick_glue); the draw order/count is observable.
@@ -44,14 +49,15 @@
 namespace bomber::game {
 
 struct SetupState {
-    std::array<int, sim::kMaxPlayers>& setup_type;             // GameApp::setup_type_
-    std::array<int, sim::kMaxPlayers>& setup_sub;              // GameApp::setup_sub_
-    std::array<int, sim::kMaxPlayers>& setup_team;             // GameApp::setup_team_
-    std::uint32_t& setup_lcg;                                  // GameApp::setup_lcg_ (pick_glue)
-    int& campaign_trigger_count;                               // GameApp::campaign_trigger_count_
-    bool& team_play;                                           // GameApp::team_play_
-    int& gold_player;                                          // GameApp::gold_player_ (Esc forfeit)
-    bool& campaign_active;                                     // GameApp::campaign_active_
+    std::array<int, sim::kMaxPlayers>& setup_type;  // GameApp::setup_type_
+    std::array<int, sim::kMaxPlayers>& setup_sub;   // GameApp::setup_sub_
+    std::array<int, sim::kMaxPlayers>& setup_team;  // GameApp::setup_team_
+    const assets::sch::Scheme& scheme;              // GameApp::scheme_ (-S teams)
+    std::uint32_t& setup_lcg;                       // GameApp::setup_lcg_ (pick_glue)
+    int& campaign_trigger_count;                    // GameApp::campaign_trigger_count_
+    bool& team_play;                                // GameApp::team_play_
+    int& gold_player;                               // GameApp::gold_player_ (Esc forfeit)
+    bool& campaign_active;                          // GameApp::campaign_active_
     std::vector<assets::res::CampaignStage>& campaign_stages;  // GameApp::campaign_stages_
     int& campaign_stage_index;                                 // GameApp::campaign_stage_index_
 };

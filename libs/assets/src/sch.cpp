@@ -83,7 +83,14 @@ Scheme load(const std::filesystem::path& path) {
                 sp.player = to_int(parts[0]);
                 sp.x = to_int(parts[1]);
                 sp.y = to_int(parts[2]);
-                if (parts.size() > 3) sp.extra = to_int(parts[3]);
+                // 4th field = TEAM, stored as a boolean exactly like
+                // sub_403EEE's own `sub_4516C1(fields[3]) != 0` — and only
+                // when the row actually carries it (the original's `j == 4`
+                // arm; a three-field row leaves the slot's record alone).
+                if (parts.size() > 3) {
+                    sp.team = to_int(parts[3]) != 0 ? 1 : 0;
+                    sp.has_team = true;
+                }
                 sch.spawns.push_back(sp);
                 break;
             }
@@ -119,7 +126,10 @@ Scheme load(const std::filesystem::path& path) {
 //   -N,<name>
 //   -B,<density>
 //   -R,<row-number>,<row text>       (one per row, row-number = its index)
-//   -S,<player>,<x>,<y>,<extra>      (one per spawn)
+//   -S,<player>,<x>,<y>,<team>       (one per spawn; 4th field optional on
+//                                     read, always written — facts.md "The
+//                                     .SCH -S row's 4th field is the per-slot
+//                                     TEAM")
 //   -P,<id>,<born_with>,<has_override>,<override_value>,<forbidden>,<comment>
 // (13 rows, one per powerup kind; comment = getstring(800+id), §5's "trailing
 // comment text is getstring(800+i)" — the SAME 800-block strings the
@@ -140,7 +150,7 @@ std::string to_text(const Scheme& scheme) {
     out << "-B," << scheme.brick_density << "\n";
     for (int y = 0; y < scheme.height(); ++y) out << "-R," << y << "," << scheme.rows[y] << "\n";
     for (const auto& sp : scheme.spawns)
-        out << "-S," << sp.player << "," << sp.x << "," << sp.y << "," << sp.extra << "\n";
+        out << "-S," << sp.player << "," << sp.x << "," << sp.y << "," << sp.team << "\n";
     for (const auto& pr : scheme.powerups) {
         out << "-P," << pr.id << "," << pr.born_with << "," << pr.has_override << ","
             << pr.override_value << "," << pr.forbidden;

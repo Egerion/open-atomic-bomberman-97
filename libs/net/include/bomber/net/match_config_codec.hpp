@@ -53,13 +53,12 @@
 //   [tuning: 157 i32 then 4 u8 flags, in declaration order]
 //   [spawn_override 13 i32]
 //   [forbidden      13 u8]
-//   [born_with      13 u8]
 //   [born_with_extra 10*13 u8]
 //   [born_with_clogs 10 i32]
 //   [campaign_rovers i32][campaign_rover_speed i32]
 //   [campaign_ghosts i32][campaign_ghost_speed i32]
 //
-// SIZE: 1761 bytes fixed + 1 + 8 per spawn = 1842 bytes for a full 10-spawn
+// SIZE: 1748 bytes fixed + 1 + 8 per spawn = 1829 bytes for a full 10-spawn
 // config. That is well past a safe UDP payload, so setup_session.hpp CHUNKS it
 // (see kSetupChunkPayloadBytes) rather than trusting IP fragmentation — a
 // config that only fails to arrive on someone else's network is exactly the bug
@@ -72,7 +71,8 @@ namespace bomber::net {
 // stale peer fails loudly instead of mis-parsing a shifted field. (Peers on
 // different builds are normally already rejected by build_hash(); this is the
 // last line of defence.)
-inline constexpr std::uint16_t kMatchConfigLayout = 1;
+inline constexpr std::uint16_t kMatchConfigLayout =
+    2;  // 2: dropped born_with (folded into tuning.start_with)
 
 // Upper bound the decoder enforces before allocating a reassembly buffer, so a
 // hostile "total length" cannot make us reserve arbitrary memory. Roughly 4x the

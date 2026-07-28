@@ -18,7 +18,22 @@ struct Spawn {
     int player = 0;
     int x = 0;
     int y = 0;
-    int extra = 0;  // 4th field, purpose TBD (team/alt flag?)
+    // Optional 4th field: this spawn's TEAM (docs/re/facts.md "The .SCH -S
+    // row's 4th field is the per-slot TEAM"). sub_403EEE stores it as a
+    // BOOLEAN — `value != 0` — into the slot's start record, and its own tail
+    // loop pushes that into the player record's +84 team byte via sub_422437,
+    // the same byte the setup screen's 'T' key toggles. Absent on a 3-field
+    // row, in which case the slot keeps sub_4049C0's alternating parity
+    // default (see match::scheme_setup_teams, which applies that rule).
+    // 19 of the 67 shipped schemes author a non-parity layout here.
+    int team = 0;
+    // Was the 4th field actually present? sub_403EEE writes the slot's team
+    // record ONLY on a four-field row, so "absent" and "present and 0" are
+    // different answers: absent leaves sub_4049C0's parity seed standing,
+    // 0 overrides it to team 0. `team` alone cannot carry that distinction.
+    // The writer (like sub_403C16) always emits the field, so a scheme
+    // round-tripped through to_text() comes back with this set.
+    bool has_team = false;
 };
 
 struct PowerupRule {
@@ -33,8 +48,8 @@ struct PowerupRule {
 struct Scheme {
     int version = 0;
     std::string name;
-    int brick_density = 100;         // 0-100 percent
-    std::vector<std::string> rows;   // '#' solid, ':' brick, '.' blank
+    int brick_density = 100;        // 0-100 percent
+    std::vector<std::string> rows;  // '#' solid, ':' brick, '.' blank
     std::vector<Spawn> spawns;
     std::vector<PowerupRule> powerups;
 

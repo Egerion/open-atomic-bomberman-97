@@ -1,5 +1,12 @@
 # Fidelity audit — match setup (system 10, W3): `libs/sim/src/setup.cpp` (`build_state`) + `libs/match/include/bomber/match/match_factory.hpp`
 
+> **CORRECTION 2026-07-28.** Finding 2's closing note ("`born_with` (scheme)
+> and `start_with` (VALUELST) ARE two independent, additive mechanisms") is
+> **wrong and retracted** — see the struck-through paragraph at the end of
+> that section for what the binary actually does and why the reasoning
+> failed. Finding 2's own subject (the incompletely-wired baseline) is
+> unaffected. The rest of this document stands.
+
 **Verdict: mostly faithful, two new findings + one confirmed cross-reference.**
 Finding 2 below (starting-inventory baselines) turns out to be the SAME gap
 `docs/re/audit/powerups.md` §1 already flagged from the other side (its own
@@ -279,22 +286,44 @@ player has `kick == true`. Also worth a one-line `docs/re/id-audit.md` fix:
 move ids 63/64 out of the "63 ids, dead data" list (they ARE read, by the
 15-wide loop above; they're just always-0 in the shipped file).
 
-**Resolving `audit/powerups.md` §1's open question — `born_with` (scheme)
-and `start_with` (VALUELST) ARE two independent, additive mechanisms.**
-`sub_4214BC`'s 15-slot baseline write (lines 200-201 above) reads
-*exclusively* from `getvalue(j+50)` — no `.SCH`/scheme-table access of any
-kind appears anywhere in the function. The scheme's own `-P born_with`
-row is parsed and applied through a completely separate path this pass
-never saw referenced from `sub_4214BC`'s neighbourhood; the port's own
-architecture already mirrors this correctly — `match_factory.hpp` line 108
-populates `cfg.born_with[]` straight from `assets::sch::Scheme::powerups`
-(scheme-file data), fully decoupled from `Tuning::start_with[]`
-(VALUELST-file data) — and `setup.cpp`'s existing `born_with` overlay loop
-(lines 115-116) is additive on top of whatever `PowerupSystem::apply` finds
-already present, exactly matching the "baseline, then a distinct overlay"
-two-mechanism model. The only bug is that the FIRST mechanism (baseline)
-is incompletely wired for 11 of 13 kinds, not that the two mechanisms are
-conflated or that the overlay's own logic is wrong.
+**~~Resolving `audit/powerups.md` §1's open question — `born_with` (scheme)
+and `start_with` (VALUELST) ARE two independent, additive mechanisms.~~
+WRONG — RETRACTED 2026-07-28.** They are ONE mechanism. See
+`docs/re/facts.md` "The `.SCH` `-P` row's 2nd field is a COUNT that REPLACES
+the starting inventory" for the evidence; the short version is that the
+scheme reader `sub_403EEE`, after it closes the file, calls the VALUELST
+**setter** `sub_4121BF(50 + kind, count)` for every `-P` row whose count is
+`> 0`. That is the same value table `sub_412135` (`getvalue`) reads — same
+base pointer, same index arithmetic — so the scheme literally overwrites the
+id `sub_4214BC` then reads. "Born with" IS the starting-inventory baseline.
+
+**Why this pass got it wrong, since the same trap is easy to fall into
+again.** The reasoning above is an argument from ABSENCE: `sub_4214BC`
+contains no scheme-table access, therefore the scheme must reach the player
+by some other path, therefore the two are independent and additive. The
+first step is true and the rest does not follow — the scheme reaches
+`sub_4214BC` through the value table, which is exactly why `sub_4214BC` has
+no scheme access to find. The pass never opened the scheme reader to check.
+The consequences of the wrong conclusion, both fixed in the same commit as
+this retraction:
+
+- the port collapsed the parsed COUNT to a bool and applied it once,
+  additively, so a scheme asking for 3 bombs granted 2;
+- it routed the grant through `PowerupSystem::apply`, which runs the pickup
+  dispatcher's mutual-exclusion evictions. Those SCATTER the evicted token
+  and draw `State::rng`. `sub_4214BC`'s baseline write is a raw byte store
+  with neither, so a scheme granting both Grab and Spooger kept both in the
+  original while the port evicted one at setup and burned an RNG draw;
+- it left the scheme's counts invisible to every OTHER reader of id 50+kind
+  — notably the death-scatter and head-hit "above baseline" surplus tests
+  — so a scheme-granted powerup was dropped on death when the original keeps
+  it.
+
+`MatchConfig::born_with` is gone; `match_factory` writes
+`cfg.tuning.start_with[id] = count` instead. The one part of this finding
+that stands unchanged is its actual subject: the baseline itself was
+incompletely wired for 11 of 13 kinds, and that fix (the 13-kind block in
+`setup.cpp`) was correct and remains.
 
 ---
 

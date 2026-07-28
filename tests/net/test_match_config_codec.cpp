@@ -35,7 +35,13 @@ constexpr std::size_t kSpawnCountAt = kCellsAt + 5 * kGridBytes;
 // The size of a full 10-spawn config, pinned. This is the tripwire for "a field
 // was added to the codec": the number moves, this fails, and whoever bumped it
 // is forced past the comparator in match_config_compare.hpp too.
-constexpr std::size_t kFullConfigBytes = 1842;
+// 1842 -> 1829 on 2026-07-28: the 13-byte `born_with` block left the codec
+// (kMatchConfigLayout 1 -> 2, kWireProtocolVersion 5 -> 6). The scheme's -P
+// "born with" field is a COUNT that REPLACES the VALUELST starting inventory,
+// so it now travels inside the already-serialized `tuning.start_with` rather
+// than a channel of its own (docs/re/facts.md "The .SCH -P row's 2nd field is
+// a COUNT that REPLACES the starting inventory").
+constexpr std::size_t kFullConfigBytes = 1829;
 
 std::string join(const std::vector<std::string>& names) {
     std::string s;

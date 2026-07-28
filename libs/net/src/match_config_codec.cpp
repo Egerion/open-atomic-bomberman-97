@@ -225,7 +225,6 @@ void visit_config(Ar& ar, Cfg& cfg) {
     visit_tuning(ar, cfg.tuning);
     for (auto& v : cfg.spawn_override) ar.i32(v);
     for (auto& v : cfg.forbidden) ar.flag(v);
-    for (auto& v : cfg.born_with) ar.flag(v);
     for (auto& slot : cfg.born_with_extra)
         for (auto& v : slot) ar.flag(v);
     for (auto& v : cfg.born_with_clogs) ar.i32(v);
