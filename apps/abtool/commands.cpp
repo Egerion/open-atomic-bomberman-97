@@ -44,11 +44,16 @@ void print_sim(const sim::State& s) {
     for (int y = 0; y < sim::kGridHeight; ++y) {
         for (int x = 0; x < sim::kGridWidth; ++x) {
             char c = '.';
-            if (s.cells[y][x] == sim::Cell::Solid) c = '#';
-            else if (s.cells[y][x] == sim::Cell::Brick) c = ':';
-            else if (s.burning[y][x] > 0) c = '%';
-            else if (s.flame[y][x] > 0) c = '*';
-            else if (s.floor[y][x] != sim::PowerupType::None) c = 'p';
+            if (s.cells[y][x] == sim::Cell::Solid)
+                c = '#';
+            else if (s.cells[y][x] == sim::Cell::Brick)
+                c = ':';
+            else if (s.burning[y][x] > 0)
+                c = '%';
+            else if (s.flame[y][x] > 0)
+                c = '*';
+            else if (s.floor[y][x] != sim::PowerupType::None)
+                c = 'p';
             grid[y][x] = c;
         }
         grid[y][sim::kGridWidth] = 0;
@@ -59,8 +64,8 @@ void print_sim(const sim::State& s) {
         const auto& p = s.players[i];
         if (p.present && p.alive) grid[p.tile_y()][p.tile_x()] = static_cast<char>('0' + i);
     }
-    std::printf("tick %llu  alive %d  bombs %zu\n",
-                static_cast<unsigned long long>(s.tick), sim::alive_count(s), s.bombs.size());
+    std::printf("tick %llu  alive %d  bombs %zu\n", static_cast<unsigned long long>(s.tick),
+                sim::alive_count(s), s.bombs.size());
     for (int y = 0; y < sim::kGridHeight; ++y) std::printf("  %s\n", grid[y]);
 }
 
@@ -84,8 +89,10 @@ int cmd_survey(const fs::path& game) {
             for (const auto& w : a.warnings)
                 std::printf("  warn: %s: %s\n", p.filename().string().c_str(), w.c_str());
             for (const auto& f : a.frames) {
-                if (f.cimg_type == 4) ++type4;
-                else if (f.cimg_type == 11) ++type11;
+                if (f.cimg_type == 4)
+                    ++type4;
+                else if (f.cimg_type == 11)
+                    ++type11;
                 if (!f.name.empty() && f.image.empty())
                     report_err(p.filename().string() + ": frame '" + f.name + "' has no pixels");
             }
@@ -93,8 +100,8 @@ int cmd_survey(const fs::path& game) {
             report_err(e.what());
         }
     }
-    std::printf("  %zu files, %zu frames (%zu type-4, %zu type-11), %zu sequences\n",
-                anis.size(), frames, type4, type11, seqs);
+    std::printf("  %zu files, %zu frames (%zu type-4, %zu type-11), %zu sequences\n", anis.size(),
+                frames, type4, type11, seqs);
 
     std::printf("== SCHEMES\n");
     auto schemes = files_with_ext(game / "DATA" / "SCHEMES", ".SCH");
@@ -113,8 +120,7 @@ int cmd_survey(const fs::path& game) {
     std::printf("== RES\n");
     try {
         auto vl = res::load_values(game / "DATA" / "RES" / "VALUELST.RES");
-        std::printf("  VALUELST: %zu values, %zu warnings\n", vl.values.size(),
-                    vl.warnings.size());
+        std::printf("  VALUELST: %zu values, %zu warnings\n", vl.values.size(), vl.warnings.size());
         for (const auto& w : vl.warnings) std::printf("    warn: %s\n", w.c_str());
     } catch (const std::exception& e) {
         report_err(e.what());
@@ -130,8 +136,9 @@ int cmd_survey(const fs::path& game) {
                 std::printf("  warn: sound %d '%s' has no RSS file\n", id, name.c_str());
             }
         }
-        std::printf("  SOUNDLST: %zu entries, %zu resolve to RSS files, %zu missing, %zu warnings\n",
-                    sl.names.size(), resolved, missing, sl.warnings.size());
+        std::printf(
+            "  SOUNDLST: %zu entries, %zu resolve to RSS files, %zu missing, %zu warnings\n",
+            sl.names.size(), resolved, missing, sl.warnings.size());
     } catch (const std::exception& e) {
         report_err(e.what());
     }
@@ -196,7 +203,7 @@ int cmd_sch(const fs::path& file) {
                 s.width(), s.height());
     for (const auto& row : s.rows) std::printf("  %s\n", row.c_str());
     for (const auto& sp : s.spawns)
-        std::printf("  spawn p%d at (%d,%d) extra=%d\n", sp.player, sp.x, sp.y, sp.extra);
+        std::printf("  spawn p%d at (%d,%d) team=%d\n", sp.player, sp.x, sp.y, sp.team);
     return 0;
 }
 
@@ -207,8 +214,8 @@ int cmd_simrun(const fs::path& scheme_path, const fs::path* game_dir, int ticks)
     sim::Simulation simulation(
         match::build_match_config(scheme, 2, 42, game_dir ? &values : nullptr));
     const sim::State& s = simulation.state();
-    std::printf("scheme '%s'  speed %d  fuse %d\n", scheme.name.c_str(),
-                s.tuning.start_speed, s.tuning.fuse_frames);
+    std::printf("scheme '%s'  speed %d  fuse %d\n", scheme.name.c_str(), s.tuning.start_speed,
+                s.tuning.fuse_frames);
     print_sim(s);
 
     sim::TickInputs in;
@@ -236,8 +243,7 @@ int cmd_simrun(const fs::path& scheme_path, const fs::path* game_dir, int ticks)
             break;
         }
     }
-    std::printf("final state hash: %016llx\n",
-                static_cast<unsigned long long>(simulation.hash()));
+    std::printf("final state hash: %016llx\n", static_cast<unsigned long long>(simulation.hash()));
     return 0;
 }
 

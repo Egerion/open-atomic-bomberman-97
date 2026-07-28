@@ -13,6 +13,12 @@ add_executable(bomber_match_tests test_match.cpp)
 target_link_libraries(bomber_match_tests PRIVATE bomber::match doctest::doctest bomber::warnings)
 add_test(NAME match COMMAND bomber_match_tests)
 
+# The two .SCH fields the port used to mis-consume: the "-S" row's per-slot
+# TEAM and the "-P" row's born-with COUNT. Drives a Simulation (bomber_add_test
+# links bomber::sim) plus match, same shape as bomber_team_tests.
+bomber_add_test(bomber_scheme_fields_tests scheme_fields test_scheme_fields.cpp)
+target_link_libraries(bomber_scheme_fields_tests PRIVATE bomber::match)
+
 # LevelRegistry (bomber::match, header-only): pins the built-in rotation +
 # asset base names byte-identical and the one-edit custom-level extensibility.
 add_executable(bomber_level_registry_tests test_level_registry.cpp)

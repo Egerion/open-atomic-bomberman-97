@@ -1,8 +1,8 @@
 // Locks the Goldman wheel's sim-side surface (docs/re/goldman-roulette.md
 // §4/§8): MatchConfig::born_with_extra is a per-player OVERLAY applied in
-// setup.cpp AFTER the global born_with loop, through the same
-// PowerupSystem::apply path — so it behaves exactly like an extra born_with
-// entry for ONE slot instead of every active player. Default all-false, so
+// setup.cpp AFTER the Tuning::start_with starting-inventory baseline, through
+// PowerupSystem::apply — so it behaves exactly like one more inventory unit
+// for ONE slot instead of every active player. Default all-false, so
 // an untouched config's setup is byte-identical to before this field
 // existed (the golden suite, test_golden.cpp, stays untouched/green as the
 // zero-golden-edits proof).
@@ -35,9 +35,9 @@ TEST_CASE("born_with_extra grants exactly one player the extra powerup at setup"
     CHECK(s.state().players[1].skates == 0);
 }
 
-TEST_CASE("born_with_extra composes with the global born_with (both apply)") {
+TEST_CASE("born_with_extra composes with the start_with baseline (both apply)") {
     MatchConfig cfg = open_config();
-    cfg.born_with[static_cast<int>(PowerupType::Kick)] = true;  // every player
+    cfg.tuning.start_with[static_cast<int>(PowerupType::Kick)] = 1;  // every player
     cfg.born_with_extra[1][static_cast<int>(PowerupType::Skate)] = true;  // player 1 only
     Simulation s(cfg);
     CHECK(s.state().players[0].kick == true);

@@ -38,7 +38,7 @@ Scheme make_basic_scheme() {
         sp.player = i;
         sp.x = 1 + i;
         sp.y = 1;
-        sp.extra = i % 2;
+        sp.team = i % 2;
         s.spawns.push_back(sp);
     }
     for (int i = 0; i < 13; ++i) {
@@ -69,7 +69,7 @@ void check_round_trip(const Scheme& s, const char* file_name) {
         CHECK(back.spawns[i].player == s.spawns[i].player);
         CHECK(back.spawns[i].x == s.spawns[i].x);
         CHECK(back.spawns[i].y == s.spawns[i].y);
-        CHECK(back.spawns[i].extra == s.spawns[i].extra);
+        CHECK(back.spawns[i].team == s.spawns[i].team);
     }
     REQUIRE(back.powerups.size() == s.powerups.size());
     for (std::size_t i = 0; i < s.powerups.size(); ++i) {

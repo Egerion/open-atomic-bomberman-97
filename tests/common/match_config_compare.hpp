@@ -138,7 +138,6 @@ inline MatchConfig distinctive_match_config() {
     for (auto& v : c.spawn_override) v = f.next();
     for (int i = 0; i < kPowerupKinds; ++i) {
         c.forbidden[static_cast<std::size_t>(i)] = (i % 2) == 0;
-        c.born_with[static_cast<std::size_t>(i)] = (i % 3) == 0;
     }
     for (int s = 0; s < kMaxPlayers; ++s)
         for (int i = 0; i < kPowerupKinds; ++i)
@@ -194,7 +193,6 @@ inline FieldReport compare_match_config(const MatchConfig& a, const MatchConfig&
     BOMBER_CMP(seed);
     BOMBER_CMP(spawn_override);
     BOMBER_CMP(forbidden);
-    BOMBER_CMP(born_with);
     BOMBER_CMP(born_with_extra);
     BOMBER_CMP(born_with_clogs);
     BOMBER_CMP(campaign_rovers);

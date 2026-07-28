@@ -38,6 +38,16 @@ std::uint32_t build_hash();
 //             ack mask and only reaches Phase::Final once EVERY guest has
 //             acknowledged the current revision, instead of latching on the
 //             first ack to arrive over the star (setup_session.hpp).
-inline constexpr std::uint32_t kWireProtocolVersion = 5;
+//   v5 -> v6: the MatchConfig blob lost its 13-byte `born_with` block
+//             (kMatchConfigLayout 1 -> 2). The scheme's "-P born with" field is
+//             a COUNT that REPLACES the VALUELST starting inventory, which the
+//             original expresses by writing the value table id the baseline is
+//             read from — so it now lands in tuning.start_with[] (already on
+//             the wire) instead of a channel of its own (docs/re/facts.md "The
+//             .SCH -P row's 2nd field is a COUNT that REPLACES the starting
+//             inventory"). Refusing pre-v6 peers at the lobby door is the point:
+//             a v5 peer decoding a v6 blob would read every field after
+//             `forbidden` shifted by 13 bytes.
+inline constexpr std::uint32_t kWireProtocolVersion = 6;
 
 }  // namespace bomber::net

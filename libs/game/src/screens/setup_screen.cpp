@@ -14,6 +14,7 @@
 #include "bomber/game/input.hpp"                     // cycle_slot_input_type / reset_setup_teams
 #include "bomber/game/screens/campaign_screens.hpp"  // CampaignPickerScreen
 #include "bomber/game/sprites.hpp"                   // Sprite, Anim, resolve_sequence
+#include "bomber/match/match_factory.hpp"            // scheme_setup_teams
 
 namespace bomber::game {
 
@@ -63,20 +64,31 @@ AppInput SetupScreen::run() {
     // default — CORRECTED"): sub_410F81 unconditionally calls sub_4046CC()
     // first thing, which (CD present) calls sub_403EEE(), which itself
     // unconditionally calls sub_4049C0() before anything else. sub_4049C0
-    // sets `dword_46481C[12*j+8] = j & 1` for j in [0,10) (pseudo.c line
-    // 6716) — i.e. every slot's TEAM byte resets to an ALTERNATING 0/1/0/1
-    // pattern by slot parity every time this screen loads, not to a flat 0.
-    // sub_403EEE's own file-parse loop only ever overwrites a slot's COLOUR
-    // (dword_46481C+0/+4) from disk, never TEAM, unless a rare "-S
-    // slot,x,y,team" 5-field profile line is present (pseudo.c line 6427) —
-    // a hidden colour-profile file this port doesn't implement — so in
-    // practice the alternating default always stands here. Getting this
-    // wrong (old behaviour: every slot defaulted to 0) meant Team Play ON
-    // without anyone pressing 'T' put every player on the SAME side: (a)
-    // everybody got the team-1/WHITE 0.RMP override instead of half going
-    // red (render_colour, docs/re/player-colour.md), and (b)
-    // sides_remaining() read <=1 from tick 0, clinching the round instantly.
+    // sets `dword_46481C[12*j+8] = j & 1` for j in [0,10) — i.e. every slot's
+    // TEAM byte resets to an ALTERNATING 0/1/0/1 pattern by slot parity every
+    // time this screen loads, not to a flat 0. Getting this wrong (old
+    // behaviour: every slot defaulted to 0) meant Team Play ON without anyone
+    // pressing 'T' put every player on the SAME side: (a) everybody got the
+    // team-1/WHITE 0.RMP override instead of half going red (render_colour,
+    // docs/re/player-colour.md), and (b) sides_remaining() read <=1 from tick
+    // 0, clinching the round instantly.
+    //
+    // ...and then THE SCHEME OVERRIDES IT, per slot — CORRECTED AGAIN
+    // 2026-07-28 (docs/re/facts.md "The .SCH -S row's 4th field is the
+    // per-slot TEAM"). The paragraph that stood here claimed sub_403EEE's
+    // parse loop "only ever overwrites a slot's COLOUR from disk, never TEAM,
+    // unless a rare 5-field profile line is present — a hidden colour-profile
+    // file this port doesn't implement". All three parts are wrong: the
+    // dwords it called colour are the spawn X and Y, the file being parsed is
+    // the scheme itself, and a four-field "-S slot,x,y,team" row appears in 19
+    // of the 67 shipped schemes (E_VS_W, N_VS_S, TENNIS, VOLLEY, … — the
+    // two-sided maps). The reader stores that field and its tail loop pushes
+    // every slot into the player record's +84 byte via sub_422437, so the map
+    // author's layout is already in place before this screen draws a frame.
+    // The 'T' key below still overrides it, exactly as in the original, where
+    // the key loop runs after the load.
     reset_setup_teams(state_.setup_team);
+    match::scheme_setup_teams(state_.scheme, state_.setup_team);
     const std::string glue = pick_glue(state_.setup_lcg, ctx_.values);
     // Layout (VALUELST X,Y,YS,colour -> consecutive getvalue ids): header 705,
     // list 710, joystick pane heading 715, joystick pane list 720.
@@ -128,15 +140,19 @@ AppInput SetupScreen::run() {
         }
         // Header (msg 50): white ink / black outline (byte_49D38F over
         // byte_495390[0], pseudo.c 15154-15160).
-        ctx_.front_font.draw_outlined(ctx_.sdl, ctx_.assets.getstring(50, "Available players:"),
-                                  hx, hy, 255, 255, 255, 0, 0, 0, hw);
+        ctx_.front_font.draw_outlined(ctx_.sdl, ctx_.assets.getstring(50, "Available players:"), hx,
+                                      hy, 255, 255, 255, 0, 0, 0, hw);
         for (int i = 0; i < 10; ++i) {
             const int t = state_.setup_type[i];
             std::string type;
             switch (t) {
                 case 1: type = ctx_.assets.getstring(221, "COMPUTER"); break;
-                case 2: type = fmt_u(ctx_.assets.getstring(222, "KEYBOARD %u"), state_.setup_sub[i]); break;
-                case 3: type = fmt_u(ctx_.assets.getstring(223, "JOYSTICK %u"), state_.setup_sub[i]); break;
+                case 2:
+                    type = fmt_u(ctx_.assets.getstring(222, "KEYBOARD %u"), state_.setup_sub[i]);
+                    break;
+                case 3:
+                    type = fmt_u(ctx_.assets.getstring(223, "JOYSTICK %u"), state_.setup_sub[i]);
+                    break;
                 case 4: type = ctx_.assets.getstring(224, "OTHER"); break;
                 default: type = ctx_.assets.getstring(220, "OFF"); break;
             }
@@ -144,7 +160,8 @@ AppInput SetupScreen::run() {
             // sprintf's the slot number and the type text in ONE call
             // (pseudo.c 15169-15195); the old two-piece concat left a literal
             // "%s" on screen with the install's real MESSAGES.TXT.
-            const std::string line = fmt_us(ctx_.assets.getstring(51, "Player %u: %s"), i + 1, type);
+            const std::string line =
+                fmt_us(ctx_.assets.getstring(51, "Player %u: %s"), i + 1, type);
             // Ink = the slot's authentic colour via sub_41672F(i) (the .RMP
             // tail quantised min(c/3,31) -> RGB555 -> LUT), which
             // AssetStore::slot_color reproduces. CONFIRMED never the team
@@ -160,9 +177,9 @@ AppInput SetupScreen::run() {
             // player's row gets a WHITE outline (sub_416867, pseudo.c
             // 18496-18503) so it stays legible over a dark glue backdrop.
             const Uint8 oc = i == 1 ? 255 : 0;
-            float lx_end = ctx_.front_font.draw_outlined(ctx_.sdl, line, lx,
-                                                     ly + lys * static_cast<float>(i), sc[0],
-                                                     sc[1], sc[2], oc, oc, oc, lw);
+            float lx_end =
+                ctx_.front_font.draw_outlined(ctx_.sdl, line, lx, ly + lys * static_cast<float>(i),
+                                              sc[0], sc[1], sc[2], oc, oc, oc, lw);
             if (state_.team_play) {
                 // Team marker: getstring(230), drawn for EVERY slot whenever
                 // Team Play is on (gated on the GLOBAL dword_464964, pseudo.c
@@ -185,27 +202,27 @@ AppInput SetupScreen::run() {
         // %s — sub_429A61(i)) or, if none, the single msg-42 line. ALL of it
         // plain white ink / black outline (pseudo.c 15227-15263) — the old
         // grey (200,200,200)/(150,150,150) tints were invented.
-        ctx_.front_font.draw_outlined(ctx_.sdl, ctx_.assets.getstring(40, "JOYSTICKS"), jhx,
-                                  jhy, 255, 255, 255, 0, 0, 0, jhw);
+        ctx_.front_font.draw_outlined(ctx_.sdl, ctx_.assets.getstring(40, "JOYSTICKS"), jhx, jhy,
+                                      255, 255, 255, 0, 0, 0, jhw);
         const int joy_count = ctx_.gamepads.count();
         if (joy_count == 0) {
             ctx_.front_font.draw_outlined(ctx_.sdl, ctx_.assets.getstring(42, "none"), jlx, jly,
-                                      255, 255, 255, 0, 0, 0, jlw);
+                                          255, 255, 255, 0, 0, 0, jlw);
         } else {
             for (int j = 0; j < joy_count; ++j) {
                 const std::string jline =
                     fmt_us(ctx_.assets.getstring(41, "Joy %u - %s"), j, ctx_.gamepads.name(j));
                 ctx_.front_font.draw_outlined(ctx_.sdl, jline, jlx,
-                                          jly + jlys * static_cast<float>(j), 255, 255, 255, 0, 0,
-                                          0, jlw);
+                                              jly + jlys * static_cast<float>(j), 255, 255, 255, 0,
+                                              0, 0, jlw);
             }
         }
         // Footer (sub_413FB9 -> getstring(330), local play only): centred,
         // cyan/black. Replaces the invented key-legend line.
         const std::string help = ctx_.assets.getstring(330, "Press F1 for help");
         const float help_w = static_cast<float>(ctx_.front_font.measure(help));
-        ctx_.front_font.draw_outlined(ctx_.sdl, help, fcx - (help_w + 2.0f) / 2.0f, ffy, 96,
-                                  252, 252, 0, 0, 0, ffw);
+        ctx_.front_font.draw_outlined(ctx_.sdl, help, fcx - (help_w + 2.0f) / 2.0f, ffy, 96, 252,
+                                      252, 0, 0, 0, ffw);
         // The bomber-dude row cursor (sub_413BD6, called at pseudo.c
         // 15205-15211): MISC.ANI "cursor1", hotspot-anchored at
         // (getvalue(710) - 15, row_y + 16) — this screen alone uses -15; the
@@ -218,14 +235,14 @@ AppInput SetupScreen::run() {
         // timed blink: cursor_indicator.hpp.
         Anim cur = resolve_sequence(ctx_.assets.misc(), "cursor1");
         if (!cur.steps.empty()) {
-            const std::size_t st = ctx_.cursor_blink.step(SDL_GetTicks() / 1000ull, cur.steps.size(),
-                                                      blink_base, blink_spread);
+            const std::size_t st = ctx_.cursor_blink.step(
+                SDL_GetTicks() / 1000ull, cur.steps.size(), blink_base, blink_spread);
             const Sprite& sp = cur.steps[anim_step_index(st, cur.steps.size())];
             if (sp.tex) {
-                SDL_FRect d{lx - 15.0f - static_cast<float>(sp.hx),
-                            ly + lys * static_cast<float>(cursor) + 16.0f -
-                                static_cast<float>(sp.hy),
-                            static_cast<float>(sp.w), static_cast<float>(sp.h)};
+                SDL_FRect d{
+                    lx - 15.0f - static_cast<float>(sp.hx),
+                    ly + lys * static_cast<float>(cursor) + 16.0f - static_cast<float>(sp.hy),
+                    static_cast<float>(sp.w), static_cast<float>(sp.h)};
                 SDL_RenderTexture(ctx_.sdl, sp.tex, nullptr, &d);
             }
         }
@@ -296,7 +313,9 @@ AppInput SetupScreen::run() {
             if (state_.setup_type[i] != 2 && state_.setup_type[i] != 3) continue;
             for (int j = i + 1; j < 10; ++j) {
                 if (state_.setup_type[j] != 2 && state_.setup_type[j] != 3) continue;
-                if (state_.setup_type[i] == state_.setup_type[j] && state_.setup_sub[i] == state_.setup_sub[j]) return true;
+                if (state_.setup_type[i] == state_.setup_type[j] &&
+                    state_.setup_sub[i] == state_.setup_sub[j])
+                    return true;
             }
         }
         return false;
@@ -432,8 +451,9 @@ AppInput SetupScreen::run() {
                 // getstring(96).
                 if (!count_ok()) {
                     const std::string reason =
-                        state_.team_play ? ctx_.assets.getstring(48, "You need at least two teams!")
-                                   : ctx_.assets.getstring(46, "You need at least two players!");
+                        state_.team_play
+                            ? ctx_.assets.getstring(48, "You need at least two teams!")
+                            : ctx_.assets.getstring(46, "You need at least two players!");
                     if (show_error(reason) == AppInput::Quit) return AppInput::Quit;
                     continue;
                 }
@@ -445,8 +465,7 @@ AppInput SetupScreen::run() {
             // §7's read-only gate: Up/Down (pure navigation) and F1 stay live on
             // a guest; every EDIT key below falls through to the SFX-40 buzz,
             // the same shape as `sub_410F81`'s `sub_40C06A() != 1` guards.
-            const bool edit_denied =
-                net_guest || (net_mode && net_setup_slot_locked(net_, cursor));
+            const bool edit_denied = net_guest || (net_mode && net_setup_slot_locked(net_, cursor));
             if (k == SDLK_UP)
                 cursor = (cursor + 9) % 10;  // 328
             else if (k == SDLK_DOWN)
@@ -529,8 +548,7 @@ AppInput SetupScreen::run() {
                                    state_.team_play);
             // The host moved on (its preview now carries a real win target), or
             // it confirmed outright and we already hold the config: follow it.
-            if (net_setup_final(net_) || net_setup_on_level_screen(net_))
-                return AppInput::Advance;
+            if (net_setup_final(net_) || net_setup_on_level_screen(net_)) return AppInput::Advance;
             // Timed out / the host vanished. Back returns to the caller, which
             // reads net_setup_failed() to tell this from an Esc.
             if (net_setup_failed(net_)) return AppInput::Back;

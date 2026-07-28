@@ -23,7 +23,7 @@ comment or a `-X,...` directive.
 -N,<name>
 -B,<brick_density>                    0-100 percent
 -R,<row_index>,<row_text>             one line per grid row
--S,<player>,<x>,<y>,<extra>           one line per spawn point
+-S,<player>,<x>,<y>,<team>            one line per spawn point
 -P,<id>,<born_with>,<has_override>,<override_value>,<forbidden>,<comment>
 ```
 
@@ -43,9 +43,25 @@ All rows must be the same width; the loader throws `std::runtime_error`
 
 ### `-S` — spawn point
 
-`player` (spawn slot index), `x`, `y` (tile coordinates), plus a 4th `extra`
-field whose exact purpose is still TBD (team/alt-spawn flag — not yet pinned
-against the binary). At least 3 fields (`player,x,y`) are required.
+`player` (spawn slot index), `x`, `y` (tile coordinates), plus an optional 4th
+field: this slot's **TEAM** (`docs/re/facts.md` "The `.SCH` `-S` row's 4th
+field is the per-slot TEAM"). At least 3 fields (`player,x,y`) are required.
+
+The team field is a **boolean** — `sub_403EEE` stores `value != 0` — and it is
+written into the slot's start record only when the row actually carries four
+fields. That distinction matters: a three-field row leaves the slot at
+`sub_4049C0`'s default, which is **slot parity** (0,1,0,1,…), not 0. The
+reader's tail loop then pushes all ten records into the player records' `+84`
+team byte, the same byte the PLAYER INPUT screen's `T` key toggles — so the
+scheme supplies the roster the screen opens with, and a `T` press overrides it.
+The map editor authors the field as a per-spawn "team ring" marker
+(`sub_4028D2`).
+
+19 of the 67 shipped schemes carry a non-parity layout here; fifteen of them
+are the same "slots 0-4 vs slots 5-9" split (`E_VS_W`, `N_VS_S`, `TENNIS`,
+`VOLLEY`, `PINGPONG`, …). Whether the teams MEAN anything in a given match is
+a separate, downstream gate: the Options screen's team-play flag
+(`dword_464964`).
 
 ### `-P` — powerup rule
 
@@ -56,7 +72,7 @@ jelly, super-disease, random — `docs/valuelst-map.md`). Fields:
 | field | meaning |
 |---|---|
 | `id` | powerup kind index |
-| `born_with` | count a player starts the match holding |
+| `born_with` | count a player starts the match holding — **replaces** the VALUELST baseline (see below) |
 | `has_override` | whether `override_value` overrides the scheme-wide hide count |
 | `override_value` | per-kind hidden-powerup count override |
 | `forbidden` | 1 = this powerup kind never spawns on this map |
@@ -70,6 +86,16 @@ result screen prints for that prize (`docs/re/goldman-roulette.md` §7, "the
 writer round-trips whatever `PowerupRule::comment` already holds rather than
 inventing MESSAGES.TXT text (which is not committed to this repo); an empty
 comment writes a bare `-P,...` line the reader tolerates.
+
+**`born_with` is not a separate grant channel** (`docs/re/facts.md` "The
+`.SCH` `-P` row's 2nd field is a COUNT that REPLACES the starting inventory").
+After the parse, `sub_403EEE` calls the VALUELST **setter** `sub_4121BF(50 +
+id, count)` for every row whose count is `> 0`, overwriting the per-kind
+starting-inventory value the whole game reads through `getvalue`. So a scheme
+asking for 3 bombs starts every player on exactly 3, not on the VALUELST's 1
+plus a grant — and every other reader of id 50+kind (notably the death-scatter
+and head-hit "above baseline" tests) sees the scheme's number too. A count of
+`0` is "no opinion": the gate is `> 0`, so it cannot zero the default.
 
 ## Brick fill is randomized — NOT baked into the file
 

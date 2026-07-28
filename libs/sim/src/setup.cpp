@@ -129,12 +129,25 @@ State build_state(const MatchConfig& config) {
         // j = 0..14 and writes getvalue(50+j) into the inventory byte at +86+j,
         // batch_0x420D4E.cpp:427-428), not just ExtraBomb/Flame. The original's
         // is an unconditional raw byte write with no eviction/clamp (that only
-        // runs for the Goldman-wheel bonus and the scheme born_with overlay
-        // below): counted kinds take the value, flag kinds are set when the
+        // runs for the Goldman-wheel bonus below): counted kinds take the
+        // value, flag kinds are set when the
         // baseline is nonzero. Silent under the shipped VALUELST (every kind but
         // bomb=1/flame=2 is 0, matching the C++ defaults) but a real gap for a
         // custom VALUELST setting Kick/Skate/... (ids 52-62) nonzero — those 11
         // kinds previously had NO baseline path and silently started at 0.
+        //
+        // This block is ALSO the scheme's "-P born with" path. That field is a
+        // COUNT that overwrites VALUELST id 50+kind — sub_403EEE's tail loop
+        // calls the value-table SETTER sub_4121BF, docs/re/facts.md "The .SCH
+        // -P row's 2nd field is a COUNT that REPLACES the starting inventory"
+        // — so build_match_config folds it into start_with and nothing extra
+        // happens here. It used to arrive as a MatchConfig::born_with BOOL
+        // replayed through PowerupSystem::apply right after this block:
+        // additive instead of replacing (a scheme asking for 3 bombs granted
+        // the VALUELST's 1 plus one), and — because apply runs the pickup
+        // dispatcher's mutual-exclusion evictions — able to evict a kind and
+        // SCATTER a token, drawing State::rng at setup, which sub_4214BC's raw
+        // byte write never does.
         p.max_bombs = s.tuning.start_with[static_cast<int>(PowerupType::ExtraBomb)];
         p.flame = s.tuning.start_with[static_cast<int>(PowerupType::Flame)];
         p.skates = s.tuning.start_with[static_cast<int>(PowerupType::Skate)];
@@ -148,11 +161,9 @@ State build_state(const MatchConfig& config) {
         // skates fold into the walk speed (the original applies the skate factor
         // per-tick; the port bakes it into `speed`, matching PowerupSystem).
         p.speed = s.tuning.start_speed + p.skates * s.tuning.skate_speed_bonus;
-        for (int k = 0; k < kPowerupKinds; ++k)
-            if (config.born_with[k]) powerups.apply(p, static_cast<PowerupType>(k));
         // Goldman wheel award (docs/re/goldman-roulette.md §4/§8): a per-
-        // player overlay applied AFTER the global born_with loop, through the
-        // same PowerupSystem::apply path — sub_4214BC simply increments the
+        // player overlay applied AFTER the start_with baseline above, through
+        // the PowerupSystem::apply path — sub_4214BC simply increments the
         // inventory byte at +86 + prize, which is exactly one more born-with
         // unit, not a distinct grant
         // mechanism. Default all-false, so this is a no-op for every

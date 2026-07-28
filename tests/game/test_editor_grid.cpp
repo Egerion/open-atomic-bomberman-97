@@ -172,7 +172,7 @@ TEST_CASE("Scheme -> EditorGrid -> Scheme round-trips every field") {
         sp.player = i;
         sp.x = i;
         sp.y = 2;
-        sp.extra = i % 2;
+        sp.team = i % 2;
         s.spawns.push_back(sp);
     }
     for (int i = 0; i < kEditorPowerupKinds; ++i) {
@@ -207,7 +207,7 @@ TEST_CASE("Scheme -> EditorGrid -> Scheme round-trips every field") {
         CHECK(back.spawns[i].player == s.spawns[i].player);
         CHECK(back.spawns[i].x == s.spawns[i].x);
         CHECK(back.spawns[i].y == s.spawns[i].y);
-        CHECK(back.spawns[i].extra == s.spawns[i].extra);
+        CHECK(back.spawns[i].team == s.spawns[i].team);
     }
     REQUIRE(back.powerups.size() == s.powerups.size());
     for (std::size_t i = 0; i < s.powerups.size(); ++i) {

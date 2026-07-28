@@ -311,21 +311,36 @@ grey joystick pane, +70 selected-row boost and key-legend line removed).
   `sub_4049C0` (pseudo.c lines 6702-6718) sets, for every slot `j` in
   `[0,10)`: `dword_46481C[12*j] = <default colour x>`, `[12*j+4] = <default
   colour y>`, and **`[12*j+8] = j & 1`** — the TEAM field, alternating
-  0,1,0,1,... by slot parity. `sub_403EEE`'s own save-file parse loop only
-  ever overwrites a slot's colour fields (`+0`/`+4`) from disk; TEAM (`+8`)
-  is left at the `j & 1` default UNLESS a "-S slot,x,y,team" 5-field profile
-  line is present — in that case (pseudo.c line 6427) the parser writes the
-  TEAM field of the slot named by that line, `dword_46481C[12*slot + 8]`, with
-  the boolean "the line's 5th field, run through `sub_4516C1` (atoi), is
-  non-zero" — a rare, hidden colour-profile file format this port
-  does not implement. `sub_403EEE` finishes by pushing all 10
+  0,1,0,1,... by slot parity.
+
+  **The "rare hidden profile file" reading of the override is WRONG —
+  CORRECTED AGAIN 2026-07-28** (`docs/re/facts.md` "The `.SCH` `-S` row's 4th
+  field is the per-slot TEAM"). This bullet used to say `sub_403EEE`'s parse
+  loop "only ever overwrites a slot's colour fields (`+0`/`+4`) from disk"
+  and that TEAM moves only for "a rare, hidden colour-profile file format
+  this port does not implement". Three things are wrong with that. The `+0`
+  and `+4` dwords are the spawn X and Y, not a colour. The file being parsed
+  is the **scheme itself** — the reader takes the current scheme name, strips
+  the extension and re-appends `.SCH`. And the four-field `-S` row that sets
+  TEAM is neither rare nor hidden: **19 of the 67 shipped
+  `DATA/SCHEMES/*.SCH` carry one**, fifteen of them the same
+  slots-0-4-vs-slots-5-9 split (`E_VS_W`, `N_VS_S`, `TENNIS`, `VOLLEY`,
+  `PINGPONG`, …). So the alternating default stands only for schemes that
+  omit the field; a team-designed map arrives with its own layout already in
+  the records. `sub_403EEE` finishes by pushing all 10
   `dword_46481C[...+8]` values into `dword_461BC4[38*i+21]` via
   `sub_422437(k, ...)` (pseudo.c line 6491) — the exact array `sub_4223E7`/
   the setup screen's own TEAM column reads. Net effect: **every time the
   setup screen loads, TEAM resets to an alternating 0/1/0/1 pattern by slot
-  index**, not to a flat 0 and not persisted from a prior visit. The port's
-  `GameApp::present_setup()` (`libs/game/src/game_app.cpp`) now mirrors this
-  with `for (slot) setup_team_[slot] = slot & 1;` at entry. Before this fix,
+  index**, and then the loaded scheme overrides whichever slots it names —
+  not a flat 0, and not persisted from a prior visit. The port's setup screen
+  mirrors both halves at entry: `reset_setup_teams()`
+  (`libs/game/include/bomber/game/input.hpp`) lays down the parity default,
+  then `match::scheme_setup_teams()`
+  (`libs/match/include/bomber/match/match_factory.hpp`) overlays the scheme's
+  `-S` teams. The `T` key still overrides both afterwards, exactly as in
+  `sub_410F81`, whose key loop runs after the load. Before the 2026-07-09
+  half of this fix,
   `setup_team_` defaulted (and stayed) all-0, so Team Play ON without anyone
   pressing 'T' put every player on the SAME sim side: `MatchConfig::team[]`
   was uniformly 1, giving everyone the team-1/WHITE `0.RMP` colour override

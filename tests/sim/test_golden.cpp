@@ -594,6 +594,53 @@ MatchConfig pillars_config() {
 //   neither does â€” recapturing them alone would have quietly retired the
 //   goldens' enclosure coverage. F is a fresh capture (nothing re-baselined)
 //   of a round that stays undecided through a complete two-ring spiral.
+//
+// UPDATE 2026-07-28 (scheme "born with" is a starting-inventory BASELINE,
+// docs/re/facts.md "The .SCH -P row's 2nd field is a COUNT that REPLACES the
+// starting inventory"). A DELIBERATE behaviour recapture reaching B, C and E
+// - exactly the three scenarios that used to set MatchConfig::born_with.
+//   The change: that field is gone. sub_403EEE's tail loop writes the
+//   scheme's count into VALUELST id 50+kind with the value-table SETTER
+//   sub_4121BF, so "born with" IS the starting-inventory baseline
+//   (Tuning::start_with) rather than a second, additive channel. setup.cpp no
+//   longer replays it through PowerupSystem::apply; the three scenarios below
+//   now say `cfg.tuning.start_with[kind] = 1` instead.
+//   Two distinct mechanisms move the hashes, both measured:
+//     (1) SETUP. apply() runs the pickup dispatcher's mutual-exclusion
+//         evictions, and evict() only spares a kind the player holds "at
+//         baseline" (`start_with[kind] > 0`). With born_with on a separate
+//         channel that test was FALSE for every born-with kind, so B's
+//         Spooger grant evicted the Grab granted one iteration earlier and
+//         SCATTERED it - 4 players, 4 scatter draws, and every player ended
+//         the round WITHOUT the grab glove the scenario asked for.
+//         sub_4214BC's baseline write is a raw byte store with no eviction and
+//         no RNG, so that is now gone: measured, all four players keep
+//         kick/punch/grab/spooger/jelly and setup places zero floor tokens.
+//         B's setup hash therefore moves, and everything after it.
+//     (2) DEATH SCATTER / HEAD HIT. Their surplus test is
+//         `held_count(p, kind) > start_with[kind]`, which reads the very id
+//         the scheme overwrites (the original asks getvalue(kind+50) at the
+//         same place). A born-with kind used to read 1 > 0 and be dropped;
+//         it now reads 1 > 1 and is kept.
+//   Which scenario moves, and from where (measured by tracing each run's
+//   events under the new code):
+//     B  both mechanisms - the setup hash and all six checkpoints move.
+//     C  mechanism (2) only. Setup is unchanged; player 1 dies at tick 10
+//        holding the born-with Trigger, which is no longer scattered, so the
+//        single tick-1500 checkpoint moves.
+//     E  mechanism (2) only, and LATE: player 0 dies at tick 231 holding
+//        kick/punch/jelly. Checkpoints 75/150/225 are BYTE-IDENTICAL (they
+//        passed unchanged through the recapture); only tick 300 and the final
+//        rng move, and the bounce count stays 10 - the choreography itself is
+//        untouched.
+//     A  has no players; D and F set no born-with kind  =>  all unmoved.
+//   FOOTNOTE on E's new final rng, 0x405862fb: that is the value this file's
+//   own bombs-F2 note records as E's PRE-F2 reading, which looks like a
+//   suspicious revert and is not one. State::rng is a plain xorshift32
+//   (rng.hpp), so its value is a function of the seed and the DRAW COUNT
+//   alone - two runs that make the same number of draws by different routes
+//   land on the same word. The tick-300 hash, which does encode the board, is
+//   a value this file has never carried.
 TEST_CASE("golden A: empty state, 10000 ticks") {
     Simulation a;
     a.state().rng = 42u;
@@ -619,13 +666,18 @@ TEST_CASE("golden B: 4-player brick match with all abilities") {
     cfg.player_count = 4;
     cfg.seed = 0xB0BB1E5;
     cfg.tuning.input_freeze_ticks = 0;  // see pillars_config's disarm note
-    cfg.born_with[static_cast<int>(PowerupType::Kick)] = true;
-    cfg.born_with[static_cast<int>(PowerupType::Punch)] = true;
-    cfg.born_with[static_cast<int>(PowerupType::Grab)] = true;
-    cfg.born_with[static_cast<int>(PowerupType::Spooger)] = true;
-    cfg.born_with[static_cast<int>(PowerupType::Jelly)] = true;
+    // "Born with" is a starting-inventory BASELINE, not a grant replayed
+    // through PowerupSystem::apply (facts.md "The .SCH -P row's 2nd field is a
+    // COUNT that REPLACES the starting inventory"): the scheme field writes
+    // VALUELST id 50+kind, which is Tuning::start_with[]. Was
+    // cfg.born_with[...] = true before 2026-07-28.
+    cfg.tuning.start_with[static_cast<int>(PowerupType::Kick)] = 1;
+    cfg.tuning.start_with[static_cast<int>(PowerupType::Punch)] = 1;
+    cfg.tuning.start_with[static_cast<int>(PowerupType::Grab)] = 1;
+    cfg.tuning.start_with[static_cast<int>(PowerupType::Spooger)] = 1;
+    cfg.tuning.start_with[static_cast<int>(PowerupType::Jelly)] = 1;
     Simulation s(cfg);
-    CHECK(s.hash() == 0x3e57ef752a0b5fe6ull);  // setup itself is pinned (setup F1 recapture 2026-07-20)
+    CHECK(s.hash() == 0x7458970437db5433ull);  // setup itself is pinned (setup F1 recapture 2026-07-20)
 
     // Recaptured 2026-07-12 (canonical frame cadence, facts.md "Canonical
     // frame cadence"): the walk budget accrues per 60 fps frame with the
@@ -635,9 +687,9 @@ TEST_CASE("golden B: 4-player brick match with all abilities") {
     // and E's bounce-count + veer-RNG assertions passed unchanged, pinning
     // that the choreography itself still plays out.
     static constexpr std::uint64_t kExpected[6] = {
-        0x4867bc190c138822ull,  // tick 500  (setup F1 recapture 2026-07-20)
-        0xe5e93242edc5bd8full,  // tick 1000
-        0xe72d94a9427b4a7bull,  // tick 1500
+        0x7079944fe44c029eull,  // tick 500  (setup F1 recapture 2026-07-20)
+        0x44bcba78eca4d2a9ull,  // tick 1000
+        0xce180c666117b293ull,  // tick 1500
         // Recaptured 2026-07-26 (enclosure F2 â€” see the file-level UPDATE).
         // Measured with the gate temporarily disabled, on the same run that
         // produced these three: the round is down to one side after 45 ticks,
@@ -645,9 +697,9 @@ TEST_CASE("golden B: 4-player brick match with all abilities") {
         // tick 3000. It now never arms â€” which is exactly why the three
         // checkpoints ABOVE (all before 1881) are byte-identical and only
         // these three, all after it, move.
-        0x61945f017d7e1dc0ull,  // tick 2000
-        0xd6d8be170f7fb91full,  // tick 2500
-        0xe1f725ab6218bffcull,  // tick 3000
+        0x4d08762018244b61ull,  // tick 2000
+        0x38ed664fd96e55dfull,  // tick 2500
+        0x72a574965ee7e37eull,  // tick 3000
     };
     for (std::uint64_t t = 0; t < 3000; ++t) {
         s.tick(pattern(t));
@@ -662,7 +714,7 @@ TEST_CASE("golden C: trigger bombs and a fast hurry phase") {
     cfg.player_count = 2;
     cfg.seed = 99;
     cfg.tuning.game_seconds = 70;
-    cfg.born_with[static_cast<int>(PowerupType::Trigger)] = true;
+    cfg.tuning.start_with[static_cast<int>(PowerupType::Trigger)] = 1;  // was born_with (see B)
     Simulation s(cfg);
     for (std::uint64_t t = 0; t < 1500; ++t) s.tick(pattern(t * 7 + 3));
     // Recaptured 2026-07-12 (canonical frame cadence â€” see golden B's note).
@@ -676,7 +728,7 @@ TEST_CASE("golden C: trigger bombs and a fast hurry phase") {
     // produced the constant below â€” this scenario is down to one side after 11
     // ticks and USED to arm the walls at tick 281 and close all 96 tiles of the
     // spiral by tick 1500; it now never arms, so this single checkpoint moves.
-    CHECK(s.hash() == 0x9a93bc4199be6cfdull);
+    CHECK(s.hash() == 0x6fab474f1fd6f43aull);
     // Legible companions to the digest, so a stepper regression names itself.
     CHECK(sides_remaining(s.state()) == 1);  // decided at tick 11 of 1500...
     CHECK(s.state().enclose_interval == 0);  // ...so the walls never armed...
@@ -781,9 +833,9 @@ TEST_CASE("golden E: jelly ping-pong and a veering punched flight") {
     for (auto& c : cfg.tuning.spawn_counts) c = 0;
     cfg.tuning.fuse_frames = 200;  // long fuse: room for the ping-pong
     cfg.tuning.start_with[0] = 3;  // three bombs
-    cfg.born_with[static_cast<int>(PowerupType::Kick)] = true;
-    cfg.born_with[static_cast<int>(PowerupType::Punch)] = true;
-    cfg.born_with[static_cast<int>(PowerupType::Jelly)] = true;
+    cfg.tuning.start_with[static_cast<int>(PowerupType::Kick)] = 1;   // was born_with (see B)
+    cfg.tuning.start_with[static_cast<int>(PowerupType::Punch)] = 1;  // was born_with (see B)
+    cfg.tuning.start_with[static_cast<int>(PowerupType::Jelly)] = 1;  // was born_with (see B)
     Simulation s(cfg);
 
     auto script = [](std::uint64_t t) {
@@ -816,7 +868,7 @@ TEST_CASE("golden E: jelly ping-pong and a veering punched flight") {
         0x14e4774347cc2b22ull,  // tick 75
         0xb26f0905590b54edull,  // tick 150
         0x3de8e4ca81b8f8d7ull,  // tick 225
-        0xfc762a8180c4f1c8ull,  // tick 300
+        0xf959093cebf4b5b6ull,  // tick 300
     };
     int bounces = 0;
     for (std::uint64_t t = 0; t < 300; ++t) {
@@ -833,7 +885,7 @@ TEST_CASE("golden E: jelly ping-pong and a veering punched flight") {
     // tile/tick, cadence-invariant). Restoring the base speed restores the
     // pre-F2 leg count and detonation rng. A jelly bounce itself draws no RNG.
     CHECK(bounces == 10);                 // the ping-pong really happened
-    CHECK(s.state().rng == 0xc6a9f3b2u);  // base kicked speed: detonation back on its pre-F2 tile
+    CHECK(s.state().rng == 0x405862fbu);  // base kicked speed: detonation back on its pre-F2 tile
 }
 
 // NEW 2026-07-26 (enclosure F2/F3, docs/re/enclosure.md Â§5.1/Â§8). B and C used
