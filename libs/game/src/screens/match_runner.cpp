@@ -20,6 +20,7 @@
 #include "bomber/game/sprites.hpp"                   // Sprite (player-row "xxx" marker)
 #include "bomber/match/match_factory.hpp"   // build_match_config / pick_stage / apply_actors
 #include "bomber/net/rollback_session.hpp"  // net::RollbackSession (netplay drive, seam is fwd-only)
+#include "bomber/platform/frame_pacer.hpp"  // platform::FramePacer (the SDL-free pacing decision)
 
 namespace bomber::game {
 
@@ -388,7 +389,13 @@ AppInput MatchRunner::run() {
         period_ns = 1'000'000'000ull * mode->refresh_rate_denominator /
                     static_cast<std::uint64_t>(mode->refresh_rate_numerator);
     }
-    std::uint64_t pace_target_ns = SDL_GetTicksNS() + period_ns;
+    //
+    // The DECISION half of all of the above (and of F8's uncapped mode below)
+    // lives in platform::FramePacer, which is SDL-free and pinned headlessly by
+    // tests/platform/test_frame_pacer.cpp. This loop only measures the clock,
+    // sleeps and spins.
+    const std::uint64_t sub_frame_ns = tick_ns / sim::kSubFrames;
+    platform::FramePacer pacer(period_ns, SDL_GetTicksNS());
     // F8 FPS-indicator state: count presented frames and refresh the shown
     // figure ~4x/second (a 250 ms window) so the number is readable, not a
     // blur. Purely for the top-right overlay; nothing gameplay reads it.
@@ -725,26 +732,51 @@ AppInput MatchRunner::run() {
         draw_player_row(state_.sim.state());
         draw_fps_overlay(shown_fps);
         SDL_RenderPresent(ctx_.sdl);
-        // Refresh-boundary pacer — see the pacing comment at the top of this
-        // function. No-op when present already blocked past the target;
-        // supplies the missing block (and re-phases the target) when it
-        // didn't.
-        // Pace target: the refresh period by default, or the sim's sub-frame
-        // period when F8's uncapped mode is armed (see uncap_fps_). At the
-        // sub-frame rate every canonical frame player_interp can distinguish
-        // reaches the screen — capping any higher would only re-show sub-frames
-        // (there are just kSubFrames per tick), so this is the useful ceiling,
-        // not a hard free-run. The else-branch resync makes a mid-match toggle
-        // self-correct within a frame.
-        const std::uint64_t pace_period_ns =
-            state_.uncap_fps ? tick_ns / sim::kSubFrames : period_ns;
-        std::uint64_t after_present_ns = SDL_GetTicksNS();
-        if (after_present_ns < pace_target_ns) {
-            SDL_DelayNS(pace_target_ns - after_present_ns);
-            pace_target_ns += pace_period_ns;
+        // Pace the next present. DEFAULT (vsync): the refresh-boundary resync
+        // rule described at the top of this function, unchanged — no-op when
+        // present already blocked past the target, supplies the missing block
+        // (and re-phases) when it didn't.
+        //
+        // F8 (uncapped): the sub-frame LATTICE instead. The useful ceiling here
+        // is the sim's interpolation quantum — renderer.cpp floors
+        // interp_alpha * kSubFrames, so a tick has exactly kSubFrames distinct
+        // on-screen positions and presenting any faster only re-shows one. The
+        // old code aimed at "now + sub-frame period" and dropped the whole
+        // overrun whenever a present ran long, which on this renderer is
+        // routine: measured 2026-07-28, SDL_RenderPresent costs 0.3 ms at p50
+        // but 11-18 ms at p99 as the swapchain backs up against a 60 Hz panel,
+        // so the resync branch fired on 7-25% of frames and the achieved rate
+        // sat at 151-171 Hz instead of 180. Targeting the next LATTICE point
+        // instead cannot lose phase (the target is read off the tick clock, not
+        // off "now") and cannot present a sub-frame twice. See FramePacer's
+        // header for the measured comparison against the deficit-catch-up
+        // alternative, which reaches the rate only by duplicating frames.
+        const std::uint64_t after_present_ns = SDL_GetTicksNS();
+        platform::FramePacer::Wait wait;
+        if (state_.uncap_fps) {
+            pacer.set_period(sub_frame_ns);
+            // Lattice origin = the wall instant the CURRENT tick began. `acc`
+            // only ever moves by measured deltas and whole ticks, so `last -
+            // acc` is an exact point on the 50 ms tick clock rather than a
+            // per-frame estimate, and the presents stay welded to the very
+            // boundaries the interpolator quantises onto. The F9 native path
+            // zeroes `acc` every frame, so there is no tick clock to anchor to
+            // there — leave the lattice free-running (its own origin) instead
+            // of re-anchoring it onto `last`, which would silently turn the
+            // absolute target back into a relative one.
+            if (!state_.native_cadence || state_.net_session) pacer.set_anchor(last - acc);
+            wait = pacer.plan_subframe(after_present_ns);
         } else {
-            pace_target_ns = after_present_ns + pace_period_ns;
+            pacer.set_period(period_ns);
+            wait = pacer.plan_resync(after_present_ns);
         }
+        if (wait.sleep_ns) SDL_DelayNS(wait.sleep_ns);
+        // Busy-wait the last stretch: the coarse sleep overshoots by ~0.5 ms on
+        // Win11 and has a floor of about the same, which at a 5.556 ms period
+        // is the difference between hitting the boundary and missing it (see
+        // FramePacer::kSpinTailNs). Only the uncapped path asks for this.
+        while (wait.spin_until_ns && SDL_GetTicksNS() < wait.spin_until_ns)
+            SDL_CPUPauseInstruction();
     }
 }
 
