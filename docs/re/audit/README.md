@@ -42,6 +42,17 @@ staleness is high enough that "the doc says so" should never end an argument.
   where to look, which is the point.
 - **The reasoning**, when you follow it back to the binary yourself.
 
+## `native/...` citations are provenance, not links
+
+Most files here cite paths under `native/` — a local-only 1:1 transliteration of
+the binary, plus its disassembly wrapper and oracle harness. **It is gitignored
+and is not published**, because it is derived from the decompilation and falls
+under the same rule as `pseudo.c` and the original assets. So those paths will
+not resolve for anyone reading this repository, and that is on purpose, not rot.
+They record where the reading was done; the `sub_XXXX` address next to them is
+the part you can check yourself. `docs/re/method.md` has the full explanation of
+what `native/` is and why it stays out of the tree.
+
 ## What these documents deliberately do NOT contain
 
 No decompiler output and no disassembly listings: the behaviour is described

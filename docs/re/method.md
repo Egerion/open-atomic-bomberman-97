@@ -50,6 +50,52 @@ immediately. Screenshots from `--demo` are diffed/inspected for anything
 visual. New behavior lands as: extract fact → encode as `Tuning` field or sim
 rule → add a scenario test asserting it → build → test → screenshot.
 
+## `native/` — the citations you cannot open, and why
+
+Many notes under `docs/re/` cite paths like `native/src/game/batch_0x41DAA7.cpp`,
+`native/src/globals.cpp`, `native/tools/disasm.py` or `native/docs/M3_NOTES.md`.
+**None of those files are in this repository, and a reader who clones it cannot
+open a single one.** That is deliberate, and worth stating plainly rather than
+leaving as a wall of broken links.
+
+`native/` is a separate, local-only **1:1 transliteration** of BM95.EXE: the
+decompiled original carried across into compilable C++ with its arithmetic,
+branch structure and globals left exactly as they are, function by function,
+plus the small tooling around it (a disassembler wrapper for byte-level
+re-checks, and an oracle harness that runs it headless and prints a per-tick
+digest). It is not a second port and nothing in `libs/` depends on it. It exists
+for two jobs:
+
+1. **A readable second opinion on the binary.** Reading a transliteration is
+   faster and less error-prone than re-reading a decompiler window, which is why
+   the audits under `docs/re/audit/` cite it so heavily.
+2. **A behavioural oracle.** Running it against `tools/oracle_mirror` on the same
+   seed and script and diffing the two digest streams points at the first tick
+   where the clean-room sim gets a mechanic wrong. That is how several findings
+   in `facts.md` were settled empirically instead of by argument.
+
+**It is not published because it is derived from the decompilation**, and the
+whole-repo rule (`.gitignore`, root `CLAUDE.md`) is that exe-derived material
+never lands in the tree — the same rule that keeps `pseudo.c`, the IDA database,
+disassembly listings and the original assets out. A transliteration is
+decompiler output that has been retyped; publishing it would undo the policy
+rather than satisfy it, so `native/` is gitignored alongside them.
+
+**What that means for a citation.** A `native/...` path is a pointer to *where
+the reasoning was done*, on par with a `pseudo.c` line number — not to evidence
+this repository ships. The evidence a public reader can independently check is:
+
+- **the `sub_XXXX` address**, which is a fact about the shipped binary and is
+  stable in anyone's disassembler;
+- **the prose description** of the behaviour, which is what these documents
+  contain instead of the code;
+- **the port** in `libs/`, which is here in full, and the tests that pin it.
+
+So treat `native/...` as provenance, not as a link. If you have your own copy of
+the binary you can go to the address and check the claim; if you do not, the
+claim rests on the prose and the address, and should be read with the same
+suspicion `docs/re/audit/README.md` asks for everywhere else.
+
 ## Provenance discipline
 
 Every extracted constant goes into `facts.md` with its source address or asset

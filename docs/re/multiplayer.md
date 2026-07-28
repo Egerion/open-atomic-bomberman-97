@@ -19,8 +19,10 @@ Sources: `docs/re/` (`facts.md`, `coverage-audit.md`, `dark-matter.md`,
 `frontend-flow.md`, `setup-screens.md`, `campaign.md`, `goldman-roulette.md`,
 `enclosure.md`, `audit/*`), the port's own net-aware code (`libs/`, `apps/`),
 `docs/adr/0003`, `docs/adr/0007`, and CLAUDE.md. The binary itself and the
-`native/` transliteration are **not** in this worktree; every claim that would
-need the binary to settle is marked **NEEDS-VERIFY (binary)**.
+`native/` transliteration are **not** in this worktree — and `native/` is not in
+*any* checkout: it is a local-only 1:1 transliteration of the binary, gitignored
+as exe-derived material like `pseudo.c` (`docs/re/method.md`). Every claim that
+would need the binary to settle is marked **NEEDS-VERIFY (binary)**.
 
 > **Motivation.** Per the project's own working notes the original BM95.EXE has
 > already been made to **run natively on modern Win11** (CFG.INI path fixes + a

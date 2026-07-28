@@ -13,6 +13,11 @@ suspected all of this but could not confirm it: `sub_427961`, `sub_427BFB`,
 `native/` and are stubbed in `native/src/game/_m1_stubs.cpp`, so the oracle
 harness could not arbitrate. These are the real routines.
 
+(`native/` is the local-only 1:1 transliteration of the binary. It is gitignored
+as exe-derived material and is not published, so that path will not resolve for
+a reader of this repository; `docs/re/method.md` explains what it is. Nothing
+here depends on it — the addresses and the `debug=3` log lines are the evidence.)
+
 ## 1. The data structures
 
 Three parallel arrays, all indexed by SOUNDLST id and all (re)allocated by the
