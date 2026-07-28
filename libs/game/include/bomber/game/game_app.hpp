@@ -279,9 +279,34 @@ private:
     // shell"). Every round's seed and tick base come from net::round_rotation.hpp,
     // so both peers agree on which round they are in with no extra traffic.
     // Returns Advance once the match is decided/abandoned, Quit on a window close.
+    //
+    // `round_base` is an IN/OUT round counter that survives across MATCHES played
+    // over one transport (see run_netplay_session): every round's tick space is
+    // net::round_tick_base(*round_base + round), so match 2's round 0 cannot land
+    // in the tick space match 1 was still sending into. nullptr = start at 0 and
+    // report nothing, which is every single-match caller.
+    // `rematch` is set true when the match was DECIDED and both peers agreed
+    // (net::RematchSession) to walk back to the setup screens over the same
+    // transport instead of tearing it down. nullptr = the caller does not offer a
+    // rematch, and the transport is dropped as before.
     AppInput run_netplay_match_seats(net::Transport& transport, std::uint16_t local_seats,
                                      std::uint16_t all_seats, bool is_host,
-                                     const sim::MatchConfig& cfg);
+                                     const sim::MatchConfig& cfg, int* round_base = nullptr,
+                                     bool* rematch = nullptr);
+    // A whole NETPLAY SESSION over one connected transport: setup -> match ->
+    // setup -> match -> ... The connect step (lobby punch or direct handshake)
+    // happens once, and finishing a match returns BOTH peers to the roster/map
+    // screens with the link intact, which is the entire point — the transport used
+    // to die with the first match, so a rematch meant re-punching through the
+    // lobby, and by then the matchmaker has reaped the room anyway (it drops a
+    // lobby ~30 s into a match). Nothing below this line needs the control plane.
+    //
+    // `cfg` is round 0 of the FIRST match, already agreed by the caller's own
+    // present_net_setup. Later matches agree their own through this loop. Returns
+    // exactly what run_netplay_match_seats/present_net_setup last returned.
+    AppInput run_netplay_session(net::Transport& transport, std::uint16_t local_seats,
+                                 std::uint16_t all_seats, bool is_host, std::uint32_t seed,
+                                 const sim::MatchConfig& cfg, ChatOverlay* chat = nullptr);
     // THE ONLINE SETUP STAGE (docs/re/network-screens.md §7, ADR-0011): runs
     // between the connect step (lobby punch or direct seed handshake) and the
     // match, over the SAME transport, so an online game finally gets the real

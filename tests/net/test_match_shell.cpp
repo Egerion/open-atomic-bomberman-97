@@ -220,10 +220,40 @@ TEST_CASE("abandon: a guest's Esc becomes the HOST's decision, and both stop tog
     CHECK(p.sa.hash() == p.sb.hash());
 }
 
+TEST_CASE("abandon: the host re-announces every pump — one datagram is not a protocol") {
+    // The redundancy, pinned directly. The host's peer is silent, so nothing is
+    // consumed and every EndRound the host emits is countable on the other side
+    // of the link. This is the assertion that fails if the announcement is ever
+    // reduced to a single fire-and-forget send: the loss case below cannot pin it
+    // on its own, because a deterministic drop pattern may happen to spare the
+    // one copy.
+    net::LoopbackLink link(/*latency=*/0);
+    net::LoopbackTransport th(link, 0);
+    net::LoopbackTransport tsilent(link, 1);
+    sim::Simulation sh(open_config());
+    net::RollbackSession host(sh, kSeat0, kBoth, /*max_prediction=*/8, th,
+                              net::DropPolicy{false, /*is_host=*/true, 0});
+
+    host.request_end_round();
+    int announcements = 0;
+    for (int i = 0; i < 50; ++i) {
+        host.advance(seat_input(0, scripted(0, host.predicted_tick())));
+        link.step();
+        std::vector<std::uint8_t> pkt;
+        while (tsilent.poll(&pkt)) {
+            net::Message m;
+            if (net::decode(pkt.data(), pkt.size(), &m) && m.type == net::MsgType::MatchCtl &&
+                m.match_ctl.kind == net::MatchCtlKind::EndRound)
+                ++announcements;
+        }
+    }
+    CHECK(announcements > 1);
+}
+
 TEST_CASE("abandon: the announcement survives packet loss") {
-    // Every third datagram from each side is dropped, which over the announcement
-    // window means several copies of EndRound never arrive. It is re-sent every
-    // pump for exactly this reason.
+    // Every third datagram from each side is dropped, so several copies of
+    // EndRound never arrive and the input window behind it is holed too. Both
+    // peers still converge on the same tick.
     Pair p(/*latency=*/2, /*drop_every=*/3);
     p.pump_n(60);
     p.host.request_end_round();
@@ -279,12 +309,12 @@ TEST_CASE("abandon: a round that is NOT abandoned reports nothing") {
 namespace {
 
 struct RematchPair {
-    explicit RematchPair(int latency = 0, int drop_every = 0)
+    explicit RematchPair(int latency = 0, int drop_every = 0, int timeout_ms = 30000)
         : link(latency, drop_every),
           ta(link, 0),
           tb(link, 1),
-          host(ta, /*is_host=*/true),
-          guest(tb, /*is_host=*/false) {}
+          host(ta, /*is_host=*/true, timeout_ms),
+          guest(tb, /*is_host=*/false, timeout_ms) {}
 
     void pump(int ms_per_pump = 50) {
         now += ms_per_pump;
@@ -318,6 +348,25 @@ TEST_CASE("rematch: the guest waits for the host, then follows it back to setup"
 
     p.host.accept();
     CHECK(p.host.ready());  // the host leaves at once, announcing on the way
+    for (int i = 0; i < 20 && !p.guest.ready(); ++i) p.pump();
+    CHECK(p.guest.ready());
+    CHECK_FALSE(p.guest.failed());
+}
+
+TEST_CASE("rematch: a host that takes its time is not mistaken for a host that left") {
+    // THE POINT OF THE LIVENESS KIND, pinned. The timeout here is 1 s and the
+    // host sits on its outcome screens for 5 — five times over — without ever
+    // accepting. If the host went quiet while it was deciding, the guest would
+    // read that as "gone", report THE HOST LEFT THE GAME, and drop the link:
+    // exactly the disconnect this change exists to remove, moved a few seconds
+    // later. RematchWait is what stops it.
+    RematchPair p(/*latency=*/0, /*drop_every=*/0, /*timeout_ms=*/1000);
+    for (int i = 0; i < 100; ++i) p.pump();  // 5 s of the host reading the board
+    CHECK_FALSE(p.guest.failed());
+    CHECK_FALSE(p.guest.ready());
+    CHECK_FALSE(p.host.failed());  // the guest's own heartbeat does the same for the host
+
+    p.host.accept();
     for (int i = 0; i < 20 && !p.guest.ready(); ++i) p.pump();
     CHECK(p.guest.ready());
     CHECK_FALSE(p.guest.failed());

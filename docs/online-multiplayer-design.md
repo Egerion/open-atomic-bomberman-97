@@ -423,6 +423,69 @@ a per-seat mask. (2) The original's guest→host slot upload (kind 40) — a gue
 contributing its own local humans/AI to the shared roster — is not built; it is
 a new `MsgType` plus a host-side merge, and another `kWireProtocolVersion` bump.
 
+## 10. The match shell (host-authoritative), wire v8
+
+Everything above is about the *content* of a match. Two transitions around it
+used to be **local** decisions, and both ended the connection:
+
+1. **Esc during a round** returned to the menu, and the caller answered by
+   destroying the transport. It was also a divergence: the peer that pressed Esc
+   stopped its sim while the other kept ticking, so by the time anything read the
+   frozen state the two had simulated a different number of ticks (and tallied a
+   different slice of the round's kill events).
+2. **A finished match** dropped the transport at the VICTORY screen, so two
+   players who wanted another game had to go back through the lobby — which by
+   then has been reaped anyway (the server drops a lobby about 30 s into a match,
+   `HeartbeatInterval` 10 × `HeartbeatMiss` 3).
+
+Both are now carried by one new message, `MsgType::MatchCtl` — a `kind` byte and
+a `u32` tick, 6 bytes. The polarity is the original's (`docs/re/network-screens.md`
+§7): the machine driving the game decides and broadcasts, a `sub_40C06A() == 1`
+client may only ask.
+
+| direction | kind | meaning |
+|---|---|---|
+| host → all | `EndRound` | "this round stops at `at_tick`; it is a DRAW". Re-sent every pump; earliest tick wins, so duplicates and reordering are no-ops. |
+| guest → host | `EndRoundRequest` | "the player here pressed Esc". A request, never an act. Re-sent until answered. |
+| host → all | `RematchWait` | liveness while the host reads the post-match RESULTS/VICTORY screens. |
+| host → all | `Rematch` | "I am walking back to the setup screens now." |
+
+**Why the end tick is in the FUTURE**, unlike `MsgType::Drop`'s deliberately
+retroactive one. A drop tick must be reachable when a seat's input will never
+arrive; here every seat is live and still sending, so any near-future tick is
+reachable by definition — and it *must* be future, because a peer that had
+already speculated past it would stop having simulated more of the round than the
+host did. The host picks `its own head + max_prediction + slack`: a peer cannot be
+more than `max_prediction` past its confirmed frontier, and its confirmed frontier
+cannot be above the host's head (it needs the host's input to get there).
+
+**A DRAW BY DECREE.** The abandoned round's outcome is *not* read out of the
+frozen state — `run_netplay_match_seats` forces `w = -1` when
+`end_round_scheduled()`. That is what makes the transition immune to the peers'
+last speculative ticks differing at all: there is no per-machine observation left
+in the path. It then falls into the same DRAW → RESULTS → next-round rotation an
+ordinary drawn round takes, which is exactly the local flow's behaviour (Esc →
+DRAW GAME → Enter → replay).
+
+**The rematch needs no new mechanism**, only a door. Both peers reach "the match
+is decided" with no traffic (same sim, same tally, same clinch), and
+`SetupSession` needs nothing but a connected `Transport` — so returning to map
+selection is just *running the setup stage again over the link that is already
+there* (`GameApp::run_netplay_session`). What does need agreeing is **when** to
+leave the outcome screens, because the guest's next `SetupSession` starts a
+liveness timeout the moment it is built: a guest that walked into the roster
+screen ahead of a host still reading VICTORY would time out and report THE HOST
+LEFT THE GAME. So `net::RematchSession` gates the VICTORY screen on the host's
+`Rematch`, and keeps `RematchWait` flowing under both outcome screens so silence
+never has to be guessed at. It self-heals against UDP loss twice over: `Rematch`
+is re-sent on an interval, and a guest also follows any inbound **setup** traffic
+(the host's first preview says the same thing implicitly, and is re-broadcast for
+as long as it is on those screens).
+
+**Ctrl+Q is untouched** — it stays the faithful unilateral forfeit
+(`docs/re/in-match-shell.md`'s "Esc negative finding": raw key 0x11 is the only
+key that aborts a round in the original), and it still ends the session.
+
 ## 7. What is reused vs new
 
 | reused unchanged (ADR-0010) | new (this design, ADR-0011) |

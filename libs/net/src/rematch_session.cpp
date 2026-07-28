@@ -28,15 +28,18 @@ void RematchSession::drain(std::int64_t now_ms) {
         // socket before the next SetupSession looks at it.
         last_rx_ms_ = now_ms;
         if (is_host_) continue;  // the host's own exit is its local player's call
-        if (m.type == MsgType::MatchCtl && m.match_ctl.kind == MatchCtlKind::Rematch) {
-            ready_ = true;
-        } else if (m.type == MsgType::SetupPreview || m.type == MsgType::SetupChunk) {
-            // The SELF-HEAL: the host is already running the setup stage, so its
-            // Rematch was lost (or we were still on a screen when it went out).
-            // Setup traffic says the same thing and cannot be missed — the host
-            // re-broadcasts it for as long as it is on those screens.
-            ready_ = true;
-        }
+        // TWO WAYS TO HEAR THE SAME THING, and the second is the SELF-HEAL. The
+        // host's Rematch is the announcement; setup traffic is the host ALREADY
+        // BEING in the setup stage, which can only mean the announcement was
+        // lost (or went out while we were still on a screen). The implicit form
+        // cannot be missed — the host re-broadcasts previews for as long as it
+        // is on those screens — so it is the backstop the explicit one needs on
+        // UDP. Consuming one preview costs nothing at that rate.
+        const bool announced =
+            m.type == MsgType::MatchCtl && m.match_ctl.kind == MatchCtlKind::Rematch;
+        const bool already_there =
+            m.type == MsgType::SetupPreview || m.type == MsgType::SetupChunk;
+        if (announced || already_there) ready_ = true;
     }
 }
 
