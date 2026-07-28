@@ -198,18 +198,35 @@ private:
     // exactly the bytes a keyboard would set (docs/re/ai.md §7).
     static void write_move(PlayerInput& out, int godir);
 
-    // Set the bomb-key edge on the produced input (the original writes +56=1;
-    // +54=0). Maps to action1 (docs/re/ai.md §7 / ADR-0005 §1): player_turn's
-    // drop block is edge-gated on action1 && !prev_action1, so a fresh press
-    // routes to grab/spooge/drop exactly as a human keypress would. The AI never
-    // sets prev_action1 itself — leaving action1=false is a "release".
-    static void press_bomb(PlayerInput& out);
+    // Bomb key DOWN, as a MANUFACTURED edge: the original's behaviours 0/3/4
+    // each write the pair `+56 = 1; +54 = 0` (sub_40BD44 806-807, sub_40AD8D
+    // 399-400, sub_40ABED 347-348 in the transliteration) — they set the key
+    // AND clear the previous-frame copy the drop block edge-tests against, so
+    // an AI press is ALWAYS a fresh edge no matter what the key did last frame.
+    // p.prev_action1 is our +54, so clearing it here is that second write
+    // (facts.md "AI key presses manufacture their own edge"). Without it a
+    // behaviour that fires on consecutive frames — which behaviour 0 does
+    // almost every frame, since its gate is a bare 1-in-2 whim — sees its own
+    // still-latched key and never edges again.
+    void press_bomb(int i, PlayerInput& out);
 
-    // Set the action-key edge (the original writes +57=1; +55=0). Maps to
-    // action2 (docs/re/ai.md §7): player_turn's action block is edge-gated on
-    // action2 && !prev_action2, driving punch (+91) / trigger-detonate (+95).
-    // Used by behaviour 1 (punch) and behaviour 2's remote-detonation whim.
-    static void press_action(PlayerInput& out);
+    // Bomb key UP, likewise a paired write: behaviour 0's carrying branch does
+    // `+56 = 0; +54 = 0` (sub_40BD44 797-798). The carried-bomb throw block is
+    // level-gated (!+56), not edge-gated, so the +54 clear changes nothing on
+    // the throw itself; it is mirrored to keep the port's writes byte-for-byte
+    // the original's.
+    void release_bomb(int i, PlayerInput& out);
+
+    // Action key DOWN as a manufactured edge — behaviour 1's punch writes
+    // `+57 = 1; +55 = 0` (sub_40BE02 838-839). Same argument as press_bomb.
+    void press_action(int i, PlayerInput& out);
+
+    // Action key DOWN with NO edge manufactured: behaviour 2's safe-branch
+    // remote-detonation whim writes `+57 = 1` ALONE (sub_40B20F 631-632) and
+    // deliberately leaves +55 as the mover set it. That asymmetry is the
+    // original's, not an oversight of ours — a trigger AI that wins the 1-in-10
+    // roll on consecutive frames really does detonate only on the first.
+    static void press_action_sustained(PlayerInput& out);
 
     State& s_;
     // The current decide()'s frame delta (ms) — pursuit timers (+12/+28)

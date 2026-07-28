@@ -257,6 +257,20 @@ are **present and correct**:
    (`sub_40A76E`) may have just set to -1 — byte-exact equivalent of the
    port's `g != -1`. (Same packing trick as the brain's `+2/+4` flag/target-X
    pack, §9.1.)
+> **CORRECTION 2026-07-28 — this list re-verified the grab-glove behaviour's
+> BODY and never asked whether anything could reach it.** Items 2 and 3 below
+> confirm `sub_40BD44`'s underfoot probe and its `rand()%2` polarity, both
+> correctly. But `sub_40BD44` writes a PAIR of bytes — `+56 = 1` **and**
+> `+54 = 0`, the previous-frame copy the mover edge-tests against — and the
+> port wrote only the first. With the second missing the AI's bomb key latches
+> down and never edges again, so behaviour 0's grab was unreachable in the one
+> board state it exists for (standing on the bomb you just dropped). The audit's
+> own supporting test seeded the bomb rather than letting the AI drop it, which
+> is exactly why it stayed green. See facts.md "AI key presses manufacture their
+> own edge". The lesson is the same one the coverage note at the end of this
+> file draws about `sub_423188`: verifying a function's interior is not
+> verifying that the port ever executes it.
+
 2. **Grab-glove polarity** (`random_below(s_,2) != 0`, ai.cpp 592): matches
    `sub_40BD44`'s three-term AND — a bomb is found underfoot, its owner word
    at +62 equals the actor's own at +62, AND `rand()%2` is **truthy** (a

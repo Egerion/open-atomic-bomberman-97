@@ -764,6 +764,17 @@ So:
     The AI writes `+56=1; +54=0` to force a fresh press.
   - **action key `+57`** ("down this frame") and **`+55`** ("last frame") — for
     punch/trigger, same edge rule.
+
+**The `+54=0` half is load-bearing, and the port shipped without it until
+2026-07-28** (facts.md "AI key presses manufacture their own edge"). Every
+behaviour that presses writes the PAIR — `sub_40BD44` 806-807, `sub_40BE02`
+838-839, `sub_40AD8D` 399-400, `sub_40ABED` 347-348 — with exactly one
+deliberate exception: behaviour 2's remote-detonation whim (`sub_40B20F`
+631-632) sets `+57` alone. Reading the sentence above as "the AI presses a key
+and the edge follows from the key having been up" is the mistake that made the
+port's grab-glove AI unreachable: the key is NOT up when you are standing on
+the bomb you just dropped, which is the only board state behaviour 0 cares
+about.
 - `sub_40179F` just clears a scratch global (`dword_4646C0 = 0`) before the run.
 
 **RESOLVED 2026-07-10 — the eligibility flag is richer than "present &&

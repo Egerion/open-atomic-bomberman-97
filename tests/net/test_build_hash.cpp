@@ -10,6 +10,10 @@
 TEST_CASE("build_hash is stable and non-degenerate") {
     const std::uint32_t a = bomber::net::build_hash();
     const std::uint32_t b = bomber::net::build_hash();
+    // Printed, not pinned: build_hash.cpp's own rule is that a sim behaviour
+    // change must be MEASURED to move the digest (before vs after). Running this
+    // suite is how you take that measurement, so it has to say the number.
+    MESSAGE("build_hash = " << a);
     CHECK(a == b);          // deterministic + cached
     CHECK(a != 0u);         // the reference scenario actually ran
     CHECK(a != 0xFFFFFFFFu);
