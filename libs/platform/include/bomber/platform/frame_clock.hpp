@@ -21,8 +21,7 @@ namespace bomber::platform {
 // engine-base layer so front-end code never re-implements pacing.
 class FrameClock {
 public:
-    explicit FrameClock(SDL_Window* window)
-        : pacer_(period_for(window), SDL_GetTicksNS()) {}
+    explicit FrameClock(SDL_Window* window) : pacer_(period_for(window), SDL_GetTicksNS()) {}
 
     // Nanoseconds per displayed frame at the window's refresh (60 Hz fallback).
     std::uint64_t period_ns() const { return pacer_.period_ns(); }

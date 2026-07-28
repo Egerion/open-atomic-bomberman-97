@@ -21,18 +21,17 @@ constexpr std::uint64_t kSubNs = kTickNs / kSubFrames;  // 5'555'555 ns, ~180 Hz
 // OVERSHOOTS the way Win11's does, and a scripted per-frame present cost.
 // Everything the real MatchRunner tail does, minus SDL.
 struct Loop {
-    std::uint64_t now = 1'000'000'000ull;  // arbitrary non-zero origin
-    std::uint64_t sleep_overshoot = 450'000;  // measured mean at a 5.556 ms request
-    std::uint64_t sleep_floor = 500'000;      // any request costs at least this
-    std::uint64_t anchor = 0;                 // tick-clock origin of the lattice
+    std::uint64_t now = 1'000'000'000ull;      // arbitrary non-zero origin
+    std::uint64_t sleep_overshoot = 450'000;   // measured mean at a 5.556 ms request
+    std::uint64_t sleep_floor = 500'000;       // any request costs at least this
+    std::uint64_t anchor = 0;                  // tick-clock origin of the lattice
     std::vector<std::uint64_t> present_costs;  // cycled; per-frame cost of the present
     std::size_t frame = 0;
-    std::uint64_t work_ns = 110'000;  // measured CPU cost of a frame before present
+    std::uint64_t work_ns = 110'000;     // measured CPU cost of a frame before present
     std::vector<std::uint64_t> targets;  // every target the pacer handed back
 
     std::uint64_t present_cost() {
-        return present_costs.empty() ? 300'000
-                                     : present_costs[frame % present_costs.size()];
+        return present_costs.empty() ? 300'000 : present_costs[frame % present_costs.size()];
     }
 
     // Run one frame; returns the instant of the present (what the fps counter
@@ -47,8 +46,8 @@ struct Loop {
         } else {
             wait = pacer.plan_resync(now);
         }
-        if (wait.sleep_ns) now += wait.sleep_ns < sleep_floor ? sleep_floor
-                                                             : wait.sleep_ns + sleep_overshoot;
+        if (wait.sleep_ns)
+            now += wait.sleep_ns < sleep_floor ? sleep_floor : wait.sleep_ns + sleep_overshoot;
         if (wait.spin_until_ns && now < wait.spin_until_ns) now = wait.spin_until_ns;  // the spin
         targets.push_back(pacer.target_ns());
         ++frame;
@@ -102,8 +101,7 @@ TEST_SUITE("frame_pacer") {
         // the one a naive "sleep(period)" rewrite would break, landing at
         // 6.0 ms/166 Hz instead of 5.556 ms/180 Hz.
         const std::uint64_t span = presents.back() - presents.front();
-        const double mean = static_cast<double>(span) /
-                            static_cast<double>(presents.size() - 1);
+        const double mean = static_cast<double>(span) / static_cast<double>(presents.size() - 1);
         CHECK(mean == doctest::Approx(static_cast<double>(kSubNs)).epsilon(0.005));
 
         // And no individual frame drifts: every present sits in its own cell.
@@ -189,8 +187,8 @@ TEST_SUITE("frame_pacer") {
         // present, plus the cell its own tail lands in). 300 frames = 50 cycles
         // = 500 cells, less the first frame that opened the count. A pacer that
         // leaked phase would drift off this figure without ever duplicating.
-        const std::uint64_t advanced = sub_index(presents.back(), loop.anchor) -
-                                       sub_index(presents.front(), loop.anchor);
+        const std::uint64_t advanced =
+            sub_index(presents.back(), loop.anchor) - sub_index(presents.front(), loop.anchor);
         CHECK(advanced == 50 * 10 - 1);
     }
 
@@ -266,8 +264,7 @@ TEST_SUITE("frame_pacer") {
         // other. It is a 1-in-10-million window on a wait that already jitters
         // by hundreds of microseconds.
         CHECK(kSubFrames * kSubNs == kTickNs - 5);
-        CHECK(sub_index(kSubFrames * kSubNs - 1, 0) ==
-              static_cast<std::uint64_t>(kSubFrames - 1));
+        CHECK(sub_index(kSubFrames * kSubNs - 1, 0) == static_cast<std::uint64_t>(kSubFrames - 1));
         CHECK(sub_index(kTickNs - 1, 0) == static_cast<std::uint64_t>(kSubFrames));
     }
 }

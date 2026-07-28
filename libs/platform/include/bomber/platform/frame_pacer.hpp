@@ -66,7 +66,9 @@ public:
     static constexpr std::uint64_t kSpinTailNs = 1'000'000;
 
     FramePacer(std::uint64_t period_ns, std::uint64_t now_ns)
-        : period_ns_(period_ns ? period_ns : 1), target_ns_(now_ns + period_ns_), anchor_ns_(now_ns) {}
+        : period_ns_(period_ns ? period_ns : 1),
+          target_ns_(now_ns + period_ns_),
+          anchor_ns_(now_ns) {}
 
     std::uint64_t period_ns() const { return period_ns_; }
     std::uint64_t target_ns() const { return target_ns_; }
@@ -108,8 +110,8 @@ public:
     // cannot lose phase, because the next target is read off the lattice rather
     // than off "now".
     Wait plan_subframe(std::uint64_t after_present_ns) {
-        target_ns_ =
-            anchor_ns_ + (subframe_index(after_present_ns, anchor_ns_, period_ns_) + 1) * period_ns_;
+        target_ns_ = anchor_ns_ +
+                     (subframe_index(after_present_ns, anchor_ns_, period_ns_) + 1) * period_ns_;
         // Guard, not a rule: an anchor ahead of the present (only reachable if a
         // caller hands one in from the future) would otherwise stall a whole
         // extra period. Never wait longer than one period, whatever the anchor.
