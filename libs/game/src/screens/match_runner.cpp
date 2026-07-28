@@ -502,8 +502,26 @@ AppInput MatchRunner::run() {
             // functionally standing in for the original's Ctrl+Q rather than
             // matching its own (inert) Esc — see the doc's "Port status"
             // paragraph for the full rationale.
-            if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_ESCAPE)
+            //
+            // ONLINE it is neither of those. Esc used to return MatchOver here
+            // too, which the netplay caller read as a forfeit and answered by
+            // dropping the whole connection — one keypress and the session was
+            // gone. Worse, the DECISION was local: this peer left the round
+            // while its partner kept ticking, so the two had simulated a
+            // different number of ticks by the time anything looked at the
+            // frozen state. So an online Esc asks the SESSION instead
+            // (rollback_session.hpp's request_end_round): the host schedules an
+            // agreed end tick and broadcasts it, a guest sends a request, and
+            // both peers stop at the same tick with the round declared a DRAW —
+            // then replay a round, exactly like the local flow's draw tier.
+            // Ctrl+Q above is untouched and remains the "really leave" key.
+            if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_ESCAPE) {
+                if (state_.net_session != nullptr) {
+                    state_.net_session->request_end_round();
+                    continue;
+                }
                 return AppInput::MatchOver;
+            }
             // docs/re/in-match-shell.md §1, auxiliary key table row
             // 0x13B=315=F1 (local only, matching `!sub_40C06A()` — no
             // network gate needed here since this port has no network play):
@@ -680,7 +698,18 @@ AppInput MatchRunner::run() {
                 // doc comment); reset only in reset_match_scores().
                 tally_kills(state_.sim.state().events, state_.kill_count);
 
-                if (advance_round_end()) return AppInput::MatchOver;
+                // ONCE AN ABANDON IS AGREED (Esc online), the agreed tick is the
+                // ONLY exit. advance_round_end() below is a per-machine reading
+                // of a SPECULATIVE state — it would let one peer leave a tick or
+                // two before the other, having tallied a different slice of the
+                // round's events — so it is skipped entirely while an abandon is
+                // in flight. Both peers stop at the same tick and the caller
+                // declares a draw without inspecting the state at all.
+                if (state_.net_session != nullptr && state_.net_session->end_round_scheduled()) {
+                    if (state_.net_session->round_ended()) return AppInput::MatchOver;
+                } else if (advance_round_end()) {
+                    return AppInput::MatchOver;
+                }
             }
         }  // end else: the deterministic fixed-tick accumulator path
 

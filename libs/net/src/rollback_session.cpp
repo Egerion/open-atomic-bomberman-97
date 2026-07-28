@@ -11,6 +11,19 @@ namespace bomber::net {
 namespace {
 constexpr std::uint32_t kHashWindow = 256;
 
+// How far AHEAD of the host's own speculative head an abandon lands, on top of
+// the prediction cap. The cap is the bound on how far any peer can have run past
+// its confirmed frontier, and a peer's confirmed frontier can never be above the
+// host's speculative head (it needs the host's input to get there) — so
+// host_tick + max_prediction is an upper bound on every peer's current tick, and
+// anything above it is a tick nobody has reached yet. That is the whole
+// requirement: an end tick a peer had already passed would leave it having
+// simulated and tallied more of the round than the host did. The extra ticks are
+// slack, and incidentally give the abandon a fraction of a second of visible
+// follow-through instead of a hard freeze on the keypress.
+constexpr std::uint32_t kEndRoundSlackTicks = 12;
+
+
 bool same_input(const sim::PlayerInput& a, const sim::PlayerInput& b) {
     return pack_input(a) == pack_input(b);
 }
@@ -134,6 +147,19 @@ void RollbackSession::receive() {
                 schedule_handoff(seat, m.drop.at_tick);
         } else if (m.type == MsgType::Hash) {
             note_peer_hash(m.hash.tick_index, m.hash.hash);
+        } else if (m.type == MsgType::MatchCtl) {
+            if (m.match_ctl.kind == MatchCtlKind::EndRound) {
+                // Obeyed by EVERY peer including the host's own echo over a star
+                // — idempotent, so re-sends and reordering are all no-ops.
+                schedule_end_round(m.match_ctl.at_tick);
+            } else if (m.match_ctl.kind == MatchCtlKind::EndRoundRequest && drop_.is_host) {
+                // A guest asked. The host turns that into THE decision, on its
+                // own clock, so the tick is still one nobody has passed. A guest
+                // that receives this (a star reflects) ignores it.
+                request_end_round();
+            }
+            // RematchWait/Rematch belong to the post-match shell (rematch_session
+            // .hpp), which runs after this session is done — not ours to read.
         }
         // Hello/Punch: pre-match traffic on the shared socket, not ours to read.
     }
@@ -303,6 +329,38 @@ void RollbackSession::broadcast_handoffs() {
     }
 }
 
+void RollbackSession::request_end_round() {
+    if (aborted_ || end_tick_ != kNoEndRound) return;  // already ending: nothing to decide
+    if (drop_.is_host) {
+        schedule_end_round(tick_ + static_cast<std::uint32_t>(max_prediction_) +
+                           kEndRoundSlackTicks);
+    } else {
+        end_requested_ = true;  // broadcast_end_round() re-asks every pump
+    }
+    broadcast_end_round();  // don't wait a pump to say so
+}
+
+void RollbackSession::schedule_end_round(std::uint32_t at_tick) {
+    if (end_tick_ != kNoEndRound && at_tick >= end_tick_) return;  // earliest wins
+    end_tick_ = at_tick;
+    end_requested_ = false;  // a guest's question has been answered
+}
+
+void RollbackSession::broadcast_end_round() {
+    // The same redundancy broadcast_handoffs() uses, and for the same reason: a
+    // peer that misses this keeps simulating a round the host has already left,
+    // and there is no other channel that would ever tell it.
+    if (end_tick_ != kNoEndRound) {
+        if (!drop_.is_host) return;  // guests echo nothing; the host owns the decision
+        const std::vector<std::uint8_t> pkt = encode_match_ctl(MatchCtlKind::EndRound, end_tick_);
+        transport_->send(pkt.data(), pkt.size());
+        return;
+    }
+    if (!end_requested_) return;
+    const std::vector<std::uint8_t> pkt = encode_match_ctl(MatchCtlKind::EndRoundRequest, 0);
+    transport_->send(pkt.data(), pkt.size());
+}
+
 void RollbackSession::prune() {
     // Everything strictly below confirmed_ is final and never needed again
     // (rollback never targets a confirmed tick).
@@ -330,6 +388,18 @@ void RollbackSession::advance(const sim::TickInputs& local_input) {
     }
     advance_confirmed();
     broadcast_handoffs();
+    broadcast_end_round();
+
+    // The round has reached its agreed abandon tick: simulate nothing more, but
+    // KEEP PUMPING. A peer that is still short of the end tick needs our input
+    // window to get there, and one that has not seen the announcement at all
+    // needs the re-send above — so going quiet here would strand exactly the
+    // peer this message exists to bring along. The caller stops calling us once
+    // its own shell has moved on (round_ended()).
+    if (round_ended()) {
+        send_local(confirmed_);
+        return;
+    }
 
     // Hold at the prediction cap so the display never runs unboundedly ahead of
     // the peer (bounded memory + bounded re-sim on a correction). Keep re-sending

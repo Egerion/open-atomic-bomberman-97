@@ -41,6 +41,7 @@
 #include "bomber/game/screens/video_settings_screen.hpp"
 #include "bomber/game/sprites.hpp"
 #include "bomber/match/match_factory.hpp"
+#include "bomber/net/rematch_session.hpp"   // net::RematchSession (the post-match rendezvous)
 #include "bomber/net/rollback_session.hpp"  // net::RollbackSession (run_netplay_match)
 #include "bomber/net/round_rotation.hpp"    // net::round_seed / round_tick_base (round rotation)
 #include "bomber/net/setup_session.hpp"     // net::SetupSession (present_net_setup + rotation)
@@ -1185,11 +1186,79 @@ private:
 // harmless: RollbackSession re-sends its whole unconfirmed window every pump).
 constexpr std::uint64_t kRoundHandoffSettleMs = 300;
 
+// THE POST-MATCH GATE — the same NetRoundGate seam the between-ROUNDS rotation
+// uses (screens/net_round_gate.hpp), driving net::RematchSession instead of a
+// config exchange, because a decided match has no next round to agree on. It has
+// TWO PHASES over one session, and the split is the whole design:
+//
+//   PHASE A — the clinch RESULTS scoreboard. Each peer dismisses its OWN, exactly
+//     as before this change: the outcome was computed identically on both sides
+//     with no traffic, so there is nothing to agree. The gate is present only to
+//     PUMP — which is what keeps the host's liveness flowing while it reads the
+//     board, and what drains the socket of the round that just ended.
+//
+//   PHASE B — the VICTORY screen, the LAST thing before the setup stage. Here the
+//     original's rule applies (docs/re/network-screens.md §7): the machine
+//     driving the game dismisses the shared screen and a client follows. It has
+//     to, because the guest's next SetupSession starts a liveness timeout the
+//     moment it is built — a guest that walked into the roster screen ahead of a
+//     host still reading VICTORY would time out and report THE HOST LEFT THE
+//     GAME. Which is the disconnect this whole change removes, thirty seconds
+//     later.
+//
+// Escape is exempt on both screens (asset_screen.cpp / results_screens.cpp both
+// route it around the gate): leaving the session is always the local player's own
+// call, and it simply means no rematch.
+class RematchGate final : public NetRoundGate {
+public:
+    explicit RematchGate(net::RematchSession& session) : session_(&session) {}
+
+    void pump() override { session_->step(static_cast<std::int64_t>(SDL_GetTicks())); }
+
+    // Phase A: nobody is read-only. Phase B: the guest follows the host.
+    bool readonly() const override { return final_phase_ && !session_->is_host(); }
+
+    void accept() override {
+        if (final_phase_)
+            session_->accept();  // HOST: announce the walk back to the setup screens
+        else
+            local_accepted_ = true;
+    }
+
+    bool ready() const override { return final_phase_ ? session_->ready() : local_accepted_; }
+    bool failed() const override { return session_->failed(); }
+
+    // Called between the two screens. One session spans both so its liveness
+    // clock never restarts and never has a gap in it.
+    void begin_final_phase() { final_phase_ = true; }
+
+private:
+    net::RematchSession* session_;
+    bool final_phase_ = false;
+    bool local_accepted_ = false;
+};
+
+// A peer that has been told the round ends at tick X may still be short of it,
+// and it can only get there on OUR input window. Keep pumping the (now
+// non-simulating) session this long before the between-rounds gate takes the
+// socket. Longer than the round-handoff settle above because it covers a real
+// catch-up, not just one lost ack.
+constexpr std::uint64_t kAbandonSettleMs = 600;
+
+// The round counter feeding net::round_tick_base is walked across every match
+// played on one transport, so it has to be kept inside the range that function
+// documents as wrap-free (100 << 22 is "an order of magnitude inside uint32").
+// Both peers count the same rounds — the rotation is agreed — so both wrap on
+// the same round and stay in the same tick space. By the time 1024 rounds have
+// been played, a straggler from round 0 is many hours dead.
+constexpr int kNetRoundBaseWrap = 1024;
+
 }  // namespace
 
 AppInput GameApp::run_netplay_match_seats(net::Transport& transport, std::uint16_t local_seats,
                                           std::uint16_t all_seats, bool is_host,
-                                          const sim::MatchConfig& cfg) {
+                                          const sim::MatchConfig& cfg, int* round_base,
+                                          bool* rematch) {
     // The match-running CORE shared by the CLI (run_netplay), the direct connect
     // screens, and the online lobby: given an ALREADY-connected transport, the
     // seats THIS peer owns, and the AGREED config, build a byte-identical arena
@@ -1234,9 +1303,15 @@ AppInput GameApp::run_netplay_match_seats(net::Transport& transport, std::uint16
     // traffic — so the two never disagree about which round they are entering.
     const std::uint32_t match_seed = cfg.seed;
     sim::MatchConfig round_cfg = cfg;
+    // Where this match's rounds sit in the shared tick space (see the parameter's
+    // doc comment): 0 for a one-match caller, the running total for a session
+    // that keeps the transport alive across matches.
+    const int base_round = round_base != nullptr ? *round_base : 0;
+    if (rematch != nullptr) *rematch = false;
 
     AppInput result = AppInput::Advance;
     for (int round = 0;; ++round) {
+        if (round_base != nullptr) *round_base = (base_round + round) % kNetRoundBaseWrap;
         // The config arrives whole (present_net_setup's confirmation on the host,
         // SetupSession::final_config()'s exact bytes on the guest, or the
         // canonical build on the CLI; for round > 0, the same confirm/ack
@@ -1348,7 +1423,8 @@ AppInput GameApp::run_netplay_match_seats(net::Transport& transport, std::uint16
         // (rollback_session.hpp's `start_tick`).
         const net::DropPolicy drop{options_.lost_net_revert_ai, is_host, /*timeout_ticks=*/600};
         net::RollbackSession session(sim_, local_seats, all_seats, /*max_prediction=*/8, transport,
-                                     drop, net::round_tick_base(round));
+                                     drop,
+                                     net::round_tick_base((base_round + round) % kNetRoundBaseWrap));
         MatchRunnerState mrs = match_runner_state();
         mrs.net_session = &session;
         mrs.net_local_seats = local_seats;
@@ -1369,11 +1445,46 @@ AppInput GameApp::run_netplay_match_seats(net::Transport& transport, std::uint16
             break;
         }
         if (result != AppInput::MatchOver) break;  // window closed
+        // AN ABANDONED ROUND (somebody pressed Esc). The decision was the HOST's
+        // and it travelled as MatchCtlKind::EndRound, so both peers stopped at
+        // the same tick and both take this branch — it is not a local reading of
+        // a local keypress. The round is a DRAW BY DECREE: nothing below asks the
+        // frozen state who won, which is what makes the abandon immune to the two
+        // peers' last speculative ticks differing.
+        //
+        // round_ended(), NOT end_round_scheduled(): the round must actually have
+        // REACHED the agreed tick. An abandon is announced a second or so ahead
+        // of itself, and Ctrl+Q inside that window still has to mean "leave the
+        // session" rather than being swallowed into a draw the player never got
+        // to see.
+        const bool abandoned = session.round_ended();
+        if (abandoned) {
+            // The peer may still be short of the agreed tick, and only OUR input
+            // window can get it there. advance() no longer simulates once
+            // round_ended() — it just receives, re-announces and re-sends — so
+            // this is a pure catch-up pump.
+            const std::uint64_t settle_until = SDL_GetTicks() + kAbandonSettleMs;
+            while (SDL_GetTicks() < settle_until) {
+                SDL_Event sev;
+                while (SDL_PollEvent(&sev))
+                    if (sev.type == SDL_EVENT_QUIT) {
+                        team_play_ = saved_team_play;
+                        return AppInput::Quit;
+                    }
+                session.advance(sim::TickInputs{});
+                SDL_Delay(2);
+            }
+            std::printf("netplay: round %d abandoned at tick %u — draw\n", round,
+                        static_cast<unsigned>(session.end_round_tick()));
+        }
         // MatchRunner returns MatchOver for a natural round end AND for the
-        // Ctrl+Q/Esc forfeit, so tell them apart from the state itself: a round
-        // that really ended has one side left or a spent clock (the same
-        // condition its own advance_round_end() waited on).
-        if (sim::sides_remaining(sim_.state()) > 1 && sim_.state().ticks_left > 0) {
+        // Ctrl+Q forfeit, so tell them apart from the state itself: a round that
+        // really ended has one side left or a spent clock (the same condition its
+        // own advance_round_end() waited on). Esc no longer reaches here — it
+        // became the abandon above — so this is the Ctrl+Q "really leave" key,
+        // which stays a unilateral, connection-ending forfeit on purpose.
+        if (!abandoned && sim::sides_remaining(sim_.state()) > 1 &&
+            sim_.state().ticks_left > 0) {
             result = AppInput::Advance;  // forfeited to the menu
             break;
         }
@@ -1385,7 +1496,7 @@ AppInput GameApp::run_netplay_match_seats(net::Transport& transport, std::uint16
         // LOCAL results tail also runs are both local-only in the original —
         // `sub_4034BC` is gated `!sub_40C06A()`, docs/re/goldman-roulette.md §2 —
         // so an online match legitimately skips them.)
-        const int w = round_winner();
+        const int w = abandoned ? -1 : round_winner();
         // Same team mirror as the local tail (sub_421B56) — both peers run it
         // over identical state, so the tallies stay identical too.
         if (w >= 0) award_round_win(w);
@@ -1394,15 +1505,39 @@ AppInput GameApp::run_netplay_match_seats(net::Transport& transport, std::uint16
             // MATCH win — the same clinch tier the local path shows: the RESULTS
             // scoreboard carrying the "WINS THE MATCH!" line with the 2000 winner
             // voice under it, then VICTORY<n>/TEAM<n>. Both peers reach this
-            // independently and identically, so neither screen is gated: there is
-            // no next round to agree on, and each player dismisses their own.
+            // independently and identically (same sim, same tally), so the
+            // OUTCOME needs no agreement.
+            //
+            // WHAT DOES need agreeing is what happens NEXT. This used to be the
+            // end of the road: the loop broke, the caller returned, and the
+            // transport the peers had punched a path for was destroyed — so two
+            // people who had just finished a game and wanted another one were
+            // back at the lobby. Instead both peers now walk back to the SETUP
+            // screens over the SAME link (run_netplay_session), and the
+            // RematchGate below is the door: it keeps the host's liveness flowing
+            // under these two screens and makes the exit from VICTORY the host's
+            // call, so the guest's next SetupSession is never built into silence.
+            net::RematchSession rematch_session(transport, is_host);
+            RematchGate gate(rematch_session);
             audio_.start_music(kDrawMusicId);        // 1130 under RESULTS/VICTORY (doc §2)
             audio_.play_random_in_range(2000, 2299);  // winner voice — clinch only
-            result = present_scoreboard();
-            if (result != AppInput::Quit)
-                result = present_screen(
-                    victory_screen(is_team_mode(), clinched, setup_team_[clinched]));
-            if (result != AppInput::Quit) result = AppInput::Advance;
+            ScoreboardState csbs = scoreboard_state();
+            // Phase A: pump only — each peer still dismisses its own board.
+            if (rematch != nullptr) csbs.net_gate = &gate;
+            result = ScoreboardScreen(sctx(), csbs).run();
+            if (result == AppInput::Quit) break;
+            gate.begin_final_phase();  // Phase B: the host dismisses, the guest follows
+            result = present_asset_screen(
+                sctx(), victory_screen(is_team_mode(), clinched, setup_team_[clinched]),
+                rematch != nullptr ? &gate : nullptr);
+            if (result == AppInput::Quit) break;
+            // Advance means the gate opened (the host walked back to setup and
+            // said so); Back means this player pressed Escape and is done. A
+            // failed gate is the peer having vanished — also done, quietly: the
+            // match itself is complete either way.
+            if (rematch != nullptr && result == AppInput::Advance && gate.ready())
+                *rematch = true;
+            result = AppInput::Advance;
             break;
         }
 
@@ -1471,6 +1606,54 @@ AppInput GameApp::run_netplay_match_seats(net::Transport& transport, std::uint16
 
     team_play_ = saved_team_play;
     return result;
+}
+
+AppInput GameApp::run_netplay_session(net::Transport& transport, std::uint16_t local_seats,
+                                      std::uint16_t all_seats, bool is_host, std::uint32_t seed,
+                                      const sim::MatchConfig& cfg, ChatOverlay* chat) {
+    // ONE CONNECTED TRANSPORT, MANY MATCHES. The connect step (the lobby punch or
+    // the direct seed handshake) ran once, above; from here the link is simply
+    // reused — match, setup, match, setup — for as long as both players want to
+    // keep going. Nothing in this loop touches the matchmaker, which matters
+    // rather than being a nicety: the server reaps a lobby about 30 s into a
+    // match (HeartbeatInterval 10 x HeartbeatMiss 3), so the control plane is
+    // already gone by the time the first match ends. `chat` is likewise dead
+    // after the first setup stage — present_net_online closes it before the
+    // match — so later stages simply run without it.
+    //
+    // WHO DECIDES. Both peers know the match is decided with no traffic (same
+    // sim, same tally, same clinch). What they agree over the wire is the
+    // TRANSITION: run_netplay_match_seats' RematchGate holds the VICTORY screen
+    // until the HOST dismisses it and announces MatchCtlKind::Rematch, so nobody
+    // walks into the next setup stage alone. A peer that pressed Escape there
+    // gets `rematch == false` and this loop ends — which is the old behaviour,
+    // now a deliberate choice rather than the only option.
+    sim::MatchConfig match_cfg = cfg;
+    std::uint32_t match_seed = seed;
+    int round_base = 0;
+    while (true) {
+        bool rematch = false;
+        const AppInput r = run_netplay_match_seats(transport, local_seats, all_seats, is_host,
+                                                   match_cfg, &round_base, &rematch);
+        if (r == AppInput::Quit || !rematch) return r;
+        // The tick space walks on across the match boundary for exactly the
+        // reason it walks on across a round boundary (round_rotation.hpp): a
+        // datagram still in flight from the last round must not land inside the
+        // first round of the next match. `round_base` came back holding the last
+        // round played, so the next match starts one past it.
+        round_base = (round_base + 1) % kNetRoundBaseWrap;
+        // A fresh seed for the next match's board. HOST-ONLY in effect — the
+        // guest's copy is never read (present_net_setup's guest arm ignores it
+        // and takes the host's whole confirmed config), so the two need not
+        // agree on this number at all. Stepped by the golden-ratio constant
+        // rather than +1 so a rematch is not simply the next board in the
+        // sequence the match just played through.
+        match_seed += 0x9E3779B9u;
+        const AppInput setup = present_net_setup(transport, is_host, local_seats, all_seats,
+                                                 match_seed, match_cfg, chat);
+        if (setup == AppInput::Quit) return AppInput::Quit;
+        if (setup != AppInput::Advance) return AppInput::Advance;  // left the setup stage
+    }
 }
 
 AppInput GameApp::present_net_setup(net::Transport& transport, bool is_host,
@@ -1746,8 +1929,10 @@ AppInput GameApp::present_net_direct_host() {
                                              /*all_seats=*/0b11u, r.seed, cfg);
     if (setup == AppInput::Quit) return AppInput::Quit;
     if (setup != AppInput::Advance) return AppInput::Advance;
-    return run_netplay_match_seats(transport, /*local_seats=*/0b01u, /*all_seats=*/0b11u,
-                                   /*is_host=*/true, cfg);
+    // A SESSION, not a single match: finishing one returns both peers to these
+    // same setup screens over this same socket (run_netplay_session).
+    return run_netplay_session(transport, /*local_seats=*/0b01u, /*all_seats=*/0b11u,
+                               /*is_host=*/true, r.seed, cfg);
 }
 
 #if defined(BOMBER_HAS_LOBBY)
@@ -1877,7 +2062,9 @@ AppInput GameApp::present_net_online(bool host, bool browse, bool is_public) {
     chat.close();
     if (setup == AppInput::Quit) return AppInput::Quit;
     if (setup != AppInput::Advance) return AppInput::Advance;
-    return run_netplay_match_seats(link, r.local_seats_mask, r.all_seats_mask, r.is_host, cfg);
+    // The chat is already closed, so later setup stages run without it — see
+    // run_netplay_session on why nothing below here may depend on the server.
+    return run_netplay_session(link, r.local_seats_mask, r.all_seats_mask, r.is_host, r.seed, cfg);
 }
 #endif  // BOMBER_HAS_LOBBY
 
@@ -1898,8 +2085,8 @@ AppInput GameApp::present_net_join() {
                                              /*all_seats=*/0b11u, r.seed, cfg);
     if (setup == AppInput::Quit) return AppInput::Quit;
     if (setup != AppInput::Advance) return AppInput::Advance;
-    return run_netplay_match_seats(transport, /*local_seats=*/0b10u, /*all_seats=*/0b11u,
-                                   /*is_host=*/false, cfg);
+    return run_netplay_session(transport, /*local_seats=*/0b10u, /*all_seats=*/0b11u,
+                               /*is_host=*/false, r.seed, cfg);
 }
 
 ScreenContext GameApp::sctx() {
