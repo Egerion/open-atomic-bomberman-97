@@ -54,11 +54,11 @@ bool AISystem::behave_grab_drop(int i, PlayerInput& out) {
     if (!p.grab) return false;  // sub_40BD44: !+92 -> not our behaviour
 
     if (p.carrying) {
-        // Carrying a grabbed bomb (+148): write the bomb key up (the original
-        // sets +56=0; +54=0). We leave action1=false — a release — so
+        // Carrying a grabbed bomb (+148): write the bomb key up — the original
+        // sets +56=0 AND +54=0, both of which release_bomb mirrors — so
         // player_turn's throw block (fires on !action1, the same !+56 gate)
         // LOBS the carried bomb forward next tick, exactly as the original does.
-        out.action1 = false;
+        release_bomb(i, out);
         return true;  // act, short-circuit the chain
     }
 
@@ -79,7 +79,7 @@ bool AISystem::behave_grab_drop(int i, PlayerInput& out) {
     // inverted-polarity deviation from both the binary and ai.md §3.0's own
     // transcription, which already read it correctly as "and rand()%2").
     if (own && random_below(s_, 2) != 0) {
-        press_bomb(out);  // fresh bomb-key edge -> try_grab in player_turn
+        press_bomb(i, out);  // fresh bomb-key edge -> try_grab in player_turn
         return true;
     }
     return false;  // pass down to behaviour 1/2/...
@@ -201,7 +201,10 @@ bool AISystem::behave_walk_path(int i, PlayerInput& out) {
     // player_turn (edge-gated on action2 && !prev_action2). Then check whether ANY
     // neighbour is walkable+safe; if boxed in with nowhere safe, "act" (stall) so
     // the chain stops, else pass down to let a lower behaviour (wander) drift.
-    if (p.trigger && !p.punch && random_below(s_, 10) == 0) press_action(out);
+    // NOTE the deliberate asymmetry: this is the ONE AI key write the original
+    // does not pair with a previous-frame clear (sub_40B20F 631-632 sets +57
+    // alone), so it uses press_action_sustained, not press_action.
+    if (p.trigger && !p.punch && random_below(s_, 10) == 0) press_action_sustained(out);
     br.has_path_target = false;
     for (int g = 0; g < 4; ++g)
         if (safe_tile(px + kDX[g], py + kDY[g])) return false;  // a way out exists: pass down
@@ -272,7 +275,7 @@ bool AISystem::behave_blast_bricks(int i, PlayerInput& out) {
     // Drop: a fresh bomb-key edge routes to BombSystem::drop in player_turn (the
     // normal placement, with the same dud-gate RNG a human drop takes). Mark the
     // commit; behaviour 2 flees the resulting blast on the following tick(s).
-    press_bomb(out);
+    press_bomb(i, out);
     br.state_flag = 9;
     return true;
 }
@@ -394,7 +397,7 @@ bool AISystem::behave_punch(int i, PlayerInput& out) {
     // Face the bomb (the direction flag sets p.facing in the mover) and set the
     // action2 edge so try_punch launches the bomb 3 tiles in that direction.
     write_move(out, face);
-    press_action(out);
+    press_action(i, out);
     return true;
 }
 
@@ -477,7 +480,7 @@ bool AISystem::behave_bomb_enemy(int i, PlayerInput& out) {
         if (same_team(i, who)) return false;
         if (!drop_tile_clear(px, py)) return false;  // matches the original's return 0
         if (random_below(s_, 5) != 0) return false;  // rand()%5 != 0 -> pass
-        press_bomb(out);  // bomb-key edge -> BombSystem::drop in player_turn
+        press_bomb(i, out);  // bomb-key edge -> BombSystem::drop in player_turn
         return true;
     }
     return false;

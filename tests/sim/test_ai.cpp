@@ -859,6 +859,125 @@ TEST_CASE("Audit fix: a grab-AI still rolls to grab its own SLIDING bomb") {
     CHECK(st.players[0].carrying);
 }
 
+// ---------------------------------------------------------------------------
+// 2026-07-28 glove fix (facts.md "AI key presses manufacture their own edge",
+// sub_40BD44 806-807 / sub_40AD8D 399-400 / sub_40ABED 347-348 / sub_40BE02
+// 838-839). Every AI key-down in the original is a PAIR of writes -- the key
+// byte set AND the previous-frame copy the mover edge-tests against cleared --
+// so an AI press is always a fresh edge. The port set only the key byte and
+// relied on prev_action1 happening to be clear, which it is NOT in the one
+// situation behaviour 0 exists for: standing on the bomb you just dropped.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Glove fix: a grab-AI edges through an already-latched bomb key") {
+    // Same board and seed as the polarity test above, but the AI's previous-
+    // frame bomb-key copy starts SET -- exactly what the mover leaves behind on
+    // the tick the AI dropped the bomb it is now standing on. sub_40BD44's
+    // `+54 = 0` makes the grab fire on the very first winning roll regardless,
+    // so this must still grab on tick 1 like the unlatched case. Before the fix
+    // it never grabbed at all: behaviour 0 wins its 1-in-2 whim in at least one
+    // of the tick's kSubFrames frames ~511 times in 512, so the OR-latched key
+    // stayed down forever and no edge ever formed again.
+    Simulation s = open_arena(/*tx=*/6, /*ty=*/5, /*ai=*/true);
+    State& st = s.state();
+    st.rng = 0x1u;
+    st.players[0].grab = true;
+    st.players[0].prev_action1 = true;  // the just-dropped-a-bomb state
+    put_bomb(st, /*tx=*/6, /*ty=*/5, /*flame=*/1, /*fuse=*/1000000, /*owner=*/0);
+
+    s.tick(idle());
+    CHECK(st.players[0].carrying);
+}
+
+TEST_CASE("Glove fix: an AI drops a bomb, grabs it and throws it") {
+    // The end-to-end behaviour the owner reported missing: a grab-glove AI that
+    // blast-drops a bomb (behaviour 3) picks it straight back up (behaviour 0's
+    // whim) and lobs it (behaviour 0's carrying branch -> the mover's throw
+    // block). Before the fix `carrying` never once became true over this whole
+    // window -- the AI kept the glove and never used it.
+    Simulation s = open_arena(/*tx=*/6, /*ty=*/5, /*ai=*/true);
+    State& st = s.state();
+    st.rng = 0x13572468u;
+    st.cells[5][5] = Cell::Brick;   // behaviour 3's blast target, west of the AI
+    st.players[0].grab = true;
+
+    bool dropped = false, grabbed = false, thrown = false;
+    for (int t = 0; t < 400; ++t) {
+        s.tick(idle());
+        if (!st.bombs.empty()) dropped = true;
+        if (st.players[0].carrying) grabbed = true;
+        // A throw is the carry ending with the bomb airborne (motion state 2),
+        // not the carry ending because the bomb was re-dropped underfoot.
+        if (grabbed && !st.players[0].carrying)
+            for (const Bomb& b : st.bombs)
+                if (b.active && b.flying) thrown = true;
+    }
+    CHECK(dropped);
+    CHECK(grabbed);
+    CHECK(thrown);
+    CHECK(st.players[0].alive);
+}
+
+TEST_CASE("Glove fix: build_hash scenario 5 really drives the glove path") {
+    // libs/net/src/build_hash.cpp's ai_gloves_scenario_hash(), replicated here
+    // (tests/sim cannot link bomber::net). Its whole reason to exist is that the
+    // digest must MOVE when the AI's key-press edges change, and build_hash.cpp's
+    // own history is of scenarios that placed a mechanic without executing it.
+    // So assert the execution directly: this board must actually reach a carried
+    // bomb. If a future edit to either copy breaks that, the digest silently
+    // stops covering AI decisions again -- keep the two in step.
+    MatchConfig cfg;
+    for (int y = 0; y < kGridHeight; ++y)
+        for (int x = 0; x < kGridWidth; ++x)
+            cfg.cells[y][x] = (x % 2 == 1 && y % 2 == 1)  ? Cell::Solid
+                              : ((x + y) % 3 == 0)         ? Cell::Brick
+                                                           : Cell::Blank;
+    const int rx = kGridWidth - 1, by = kGridHeight - 1;
+    for (auto [cx_, cy_] : {std::pair{0, 0}, std::pair{rx, 0}, std::pair{0, by}, std::pair{rx, by}})
+        cfg.cells[cy_][cx_] = Cell::Blank;
+    cfg.spawns = {{0, 0}, {rx, 0}, {0, by}, {rx, by}};
+    cfg.player_count = 4;
+    cfg.seed = 0x424F4D42u;
+    cfg.tuning.input_freeze_ticks = 0;
+    cfg.ai[3] = true;
+    cfg.born_with_extra[3][static_cast<std::size_t>(PowerupType::Grab)] = true;
+    cfg.born_with_extra[3][static_cast<std::size_t>(PowerupType::Punch)] = true;
+    cfg.born_with_extra[3][static_cast<std::size_t>(PowerupType::ExtraBomb)] = true;
+    for (int y = by - 4; y <= by; ++y)
+        for (int x = rx - 4; x <= rx; ++x)
+            if (cfg.cells[y][x] == Cell::Blank && !(x == rx && y == by))
+                cfg.cells[y][x] = Cell::Brick;
+    cfg.cells[by - 1][rx] = Cell::Blank;
+
+    Simulation s(cfg);
+    State& st = s.state();
+    REQUIRE(st.players[3].grab);   // the born-with overlay really landed
+    REQUIRE(st.players[3].punch);
+
+    int grabs = 0, throws = 0;
+    for (int t = 0; t < 400; ++t) {
+        TickInputs in;
+        for (int p = 0; p < 3; ++p) {
+            in.players[p].right = (p == 0 || p == 2);
+            in.players[p].left = (p == 1);
+            in.players[p].down = (p == 0 || p == 1);
+            in.players[p].up = (p == 2);
+            in.players[p].action1 = (t % 8 == p);
+        }
+        s.tick(in);
+        for (const Event& e : st.events) {
+            if (e.player != 3) continue;
+            if (e.type == Event::Type::BombGrabbed) ++grabs;
+            if (e.type == Event::Type::BombThrown) ++throws;
+        }
+    }
+    // Measured on the tuned board: 3 grabs and 3 throws. Assert the floor, not
+    // the exact count -- the point is that the brain reaches the branch at all,
+    // and a >= keeps this from becoming a second golden nobody dares touch.
+    CHECK(grabs >= 1);
+    CHECK(throws >= 1);
+}
+
 TEST_CASE("Audit fix: a stunned AI draws no RNG this tick") {
     // sub_41F29B gates the WHOLE AI dispatch -- draws A/B included -- behind
     // the input-acquisition gate at line 23028 -- the per-actor "input was

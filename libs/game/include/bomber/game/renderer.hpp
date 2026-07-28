@@ -251,9 +251,10 @@ private:
     std::array<int, sim::kMaxPlayers> panic_elapsed_{};
     std::array<int, sim::kMaxPlayers> panic_variant_{};
     // Bomb-pickup carry arc (docs/re/id-audit.md item 4, VALUELST 500/502/
-    // 504/506): ticks elapsed since this player started carrying a bomb,
-    // clamped 0..3 (see update_carry_arc / the carried-bomb draw in
-    // draw_world). Cosmetic-only — never touches the sim.
+    // 504/506): ticks elapsed since this player started carrying a bomb, with
+    // 0 on the grab tick. Clamped at 5 — `carry_pose.hpp`'s carry_arc_index
+    // saturates its 0..3 curve index two ticks earlier than that, and nothing
+    // else reads the count. Cosmetic-only — never touches the sim.
     std::array<int, sim::kMaxPlayers> carry_ticks_{};
     std::array<bool, sim::kMaxPlayers> carrying_prev_{};
 

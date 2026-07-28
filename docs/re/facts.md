@@ -1766,6 +1766,102 @@ recorded in "Bomb/warphole reconciliation 2026-07-10" and `stage-actors.md` §1'
 registry layout. Live-play observation by Ege is the finding's origin and its
 independent confirmation.)
 
+## AI key presses manufacture their own edge — CONFIRMED (`sub_40BD44` / `sub_40BE02` / `sub_40AD8D` / `sub_40ABED`, 2026-07-28)
+
+**Observation first.** Ege, playing the original and then the port, reported
+that **the port's AI players never use the grab glove** — the powerup that lets
+a player pick a bomb up and throw it — while the original's AI does once it has
+picked the powerup up. The port has had behaviour 0 (`sub_40BD44`) since Stage 4
+and a green test for it, so the report looked like a candidate for refutation.
+It is not: the behaviour was reachable only in a board state the game does not
+actually produce.
+
+**What the original does.** The mover resets both key bytes at the top of every
+per-frame pass (`sub_41F29B`: `+54 = +56; +55 = +57; +56 = 0; +57 = 0`), and the
+drop block near the bottom of the same frame is edge-gated on `+56 && !+54`
+(and `+57 && !+55` for the action key). Between those two points the frame runs
+the input acquisition, which for a computer player is `sub_40A1C6` and the
+behaviour chain. **Every behaviour that presses a key writes the edge itself —
+the key byte AND the previous-frame copy, as a pair:**
+
+| behaviour | function | writes |
+|---|---|---|
+| 0 grab, carrying | `sub_40BD44` | `+56 = 0; +54 = 0` |
+| 0 grab, snatch | `sub_40BD44` | `+56 = 1; +54 = 0` |
+| 1 punch | `sub_40BE02` | `+57 = 1; +55 = 0` |
+| 3 blast bricks | `sub_40AD8D` | `+54 = 0; +56 = 1` |
+| 4 bomb near enemy | `sub_40ABED` | `+54 = 0; +56 = 1` |
+
+A census of the whole AI batch (0x40A140-0x40BEE7) finds exactly these five
+key-byte write sites plus **one** exception, and the exception is deliberate:
+behaviour 2's safe-branch remote-detonation whim (`sub_40B20F`, the
+`+95 && !+91 && !(rand()%10)` arm) writes `+57 = 1` **alone**, leaving `+55` as
+the mover set it. So a trigger AI that wins the 1-in-10 roll on consecutive
+frames really does detonate only on the first — that asymmetry is the
+original's, not an oversight. Note `ai.md` §7 already recorded the rule ("The AI
+writes `+56=1; +54=0` to force a fresh press"); only the port had missed it.
+
+**Our divergence (fixed here).** `AISystem::press_bomb`/`press_action`
+(`libs/sim/src/systems/ai.cpp`) set only `PlayerInput::action1`/`action2` and
+left `Player::prev_action1`/`prev_action2` — our `+54`/`+55` — alone, on the
+reasoning recorded in their own doc comment: "the AI never sets prev_action1
+itself, so a single-tick action1=true is a fresh press". That holds only when
+the key happened to be up on the previous tick, and **the one situation
+behaviour 0 exists for is precisely the one where it is not**: you are standing
+on a bomb because you just dropped it, which latched the key down. The port's
+sub-frame cadence then makes the latch permanent — the AI brain runs once per
+canonical frame (`kSubFrames = 9`) and its presses are OR-latched into the
+tick's input, so a behaviour gated on a bare `rand()%2` presses in at least one
+of the nine frames **511 times in 512**. The key never comes back up, no edge
+ever forms again, and `try_grab` is never reached. Measured in the port before
+the fix: an AI seeded with the glove and its own bomb underfoot, with the key
+latched, did not grab once in 200 ticks; an AI that dropped its own bomb and
+stood on it did not grab once in 400. The AI picks the glove up and keeps it,
+exactly as reported.
+
+The fix is the original's pair of writes: `press_bomb`/`press_action` clear
+`prev_action1`/`prev_action2` alongside setting the key, `release_bomb` mirrors
+the carrying branch's `+56 = 0; +54 = 0`, and behaviour 2's whim keeps the
+original's unpaired write via `press_action_sustained`. After it, the same
+board grabs on the first winning roll, and a 4-seat pillar match with a
+grab+punch AI produces 6 grabs and 6 throws over 7 drops.
+
+**A second, RELATED gap, diagnosed but NOT fixed here — the deferred tail.**
+The original evaluates the bomb-action tail every frame, so the tail sees the
+position the brain decided at. The port runs the brain per sub-frame but the
+tail once per tick, at the END-of-tick position, and `bomb_actions` re-tests
+"own bomb underfoot" there. An AI that wins the grab roll in one sub-frame but
+loses it in a later one steps away (behaviour 0 short-circuits the chain only
+on the frames it wins), and the tail then finds no bomb underfoot and the grab
+is silently lost. This is why the fixed AI grabs on ~6 of 7 drops rather than
+essentially all of them, and why it grabs less often the more freely it can
+flee. `simulation.cpp`'s standing claim that the once-per-tick tail differs
+from the original "only [in] the auto-drop diseases' intra-tick attempt
+density" is therefore incomplete: the tail's POSITION-dependent tests
+(grab/spooge underfoot, drop tile) can be up to eight frames stale. Closing it
+means running the tail inside the sub-frame loop, which is a cadence change of
+its own and wants its own entry; recorded here so the next reader does not
+re-derive it.
+
+**RNG / golden impact.** No draw is added or removed and no draw order changes
+— the fix writes an already-hashed player field at sites that already ran. All
+five golden scenarios are **byte-identical** (verified): none of them sets
+`MatchConfig::ai`, so no golden has an AI player at all. That makes
+`build_hash` the only cross-build door for this change, and scenario 3 did not
+discriminate it — the digest was byte-identical at 3780851729 before and after.
+`libs/net/src/build_hash.cpp` therefore gains **scenario 5**, built against the
+brain's decision path (an AI born with grab + punch + a spare bomb in a brick
+pocket, on plain floor and a full clock); with it the digest moves
+1599681701 → 150405641. `tests/sim/test_ai.cpp` replicates that board and
+asserts the grab actually happens, so the coverage cannot silently lapse.
+
+(Provenance: `sub_40BD44` @ 0x40BD44; `sub_40BE02` @ 0x40BE02; `sub_40AD8D` @
+0x40AD8D; `sub_40ABED` @ 0x40ABED; `sub_40B20F` @ 0x40B20F; `sub_41F29B`'s
+per-frame key reset and its `+56 && !+54 && !+134` drop block. The `+54`/`+55`
+write census covers the whole AI batch 0x40A140-0x40BEE7. Live-play observation
+by Ege is the finding's origin; the port-side numbers above are measured in
+headless tests, not inferred.)
+
 ## Chain-reaction timing — CONFIRMED (`sub_423209` queue, `sub_42331C` drain, 2026-07-10 flame-system audit)
 
 A full line-by-line re-read of the flame system (facts.md's own "Core-feel
@@ -5963,6 +6059,86 @@ in the predicate. To settle it: on level 4 (`EXTRA4.RES`, warp holes at (2,2),
 (12,2), (12,8), (2,8)), walk the warp hole's own row at several vertical offsets
 and the two rows either side, from each of the four directions, and note every
 case where one build takes you and the other does not.
+
+## Grab / carry / throw presentation — CONFIRMED + PORTED (2026-07-28, `sub_41F29B`/`sub_42331C`)
+
+Audit of the glove sequence (grab a bomb, carry it, throw it) after a report
+that the throw animation looked wrong. Three separate findings; the third is
+the visible one.
+
+**The asset side is correct and needs no change.** `MASTER.ALI` loads
+`BWALK1..4.ANI` (`walkbomb <dir>` 15 steps + `standbomb <dir>` 1 step, one
+direction per file), `PUP1..4.ANI` (`pickup <dir>`, 10 steps) and
+`PUNBOMB1..4.ANI` — never `BOMBWALK.ANI` or `BPICKUP.ANI`, which ship but are
+dead art (the "ANI sequence-name audit" entry already established this).
+`SequenceSet::resolve` probes the four files per name, so no direction index
+can be off by construction. Verified against the shipped install with
+`abtool ani`.
+
+**There is no throw animation, and that is correct.** The bomb-action block's
+carried-release (block 2 of the truth table in "Player state machine (+78) —
+COMPLETE") launches via `sub_424987` and writes `+148 = 0`; it never touches
+`+78`. So a throw is depicted purely by the base name reverting from
+`walkbomb`/`standbomb` to `walk`/`stand`. The port matches — nothing draws a
+throw pose, and `BombThrown` is silent for the same reason (see
+`sound_director.cpp`'s "two silent bomb events").
+
+1. **Action poses OUTRANK the carry pose.** `sub_41F29B`'s name build
+   (LABEL_155) formats the BASE name first — `stand %s`/`walk %s`, or
+   `standbomb %s`/`walkbomb %s` when the carried-bomb pointer `+148` is set —
+   and only THEN lets the `+78` switch overwrite that same buffer with
+   `kick %s` (1), `punch %s` (2) or `pickup %s` (4). Our renderer applied the
+   carry pose LAST, so a carrying player who kicked a bomb (reachable: the kick
+   probe lives in the mover and never checks `+148`) kept the carry pose where
+   the original swings. Fixed; the precedence now lives in
+   `libs/game/include/bomber/game/carry_pose.hpp` (`select_player_pose`) so the
+   headless suite can pin it.
+2. **The pickup pose outlives the bomb.** State 4 exits on its own animation
+   length (`+80 > statecnt`, 10 frames), while the grab's movement pause is
+   only `getvalue(665)` = 2 ticks and the release clears `+148` without
+   touching `+78`. Throwing the instant the pause ends therefore leaves ~8
+   frames of `pickup <dir>` still playing, empty-handed. Our renderer nested
+   the pickup pose inside `if (p.carrying)`, so it snapped back to walk/stand
+   on the throw. Fixed. (The three presentation countdowns now also clobber
+   each other on entry, mirroring the fact that `+78` is ONE word.)
+3. **A carried bomb rides ABOVE THE HEAD, not ahead of it.** `sub_42331C`'s
+   bomb motion-state 3 ("carried") branch reads the CARRIER's `+78` and has two
+   arms, not one:
+   - `+78 == 4` (the pickup animation): curve step
+     `k = clamp((carrier's +80) - 1, 0, 3)`, then
+     `x = carrier_x + dx*(10 + getvalue(2k+500))`,
+     `y = carrier_y + dy*10 - getvalue(2k+501)`.
+   - **any other state**: no curve at all —
+     `x = carrier_x + dx*10`, `y = carrier_y + dy*10 - 40` (both literals).
+
+   The port ran the curve for the WHOLE carry with `k` saturated at 3, so the
+   bomb stayed at the last curve point's forward reach forever: 22 px along the
+   facing direction instead of 10, i.e. **12 px — over a quarter of a 40 px
+   tile — too far to the side** for every west/east-facing carry, for as long
+   as the bomb was held. The lift was already right (the curve's last Y column
+   is 40, the same number the else-arm hardcodes), which is why only the
+   horizontal drift showed. Fixed: `carried_bomb_offset` picks the arm off the
+   pickup state, and `carry_arc_index` reproduces the `-1` plus the one-frame
+   staleness (`sub_4245B9` → `sub_42331C` runs BEFORE `sub_420F07` →
+   `sub_41F29B` in the frame loop, so the `+80` a carried bomb reads is always
+   last frame's).
+
+Presentation only: no `libs/sim` change, no golden hash and no `build_hash`
+movement. `tests/visual/` is unmoved — the scripted demo never grabs a bomb
+(verified green). Tests: `tests/game/test_anim.cpp` (five new cases).
+
+### Adjacent, NOT fixed here
+
+- **The head-stun pose spins.** In the idle branch the direction byte fed to
+  `stand %s` is `+80 & 3` when `+58` (head-hit stun) is non-zero, not the
+  player's facing — a stunned player's sprite cycles through all four facings.
+  Our renderer draws the plain stand pose in the facing direction. Separate
+  mechanic (head hit, not the glove); left for its own pass.
+- **The grab tick's first frame.** The original's bomb pass has already run
+  when the grab happens, so on that one frame the bomb is still drawn resting
+  on the floor; our sim deactivates the bomb slot immediately, so we draw it
+  already held. A one-frame artifact of where the slot lives, not of the offset
+  math.
 
 ## Still guessed — not yet extracted from the binary
 
