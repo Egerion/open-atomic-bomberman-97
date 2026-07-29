@@ -6158,7 +6158,8 @@ fixes in it and still said the manual throw did not look like the native — "ne
 20hz'de ne de uncap 180'de", at BOTH cadences, which rules out interpolation and
 frame pacing and points at sequence content or tick-level timing.
 
-Three facts, the first of which overturns the previous entry's verdict.
+Four facts. The first overturns the previous entry's frame-loop order, the
+second its verdict, and the fourth is the one that costs a `build_hash`.
 
 ### 1. `sub_42331C` is called TWICE per frame, and the carried half runs LAST
 
@@ -6178,8 +6179,8 @@ So a carried bomb is updated and drawn AFTER its carrier — which is also why i
 composites over the head — and the `+80` its curve step reads has already been
 advanced by that same frame's player pass. The previous entry asserted the
 opposite order and paid for it with a second `-1` in `carry_arc_index`; the
-index is `k = clamp(+80 - 1, 0, 3)` and nothing more, i.e. `clamp(ticks_since_
-grab - 1, 0, 3)`. Fixed.
+index is `k = clamp(+80 - 1, 0, 3)` and nothing more — one tick after the grab,
+not two. Fixed.
 
 ### 2. The carrier's body animation counter is pinned to ZERO for the whole carry
 
@@ -6241,30 +6242,45 @@ converts pixels into a fraction of the leg, so the whole expression is
 `arc * sin(pi * t)`. Our renderer used `4 * arc * t * (1 - t)`, which peaks at
 the same height but bulges ~4% of it early in the flight. Now exact.
 
-Presentation only: no `libs/sim` change, no golden hash and no `build_hash`
-movement. `tests/visual/` unmoved and green — but note it CANNOT validate any of
-this, because the scripted demo never grabs, punches or throws a bomb, so no
-flying bomb and no carry pose ever reaches a pinned frame. Tests:
-`tests/game/test_anim.cpp`.
+Facts 1-3 are presentation only: no `libs/sim` change, no golden hash and no
+`build_hash` movement. `tests/visual/` unmoved and green — but note it CANNOT
+validate any of this, because the scripted demo never grabs, punches or throws a
+bomb, so no flying bomb and no carry pose ever reaches a pinned frame. Tests:
+`tests/game/test_anim.cpp`. Fact 4 below is a `libs/sim` change and is costed
+separately.
 
-### Adjacent, NOT fixed here — two of them are `libs/sim`
+### 4. The throw launches from the carrier's exact position — a `libs/sim` fix
 
-- **The throw launches from the TILE CENTRE; the original launches from the
-  carrier's exact pixel position.** The bomb-action block's release (pseudo.c
-  23290-23291, block 2 of the truth table in "Player state machine (+78) —
-  COMPLETE") writes `bomb[+28] = player[+28]` and `bomb[+32] = player[+32]`
-  before `sub_424987`, so the thrown bomb starts wherever the carrier was
-  standing — which is where the carried bomb was already being drawn.
-  `BombSystem::throw_carried` instead seeds `nb.x/nb.y` from
-  `grid::tile_center_*`, so a bomb thrown mid-stride TELEPORTS up to half a tile
-  along the throw axis on the release frame. The landing tile is unaffected
-  (`|offset| < tile/2`, so `tile_of(start + 3 tiles)` is the same tile either
-  way) and `launch` derives `fly_total` from the tile count rather than the
-  actual span, so the only differences are the flight's start point and its
-  per-tick interpolation — but `Bomb::x/y` are hashed, so this is a `libs/sim`
-  behaviour change: golden recapture plus a `build_hash` re-measurement, and
-  every peer needs the new executable. Deliberately NOT taken in this
-  presentation pass.
+The bomb-action block's release (pseudo.c 23290-23291, block 2 of the truth
+table in "Player state machine (+78) — COMPLETE") writes `bomb[+28] =
+player[+28]` and `bomb[+32] = player[+32]` immediately before `sub_424987`, so
+the thrown bomb starts wherever the carrier was standing — which is exactly
+where the carried bomb was already being drawn, making the release continuous.
+`BombSystem::throw_carried` seeded `nb.x/nb.y` from `grid::tile_center_*`
+instead, so a bomb thrown mid-stride TELEPORTED up to half a tile along the
+throw axis on the release frame, on top of the (faithful) 40 px drop from head
+height.
+
+The landing tile is unaffected — `|offset| < tile/2`, so `tile_of(start + 3
+tiles)` resolves to the same tile — and `launch` derives `fly_total` from the
+tile count rather than the actual span, so the only things that move are the
+flight's start point and its per-tick interpolation. But `Bomb::x/y` are hashed,
+so this is a behaviour change under the determinism contract:
+
+- **`build_hash` MOVED**, measured before and after per rule 7:
+  `2865273942` → `2384174189`. The AI grab+throw path in the existing scenario
+  set reaches it, so no new scenario was needed.
+- **`test_golden.cpp` is byte-identical** and needed no recapture — its
+  scenarios do throw, but never from an off-centre position. That is a coverage
+  gap in the golden set, not evidence the change is inert; the discriminating
+  case is pinned directly instead, in `tests/sim/test_punch_throw.cpp` ("a
+  thrown bomb launches from the carrier's exact position"), verified to FAIL on
+  the pre-fix sim.
+- Every peer needs the new executable: the lobby door refuses a `build_hash`
+  mismatch, which is the point.
+
+### Adjacent, NOT fixed here
+
 - **The grab's movement pause may be one tick short.** The gate is
   `if (+78 == 4 && frame_counter <= getvalue(665))` (pseudo.c 23017-23023),
   which suppresses input acquisition and forces the bomb key byte `+56` to 1.
