@@ -7,6 +7,8 @@
 #include <utility>
 #include <vector>
 
+#include "bomber/net/net_path.hpp"
+
 // The datagram transport seam. The lockstep session (lockstep_session.hpp) talks
 // only to the abstract Transport, so the SAME session logic runs over a real UDP
 // socket (UdpTransport, a later increment) or over an in-memory LoopbackLink
@@ -29,6 +31,14 @@ public:
     // Non-blocking receive: fills *out and returns true if a datagram had
     // arrived, else returns false (like a non-blocking recvfrom()).
     virtual bool poll(std::vector<std::uint8_t>* out) = 0;
+
+    // WHICH PATH THIS IS (net_path.hpp) — pure diagnostics, never consulted by
+    // the session logic, which is identical whichever transport it runs over.
+    // Virtual rather than threaded down from the caller because the transport is
+    // the object actually carrying the bytes; a caller that only ever sees a
+    // `Transport&` (run_netplay_match_seats does) can then still say what it is.
+    // Defaulted so a test double or a future transport compiles unchanged.
+    virtual NetPath path() const { return NetPath::Unknown; }
 };
 
 // An in-memory link between two endpoints (sides 0 and 1) for headless tests.
@@ -83,6 +93,7 @@ public:
         link_->send(side_, data, size);
     }
     bool poll(std::vector<std::uint8_t>* out) override { return link_->poll(side_, out); }
+    NetPath path() const override { return NetPath::Loopback; }
 
 private:
     LoopbackLink* link_;

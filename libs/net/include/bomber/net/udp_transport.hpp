@@ -49,6 +49,9 @@ public:
 
     void send(const std::uint8_t* data, std::size_t size) override;
     bool poll(std::vector<std::uint8_t>* out) override;
+    // A bare socket aimed at one peer: the punched peer-to-peer path. Nothing
+    // the matchmaker does can affect a match running over this.
+    NetPath path() const override { return NetPath::Direct; }
 
     // --- Address-aware I/O for the Rendezvous hole-punch (ADR-0011 §3) ---
     // The punch must probe SEVERAL candidate addresses (host / reflexive / relay)

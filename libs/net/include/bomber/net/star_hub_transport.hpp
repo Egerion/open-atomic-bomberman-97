@@ -48,6 +48,11 @@ public:
     // inject frames into the match.
     bool poll(std::vector<std::uint8_t>* out) override;
 
+    // This machine is the hub: every guest's traffic crosses THIS uplink twice
+    // (in, then reflected out to the others), which is a bottleneck no
+    // server-side log can see. Worth knowing before blaming the network.
+    NetPath path() const override { return NetPath::StarHub; }
+
     std::size_t guest_count() const { return guests_.size(); }
 
 private:

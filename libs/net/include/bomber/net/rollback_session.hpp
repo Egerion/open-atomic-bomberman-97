@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <unordered_map>
 
+#include "bomber/net/net_stats.hpp"  // NetStatsTracker (diagnostics; nothing the sim sees)
 #include "bomber/net/transport.hpp"
 #include "bomber/sim/constants.hpp"  // kMaxPlayers
 #include "bomber/sim/simulation.hpp"
@@ -122,7 +123,16 @@ public:
     // (speculative) state by one tick, unless the prediction cap is reached and
     // the peer has not caught up (then it holds). Applies any pending rollback
     // first, so on return sim() reflects the best current estimate. Never blocks.
-    void advance(const sim::TickInputs& local_input);
+    //
+    // `now_ms` is a MONOTONIC WALL CLOCK, and it exists only to timestamp the
+    // diagnostics (net_stats.hpp): RTT, jitter and the per-second rates cannot be
+    // derived from tick numbers alone. It NEVER reaches the sim — no branch below
+    // reads it, `Simulation::tick` is not handed it, and nothing hashed depends
+    // on it (determinism rule 1). The default of -1 means "no clock": every
+    // tick-derived statistic still works exactly and the time-derived ones stay
+    // at their unavailable values, which is what keeps every existing headless
+    // caller and test byte-identical.
+    void advance(const sim::TickInputs& local_input, std::int64_t now_ms = -1);
 
     std::uint32_t predicted_tick() const { return tick_; }   // next tick to simulate speculatively
     std::uint32_t confirmed_tick() const { return confirmed_; }  // highest all-inputs-known tick
@@ -131,6 +141,13 @@ public:
 
     bool desynced() const { return desynced_; }
     std::uint32_t desync_tick() const { return desync_tick_; }
+
+    // THE LIVE DIAGNOSTIC SNAPSHOT (net_stats.hpp). Everything the in-match
+    // overlay draws and the end-of-session log line records — path, per-peer
+    // RTT/lag, prediction depth, re-sim rate, stalls — derived entirely from
+    // traffic this session already exchanges. Read-only and side-effect free;
+    // the session behaves identically whether anyone calls it or not.
+    const NetStats& stats() const { return stats_.stats(); }
 
     // Seats declared dropped so far (0 while everyone is live). With
     // DropPolicy::revert_to_ai these are the seats now driven by the AI; without
@@ -176,6 +193,16 @@ private:
         sim::TickInputs inputs;         // seat inputs used to simulate this tick (confirmed or predicted)
         std::uint16_t confirmed = 0;    // which seats are CONFIRMED (rest are predicted)
     };
+
+    // The whole of advance() except the diagnostics bracket around it. Split so
+    // the tracker's begin/end pair is written ONCE and cannot be missed on any of
+    // advance()'s several early-return paths (aborted, round ended, at the cap).
+    void advance_impl(const sim::TickInputs& local_input);
+
+    // Attribute one arriving input datagram to every seat it carries, for the
+    // diagnostics only. `first_tick` is the sender's confirmed frontier (the
+    // ack-RTT's basis), or 0 for a frame that carries none.
+    void note_input_seats(std::uint16_t seats, std::uint32_t first_tick);
 
     void receive();  // drain transport -> input slots + peer hashes, flag rollbacks
     void apply_remote(std::uint32_t tick, std::uint16_t seats, const sim::TickInputs& in);
@@ -259,6 +286,12 @@ private:
 
     bool desynced_ = false;
     std::uint32_t desync_tick_ = 0;
+
+    // INSTRUMENTATION ONLY. Deliberately last, deliberately not consulted by any
+    // decision in this class: nothing below reads stats_, so a build that never
+    // looks at it plays exactly the same match. Owns no heap and allocates on no
+    // packet path (net_stats.hpp), so counting cannot perturb what it counts.
+    NetStatsTracker stats_;
 };
 
 }  // namespace bomber::net
