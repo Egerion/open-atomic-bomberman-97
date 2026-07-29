@@ -57,6 +57,11 @@ struct MatchRunnerState {
     bool& uncap_fps;        // GameApp::uncap_fps_ (F8 pacing lever)
     bool& native_cadence;   // GameApp::native_cadence_ (F9 cadence lever)
     bool& show_fps;         // GameApp::show_fps_ (F7 overlay lever)
+    // F3: the in-match NETPLAY diagnostic panel (screens/net_overlay.hpp). A
+    // reference for the same reason the three above are — the global event
+    // filter flips it mid-match. Session-only: unlike show_fps it is never read
+    // from or written to options.ini, so no saved value can reach a capture.
+    bool& show_netstats;
 
     // --- Read-only match inputs (const references) ---
     const assets::sch::Scheme& scheme;                   // GameApp::scheme_ (build_match_config)

@@ -17,6 +17,7 @@
 #include "bomber/game/renderer.hpp"                  // kScreenW
 #include "bomber/game/results.hpp"                   // tally_kills
 #include "bomber/game/screens/campaign_screens.hpp"  // HelpBrowserModal (the in-round F1)
+#include "bomber/game/screens/net_overlay.hpp"       // draw_net_overlay (the F3 panel)
 #include "bomber/game/sprites.hpp"                   // Sprite (player-row "xxx" marker)
 #include "bomber/match/match_factory.hpp"   // build_match_config / pick_stage / apply_actors
 #include "bomber/net/rollback_session.hpp"  // net::RollbackSession (netplay drive, seam is fwd-only)
@@ -669,7 +670,16 @@ AppInput MatchRunner::run() {
                 // network the way input-delay lockstep did. A local match ticks
                 // directly, exactly as before (net_session is null everywhere else).
                 if (state_.net_session) {
-                    state_.net_session->advance(in);
+                    // The wall clock is handed in for the DIAGNOSTICS ONLY
+                    // (net_stats.hpp): RTT, jitter and the per-second rates
+                    // cannot be derived from tick numbers. It stops at the
+                    // session's instrumentation bracket and never reaches
+                    // Simulation::tick, so no hashed state can depend on it
+                    // (determinism rule 1) — which is also why it is passed
+                    // unconditionally rather than behind the overlay's toggle:
+                    // a session that only starts counting when you press F3 has
+                    // nothing to say about the ten seconds before you pressed it.
+                    state_.net_session->advance(in, static_cast<std::int64_t>(SDL_GetTicks()));
                 } else {
                     state_.sim.tick(in);
                 }
@@ -760,6 +770,13 @@ AppInput MatchRunner::run() {
         // logically part of the same pass).
         draw_player_row(state_.sim.state());
         draw_fps_overlay(shown_fps);
+        // F3: the netplay diagnostic panel. Double-gated on purpose — it needs
+        // BOTH the toggle (session-only, never persisted, so nothing can carry
+        // it into a run) and a live netplay session (a capture never has one),
+        // which is what keeps it out of tests/visual's frames.
+        if (state_.show_netstats && state_.net_session != nullptr)
+            draw_net_overlay(ctx_.sdl, ctx_.front_font, state_.net_session->stats(),
+                             state_.net_local_seats);
         SDL_RenderPresent(ctx_.sdl);
         // Pace the next present. DEFAULT (vsync): the refresh-boundary resync
         // rule described at the top of this function, unchanged — no-op when

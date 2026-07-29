@@ -47,6 +47,9 @@ public:
 
     void send(const std::uint8_t* data, std::size_t size) override;
     bool poll(std::vector<std::uint8_t>* out) override;
+    // Every datagram of this match is forwarded by the matchmaker — so, unlike a
+    // direct match, the server IS in the path and its health is a live suspect.
+    NetPath path() const override { return NetPath::Relayed; }
 
     // The seat that sent the datagram most recently returned by poll() — the
     // N-player star reads this to attribute inputs. -1 before any datagram.

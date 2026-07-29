@@ -42,6 +42,11 @@ RollbackSession::RollbackSession(sim::Simulation& sim, std::uint16_t local_seats
       tick_(start_tick),
       confirmed_(start_tick),
       rollback_to_(start_tick) {
+    // Diagnostics only (net_stats.hpp). transport.path() is asked ONCE here, at
+    // the one moment the session and its transport are certainly the pair that
+    // will carry this round — which is what makes "which path is carrying the
+    // match" answerable from a `Transport&` the caller may have captured long ago.
+    stats_.begin(transport.path(), remote_seats_, start_tick, max_prediction);
     handoff_.fill(kNoHandoff);
     // "First tick we hold no input for" starts at the session's own base, not 0 —
     // otherwise a seat that never speaks would be handed off at tick 0, which is
@@ -91,7 +96,15 @@ sim::TickInputs RollbackSession::assemble(std::uint32_t tick) {
 
 void RollbackSession::apply_remote(std::uint32_t tick, std::uint16_t seats,
                                    const sim::TickInputs& in) {
-    if (tick < confirmed_) return;  // already fully confirmed — a late duplicate is inert
+    if (tick < confirmed_) {
+        // Already fully confirmed — a late duplicate is inert. Counted (not
+        // ignored) because the redundancy window means MOST arriving input is
+        // this, and the count is the cheapest proof that traffic is still
+        // flowing; it is explicitly NOT a loss signal (net_stats.hpp).
+        for (int s = 0; s < sim::kMaxPlayers; ++s)
+            if ((seats & static_cast<std::uint16_t>(1U << s)) != 0) stats_.on_dup_input(s);
+        return;
+    }
     // Input from a seat that is already the AI's at this tick is inert too: the
     // handoff is the agreed truth, and honouring a straggler packet would both
     // diverge from the peers and trigger a pointless rollback.
@@ -103,7 +116,10 @@ void RollbackSession::apply_remote(std::uint32_t tick, std::uint16_t seats,
         if ((seats & bit) == 0) continue;
         const std::size_t si = static_cast<std::size_t>(s);
         if (tick + 1 > remote_next_[si]) remote_next_[si] = tick + 1;  // first tick still missing
-        if ((slot.confirmed & bit) != 0) continue;  // seat already confirmed for this tick
+        if ((slot.confirmed & bit) != 0) {
+            stats_.on_dup_input(s);  // this tick's input from that seat is already held
+            continue;
+        }
         const sim::PlayerInput& val = in.players[si];
         // If this tick was ALREADY simulated speculatively with a prediction that
         // turns out wrong, schedule a rollback to the earliest such tick.
@@ -122,15 +138,29 @@ void RollbackSession::apply_remote(std::uint32_t tick, std::uint16_t seats,
     }
 }
 
+void RollbackSession::note_input_seats(std::uint16_t seats, std::uint32_t first_tick) {
+    for (int s = 0; s < sim::kMaxPlayers; ++s)
+        if ((seats & static_cast<std::uint16_t>(1U << s)) != 0)
+            stats_.on_input_from(s, first_tick);
+}
+
 void RollbackSession::receive() {
     std::vector<std::uint8_t> pkt;
     while (transport_->poll(&pkt)) {
         Message m;
-        if (!decode(pkt.data(), pkt.size(), &m)) continue;  // drop malformed (untrusted)
+        const bool decoded = decode(pkt.data(), pkt.size(), &m);
+        stats_.on_datagram(decoded);
+        if (!decoded) continue;  // drop malformed (untrusted)
         if (m.type == MsgType::InputRange) {
             const std::uint16_t remote = static_cast<std::uint16_t>(m.range.seat_mask & remote_seats_);
             if (remote == 0) continue;
             heard(remote);
+            // THE ACK-RTT SAMPLE, and the reason this diagnostic needs no new
+            // wire message: an InputRange always begins at the SENDER'S confirmed
+            // frontier (send_local(confirmed_) on every path through advance()),
+            // and that frontier cannot pass a tick our input has not reached. So
+            // `first_tick` is an acknowledgement of our own tick first_tick-1.
+            note_input_seats(remote, m.range.first_tick);
             for (std::size_t i = 0; i < m.range.per_tick.size(); ++i)
                 apply_remote(m.range.first_tick + static_cast<std::uint32_t>(i), remote,
                              m.range.per_tick[i]);
@@ -138,6 +168,10 @@ void RollbackSession::receive() {
             const std::uint16_t remote = static_cast<std::uint16_t>(m.input.seat_mask & remote_seats_);
             if (remote == 0) continue;
             heard(remote);
+            // A single-tick Input carries no frontier (only LockstepSession sends
+            // these), so it counts as traffic but yields no RTT sample: passing
+            // its tick would read as an acknowledgement it is not.
+            note_input_seats(remote, 0);
             apply_remote(m.input.tick_index, remote, m.input.inputs);
         } else if (m.type == MsgType::Drop) {
             // Obeyed by EVERY peer including the host's own echo — idempotent, so
@@ -171,6 +205,10 @@ void RollbackSession::resimulate(std::uint32_t from) {
     // Cheap: value-type State restore + pure tick().
     const auto snap = snapshots_.find(from);
     if (snap == snapshots_.end()) return;
+    // Counted HERE, not at the call site: a rollback whose snapshot is gone
+    // replays nothing, and recording it as work done would overstate the very
+    // cost the overlay exists to show.
+    stats_.on_rollback(from, tick_);
     sim_->state() = snap->second;
     for (std::uint32_t t = from; t < tick_; ++t) {
         snapshots_[t] = sim_->state();
@@ -375,7 +413,16 @@ void RollbackSession::prune() {
         it = (it->first < keep) ? peer_hash_.erase(it) : std::next(it);
 }
 
-void RollbackSession::advance(const sim::TickInputs& local_input) {
+void RollbackSession::advance(const sim::TickInputs& local_input, std::int64_t now_ms) {
+    // The DIAGNOSTIC BRACKET. `now_ms` goes no further than this line — the
+    // simulation below never sees it, so no wall clock can reach a tick
+    // (determinism rule 1) and no hashed field can depend on one.
+    stats_.begin_pump(now_ms);
+    advance_impl(local_input);
+    stats_.end_pump(tick_, confirmed_, remote_next_, dropped_, desynced_, desync_tick_, aborted_);
+}
+
+void RollbackSession::advance_impl(const sim::TickInputs& local_input) {
     if (aborted_) return;  // a peer was lost with Options row 12 OFF: the match is over, not hung
     receive();
     // Detection sits BEFORE the rollback so a handoff announced or decided this
@@ -405,6 +452,10 @@ void RollbackSession::advance(const sim::TickInputs& local_input) {
     // the peer (bounded memory + bounded re-sim on a correction). Keep re-sending
     // local input so the peer catches up and our confirmations advance.
     if (tick_ - confirmed_ >= static_cast<std::uint32_t>(max_prediction_)) {
+        // A pump that could not simulate. THIS is what a netcode stutter is —
+        // a displayed frame the game was not allowed to advance because a peer's
+        // input had not arrived — so it is counted rather than merely happening.
+        stats_.on_stall();
         send_local(confirmed_);
         return;
     }
@@ -428,6 +479,10 @@ void RollbackSession::advance(const sim::TickInputs& local_input) {
     slots_[tick_].inputs = in;  // store actually-simulated inputs (predicted remote incl.) for compares
     sim_->tick(in);
     ++tick_;
+    // The tick we just simulated leaves in the send below, for the first time.
+    // That instant is one end of the ack-RTT (net_stats.hpp); the other is the
+    // peer's confirmed frontier rising past it.
+    stats_.on_local_tick(tick_ - 1);
     send_local(confirmed_);  // now covers [confirmed_, tick_): includes the just-simulated tick
     prune();
 }

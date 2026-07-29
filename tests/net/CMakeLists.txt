@@ -22,6 +22,15 @@ target_link_libraries(bomber_net_udp_tests PRIVATE bomber::net)
 bomber_add_test(bomber_net_rollback_tests net_rollback test_rollback_session.cpp)
 target_link_libraries(bomber_net_rollback_tests PRIVATE bomber::net)
 
+# In-match netplay DIAGNOSTICS (net_stats.hpp): the ack-RTT derived from the
+# confirmed frontier a peer's InputRange already carries (no new wire message,
+# so no wire-version bump), the rollback/stall/lag counters, the loss ESTIMATE,
+# and the one-line session-end log record. Both peers are driven over a
+# LoopbackLink, and the clocked run is asserted hash-identical to the unclocked
+# one — instrumentation must not perturb what it measures.
+bomber_add_test(bomber_net_stats_tests net_stats test_net_stats.cpp)
+target_link_libraries(bomber_net_stats_tests PRIVATE bomber::net)
+
 # Multi-round rotation: the derived per-round seed + tick base an online
 # best-of-N match agrees on with no extra traffic (round_rotation.hpp), and the
 # RollbackSession tick base that keeps a straggler from the previous round out of
