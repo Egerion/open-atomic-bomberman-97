@@ -76,7 +76,8 @@ struct ListDialogGeometry {
     int sb_button_x = 0, sb_up_y = 0, sb_down_y = 0;
     int sb_track_x = 0, sb_track_y = 0, sb_track_w = 0, sb_track_h = 0;
     int sb_frame_x0 = 0, sb_frame_y0 = 0, sb_frame_x1 = 0, sb_frame_y1 = 0;
-    // The thumb is a FIXED 15x15 raised bevel, not a proportional one.
+    // The thumb is a FIXED 15x15 raised bevel — its SIZE never tracks the list
+    // length. Its Y does: see list_dialog_thumb_y().
     int sb_thumb_x0 = 0, sb_thumb_y0 = 0, sb_thumb_x1 = 0, sb_thumb_y1 = 0;
 
     int done_x = 0, done_y = 0;  // the "Done" button's top-left
@@ -89,6 +90,70 @@ struct ListDialogGeometry {
 inline int list_dialog_width(int item_text_w, int title_w) {
     const int span = (title_w > item_text_w + 16) ? title_w : item_text_w + 16;
     return span + 20;
+}
+
+// The scrollbar thumb's Y — the ONE number in this geometry that is not a
+// constant, and the one the port used to pin to the top of the track.
+//
+// sub_42DBCC keeps the thumb's Y in a single stack slot and writes it from two
+// places. When the dialog is BUILT @0x42E077-0x42E090 it is the top-of-track
+// value, item_y0 + font_h + 7 (= 2*font_h + 23), and the thumb's extent is
+// seeded to 14 @0x42E097 — the 15x15 block, size-minus-one. Then on every
+// SCROLL repaint (the `-4` branch, taken only when the TOP VISIBLE ROW
+// changed) @0x42E6B5-0x42E6F7 it is recomputed as that same base plus a
+// proportional offset. The offset is built up in this order: the item area's
+// inner height (item_bottom - item_y0, i.e. visible_rows * font_h, cached
+// @0x42E2E4), less twice the font height, less 16 @0x42E6C3, less the thumb's
+// own 14 @0x42E6C6, less one more @0x42E6CD — that is the TRAVEL span —
+// multiplied by the top-row index @0x42E6D0 and divided, signed and
+// truncating, by (total - visible) @0x42E6DF (cached @0x42E2F5).
+//
+// The whole block is guarded @0x42E67A-0x42E681 by a total-vs-visible compare
+// that skips it when the list fits, which is both why a short list keeps the
+// build-time thumb and why that divisor is never zero. Its first act
+// @0x42E6B0 is to repaint a 15x15 patch of base coat over the OLD thumb: the
+// original moves the thumb and nothing else, never redrawing the track.
+//
+// Two things an approximation gets wrong, both settled by the above:
+//
+//  * IT IS DRIVEN BY THE TOP VISIBLE ROW, NOT THE HIGHLIGHT. The register the
+//    multiply reads is the first-drawn-item index — the one that indexes the
+//    item array @0x42DEEE and @0x42E5E0, and that the arrow, page, home and
+//    end handlers clamp to [0, total-visible] @0x42E4E0-0x42E549. The
+//    highlight is a separate register, offset within the visible window, and
+//    the selected absolute index is their sum @0x42E39A; neither reaches the
+//    thumb expression. Consistently, the highlight-only repaint (the `-3`
+//    branch) does not touch the thumb at all, so moving the cursor inside the
+//    visible window leaves it exactly where it was.
+//  * IT MOVES CONTINUOUSLY, NOT IN ROW-SIZED STEPS. The offset is one
+//    truncating division, so a scrolled row is worth travel/(total-visible)
+//    px — for a long list far less than a row height, and for a list one row
+//    too long the entire travel at once.
+//
+// The travel span is the track height less 16, not less 15: the track is
+// visible*font_h - 2*font_h - 15 tall (@0x42E0C0-0x42E0E8) and the thumb is
+// 15, so a flush-bottom thumb would subtract 30. The original subtracts 31
+// @0x42E6CD and the thumb comes to rest one pixel above the track's last row.
+// Mirrored, not corrected.
+inline int list_dialog_thumb_y(int font_h, int visible_rows, int total_rows, int top_row) {
+    const int base = (font_h + 16) + font_h + 7;  // item_y0 + font_h + 7 @0x42E08B
+    // @0x42E681's `jle`: a list that fits keeps the build-time top-of-track
+    // thumb forever. This also makes the division below unreachable at zero.
+    if (total_rows <= visible_rows) return base;
+    // Left UNGUARDED against a negative span, exactly as the original leaves
+    // it: sub_42DBCC only ever runs 6..10 rows (@0x42DC44's retry loop) and the
+    // FON heights are 12/16, and every port caller that can overflow passes ten
+    // rows too, so `visible_rows * font_h` is never small enough to invert this.
+    // Clamping it would be inventing arithmetic the binary does not contain.
+    const int travel = visible_rows * font_h - 2 * font_h - 16 - 14 - 1;
+    const int max_top = total_rows - visible_rows;
+    // PORT-ONLY clamp. Every original caller reaches the division with the top
+    // row already inside [0, max_top] because sub_42DBCC owns the scroll state
+    // and clamps it in its own key handlers; the port hands the offset in from
+    // the outside, so this stops a caller with a stale one from drawing the
+    // thumb off its track. A no-op for input that respects that invariant.
+    const int top = top_row < 0 ? 0 : (top_row > max_top ? max_top : top_row);
+    return base + top * travel / max_top;
 }
 
 // Builds the layout sub_42DBCC would.
@@ -106,9 +171,16 @@ inline int list_dialog_width(int item_text_w, int title_w) {
 //                       online lobby's key hints, which have no home in
 //                       sub_42DBCC's own chrome. 0 keeps every RE'd caller's
 //                       geometry byte-identical.
+//   `total_rows`        the WHOLE list's length -- sub_42DBCC's own a4/[esp+
+//                       0xa4]. Only the thumb's Y reads it. The default 0 is
+//                       `<= visible_rows`, i.e. the fits-on-screen case, which
+//                       is exactly the build-time layout every other field
+//                       already describes.
+//   `top_row`           the first visible item's index -- sub_42DBCC's `edi`.
 inline ListDialogGeometry list_dialog_geometry(int x, int y, int item_text_w, int title_w,
                                                int font_h, int visible_rows = kListDialogRows,
-                                               int footer_lines = 0) {
+                                               int footer_lines = 0, int total_rows = 0,
+                                               int top_row = 0) {
     ListDialogGeometry g;
 
     // @0x42DC24-0x42DC49: a working width is taken as itemw + 16; if the
@@ -168,12 +240,17 @@ inline ListDialogGeometry list_dialog_geometry(int x, int y, int item_text_w, in
     g.sb_frame_y0 = 2 * font_h + 22;
     g.sb_frame_x1 = g.win_w - 6;
     g.sb_frame_y1 = g.item_bottom - font_h - 9;
-    // Thumb @0x42E1D4: raised, (w-21, 2*font_h+23)..(w-7, 2*font_h+37) -- a
-    // hard 15x15, independent of how long the list is.
+    // Thumb @0x42E1D4 / @0x42E6F7: raised, drawn as the inclusive corner quad
+    // (track_x, thumb_y)..(track_x + 14, thumb_y + 14) -- a hard 15x15 whose
+    // SIZE is independent of how long the list is, but whose Y slides with the
+    // top visible row (list_dialog_thumb_y). Note the TRACK does not follow it:
+    // sb_track_y/sb_track_h are computed once at build time from the thumb's
+    // INITIAL y (@0x42E0B2-0x42E0E8) and the original never repaints them --
+    // the scroll path erases and redraws only the 15x15 thumb itself.
     g.sb_thumb_x0 = g.sb_track_x;
-    g.sb_thumb_y0 = g.sb_track_y;
+    g.sb_thumb_y0 = list_dialog_thumb_y(font_h, visible_rows, total_rows, top_row);
     g.sb_thumb_x1 = g.win_w - 7;
-    g.sb_thumb_y1 = 2 * font_h + 37;
+    g.sb_thumb_y1 = g.sb_thumb_y0 + 14;
 
     // "Done" @0x42E072: (w/2 - 32, win_h - font_h - 14). Same x rule as
     // sub_414340's " Ok " button, and its widget id is likewise 27 (Esc).

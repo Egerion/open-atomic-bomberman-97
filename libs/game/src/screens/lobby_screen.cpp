@@ -136,7 +136,7 @@ LobbyMenuChoice LobbyScreen::run_menu(bool online_available) {
         draw_backdrop();
         const ListDialogLayout lay = draw_list_dialog(
             ctx_.sdl, ctx_.front_font, title, centered_list_x(ctx_.front_font, title, content_w),
-            kListY, content_w, count, 0);
+            kListY, content_w, count, count, 0);
         for (int i = 0; i < count; ++i) {
             const float ty = lay.item_y0 + static_cast<float>(i) * lay.item_h;
             const std::string label = rows[static_cast<std::size_t>(i)]->label;
@@ -205,7 +205,7 @@ bool LobbyScreen::run_seat_count(int& seats, bool& window_closed) {
         draw_backdrop();
         const ListDialogLayout lay = draw_list_dialog(
             ctx_.sdl, ctx_.front_font, title, centered_list_x(ctx_.front_font, title, content_w),
-            kListY, content_w, count, 0, static_cast<int>(hints.lines.size()));
+            kListY, content_w, count, count, 0, static_cast<int>(hints.lines.size()));
         for (int i = 0; i < count; ++i) {
             const float ty = lay.item_y0 + static_cast<float>(i) * lay.item_h;
             const std::string& label = labels[static_cast<std::size_t>(i)];
@@ -363,7 +363,7 @@ void draw_room(ScreenContext& ctx, const net::LobbyFlow& flow, bool local_ready,
 
     const ListDialogLayout lay = draw_list_dialog(
         ctx.sdl, ctx.front_font, title, centered_list_x(ctx.front_font, title, content_w), kListY,
-        content_w, rows, 0, static_cast<int>(hints.lines.size()));
+        content_w, rows, rows, 0, static_cast<int>(hints.lines.size()));
 
     for (std::size_t i = 0; i < roster.size(); ++i) {
         const net::RosterEntry& e = roster[i];
@@ -463,7 +463,7 @@ void draw_browser(ScreenContext& ctx, const std::vector<net::PublicLobby>& list,
 
     const ListDialogLayout lay = draw_list_dialog(
         ctx.sdl, ctx.front_font, title, centered_list_x(ctx.front_font, title, content_w), kListY,
-        content_w, visible, top, static_cast<int>(hints.lines.size()));
+        content_w, visible, count, top, static_cast<int>(hints.lines.size()));
     const float mark_x = lay.item_x + lay.item_w - mark_w;
     const float code_x = mark_x - kColGap - code_w;
     const float occ_x = code_x - kColGap - occ_w;
