@@ -131,6 +131,52 @@ TEST_CASE("throwing a carried bomb emits BombThrown") {
     CHECK(!s.state().players[0].carrying);  // the carried bomb was released
 }
 
+TEST_CASE("a thrown bomb launches from the carrier's exact position, not the tile centre") {
+    // sub_41F29B's +37 release block writes `bomb[+28] = player[+28]` and
+    // `bomb[+32] = player[+32]` right before sub_424987 (pseudo.c 23290-23291),
+    // so the bomb leaves from wherever the carrier is STANDING — which is where
+    // it was already being drawn. Seeding the tile centre instead teleported a
+    // bomb thrown mid-stride up to half a tile sideways on the release frame.
+    // docs/re/facts.md "The carry FREEZES the carrier's body".
+    Simulation s(open_config());
+    s.state().players[1].alive = false;
+    Player& p = s.state().players[0];
+    p.grab = true;
+    p.facing = Direction::Down;
+
+    s.tick(press1(0));
+    REQUIRE(s.state().bombs.size() == 1);
+    s.tick(TickInputs{});
+    s.tick(press1(0));
+    REQUIRE(s.state().players[0].carrying);
+
+    // Walk the carrier off the tile centre before letting go, keeping the bomb
+    // key DOWN so the release block (`auto_drop || !a1_now`) holds off. Down is
+    // clear in open_config.
+    TickInputs walk;
+    walk.players[0].down = true;
+    walk.players[0].action1 = true;
+    for (int i = 0; i < 3; ++i) s.tick(walk);
+    REQUIRE(s.state().players[0].carrying);
+    const Fixed carrier_y = s.state().players[0].y;
+    // grid.hpp is a private sim header, so spell the tile centre out here.
+    REQUIRE(carrier_y != s.state().players[0].tile_y() * kTileHF + kTileHF / 2);
+
+    bool thrown = false;
+    for (int i = 0; i < 6 && !thrown; ++i) {
+        s.tick(TickInputs{});
+        thrown = has_event(s, Event::Type::BombThrown);
+    }
+    REQUIRE(thrown);
+    // The new bomb is the one flying; it starts on the carrier's own y.
+    const Bomb* flier = nullptr;
+    for (const auto& b : s.state().bombs)
+        if (b.active && b.flying) flier = &b;
+    REQUIRE(flier != nullptr);
+    CHECK(flier->from_y == carrier_y);
+    CHECK(flier->from_x == s.state().players[0].x);
+}
+
 // docs/re/facts.md "Flying-bomb landing on powerups": the landing check
 // (sub_42331C ~25443, `!sub_425FB9 && !sub_422E48 && !sub_42542D`) treats ANY
 // floor powerup as an occupied tile, exactly like a wall or another bomb — a

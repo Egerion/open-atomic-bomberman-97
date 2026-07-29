@@ -229,6 +229,13 @@ private:
     std::array<sim::Fixed, sim::kMaxPlayers> last_x_{}, last_y_{};
     std::array<bool, sim::kMaxPlayers> moving_{};
     std::array<std::uint32_t, sim::kMaxPlayers> walk_phase_{};
+    // The original's +48 body anim counter (carry_pose.hpp's body_phase_next):
+    // walk pixels while moving, one per displayed frame while idle, and pinned
+    // to 0 for the whole carry by the carried-bomb pass. Only the carry poses
+    // and the pickup pose read it — walk/stand keep walk_phase_ above, whose
+    // "freeze while idle" is indistinguishable there (`stand <dir>` is a 1-step
+    // sequence) and which the visual pins are captured against.
+    std::array<std::uint32_t, sim::kMaxPlayers> body_phase_{};
     // Action-pose countdowns (ticks): a recent kick/punch shows KICK.ANI/
     // PUNBOMB*.ANI instead of walk/stand. Driven by the (unhashed)
     // BombKicked/BombPunched events, so this is purely cosmetic and never

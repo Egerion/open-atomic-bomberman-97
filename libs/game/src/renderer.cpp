@@ -280,6 +280,7 @@ void Renderer::reset_match(bool untimed) {
     kick_pose_.fill(0);
     punch_pose_.fill(0);
     pickup_pose_.fill(0);
+    body_phase_.fill(0);
     panic_active_.fill(false);
     panic_elapsed_.fill(0);
     // Drop the inter-tick snapshots: a new round restarts s.tick and reuses
@@ -465,11 +466,21 @@ void Renderer::sample_movement(const sim::State& s) {
         // Bomb-pickup carry arc bookkeeping (docs/re/id-audit.md item 4):
         // ticks elapsed since carrying started, 0 on the grab tick, mirroring
         // the original's player+80 "elapsed since state entry" counter (see the
-        // carried-bomb draw in draw_world for the full citation). Clamped at 5
-        // because carry_arc_index saturates at 3 = 5 - 2.
+        // carried-bomb draw in draw_world for the full citation). Clamped at 4
+        // because carry_arc_index saturates at 3 = 4 - 1.
         const bool carrying_now = p.present && p.alive && p.carrying;
         if (carrying_now)
-            carry_ticks_[i] = carrying_prev_[i] ? std::min(carry_ticks_[i] + 1, 5) : 0;
+            carry_ticks_[i] = carrying_prev_[i] ? std::min(carry_ticks_[i] + 1, 4) : 0;
+
+        // The +48 body anim counter (carry_pose.hpp). Held at 0 for the whole
+        // carry and for the release tick, then advanced by this tick's walk
+        // budget or, standing still, by one per displayed frame — the idle
+        // branch's `++[+48]` is per FRAME, so a tick is worth kSubFrames of it
+        // at the canonical cadence (constants.hpp; the F9 native-cadence path
+        // keeps the same authored rate, exactly as on_events keeps the state-4
+        // countdown tick-paced there).
+        body_phase_[i] = body_phase_next(body_phase_[i], carrying_now, carrying_prev_[i],
+                                         walk_px[i], sim::kSubFrames);
         carrying_prev_[i] = carrying_now;
     }
     // F9 mid-tick frame: nothing tick-cadenced to advance; leave last_tick_ so
@@ -634,7 +645,19 @@ void Renderer::draw_bombs(const sim::State& s) {
         float lift = 0.0f;
         if (b.flying && b.fly_total > 0) {
             float t = 1.0f - static_cast<float>(b.fly_ticks) / static_cast<float>(b.fly_total);
-            lift = 4.0f * static_cast<float>(b.fly_arc) * t * (1.0f - t);
+            // A flying bomb's height is a HALF SINE over the leg, not a parabola:
+            // sub_42331C's draw tail (pseudo.c ~25710-25726) blits it at
+            //   y - sin(pi * travelled / (3 * tile)) * getvalue(660)   (first leg)
+            //   y - sin(pi * travelled /      tile ) * getvalue(661)   (each hop)
+            // where `travelled` is +70, the pixel counter reset at every landing
+            // boundary, and the three literals are dbl_45A2C9 = pi,
+            // dbl_45A2D1 = 3, dbl_45A2D9 = pi (read out of DGROUP at 0x45A2C9/
+            // D1/D9). The tile dimension only turns pixels into a fraction of
+            // the leg, which is exactly `t`, so this is arc * sin(pi * t). The
+            // parabola it replaces peaked at the same height but bulged ~4% of
+            // it early in the throw.
+            lift = static_cast<float>(b.fly_arc) *
+                   std::sin(3.14159265f * std::clamp(t, 0.0f, 1.0f));
             const float fw = static_cast<float>(sim::kGridWidth * sim::kTileW);
             const float fh = static_cast<float>(sim::kGridHeight * sim::kTileH);
             bx = std::fmod(std::fmod(bx, fw) + fw, fw);
@@ -922,6 +945,9 @@ void Renderer::draw_world(const sim::State& s) {
         // stops after some skates" — e.g. 10 px/tick vs a 10-frame WALK.ANI).
         // docs/re/facts.md "Walk leg-cycle pacing".
         const std::size_t walk_ph = moving_[i] ? walk_phase_[i] / (native_cadence_ ? 48u : 3u) : 0;
+        // The carry/pickup poses run off the faithful +48 counter instead (see
+        // their branches below); walk/stand keep walk_ph.
+        const std::size_t body_ph = body_anim_step(body_phase_[i]);
         std::size_t ph = walk_ph;
         // At most one flag is dropped per pass, so the loop always terminates
         // well inside its guard.
@@ -961,7 +987,7 @@ void Renderer::draw_world(const sim::State& s) {
                     }
                     break;
                 case PlayerPose::Pickup:
-                    // State 4. The DISPLAYED frame is walk-phase-driven, NOT
+                    // State 4. The DISPLAYED frame is +48-driven, NOT
                     // elapsed-since-grab: the original unconditionally recomputes
                     // the frame at the shared draw tail, calling sub_41DAA7 with
                     // the sequence and the player's +0x30 word (unsigned 16-bit)
@@ -970,8 +996,16 @@ void Renderer::draw_world(const sim::State& s) {
                     // the elapsed-based frame the pickup block computed. Only
                     // pickup_pose_'s countdown (the state's exit timer, set from
                     // the sequence length) survives.
+                    //
+                    // And +48 is pinned to 0 for as long as the bomb is held
+                    // (carry_pose.hpp's body_phase_next), so this sequence is a
+                    // still frame during the carry and only PLAYS once the throw
+                    // clears the carry link — which IS what a throw looks like
+                    // in the original, and what a walk-phase-driven pickup pose
+                    // could never show: it animated through the carry and then,
+                    // standing still, showed nothing at all at the release.
                     a = &q.pickup[body_colour][dir];
-                    ph = walk_ph;
+                    ph = body_ph;
                     drop = &pf.pickup;
                     break;
                 case PlayerPose::Cornerhead:
@@ -991,11 +1025,14 @@ void Renderer::draw_world(const sim::State& s) {
                 case PlayerPose::WalkBomb:
                 case PlayerPose::StandBomb:
                     // Carrying (+148): the "holding a bomb" walk/stand pose
-                    // (BWALK*.ANI). Same +48/3 pacing as walk/stand — the
-                    // original's carry poses share the one counter and the one
-                    // /3 site.
+                    // (BWALK*.ANI). Same +48/3 site as walk/stand — but +48 is
+                    // zeroed every frame by the carried bomb itself, so this is
+                    // a HELD frame, not a cycle: `walkbomb <dir>` step 0 for the
+                    // whole carry however far the carrier walks. (`standbomb
+                    // <dir>` is a 1-step sequence, so the idle case was already
+                    // right by accident.) carry_pose.hpp, body_phase_next.
                     a = pf.moving ? &q.walkbomb[body_colour][dir] : &q.standbomb[body_colour][dir];
-                    ph = walk_ph;
+                    ph = body_ph;
                     drop = &pf.carrying;
                     break;
                 case PlayerPose::Walk:
@@ -1028,7 +1065,10 @@ void Renderer::draw_world(const sim::State& s) {
             // The port used to run the arc for the whole carry with k saturated
             // at 3, leaving the bomb permanently 12 px too far forward — half a
             // tile off to the side whenever the carrier faced west/east.
-            // carry_ticks_ (sample_movement) is our +80 equivalent; the curve
+            // carry_ticks_ (sample_movement) is our +80 equivalent, and the -1
+            // in carry_arc_index is the WHOLE offset: the carried-bomb pass is
+            // the second of sub_42331C's two calls and runs AFTER the player
+            // pass, so it never reads a stale +80 (see carry_pose.hpp). The curve
             // columns are read live off VALUELST so a modified install's curve
             // changes the arc, falling back to the shipped values. dx/dy match
             // our Direction enum order (Up,Down,Left,Right — grid::dir_dx/dir_dy
