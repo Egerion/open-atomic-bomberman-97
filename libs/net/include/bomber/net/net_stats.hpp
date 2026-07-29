@@ -111,14 +111,35 @@ struct PeerStats {
     //   * in a >2-seat match, the wait for the SLOWEST other seat, since a
     //     peer's confirmed frontier is gated by every seat it awaits.
     // Read `rtt_min_ms` as the best estimate of the real path and `rtt_ms` /
-    // the sparkline as the thing that spikes. Getting a tight pairwise RTT would
-    // need a ping message, and that costs a wire version — see the file header.
+    // the sparkline as the thing that spikes — BUT ONLY WHEN `rtt_offset_bound`
+    // below is clear. Getting a tight pairwise RTT unconditionally would need a
+    // ping message, and that costs a wire version — see the file header.
     int rtt_ms = -1;         // most recent sample; -1 until one exists
     int rtt_smooth_ms = -1;  // EWMA (1/4 weight) — the steady reading
     int rtt_min_ms = -1;     // best sample this session: the tightest bound on the path
     int rtt_max_ms = -1;     // worst sample this session
     int rtt_recent_max_ms = -1;  // worst within the sparkline window: "is it spiking NOW"
     int jitter_ms = 0;           // EWMA of |sample - previous sample|
+
+    // EXACT, and the reading above is USELESS AS A PATH MEASUREMENT when this is
+    // set. MEASURED, not theorised: two peers over UDP loopback (a ~25 ms path)
+    // reported 33 ms and 333 ms respectively — because in rollback netcode the
+    // peers settle into a WALL-CLOCK PHASE OFFSET, bounded only by the prediction
+    // cap, and the peer that is AHEAD is measuring that offset rather than the
+    // wire. Writing out the ack sample as max(offset, one_way) + one_way makes it
+    // exact: while the offset exceeds the one-way delay the sample collapses onto
+    // the offset, which is also what `lag_ticks` measures — so the two numbers
+    // become the same number and neither says anything about the network. That
+    // gives the detector for free: a healthy reading is ~2x the lag, a
+    // contaminated one is ~1x (net_stats.cpp derives both).
+    //
+    // Hence this flag rather than a "corrected" figure. There is no correction:
+    // once the offset dominates, the one-way delay is genuinely not observable
+    // from this side without a message that carries a timestamp — and that costs
+    // a wire version. Saying "not measurable right now" is the honest output, and
+    // `lag_ticks` is the actionable number in that state anyway, since it is the
+    // lag (not the path) that drives the stalls the player feels.
+    bool rtt_offset_bound = false;
 
     // EXACT. Datagrams carrying this seat's input that we accepted, and those
     // whose content we already held. The duplicate count is EXPECTED to be large

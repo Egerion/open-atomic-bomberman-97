@@ -162,6 +162,72 @@ TEST_CASE("net stats: BOTH peers measure an ack-RTT that tracks the link's laten
     CHECK(from_b.rtt_recent_max_ms >= from_b.rtt_min_ms);
 }
 
+TEST_CASE("net stats: an ack-RTT dominated by the peer's tick offset says so") {
+    // MEASURED, not theorised. Two real peers over UDP loopback (a ~25 ms path)
+    // reported 33 ms and 333 ms: rollback netcode lets the peers settle into a
+    // wall-clock phase offset bounded only by the prediction cap, and the peer
+    // that is AHEAD is measuring that offset rather than the wire. A 349 ms
+    // reading on a LAN would send someone hunting a network fault that does not
+    // exist, so the flag is not a nicety — it is the difference between a
+    // diagnostic and a misleading one.
+    //
+    // Reproduced the way it happens for real: A gets a head start and then BOTH
+    // peers run at the same rate, so the lead persists as a constant phase
+    // offset (nothing in rollback pulls it back in below the prediction cap).
+    constexpr int kLead = 8;
+    net::LoopbackLink link(/*latency=*/1);
+    net::LoopbackTransport ta(link, 0);
+    net::LoopbackTransport tb(link, 1);
+    sim::Simulation sa(open_config());
+    sim::Simulation sb(open_config());
+    net::RollbackSession a(sa, kSeat0, kBoth, /*max_prediction=*/16, ta);
+    net::RollbackSession b(sb, kSeat1, kBoth, /*max_prediction=*/16, tb);
+    std::int64_t now = 0;
+    const auto pump_a = [&] { a.advance(seat_input(0, scripted(0, a.predicted_tick())), now); };
+    const auto pump_b = [&] { b.advance(seat_input(1, scripted(1, b.predicted_tick())), now); };
+    for (int i = 0; i < kLead; ++i) {
+        pump_a();
+        link.step();
+        now += kPumpMs;
+    }
+    for (int i = 0; i < 300; ++i) {
+        pump_a();
+        pump_b();
+        link.step();
+        now += kPumpMs;
+    }
+    const net::PeerStats& ahead = a.stats().peers[1];   // A leads: its reading is contaminated
+    const net::PeerStats& behind = b.stats().peers[0];  // B trails: its partner answers at once
+    REQUIRE(ahead.rtt_ms > 0);
+    REQUIRE(behind.rtt_ms > 0);
+    CHECK(ahead.lag_ticks >= kLead);
+    // The contaminated reading has collapsed onto the offset: it is ~1x the lag,
+    // where a healthy one would be ~2x (net_stats.cpp derives both).
+    CHECK(ahead.rtt_ms * 2 < ahead.lag_ticks * (1000 / net::kPumpHz) * 3);
+    CHECK(ahead.rtt_offset_bound);
+    // And it is many times what this one-pump link can actually cost, which is
+    // precisely why an unflagged reading would send someone hunting a fault.
+    CHECK(ahead.rtt_ms > 4 * static_cast<int>(kPumpMs));
+    // The peer that is BEHIND is not flagged: its partner is always ready to
+    // acknowledge, so its sample really is the round trip — and it reads it.
+    CHECK_FALSE(behind.rtt_offset_bound);
+    CHECK(behind.rtt_ms <= 4 * static_cast<int>(kPumpMs));
+
+    // It reaches the log too, so a line pasted back to us cannot be misread
+    // later either.
+    net::SessionSummary sum;
+    sum.stats = a.stats();
+    CHECK(net::format_session_log_line(sum).find("[OFFSET-BOUND,NOT-PATH]") != std::string::npos);
+}
+
+TEST_CASE("net stats: a level pair is NOT flagged offset-bound") {
+    // The flag has to be quiet in the ordinary case or it is noise.
+    Pair p(/*latency=*/2, /*max_prediction=*/16, /*with_clock=*/true);
+    p.pump_n(300);
+    CHECK_FALSE(p.a.stats().peers[1].rtt_offset_bound);
+    CHECK_FALSE(p.b.stats().peers[0].rtt_offset_bound);
+}
+
 TEST_CASE("net stats: a longer link reads as a longer RTT on both peers") {
     // The number has to MOVE with the thing it claims to measure — otherwise it
     // is a plausible-looking constant, which is worse than no number at all.
@@ -437,6 +503,9 @@ TEST_CASE("net stats: the end-of-session log line is one greppable record") {
           "depth_max=64 stalls=418 rollbacks=97 resim_ticks=612 rx=24880 bad=3 desync_tick=1201 "
           "| seat1 live=1 lag=63t lag_max=71t rtt=214/188/940(last/min/max)ms jitter=41ms "
           "rx=12440(18/s) dup=9412 loss~10%\n");
+    // No [OFFSET-BOUND] marker on a peer that is not one: the marker has to mean
+    // something when it does appear.
+    CHECK(line.find("OFFSET-BOUND") == std::string::npos);
 
     // Exactly one record: a newline at the end and nowhere else, so a grep for
     // "netdiag end=" returns whole lines however the note was written.

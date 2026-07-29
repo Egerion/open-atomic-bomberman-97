@@ -163,9 +163,14 @@ void draw_net_overlay(SDL_Renderer* ren, const FontTextures& font, const net::Ne
     // Count the rows first so the slab is exactly as tall as its contents: a
     // panel with dead space at the bottom reads as a panel with missing data.
     int peer_rows = 0;
-    for (const net::PeerStats& p : s.peers)
-        if (p.tracked) peer_rows += 2;
-    const float h = kPad * 2 + lh * static_cast<float>(6 + peer_rows) +
+    bool any_offset_bound = false;
+    for (const net::PeerStats& p : s.peers) {
+        if (!p.tracked) continue;
+        peer_rows += 2;
+        if (p.rtt_offset_bound) any_offset_bound = true;
+    }
+    const int footer_rows = any_offset_bound ? 1 : 0;
+    const float h = kPad * 2 + lh * static_cast<float>(6 + peer_rows + footer_rows) +
                     static_cast<float>(peer_rows / 2) * (kSparkH + 3.0f);
     const SDL_FRect panel{kMargin, kMargin, kPanelW, h};
     draw_slab(ren, panel);
@@ -230,19 +235,24 @@ void draw_net_overlay(SDL_Renderer* ren, const FontTextures& font, const net::Ne
         const Ink lag_ink = (s.max_prediction > 0 && p.lag_ticks >= s.max_prediction) ? kBad
                             : (p.lag_ticks > s.max_prediction / 2)                    ? kWarn
                                                                                       : kOk;
-        row(fmt("s%d LAG %dt  RTT %sms  J%d", i, p.lag_ticks, ms(p.rtt_smooth_ms).c_str(),
+        // The "*" is the whole honesty of this line: while the peer is running
+        // behind us, the ack-RTT is measuring that tick offset and not the wire,
+        // so it must not be read as a path latency (net_stats.hpp).
+        const char* star = p.rtt_offset_bound ? "*" : "";
+        row(fmt("s%d LAG %dt  RTT %sms%s  J%d", i, p.lag_ticks, ms(p.rtt_smooth_ms).c_str(), star,
                 p.jitter_ms),
             lag_ink);
         // The loss figure is an ESTIMATE and is marked "~" on screen for the same
         // reason it is documented as one: it cannot separate datagrams lost on
         // the path from the peer's own loop stalling. MIN is the tightest
         // reading of the real path — the ack-RTT is an upper bound.
-        row(fmt("   %d/s  ~%d%% LOSS  MIN %sms", p.recv_per_sec, p.loss_pct_est,
-                ms(p.rtt_min_ms).c_str()),
+        row(fmt("   %d/s  ~%d%% LOSS  MIN %sms%s", p.recv_per_sec, p.loss_pct_est,
+                ms(p.rtt_min_ms).c_str(), star),
             p.loss_pct_est >= 20 ? kBad : (p.loss_pct_est >= 5 ? kWarn : kOk));
         draw_spark(ren, p, x, y, kPanelW - kPad * 2);
         y += kSparkH + 3.0f;
     }
+    if (any_offset_bound) row("* RTT = TICK OFFSET, NOT PATH", kWarn);
 }
 
 std::string net_log_timestamp() {
@@ -299,8 +309,9 @@ AppInput present_net_session_end(ScreenContext ctx, const net::SessionSummary& s
     for (int i = 0; i < sim::kMaxPlayers; ++i) {
         const net::PeerStats& p = s.peers[static_cast<std::size_t>(i)];
         if (!p.tracked) continue;
-        rows.emplace_back(fmt("SEAT %d  LAG %dt (PEAK %dt)  RTT %d/%d/%d MS", i, p.lag_ticks,
-                              p.worst_lag_ticks, p.rtt_ms, p.rtt_min_ms, p.rtt_max_ms),
+        rows.emplace_back(fmt("SEAT %d  LAG %dt (PEAK %dt)  RTT %d/%d/%d MS%s", i, p.lag_ticks,
+                              p.worst_lag_ticks, p.rtt_ms, p.rtt_min_ms, p.rtt_max_ms,
+                              p.rtt_offset_bound ? " (TICK OFFSET, NOT PATH)" : ""),
                           p.live ? kOk : kWarn);
     }
     rows.emplace_back(std::string("WRITTEN TO netdiag.log NEXT TO THE GAME"), kOk);

@@ -226,6 +226,27 @@ void NetStatsTracker::end_pump(std::uint32_t tick, std::uint32_t confirmed,
         const std::uint32_t next = remote_next[si];
         p.lag_ticks = static_cast<int>(tick > next ? tick - next : 0);
         if (p.live) p.worst_lag_ticks = std::max(p.worst_lag_ticks, p.lag_ticks);
+        // Is the ack-RTT measuring the wire, or this peer's tick offset from us?
+        // The sample is max(offset, one_way) + one_way, so once the offset
+        // dominates it equals the offset — which `lag_ticks` also measures. One
+        // pump of slack, because the ack can only be answered on a pump boundary.
+        // A RATIO TEST, and it falls straight out of the two models rather than
+        // being a tuned threshold. Write the one-way delay as d and the peer's
+        // wall-clock lead over us as G, both in pumps:
+        //   * peers LEVEL (G = 0): our input for T reaches the peer d after we
+        //     sent it and it answers at once, so the sample is 2d — while the lag
+        //     is only the d it takes the peer's own input to reach us. rtt = 2*lag.
+        //   * peer BEHIND (G > d): the peer cannot answer until it reaches T, so
+        //     the sample is G+d — and the lag is G+d too, because its newest
+        //     input is exactly that far back. rtt = lag, and the reading has
+        //     stopped containing any information about the wire.
+        // So a healthy reading sits near 2x the lag and a contaminated one near
+        // 1x. Cutting at 1.5x separates them with a factor of two of margin on
+        // both sides. Judged on the LATEST sample, not the session minimum: an
+        // offset builds up over a match, and a good sample from before it did
+        // says nothing about what the numbers mean now.
+        const int lag_ms = p.lag_ticks * (1000 / kPumpHz);
+        p.rtt_offset_bound = p.rtt_ms >= 0 && p.lag_ticks >= 2 && p.rtt_ms * 2 < lag_ms * 3;
     }
 }
 
@@ -268,8 +289,8 @@ std::string format_session_log_line(const SessionSummary& s) {
         if (!p.tracked) continue;
         appendf(out, " | seat%d live=%d lag=%dt lag_max=%dt", i, p.live ? 1 : 0, p.lag_ticks,
                 p.worst_lag_ticks);
-        appendf(out, " rtt=%d/%d/%d(last/min/max)ms jitter=%dms", p.rtt_ms, p.rtt_min_ms,
-                p.rtt_max_ms, p.jitter_ms);
+        appendf(out, " rtt=%d/%d/%d(last/min/max)ms%s jitter=%dms", p.rtt_ms, p.rtt_min_ms,
+                p.rtt_max_ms, p.rtt_offset_bound ? "[OFFSET-BOUND,NOT-PATH]" : "", p.jitter_ms);
         appendf(out, " rx=%u(%d/s) dup=%u loss~%d%%", static_cast<unsigned>(p.input_packets),
                 p.recv_per_sec, static_cast<unsigned>(p.dup_inputs), p.loss_pct_est);
     }
