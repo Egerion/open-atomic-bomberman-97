@@ -637,6 +637,11 @@ bool GameApp::init_video(SDL_Renderer*& ren) {
     }
     window_.reset(win);
     sdl_renderer_.reset(ren);
+    // Which backend actually won the preference list above. Cheap, once, and the
+    // first thing worth knowing about any frame-rate report — the D3D11 and GL
+    // paths differ by ~15 fps and three orders of magnitude of frame jitter in
+    // uncapped windowed mode, so "it drops below 180" is unanswerable without it.
+    if (const char* name = SDL_GetRendererName(ren)) std::fprintf(stderr, "renderer: %s\n", name);
     // Window/taskbar icon from the install's own BM95.ICO (matches the native).
     if (SDL_Surface* icon = load_window_icon(opts_.game_dir / "BM95.ICO")) {
         SDL_SetWindowIcon(window_.get(), icon);
