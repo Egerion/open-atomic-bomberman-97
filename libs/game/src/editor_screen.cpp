@@ -52,8 +52,9 @@ void SchemeFilePicker::enter(const std::filesystem::path& schemes_dir, std::stri
     backdrop_ = std::move(backdrop);
     entries_.clear();
     names_.clear();
-    row_ = 0;
-    top_ = 0;
+    nav_ = ListDialogNav{};
+    item_w_ = 0.0f;
+    pressed_ = ListDialogWidget::None;
     done_ = false;
     cancelled_ = false;
     std::error_code ec;
@@ -88,6 +89,21 @@ void SchemeFilePicker::enter(const std::filesystem::path& schemes_dir, std::stri
         }
         names_.push_back(std::move(n));
     }
+    // sub_42FEF0 @0x42DC16 — the widest ITEM row alone drives the width.
+    // Cached so the mouse handlers hit-test exactly what draw() paints.
+    if (font_)
+        for (int i = 0; i < static_cast<int>(entries_.size()); ++i)
+            item_w_ = std::max(item_w_, static_cast<float>(font_->measure(row_text(i))));
+}
+
+std::string SchemeFilePicker::header() const {
+    return assets_ ? assets_->getstring(721, "Available Scheme Files:")
+                   : std::string("Available Scheme Files:");
+}
+
+ListDialogGeometry SchemeFilePicker::layout() const {
+    return list_dialog_layout_for(*font_, header(), 100.0f, 100.0f, item_w_, kVisibleRows,
+                                  static_cast<int>(entries_.size()), nav_.top_row);
 }
 
 void SchemeFilePicker::on_key(SDL_Keycode key, AudioEngine& audio) {
@@ -106,32 +122,63 @@ void SchemeFilePicker::on_key(SDL_Keycode key, AudioEngine& audio) {
     // widget it hands the glob to — sub_41485A -> sub_42DB80 -> sub_42DBCC —
     // has no play call anywhere in its 344-function closure. Navigating and
     // accepting a scheme make no sound at all.
-    int count = static_cast<int>(entries_.size());
-    switch (key) {
-        case SDLK_UP:
-        case SDLK_W:
-            row_ = (row_ + count - 1) % count;
-            break;
-        case SDLK_DOWN:
-        case SDLK_S:
-            row_ = (row_ + 1) % count;
-            break;
-        case SDLK_RETURN:
-        case SDLK_KP_ENTER:
-        case SDLK_SPACE:
+    const int count = static_cast<int>(entries_.size());
+    // W/S kept as the port's own alias (the original would route a letter to
+    // sub_42FEB0's type-ahead, which this picker does not implement).
+    const int code = (key == SDLK_W)   ? kListKeyUp
+                     : (key == SDLK_S) ? kListKeyDown
+                     : (key == SDLK_SPACE)
+                         ? kListKeyEnter
+                         : list_dialog_key_code(key);
+    switch (list_dialog_key(nav_, code, kVisibleRows, count)) {
+        case ListDialogAction::Activate:
             done_ = true;
             cancelled_ = false;
             break;
-        case SDLK_ESCAPE:
+        case ListDialogAction::Cancel:
             done_ = true;
             cancelled_ = true;
             break;
-        default: break;
+        case ListDialogAction::None:
+            break;
     }
-    // Keep the cursor inside the kVisibleRows scroll window (sub_42DBCC's
-    // list scrolls; our window follows the cursor).
-    if (row_ < top_) top_ = row_;
-    if (row_ >= top_ + kVisibleRows) top_ = row_ - kVisibleRows + 1;
+}
+
+void SchemeFilePicker::on_mouse_move(float x, float y, bool buttons_held) {
+    if (entries_.empty() || !font_ || !font_->loaded() || buttons_held) return;
+    list_dialog_mouse_move(nav_, list_dialog_hit_for(*font_, layout(), kVisibleRows, x, y),
+                           static_cast<int>(entries_.size()));
+}
+
+void SchemeFilePicker::on_mouse_down(float x, float y) {
+    if (entries_.empty() || !font_ || !font_->loaded()) return;
+    const ListDialogGeometry g = layout();
+    const ListDialogHit hit = list_dialog_hit_for(*font_, g, kVisibleRows, x, y);
+    pressed_ = hit.widget;
+    switch (list_dialog_mouse_down(nav_, g, hit, kVisibleRows,
+                                   static_cast<int>(entries_.size()), static_cast<int>(y))) {
+        case ListDialogAction::Activate:
+            done_ = true;
+            cancelled_ = false;
+            break;
+        case ListDialogAction::Cancel:
+            done_ = true;
+            cancelled_ = true;
+            break;
+        case ListDialogAction::None:
+            break;
+    }
+}
+
+void SchemeFilePicker::on_mouse_up(float x, float y) {
+    if (entries_.empty() || !font_ || !font_->loaded()) return;
+    const ListDialogHit hit = list_dialog_hit_for(*font_, layout(), kVisibleRows, x, y);
+    const ListDialogWidget was = pressed_;
+    pressed_ = ListDialogWidget::None;
+    if (list_dialog_mouse_up(hit, was) == ListDialogAction::Cancel) {
+        done_ = true;
+        cancelled_ = true;
+    }
 }
 
 void SchemeFilePicker::draw(SDL_Renderer* ren) const {
@@ -167,25 +214,21 @@ void SchemeFilePicker::draw(SDL_Renderer* ren) const {
     // centred, and not bare text on the backdrop: draw_list_dialog carries the
     // whole pinned chrome (grey panel, bevels, title strip, scrollbar, "Done"
     // button) — see list_dialog_geometry.hpp.
-    const std::string header = assets_ ? assets_->getstring(721, "Available Scheme Files:")
-                                       : std::string("Available Scheme Files:");
     const int count = static_cast<int>(entries_.size());
-    const int last = std::min(count, top_ + kVisibleRows);
+    const int last = std::min(count, nav_.top_row + kVisibleRows);
 
-    // sub_42FEF0 @0x42DC16: the widest ITEM row drives the width. The title is
-    // folded in by the widget itself, so it must NOT be pre-maxed here.
-    float item_w = 0.0f;
-    for (int i = 0; i < count; ++i)
-        item_w = std::max(item_w, static_cast<float>(font_->measure(row_text(i))));
-
-    const ListDialogLayout lay =
-        draw_list_dialog(ren, *font_, header, 100.0f, 100.0f, item_w, kVisibleRows, count, top_);
-    for (int i = top_; i < last; ++i) {
-        const int vi = i - top_;
+    // sub_42FEF0 @0x42DC16: the widest ITEM row drives the width (measured at
+    // enter()). The title is folded in by the widget itself, so it must NOT be
+    // pre-maxed here.
+    const ListDialogLayout lay = draw_list_dialog(ren, *font_, header(), 100.0f, 100.0f, item_w_,
+                                                  kVisibleRows, count, nav_.top_row);
+    for (int i = nav_.top_row; i < last; ++i) {
+        const int vi = i - nav_.top_row;
         const float ty = lay.item_y0 + static_cast<float>(vi) * lay.item_h;
         // The selected row is LIGHTENED under unchanged text (sub_442C28), not
-        // inverted — so the ink is the same for every row.
-        if (i == row_) draw_list_selection(ren, lay, vi);
+        // inverted — so the ink is the same for every row. The band follows
+        // the highlight OFFSET (@0x42E656), not an absolute index.
+        if (vi == nav_.highlight) draw_list_selection(ren, lay, vi);
         font_->draw(ren, row_text(i), lay.item_x, ty, kInkR, kInkG, kInkB);
     }
 }

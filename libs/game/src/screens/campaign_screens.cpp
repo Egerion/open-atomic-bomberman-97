@@ -33,6 +33,7 @@ AppInput HelpBrowserModal::run() {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
+            if (dispatch_list_mouse(ctx_.sdl, ev, browser)) continue;
             if (ev.type != SDL_EVENT_KEY_DOWN) continue;
             browser.on_key(ev.key.key, ctx_.audio);
         }
@@ -60,6 +61,7 @@ void CampaignPickerScreen::run() {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_EVENT_QUIT) return;
+            if (dispatch_list_mouse(ctx_.sdl, ev, picker)) continue;
             if (ev.type != SDL_EVENT_KEY_DOWN) continue;
             picker.on_key(ev.key.key, ctx_.audio);
         }
