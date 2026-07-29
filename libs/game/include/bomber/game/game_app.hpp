@@ -842,6 +842,15 @@ private:
     // F7 — draw the FPS / cadence indicator (next to the match clock). Default
     // ON while this is a live A/B feature; will be driven by a persisted setting.
     bool show_fps_ = true;
+    // F3 — the in-match NETPLAY diagnostic panel (screens/net_overlay.hpp).
+    //
+    // OFF by default and DELIBERATELY NOT PERSISTED: it is never read from or
+    // written to options.ini, so there is no path by which a saved value could
+    // reach a capture run — strictly stronger than the capture-time pin
+    // uncap_fps_/native_cadence_/show_fps_ need in load_config(), and the reason
+    // capture_run() says nothing about it. MatchRunner additionally refuses to
+    // draw the panel without a live netplay session, which a capture never has.
+    bool show_netstats_ = false;
 
     std::optional<sdl::VideoSubsystem> video_;
     sdl::WindowPtr window_;

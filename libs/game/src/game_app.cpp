@@ -32,6 +32,7 @@
 #include "bomber/game/screens/match_runner.hpp"
 #include "bomber/game/screens/menu_screen.hpp"
 #include "bomber/game/screens/lobby_screen.hpp"
+#include "bomber/game/screens/net_overlay.hpp"  // F3 panel + the netdiag.log record
 #include "bomber/game/screens/net_setup_link.hpp"
 #include "bomber/game/screens/netplay_connect_screen.hpp"
 #include "bomber/game/screens/options_screens.hpp"
@@ -1253,6 +1254,51 @@ constexpr std::uint64_t kAbandonSettleMs = 600;
 // been played, a straggler from round 0 is many hours dead.
 constexpr int kNetRoundBaseWrap = 1024;
 
+// THE EVIDENCE A DEAD SESSION LEAVES BEHIND.
+//
+// "It suddenly cut out" was unanswerable because by the time the player has
+// alt-tabbed to say so, the window and everything on it are gone. So the reason
+// and the last numbers are written to netdiag.log next to the executable — and
+// written from a DESTRUCTOR, not from each of run_netplay_match_seats' several
+// exits, because the one path guaranteed to matter is the one nobody remembered
+// to instrument. A session that dies leaves a record however it died.
+//
+// The reason itself is latched as the match runs. Unknown means the function
+// left by a path that had no opinion, which is itself worth seeing in the log
+// rather than being papered over with a plausible guess.
+class NetSessionRecorder {
+public:
+    NetSessionRecorder(std::uint16_t local_seats, std::uint16_t all_seats, bool is_host) {
+        summary_.timestamp = net_log_timestamp();
+        summary_.local_seats = local_seats;
+        summary_.all_seats = all_seats;
+        summary_.is_host = is_host;
+    }
+    NetSessionRecorder(const NetSessionRecorder&) = delete;
+    NetSessionRecorder& operator=(const NetSessionRecorder&) = delete;
+    NetSessionRecorder(NetSessionRecorder&&) = delete;
+    NetSessionRecorder& operator=(NetSessionRecorder&&) = delete;
+    ~NetSessionRecorder() {
+        // Stamped at the END, so the line carries when the session died rather
+        // than when it started — which is the question being asked of it.
+        summary_.timestamp = net_log_timestamp();
+        append_net_session_log(summary_);
+    }
+
+    // One session per ROUND, so the newest snapshot is the one that was live
+    // when whatever happened happened.
+    void snapshot(const net::RollbackSession& s, int round) {
+        summary_.stats = s.stats();
+        summary_.round = round;
+    }
+    void latch(net::SessionEndReason r) { summary_.reason = r; }
+    void note(std::string n) { summary_.note = std::move(n); }
+    const net::SessionSummary& summary() const { return summary_; }
+
+private:
+    net::SessionSummary summary_;
+};
+
 }  // namespace
 
 AppInput GameApp::run_netplay_match_seats(net::Transport& transport, std::uint16_t local_seats,
@@ -1308,6 +1354,11 @@ AppInput GameApp::run_netplay_match_seats(net::Transport& transport, std::uint16
     // that keeps the transport alive across matches.
     const int base_round = round_base != nullptr ? *round_base : 0;
     if (rematch != nullptr) *rematch = false;
+
+    // Diagnostics (screens/net_overlay.hpp): whatever happens below — including
+    // the window closing mid-round — this object writes one netdiag.log line on
+    // the way out with the reason and the session's last numbers.
+    NetSessionRecorder recorder(local_seats, all_seats, is_host);
 
     AppInput result = AppInput::Advance;
     for (int round = 0;; ++round) {
@@ -1429,11 +1480,19 @@ AppInput GameApp::run_netplay_match_seats(net::Transport& transport, std::uint16
         mrs.net_session = &session;
         mrs.net_local_seats = local_seats;
         result = MatchRunner(sctx(), mrs).run();
+        // Whatever this round ended as, the log line should carry ITS numbers.
+        recorder.snapshot(session, round);
 
         if (session.desynced()) {
             std::fprintf(stderr,
                          "netplay: DESYNC at tick %u — peers diverged (config/seed mismatch?)\n",
                          session.desync_tick());
+            recorder.latch(net::SessionEndReason::Desync);
+            // ON SCREEN as well as in the log: this used to be a stderr line on a
+            // GUI build nobody sees, so from the player's side the match simply
+            // stopped for no stated reason.
+            if (present_net_session_end(sctx(), recorder.summary()) == AppInput::Quit)
+                result = AppInput::Quit;
             break;
         }
         if (session.aborted()) {
@@ -1442,9 +1501,19 @@ AppInput GameApp::run_netplay_match_seats(net::Transport& transport, std::uint16
             std::fprintf(stderr,
                          "netplay: a player dropped; match ended (turn on \"Lost net players "
                          "revert to AIs\" to play on)\n");
+            recorder.latch(net::SessionEndReason::PeerDropped);
+            recorder.note("silence past the 600-pump timeout with Options row 12 off");
+            if (present_net_session_end(sctx(), recorder.summary()) == AppInput::Quit)
+                result = AppInput::Quit;
             break;
         }
-        if (result != AppInput::MatchOver) break;  // window closed
+        if (result != AppInput::MatchOver) {
+            // The window closed under the match. No modal — there is nothing left
+            // to show it on — but the log line is exactly why this case is worth
+            // latching: it is the one the player cannot report themselves.
+            recorder.latch(net::SessionEndReason::WindowClosed);
+            break;
+        }
         // AN ABANDONED ROUND (somebody pressed Esc). The decision was the HOST's
         // and it travelled as MatchCtlKind::EndRound, so both peers stopped at
         // the same tick and both take this branch — it is not a local reading of
@@ -1469,11 +1538,18 @@ AppInput GameApp::run_netplay_match_seats(net::Transport& transport, std::uint16
                 while (SDL_PollEvent(&sev))
                     if (sev.type == SDL_EVENT_QUIT) {
                         team_play_ = saved_team_play;
+                        recorder.latch(net::SessionEndReason::WindowClosed);
                         return AppInput::Quit;
                     }
-                session.advance(sim::TickInputs{});
+                session.advance(sim::TickInputs{}, static_cast<std::int64_t>(SDL_GetTicks()));
                 SDL_Delay(2);
             }
+            recorder.snapshot(session, round);  // the catch-up pump moved the numbers
+            // Latched, not final: the match usually carries on into another
+            // round, and any later exit overwrites this. It matters for the case
+            // where it does NOT — an Esc at the DRAW or scoreboard right after —
+            // so the log says "somebody abandoned" rather than a bare "left".
+            recorder.latch(net::SessionEndReason::RoundAbandoned);
             std::printf("netplay: round %d abandoned at tick %u — draw\n", round,
                         static_cast<unsigned>(session.end_round_tick()));
         }
@@ -1486,6 +1562,8 @@ AppInput GameApp::run_netplay_match_seats(net::Transport& transport, std::uint16
         if (!abandoned && sim::sides_remaining(sim_.state()) > 1 &&
             sim_.state().ticks_left > 0) {
             result = AppInput::Advance;  // forfeited to the menu
+            recorder.latch(net::SessionEndReason::LeftSession);
+            recorder.note("Ctrl+Q forfeit");
             break;
         }
 
@@ -1538,6 +1616,7 @@ AppInput GameApp::run_netplay_match_seats(net::Transport& transport, std::uint16
             if (rematch != nullptr && result == AppInput::Advance && gate.ready())
                 *rematch = true;
             result = AppInput::Advance;
+            recorder.latch(net::SessionEndReason::MatchCompleted);
             break;
         }
 
@@ -1570,6 +1649,8 @@ AppInput GameApp::run_netplay_match_seats(net::Transport& transport, std::uint16
             ds.dwell_ms = 0;  // a human is playing by definition online: wait for Enter
             result = present_asset_screen(sctx(), ds);
             if (result != AppInput::Advance) {
+                recorder.latch(result == AppInput::Quit ? net::SessionEndReason::WindowClosed
+                                                        : net::SessionEndReason::LeftSession);
                 if (result != AppInput::Quit) result = AppInput::Advance;  // Esc: abandon
                 break;
             }
@@ -1577,12 +1658,26 @@ AppInput GameApp::run_netplay_match_seats(net::Transport& transport, std::uint16
         ScoreboardState sbs = scoreboard_state();
         sbs.net_gate = &gate;
         result = ScoreboardScreen(sctx(), sbs).run();
-        if (result == AppInput::Quit) break;
+        if (result == AppInput::Quit) {
+            recorder.latch(net::SessionEndReason::WindowClosed);
+            break;
+        }
         if (!gate.ready()) {
             // Escape (either peer abandoning the match) or the link died under
             // the screen — either way there is no agreed next round.
-            if (gate.failed())
+            if (gate.failed()) {
                 std::fprintf(stderr, "netplay: lost the peer between rounds; match ended\n");
+                recorder.latch(net::SessionEndReason::PeerLostBetweenRounds);
+                // The screen the player was looking at gave no hint of this: the
+                // scoreboard simply stopped accepting Enter. Say it out loud.
+                if (present_net_session_end(sctx(), recorder.summary()) == AppInput::Quit) {
+                    team_play_ = saved_team_play;
+                    return AppInput::Quit;
+                }
+            } else {
+                recorder.latch(net::SessionEndReason::LeftSession);
+                recorder.note("left at the between-rounds scoreboard");
+            }
             result = AppInput::Advance;
             break;
         }
@@ -2259,6 +2354,7 @@ MatchRunnerState GameApp::match_runner_state() {
                             .uncap_fps = uncap_fps_,
                             .native_cadence = native_cadence_,
                             .show_fps = show_fps_,
+                            .show_netstats = show_netstats_,
                             .scheme = scheme_,
                             .base_tuning = base_tuning_,
                             .options = options_,
@@ -2888,6 +2984,16 @@ bool GameApp::handle_global_event(const SDL_Event& ev) {
         std::fprintf(stderr, "framerate: %s\n", uncap_fps_ ? "uncapped (~180 fps, native feel)"
                                                            : "vsync (60 fps, smooth)");
         return false;  // presentation shortcut; never leak F8 into a screen
+    }
+    if (ev.key.key == kNetOverlayToggleKey) {
+        // F3 — the in-match netplay diagnostic panel (screens/net_overlay.hpp
+        // carries the key survey). Handled here with the other overlay levers so
+        // it works whatever screen is up and never leaks into one; MatchRunner
+        // only draws it when a netplay session is actually running, so pressing
+        // it in a local match is a harmless no-op rather than an empty panel.
+        show_netstats_ = !show_netstats_;
+        std::fprintf(stderr, "netplay overlay: %s\n", show_netstats_ ? "on" : "off");
+        return false;  // presentation shortcut; never leak F3 into a screen
     }
     if (ev.key.key == SDLK_F7) {
         show_fps_ = !show_fps_;
