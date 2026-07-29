@@ -447,11 +447,13 @@ void HelpBrowser::on_key(SDL_Keycode key, AudioEngine& audio) {
     // sub_414340 error box above, and that is a modal, not the list. The port
     // invented every cue that used to be in this switch.
     const int count = static_cast<int>(entries_.size());
-    const int code = list_dialog_key_code(key);
+    // Arrow-only: sub_42DBCC binds 0x0d/0x1b plus the 0x147..0x151 jump table
+    // @0x42DBA0 and nothing else, so there is no W/S alias. Space is kept as
+    // the port's own accept alias — in the original it is a printable
+    // character and would fall into the type-ahead default, which cannot
+    // match it, so it is inert there rather than bound to something else.
+    const int code = (key == SDLK_SPACE) ? kListKeyEnter : list_dialog_key_code(key);
     if (code != 0) {
-        // Arrow-only, and no Space: sub_42DBCC binds 0x0d/0x1b plus the
-        // 0x147..0x151 jump table @0x42DBA0 and nothing else. Space is a
-        // printable character and falls into the type-ahead default below.
         switch (list_dialog_key(nav_, code, kVisibleRows, count)) {
             case ListDialogAction::Activate: open_selected(); break;
             case ListDialogAction::Cancel: done_ = true; break;
