@@ -204,8 +204,19 @@ void BombSystem::throw_carried(Player& p, int who) {
     nb.created_tick = s_.tick;  // a freshly-launched bomb is stamped this tick
     nb.owner = p.carried_owner;
     nb.colour = p.carried_colour;
-    nb.x = grid::tile_center_x(p.tile_x());
-    nb.y = grid::tile_center_y(p.tile_y());
+    // The bomb leaves from where the CARRIER IS STANDING, not from the tile
+    // centre: sub_41F29B's +37 release block writes `bomb[+28] = player[+28]`
+    // and `bomb[+32] = player[+32]` immediately before sub_424987 (pseudo.c
+    // 23290-23291). That is also where the carried bomb was already being
+    // drawn, so the release is continuous; seeding the tile centre instead made
+    // a bomb thrown mid-stride jump up to half a tile sideways on the release
+    // frame. The landing tile is unaffected — |offset| < tile/2, so the flight's
+    // 3-tile target still resolves to the same tile — and `launch` takes
+    // fly_total from the tile count rather than the actual span, so only the
+    // start point and the per-tick interpolation move. docs/re/facts.md "The
+    // carry FREEZES the carrier's body, and the RELEASE is the throw animation".
+    nb.x = p.x;
+    nb.y = p.y;
     // Fresh full fuse on release (sub_41F29B's bomb-action tail zeroes the
     // elapsed-fuse dword at +68 right before the launch): a thrown bomb always
     // lands with its complete creation-time duration ahead of it, not the
