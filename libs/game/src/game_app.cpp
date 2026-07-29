@@ -594,6 +594,39 @@ bool GameApp::init_video(SDL_Renderer*& ren) {
     // LETTERBOX mode kept 4:3 with black bars — the reported mismatch. Any
     // fullscreen toggle (Alt+Enter/F11, sdl_event_filter below) just resizes
     // the OS window/output — it never touches kScreenW/kScreenH or the sim.
+#ifdef SDL_PLATFORM_WINDOWS
+    // Renderer backend preference — a PACING fix, not a fidelity one, and the
+    // single biggest lever on F8's uncapped mode (measured 2026-07-29, this
+    // machine, 1280x960 windowed, 60 Hz panel, 2-player match, 5 runs each):
+    //
+    //                     achieved fps                 adjacent-frame jitter
+    //   direct3d11   155.5 164.5 177.0 168.2 156.6     0.63-1.31 ms
+    //   opengl       179.7 180.0 180.0 180.0 180.0     0.001-0.023 ms
+    //
+    // The cause is not our drawing, which costs a flat 0.11 ms of the 5.556 ms
+    // sub-frame budget in every configuration measured (window size, roster
+    // size and audio all change it by less than the run-to-run noise). It is
+    // SDL_RenderPresent blocking: SDL's D3D11 backend calls
+    // SetMaximumFrameLatency(dxgiDevice, 1) (SDL_render_d3d11.c), so with vsync
+    // off in a DWM-composited window each present has to wait for the previous
+    // flip the compositor is still holding at its own 60 Hz. Present then
+    // wanders between 0.9 ms and 5.8 ms over seconds — a single 6 s sample went
+    // 182, 180, 132, 100, 142, 180, 180, 152, 120 fps per half-second with the
+    // CPU work dead flat throughout, which is exactly the "hits 180, drops to
+    // ~140, recovers" the drop was reported as. The GL backend does not take
+    // that per-frame latency wait and holds 180.0 flat.
+    //
+    // Fullscreen bypasses the compositor and is fine on BOTH backends (178.2
+    // d3d11 / 176.4 opengl), and the vsync path is exactly 60.0 on both — so
+    // this only ever moves the windowed uncapped case, which is the broken one.
+    // Comma-separated: SDL walks the list and falls back on creation failure,
+    // so a machine with no usable GL still gets D3D11. An explicitly-set
+    // SDL_RENDER_DRIVER always wins, for A/B and for anyone the GL path fails.
+    // tests/visual's pins are byte-identical under both backends (verified by
+    // running visual_golden under each), so this does not touch the goldens.
+    if (!SDL_getenv("SDL_RENDER_DRIVER"))
+        SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl,direct3d11,direct3d12,software");
+#endif
     SDL_Window* win = nullptr;
     ren = nullptr;
     // Window title matches the original (sub_41095A -> sub_43E5CC(aAtomicBomberma)).
@@ -604,6 +637,11 @@ bool GameApp::init_video(SDL_Renderer*& ren) {
     }
     window_.reset(win);
     sdl_renderer_.reset(ren);
+    // Which backend actually won the preference list above. Cheap, once, and the
+    // first thing worth knowing about any frame-rate report — the D3D11 and GL
+    // paths differ by ~15 fps and three orders of magnitude of frame jitter in
+    // uncapped windowed mode, so "it drops below 180" is unanswerable without it.
+    if (const char* name = SDL_GetRendererName(ren)) std::fprintf(stderr, "renderer: %s\n", name);
     // Window/taskbar icon from the install's own BM95.ICO (matches the native).
     if (SDL_Surface* icon = load_window_icon(opts_.game_dir / "BM95.ICO")) {
         SDL_SetWindowIcon(window_.get(), icon);

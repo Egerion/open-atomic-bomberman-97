@@ -44,6 +44,19 @@ namespace bomber::platform {
 // frame's CPU work: same rig measured 0.11 ms of work before the present and
 // 0.3 ms (p50) / 4-10 ms (p90) / 11-18 ms (p99) inside it, the swapchain
 // blocking as it backs up against the 60 Hz display.
+//
+// AMENDED 2026-07-29 — that present cost is a property of the D3D11 BACKEND in
+// a composited window, not of this rule, and the table above was measured under
+// it. SDL's D3D11 renderer pins SetMaximumFrameLatency(1), so an uncapped
+// windowed present waits on the flip DWM is still holding at 60 Hz; the GL
+// backend does not, and game_app.cpp's init_video now prefers it on Windows for
+// exactly that reason. With GL the same rig holds 180.0 fps at 0.002 ms
+// adjacent-frame jitter and the two rules become indistinguishable (lattice
+// 180.0/0.002 ms, resync 179.7/0.156 ms) — the lattice is kept because it is
+// still the better of the two and because its no-duplicate-sub-frame argument
+// stands on its own. Re-measured across window sizes, roster size, audio on/off
+// and fullscreen, the frame's own CPU work never left 0.11-0.23 ms, so nothing
+// in this header should be read as a claim about how expensive OUR drawing is.
 class FramePacer {
 public:
     // What the caller should do before its next present.
