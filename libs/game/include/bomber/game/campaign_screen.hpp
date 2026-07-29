@@ -61,7 +61,8 @@ public:
     bool cancelled() const { return cancelled_; }
     // The selected file's full path — only valid when done() && !cancelled().
     const std::filesystem::path& selected() const {
-        return entries_[static_cast<std::size_t>(nav_.top_row + nav_.highlight)];
+        const int sel = nav_.top_row + nav_.highlight;  // @0x42E39A
+        return entries_[static_cast<std::size_t>(sel)];
     }
     bool empty() const { return entries_.empty(); }
 

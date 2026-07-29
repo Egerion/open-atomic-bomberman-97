@@ -37,6 +37,8 @@
 // colormode-256 base coat -- dword_45C46C -> (88, 84, 80). The grey popup, not
 // the blue one.
 
+#include <cstdint>  // the input model's enum bases
+
 namespace bomber::game {
 
 // sub_42DBCC's own visible-row count. @0x42DC44 it seeds TWO separate
@@ -317,7 +319,7 @@ inline constexpr int kListKeyEnd = 0x14f;
 inline constexpr int kListKeyDown = 0x150;
 inline constexpr int kListKeyPageDown = 0x151;
 
-enum class ListDialogWidget { None, Row, ScrollUp, ScrollDown, Track, Done };
+enum class ListDialogWidget : std::uint8_t { None, Row, ScrollUp, ScrollDown, Track, Done };
 
 struct ListDialogHit {
     ListDialogWidget widget = ListDialogWidget::None;
@@ -335,7 +337,7 @@ struct ListDialogNav {
     int highlight = 0;
 };
 
-enum class ListDialogAction {
+enum class ListDialogAction : std::uint8_t {
     None,
     Activate,  // Enter, or a left press on a row: the sub_42DBCC exit @0x42E395
     Cancel     // Esc, or "Done": the exit @0x42E91C, which returns -1
