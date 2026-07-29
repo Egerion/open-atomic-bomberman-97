@@ -3,11 +3,16 @@
 #include <algorithm>
 #include <cctype>
 
+#include "bomber/game/dialog_chrome.hpp"  // the shared sub_42DBCC list chrome
+
 namespace bomber::game {
 
 namespace {
+// The general white ink every row of this widget is drawn in — the selected
+// one included, because sub_442C28 lightens the band UNDER the text rather
+// than inverting it (dialog_chrome.hpp). The old kSel*/"> " marker pair went
+// with the bare-text stand-in this screen used to draw.
 constexpr Uint8 kInkR = 255, kInkG = 255, kInkB = 255;
-constexpr Uint8 kSelR = 255, kSelG = 220, kSelB = 80;
 constexpr Uint8 kHintR = 160, kHintG = 160, kHintB = 160;
 }  // namespace
 
@@ -86,7 +91,6 @@ void CampaignFilePicker::draw(SDL_Renderer* ren) const {
     // docs/re/campaign.md §3) in the general white ink.
     const std::string header =
         assets_ ? assets_->getstring(1250, "Select a campaign:") : std::string("Select a campaign:");
-    font_->draw(ren, header, 100.0f, 100.0f, kInkR, kInkG, kInkB);
     if (entries_.empty()) {
         // sub_4015C6's empty-glob path: getstring(1215)/getstring(97) error
         // dialog (docs/re/campaign.md §3's "shows an error dialog instead").
@@ -96,17 +100,33 @@ void CampaignFilePicker::draw(SDL_Renderer* ren) const {
                     kHintG, kHintB);
         return;
     }
-    int count = static_cast<int>(entries_.size());
-    int last = std::min(count, top_ + kVisibleRows);
+    // sub_4015C6 hands its glob to the SAME sub_41485A -> sub_42DB80 ->
+    // sub_42DBCC widget the *.SCH picker and the help browser use, so it gets
+    // the same chrome at the same literal (100, 100): grey panel, title strip,
+    // bevelled item frame, scrollbar and "Done" button. This screen used to
+    // draw bare "> name" text on the backdrop with no panel and no scrollbar —
+    // a port stand-in, and the reason a scrolled campaign list showed no
+    // position at all. Laid out exactly like SchemeFilePicker::draw.
+    const int count = static_cast<int>(entries_.size());
+    const int last = std::min(count, top_ + kVisibleRows);
+
+    // sub_42FEF0 @0x42DC16: the widest ITEM drives the width; the widget folds
+    // the title in itself, so it must NOT be pre-maxed here.
+    float item_w = 0.0f;
+    for (const auto& e : entries_)
+        item_w = std::max(item_w, static_cast<float>(font_->measure(e.filename().string())));
+
+    const ListDialogLayout lay =
+        draw_list_dialog(ren, *font_, header, 100.0f, 100.0f, item_w, kVisibleRows, count, top_);
     for (int i = top_; i < last; ++i) {
-        bool sel = (i == row_);
-        Uint8 r = sel ? kSelR : kInkR, g = sel ? kSelG : kInkG, b = sel ? kSelB : kInkB;
-        std::string line =
-            (sel ? "> " : "  ") + entries_[static_cast<std::size_t>(i)].filename().string();
-        font_->draw(ren, line, 100.0f, 124.0f + static_cast<float>(i - top_) * 20.0f, r, g, b);
+        const int vi = i - top_;
+        const float ty = lay.item_y0 + static_cast<float>(vi) * lay.item_h;
+        // sub_442C28 LIGHTENS the selected row instead of inverting it, so
+        // every row keeps the same ink and the "> " marker is not needed.
+        if (i == row_) draw_list_selection(ren, lay, vi);
+        font_->draw(ren, entries_[static_cast<std::size_t>(i)].filename().string(), lay.item_x, ty,
+                    kInkR, kInkG, kInkB);
     }
-    font_->draw(ren, "UP/DOWN SELECT   ENTER OPEN   ESC CANCEL", 100.0f,
-                124.0f + static_cast<float>(kVisibleRows) * 20.0f + 8.0f, kHintR, kHintG, kHintB);
 }
 
 }  // namespace bomber::game

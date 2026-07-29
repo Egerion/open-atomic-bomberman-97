@@ -57,8 +57,10 @@ public:
 
     // CORRECTED 2026-07-26: sub_42DBCC shows TEN rows, not thirteen — 13 is
     // only the window's font-height multiplier (list_dialog_geometry.hpp).
-    // NOTE: unlike SchemeFilePicker, this screen still draws bare text rather
-    // than routing through draw_list_dialog's chrome — a separate fix.
+    // The old "still draws bare text rather than routing through
+    // draw_list_dialog's chrome" note is retired: it does now, so a scrolled
+    // campaign list shows its position on the same scrollbar the *.SCH picker
+    // and the help browser draw.
     static constexpr int kVisibleRows = kListDialogRows;
 
 private:
