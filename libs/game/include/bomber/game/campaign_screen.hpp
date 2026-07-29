@@ -44,15 +44,25 @@ public:
     // resets the list cursor.
     void enter(const std::filesystem::path& install_root, std::string backdrop);
 
-    // Up/Down move the cursor; Enter selects (done()==true, cancelled()==
-    // false); Esc cancels (done()==true, cancelled()==true).
+    // Up/Down/Home/End/PageUp/PageDown navigate exactly as sub_42DBCC's own
+    // handlers do (list_dialog_geometry.hpp's input model); Enter selects
+    // (done()==true, cancelled()==false); Esc cancels (done()==true,
+    // cancelled()==true).
     void on_key(SDL_Keycode key, AudioEngine& audio);
+
+    // The widget's MOUSE half, in logical (640x480) coordinates.
+    void on_mouse_move(float x, float y, bool buttons_held);
+    void on_mouse_down(float x, float y);
+    void on_mouse_up(float x, float y);
+
     void draw(SDL_Renderer* ren) const;
 
     bool done() const { return done_; }
     bool cancelled() const { return cancelled_; }
     // The selected file's full path — only valid when done() && !cancelled().
-    const std::filesystem::path& selected() const { return entries_[static_cast<std::size_t>(row_)]; }
+    const std::filesystem::path& selected() const {
+        return entries_[static_cast<std::size_t>(nav_.top_row + nav_.highlight)];
+    }
     bool empty() const { return entries_.empty(); }
 
     // CORRECTED 2026-07-26: sub_42DBCC shows TEN rows, not thirteen — 13 is
@@ -64,12 +74,17 @@ public:
     static constexpr int kVisibleRows = kListDialogRows;
 
 private:
+    std::string header() const;
+    ListDialogGeometry layout() const;
+
     const AssetStore* assets_ = nullptr;
     const FontTextures* font_ = nullptr;
     std::string backdrop_;
     std::vector<std::filesystem::path> entries_;
-    int row_ = 0;
-    int top_ = 0;
+    // sub_42DBCC's own two registers; their sum is the selection.
+    ListDialogNav nav_;
+    float item_w_ = 0.0f;  // sub_42FEF0's max over the item text, cached at enter()
+    ListDialogWidget pressed_ = ListDialogWidget::None;
     bool done_ = false;
     bool cancelled_ = false;
 };

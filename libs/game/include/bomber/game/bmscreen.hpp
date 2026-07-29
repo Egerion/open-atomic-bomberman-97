@@ -159,6 +159,18 @@ public:
     // the caller should check viewing() and dispatch there, mirroring
     // present_options_screen's own F1 sub-loop pattern.
     void on_key(SDL_Keycode key, AudioEngine& audio);
+
+    // sub_42DBCC is MOUSE-FIRST (list_dialog_geometry.hpp's "INPUT MODEL"):
+    // the highlight FOLLOWS the pointer over the item rows, a left press on a
+    // row opens it, the scrollbar's arrows and track are live, and "Done"
+    // cancels on RELEASE. Coordinates are the 640x480 logical space, i.e.
+    // already through SDL_RenderCoordinatesFromWindow. `buttons_held` is the
+    // motion event's own button mask — the original only re-homes the
+    // highlight while no button is down (@0x4330A0).
+    void on_mouse_move(float x, float y, bool buttons_held);
+    void on_mouse_down(float x, float y);
+    void on_mouse_up(float x, float y);
+
     void draw(SDL_Renderer* ren) const;
 
     // True once a `.BM` viewer is open on top of the list (route on_key/
@@ -186,12 +198,22 @@ public:
     static constexpr int kVisibleRows = kListDialogRows;
 
 private:
+    // getstring(600), and the widest item — the two inputs the layout needs.
+    // Split out so the mouse handlers can hit-test the SAME geometry draw()
+    // paints without re-measuring every item on every motion event.
+    std::string header() const;
+    ListDialogGeometry layout() const;
+    void open_selected();
+
     const AssetStore* assets_ = nullptr;
     const FontTextures* font_ = nullptr;
     BmScreen bm_;
     std::vector<std::filesystem::path> entries_;
-    int row_ = 0;
-    int top_ = 0;
+    // sub_42DBCC's own two registers — see ListDialogNav. `top_row +
+    // highlight` is the selected entry.
+    ListDialogNav nav_;
+    float item_w_ = 0.0f;  // sub_42FEF0's max over the item text, cached at enter()
+    ListDialogWidget pressed_ = ListDialogWidget::None;
     bool viewing_ = false;
     bool done_ = false;
     bool disabled_ = false;

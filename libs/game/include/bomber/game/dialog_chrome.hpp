@@ -32,6 +32,7 @@
 #include <vector>
 
 #include "bomber/game/bmscreen.hpp"
+#include "bomber/game/list_dialog_geometry.hpp"  // sub_42DBCC's geometry + input model
 #include "bomber/game/sprites.hpp"
 
 namespace bomber::game {
@@ -212,6 +213,59 @@ ListDialogLayout draw_list_dialog(SDL_Renderer* ren, const FontTextures& font,
 // so callers keep drawing selected rows in their NORMAL ink — no dark-on-light
 // inversion. `visible_index` is 0-based within the visible window.
 void draw_list_selection(SDL_Renderer* ren, const ListDialogLayout& lay, int visible_index);
+
+// --- the list dialog's INPUT side ----------------------------------------
+//
+// sub_42DBCC is mouse-first (list_dialog_geometry.hpp's "INPUT MODEL" block
+// carries the addresses). The DECISIONS live in that SDL-free header so the
+// headless suite can drive them; these two are only the font/SDL adapters
+// the screens need to reach them.
+
+// The same geometry draw_list_dialog builds, for the identical arguments —
+// so a screen can hit-test exactly what it last drew.
+ListDialogGeometry list_dialog_layout_for(const FontTextures& font, const std::string& title,
+                                          float x_px, float y_px, float item_text_w,
+                                          int visible_rows, int total_rows, int top_row,
+                                          int footer_lines = 0);
+
+// Which hotspot a screen-space point lands on. Measures the two arrow
+// glyphs' and the "Done" label's button boxes, then defers to
+// list_dialog_hit_test().
+ListDialogHit list_dialog_hit_for(const FontTextures& font, const ListDialogGeometry& g,
+                                  int visible_rows, float mx, float my);
+
+// One SDL keycode translated to the code sub_42DBCC's own switch expects
+// (kListKeyUp &c), or 0 for a key the widget does not handle. Only the keys
+// the ORIGINAL binds are mapped — there is no W/S alias and no Space.
+int list_dialog_key_code(SDL_Keycode key);
+
+// The logical (640x480) point of a mouse event, for a screen that drives the
+// list model inline rather than through a widget class. Returns false for a
+// non-mouse event.
+bool list_mouse_point(SDL_Renderer* ren, const SDL_Event& ev, float& x, float& y);
+
+// Route one SDL event's mouse half into a list widget (anything exposing the
+// on_mouse_move/down/up trio). Returns true when the event WAS a mouse event,
+// so a screen pump can `continue` past it. The only thing living here is the
+// window->logical coordinate conversion — the house pattern from
+// keyremap_screen's runner, which SDL_SetRenderLogicalPresentation makes a
+// one-liner.
+template <class ListWidget>
+inline bool dispatch_list_mouse(SDL_Renderer* ren, const SDL_Event& ev, ListWidget& w) {
+    float lx = 0.0f, ly = 0.0f;
+    if (!list_mouse_point(ren, ev, lx, ly)) return false;
+    // Only the LEFT button reaches the widget: every id sub_42DBCC registers
+    // sits in the left-button pair of slots (+0x20/+0x24), and the right pair
+    // (+0x28/+0x2c) is -1 throughout. A right click is swallowed, not passed
+    // on to the key path.
+    if (ev.type == SDL_EVENT_MOUSE_MOTION)
+        w.on_mouse_move(lx, ly, ev.motion.state != 0);
+    else if (ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN && ev.button.button == SDL_BUTTON_LEFT)
+        w.on_mouse_down(lx, ly);
+    else if (ev.type == SDL_EVENT_MOUSE_BUTTON_UP && ev.button.button == SDL_BUTTON_LEFT)
+        w.on_mouse_up(lx, ly);
+    return true;
+}
 
 // sub_414340 — the ACKNOWLEDGE modal (PINNED from the body, pseudo.c
 // 17003-17107): two centered lines (top = the EAX half of the packed 64-bit

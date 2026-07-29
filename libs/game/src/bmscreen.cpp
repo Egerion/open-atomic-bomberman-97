@@ -363,8 +363,9 @@ void BmScreen::draw(SDL_Renderer* ren) const {
 
 void HelpBrowser::enter(bool manual_enabled) {
     entries_.clear();
-    row_ = 0;
-    top_ = 0;
+    nav_ = ListDialogNav{};
+    item_w_ = 0.0f;
+    pressed_ = ListDialogWidget::None;
     viewing_ = false;
     done_ = false;
     // sub_414235's own first act: gate on getvalue(15) ("is the online manual
@@ -390,6 +391,33 @@ void HelpBrowser::enter(bool manual_enabled) {
         if (ext == ".BM") entries_.push_back(entry.path());
     }
     std::sort(entries_.begin(), entries_.end());  // qsort_(sub_41400F, count)
+    // sub_42FEF0 @0x42DC16 — the widest ITEM alone drives the width (the
+    // widget folds the title in itself). Measured once here so the mouse
+    // handlers can rebuild the same layout cheaply.
+    if (font_)
+        for (const auto& e : entries_)
+            item_w_ = std::max(item_w_, static_cast<float>(font_->measure(e.filename().string())));
+}
+
+std::string HelpBrowser::header() const {
+    return assets_ ? assets_->getstring(600, "Available help files:")
+                   : std::string("Available help files:");
+}
+
+ListDialogGeometry HelpBrowser::layout() const {
+    return list_dialog_layout_for(*font_, header(), 100.0f, 100.0f, item_w_, kVisibleRows,
+                                  static_cast<int>(entries_.size()), nav_.top_row);
+}
+
+void HelpBrowser::open_selected() {
+    // sub_41302D is called on the highlighted glob entry: open the selected
+    // topic through the same .BM viewer; the list re-shows once
+    // close_viewer() is called (the caller drives that on bm_.done(),
+    // matching sub_414235's do/while loop-back over the same glob array).
+    const int sel = nav_.top_row + nav_.highlight;  // @0x42E39A
+    if (sel < 0 || sel >= static_cast<int>(entries_.size())) return;  // @0x42E3A8
+    bm_.enter(entries_[static_cast<std::size_t>(sel)].stem().string());
+    viewing_ = true;
 }
 
 void HelpBrowser::on_key(SDL_Keycode key, AudioEngine& audio) {
@@ -418,61 +446,63 @@ void HelpBrowser::on_key(SDL_Keycode key, AudioEngine& audio) {
     // click — the only audible thing the help browser can produce is the
     // sub_414340 error box above, and that is a modal, not the list. The port
     // invented every cue that used to be in this switch.
-    int count = static_cast<int>(entries_.size());
-    switch (key) {
-        case SDLK_UP:
-            // Arrow-only: the native list widget has no W/S alias (the removed
-            // W/S cases were invented).
-            row_ = (row_ + count - 1) % count;
-            break;
-        case SDLK_DOWN:
-            row_ = (row_ + 1) % count;
-            break;
-        case SDLK_PAGEUP:
-            row_ = std::max(0, row_ - kVisibleRows);  // 329
-            break;
-        case SDLK_PAGEDOWN:
-            row_ = std::min(count - 1, row_ + kVisibleRows);  // 337
-            break;
-        case SDLK_HOME:
-            row_ = 0;  // 327
-            break;
-        case SDLK_END:
-            row_ = count - 1;  // 335
-            break;
-        case SDLK_RETURN:
-        case SDLK_KP_ENTER:
-        case SDLK_SPACE:
-            // sub_41302D is called on the highlighted glob entry: open the
-            // selected topic through the same
-            // .BM viewer; the list re-shows once close_viewer() is called
-            // (the caller drives that on bm_.done(), matching sub_414235's
-            // do/while loop-back over the same glob array).
-            bm_.enter(entries_[static_cast<std::size_t>(row_)].stem().string());
-            viewing_ = true;
-            break;
-        case SDLK_ESCAPE:
-            done_ = true;
-            break;
-        default:
-            // Letter-jump (sub_42FEB0 @ 32603): a printable key selects the
-            // first entry whose filename starts with it (case-insensitive).
-            // sub_42FEB0 is a leaf — it makes no calls at all, sound included.
-            if (key >= SDLK_A && key <= SDLK_Z) {
-                const char want = static_cast<char>('a' + (key - SDLK_A));
-                for (int i = 0; i < count; ++i) {
-                    std::string f = entries_[static_cast<std::size_t>(i)].filename().string();
-                    if (!f.empty() &&
-                        std::tolower(static_cast<unsigned char>(f[0])) == want) {
-                        row_ = i;
-                        break;
-                    }
-                }
-            }
-            break;
+    const int count = static_cast<int>(entries_.size());
+    const int code = list_dialog_key_code(key);
+    if (code != 0) {
+        // Arrow-only, and no Space: sub_42DBCC binds 0x0d/0x1b plus the
+        // 0x147..0x151 jump table @0x42DBA0 and nothing else. Space is a
+        // printable character and falls into the type-ahead default below.
+        switch (list_dialog_key(nav_, code, kVisibleRows, count)) {
+            case ListDialogAction::Activate: open_selected(); break;
+            case ListDialogAction::Cancel: done_ = true; break;
+            case ListDialogAction::None: break;
+        }
+        return;
     }
-    if (row_ < top_) top_ = row_;
-    if (row_ >= top_ + kVisibleRows) top_ = row_ - kVisibleRows + 1;
+    // Letter-jump (sub_42FEB0 @0x42FEB0): a letter selects the first entry
+    // whose filename starts with it (case-insensitive). sub_42FEB0 is a leaf
+    // — it makes no calls at all, sound included.
+    if (key >= SDLK_A && key <= SDLK_Z) {
+        const char want = static_cast<char>('a' + (key - SDLK_A));
+        int match = -1;
+        for (int i = 0; i < count && match < 0; ++i) {
+            const std::string f = entries_[static_cast<std::size_t>(i)].filename().string();
+            if (!f.empty() && std::tolower(static_cast<unsigned char>(f[0])) == want) match = i;
+        }
+        // The match is pulled to the TOP of the window, not merely scrolled
+        // into view — and in a list that fits, nothing happens at all.
+        list_dialog_letter_jump(nav_, match, kVisibleRows, count);
+    }
+}
+
+void HelpBrowser::on_mouse_move(float x, float y, bool buttons_held) {
+    if (viewing_ || disabled_ || entries_.empty() || !font_ || !font_->loaded()) return;
+    if (buttons_held) return;  // @0x4330A0: the enter id needs an idle mouse
+    const ListDialogGeometry g = layout();
+    list_dialog_mouse_move(nav_, list_dialog_hit_for(*font_, g, kVisibleRows, x, y),
+                           static_cast<int>(entries_.size()));
+}
+
+void HelpBrowser::on_mouse_down(float x, float y) {
+    if (viewing_ || disabled_ || entries_.empty() || !font_ || !font_->loaded()) return;
+    const ListDialogGeometry g = layout();
+    const ListDialogHit hit = list_dialog_hit_for(*font_, g, kVisibleRows, x, y);
+    pressed_ = hit.widget;
+    switch (list_dialog_mouse_down(nav_, g, hit, kVisibleRows,
+                                   static_cast<int>(entries_.size()), static_cast<int>(y))) {
+        case ListDialogAction::Activate: open_selected(); break;
+        case ListDialogAction::Cancel: done_ = true; break;
+        case ListDialogAction::None: break;
+    }
+}
+
+void HelpBrowser::on_mouse_up(float x, float y) {
+    if (viewing_ || disabled_ || entries_.empty() || !font_ || !font_->loaded()) return;
+    const ListDialogGeometry g = layout();
+    const ListDialogHit hit = list_dialog_hit_for(*font_, g, kVisibleRows, x, y);
+    const ListDialogWidget was = pressed_;
+    pressed_ = ListDialogWidget::None;
+    if (list_dialog_mouse_up(hit, was) == ListDialogAction::Cancel) done_ = true;
 }
 
 void HelpBrowser::draw(SDL_Renderer* ren) const {
@@ -515,23 +545,19 @@ void HelpBrowser::draw(SDL_Renderer* ren) const {
     // widest ENTRY alone: the widget folds the title in itself
     // (max(item_w + 16, title_w) + 20), so pre-maxing them here would inflate
     // it by 16. The old 200-px floor was a port stand-in and is gone.
-    const std::string header = assets_ ? assets_->getstring(600, "Available help files:")
-                                        : std::string("Available help files:");
-    int count = static_cast<int>(entries_.size());
-    float item_w = 0.0f;
-    for (const auto& e : entries_)
-        item_w = std::max(item_w, static_cast<float>(font_->measure(e.filename().string())));
-
-    const int last = std::min(count, top_ + kVisibleRows);
-    const ListDialogLayout lay =
-        draw_list_dialog(ren, *font_, header, 100.0f, 100.0f, item_w, kVisibleRows, count, top_);
-    for (int i = top_; i < last; ++i) {
-        const int vi = i - top_;
+    const int count = static_cast<int>(entries_.size());
+    const int last = std::min(count, nav_.top_row + kVisibleRows);
+    const ListDialogLayout lay = draw_list_dialog(ren, *font_, header(), 100.0f, 100.0f, item_w_,
+                                                  kVisibleRows, count, nav_.top_row);
+    for (int i = nav_.top_row; i < last; ++i) {
+        const int vi = i - nav_.top_row;
         const float ty = lay.item_y0 + static_cast<float>(vi) * lay.item_h;
         std::string name = entries_[static_cast<std::size_t>(i)].filename().string();
         // sub_442C28 LIGHTENS the selected row rather than inverting it, so
         // every row keeps the same ink (dialog_chrome.hpp's own note).
-        if (i == row_) draw_list_selection(ren, lay, vi);
+        // The band tracks the highlight OFFSET, which is what the original
+        // draws @0x42E656 — it is not derived from an absolute selection.
+        if (vi == nav_.highlight) draw_list_selection(ren, lay, vi);
         font_->draw(ren, name, lay.item_x, ty, kListInkR, kListInkG, kListInkB);
     }
 }
