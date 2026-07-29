@@ -524,7 +524,7 @@ void HelpBrowser::draw(SDL_Renderer* ren) const {
 
     const int last = std::min(count, top_ + kVisibleRows);
     const ListDialogLayout lay =
-        draw_list_dialog(ren, *font_, header, 100.0f, 100.0f, item_w, kVisibleRows, top_);
+        draw_list_dialog(ren, *font_, header, 100.0f, 100.0f, item_w, kVisibleRows, count, top_);
     for (int i = top_; i < last; ++i) {
         const int vi = i - top_;
         const float ty = lay.item_y0 + static_cast<float>(vi) * lay.item_h;

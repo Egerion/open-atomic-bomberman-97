@@ -169,8 +169,9 @@ struct ListDialogLayout {
 //     the centred title in dword_45C478 grey (168,168,164) at y = 8
 //   * a base-coat item-area fill and its own SUNKEN frame
 //   * the scrollbar — arrow buttons "\x18"/"\x19", a sunken track, and a
-//     FIXED 15x15 raised thumb. UNCONDITIONAL: there is no branch around it,
-//     so a list that fits still shows a full-height scrollbar.
+//     15x15 raised thumb of FIXED SIZE (never proportional) but sliding Y.
+//     UNCONDITIONAL: there is no branch around it, so a list that fits still
+//     shows a full-height scrollbar, with the thumb parked at the track's top.
 //   * a "Done" button at (w/2 - 32, h - fontheight - 14). The label is the
 //     hardcoded literal at 0x45AAB4, NOT a getstring.
 // The window is NOT centred — `x_px`/`y_px` go straight to sub_43C734, and
@@ -181,6 +182,13 @@ struct ListDialogLayout {
 // pre-maxed with the title — the widget folds the title in itself:
 // win_w = max(item_text_w + 16, measure(title)) + 20.
 //
+// `visible_rows` / `total_rows` / `top_row` are sub_42DBCC's own three list
+// counters. Only the thumb's Y reads the last two, and only through
+// list_dialog_thumb_y(), which carries the disassembly it mirrors — in short:
+// the offset is proportional to `top_row` (the FIRST VISIBLE row, never the
+// highlighted one) over `total_rows - visible_rows`, and the whole computation
+// is skipped when the list fits, leaving the thumb at the top of the track.
+//
 // `footer_lines` reserves that many extra text lines INSIDE the window between
 // the item area and the "Done" button, reported as `footer_y0` — the PORT-ONLY
 // room for the online lobby's key hints (ADR-0011), which have no home in
@@ -188,7 +196,7 @@ struct ListDialogLayout {
 // browser, the *.SCH picker) keeps the pinned geometry exactly.
 ListDialogLayout draw_list_dialog(SDL_Renderer* ren, const FontTextures& font,
                                   const std::string& title, float x_px, float y_px,
-                                  float item_text_w, int visible_rows, int top_row,
+                                  float item_text_w, int visible_rows, int total_rows, int top_row,
                                   int footer_lines = 0);
 
 // The selection highlight for a list row. The original does NOT invert: it

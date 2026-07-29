@@ -270,18 +270,16 @@ void fill_base(SDL_Renderer* ren, float ox, float oy, int x, int y, int w, int h
 
 ListDialogLayout draw_list_dialog(SDL_Renderer* ren, const FontTextures& font,
                                   const std::string& title, float x_px, float y_px,
-                                  float item_text_w, int visible_rows, int top_row,
+                                  float item_text_w, int visible_rows, int total_rows, int top_row,
                                   int footer_lines) {
     const float h = line_h(font);
     const float tw = text_w(font, title);
     // Every number below comes from list_dialog_geometry(), which carries the
-    // per-offset sub_42DBCC citations. `top_row` deliberately does NOT enter
-    // the chrome: the original's thumb is a fixed 15x15 block its own event
-    // loop slides, so the scroll position changes nothing this function draws.
+    // per-offset sub_42DBCC citations — including the thumb's Y, the one field
+    // `total_rows`/`top_row` feed.
     const ListDialogGeometry g = list_dialog_geometry(
         static_cast<int>(x_px), static_cast<int>(y_px), static_cast<int>(item_text_w),
-        static_cast<int>(tw), static_cast<int>(h), visible_rows, footer_lines);
-    (void)top_row;
+        static_cast<int>(tw), static_cast<int>(h), visible_rows, footer_lines, total_rows, top_row);
 
     const float ox = static_cast<float>(g.win_x);
     const float oy = static_cast<float>(g.win_y);
@@ -323,7 +321,8 @@ ListDialogLayout draw_list_dialog(SDL_Renderer* ren, const FontTextures& font,
                   /*raised=*/false, kDialogFillR, kDialogFillG, kDialogFillB);
     // The thumb: a fixed 15x15 RAISED bevel whose face gets the sub_442C28
     // wash @0x42E1E6 — the same wash sub_432298 gives a button face, hence the
-    // same colour.
+    // same colour. Its Y slides with `top_row` (@0x42E6B5-0x42E6F7); the track
+    // fill above stays put, exactly as the original's partial repaint does.
     bevel_corners(ren, ox, oy, g.sb_thumb_x0, g.sb_thumb_y0, g.sb_thumb_x1, g.sb_thumb_y1,
                   /*raised=*/true, kButtonFaceR, kButtonFaceG, kButtonFaceB);
 
