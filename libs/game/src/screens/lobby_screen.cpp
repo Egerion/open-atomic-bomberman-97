@@ -94,9 +94,11 @@ void LobbyScreen::draw_backdrop() {
 LobbyMenuChoice LobbyScreen::run_menu(bool online_available) {
     // The generic bevel list dialog (sub_42DBCC) over the MAINMENU backdrop —
     // the SAME primitive and navigation model the *.BM help browser's picker
-    // uses (bmscreen.cpp): up/down wrap the highlight, Enter selects, Esc backs
-    // out. The original's own net rows play SFX 20 on any key (setup-screens.md
-    // "Screen A"/"Screen B"), which is what the nav blip here mirrors.
+    // uses (bmscreen.cpp): up/down move the highlight and STOP at the ends
+    // (sub_42DBCC has no wrap — list_dialog_geometry.hpp's input model),
+    // Enter selects, Esc backs out. The original's own net rows play SFX 20 on
+    // any key (setup-screens.md "Screen A"/"Screen B"), which is what the nav
+    // blip here mirrors.
     std::vector<const MenuRow*> rows;
     for (const MenuRow& r : kRows)
         if (online_available || !r.online) rows.push_back(&r);
@@ -104,6 +106,7 @@ LobbyMenuChoice LobbyScreen::run_menu(bool online_available) {
 
     const int count = static_cast<int>(rows.size());
     int sel = 0;
+    ListDialogWidget pressed = ListDialogWidget::None;
     platform::FrameClock frame_clock(ctx_.window);
     const std::string title = "NETWORK GAME";
 
@@ -116,12 +119,48 @@ LobbyMenuChoice LobbyScreen::run_menu(bool online_available) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_EVENT_QUIT) return LobbyMenuChoice::WindowClosed;
+            // The list's mouse widgets. The whole menu fits, so the track and
+            // the page keys are inert here exactly as they are in the
+            // original for a list that fits — but the rows and the two arrow
+            // buttons are live.
+            float mx = 0.0f, my = 0.0f;
+            if (list_mouse_point(ctx_.sdl, ev, mx, my)) {
+                const ListDialogGeometry g = list_dialog_layout_for(
+                    ctx_.front_font, title, centered_list_x(ctx_.front_font, title, content_w),
+                    kListY, content_w, count, count, 0);
+                const ListDialogHit hit = list_dialog_hit_for(ctx_.front_font, g, count, mx, my);
+                ListDialogNav nav{0, sel};
+                if (ev.type == SDL_EVENT_MOUSE_MOTION) {
+                    if (ev.motion.state == 0) list_dialog_mouse_move(nav, hit, count);
+                    sel = nav.highlight;
+                } else if (ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
+                           ev.button.button == SDL_BUTTON_LEFT) {
+                    pressed = hit.widget;
+                    const ListDialogAction act =
+                        list_dialog_mouse_down(nav, g, hit, count, count, static_cast<int>(my));
+                    sel = nav.highlight;
+                    if (act == ListDialogAction::Activate) {
+                        ctx_.audio.play(10);  // accept sting
+                        return rows[static_cast<std::size_t>(sel)]->choice;
+                    }
+                } else if (ev.type == SDL_EVENT_MOUSE_BUTTON_UP &&
+                           ev.button.button == SDL_BUTTON_LEFT) {
+                    const ListDialogWidget was = pressed;
+                    pressed = ListDialogWidget::None;
+                    if (list_dialog_mouse_up(hit, was) == ListDialogAction::Cancel) {
+                        ctx_.audio.play(20);
+                        return LobbyMenuChoice::Cancel;
+                    }
+                }
+                continue;
+            }
             if (ev.type != SDL_EVENT_KEY_DOWN || ev.key.repeat) continue;
-            if (ev.key.key == SDLK_UP) {
-                sel = (sel + count - 1) % count;
-                ctx_.audio.play(20);
-            } else if (ev.key.key == SDLK_DOWN) {
-                sel = (sel + 1) % count;
+            if (ev.key.key == SDLK_UP || ev.key.key == SDLK_DOWN) {
+                // The whole menu is visible, so sub_42DBCC's handlers can only
+                // move the highlight — and they clamp at both ends.
+                ListDialogNav nav{0, sel};
+                list_dialog_key(nav, list_dialog_key_code(ev.key.key), count, count);
+                sel = nav.highlight;
                 ctx_.audio.play(20);
             } else if (ev.key.key == SDLK_RETURN || ev.key.key == SDLK_KP_ENTER) {
                 ctx_.audio.play(10);  // accept sting
@@ -153,10 +192,11 @@ LobbyMenuChoice LobbyScreen::run_menu(bool online_available) {
 
 bool LobbyScreen::run_seat_count(int& seats, bool& window_closed) {
     // The SAME sub_42DBCC list dialog run_menu draws, one row per lobby size —
-    // no new chrome, and the same nav model (arrows wrap, Enter picks, Esc backs
-    // out with SFX 20/10 exactly where the menu fires them).
+    // no new chrome, and the same nav model (arrows clamp at the ends, Enter
+    // picks, Esc backs out with SFX 20/10 exactly where the menu fires them).
     const int count = kMaxLobbySeats - kMinLobbySeats + 1;
     int sel = std::clamp(seats, kMinLobbySeats, kMaxLobbySeats) - kMinLobbySeats;
+    ListDialogWidget pressed = ListDialogWidget::None;
     platform::FrameClock frame_clock(ctx_.window);
     const std::string title = "HOW MANY PLAYERS";
 
@@ -184,12 +224,44 @@ bool LobbyScreen::run_seat_count(int& seats, bool& window_closed) {
                 window_closed = true;
                 return false;
             }
+            float mx = 0.0f, my = 0.0f;
+            if (list_mouse_point(ctx_.sdl, ev, mx, my)) {
+                const ListDialogGeometry g = list_dialog_layout_for(
+                    ctx_.front_font, title, centered_list_x(ctx_.front_font, title, content_w),
+                    kListY, content_w, count, count, 0,
+                    static_cast<int>(hints.lines.size()));
+                const ListDialogHit hit = list_dialog_hit_for(ctx_.front_font, g, count, mx, my);
+                ListDialogNav nav{0, sel};
+                if (ev.type == SDL_EVENT_MOUSE_MOTION) {
+                    if (ev.motion.state == 0) list_dialog_mouse_move(nav, hit, count);
+                    sel = nav.highlight;
+                } else if (ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
+                           ev.button.button == SDL_BUTTON_LEFT) {
+                    pressed = hit.widget;
+                    const ListDialogAction act =
+                        list_dialog_mouse_down(nav, g, hit, count, count, static_cast<int>(my));
+                    sel = nav.highlight;
+                    if (act == ListDialogAction::Activate) {
+                        ctx_.audio.play(10);  // accept sting
+                        seats = sel + kMinLobbySeats;
+                        return true;
+                    }
+                } else if (ev.type == SDL_EVENT_MOUSE_BUTTON_UP &&
+                           ev.button.button == SDL_BUTTON_LEFT) {
+                    const ListDialogWidget was = pressed;
+                    pressed = ListDialogWidget::None;
+                    if (list_dialog_mouse_up(hit, was) == ListDialogAction::Cancel) {
+                        ctx_.audio.play(20);
+                        return false;
+                    }
+                }
+                continue;
+            }
             if (ev.type != SDL_EVENT_KEY_DOWN || ev.key.repeat) continue;
-            if (ev.key.key == SDLK_UP) {
-                sel = (sel + count - 1) % count;
-                ctx_.audio.play(20);
-            } else if (ev.key.key == SDLK_DOWN) {
-                sel = (sel + 1) % count;
+            if (ev.key.key == SDLK_UP || ev.key.key == SDLK_DOWN) {
+                ListDialogNav nav{0, sel};
+                list_dialog_key(nav, list_dialog_key_code(ev.key.key), count, count);
+                sel = nav.highlight;
                 ctx_.audio.play(20);
             } else if (ev.key.key == SDLK_RETURN || ev.key.key == SDLK_KP_ENTER) {
                 ctx_.audio.play(10);  // accept sting
@@ -436,11 +508,19 @@ std::string display_name(const std::string& raw) {
 // A row whose build_ok is false cannot be joined, so it is drawn in the chrome's
 // own grey (kDialogDim*, dword_45C478 — the ink the button labels and the title
 // strip already use) and carries the VERSION marker.
-void draw_browser(ScreenContext& ctx, const std::vector<net::PublicLobby>& list, int sel, int top) {
-    const std::string title = "PUBLIC GAMES";
-    const int count = static_cast<int>(list.size());
-    const int visible = std::min(count, kBrowseRows);
+constexpr char kBrowseTitle[] = "PUBLIC GAMES";
 
+HintBlock browse_hints(ScreenContext& ctx) {
+    // Same measured-footer contract as draw_room: the hints are window content,
+    // so they can never overflow the border.
+    return pack_hint_lines(ctx.front_font, {"ENTER = JOIN", "R = REFRESH", "ESC = BACK"}, {},
+                           kHintWrapW);
+}
+
+// The item column's width. Split out of draw_browser so the mouse pump can
+// rebuild EXACTLY the geometry the last frame drew — a hit test against a
+// re-derived width would drift off the visible rows.
+float browse_content_w(ScreenContext& ctx, const std::vector<net::PublicLobby>& list) {
     // Column widths come from the WHOLE list, not just the visible window, so
     // the columns do not jump around as the list scrolls.
     float name_w = 0.0f;
@@ -452,14 +532,26 @@ void draw_browser(ScreenContext& ctx, const std::vector<net::PublicLobby>& list,
         code_w = std::max(code_w, static_cast<float>(ctx.front_font.measure(l.code)));
     }
     const float mark_w = static_cast<float>(ctx.front_font.measure(kStaleMark));
-    // Same measured-footer contract as draw_room: the hints are window content,
-    // so they can never overflow the border.
-    const HintBlock hints = pack_hint_lines(
-        ctx.front_font, {"ENTER = JOIN", "R = REFRESH", "ESC = BACK"}, {}, kHintWrapW);
     float content_w = name_w + occ_w + code_w + mark_w + 3.0f * kColGap;
-    content_w = std::max(content_w, static_cast<float>(ctx.front_font.measure(title)));
+    content_w = std::max(content_w, static_cast<float>(ctx.front_font.measure(kBrowseTitle)));
     content_w = std::max(content_w, kMinListW);
-    content_w = std::max(content_w, hints.width);
+    return std::max(content_w, browse_hints(ctx).width);
+}
+
+void draw_browser(ScreenContext& ctx, const std::vector<net::PublicLobby>& list, int sel, int top) {
+    const std::string title = kBrowseTitle;
+    const int count = static_cast<int>(list.size());
+    const int visible = std::min(count, kBrowseRows);
+
+    const float mark_w = static_cast<float>(ctx.front_font.measure(kStaleMark));
+    float occ_w = 0.0f;
+    float code_w = 0.0f;
+    for (const net::PublicLobby& l : list) {
+        occ_w = std::max(occ_w, static_cast<float>(ctx.front_font.measure(occupancy(l))));
+        code_w = std::max(code_w, static_cast<float>(ctx.front_font.measure(l.code)));
+    }
+    const HintBlock hints = browse_hints(ctx);
+    const float content_w = browse_content_w(ctx, list);
 
     const ListDialogLayout lay = draw_list_dialog(
         ctx.sdl, ctx.front_font, title, centered_list_x(ctx.front_font, title, content_w), kListY,
@@ -623,8 +715,12 @@ bool LobbyScreen::run_public_browser(const OnlineConfig& ocfg, net::UdpTransport
     const Sprite* winz = &ctx_.assets.frontend_pcx("WINZ");
     const std::string ok_label = ctx_.assets.getstring(27, " Ok ");
     const std::string head = "PUBLIC GAMES";
+    // sub_42DBCC's own two registers (list_dialog_geometry.hpp): the first
+    // visible row and the highlight's offset inside the window. `sel`, the
+    // absolute row, is their sum and is re-derived each frame.
+    ListDialogNav nav;
     int sel = 0;
-    int top = 0;
+    ListDialogWidget pressed = ListDialogWidget::None;
     // The SELECTION's identity is the row's CODE, not its index: the list is
     // re-queried underneath the player every few seconds and a lobby appearing or
     // filling up would otherwise slide the highlight onto a different game.
@@ -645,6 +741,46 @@ bool LobbyScreen::run_public_browser(const OnlineConfig& ocfg, net::UdpTransport
             if (ev.type == SDL_EVENT_QUIT) {
                 window_closed = true;
                 return false;
+            }
+            // The list's own mouse widgets, live only once a real list is up
+            // (both modals below own the screen while they are showing).
+            float mx = 0.0f, my = 0.0f;
+            if (list_mouse_point(ctx_.sdl, ev, mx, my)) {
+                if (!failure.empty() || searching || count == 0) continue;
+                const ListDialogGeometry g = list_dialog_layout_for(
+                    ctx_.front_font, kBrowseTitle,
+                    centered_list_x(ctx_.front_font, kBrowseTitle, browse_content_w(ctx_, list)),
+                    kListY, browse_content_w(ctx_, list), std::min(count, kBrowseRows), count,
+                    nav.top_row, static_cast<int>(browse_hints(ctx_).lines.size()));
+                const ListDialogHit hit =
+                    list_dialog_hit_for(ctx_.front_font, g, std::min(count, kBrowseRows), mx, my);
+                if (ev.type == SDL_EVENT_MOUSE_MOTION) {
+                    if (ev.motion.state == 0) list_dialog_mouse_move(nav, hit, count);
+                } else if (ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
+                           ev.button.button == SDL_BUTTON_LEFT) {
+                    pressed = hit.widget;
+                    if (list_dialog_mouse_down(nav, g, hit, std::min(count, kBrowseRows), count,
+                                               static_cast<int>(my)) ==
+                        ListDialogAction::Activate) {
+                        sel = nav.top_row + nav.highlight;
+                        if (!list[static_cast<std::size_t>(sel)].build_ok) {
+                            ctx_.audio.play(40);
+                        } else {
+                            ctx_.audio.play(10);
+                            code = list[static_cast<std::size_t>(sel)].code;
+                            return true;
+                        }
+                    }
+                } else if (ev.type == SDL_EVENT_MOUSE_BUTTON_UP &&
+                           ev.button.button == SDL_BUTTON_LEFT) {
+                    const ListDialogWidget was = pressed;
+                    pressed = ListDialogWidget::None;
+                    if (list_dialog_mouse_up(hit, was) == ListDialogAction::Cancel) {
+                        ctx_.audio.play(20);
+                        return false;
+                    }
+                }
+                continue;
             }
             if (ev.type != SDL_EVENT_KEY_DOWN || ev.key.repeat) continue;
             const SDL_Keycode key = ev.key.key;
@@ -684,49 +820,30 @@ bool LobbyScreen::run_public_browser(const OnlineConfig& ocfg, net::UdpTransport
                 continue;
             }
 
-            // The sub_42DBCC list widget's own navigation model (bmscreen.cpp's
-            // HelpBrowser): arrows wrap, PageUp/PageDown/Home/End clamp,
-            // Enter/Space picks. No letter-jump here — R is the refresh key.
-            switch (key) {
-                case SDLK_UP:
-                    sel = (sel + count - 1) % count;
-                    ctx_.audio.play(20);
-                    break;
-                case SDLK_DOWN:
-                    sel = (sel + 1) % count;
-                    ctx_.audio.play(20);
-                    break;
-                case SDLK_PAGEUP:
-                    sel = std::max(0, sel - kBrowseRows);
-                    ctx_.audio.play(20);
-                    break;
-                case SDLK_PAGEDOWN:
-                    sel = std::min(count - 1, sel + kBrowseRows);
-                    ctx_.audio.play(20);
-                    break;
-                case SDLK_HOME:
-                    sel = 0;
-                    ctx_.audio.play(20);
-                    break;
-                case SDLK_END:
-                    sel = count - 1;
-                    ctx_.audio.play(20);
-                    break;
-                case SDLK_RETURN:
-                case SDLK_KP_ENTER:
-                case SDLK_SPACE:
-                    if (!list[static_cast<std::size_t>(sel)].build_ok) {
-                        // SFX 40 — the same "you can't do that here" buzz the
-                        // waiting room fires at a non-host pressing Enter. The
-                        // server would refuse this join with VERSION MISMATCH, so
-                        // the row is a dead end by design, not a failure to show.
-                        ctx_.audio.play(40);
-                        break;
-                    }
-                    ctx_.audio.play(10);  // accept sting
-                    code = list[static_cast<std::size_t>(sel)].code;
-                    return true;  // -> the caller's UNCHANGED join path
-                default: break;
+            // sub_42DBCC's own navigation model (list_dialog_geometry.hpp's
+            // input model): arrows move the highlight and STOP at the ends,
+            // and Home/End/PageUp/PageDown scroll the VIEW only, leaving the
+            // bar on its screen row. No letter-jump here — R is the refresh
+            // key.
+            const int code_key = (key == SDLK_SPACE) ? kListKeyEnter : list_dialog_key_code(key);
+            if (code_key == kListKeyEscape) continue;  // handled above
+            if (code_key == kListKeyEnter) {
+                sel = nav.top_row + nav.highlight;  // @0x42E39A
+                if (!list[static_cast<std::size_t>(sel)].build_ok) {
+                    // SFX 40 — the same "you can't do that here" buzz the
+                    // waiting room fires at a non-host pressing Enter. The
+                    // server would refuse this join with VERSION MISMATCH, so
+                    // the row is a dead end by design, not a failure to show.
+                    ctx_.audio.play(40);
+                    continue;
+                }
+                ctx_.audio.play(10);  // accept sting
+                code = list[static_cast<std::size_t>(sel)].code;
+                return true;  // -> the caller's UNCHANGED join path
+            }
+            if (code_key != 0) {
+                list_dialog_key(nav, code_key, kBrowseRows, count);
+                ctx_.audio.play(20);
             }
         }
 
@@ -756,16 +873,28 @@ bool LobbyScreen::run_public_browser(const OnlineConfig& ocfg, net::UdpTransport
             if (!sel_code.empty())
                 for (std::size_t i = 0; i < list.size(); ++i)
                     if (list[i].code == sel_code) {
-                        sel = static_cast<int>(i);
+                        // Re-anchor BOTH registers on the row that moved: keep
+                        // the view where it is if the row is still inside it,
+                        // otherwise scroll to bring it back.
+                        const int at = static_cast<int>(i);
+                        if (at < nav.top_row || at >= nav.top_row + kBrowseRows)
+                            nav.top_row = std::min(
+                                at, std::max(0, static_cast<int>(list.size()) - kBrowseRows));
+                        nav.highlight = at - nav.top_row;
                         break;
                     }
         }
-        // A refresh can shrink the list under the cursor; re-clamp before drawing.
+        // A refresh can shrink the list under the cursor; re-clamp before
+        // drawing. PORT-ONLY: sub_42DBCC's list never changes under it, so
+        // there is nothing here to be faithful to — the invariants restored
+        // are simply the ones its own handlers maintain.
         count = static_cast<int>(list.size());
-        if (sel >= count) sel = std::max(0, count - 1);
-        if (sel < top) top = sel;
-        if (sel >= top + kBrowseRows) top = sel - kBrowseRows + 1;
-        top = std::min(top, std::max(0, count - kBrowseRows));
+        const int max_top = std::max(0, count - kBrowseRows);
+        nav.top_row = std::clamp(nav.top_row, 0, max_top);
+        nav.highlight = std::clamp(nav.highlight, 0, std::max(0, std::min(count, kBrowseRows) - 1));
+        if (nav.top_row + nav.highlight >= count)
+            nav.highlight = std::max(0, count - 1 - nav.top_row);
+        sel = nav.top_row + nav.highlight;
         sel_code = count > 0 ? list[static_cast<std::size_t>(sel)].code : std::string();
 
         ctx_.audio.update_music();
@@ -792,7 +921,7 @@ bool LobbyScreen::run_public_browser(const OnlineConfig& ocfg, net::UdpTransport
                 draw_centred(ctx_.sdl, ctx_.front_font, hints.lines[i],
                              win.y + win.h + 10.0f + static_cast<float>(i) * lh);
         } else {
-            draw_browser(ctx_, list, sel, top);
+            draw_browser(ctx_, list, sel, nav.top_row);
         }
         SDL_RenderPresent(ctx_.sdl);
         frame_clock.pace();

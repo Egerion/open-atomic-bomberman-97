@@ -467,4 +467,70 @@ void draw_text_entry_dialog(SDL_Renderer* ren, const FontTextures& font, float y
     draw_dialog_button(ren, font, win.x + win.w / 2.0f + 8.0f, btn_y, cancel_label);
 }
 
+// --- the list dialog's INPUT side ----------------------------------------
+
+ListDialogGeometry list_dialog_layout_for(const FontTextures& font, const std::string& title,
+                                          float x_px, float y_px, float item_text_w,
+                                          int visible_rows, int total_rows, int top_row,
+                                          int footer_lines) {
+    // Deliberately the same call draw_list_dialog makes, argument for
+    // argument: a hit test that re-derived the layout could drift from what
+    // is on screen.
+    return list_dialog_geometry(static_cast<int>(x_px), static_cast<int>(y_px),
+                                static_cast<int>(item_text_w),
+                                static_cast<int>(text_w(font, title)),
+                                static_cast<int>(line_h(font)), visible_rows, footer_lines,
+                                total_rows, top_row);
+}
+
+ListDialogHit list_dialog_hit_for(const FontTextures& font, const ListDialogGeometry& g,
+                                  int visible_rows, float mx, float my) {
+    const int fh = static_cast<int>(line_h(font));
+    // The arrow buttons carry the FONT6 glyphs draw_list_dialog paints; both
+    // boxes are sized from their own label, so take the wider of the two and
+    // let the y bands separate them (they never overlap in x anyway).
+    const int arrow_w = list_dialog_button_w(
+        static_cast<int>(std::max(text_w(font, "\x18"), text_w(font, "\x19"))));
+    const int done_w = list_dialog_button_w(static_cast<int>(text_w(font, "Done")));
+    const int bh = list_dialog_button_h(fh);
+    return list_dialog_hit_test(g, visible_rows, arrow_w, bh, done_w, bh, static_cast<int>(mx),
+                                static_cast<int>(my));
+}
+
+bool list_mouse_point(SDL_Renderer* ren, const SDL_Event& ev, float& x, float& y) {
+    if (ev.type == SDL_EVENT_MOUSE_MOTION) {
+        SDL_RenderCoordinatesFromWindow(ren, ev.motion.x, ev.motion.y, &x, &y);
+        return true;
+    }
+    if (ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN || ev.type == SDL_EVENT_MOUSE_BUTTON_UP) {
+        SDL_RenderCoordinatesFromWindow(ren, ev.button.x, ev.button.y, &x, &y);
+        return true;
+    }
+    return false;
+}
+
+int list_dialog_key_code(SDL_Keycode key) {
+    switch (key) {
+        case SDLK_RETURN:
+        case SDLK_KP_ENTER:
+            return kListKeyEnter;
+        case SDLK_ESCAPE:
+            return kListKeyEscape;
+        case SDLK_HOME:
+            return kListKeyHome;
+        case SDLK_UP:
+            return kListKeyUp;
+        case SDLK_PAGEUP:
+            return kListKeyPageUp;
+        case SDLK_END:
+            return kListKeyEnd;
+        case SDLK_DOWN:
+            return kListKeyDown;
+        case SDLK_PAGEDOWN:
+            return kListKeyPageDown;
+        default:
+            return 0;
+    }
+}
+
 }  // namespace bomber::game

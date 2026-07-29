@@ -76,16 +76,28 @@ public:
     // pre-reads each scheme's -N name for the two-column row text.
     void enter(const std::filesystem::path& schemes_dir, std::string backdrop);
 
-    // Up/Down move the cursor; Enter selects (done()==true, cancelled()==
-    // false); Esc cancels (done()==true, cancelled()==true).
+    // Up/Down/Home/End/PageUp/PageDown navigate exactly as sub_42DBCC's own
+    // handlers do (list_dialog_geometry.hpp's input model — no wrap, and the
+    // four view keys move only the scroll window); Enter selects
+    // (done()==true, cancelled()==false); Esc cancels (done()==true,
+    // cancelled()==true).
     void on_key(SDL_Keycode key, AudioEngine& audio);
+
+    // The widget's MOUSE half — the highlight follows the pointer, a left
+    // press on a row selects, the scrollbar arrows and track scroll, and
+    // "Done" cancels on release. Logical (640x480) coordinates.
+    void on_mouse_move(float x, float y, bool buttons_held);
+    void on_mouse_down(float x, float y);
+    void on_mouse_up(float x, float y);
+
     void draw(SDL_Renderer* ren) const;
 
     bool done() const { return done_; }
     bool cancelled() const { return cancelled_; }
     // The selected file's full path — only valid when done() && !cancelled().
     const std::filesystem::path& selected() const {
-        return entries_[static_cast<std::size_t>(row_)];
+        const int sel = nav_.top_row + nav_.highlight;  // @0x42E39A
+        return entries_[static_cast<std::size_t>(sel)];
     }
     bool empty() const { return entries_.empty(); }
 
@@ -98,14 +110,19 @@ private:
     // One row as the original formats it: "<FILENAME.SCH>: <scheme name>".
     // Used both to draw and to measure the list's width (sub_42FEF0).
     std::string row_text(int i) const;
+    std::string header() const;
+    ListDialogGeometry layout() const;
 
     const AssetStore* assets_ = nullptr;
     const FontTextures* font_ = nullptr;
     std::string backdrop_;
     std::vector<std::filesystem::path> entries_;
     std::vector<std::string> names_;  // each file's -N scheme name ("" if unreadable)
-    int row_ = 0;
-    int top_ = 0;  // first visible row (scroll window of kVisibleRows)
+    // sub_42DBCC's own two registers: the first visible row and the
+    // highlight's OFFSET inside the window. Their sum is the selection.
+    ListDialogNav nav_;
+    float item_w_ = 0.0f;  // sub_42FEF0's max over row_text(), cached at enter()
+    ListDialogWidget pressed_ = ListDialogWidget::None;
     bool done_ = false;
     bool cancelled_ = false;
 };

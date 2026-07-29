@@ -4,6 +4,7 @@
 
 #include "bomber/game/asset_store.hpp"
 #include "bomber/game/bmscreen.hpp"
+#include "bomber/game/dialog_chrome.hpp"  // dispatch_list_mouse
 
 namespace bomber::game {
 
@@ -62,6 +63,9 @@ AppInput HelpBrowserScreen::run() {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
+            // sub_42DBCC is mouse-first; the list's own arrows, track and rows
+            // are live widgets, not decoration.
+            if (dispatch_list_mouse(ctx_.sdl, ev, browser)) continue;
             if (ev.type != SDL_EVENT_KEY_DOWN) continue;
             browser.on_key(ev.key.key, ctx_.audio);
         }

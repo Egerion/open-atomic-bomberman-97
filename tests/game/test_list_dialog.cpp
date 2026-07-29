@@ -6,6 +6,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
+#include <utility>  // std::pair (the dead-space sweep)
+
 #include "bomber/game/list_dialog_geometry.hpp"
 
 using bomber::game::kListDialogRows;
@@ -288,6 +290,381 @@ TEST_SUITE("list dialog geometry (sub_42DBCC)") {
         CHECK(with.done_y == with.win_h - 12 - 14);
         CHECK(with.footer_y0 == with.item_bottom + 8);
         CHECK(with.footer_y0 + 2 * 12 <= with.done_y);
+    }
+
+}  // TEST_SUITE
+
+// ---------------------------------------------------------------------------
+// sub_42DBCC's INPUT MODEL — read out of BM95.EXE 2026-07-29. The geometry
+// suite above pins what the widget LOOKS like; this one pins what it DOES.
+
+using bomber::game::kListKeyDown;
+using bomber::game::kListKeyEnd;
+using bomber::game::kListKeyEnter;
+using bomber::game::kListKeyEscape;
+using bomber::game::kListKeyHome;
+using bomber::game::kListKeyPageDown;
+using bomber::game::kListKeyPageUp;
+using bomber::game::kListKeyUp;
+using bomber::game::list_dialog_hit_test;
+using bomber::game::list_dialog_key;
+using bomber::game::list_dialog_letter_jump;
+using bomber::game::list_dialog_mouse_down;
+using bomber::game::list_dialog_mouse_move;
+using bomber::game::list_dialog_mouse_up;
+using bomber::game::ListDialogAction;
+using bomber::game::ListDialogHit;
+using bomber::game::ListDialogNav;
+using bomber::game::ListDialogWidget;
+
+namespace {
+
+constexpr int kRows = kListDialogRows;  // 10
+
+// The *.SCH picker's own dialog, hit-tested with plausible button boxes: a
+// FONT6 arrow glyph is narrow, "Done" is not. Only the widths matter to the
+// hit test, and neither box overlaps the item column (which ends at x = 208).
+constexpr int kArrowW = 20, kBtnH = 18, kDoneW = 60;
+
+ListDialogHit hit_at(const ListDialogGeometry& g, int x, int y) {
+    return list_dialog_hit_test(g, kRows, kArrowW, kBtnH, kDoneW, kBtnH, x, y);
+}
+
+// Screen-space centre of visible row `i` in the default picker geometry.
+int row_x() { return 100 + 8 + 4; }
+int row_y(const ListDialogGeometry& g, int i) { return 100 + g.item_y0 + i * g.item_h + 1; }
+
+}  // namespace
+
+TEST_SUITE("list dialog input model (sub_42DBCC)") {
+
+    // --- item 2: THERE IS NO WRAP -----------------------------------------
+
+    TEST_CASE("Up at the very top of the list does NOTHING") {
+        // @0x42E476: highlight == 0 falls to the edi test @0x42E48C, which is
+        // also 0, and the `jle` lands on the repaint dispatch having changed
+        // neither register. The port used to do (row + count - 1) % count and
+        // jump to the LAST item.
+        ListDialogNav nav{0, 0};
+        CHECK(list_dialog_key(nav, kListKeyUp, kRows, 40) == ListDialogAction::None);
+        CHECK(nav.top_row == 0);
+        CHECK(nav.highlight == 0);
+    }
+
+    TEST_CASE("Down at the very bottom of the list does NOTHING") {
+        // @0x42E4BD: top + visible == total, so the `jge` skips the increment.
+        ListDialogNav nav{30, 9};
+        CHECK(list_dialog_key(nav, kListKeyDown, kRows, 40) == ListDialogAction::None);
+        CHECK(nav.top_row == 30);
+        CHECK(nav.highlight == 9);
+    }
+
+    TEST_CASE("Up/Down move the HIGHLIGHT first and only then the view") {
+        ListDialogNav nav{5, 4};
+        list_dialog_key(nav, kListKeyDown, kRows, 40);
+        CHECK(nav.top_row == 5);  // the view holds still...
+        CHECK(nav.highlight == 5);
+        list_dialog_key(nav, kListKeyUp, kRows, 40);
+        CHECK(nav.top_row == 5);
+        CHECK(nav.highlight == 4);
+
+        // ...until the highlight is already parked on the window's edge.
+        ListDialogNav bottom{5, 9};
+        list_dialog_key(bottom, kListKeyDown, kRows, 40);
+        CHECK(bottom.top_row == 6);
+        CHECK(bottom.highlight == 9);  // the BAR stays on the same screen row
+        ListDialogNav top{5, 0};
+        list_dialog_key(top, kListKeyUp, kRows, 40);
+        CHECK(top.top_row == 4);
+        CHECK(top.highlight == 0);
+    }
+
+    TEST_CASE("Down stops on the last REAL item of a short list") {
+        // @0x42E4A5's second compare is against total-1, so a 3-item list
+        // cannot park the bar on a blank row 3..9 — and the view cannot move
+        // either, so Down at item 2 is a total no-op.
+        ListDialogNav nav{0, 2};
+        CHECK(list_dialog_key(nav, kListKeyDown, kRows, 3) == ListDialogAction::None);
+        CHECK(nav.top_row == 0);
+        CHECK(nav.highlight == 2);
+    }
+
+    TEST_CASE("walking Down through a long list never wraps back to the start") {
+        // 40 items, 10 rows: 39 presses reach the last item and the 40th does
+        // nothing. A wrapping handler would be back at item 0 by then.
+        ListDialogNav nav{0, 0};
+        for (int i = 0; i < 60; ++i) list_dialog_key(nav, kListKeyDown, kRows, 40);
+        CHECK(nav.top_row == 30);
+        CHECK(nav.highlight == 9);
+        CHECK(nav.top_row + nav.highlight == 39);
+        for (int i = 0; i < 60; ++i) list_dialog_key(nav, kListKeyUp, kRows, 40);
+        CHECK(nav.top_row == 0);
+        CHECK(nav.highlight == 0);
+    }
+
+    // --- item 3: HOME/END/PAGEUP/PAGEDOWN ARE PURE VIEW SCROLLS -----------
+
+    TEST_CASE("Home and End move ONLY the view, so the selection changes with it") {
+        // @0x42E525 / @0x42E539 write edi and nothing else. The highlight bar
+        // stays on the same SCREEN ROW, which is what makes the selected item
+        // change as a side effect. The port's help browser moved the
+        // SELECTION (Home -> item 0, End -> the last item) and let the view
+        // follow, which lands the bar on a different screen row entirely.
+        ListDialogNav nav{12, 3};
+        CHECK(list_dialog_key(nav, kListKeyHome, kRows, 40) == ListDialogAction::None);
+        CHECK(nav.top_row == 0);
+        CHECK(nav.highlight == 3);              // NOT 0
+        CHECK(nav.top_row + nav.highlight == 3);  // selection followed the view
+
+        CHECK(list_dialog_key(nav, kListKeyEnd, kRows, 40) == ListDialogAction::None);
+        CHECK(nav.top_row == 30);  // total - visible
+        CHECK(nav.highlight == 3);
+        CHECK(nav.top_row + nav.highlight == 33);  // NOT the last item, 39
+    }
+
+    TEST_CASE("PageUp and PageDown scroll the view by exactly one window, clamped") {
+        ListDialogNav nav{0, 7};
+        list_dialog_key(nav, kListKeyPageDown, kRows, 40);
+        CHECK(nav.top_row == 10);
+        CHECK(nav.highlight == 7);
+        list_dialog_key(nav, kListKeyPageDown, kRows, 40);
+        CHECK(nav.top_row == 20);
+        list_dialog_key(nav, kListKeyPageDown, kRows, 40);
+        CHECK(nav.top_row == 30);  // clamped to total - visible @0x42E519
+        list_dialog_key(nav, kListKeyPageDown, kRows, 40);
+        CHECK(nav.top_row == 30);  // and then does nothing at all @0x42E508
+        CHECK(nav.highlight == 7);
+
+        list_dialog_key(nav, kListKeyPageUp, kRows, 40);
+        CHECK(nav.top_row == 20);
+        list_dialog_key(nav, kListKeyPageUp, kRows, 40);
+        CHECK(nav.top_row == 10);
+        list_dialog_key(nav, kListKeyPageUp, kRows, 40);
+        CHECK(nav.top_row == 0);
+        list_dialog_key(nav, kListKeyPageUp, kRows, 40);
+        CHECK(nav.top_row == 0);  // @0x42E4E2's `jle`
+        CHECK(nav.highlight == 7);
+    }
+
+    TEST_CASE("a page that would overshoot the top clamps to 0, not below") {
+        ListDialogNav nav{4, 2};  // 4 < visible, so top - 10 goes negative
+        list_dialog_key(nav, kListKeyPageUp, kRows, 40);
+        CHECK(nav.top_row == 0);  // @0x42E4F3's `xor edi, edi`
+        CHECK(nav.highlight == 2);
+    }
+
+    TEST_CASE("in a list that FITS, all four view keys do nothing whatsoever") {
+        // max_top = total - visible <= 0, so End/PageDown fail their `jge`
+        // and Home/PageUp fail their `jle`. The selection is untouched — the
+        // port's End jumped to the last item here.
+        for (const int total : {1, 5, 10}) {
+            for (const int key :
+                 {kListKeyHome, kListKeyEnd, kListKeyPageUp, kListKeyPageDown}) {
+                ListDialogNav nav{0, 2};
+                CHECK(list_dialog_key(nav, key, kRows, total) == ListDialogAction::None);
+                CHECK(nav.top_row == 0);
+                CHECK(nav.highlight == 2);
+            }
+        }
+    }
+
+    TEST_CASE("Enter activates and Escape cancels, and neither moves the list") {
+        ListDialogNav nav{7, 3};
+        CHECK(list_dialog_key(nav, kListKeyEnter, kRows, 40) == ListDialogAction::Activate);
+        CHECK(list_dialog_key(nav, kListKeyEscape, kRows, 40) == ListDialogAction::Cancel);
+        CHECK(nav.top_row == 7);
+        CHECK(nav.highlight == 3);
+    }
+
+    TEST_CASE("the type-ahead jump pulls the match to the TOP of the window") {
+        // @0x42E58A-@0x42E5A0: edi = min(match, max_top), ebp = match - edi.
+        ListDialogNav nav{0, 0};
+        list_dialog_letter_jump(nav, 12, kRows, 40);
+        CHECK(nav.top_row == 12);
+        CHECK(nav.highlight == 0);
+        // ...unless that would scroll past the end, when the window stops and
+        // the highlight takes up the slack.
+        list_dialog_letter_jump(nav, 37, kRows, 40);
+        CHECK(nav.top_row == 30);
+        CHECK(nav.highlight == 7);
+        // A list that fits is skipped outright @0x42E554.
+        ListDialogNav fits{0, 1};
+        list_dialog_letter_jump(fits, 4, kRows, 6);
+        CHECK(fits.top_row == 0);
+        CHECK(fits.highlight == 1);
+    }
+
+    // --- item 1: THE MOUSE --------------------------------------------------
+
+    TEST_CASE("the hit test finds every hotspot sub_42DBCC registers") {
+        const ListDialogGeometry g = scrolled(40, 0);
+        REQUIRE(g.win_x == 100);
+        REQUIRE(g.item_x == 8);
+        REQUIRE(g.item_y0 == 28);
+
+        // Rows: one hotspot per VISIBLE row, over exactly the drawn band.
+        for (int i = 0; i < kRows; ++i) {
+            const ListDialogHit h = hit_at(g, row_x(), row_y(g, i));
+            CHECK(h.widget == ListDialogWidget::Row);
+            CHECK(h.row == i);
+        }
+        // ...and the band's own edges: item_x .. item_x + item_w, item_y0 ..
+        // item_y0 + visible*font_h.
+        CHECK(hit_at(g, 100 + g.item_x, 100 + g.item_y0).widget == ListDialogWidget::Row);
+        CHECK(hit_at(g, 100 + g.item_x - 1, 100 + g.item_y0).widget == ListDialogWidget::None);
+        CHECK(hit_at(g, 100 + g.item_x + g.item_w, 100 + g.item_y0).widget ==
+              ListDialogWidget::None);
+        CHECK(hit_at(g, row_x(), 100 + g.item_y0 - 1).widget == ListDialogWidget::None);
+        CHECK(hit_at(g, row_x(), 100 + g.item_bottom).widget == ListDialogWidget::None);
+
+        CHECK(hit_at(g, 100 + g.sb_button_x + 2, 100 + g.sb_up_y + 2).widget ==
+              ListDialogWidget::ScrollUp);
+        CHECK(hit_at(g, 100 + g.sb_button_x + 2, 100 + g.sb_down_y + 2).widget ==
+              ListDialogWidget::ScrollDown);
+        CHECK(hit_at(g, 100 + g.sb_track_x + 2, 100 + g.sb_track_y + 2).widget ==
+              ListDialogWidget::Track);
+        CHECK(hit_at(g, 100 + g.done_x + 2, 100 + g.done_y + 2).widget == ListDialogWidget::Done);
+
+        // Outside the window is nothing at all.
+        CHECK(hit_at(g, 99, 150).widget == ListDialogWidget::None);
+        CHECK(hit_at(g, 150, 99).widget == ListDialogWidget::None);
+        CHECK(hit_at(g, 100 + g.win_w, 150).widget == ListDialogWidget::None);
+        CHECK(hit_at(g, 150, 100 + g.win_h).widget == ListDialogWidget::None);
+    }
+
+    TEST_CASE("the highlight FOLLOWS the pointer over the rows — no click needed") {
+        // The 0x200+i ids @0x42E212 sit in the widget's MOUSE-ENTER slot
+        // (+0x18), not a click slot, so hovering a row moves the bar
+        // @0x42E453. The view does not move with it.
+        const ListDialogGeometry g = scrolled(40, 12);
+        ListDialogNav nav{12, 0};
+        list_dialog_mouse_move(nav, hit_at(g, row_x(), row_y(g, 6)), 40);
+        CHECK(nav.top_row == 12);
+        CHECK(nav.highlight == 6);
+        CHECK(nav.top_row + nav.highlight == 18);
+
+        // Off the rows, nothing happens — and the rows pass -1 for the LEAVE
+        // slot @0x42E212, so the bar stays where the pointer left it.
+        list_dialog_mouse_move(nav, hit_at(g, 100 + g.done_x + 2, 100 + g.done_y + 2), 40);
+        CHECK(nav.highlight == 6);
+        list_dialog_mouse_move(nav, hit_at(g, 5, 5), 40);
+        CHECK(nav.highlight == 6);
+    }
+
+    TEST_CASE("hovering a row with no item behind it is ignored") {
+        // @0x42E43F's total compare. All ten hotspots exist whatever the list
+        // length (@0x42E1ED loops over the VISIBLE count).
+        const ListDialogGeometry g = scrolled(3, 0);
+        ListDialogNav nav{0, 1};
+        CHECK(hit_at(g, row_x(), row_y(g, 7)).widget == ListDialogWidget::Row);
+        list_dialog_mouse_move(nav, hit_at(g, row_x(), row_y(g, 7)), 3);
+        CHECK(nav.highlight == 1);
+    }
+
+    TEST_CASE("a single left press on a row activates it — there is no double-click") {
+        // 0x400+i @0x42E387 joins Enter's own path @0x42E395. One press.
+        const ListDialogGeometry g = scrolled(40, 12);
+        ListDialogNav nav{12, 0};
+        const ListDialogHit h = hit_at(g, row_x(), row_y(g, 4));
+        CHECK(list_dialog_mouse_down(nav, g, h, kRows, 40, row_y(g, 4)) ==
+              ListDialogAction::Activate);
+        CHECK(nav.top_row + nav.highlight == 16);
+    }
+
+    TEST_CASE("the scrollbar arrows are one Up / one Down keypress each") {
+        // Their widget ids @0x42DFE8 / @0x42E00E are LITERALLY 0x148 and
+        // 0x150, so they run the same handlers the keys do — including moving
+        // the highlight inside the window before scrolling the view.
+        const ListDialogGeometry g = scrolled(40, 5);
+        ListDialogNav nav{5, 4};
+        const ListDialogHit up = hit_at(g, 100 + g.sb_button_x + 2, 100 + g.sb_up_y + 2);
+        const ListDialogHit down = hit_at(g, 100 + g.sb_button_x + 2, 100 + g.sb_down_y + 2);
+        CHECK(list_dialog_mouse_down(nav, g, down, kRows, 40, 0) == ListDialogAction::None);
+        CHECK(nav.top_row == 5);
+        CHECK(nav.highlight == 5);
+        CHECK(list_dialog_mouse_down(nav, g, up, kRows, 40, 0) == ListDialogAction::None);
+        CHECK(nav.highlight == 4);
+
+        ListDialogNav edge{5, 0};
+        list_dialog_mouse_down(edge, g, up, kRows, 40, 0);
+        CHECK(edge.top_row == 4);
+        CHECK(edge.highlight == 0);
+
+        // ...and they clamp at the ends like the keys do.
+        ListDialogNav at_top{0, 0};
+        list_dialog_mouse_down(at_top, g, up, kRows, 40, 0);
+        CHECK(at_top.top_row == 0);
+        CHECK(at_top.highlight == 0);
+    }
+
+    TEST_CASE("a track click pages, and a click ON THE THUMB does nothing — no drag") {
+        // @0x42E3D3-@0x42E415: above the thumb -> 0x149 (PageUp), below ->
+        // 0x151 (PageDown), inside the 15-px thumb band -> the loop, with no
+        // handler at all. sub_42DBCC has no drag code anywhere.
+        const ListDialogGeometry g = scrolled(40, 15);
+        REQUIRE(g.sb_thumb_y0 == 79);  // 47 + 15*65/30
+        const int tx = 100 + g.sb_track_x + 2;
+        const int thumb_top = 100 + g.sb_thumb_y0;  // 179
+
+        ListDialogNav above{15, 3};
+        CHECK(list_dialog_mouse_down(above, g, hit_at(g, tx, thumb_top - 9), kRows, 40,
+                                     thumb_top - 9) == ListDialogAction::None);
+        CHECK(above.top_row == 5);   // one page up
+        CHECK(above.highlight == 3);  // the bar did not move
+
+        ListDialogNav below{15, 3};
+        list_dialog_mouse_down(below, g, hit_at(g, tx, thumb_top + 21), kRows, 40, thumb_top + 21);
+        CHECK(below.top_row == 25);
+        CHECK(below.highlight == 3);
+
+        // The thumb band itself is [thumb_y, thumb_y + 14] INCLUSIVE.
+        for (const int dy : {0, 7, 14}) {
+            ListDialogNav on{15, 3};
+            CHECK(list_dialog_mouse_down(on, g, hit_at(g, tx, thumb_top + dy), kRows, 40,
+                                         thumb_top + dy) == ListDialogAction::None);
+            CHECK(on.top_row == 15);
+            CHECK(on.highlight == 3);
+        }
+        // ...and one pixel past it on either side pages again.
+        ListDialogNav just_above{15, 3};
+        list_dialog_mouse_down(just_above, g, hit_at(g, tx, thumb_top - 1), kRows, 40,
+                               thumb_top - 1);
+        CHECK(just_above.top_row == 5);
+        ListDialogNav just_below{15, 3};
+        list_dialog_mouse_down(just_below, g, hit_at(g, tx, thumb_top + 15), kRows, 40,
+                               thumb_top + 15);
+        CHECK(just_below.top_row == 25);
+    }
+
+    TEST_CASE("\"Done\" fires on RELEASE, and only when the press was on it too") {
+        // Its id 0x1b sits in the RELEASE slot (+0x24) @0x42E040, while every
+        // other widget here fills the PRESS slot (+0x20). And the dispatcher
+        // only delivers a release to the widget the press captured
+        // @0x432F5D, so pressing Done and sliding off cancels the click.
+        const ListDialogGeometry g = scrolled(40, 0);
+        const ListDialogHit done = hit_at(g, 100 + g.done_x + 2, 100 + g.done_y + 2);
+        const ListDialogHit row = hit_at(g, row_x(), row_y(g, 0));
+        REQUIRE(done.widget == ListDialogWidget::Done);
+
+        ListDialogNav nav{0, 0};
+        CHECK(list_dialog_mouse_down(nav, g, done, kRows, 40, 0) == ListDialogAction::None);
+        CHECK(list_dialog_mouse_up(done, ListDialogWidget::Done) == ListDialogAction::Cancel);
+        CHECK(list_dialog_mouse_up(row, ListDialogWidget::Done) == ListDialogAction::None);
+        CHECK(list_dialog_mouse_up(done, ListDialogWidget::Row) == ListDialogAction::None);
+        CHECK(list_dialog_mouse_up(done, ListDialogWidget::None) == ListDialogAction::None);
+    }
+
+    TEST_CASE("nothing else responds to a press: the title strip and dead space") {
+        const ListDialogGeometry g = scrolled(40, 5);
+        ListDialogNav nav{5, 2};
+        for (const auto& p : {std::pair<int, int>{100 + g.win_w / 2, 100 + 8},   // title strip
+                              std::pair<int, int>{100 + 2, 100 + g.done_y + 2},  // dead space
+                              std::pair<int, int>{50, 50}}) {                    // outside
+            CHECK(list_dialog_mouse_down(nav, g, hit_at(g, p.first, p.second), kRows, 40,
+                                         p.second) == ListDialogAction::None);
+            CHECK(nav.top_row == 5);
+            CHECK(nav.highlight == 2);
+        }
     }
 
 }  // TEST_SUITE

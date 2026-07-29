@@ -13,6 +13,7 @@
 #include <system_error>  // std::error_code
 
 #include "bomber/assets/sch.hpp"                      // assets::sch::Scheme/load/write
+#include "bomber/game/dialog_chrome.hpp"              // dispatch_list_mouse
 #include "bomber/game/editor_screen.hpp"              // EditorChooserScreen/EditorScreen/SchemeFilePicker
 #include "bomber/game/frontend_util.hpp"              // pick_glue
 #include "bomber/game/screens/help_screens.hpp"       // HelpBrowserScreen
@@ -78,6 +79,7 @@ void EditorRunner::run() {
                 SDL_Event pev;
                 while (SDL_PollEvent(&pev)) {
                     if (pev.type == SDL_EVENT_QUIT) return;
+                    if (dispatch_list_mouse(ctx_.sdl, pev, picker)) continue;
                     if (pev.type != SDL_EVENT_KEY_DOWN) continue;
                     picker.on_key(pev.key.key, ctx_.audio);
                 }
