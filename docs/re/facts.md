@@ -6062,6 +6062,14 @@ case where one build takes you and the other does not.
 
 ## Grab / carry / throw presentation — CONFIRMED + PORTED (2026-07-28, `sub_41F29B`/`sub_42331C`)
 
+> **PARTIALLY SUPERSEDED 2026-07-29** by "The carry FREEZES the carrier's body"
+> below. Two claims in this entry are retracted there: the frame-loop ORDER this
+> entry asserts (bomb pass before player pass) is inverted, and with it the extra
+> `-1` in `carry_arc_index`; and "there is no throw animation" is true of the
+> pose NAMES but wrong as a verdict on the port — the release is what starts
+> `pickup <dir>` playing, and a port that animates the carry pose can never show
+> it. Everything else here still stands.
+
 Audit of the glove sequence (grab a bomb, carry it, throw it) after a report
 that the throw animation looked wrong. Three separate findings; the third is
 the visible one.
@@ -6119,9 +6127,11 @@ throw pose, and `BombThrown` is silent for the same reason (see
    is 40, the same number the else-arm hardcodes), which is why only the
    horizontal drift showed. Fixed: `carried_bomb_offset` picks the arm off the
    pickup state, and `carry_arc_index` reproduces the `-1` plus the one-frame
-   staleness (`sub_4245B9` → `sub_42331C` runs BEFORE `sub_420F07` →
+   staleness (~~`sub_4245B9` → `sub_42331C` runs BEFORE `sub_420F07` →
    `sub_41F29B` in the frame loop, so the `+80` a carried bomb reads is always
-   last frame's).
+   last frame's~~ — RETRACTED 2026-07-29, the order is inverted: see the
+   two-call split in the entry below, and `docs/re/enclosure.md`'s call-order
+   table, which had the same two modes right all along).
 
 Presentation only: no `libs/sim` change, no golden hash and no `build_hash`
 movement. `tests/visual/` is unmoved — the scripted demo never grabs a bomb
@@ -6134,11 +6144,145 @@ movement. `tests/visual/` is unmoved — the scripted demo never grabs a bomb
   player's facing — a stunned player's sprite cycles through all four facings.
   Our renderer draws the plain stand pose in the facing direction. Separate
   mechanic (head hit, not the glove); left for its own pass.
-- **The grab tick's first frame.** The original's bomb pass has already run
+- **The grab tick's first frame.** ~~The original's bomb pass has already run
   when the grab happens, so on that one frame the bomb is still drawn resting
-  on the floor; our sim deactivates the bomb slot immediately, so we draw it
-  already held. A one-frame artifact of where the slot lives, not of the offset
-  math.
+  on the floor~~ — RETRACTED with the pass order below: the carried pass runs
+  AFTER the player pass, so the bomb is drawn held on the grab frame, which is
+  what our sim's immediate slot deactivation already produces. There is no
+  one-frame artifact here; the port was right by accident.
+
+## The carry FREEZES the carrier's body, and the RELEASE is the throw animation — CONFIRMED + PORTED (2026-07-29, `sub_42331C`/`sub_41F29B`)
+
+Second pass on the glove, after the owner played the build with the 2026-07-28
+fixes in it and still said the manual throw did not look like the native — "ne
+20hz'de ne de uncap 180'de", at BOTH cadences, which rules out interpolation and
+frame pacing and points at sequence content or tick-level timing.
+
+Three facts, the first of which overturns the previous entry's verdict.
+
+### 1. `sub_42331C` is called TWICE per frame, and the carried half runs LAST
+
+The very first test inside the actor loop is
+`if (record[0] && (record[+148] == 0) != a1)` — the argument SPLITS the bomb
+list on the carry link. There are exactly two call sites, and the frame loop
+(pseudo.c ~29522-29527) puts the players between them:
+
+```
+sub_4245B9 -> sub_42331C(0, ..)   // +148 == 0: every un-carried bomb
+sub_424F89 / sub_41B961 / sub_426D06 / sub_426818
+sub_420F07 -> sub_41F29B x10      // the players: move, then draw
+sub_42459A -> sub_42331C(1, ..)   // +148 != 0: the carried bombs
+```
+
+So a carried bomb is updated and drawn AFTER its carrier — which is also why it
+composites over the head — and the `+80` its curve step reads has already been
+advanced by that same frame's player pass. The previous entry asserted the
+opposite order and paid for it with a second `-1` in `carry_arc_index`; the
+index is `k = clamp(+80 - 1, 0, 3)` and nothing more, i.e. `clamp(ticks_since_
+grab - 1, 0, 3)`. Fixed.
+
+### 2. The carrier's body animation counter is pinned to ZERO for the whole carry
+
+Two halves, both read directly:
+
+- **The displayed step of every body pose that reaches `sub_41F29B`'s shared
+  draw tail is `+48 / 3`** — `sub_41DAA7(seq, (u16)player[+48] / 3)`, pseudo.c
+  23410. That tail is reached by `stand`, `walk`, `standbomb`, `walkbomb` AND
+  `pickup`: the state-4 block computes a frame from `+80` and then falls
+  straight through, so that value is DEAD and overwritten. Only `kick` (state 1)
+  and `punch` (state 2) escape, by `goto LABEL_239` with their own `+80` frame.
+  `+48` itself advances once per PIXEL stepped inside the mover (`sub_41EC84`,
+  22718) and once per FRAME in the idle branch (`++v111[24]`, 23084).
+- **The carried bomb writes it back to zero.** The first statement of
+  `sub_42331C`'s motion-state-3 branch is `*(_WORD *)(carrier + 48) = 0`
+  (pseudo.c ~25488), where `carrier` is the `+148` back-pointer `sub_424AF4`
+  installed at the grab. It runs every frame the link exists.
+
+Because that pass runs after the player pass (fact 1), the value each draw sees
+is only what THAT frame added: 1 in the idle branch, and at the original's
+~180 fps well under one pixel while walking. `/3` is 0 either way. **The carry
+is a still image** — `walkbomb <dir>` step 0 however far the carrier walks,
+`standbomb <dir>` (a 1-step sequence anyway) standing, and `pickup <dir>` step 0
+for as long as state 4 lasts.
+
+The corollary is the answer to the report. The release clears `+148`, the
+zeroing stops, `+48` accumulates from 0 again, and whatever remains of state 4
+plays `PUP*.ANI` out from its FIRST step — ten frames of the bomberman's arms
+sweeping up and away (extracted with `abtool ani PUP2.ANI`). **That playout is
+the original's throw animation.** There is no `throw <dir>` sequence name, which
+is what the previous entry saw and correctly reported; its mistake was
+concluding the port therefore matched. It did not: our renderer drove the carry
+and pickup poses off the running walk phase, so the pickup animation was already
+mid-cycle (or, standing still, pinned to `walk_ph == 0`) throughout the carry and
+had nothing left to show at the release. Standing still and throwing produced NO
+body motion at all.
+
+Ported in `carry_pose.hpp` (`body_phase_next` / `body_anim_step`) and
+`Renderer::sample_movement`. `walk`/`stand` deliberately keep the existing
+`walk_phase_`: the two differ only in whether the counter free-runs while idle,
+which `stand <dir>` (1 step, STAND.ANI) cannot show, and `walk_phase_` is what
+the visual pins were captured against.
+
+### 3. A flying bomb's height is a half SINE, not a parabola
+
+`sub_42331C`'s draw tail (~25710-25726) blits a motion-2 bomb at
+
+```
+y - sin(pi * travelled / (3 * tile)) * getvalue(660)    while +72 < 3 tiles
+y - sin(pi * travelled /      tile ) * getvalue(661)    each 1-tile hop after
+```
+
+`travelled` is `+70`, the pixel counter reset at every landing boundary (and NOT
+during the first three tiles, so the opening leg is one arch across all three).
+The three literals are `dbl_45A2C9 = 3.14159`, `dbl_45A2D1 = 3`,
+`dbl_45A2D9 = 3.14159`, read straight out of DGROUP at 0x45A2C9/D1/D9. The tile
+dimension (`dword_4648A4` for east/west, `dword_4648A0` for north/south) only
+converts pixels into a fraction of the leg, so the whole expression is
+`arc * sin(pi * t)`. Our renderer used `4 * arc * t * (1 - t)`, which peaks at
+the same height but bulges ~4% of it early in the flight. Now exact.
+
+Presentation only: no `libs/sim` change, no golden hash and no `build_hash`
+movement. `tests/visual/` unmoved and green — but note it CANNOT validate any of
+this, because the scripted demo never grabs, punches or throws a bomb, so no
+flying bomb and no carry pose ever reaches a pinned frame. Tests:
+`tests/game/test_anim.cpp`.
+
+### Adjacent, NOT fixed here — two of them are `libs/sim`
+
+- **The throw launches from the TILE CENTRE; the original launches from the
+  carrier's exact pixel position.** The bomb-action block's release (pseudo.c
+  23290-23291, block 2 of the truth table in "Player state machine (+78) —
+  COMPLETE") writes `bomb[+28] = player[+28]` and `bomb[+32] = player[+32]`
+  before `sub_424987`, so the thrown bomb starts wherever the carrier was
+  standing — which is where the carried bomb was already being drawn.
+  `BombSystem::throw_carried` instead seeds `nb.x/nb.y` from
+  `grid::tile_center_*`, so a bomb thrown mid-stride TELEPORTS up to half a tile
+  along the throw axis on the release frame. The landing tile is unaffected
+  (`|offset| < tile/2`, so `tile_of(start + 3 tiles)` is the same tile either
+  way) and `launch` derives `fly_total` from the tile count rather than the
+  actual span, so the only differences are the flight's start point and its
+  per-tick interpolation — but `Bomb::x/y` are hashed, so this is a `libs/sim`
+  behaviour change: golden recapture plus a `build_hash` re-measurement, and
+  every peer needs the new executable. Deliberately NOT taken in this
+  presentation pass.
+- **The grab's movement pause may be one tick short.** The gate is
+  `if (+78 == 4 && frame_counter <= getvalue(665))` (pseudo.c 23017-23023),
+  which suppresses input acquisition and forces the bomb key byte `+56` to 1.
+  With `+80` zeroed by the grab and `getvalue(665) = 2` that is a NON-strict
+  comparison over `+80 = 0,1,2` — three ticks after the grab tick, where
+  `Player::pickup_pause` gives two. The compared variable is a decompiler
+  artifact (`v14`) rather than a named `+80` read, so this is NEEDS-VERIFY, not
+  a confirmed divergence; also a hashed field, so same cost as above.
+- **State 4's own length may be one tick short.** The exit is
+  `+80 > sub_41DA5C(seq)` (pseudo.c ~23404), i.e. the pose survives `+80` = 0..10
+  for a 10-step `pickup <dir>` = 11 ticks; `pickup_pose_` is seeded with the
+  step count, 10. Presentation-only and within the noise, but it now bounds how
+  much of the throw playout is visible.
+- **The head-stun pose spins.** In the idle branch the direction byte fed to
+  `stand %s` is `+80 & 3` when `+58` (head-hit stun) is non-zero, not the
+  player's facing — a stunned player's sprite cycles through all four facings.
+  Our renderer draws the plain stand pose in the facing direction. Separate
+  mechanic (head hit, not the glove); left for its own pass.
 
 ## Still guessed — not yet extracted from the binary
 

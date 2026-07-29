@@ -111,16 +111,48 @@ TEST_CASE("warp and the boxed-in fidget sit at the ends of the precedence") {
     CHECK(select_player_pose(f) == PlayerPose::Spin);  // states 6/7 gate everything
 }
 
-TEST_CASE("the pickup curve index lags the grab by two frames and saturates") {
-    // k = clamp(+80 - 1, 0, 3), and the bomb pass reads +80 one frame stale
-    // (sub_4245B9 runs before sub_420F07), so k = clamp(frames - 2, 0, 3).
+TEST_CASE("the pickup curve index lags the grab by one frame and saturates") {
+    // k = clamp(+80 - 1, 0, 3) and nothing else: the CARRIED half of
+    // sub_42331C (the a1=1 call, sub_42459A) runs AFTER sub_420F07, so the +80
+    // it reads has already been advanced this frame. An earlier pass had the
+    // two passes the other way round and paid for it with a second -1.
     CHECK(carry_arc_index(0) == 0);
     CHECK(carry_arc_index(1) == 0);
-    CHECK(carry_arc_index(2) == 0);
-    CHECK(carry_arc_index(3) == 1);
-    CHECK(carry_arc_index(4) == 2);
+    CHECK(carry_arc_index(2) == 1);
+    CHECK(carry_arc_index(3) == 2);
+    CHECK(carry_arc_index(4) == 3);
     CHECK(carry_arc_index(5) == 3);
     CHECK(carry_arc_index(500) == 3);
+}
+
+TEST_CASE("the carry freezes the body, and the throw is what plays it") {
+    using bomber::game::body_anim_step;
+    using bomber::game::body_phase_next;
+    constexpr int kFramesPerTick = 9;  // sim::kSubFrames, the canonical cadence
+
+    // Walking into a grab: whatever the counter had, the carry pins it to 0 —
+    // sub_42331C's state-3 branch writes the carrier's +48 = 0 every frame, so
+    // "walkbomb <dir>" holds step 0 however far the carrier walks.
+    std::uint32_t ph = 500;
+    for (int t = 0; t < 6; ++t) {
+        ph = body_phase_next(ph, /*carrying=*/true, /*carried_last=*/t > 0, 13, kFramesPerTick);
+        CHECK(body_anim_step(ph) == 0);
+    }
+    // The release tick still draws step 0 (the original's release frame is
+    // drawn before anything has added to +48 but the frame's own increments).
+    ph = body_phase_next(ph, false, /*carried_last=*/true, 0, kFramesPerTick);
+    CHECK(body_anim_step(ph) == 0);
+    // From there the pickup remainder plays out. Standing still, +48 gains one
+    // per displayed frame, so a tick is worth kSubFrames of it and the step
+    // advances by three — PUP*.ANI's ten steps inside ~4 ticks.
+    ph = body_phase_next(ph, false, false, 0, kFramesPerTick);
+    CHECK(body_anim_step(ph) == 3);
+    ph = body_phase_next(ph, false, false, 0, kFramesPerTick);
+    CHECK(body_anim_step(ph) == 6);
+    // Throwing mid-stride uses the walk budget instead, the same /3 the walk
+    // cycle gets (13 px of attempted travel -> four steps).
+    std::uint32_t walking = body_phase_next(0, false, false, 13, kFramesPerTick);
+    CHECK(body_anim_step(walking) == 4);
 }
 
 TEST_CASE("the held bomb leaves the curve and rides above the head") {
