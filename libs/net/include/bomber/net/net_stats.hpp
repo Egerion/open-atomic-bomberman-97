@@ -114,10 +114,10 @@ struct PeerStats {
     // the sparkline as the thing that spikes — BUT ONLY WHEN `rtt_offset_bound`
     // below is clear. Getting a tight pairwise RTT unconditionally would need a
     // ping message, and that costs a wire version — see the file header.
-    int rtt_ms = -1;         // most recent sample; -1 until one exists
-    int rtt_smooth_ms = -1;  // EWMA (1/4 weight) — the steady reading
-    int rtt_min_ms = -1;     // best sample this session: the tightest bound on the path
-    int rtt_max_ms = -1;     // worst sample this session
+    int rtt_ms = -1;             // most recent sample; -1 until one exists
+    int rtt_smooth_ms = -1;      // EWMA (1/4 weight) — the steady reading
+    int rtt_min_ms = -1;         // best sample this session: the tightest bound on the path
+    int rtt_max_ms = -1;         // worst sample this session
     int rtt_recent_max_ms = -1;  // worst within the sparkline window: "is it spiking NOW"
     int jitter_ms = 0;           // EWMA of |sample - previous sample|
 
@@ -305,13 +305,13 @@ private:
 // one of these lands both on screen and in netdiag.log.
 enum class SessionEndReason : std::uint8_t {
     Unknown = 0,
-    MatchCompleted,   // somebody clinched; the normal end
-    RoundAbandoned,   // Esc — the host scheduled an end tick and both peers stopped there
-    Desync,           // the confirmed-hash exchange disagreed: the peers are simulating different games
-    PeerDropped,      // a seat went silent past the hard timeout with Options row 12 OFF
+    MatchCompleted,  // somebody clinched; the normal end
+    RoundAbandoned,  // Esc — the host scheduled an end tick and both peers stopped there
+    Desync,       // the confirmed-hash exchange disagreed: the peers are simulating different games
+    PeerDropped,  // a seat went silent past the hard timeout with Options row 12 OFF
     PeerLostBetweenRounds,  // the between-rounds config exchange never completed
-    WindowClosed,     // the local player closed the window mid-match
-    LeftSession,      // the local player walked out (Ctrl+Q / Escape at an outcome screen)
+    WindowClosed,           // the local player closed the window mid-match
+    LeftSession,            // the local player walked out (Ctrl+Q / Escape at an outcome screen)
 };
 
 const char* end_reason_name(SessionEndReason r);

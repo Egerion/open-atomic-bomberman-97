@@ -162,16 +162,16 @@ void draw_net_overlay(SDL_Renderer* ren, const FontTextures& font, const net::Ne
     const float lh = static_cast<float>(font.line_height()) * kScale + 1.0f;
     // Count the rows first so the slab is exactly as tall as its contents: a
     // panel with dead space at the bottom reads as a panel with missing data.
-    int peer_rows = 0;
+    int peer_count = 0;  // each tracked peer costs two text rows plus a sparkline
     bool any_offset_bound = false;
     for (const net::PeerStats& p : s.peers) {
         if (!p.tracked) continue;
-        peer_rows += 2;
+        ++peer_count;
         if (p.rtt_offset_bound) any_offset_bound = true;
     }
     const int footer_rows = any_offset_bound ? 1 : 0;
-    const float h = kPad * 2 + lh * static_cast<float>(6 + peer_rows + footer_rows) +
-                    static_cast<float>(peer_rows / 2) * (kSparkH + 3.0f);
+    const float h = kPad * 2 + lh * static_cast<float>(6 + peer_count * 2 + footer_rows) +
+                    static_cast<float>(peer_count) * (kSparkH + 3.0f);
     const SDL_FRect panel{kMargin, kMargin, kPanelW, h};
     draw_slab(ren, panel);
 
@@ -204,8 +204,7 @@ void draw_net_overlay(SDL_Renderer* ren, const FontTextures& font, const net::Ne
     //    Amber once it is within one tick of the cap: that is the point past
     //    which the display stops being allowed to move.
     const bool deep = s.max_prediction > 0 && s.prediction_depth >= s.max_prediction - 1;
-    row(fmt("PRED %d/%d  PEAK %d", s.prediction_depth, s.max_prediction,
-            s.worst_prediction_depth),
+    row(fmt("PRED %d/%d  PEAK %d", s.prediction_depth, s.max_prediction, s.worst_prediction_depth),
         deep ? kWarn : kOk);
 
     // 4. THE STUTTER LINE. A pump the session was not allowed to simulate is
@@ -298,11 +297,10 @@ AppInput present_net_session_end(ScreenContext ctx, const net::SessionSummary& s
     rows.emplace_back(fmt("TICK %u   CONFIRMED %u", static_cast<unsigned>(s.tick),
                           static_cast<unsigned>(s.confirmed)),
                       kOk);
-    rows.emplace_back(fmt("STALLS %u   ROLLBACKS %u   RESIM %u",
-                          static_cast<unsigned>(s.stall_pumps),
-                          static_cast<unsigned>(s.rollbacks),
-                          static_cast<unsigned>(s.resim_ticks)),
-                      kOk);
+    rows.emplace_back(
+        fmt("STALLS %u   ROLLBACKS %u   RESIM %u", static_cast<unsigned>(s.stall_pumps),
+            static_cast<unsigned>(s.rollbacks), static_cast<unsigned>(s.resim_ticks)),
+        kOk);
     rows.emplace_back(fmt("PACKETS %u   MALFORMED %u", static_cast<unsigned>(s.rx_packets),
                           static_cast<unsigned>(s.rx_malformed)),
                       s.rx_malformed > 0 ? kBad : kOk);

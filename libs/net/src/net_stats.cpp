@@ -75,8 +75,7 @@ void NetStatsTracker::begin_pump(std::int64_t now_ms) {
             if (!s_.peers[si].tracked) continue;
             const int worst = bucket_worst_[si];
             PeerStats& p = s_.peers[si];
-            const auto value =
-                static_cast<std::uint16_t>(worst < 0 ? 0 : std::min(worst, 0xFFFF));
+            const auto value = static_cast<std::uint16_t>(worst < 0 ? 0 : std::min(worst, 0xFFFF));
             if (p.rtt_history_len < kRttHistory) {
                 p.rtt_history[p.rtt_history_len++] = value;
             } else {
@@ -90,8 +89,8 @@ void NetStatsTracker::begin_pump(std::int64_t now_ms) {
             p.rtt_recent_max_ms = -1;
             for (std::size_t i = 0; i < p.rtt_history_len; ++i)
                 if (p.rtt_history[i] != 0)
-                    p.rtt_recent_max_ms = std::max(p.rtt_recent_max_ms,
-                                                   static_cast<int>(p.rtt_history[i]));
+                    p.rtt_recent_max_ms =
+                        std::max(p.rtt_recent_max_ms, static_cast<int>(p.rtt_history[i]));
         }
         bucket_start_ms_ += kRttBucketMs;
     }

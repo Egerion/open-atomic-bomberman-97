@@ -347,8 +347,8 @@ TEST_CASE("net stats: rollbacks, re-sim depth and the redundancy count are all e
     p.pump_n(300);
 
     for (const net::NetStats* s : {&p.a.stats(), &p.b.stats()}) {
-        CHECK(s->rollbacks > 0);                  // latency forced real mispredictions
-        CHECK(s->resim_ticks >= s->rollbacks);    // each rollback replays >= 1 tick
+        CHECK(s->rollbacks > 0);                // latency forced real mispredictions
+        CHECK(s->resim_ticks >= s->rollbacks);  // each rollback replays >= 1 tick
         CHECK(s->prediction_depth >= 0);
         CHECK(s->worst_prediction_depth >= s->prediction_depth);
         CHECK(s->max_prediction == 16);
