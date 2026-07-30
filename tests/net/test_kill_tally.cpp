@@ -243,11 +243,18 @@ TEST_CASE("kill tally: an asymmetric path leaves the two peers with the SAME cou
     // rolled back the same ticks.
     //
     // These three delays are not arbitrary — each is a pairing the sweep at the
-    // bottom of this file shows the OLD accumulator getting WRONG (peer B ends on
-    // 5, 5 and 3 against peer A's 4). So every assertion below is being made on a
-    // run where the bug was live, not merely on a run where rollback happened.
+    // bottom of this file shows the OLD accumulator getting WRONG. So every
+    // assertion below is being made on a run where the bug was live, not merely on
+    // a run where rollback happened.
+    //
+    // The middle pairing was 200/60 until 2026-07-30, when the arrival-variance
+    // absorber (rollback_session.hpp's jitter note) stopped it splitting: fewer
+    // and shallower corrections mean the two peers' rollback histories diverge
+    // less, so some pairings that used to expose the naive accumulator no longer
+    // do. Re-picked from the sweep rather than loosened — 300/60 is the same shape
+    // (A->B far slower than B->A) and still splits.
     for (const auto& sc : {Scenario{.a_to_b_ms = 300, .b_to_a_ms = 120},
-                           Scenario{.a_to_b_ms = 200, .b_to_a_ms = 60},
+                           Scenario{.a_to_b_ms = 300, .b_to_a_ms = 60},
                            Scenario{.a_to_b_ms = 120, .b_to_a_ms = 300, .jitter_ms = 30}}) {
         const Run r = measure(sc);
         char label[48];
@@ -316,6 +323,13 @@ TEST_CASE("kill tally: THE BUG is still reachable by the old formulation") {
     }
     std::printf("  SWEEP over %d paths: naive split %d, confirmed-stream agreed %d\n", cases, split,
                 agreed);
-    CHECK(split > 0);        // measured 2026-07-30: 23 of 72
+    // Measured 2026-07-30: 23 of 72 before the arrival-variance absorber landed
+    // and 14 of 72 after it — the absorber leaves the two peers with less
+    // divergent rollback histories, so it takes some of the naive accumulator's
+    // failures away with it. Not a reason to relax anything: the defect is a
+    // property of the OLD formulation, not of any particular path, and this stays
+    // a floor of one so that a future change which makes it unreachable is caught
+    // as a loss of coverage rather than celebrated as a pass.
+    CHECK(split > 0);
     CHECK(agreed == cases);  // and the fix held on every single one
 }
