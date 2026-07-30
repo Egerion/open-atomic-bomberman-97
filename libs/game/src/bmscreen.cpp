@@ -10,6 +10,7 @@
 #include <system_error>
 
 #include "bomber/assets/image.hpp"
+#include "bomber/game/credits_addendum.hpp"
 #include "bomber/game/sprites.hpp"
 
 namespace bomber::game {
@@ -202,6 +203,12 @@ void BmScreen::enter(const std::string& bm_name) {
     } catch (const std::exception& e) {
         std::fprintf(stderr, "BM screen '%s' load failed: %s\n", bm_name.c_str(), e.what());
     }
+    // The port's own credits addendum, appended in memory only — the install's
+    // CREDITS.BM is 1997 game data and is opened read-only (credits_addendum.hpp
+    // explains the choice). It is appended even when the load above failed, so a
+    // user whose CREDITS.BM is missing still gets a page rather than a blank
+    // window.
+    if (bm_name == "CREDITS") append_credits_addendum(doc_);
 }
 
 int BmScreen::visible_rows() const {
@@ -304,11 +311,17 @@ void BmScreen::draw(SDL_Renderer* ren) const {
                 if (row_visible) font_->draw(ren, run, x, y, kInkR, kInkG, kInkB);
                 x += w;
             } else {
-                // Inline image: look it up as a front-end PCX by its base name
-                // (case as written; the install FS was case-insensitive). A
-                // missing image draws nothing but still advances (matches the
-                // original skipping an image whose palette/asset failed to load).
-                const Sprite& sp = assets_->frontend_pcx(seg.value);
+                // Inline image, through the VIEWER's own loader — keyed on
+                // palette index 0 and snapped to the master palette, which is
+                // what sub_41302D's sub_4150F0 load + sub_44AED5 blit do and
+                // what frontend_pcx (the opaque backdrop path) does not; see
+                // AssetStore::bm_inline_pcx. Looked up by base name, case as
+                // written (the install FS was case-insensitive). A missing image
+                // draws nothing but still advances (matching the original
+                // skipping an image whose palette/asset failed to load).
+                const Sprite& sp = seg.value == kAuthorPhotoTag
+                                       ? assets_->author_photo()  // compiled-in, not DATA/RES
+                                       : assets_->bm_inline_pcx(seg.value);
                 if (sp.tex) {
                     // CENTER the image vertically on the row: sub_41302D sets the
                     // blit Y to `rowY - (imageHeight - lineHeight)/2` (integer
@@ -337,8 +350,14 @@ void BmScreen::draw(SDL_Renderer* ren) const {
                     if (x + static_cast<float>(draw_w) > clip_right)
                         draw_w = static_cast<int>(clip_right - x);
                     if (draw_h > 0 && draw_w > 0) {
-                        SDL_FRect src{0.0f, static_cast<float>(src_y),
-                                      static_cast<float>(draw_w), static_cast<float>(draw_h)};
+                        // The src rect is in the sprite's CLASSIC space; behind
+                        // it may be a 4x DATA_HD texture, which would otherwise
+                        // sample a sliver of the corner (sprites.hpp
+                        // texture_src_rect). Identity when HD is off.
+                        const SDL_FRect src = texture_src_rect(
+                            sp.tex, sp.w, sp.h,
+                            SDL_FRect{0.0f, static_cast<float>(src_y),
+                                      static_cast<float>(draw_w), static_cast<float>(draw_h)});
                         SDL_FRect dst{x, static_cast<float>(img_top),
                                       static_cast<float>(draw_w), static_cast<float>(draw_h)};
                         SDL_RenderTexture(ren, sp.tex, &src, &dst);

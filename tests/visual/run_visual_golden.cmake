@@ -110,21 +110,101 @@ foreach(i RANGE ${last})
   endif()
 endforeach()
 
-if(BOMBER_RECAPTURE)
-  message(STATUS "Recapture complete -- paste the RECAPTURE lines above into "
-                 "${shots_file} (label/tick/hash columns), after confirming "
-                 "the rendered BMPs under ${BOMBER_WORK_DIR} look right.")
+# The match-frame verdict. A recapture run skips it (and skips the FATAL below)
+# but must NOT return here -- the front-end `.BM` rows further down have to be
+# recaptured in the same pass, or one invocation would silently refresh half the
+# manifest.
+if(NOT BOMBER_RECAPTURE)
+  if(mismatches)
+    string(REPLACE ";" "\n  " mismatches_str "${mismatches}")
+    message(FATAL_ERROR
+      "Visual golden mismatch -- a renderer change altered pixels for a "
+      "pinned frame. If this is a DELIBERATE visual change, recapture "
+      "(README.md \"Recapturing\") and update ${shots_file} in the same "
+      "commit; otherwise this is the presentation regression this harness "
+      "exists to catch.\n  ${mismatches_str}")
+  endif()
+  message(STATUS "Visual golden: all ${nshots} pinned shots match (${BOMBER_WORK_DIR})")
+endif()
+
+# ---------------------------------------------------------------------------
+# FRONT-END pins: bm_shots.txt, one `--bm-shot` capture per row.
+#
+# The five rows above all come from ONE scripted match, which is why they share
+# a run. A `.BM` text screen has no match behind it at all -- it is one frame of
+# the sub_41302D viewer at a given scroll position -- so each row is its own
+# invocation. Same hermetic guarantee: --bm-shot is a capture_run(), so
+# options.ini's soft_scaling / show_fps / vsync / native_cadence are pinned
+# rather than read (game_app.cpp load_config), and HD artwork is off at boot
+# and only ever turned on by a keypress.
+#
+# Row format: `<label> <BM_NAME> <scroll_lines> <sha256>`.
+set(bm_file "${BOMBER_SHOTS_DIR}/bm_shots.txt")
+if(NOT EXISTS "${bm_file}")
+  if(BOMBER_RECAPTURE)
+    message(STATUS "Recapture complete -- paste the RECAPTURE lines above into "
+                   "${shots_file}, after confirming the rendered BMPs under "
+                   "${BOMBER_WORK_DIR} look right.")
+  endif()
   return()
 endif()
 
-if(mismatches)
-  string(REPLACE ";" "\n  " mismatches_str "${mismatches}")
-  message(FATAL_ERROR
-    "Visual golden mismatch -- a renderer change altered pixels for a "
-    "pinned frame. If this is a DELIBERATE visual change, recapture "
-    "(README.md \"Recapturing\") and update ${shots_file} in the same "
-    "commit; otherwise this is the presentation regression this harness "
-    "exists to catch.\n  ${mismatches_str}")
-endif()
+file(STRINGS "${bm_file}" bm_lines)
+set(bm_mismatches "")
+set(bm_count 0)
+foreach(line IN LISTS bm_lines)
+  string(STRIP "${line}" line)
+  if(line STREQUAL "" OR line MATCHES "^#")
+    continue()
+  endif()
+  separate_arguments(fields UNIX_COMMAND "${line}")
+  list(LENGTH fields nfields)
+  if(NOT nfields EQUAL 4)
+    message(FATAL_ERROR "${bm_file}: malformed row (want 'label name scroll sha256'): ${line}")
+  endif()
+  list(GET fields 0 label)
+  list(GET fields 1 bm_name)
+  list(GET fields 2 scroll)
+  list(GET fields 3 expect_hash)
+  set(bmp "${BOMBER_WORK_DIR}/${label}.bmp")
+  execute_process(
+    COMMAND "${BOMBER_GAME_EXE}" --bm-shot "${bm_name}" "${bmp}" "${scroll}"
+    RESULT_VARIABLE rc
+    OUTPUT_VARIABLE bm_stdout
+    ERROR_VARIABLE bm_stderr
+  )
+  if(NOT rc EQUAL 0)
+    if(rc EQUAL 2)
+      message(STATUS "VISUAL_GOLDEN_SKIP: no install for --bm-shot ${bm_name}")
+      return()
+    endif()
+    message(FATAL_ERROR "bomber_game --bm-shot ${bm_name} exited ${rc}: ${bm_stderr}")
+  endif()
+  if(NOT EXISTS "${bmp}")
+    list(APPEND bm_mismatches "${label}: MISSING -- expected ${bmp}")
+    continue()
+  endif()
+  file(SHA256 "${bmp}" actual_hash)
+  math(EXPR bm_count "${bm_count} + 1")
+  if(BOMBER_RECAPTURE)
+    message(STATUS "RECAPTURE-BM ${label} ${bm_name} ${scroll} ${actual_hash}")
+  elseif(NOT actual_hash STREQUAL expect_hash)
+    list(APPEND bm_mismatches
+         "${label} (${bm_name} +${scroll}): expected ${expect_hash}, got ${actual_hash}")
+  endif()
+endforeach()
 
-message(STATUS "Visual golden: all ${nshots} pinned shots match (${BOMBER_WORK_DIR})")
+if(BOMBER_RECAPTURE)
+  message(STATUS "Recapture complete -- paste the RECAPTURE lines into "
+                 "${shots_file} and the RECAPTURE-BM lines into ${bm_file}, "
+                 "after confirming the rendered BMPs under ${BOMBER_WORK_DIR} "
+                 "look right.")
+  return()
+endif()
+if(bm_mismatches)
+  string(REPLACE ";" "\n  " bm_str "${bm_mismatches}")
+  message(FATAL_ERROR
+    "Visual golden mismatch on a front-end .BM screen -- recapture and update "
+    "${bm_file} in the same commit if the change is deliberate.\n  ${bm_str}")
+endif()
+message(STATUS "Visual golden: all ${bm_count} pinned .BM frames match")

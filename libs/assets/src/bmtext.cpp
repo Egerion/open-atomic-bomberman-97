@@ -10,26 +10,12 @@ namespace {
 constexpr char kEof = '\x1a';  // DOS EOF (^Z): sub_41302D stops at the stream's EOF flag.
 constexpr std::string_view kTag = "<IMG";
 
-// Expand tabs to the next 4-column stop, mirroring sub_41302D
-// (`while (col & 3) emit ' '`), and append to the current text run.
-void append_expanded(std::string& out, char ch, int& col) {
-    if (ch == '\t') {
-        do {
-            out.push_back(' ');
-            ++col;
-        } while (col & 3);
-    } else {
-        out.push_back(ch);
-        ++col;
-    }
-}
-
-// Split one already-newline-free line into text/image segments. `col` tracks
-// the visual column so tab stops stay aligned across segments within the line.
+// Split one already-newline-free line into text/image segments. The line has
+// ALREADY been tab-expanded (expand_tabs below) — the original does the same,
+// in that order.
 BmLine parse_line(std::string_view line) {
     BmLine segs;
     std::string text;
-    int col = 0;
 
     for (std::size_t i = 0; i < line.size();) {
         if (line.compare(i, kTag.size(), kTag) == 0) {
@@ -46,7 +32,7 @@ BmLine parse_line(std::string_view line) {
             i = close + 1;
             continue;
         }
-        append_expanded(text, line[i], col);
+        text.push_back(line[i]);
         ++i;
     }
     if (!text.empty()) segs.push_back(BmSegment::text(std::move(text)));
@@ -54,6 +40,29 @@ BmLine parse_line(std::string_view line) {
 }
 
 }  // namespace
+
+std::string expand_tabs(std::string_view line) {
+    std::string out;
+    int col = 0;
+    for (char ch : line) {
+        if (ch == '\t') {
+            // At least one space, then on to the next 4-column stop:
+            // `do { *dst++ = ' '; ++col; } while (col & 3);`
+            do {
+                out.push_back(' ');
+                ++col;
+            } while (col & 3);
+        } else {
+            out.push_back(ch);
+        }
+        // The shared per-source-character increment (see the header): after a
+        // tab it makes `col` one MORE than the number of characters emitted,
+        // which is what the shipped column art is drawn against.
+        ++col;
+        if (col >= 255) break;  // the original's 256-byte scratch buffer
+    }
+    return out;
+}
 
 BmDocument parse(std::string_view data) {
     // sub_41302D reads in text mode: everything from the first 0x1A is EOF.
@@ -71,7 +80,11 @@ BmDocument parse(std::string_view data) {
         // fgets keeps the CR of a CRLF pair only until the '\n' cut; strip it so
         // segments never carry a trailing carriage return.
         if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
-        doc.lines.push_back(parse_line(line));
+        // Tabs first, over the whole raw line; tag splitting second — the
+        // original's order, and the reason a tag's characters count toward a
+        // later tab's column (expand_tabs' header comment).
+        const std::string expanded = expand_tabs(line);
+        doc.lines.push_back(parse_line(expanded));
         if (nl == std::string_view::npos) break;
         start = nl + 1;
     }

@@ -76,6 +76,17 @@ SDL_Texture* make_texture(SDL_Renderer* ren, const assets::Image& img, TextureAr
     return tex;
 }
 
+SDL_FRect texture_src_rect(SDL_Texture* tex, int classic_w, int classic_h,
+                           const SDL_FRect& classic) {
+    if (!tex || classic_w <= 0 || classic_h <= 0) return classic;
+    float tw = 0, th = 0;
+    if (!SDL_GetTextureSize(tex, &tw, &th)) return classic;
+    const float sx = tw / static_cast<float>(classic_w);
+    const float sy = th / static_cast<float>(classic_h);
+    if (sx == 1.0f && sy == 1.0f) return classic;
+    return SDL_FRect{classic.x * sx, classic.y * sy, classic.w * sx, classic.h * sy};
+}
+
 assets::Image recolor_image(assets::Image img, const std::int32_t rgb[3]) {
     // Faithful port of the original's remap-table builder sub_414A65 (0x414A65),
     // the per-palette-entry green-armour recolor the engine bakes into each
