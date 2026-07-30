@@ -266,6 +266,12 @@ inline constexpr int kRephaseWindowPumps = 20;
 // input_delay" already argued for, and the value the lobby picks for the lockstep
 // path. Deliberately small: past this the cure is worse than the disease, and the
 // rest of the burst is what rollback is FOR.
+//
+// THIS IS THE KNOB. It is the only number here that costs the player something he
+// can feel, and feel is the one thing a loopback harness cannot measure — so it is
+// meant to be judged in a live match and turned down if 100 ms reads worse than
+// the corrections it removes. 1 halves both; 0 disables the lead entirely and
+// leaves the re-phase filter, which is inert on a clean path either way.
 inline constexpr int kMaxLocalLeadTicks = 2;
 
 // How much spread in the peer's own prediction depth is treated as ordinary
