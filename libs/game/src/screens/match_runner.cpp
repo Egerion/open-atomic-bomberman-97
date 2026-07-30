@@ -11,6 +11,7 @@
 
 #include "bomber/assets/extra.hpp"                   // assets::extra::load_for_board
 #include "bomber/audio/round_music.hpp"              // round_music_id (the sub_410B6E guard)
+#include "bomber/game/campaign_round_end.hpp"        // CampaignVerdict / campaign_verdict
 #include "bomber/game/dialog_chrome.hpp"             // kDialogInkR/G/B (fps overlay)
 #include "bomber/game/goldman_wheel.hpp"             // kClogsPrizeId / wheel_prize_to_powerup
 #include "bomber/game/input.hpp"                     // SlotInputType
@@ -400,6 +401,11 @@ AppInput MatchRunner::run() {
     // GOLDEN-SAFE: net_session is null on every non-netplay path, so this
     // guard is transparent to the golden/demo/normal-match callers.
     if (!state_.net_session) start_match(state_.next_seed++);
+    // dword_464894 = 0, sub_40151B @0x401548 — the round init clears the pacing
+    // verdict before every campaign round (including a replayed one), so a
+    // stale verdict can never decide the round that follows. Inert off the
+    // campaign path: nothing reads it there.
+    state_.campaign_pacing = CampaignPacing{};
     const std::uint64_t tick_ns = 1'000'000'000ull / sim::kTicksPerSecond;
     std::uint64_t last = SDL_GetTicksNS();
     std::uint64_t acc = 0;
@@ -492,12 +498,39 @@ AppInput MatchRunner::run() {
     // and run_match should hand back to the Results flow.
     auto advance_round_end = [&]() -> bool {
         const sim::State& s = state_.sim.state();
-        // Campaign hazard-clear grace timer (docs/re/campaign.md "Round pacing"
-        // clause 3, sub_4016DA's dword_4646C0): fires once when every hazard has
-        // been dead kHazardClearTicks ticks — an independent early-out.
-        if (over_ticks < 0 && !await_death_fx && state_.campaign_active &&
-            s.hazard_clear_timer == sim::kHazardClearTicks) {
-            over_ticks = 3 * sim::kTicksPerSecond;
+        // CAMPAIGN rounds end by sub_4016DA's pacing verdict and NOTHING else
+        // (docs/re/campaign.md "Round end" / "Round pacing"). The survivor-count
+        // guard below is genuinely unreachable there: sub_421969 @0x421977
+        // returns a CONSTANT 2 while dword_46489C is set, so the round loop's own
+        // player-count test at 0x42A62C never trips, and the loop tail at
+        // 0x42A644 looks at dword_464894 alone. Killing every AI opponent does
+        // not end a campaign stage — clearing the monsters (verdict 1) or running
+        // the clock out (verdict 2) does. The port used to apply the normal
+        // sides_remaining() rule here, which ended EIGHT of the seventeen shipped
+        // stages on their first tick: those have ai_count 0, so a lone human is
+        // already the only side standing before anyone has moved.
+        if (state_.campaign_active) {
+            if (over_ticks < 0 && !await_death_fx) {
+                const CampaignPacing pacing = campaign_pacing(
+                    // clause 2 — sub_410578's REMAINING WHOLE SECONDS, floored
+                    // the same way EnclosureSystem::update reads the same global.
+                    s.ticks_left / sim::kTicksPerSecond,
+                    // clause 3 — dword_464820 == 0 for the grace window. Only the
+                    // sim can answer it, and only for a stage that actually
+                    // spawned hazards (see the campaign_hazards_active note in
+                    // state.hpp, and the divergence recorded in campaign.md).
+                    s.campaign_hazards_active && s.hazard_clear_timer >= sim::kHazardClearTicks,
+                    // clause 5 — no human/joystick slot left alive.
+                    campaign_no_human_survivor(true, s, state_.setup_type));
+                if (pacing.verdict != CampaignVerdict::Running) {
+                    state_.campaign_pacing = pacing;
+                    await_death_fx = true;
+                }
+            }
+            // Same "wait for the last corpse to finish" hand-off the normal path
+            // uses below; a stage cleared with nobody dying simply has no death
+            // effect to wait for and hands back at once.
+            return await_death_fx && !state_.renderer.death_fx_active(s);
         }
         // Team-aware round-over: "one SIDE left" (docs/re/ai.md TEAM follow-up);
         // sides_remaining() degenerates to alive_count() in a solo match.

@@ -2438,6 +2438,7 @@ MatchRunnerState GameApp::match_runner_state() {
                             .renderer = *renderer_,  // NOLINT(bugprone-unchecked-optional-access)
                             .next_seed = next_seed_,
                             .kill_count = kill_count_,
+                            .campaign_pacing = campaign_pacing_,
                             .uncap_fps = uncap_fps_,
                             .native_cadence = native_cadence_,
                             .show_fps = show_fps_,
@@ -2486,6 +2487,10 @@ AppInput GameApp::present_campaign_complete() {
     return CampaignCompleteScreen(sctx(), match_backdrop()).run();
 }
 
+AppInput GameApp::present_campaign_unsuccessful() {
+    return CampaignUnsuccessfulScreen(sctx(), match_backdrop()).run();
+}
+
 // The six match-outcome predicates were promoted VERBATIM to free functions in
 // bomber/game/match_outcome.hpp (ADR-0009 §10) so the extracted ScoreboardScreen
 // and MatchRunner — which hold no GameApp& — can call the SAME clinch/outcome
@@ -2495,10 +2500,6 @@ AppInput GameApp::present_campaign_complete() {
 // functions. Each forwarder qualifies the call (::bomber::game::) so it names the
 // free function, not itself.
 int GameApp::round_winner() const { return ::bomber::game::round_winner(sim_.state()); }
-
-bool GameApp::campaign_no_human_survivor() const {
-    return ::bomber::game::campaign_no_human_survivor(campaign_active_, sim_.state(), setup_type_);
-}
 
 bool GameApp::is_team_mode() const {
     return ::bomber::game::is_team_mode(team_play_, sim_.state(), setup_team_);
@@ -2824,36 +2825,76 @@ int GameApp::run_app() {
                 // carries its own backdrop music — previously our DRAW/
                 // RESULTS/VICTORY screens played under whatever music was
                 // left running, a silent-vs-original gap now closed.
-                // The outcome-tier backdrop, CAMPAIGN-GATED. sub_42A3F6's round
-                // loop tests dword_46489C at 0x42A63B and a campaign round end
-                // branches away entirely: at most one modal (sub_414340, and
-                // only when the pacing flag dword_464894 is 2), then straight
-                // back into the round init sub_410B6E for the next stage. It
-                // never reaches the 1130 start at 0x42A6DD.
                 //
-                // SCOPE, stated plainly: the same branch means a campaign round
-                // end shows no DRAW, no RESULTS tally and no VICTORY either, and
-                // the port DOES show all three. That is a real divergence and it
-                // is NOT fixed here — reshaping the campaign round end touches
-                // the stage advance, the gold-player assignment and the
-                // scoreboard, which is its own change with its own tests. What
-                // this gate does fix is the invented CUE: those screens no
-                // longer swap the track out from under a campaign, so they run
-                // on the stage music the round init left playing, which is what
-                // the original is actually doing at that moment.
-                const auto start_outcome_music = [this] {
-                    if (campaign_active_) return;
-                    audio_.start_music(kDrawMusicId);
-                };
+                // ---------------------------------------------------------------
+                // THE CAMPAIGN ARM (docs/re/campaign.md "Round end"). sub_42A3F6's
+                // round loop tests dword_46489C at 0x42A63B and a campaign round
+                // end branches away from EVERYTHING below: no 1130 music (0x42A6DD
+                // sits in the other arm), no DRAW, no RESULTS tally, no VICTORY, no
+                // win award (sub_421B56's only caller is 0x42A919, likewise in the
+                // other arm) and no gold-player write. It does two things instead —
+                // at most ONE modal, and only when the pacing verdict dword_464894
+                // is 2 (0x42A657) — and then the ROUND INIT sub_410B6E at 0x42A68B,
+                // which is where a campaign stage actually advances (sub_410B6E ->
+                // sub_40133F's ++dword_4648B0 at 0x40135F). The loop tail at
+                // 0x42AFF8 then either goes round again for the next stage or, once
+                // sub_40133F has run out of stages and written dword_464A68 = 10,
+                // leaves for the menu.
+                //
+                // Note WHERE the advance sits: after EVERY campaign round, not after
+                // a won best-of-N match. The port used to hang the stage advance off
+                // the VICTORY branch, so a campaign only moved on once someone had
+                // clinched win_target_ rounds — a shape the original does not have,
+                // because a campaign round never reaches the tier that counts wins.
+                //
+                // The decision itself is campaign_round_end.hpp, pinned headlessly;
+                // this block is only its SDL side. Everything past the break is the
+                // ordinary outcome tier, now reachable ONLY with campaign mode off —
+                // which is why the campaign special cases that used to be threaded
+                // through it (a music gate, a round_winner() override, a stage
+                // advance inside the VICTORY branch) are gone rather than bypassed.
+                const CampaignRoundEnd plan = campaign_round_end(
+                    campaign_active_, campaign_pacing_.verdict, campaign_pacing_.no_human_survivor,
+                    campaign_stage_index_, static_cast<int>(campaign_stages_.size()));
+                if (!plan.run_outcome_tier) {
+                    ev = AppInput::Advance;  // Advance -> Menu unless a stage follows
+                    if (plan.show_unsuccessful && present_campaign_unsuccessful() == AppInput::Quit)
+                        return 0;
+                    campaign_stage_index_ = plan.next_stage_index;
+                    // sub_410B6E's tail: load the stage sub_40133F's ++ just
+                    // selected, show its banner and play the next round. A scheme
+                    // the install cannot resolve is treated as "out of stages"
+                    // (port convenience, unpinned) rather than starting a match on
+                    // a stale board.
+                    if (plan.next_stage &&
+                        load_campaign_stage(campaign_stage_index_, campaign_state())) {
+                        reset_match_scores();
+                        if (present_campaign_banner() == AppInput::Quit) return 0;
+                        ev = AppInput::CampaignContinue;
+                        break;
+                    }
+                    if (plan.show_complete || plan.next_stage) {
+                        // sub_40133F's stage-exhausted branch: "Congratulations!" /
+                        // "You made it through the whole campaign!" (1220/1225),
+                        // then dword_464A68 = 10, i.e. out to the menu.
+                        if (present_campaign_complete() == AppInput::Quit) return 0;
+                    }
+                    // Verdict 0 lands here too, with neither modal: the original
+                    // only reaches its round-loop tail with dword_464894 still 0
+                    // after a Ctrl+Q forfeit, which has already written the menu
+                    // sentinel dword_464A68 = 2 at 0x42A579. Our Esc/Ctrl+Q abort is
+                    // the same act, so it leaves the same way — no banner, no stage
+                    // advance. dword_46489C itself is left stale in the original and
+                    // overwritten by sub_42A3F6's entry reset on the next Play; the
+                    // port clears it both here and there (campaign.md
+                    // "Campaign-exit key").
+                    campaign_active_ = false;
+                    campaign_stages_.clear();
+                    campaign_stage_index_ = 0;
+                    break;
+                }
+                const auto start_outcome_music = [this] { audio_.start_music(kDrawMusicId); };
                 int w = round_winner();
-                // Round-pacing clauses 4-5 override (docs/re/campaign.md
-                // "Round pacing", sub_4016DA, PORTED 2026-07-09): in campaign
-                // mode, a round where every human/joystick slot is dead is
-                // force-ended and REPLAYED regardless of what round_winner()
-                // says — even an AI side "winning" (w>=0, no human alive)
-                // does not count. Route it exactly like a plain draw (below)
-                // so it neither tallies a win nor advances the stage.
-                if (w >= 0 && campaign_no_human_survivor()) w = -1;
                 // Tally the round win — and under Team Play mirror it onto the
                 // winner's teammates (sub_421B56 @ 0x421B56, called from
                 // 0x42A919), so every member of the winning team holds the TEAM
@@ -2898,7 +2939,7 @@ int GameApp::run_app() {
                     // inside the branch taken when v73 is not -1) — THEN cuts to VICTORY.
                     // The port formerly skipped the scoreboard and jumped straight
                     // to VICTORY (and mis-fired 2000 on every round win too).
-                    start_outcome_music();  // 1130 under RESULTS/VICTORY (doc §2), not in campaign
+                    start_outcome_music();  // 1130 under RESULTS/VICTORY (doc §2)
                     audio_.play_random_in_range(2000, 2299);  // winner voice — clinch only
                     ev = present_scoreboard();  // the clinch scoreboard (WINS THE MATCH!)
                     // Then VICTORY<player>.PCX / TEAM<0/1>.PCX (frontend-flow.md
@@ -2906,52 +2947,6 @@ int GameApp::run_app() {
                     if (ev != AppInput::Quit)
                         ev = present_screen(
                             victory_screen(is_team_mode(), clinched, setup_team_[clinched]));
-                    // Campaign stage advance (docs/re/campaign.md
-                    // "Advances through campaign stages automatically",
-                    // sub_401312/sub_40133F, both gated on dword_46489C): a
-                    // decided match steps dword_4648B0 to the next stage and
-                    // loads its scheme/roster instead of returning to the
-                    // menu. sub_4016DA's per-tick round pacing (RE'd
-                    // 2026-07-09, docs/re/campaign.md "Round pacing —
-                    // PINNED") ADDS an early-out once every rover/ghost is
-                    // dead (a 2-second wall-clock grace before ending the
-                    // stage) — clause 3, now wired via RoverSystem's hashed
-                    // State::hazard_clear_timer and the run_match edge-check
-                    // that sets over_ticks when it reaches kHazardClearTicks
-                    // (see that check's own comment, same file). The clause
-                    // this VICTORY-tail block still re-uses unmodified is
-                    // clause 2, the SAME survivor-count check the normal
-                    // best-of-N win_target_/win_by_kills clinch already is
-                    // (sub_410578()<=1), which is exactly what
-                    // match_over/clinched above already checks.
-                    // Exhausting the stage list falls through to the menu
-                    // and clears campaign state (port convenience; the
-                    // original's own post-last-stage behaviour is unpinned
-                    // — see ROADMAP.md).
-                    if (campaign_active_ && ev != AppInput::Quit) {
-                        ++campaign_stage_index_;  // the original bumps dword_4648B0 here
-                        if (campaign_stage_index_ < static_cast<int>(campaign_stages_.size()) &&
-                            load_campaign_stage(campaign_stage_index_, campaign_state())) {
-                            reset_match_scores();
-                            if (present_campaign_banner() == AppInput::Quit) return 0;
-                            // Results -> Match with the NEXT stage's
-                            // scheme/roster already loaded (app_flow.hpp's
-                            // CampaignContinue), not a plain Advance (which
-                            // would route to the menu, per next()'s Results
-                            // case) or RoundContinue (documented as "same
-                            // roster/settings", which this breaks).
-                            ev = AppInput::CampaignContinue;
-                        } else {
-                            // Whole campaign cleared: the "Congratulations! You
-                            // made it through the whole campaign!" banner
-                            // (sub_40133F, getstring 1220/1225) before returning
-                            // to the menu.
-                            if (present_campaign_complete() == AppInput::Quit) return 0;
-                            campaign_active_ = false;  // dword_46489C = 0 (stage list exhausted)
-                            campaign_stages_.clear();
-                            campaign_stage_index_ = 0;
-                        }
-                    }
                 } else if (w >= 0) {
                     // Round win, match not over: show the running scores. NO
                     // winner voice here — sub_42A3F6 fires sub_427BFB(2000) only
@@ -2959,24 +2954,11 @@ int GameApp::run_app() {
                     // RESULTS pass (index -1, batch_0x4293E5.cpp:1260-1272) plays no
                     // "we have a winner" cue. (The port formerly fired it every
                     // round win.)
-                    start_outcome_music();  // 1130 under RESULTS (doc §2), not in campaign
+                    start_outcome_music();  // 1130 under RESULTS (doc §2)
                     ev = present_scoreboard();
                 } else {
-                    // DRAW (no survivor / time-up), OR the campaign_no_human_
-                    // survivor() override above forcing an AI-only "win" into
-                    // this branch: nobody scores; replay a round. This IS
-                    // clauses 4-5 of docs/re/campaign.md "Round pacing"
-                    // (sub_4016DA): "all humans/network players dead -> undo
-                    // the pending stage advance, replay the SAME stage".
-                    // campaign_stage_index_ is only ever incremented in the
-                    // match_over branch above, which requires w>=0 AFTER the
-                    // override — so a plain draw (w==-1 from round_winner())
-                    // never reached that increment to begin with, and the
-                    // override now catches the one case that WOULD have
-                    // (an AI side surviving with no human left): both land
-                    // here, "replay a round" is exactly "replay the same
-                    // campaign stage", with no separate decrement needed.
-                    start_outcome_music();  // 1130 under DRAW (doc §2), not in campaign
+                    // DRAW (no survivor / time-up): nobody scores; replay a round.
+                    start_outcome_music();  // 1130 under DRAW (doc §2)
                     audio_.play_random_in_range(kDrawStingLo, kDrawStingHi);
                     // sub_42A3F6's DRAW loop only auto-advances (6 s) for an
                     // all-AI/attract roster; a human match waits for Enter. A

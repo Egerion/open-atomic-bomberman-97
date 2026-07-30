@@ -8,6 +8,7 @@
 
 #include "bomber/assets/campaign.hpp"       // assets::res::CampaignStage
 #include "bomber/assets/sch.hpp"            // assets::sch::Scheme
+#include "bomber/game/campaign_round_end.hpp"  // CampaignVerdict (dword_464894)
 #include "bomber/game/options_screen.hpp"  // OptionsSnapshot
 #include "bomber/game/renderer.hpp"        // Renderer
 #include "bomber/sim/constants.hpp"        // sim::kMaxPlayers
@@ -76,6 +77,15 @@ struct MatchRunnerState {
     Renderer& renderer;                                  // GameApp::*renderer_ (draw/on_events/...)
     std::uint32_t& next_seed;                            // GameApp::next_seed_ (start_match(next_seed++))
     std::array<int, sim::kMaxPlayers>& kill_count;       // GameApp::kill_count_ (tally_kills)
+    // What sub_4016DA left behind: dword_464894 plus clause 5's stage decrement
+    // (campaign_round_end.hpp). MatchRunner latches it at the instant the
+    // round-end condition first holds and the match shell reads it back, rather
+    // than the shell re-deriving it from the frozen state afterwards — the
+    // original's loop leaves on the very pass the verdict is written, while our
+    // runner still lingers for the death animations, and a human dying to a
+    // leftover flame during that linger would silently turn a stage ADVANCE into
+    // a stage REPLAY. Untouched (and unread) on every non-campaign path.
+    CampaignPacing& campaign_pacing;                     // GameApp::campaign_pacing_
 
     // --- F7/F8/F9 live levers: read here, flipped mid-match by the global event
     //     filter, so they MUST be references (not value snapshots) ---

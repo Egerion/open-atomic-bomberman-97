@@ -91,6 +91,28 @@ private:
     MatchBackdrop backdrop_;
 };
 
+// The campaign round-end banner (docs/re/campaign.md "Round end"): the ONE
+// modal a campaign round is allowed to show in place of the whole DRAW/RESULTS/
+// VICTORY tier. sub_42A3F6 puts it up at 0x42A660 only when the pacing verdict
+// dword_464894 is 2 — the round clock ran out, or no human survived — never for
+// verdict 1 ("stage clear"). getstring(1240)="Oh Well!" is the top line and
+// getstring(1245)="Campaign unsuccessful!" the bottom, from the EAX/EDX register
+// pair sub_414340 draws top-then-bottom (the same pairing already pinned for the
+// picker's own confirm dialog), in the byte_49A390 = (164,0,0) dark red the
+// sibling "Congratulations!" modal uses — 0x42A662/0x42A66A load exactly the same
+// two ink globals as sub_40133F's 0x401374/0x40137C. Draws over the live match
+// frame (MatchBackdrop), like every other member of this family.
+class CampaignUnsuccessfulScreen {
+public:
+    CampaignUnsuccessfulScreen(ScreenContext ctx, MatchBackdrop backdrop)
+        : ctx_(ctx), backdrop_(backdrop) {}
+    AppInput run();
+
+private:
+    ScreenContext ctx_;
+    MatchBackdrop backdrop_;
+};
+
 // The in-round F1 help browser (was GameApp::present_help_browser_modal,
 // docs/re/in-match-shell.md §1): the SAME generic *.BM help browser the menu
 // row opens, but composited over the LAST rendered match frame (MatchBackdrop)

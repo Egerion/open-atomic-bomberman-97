@@ -15,6 +15,7 @@
 #include "bomber/game/asset_store.hpp"
 #include "bomber/audio/audio_engine.hpp"
 #include "bomber/game/bmscreen.hpp"
+#include "bomber/game/campaign_round_end.hpp"
 #include "bomber/game/campaign_screen.hpp"
 #include "bomber/game/chat_overlay.hpp"
 #include "bomber/game/editor_screen.hpp"
@@ -502,6 +503,10 @@ private:
     // modal (sub_40133F stage-exhausted branch, getstring 1220/1225) shown once
     // the last campaign stage is cleared, before returning to the menu.
     AppInput present_campaign_complete();
+    // The "Oh Well! / Campaign unsuccessful!" round-end banner (sub_42A3F6's
+    // campaign arm @0x42A660, getstring 1240/1245) — the ONLY screen a campaign
+    // round end is allowed to show, and only when the pacing verdict is 2.
+    AppInput present_campaign_unsuccessful();
     // The IPLOGO -> HSLOGO -> TITLE boot presentation (sub_42B060). LINEAR — no
     // attract re-run: each screen advances on a key OR the getvalue(12) = 7 s
     // timeout, and the title's Advance (key or timeout) returns so run_app drops
@@ -568,8 +573,9 @@ private:
     //
     // The winner of the round just ended (sole survivor index, or -1 for a draw).
     int round_winner() const;
-    // Campaign clauses 4-5: no human/joystick player survives this round.
-    bool campaign_no_human_survivor() const;
+    // (Campaign clauses 4-5 had a forwarder here too, until the campaign round
+    // end stopped being a special case inside the outcome tier. Its only caller
+    // is now MatchRunner, which reaches the free function directly.)
     // At least two ACTIVE players share a MatchConfig team (dword_464964).
     bool is_team_mode() const;
     // The §1 v73 match-clinch check; the clinching player's index, or -1.
@@ -745,6 +751,13 @@ private:
     // present_setup for one frame-cycle at stage start alongside getstring
     // 1230="Prepare to begin Campaign!"; empty when campaign mode is off.
     std::string campaign_banner_;
+    // What sub_4016DA left behind at the end of a campaign round: dword_464894
+    // plus clause 5's stage decrement (campaign_round_end.hpp). Written by
+    // MatchRunner at the moment the round ends, read once by run_app's Results
+    // handler to choose between "stage clear" (no screen at all), "Oh Well!" and
+    // "replay this stage" — and reset by the runner before every round, exactly
+    // as sub_40151B clears the verdict per stage.
+    CampaignPacing campaign_pacing_;  // dword_464894 (+ the 0x401786 decrement)
 
     // The Goldman wheel's pending gold player (dword_46492C, docs/re/goldman-
     // roulette.md §2): -1 = none pending, else a player index (solo) or a
