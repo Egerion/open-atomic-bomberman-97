@@ -23,6 +23,15 @@ constexpr std::uint32_t kHashWindow = 256;
 // follow-through instead of a hard freeze on the keypress.
 constexpr std::uint32_t kEndRoundSlackTicks = 12;
 
+// How much CLOCK SKEW (in ticks) this peer tolerates before it starts giving it
+// back. Our lag minus the peer's own lag is twice the skew — the path delay is in
+// both and cancels — so this is a threshold on 2x the skew, i.e. it engages once
+// this peer is a full tick (50 ms) ahead of its partner. Small on purpose: the
+// whole failure being cured is skew ACCUMULATING unnoticed until the prediction
+// cap is the only thing left holding it, so it must be shed while there is still
+// budget to spare. Too small and ordinary arrival noise would trip it: at 2 the
+// margin is a factor of two over the +/-1 tick a pump-boundary can contribute.
+constexpr int kRephaseAdvantageTicks = 2;
 
 bool same_input(const sim::PlayerInput& a, const sim::PlayerInput& b) {
     return pack_input(a) == pack_input(b);
@@ -155,6 +164,16 @@ void RollbackSession::receive() {
             const std::uint16_t remote = static_cast<std::uint16_t>(m.range.seat_mask & remote_seats_);
             if (remote == 0) continue;
             heard(remote);
+            // The sender's OWN prediction depth, for free: an InputRange spans
+            // [its confirmed, its head), so its length IS that distance. This is
+            // the remote half of the frame-advantage comparison (see the
+            // re-phasing note in the header) and the only reason it costs no wire
+            // message.
+            for (int s = 0; s < sim::kMaxPlayers; ++s)
+                if ((remote & static_cast<std::uint16_t>(1U << s)) != 0)
+                    peer_depth_[static_cast<std::size_t>(s)] =
+                        static_cast<int>(m.range.per_tick.size());
+            peer_heard_ = true;
             // THE ACK-RTT SAMPLE, and the reason this diagnostic needs no new
             // wire message: an InputRange always begins at the SENDER'S confirmed
             // frontier (send_local(confirmed_) on every path through advance()),
@@ -413,6 +432,38 @@ void RollbackSession::prune() {
         it = (it->first < keep) ? peer_hash_.erase(it) : std::next(it);
 }
 
+int RollbackSession::local_lag() const {
+    const std::uint16_t awaited = static_cast<std::uint16_t>(remote_seats_ & seats_awaited(tick_));
+    int worst = 0;
+    for (int s = 0; s < sim::kMaxPlayers; ++s) {
+        if ((awaited & static_cast<std::uint16_t>(1U << s)) == 0) continue;
+        const std::uint32_t next = remote_next_[static_cast<std::size_t>(s)];
+        const int lag = static_cast<int>(tick_ > next ? tick_ - next : 0);
+        if (lag > worst) worst = lag;
+    }
+    return worst;
+}
+
+int RollbackSession::peer_lag() const {
+    const std::uint16_t awaited = static_cast<std::uint16_t>(remote_seats_ & seats_awaited(tick_));
+    int worst = 0;
+    for (int s = 0; s < sim::kMaxPlayers; ++s) {
+        if ((awaited & static_cast<std::uint16_t>(1U << s)) == 0) continue;
+        const int d = peer_depth_[static_cast<std::size_t>(s)];
+        if (d > worst) worst = d;
+    }
+    return worst;
+}
+
+bool RollbackSession::should_rephase() const {
+    // Nothing to compare against until a peer has actually spoken; and a session
+    // whose partner is gone (handed to the AI, or the match already ending) has
+    // no clock to align with.
+    if (!peer_heard_ || aborted_ || end_tick_ != kNoEndRound) return false;
+    if ((remote_seats_ & seats_awaited(tick_)) == 0) return false;
+    return local_lag() - peer_lag() >= kRephaseAdvantageTicks;
+}
+
 void RollbackSession::advance(const sim::TickInputs& local_input, std::int64_t now_ms) {
     // The DIAGNOSTIC BRACKET. `now_ms` goes no further than this line — the
     // simulation below never sees it, so no wall clock can reach a tick
@@ -447,6 +498,21 @@ void RollbackSession::advance_impl(const sim::TickInputs& local_input) {
         send_local(confirmed_);
         return;
     }
+
+    // RE-PHASE (see the header's note). This peer is running ahead of its partner
+    // by more than the path explains, so give a tick back — on ALTERNATE pumps, so
+    // the skew is shed at half rate rather than by freezing. Sits ABOVE the cap
+    // check deliberately: the point is to spend the skew while there is still
+    // prediction budget in hand, instead of arriving at the cap and living there
+    // for the rest of the round. Counted separately from a cap stall — the two are
+    // different events and conflating them would hide the cure inside the symptom.
+    if (!rephase_held_ && should_rephase()) {
+        rephase_held_ = true;
+        stats_.on_rephase_hold();
+        send_local(confirmed_);  // the peer still needs our window to catch up
+        return;
+    }
+    rephase_held_ = false;
 
     // Hold at the prediction cap so the display never runs unboundedly ahead of
     // the peer (bounded memory + bounded re-sim on a correction). Keep re-sending

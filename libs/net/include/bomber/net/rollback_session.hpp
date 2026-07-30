@@ -43,6 +43,29 @@
 // RE'd Options row 12) and the `handoff_` schedule at the bottom of the class
 // (the rollback-safe part).
 //
+// RE-PHASING (the standing-lag cure; no wire change). MEASURED 2026-07-30 with a
+// two-peer harness on INDEPENDENT wall clocks (tests/net/test_rollback_pacing
+// .cpp): any freeze of a peer's frame loop longer than MatchRunner's 200 ms
+// catch-up clamp has its excess wall time DISCARDED, so that peer falls
+// permanently behind its partner — a 400 ms window drag costs a standing 4 ticks
+// and nothing ever gives them back. The prediction cap was the only re-phasing
+// mechanism there was, and it only engages once the WHOLE budget is spent: the
+// peer that is ahead stalls at 8/8 for the rest of the round, so every ordinary
+// packet-timing wobble becomes a visible stutter. A live Turkey<->Lithuania
+// record showed exactly that end state — depth=8/8, lag=lag_max=8, rollbacks=0
+// (the peer was never WRONG, only late) on a ~100 ms path where the healthy
+// depth is 2.
+//
+// The cure is GGPO's frame-advantage time-sync, and the numbers it needs are
+// already on the wire. An InputRange spans [sender's confirmed, sender's head),
+// so its LENGTH is the sender's own prediction depth — i.e. the peer's own lag,
+// measured on the peer. Ours minus theirs cancels the path delay (which both
+// contain equally) and leaves twice the CLOCK SKEW, which is the part that should
+// not be there. Past a small threshold the peer that is ahead holds one tick per
+// pump until the skew is gone, so depth returns to the path baseline instead of
+// parking at the cap. Purely a decision about WHEN this peer simulates — never
+// about WHAT it simulates — so no hashed state and no golden can move.
+
 // ROUND ABANDON -> DRAW (wire v8, MatchCtlKind::EndRound). Esc during an online
 // round is a LOCAL keypress and therefore must not be a local ACT: a peer that
 // stopped its own sim would have simulated — and tallied — a different number of
@@ -134,6 +157,10 @@ public:
     // caller and test byte-identical.
     void advance(const sim::TickInputs& local_input, std::int64_t now_ms = -1);
 
+    // The cap this session was built with. The match shell reads it to size its
+    // own wall-clock catch-up allowance against the same bound.
+    int max_prediction() const { return max_prediction_; }
+
     std::uint32_t predicted_tick() const { return tick_; }   // next tick to simulate speculatively
     std::uint32_t confirmed_tick() const { return confirmed_; }  // highest all-inputs-known tick
     const sim::Simulation& sim() const { return *sim_; }
@@ -213,6 +240,15 @@ private:
     void note_peer_hash(std::uint32_t tick, std::uint64_t peer_hash);
     void prune();
 
+    // How far the newest input we hold from any still-awaited remote seat trails
+    // our own speculative head — the same quantity the overlay calls `lag`.
+    int local_lag() const;
+    // The worst of the peers' OWN lags, read off the length of the InputRanges
+    // they send (see the re-phasing note at the top of this file).
+    int peer_lag() const;
+    // "This peer is ahead of its partner by more than the path alone explains."
+    bool should_rephase() const;
+
     // Seats whose input is still EXCHANGED at `tick`: all_seats_ minus every
     // seat already handed to the AI by then. The single tick-keyed predicate
     // behind both "what does the sim get fed" (assemble) and "whose input must
@@ -283,6 +319,16 @@ private:
     std::uint32_t end_tick_ = kNoEndRound;
     // GUEST only: our Esc is outstanding, so keep asking every pump.
     bool end_requested_ = false;
+
+    // Each remote seat's OWN prediction depth, taken from the length of the last
+    // InputRange it sent. Not hashed, not sent, and not part of any correctness
+    // decision — it only ever decides whether THIS peer holds a tick to let its
+    // partner catch up.
+    std::array<int, sim::kMaxPlayers> peer_depth_{};
+    bool peer_heard_ = false;  // nothing to compare against until a peer speaks
+    // A re-phase hold is spread over alternate pumps so a skew is shed at half
+    // rate rather than freezing the display outright.
+    bool rephase_held_ = false;
 
     bool desynced_ = false;
     std::uint32_t desync_tick_ = 0;

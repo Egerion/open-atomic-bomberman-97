@@ -187,6 +187,14 @@ struct NetStats {
     std::uint32_t stall_pumps = 0;
     int stalls_per_sec = 0;
 
+    // EXACT. Pumps this peer held DELIBERATELY, to give back clock skew its
+    // partner had lost (rollback_session.hpp's re-phasing note). Distinct from a
+    // stall on purpose: a stall is the cap refusing to let us run, a re-phase hold
+    // is us choosing not to. A healthy match shows a burst of these after each
+    // hitch and none in between; a permanently rising count means the two machines
+    // cannot hold the same tick rate at all, which is a different fault.
+    std::uint32_t rephase_holds = 0;
+
     // EXACT. A rollback is one mispredicted remote input; `resim_ticks` is the
     // total number of ticks replayed to correct them. Re-sims per second is the
     // CPU cost of the correction, and a high count with a low rollback count
@@ -255,6 +263,9 @@ public:
 
     // This pump could not simulate — the prediction cap held it.
     void on_stall();
+
+    // This pump WOULD have simulated, and chose not to, to shed clock skew.
+    void on_rephase_hold();
 
     // Called at the bottom of every pump with the session's live state.
     // `remote_next[s]` is the first tick no input is held for from seat s, which

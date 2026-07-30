@@ -171,53 +171,64 @@ TEST_CASE("net stats: an ack-RTT dominated by the peer's tick offset says so") {
     // exist, so the flag is not a nicety — it is the difference between a
     // diagnostic and a misleading one.
     //
-    // Reproduced the way it happens for real: A gets a head start and then BOTH
-    // peers run at the same rate, so the lead persists as a constant phase
-    // offset (nothing in rollback pulls it back in below the prediction cap).
-    constexpr int kLead = 8;
-    net::LoopbackLink link(/*latency=*/1);
-    net::LoopbackTransport ta(link, 0);
-    net::LoopbackTransport tb(link, 1);
-    sim::Simulation sa(open_config());
-    sim::Simulation sb(open_config());
-    net::RollbackSession a(sa, kSeat0, kBoth, /*max_prediction=*/16, ta);
-    net::RollbackSession b(sb, kSeat1, kBoth, /*max_prediction=*/16, tb);
-    std::int64_t now = 0;
-    const auto pump_a = [&] { a.advance(seat_input(0, scripted(0, a.predicted_tick())), now); };
-    const auto pump_b = [&] { b.advance(seat_input(1, scripted(1, b.predicted_tick())), now); };
-    for (int i = 0; i < kLead; ++i) {
-        pump_a();
-        link.step();
-        now += kPumpMs;
-    }
-    for (int i = 0; i < 300; ++i) {
-        pump_a();
-        pump_b();
-        link.step();
-        now += kPumpMs;
-    }
-    const net::PeerStats& ahead = a.stats().peers[1];   // A leads: its reading is contaminated
-    const net::PeerStats& behind = b.stats().peers[0];  // B trails: its partner answers at once
-    REQUIRE(ahead.rtt_ms > 0);
-    REQUIRE(behind.rtt_ms > 0);
-    CHECK(ahead.lag_ticks >= kLead);
+    // DRIVEN SYNTHETICALLY, and this changed on 2026-07-30. It used to build the
+    // offset from a live pair — "A gets a head start and then both peers run at the
+    // same rate, so the lead persists, since nothing in rollback pulls it back in
+    // below the prediction cap". That last clause was the standing-lag DEFECT, not
+    // a property to build a test on: RollbackSession now sheds clock skew actively
+    // (its header's re-phasing note, pinned end-to-end by
+    // test_rollback_pacing.cpp), so a live pair no longer HOLDS a large offset and
+    // the state this flag exists for cannot be reached that way any more.
+    //
+    // That is a good outcome for players and a bad one for a live-pair test, so the
+    // detector is now exercised where it actually lives: `rtt_offset_bound` is a
+    // pure function of the latest sample and the lag, both of which the tracker is
+    // fed directly here. The reading below is the real one from that UDP-loopback
+    // session — a 400 ms sample against an 8-tick lag — so the case still pins the
+    // measurement that motivated the flag, without depending on a pacing bug to
+    // reproduce it.
+    net::NetStatsTracker t;
+    t.begin(net::NetPath::Direct, kSeat1, /*start_tick=*/0, /*max_prediction=*/16);
+    std::array<std::uint32_t, sim::kMaxPlayers> remote_next{};
+
+    // Our input for tick 99 goes out at t=0; the peer's frontier only rises past
+    // it 400 ms later, because it was eight ticks behind and had to get there.
+    t.begin_pump(0);
+    t.on_local_tick(99);
+    remote_next[1] = 92;  // we hold nothing newer than tick 91 from the peer
+    t.end_pump(/*tick=*/100, /*confirmed=*/92, remote_next, 0, false, 0, false);
+
+    t.begin_pump(400);
+    t.on_input_from(/*seat=*/1, /*first_tick=*/100);  // acknowledges our tick 99
+    t.end_pump(/*tick=*/100, /*confirmed=*/92, remote_next, 0, false, 0, false);
+
+    const net::PeerStats& ahead = t.stats().peers[1];
+    REQUIRE(ahead.rtt_ms == 400);
+    CHECK(ahead.lag_ticks == 8);
     // The contaminated reading has collapsed onto the offset: it is ~1x the lag,
     // where a healthy one would be ~2x (net_stats.cpp derives both).
     CHECK(ahead.rtt_ms * 2 < ahead.lag_ticks * (1000 / net::kPumpHz) * 3);
     CHECK(ahead.rtt_offset_bound);
-    // And it is many times what this one-pump link can actually cost, which is
-    // precisely why an unflagged reading would send someone hunting a fault.
-    CHECK(ahead.rtt_ms > 4 * static_cast<int>(kPumpMs));
-    // The peer that is BEHIND is not flagged: its partner is always ready to
-    // acknowledge, so its sample really is the round trip — and it reads it.
-    CHECK_FALSE(behind.rtt_offset_bound);
-    CHECK(behind.rtt_ms <= 4 * static_cast<int>(kPumpMs));
 
     // It reaches the log too, so a line pasted back to us cannot be misread
     // later either.
     net::SessionSummary sum;
-    sum.stats = a.stats();
+    sum.stats = t.stats();
     CHECK(net::format_session_log_line(sum).find("[OFFSET-BOUND,NOT-PATH]") != std::string::npos);
+
+    // And the same tracker is NOT flagged when the sample is the healthy ~2x: the
+    // marker has to distinguish, not merely appear whenever the lag is high.
+    net::NetStatsTracker healthy;
+    healthy.begin(net::NetPath::Direct, kSeat1, 0, 16);
+    healthy.begin_pump(0);
+    healthy.on_local_tick(99);
+    remote_next[1] = 98;
+    healthy.end_pump(100, 98, remote_next, 0, false, 0, false);
+    healthy.begin_pump(200);  // 2 ticks of lag, a 200 ms round trip
+    healthy.on_input_from(1, 100);
+    healthy.end_pump(100, 98, remote_next, 0, false, 0, false);
+    CHECK(healthy.stats().peers[1].lag_ticks == 2);
+    CHECK_FALSE(healthy.stats().peers[1].rtt_offset_bound);
 }
 
 TEST_CASE("net stats: a level pair is NOT flagged offset-bound") {
@@ -476,6 +487,7 @@ TEST_CASE("net stats: the end-of-session log line is one greppable record") {
     s.stats.max_prediction = 64;
     s.stats.worst_prediction_depth = 64;
     s.stats.stall_pumps = 418;
+    s.stats.rephase_holds = 26;
     s.stats.rollbacks = 97;
     s.stats.resim_ticks = 612;
     s.stats.rx_packets = 24880;
@@ -500,7 +512,8 @@ TEST_CASE("net stats: the end-of-session log line is one greppable record") {
     CHECK(line ==
           "2026-07-29 14:03:11 netdiag end=desync path=relayed host=1 round=2 "
           "local_seats=0x001 all_seats=0x003 elapsed=92s tick=1264 confirmed=1201 depth=63/64 "
-          "depth_max=64 stalls=418 rollbacks=97 resim_ticks=612 rx=24880 bad=3 desync_tick=1201 "
+          "depth_max=64 stalls=418 rephase=26 rollbacks=97 resim_ticks=612 rx=24880 bad=3 "
+          "desync_tick=1201 "
           "| seat1 live=1 lag=63t lag_max=71t rtt=214/188/940(last/min/max)ms jitter=41ms "
           "rx=12440(18/s) dup=9412 loss~10%\n");
     // No [OFFSET-BOUND] marker on a peer that is not one: the marker has to mean
