@@ -202,8 +202,11 @@ std::uint64_t stage_actor_scenario_hash() {
 // once-per-tick action tail evaluates. The brick POCKET is what fixes that: it
 // keeps behaviour 3 supplied with adjacent targets and, with the spare bomb,
 // keeps the AI penned close enough that it is still on the bomb at tail time.
-// As tuned the run makes 4 drops, 3 grabs, 3 throws and a punch (first grab at
-// tick 11). If you edit this scenario, re-measure those — tests/sim/test_ai.cpp
+// As tuned the run makes 3 drops, 3 grabs and 3 throws, the first grab at tick
+// 10 (it was 4/3/3 plus a punch, first grab at tick 11, before the per-frame
+// bomb-action tail of 2026-07-30 changed the trajectory — a grab now lands on
+// the frame that decided it, so the AI is elsewhere by the tick's end).
+// If you edit this scenario, re-measure those — tests/sim/test_ai.cpp
 // "build_hash scenario 5 really drives the glove path" replicates the board and
 // asserts the grab, so it fails loudly if a future edit makes the brain idle.
 //
@@ -214,6 +217,14 @@ std::uint64_t stage_actor_scenario_hash() {
 // scenario closes. Do not fold this into scenario 3: a full clock and a spawn
 // OFF an actor tile are both load-bearing (the warp states and the wall crush
 // each starve the brain in their own way).
+//
+// It has since earned its keep twice more (2026-07-30), and it is the ONLY
+// scenario that catches either. Against the shipping digest of 977392888:
+// reverting the per-frame bomb-action tail moves this hash to
+// 7293458409330077548 and the digest to 3366107864 (scenario 3 moves with it),
+// and reverting the grab pause's getvalue(665)+1 window moves this hash ALONE,
+// to 12594943270607026772, digest 4051077992. Scenarios 1, 2, 4 and 6 are
+// byte-identical under both reverts.
 std::uint64_t ai_gloves_scenario_hash() {
     using namespace sim;
     MatchConfig cfg = pillar_arena();
@@ -240,6 +251,63 @@ std::uint64_t ai_gloves_scenario_hash() {
     return sim.hash();
 }
 
+// Seat 0 walks right into the brick wall, drops one bomb, retreats far enough
+// to survive it, comes back through the gap it blew (picking up the skull that
+// was under the brick), then walks back past the parked seat 1 and off again.
+// Seat 1 never presses anything: it is the contagion target, parked one tile
+// from seat 0's spawn and outside the blast.
+sim::TickInputs disease_inputs(int t) {
+    sim::TickInputs in;
+    in.players[0].right = (t < 60) || (t >= 110 && t < 200) || t >= 260;
+    in.players[0].left = (t >= 60 && t < 110) || (t >= 200 && t < 260);
+    in.players[0].action1 = (t == 59);
+    return in;
+}
+
+// 6. DISEASES — infection, contagion and EXPIRY. Scenarios 1-5 leave
+// `Tuning::diseases_time_limited` at its default true, and until 2026-07-30 the
+// port gated disease expiry on that flag, so the whole "VALUELST id 121 is dead
+// in the original, stop consuming it" fix was invisible to the digest: every
+// scenario took the same branch either way. A default is not coverage. This
+// scenario turns the flag OFF — the only setting the fix changes anything for,
+// and the setting a scheme authored with `121,0` hands a peer.
+//
+// It also needs its own board and its own inputs, and both were arrived at by
+// measurement, not by reasoning. The obvious version — pillar_arena plus the
+// shared `canned_inputs` — reaches ZERO infections in 400 ticks: those inputs
+// walk the four seats into each other's bombs, and three of them are dead by
+// tick 100 with the skulls still under unbroken bricks. The corridor below
+// instead guarantees the pickup: every brick in the wall hides a skull (Disease
+// is the only kind with a nonzero count, and a positive count places
+// unconditionally), and seat 0 has to blast through the wall to continue.
+//
+// Measured as this file demands: with the id-121 gate restored the scenario
+// hash changes (10041317218023902939 -> 2524117031108598899) and the digest
+// with it (2695214498 -> 977392888), so a peer still honouring the flag is
+// refused at the door — nothing else in scenarios 1-5 moves. As tuned
+// the run infects seat 0 at tick 129 and passes it to seat 1 on the way back;
+// on a time-limited build both diseases have expired by tick 400, on a
+// gate-honouring one both still read the full duration.
+std::uint64_t disease_scenario_hash() {
+    using namespace sim;
+    MatchConfig cfg;
+    for (auto& row : cfg.cells) row.fill(Cell::Blank);
+    for (int y = 0; y < kGridHeight; ++y) cfg.cells[y][5] = Cell::Brick;
+    cfg.spawns = {{0, 0}, {1, 0}};
+    cfg.player_count = 2;
+    cfg.seed = 0x534B554Cu;  // "SKUL"
+    cfg.tuning.input_freeze_ticks = 0;
+    for (int k = 0; k < kPowerupKinds; ++k) cfg.spawn_override[k] = 0;
+    cfg.spawn_override[static_cast<std::size_t>(PowerupType::Disease)] = 60;
+    for (auto& f : cfg.tuning.disease_frames) f = 40;
+    cfg.tuning.disease_cure_chance = 0;        // no cure roll to mask the infection
+    cfg.tuning.diseases_time_limited = false;  // the dead VALUELST id 121
+
+    Simulation sim(cfg);
+    for (int t = 0; t < 400; ++t) sim.tick(disease_inputs(t));
+    return sim.hash();
+}
+
 std::uint32_t fold64(std::uint64_t h) {
     return static_cast<std::uint32_t>(h ^ (h >> 32));
 }
@@ -251,8 +319,9 @@ std::uint32_t build_hash() {
         // Order matters and is part of the digest; append new scenarios, never
         // reorder, or every existing build looks incompatible for no reason.
         std::uint64_t h = core_scenario_hash();
-        for (const std::uint64_t s : {enclosure_scenario_hash(), ai_scenario_hash(),
-                                      stage_actor_scenario_hash(), ai_gloves_scenario_hash()}) {
+        for (const std::uint64_t s :
+             {enclosure_scenario_hash(), ai_scenario_hash(), stage_actor_scenario_hash(),
+              ai_gloves_scenario_hash(), disease_scenario_hash()}) {
             h ^= s + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2);
         }
         std::uint32_t v = fold64(h);

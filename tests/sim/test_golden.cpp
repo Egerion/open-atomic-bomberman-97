@@ -686,20 +686,25 @@ TEST_CASE("golden B: 4-player brick match with all abilities") {
     // (same commit) stayed BYTE-IDENTICAL â€” the no-input path is untouched â€”
     // and E's bounce-count + veer-RNG assertions passed unchanged, pinning
     // that the choreography itself still plays out.
+    // Recaptured 2026-07-30 (the three-mechanic sim-fidelity batch: the dead
+    // VALUELST id 121, the per-FRAME bomb-action tail, and the grab pause's
+    // non-strict getvalue(665) window — facts.md's three entries of that date).
+    // This is the ONLY golden that moved: B is the one scenario whose roster
+    // starts with the grab glove and drives the bomb key, so it is the only one
+    // that reaches either the pause window or a drop whose tile depends on
+    // which sub-frame the edge is resolved in. A/C/D/E are byte-identical, and
+    // the id-121 change is inert at their default settings — that gap is
+    // covered at the digest instead, by build_hash.cpp's scenario 6.
     static constexpr std::uint64_t kExpected[6] = {
-        0x7079944fe44c029eull,  // tick 500  (setup F1 recapture 2026-07-20)
-        0x44bcba78eca4d2a9ull,  // tick 1000
-        0xce180c666117b293ull,  // tick 1500
-        // Recaptured 2026-07-26 (enclosure F2 â€” see the file-level UPDATE).
-        // Measured with the gate temporarily disabled, on the same run that
-        // produced these three: the round is down to one side after 45 ticks,
-        // and the stepper USED to arm at tick 1881 and close all 96 tiles by
-        // tick 3000. It now never arms â€” which is exactly why the three
-        // checkpoints ABOVE (all before 1881) are byte-identical and only
-        // these three, all after it, move.
-        0x4d08762018244b61ull,  // tick 2000
-        0x38ed664fd96e55dfull,  // tick 2500
-        0x72a574965ee7e37eull,  // tick 3000
+        0xda2b559cfb8cdc72ull,  // tick 500
+        0x589158226bdf46d2ull,  // tick 1000
+        0x9e5e3a31a12fb33aull,  // tick 1500
+        // These three used to move on their own (enclosure F2, 2026-07-26):
+        // the round is down to one side after 45 ticks, the stepper USED to arm
+        // at tick 1881, and it now never arms.
+        0x91ed72678f270b68ull,  // tick 2000
+        0xcb8ed8887388439dull,  // tick 2500
+        0x04f97b4b2b809321ull,  // tick 3000
     };
     for (std::uint64_t t = 0; t < 3000; ++t) {
         s.tick(pattern(t));

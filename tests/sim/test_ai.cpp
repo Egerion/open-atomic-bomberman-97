@@ -971,7 +971,8 @@ TEST_CASE("Glove fix: build_hash scenario 5 really drives the glove path") {
             if (e.type == Event::Type::BombThrown) ++throws;
         }
     }
-    // Measured on the tuned board: 3 grabs and 3 throws. Assert the floor, not
+    // Measured on the tuned board: 3 grabs and 3 throws (first at tick 10).
+    // Assert the floor, not
     // the exact count -- the point is that the brain reaches the branch at all,
     // and a >= keeps this from becoming a second golden nobody dares touch.
     CHECK(grabs >= 1);
