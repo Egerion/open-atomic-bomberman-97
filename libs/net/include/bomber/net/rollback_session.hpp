@@ -4,10 +4,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <unordered_map>
+#include <vector>
 
 #include "bomber/net/net_stats.hpp"  // NetStatsTracker (diagnostics; nothing the sim sees)
 #include "bomber/net/transport.hpp"
 #include "bomber/sim/constants.hpp"  // kMaxPlayers
+#include "bomber/sim/event.hpp"
 #include "bomber/sim/simulation.hpp"
 #include "bomber/sim/state.hpp"
 
@@ -92,6 +94,38 @@
 // leaving only removes yourself, must never depend on a peer answering, and is
 // the match shell's own business (MatchRunner's double-Esc bail-out, which tears
 // the transport down locally and never sends anything).
+//
+// THE CONFIRMED EVENT STREAM (drain_confirmed_events, added 2026-07-30). Rollback
+// makes `State::events` a stream that REPLAYS: a tick simulated speculatively and
+// then corrected produces its events twice, and the two passes need not agree.
+// Anything that ACCUMULATES those events across ticks therefore accumulates a
+// per-machine number — and because events are excluded from state_hash by design
+// (determinism rule 4), the per-tick desync check, the goldens and `build_hash`
+// are all blind to it. That is not hypothetical: the front-end's per-match kill
+// tally (libs/game's results.hpp `tally_kills`) was fed straight from
+// `sim.state().events` once per pump, so two peers with different rollback
+// histories reached different kill totals from an IDENTICAL, agreed simulation —
+// and with Team Play + "win by kills" that is a different match VERDICT on the
+// two machines.
+//
+// The cure is to hand such a consumer only the events of CONFIRMED ticks. A
+// confirmed tick's inputs can never change again, so it is simulated exactly once
+// more than the goldens are: whatever the speculative passes did, the events
+// emitted here are the ones the final, agreed history produced. They need no
+// storage of their own — `snapshots_[t+1]` is the State AFTER tick t and carries
+// its `events`, which is the SAME lookup advance_confirmed() already does for the
+// hash. So the stream a consumer sums is, tick for tick, the stream whose hash
+// both peers have compared and agreed on: an accumulator fed from it is guarded
+// by the desync check that could not see the old one.
+//
+// The residual is the SPECULATIVE TAIL — the at-most-`max_prediction` ticks
+// between confirmed_ and the head at the moment the round stops. Both peers stop
+// at the same TICK, so drain_remaining_events() lets the shell close the range on
+// both machines identically; the CONTENT of those last few ticks is the one part
+// still taken on trust. It is bounded (400 ms at the default cap of 8) and, on
+// the ordinary round-end path, empty of kills — the shell lingers 3 s (60 ticks)
+// after the last side falls before it reads the tally, which is far longer than
+// the confirmation frontier ever trails.
 
 // HOST MIGRATION (wire v9, ADR-0011 decision 5, design §8). Everything above
 // assumes the hub is alive: the drop->AI handoff is scheduled by the host, and
@@ -252,6 +286,28 @@ public:
     bool desynced() const { return desynced_; }
     std::uint32_t desync_tick() const { return desync_tick_; }
 
+    // --- the confirmed event stream (see the note at the top of this file) ----
+
+    // APPEND, in tick order, the `State::events` of every tick that has become
+    // CONFIRMED since the last drain, and forget them. This is the ONLY safe
+    // input for anything that sums per-tick events across a match: a confirmed
+    // tick is never re-simulated, so each tick's events are handed out exactly
+    // once and are the ones the agreed history produced.
+    //
+    // The caller is expected to drain every pump — the buffer is otherwise
+    // unbounded (it is a few events per tick, so a whole round is on the order of
+    // a hundred kilobytes even if nobody ever reads it, but it is not free).
+    void drain_confirmed_events(std::vector<sim::Event>& out);
+
+    // drain_confirmed_events() PLUS the events of every tick simulated but not
+    // yet confirmed, i.e. the whole range [.., predicted_tick()). Call it ONCE,
+    // at the moment the round stops, so that two peers whose confirmation
+    // frontiers sit at different ticks still close the round having covered the
+    // IDENTICAL tick range — the tail's content is the documented residual, its
+    // extent is not. Advancing the session after this would double-count the
+    // tail, so don't.
+    void drain_remaining_events(std::vector<sim::Event>& out);
+
     // THE LIVE DIAGNOSTIC SNAPSHOT (net_stats.hpp). Everything the in-match
     // overlay draws and the end-of-session log line records — path, per-peer
     // RTT/lag, prediction depth, re-sim rate, stalls — derived entirely from
@@ -358,6 +414,13 @@ private:
     void note_peer_hash(std::uint32_t tick, std::uint64_t peer_hash);
     void prune();
 
+    // The events produced BY simulating `tick`, or nullptr if that tick has not
+    // been simulated (or its snapshot has already been pruned). Reads them off
+    // the snapshot taken BEFORE `tick + 1` — the same place, and the same
+    // lookup, advance_confirmed() takes the confirmed hash from, which is what
+    // ties the two together.
+    const std::vector<sim::Event>* events_of(std::uint32_t tick) const;
+
     // How far the newest input we hold from any still-awaited remote seat trails
     // our own speculative head — the same quantity the overlay calls `lag`.
     int local_lag() const;
@@ -450,6 +513,10 @@ private:
     std::array<std::uint32_t, sim::kMaxPlayers> last_remote_tick_{};
     std::unordered_map<std::uint32_t, std::uint64_t> hash_;  // our hash after each CONFIRMED tick
     std::unordered_map<std::uint32_t, std::uint64_t> peer_hash_;
+    // Events of confirmed-but-not-yet-drained ticks, in tick order. Filled ONLY
+    // by advance_confirmed(), which is also the only place the confirmed hash is
+    // taken — so the two can never disagree about which ticks are final.
+    std::vector<sim::Event> confirmed_events_;
 
     // The peer-drop SCHEDULE — the durable, tick-keyed record that survives
     // rollback. Deliberately NOT a one-shot mutation of State: `Player::ai` is

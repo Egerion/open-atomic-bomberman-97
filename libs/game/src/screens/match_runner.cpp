@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 #include "bomber/assets/extra.hpp"                   // assets::extra::load_for_board
 #include "bomber/audio/round_music.hpp"              // round_music_id (the sub_410B6E guard)
@@ -15,6 +16,7 @@
 #include "bomber/game/input.hpp"                     // SlotInputType
 #include "bomber/game/match_outcome.hpp"             // is_team_mode
 #include "bomber/game/net_esc.hpp"                   // NetEscState (the online Esc rule)
+#include "bomber/game/net_tally.hpp"                 // tally_netplay_kills (the rollback-safe tally)
 #include "bomber/game/renderer.hpp"                  // kScreenW
 #include "bomber/game/results.hpp"                   // tally_kills
 #include "bomber/game/screens/campaign_screens.hpp"  // HelpBrowserModal (the in-round F1)
@@ -468,6 +470,22 @@ AppInput MatchRunner::run() {
         return state_.net_session != nullptr && state_.net_session->end_round_scheduled() &&
                !state_.net_session->round_ended();
     };
+    // ONLINE the per-match kill tally is NOT summed from the live
+    // `sim.state().events` — under rollback that stream REPLAYS, so two peers
+    // with different prediction histories accumulated different totals from the
+    // same agreed simulation and could clinch the match for different players.
+    // Both calls below go through net_tally.hpp, which takes each tick's events
+    // from the session's CONFIRMED stream exactly once; that header carries the
+    // full rationale. `net_events` is just the reusable buffer they fill.
+    std::vector<sim::Event> net_events;
+    // The round's LAST tally + the exit code, in one place so every agreed exit
+    // path closes the tally the same way. A LOCAL match has no session and this
+    // is a plain `return AppInput::MatchOver` (the byte-identical old behaviour).
+    const auto finish_round = [&] {
+        if (state_.net_session)
+            tally_netplay_kills_final(*state_.net_session, net_events, state_.kill_count);
+        return AppInput::MatchOver;
+    };
     // Round-end / linger bookkeeping for ONE advanced 50 ms tick. Called from
     // both the fixed-tick catch-up loop and the F9 native-cadence path (once per
     // 50 ms systems pass). Returns true when the post-round linger has elapsed
@@ -721,9 +739,13 @@ AppInput MatchRunner::run() {
             state_.renderer.on_events(state_.sim.state(), state_.sim.state().tick != tick_before);
             state_.renderer.advance_tick(
                 state_.sim.state());  // NOLINT(bugprone-unchecked-optional-access)
+            // Local-only path: the F9 native cadence is force-disabled online
+            // (match_cadence.hpp), so there is no session here and no replaying
+            // event stream to guard against — the live events are each tick's
+            // one and only pass.
             tally_kills(state_.sim.state().events, state_.kill_count);
             for (std::uint64_t t = tick_before; t < state_.sim.state().tick; ++t)
-                if (advance_round_end()) return AppInput::MatchOver;
+                if (advance_round_end()) return finish_round();
             acc = 0;  // the fixed-tick accumulator is dormant on this path
         } else {
             // Long-stall guard (spiral-of-death / teleport clamp). A window drag,
@@ -794,12 +816,19 @@ AppInput MatchRunner::run() {
                 // on the live path and still primes the demo/screenshot path.
                 state_.renderer.advance_tick(
                     state_.sim.state());  // NOLINT(bugprone-unchecked-optional-access)
-                // §1's kill tally (sub_421B0F): a GameApp-side pass over this
+                // §1's kill tally (sub_421B0F): a GameApp-side pass over the
                 // tick's events, separate from the renderer's own on_events walk
                 // (renderer_ never mutates GameApp state — CLAUDE.md's libs/game
                 // boundary). Cumulative for the whole match (see kill_count_'s
                 // doc comment); reset only in reset_match_scores().
-                tally_kills(state_.sim.state().events, state_.kill_count);
+                //
+                // ONLINE the events come from the session's CONFIRMED stream
+                // rather than from the live (speculative, re-simulatable) state —
+                // see net_tally.hpp. The LOCAL branch is the old line verbatim.
+                if (state_.net_session)
+                    tally_netplay_kills(*state_.net_session, net_events, state_.kill_count);
+                else
+                    tally_kills(state_.sim.state().events, state_.kill_count);
 
                 // ONCE AN ABANDON IS AGREED (Esc online), the agreed tick is the
                 // ONLY exit. advance_round_end() below is a per-machine reading
@@ -809,9 +838,9 @@ AppInput MatchRunner::run() {
                 // in flight. Both peers stop at the same tick and the caller
                 // declares a draw without inspecting the state at all.
                 if (state_.net_session != nullptr && state_.net_session->end_round_scheduled()) {
-                    if (state_.net_session->round_ended()) return AppInput::MatchOver;
+                    if (state_.net_session->round_ended()) return finish_round();
                 } else if (advance_round_end()) {
-                    return AppInput::MatchOver;
+                    return finish_round();
                 }
             }
         }  // end else: the deterministic fixed-tick accumulator path

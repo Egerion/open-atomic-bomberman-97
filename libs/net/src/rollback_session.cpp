@@ -288,6 +288,32 @@ void RollbackSession::resimulate(std::uint32_t from) {
     }
 }
 
+const std::vector<sim::Event>* RollbackSession::events_of(std::uint32_t tick) const {
+    // `tick` is the most recent simulated tick: the live State still holds its
+    // events (nothing has ticked over them).
+    if (tick + 1 == tick_) return &sim_->state().events;
+    // Otherwise they are in the snapshot taken just before the NEXT tick ran.
+    // Always present while `tick` is inside the un-pruned window, which is the
+    // only range advance_confirmed() ever asks about.
+    const auto after = snapshots_.find(tick + 1);
+    return (after != snapshots_.end()) ? &after->second.events : nullptr;
+}
+
+void RollbackSession::drain_confirmed_events(std::vector<sim::Event>& out) {
+    out.insert(out.end(), confirmed_events_.begin(), confirmed_events_.end());
+    confirmed_events_.clear();
+}
+
+void RollbackSession::drain_remaining_events(std::vector<sim::Event>& out) {
+    drain_confirmed_events(out);
+    // The speculative tail, in tick order. Closing the range here is what makes
+    // two peers cover the same ticks even though their confirmation frontiers
+    // sit at different places (see the header's note).
+    for (std::uint32_t t = confirmed_; t < tick_; ++t)
+        if (const std::vector<sim::Event>* ev = events_of(t))
+            out.insert(out.end(), ev->begin(), ev->end());
+}
+
 void RollbackSession::advance_confirmed() {
     // Raise confirmed_ across the contiguous prefix of all-seats-known ticks. A
     // confirmed tick's inputs never change again, so its result is final —
@@ -308,6 +334,13 @@ void RollbackSession::advance_confirmed() {
             h = sim_->hash();  // confirmed_ is the most recent simulated tick
         }
         hash_[confirmed_] = h;
+        // This tick is FINAL, so its events are too: hand them to the confirmed
+        // stream (header note, "THE CONFIRMED EVENT STREAM"). Deliberately the
+        // same tick, the same snapshot and the same moment the hash above is
+        // taken from — an accumulator fed from here is covered by the very
+        // comparison that hash is about to be exchanged for.
+        if (const std::vector<sim::Event>* ev = events_of(confirmed_))
+            confirmed_events_.insert(confirmed_events_.end(), ev->begin(), ev->end());
         const std::vector<std::uint8_t> hp = encode_hash(confirmed_, h);
         transport_->send(hp.data(), hp.size());
         const auto peer = peer_hash_.find(confirmed_);
