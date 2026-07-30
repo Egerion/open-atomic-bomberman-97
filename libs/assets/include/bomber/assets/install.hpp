@@ -146,6 +146,13 @@ struct Options {
     std::optional<bool> vsync;
     std::optional<bool> native_cadence;
     std::optional<bool> show_fps;
+    // "soft_scaling=" — PORT-ONLY, the same Video Settings panel. Linear instead
+    // of nearest-neighbour sampling when the logical 640x480 frame is scaled up
+    // to the window/monitor (libs/game's scale_filter.hpp). Absent key -> OFF
+    // (crisp), which is the ONLY faithful default: the 1997 build scales nothing
+    // at all, so the smoothing reproduces a modern display scaler, not the
+    // original. Normalized 0/1.
+    std::optional<bool> soft_scaling;
 };
 
 // Reads and parses `<path>` (the install-root options.ini). A missing or

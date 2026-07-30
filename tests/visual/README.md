@@ -76,6 +76,7 @@ identical:
   | `team_play`      | `false` | team red/white vs each player's own slot colour |
   | `playtime`       | `150` s | the clock HUD is inside the hashed frame |
   | `show_fps`, `native_cadence`, `vsync` | off / off / on | an overlay over every frame; a wall-clock-driven sim |
+  | `soft_scaling`   | off / crisp (`scale_filter_for`) | the F10 panel's linear-vs-nearest upscale: it re-samples EVERY scaled pixel, so honouring it would re-hash all five shots at once |
 
   The remaining `options.ini` keys (`goldman`, `stomped_bombs_detonate`,
   `diseases_destroyable`, `win_by_kills`, `enclosement_depth`,

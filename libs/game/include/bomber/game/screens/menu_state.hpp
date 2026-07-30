@@ -22,10 +22,9 @@
 //  - attract / attract_saved / attract_lcg + setup_type/setup_sub/setup_team/
 //    selected_level/team_play — roll_attract_match's sub_4224E2 save plus the
 //    two presentation-LCG rolls that overwrite the live roster/level/team.
-//  - uncap_fps / native_cadence / show_fps / options_dirty — the F10 Video
-//    Settings toggles, handed straight to VideoSettingsScreen as a
-//    VideoToggleRefs (the same four members GameApp::present_video_settings
-//    passes).
+//  - uncap_fps / native_cadence / show_fps / soft_scaling / options_dirty — the
+//    F10 Video Settings toggles, handed straight to VideoSettingsScreen as a
+//    VideoToggleRefs (the same members GameApp::present_video_settings passes).
 //  - setup_lcg / scheme / game_dir / scheme_path — the four members the Ctrl+E×6
 //    editor needs to build an EditorEditState (mirrors GameApp::editor_state()).
 // campaign_active_/gold_player_ are deliberately ABSENT: roll_attract_match
@@ -63,6 +62,7 @@ struct MenuState {
     bool& uncap_fps;                    // GameApp::uncap_fps_ (F10 VideoToggleRefs)
     bool& native_cadence;               // GameApp::native_cadence_ (F10 VideoToggleRefs)
     bool& show_fps;                     // GameApp::show_fps_ (F10 VideoToggleRefs)
+    bool& soft_scaling;                 // GameApp::soft_scaling_ (F10 VideoToggleRefs)
     bool& options_dirty;                // GameApp::options_dirty_ (F10 flush flag)
     std::uint32_t& setup_lcg;           // GameApp::setup_lcg_ (editor: pick_glue)
     assets::sch::Scheme& scheme;        // GameApp::scheme_ (editor: saved scheme)

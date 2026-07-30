@@ -201,6 +201,8 @@ Options load_options(const fs::path& path) {
             opts.native_cadence = as_bool();  // PORT-ONLY (Video Settings)
         } else if (iequals(key, "show_fps")) {
             opts.show_fps = as_bool();  // PORT-ONLY (Video Settings)
+        } else if (iequals(key, "soft_scaling")) {
+            opts.soft_scaling = as_bool();  // PORT-ONLY (Video Settings)
         }
         // Any other key hits the original's final `else` (a debug log line,
         // not a user-facing effect) and is intentionally ignored here — still
@@ -266,6 +268,7 @@ void save_options(const fs::path& path, const Options& opts) {
     if (opts.vsync) set_bool("vsync", *opts.vsync);
     if (opts.native_cadence) set_bool("native_cadence", *opts.native_cadence);
     if (opts.show_fps) set_bool("show_fps", *opts.show_fps);
+    if (opts.soft_scaling) set_bool("soft_scaling", *opts.soft_scaling);
     if (opts.keydef) {
         // The writer (sub_405DE3) always emits all 20 triples in a fixed
         // (set, action) order; we do the same but skip a triple whose

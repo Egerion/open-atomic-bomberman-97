@@ -49,6 +49,15 @@ target_link_libraries(bomber_list_dialog_tests PRIVATE doctest::doctest bomber::
 target_include_directories(bomber_list_dialog_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
 add_test(NAME list_dialog COMMAND bomber_list_dialog_tests)
 
+# The PORT-ONLY soft-scaling filter's pure decisions (scale_filter.hpp): which
+# sampling mode each texture class gets, and the capture-run pin. Header-only and
+# SDL-free (the SDL translation lives in sprites.cpp), so like the list-dialog
+# suite this needs nothing but the game include dir.
+add_executable(bomber_scale_filter_tests test_scale_filter.cpp)
+target_link_libraries(bomber_scale_filter_tests PRIVATE doctest::doctest bomber::warnings)
+target_include_directories(bomber_scale_filter_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+add_test(NAME scale_filter COMMAND bomber_scale_filter_tests)
+
 # Scheme editor's pure grid model (editor_grid.hpp/.cpp) is SDL-free despite
 # living under libs/game/src — compiled directly into its own test binary rather
 # than linking bomber_game_core (which pulls in SDL3).

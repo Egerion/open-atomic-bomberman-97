@@ -25,7 +25,7 @@ The human's role was product direction and reverse-engineering guidance — "her
 - **Faithful, deterministic gameplay core** — integer-only 20 Hz sim, ported to mirror the original binary's arithmetic (not paraphrased), with golden-hash tests that freeze behaviour against accidental change.
 - **Original assets at runtime** — reads the 1997 ANI/PCX/SCH/RES/RSS formats from your own install; nothing is bundled.
 - **Online multiplayer** — deterministic lockstep **and** GGPO-style rollback over UDP, with per-tick `state_hash` desync detection and packet-loss tolerance; play from the menu (*Start / Join Network Game*) or the command line.
-- **Presentation extras** with no 1997 equivalent — HD art toggle, a native-cadence "creamy" low-latency mode (F9), FPS/vsync toggles — all kept off the faithfully-reproduced Options screen.
+- **Presentation extras** with no 1997 equivalent — HD art toggle, a native-cadence "creamy" low-latency mode (F9), FPS/vsync toggles, and an optional soft (bilinear) upscale for anyone who prefers the smoothed look a modern display scaler gives the 640x480 image — all default-off, and all kept off the faithfully-reproduced Options screen (they live in the port's own F10 panel).
 - **Tools** — a headless asset inspector/extractor (`abtool`), an animation viewer (`bomber_viewer`), and a scheme editor.
 
 ## Layout

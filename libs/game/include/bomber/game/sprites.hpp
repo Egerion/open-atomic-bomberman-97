@@ -12,6 +12,7 @@
 #include "bomber/assets/ani.hpp"
 #include "bomber/assets/colorpal.hpp"
 #include "bomber/assets/image.hpp"
+#include "bomber/game/scale_filter.hpp"
 
 // Render-side sprite primitives shared by the game and the asset viewer.
 
@@ -50,9 +51,49 @@ struct Anim {
     std::vector<Sprite> steps;
 };
 
-// Uploads an RGBA8 image with the requested sampling mode (nullptr on error).
-// Classic assets retain crisp nearest-neighbour sampling; high-resolution
-// override art uses linear sampling for a modern presentation.
+// THE SCALING FILTER (scale_filter.hpp — the F10 "SOFT SCALING" toggle).
+//
+// SDL3 (3.4.10) implements SDL_SetRenderLogicalPresentation as a viewport +
+// scale transform on the draw calls themselves, NOT as an intermediate
+// render-target texture (SDL_render.c: the logical mode only feeds
+// GetRenderViewportInPixels/logical_scale; there is no logical target to give a
+// scale mode to). So there is no single "logical-presentation scaler" knob: the
+// upscale is filtered PER TEXTURE, by each texture's own SDL_SetTextureScaleMode
+// — and SDL_SetDefaultTextureScaleMode is no substitute, because it only seeds
+// `texture->scaleMode` at CREATION (SDL_render.c @SDL_CreateTextureWithProperties)
+// and does nothing to the thousands of textures the boot load already uploaded.
+// Set it and only later-created textures would smooth: the classic
+// silently-half-works bug.
+//
+// A live toggle therefore has to reach every EXISTING texture, so make_texture
+// (the single texture-creation funnel in the whole codebase) keeps a registry of
+// the classic ones and set_scale_filter re-stamps them. The registry, not a walk
+// over AssetStore, because the owners are spread across AssetStore's ~40
+// containers, FontTextures' glyph atlas, BmScreen's inline images and the
+// viewer app — a per-container walk would have to be extended by hand for every
+// future container, and forgetting one is invisible except as a patch of the
+// screen that did not smooth. Registration is keyed on TextureArt, so DATA_HD
+// art (always Soft) is never re-stamped.
+//
+// Single-threaded, like everything else that touches the renderer.
+void set_scale_filter(ScaleFilter filter);
+ScaleFilter scale_filter();
+
+// SDL's spelling of a ScaleFilter. NEAREST, not SDL_SCALEMODE_PIXELART: the
+// crisp path must stay a plain per-pixel replicate, which is what every existing
+// tests/visual pin was captured under.
+SDL_ScaleMode sdl_scale_mode(ScaleFilter filter);
+
+// Destroys a texture and drops it from the scaling-filter registry. EVERY
+// texture from make_texture must be released through this (sdl::TextureDeleter
+// does it for the TexturePtr owners) — a raw SDL_DestroyTexture would leave a
+// dangling pointer for the next set_scale_filter to stamp.
+void destroy_texture(SDL_Texture* tex);
+
+// Uploads an RGBA8 image (nullptr on error). `art` picks the sampling mode via
+// art_filter(): Classic art follows the live SOFT SCALING filter and is
+// registered for later re-stamping; HighRes (DATA_HD) art is always linear and
+// is left out of the registry.
 //
 // When `snap` is non-null and ok(), the image is run through the in-match
 // master-palette quantization (colorpal.hpp) before upload — the original
@@ -61,7 +102,7 @@ struct Anim {
 // leave nullptr for front-end screens and DATA_HD truecolour, which the
 // original loads through its non-snapping path.
 SDL_Texture* make_texture(SDL_Renderer* ren, const assets::Image& img,
-                          SDL_ScaleMode scale_mode = SDL_SCALEMODE_NEAREST,
+                          TextureArt art = TextureArt::Classic,
                           const assets::colorpal::Palette* snap = nullptr);
 
 // Retargets the green armour of the pre-rendered player sprites, a faithful

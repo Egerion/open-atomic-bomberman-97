@@ -2,11 +2,14 @@
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
 #include <string>
 
 #include "bomber/game/asset_store.hpp"
 #include "bomber/game/dialog_chrome.hpp"
 #include "bomber/game/renderer.hpp"  // kScreenW
+#include "bomber/game/scale_filter.hpp"
+#include "bomber/game/sprites.hpp"  // set_scale_filter (the live soft-scaling apply)
 
 namespace bomber::game {
 
@@ -21,7 +24,7 @@ void VideoSettingsScreen::run() {
     // closes. Toggles apply live and mark options_dirty_ so flush_options
     // round-trips them.
     int row = 0;
-    constexpr int kRows = 3;
+    constexpr int kRows = 4;
     while (true) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -41,8 +44,16 @@ void VideoSettingsScreen::run() {
                         SDL_SetRenderVSync(ctx_.sdl, *toggles_.uncap_fps ? 0 : 1);
                     } else if (row == 1) {
                         *toggles_.native_cadence = !*toggles_.native_cadence;
-                    } else {
+                    } else if (row == 2) {
                         *toggles_.show_fps = !*toggles_.show_fps;
+                    } else {
+                        // Live, like the vsync row above: set_scale_filter
+                        // re-stamps every already-uploaded classic texture, so
+                        // the panel behind this frame is already smoothed (or
+                        // crisp again) on the very next present — no restart.
+                        *toggles_.soft_scaling = !*toggles_.soft_scaling;
+                        set_scale_filter(*toggles_.soft_scaling ? ScaleFilter::Soft
+                                                                : ScaleFilter::Crisp);
                     }
                     *toggles_.options_dirty = true;
                     break;
@@ -60,14 +71,23 @@ void VideoSettingsScreen::run() {
             SDL_FRect d{0, 0, static_cast<float>(bg.w), static_cast<float>(bg.h)};
             SDL_RenderTexture(ctx_.sdl, bg.tex, nullptr, &d);
         }
-        const DialogRect win{(kScreenW - 380.0f) / 2.0f, 140.0f, 380.0f, 190.0f};
-        draw_dialog_chrome(ctx_.sdl, win, &ctx_.assets.frontend_pcx("WINZ"));
         const float lh = static_cast<float>(ctx_.front_font.line_height());
+        // Tall enough for kRows rows plus the centred hint line, whatever FONT6's
+        // line height is — the 4th row must not re-create the spill this panel
+        // already had once (see the hint's comment). Floored at the original 190
+        // so the 3-row look is unchanged on this install's font.
+        const float win_h =
+            std::max(190.0f, 38.0f + 3.0f * lh + static_cast<float>(kRows) * (lh + 6.0f));
+        const DialogRect win{(kScreenW - 380.0f) / 2.0f, 140.0f, 380.0f, win_h};
+        draw_dialog_chrome(ctx_.sdl, win, &ctx_.assets.frontend_pcx("WINZ"));
         draw_dialog_text(ctx_.sdl, ctx_.front_font, "VIDEO SETTINGS (port)", win.x + 24.0f,
                          win.y + 16.0f, 255, 255, 255);
-        const char* labels[kRows] = {"VSync", "Native cadence", "Show FPS"};
+        // "Soft scaling", not "Retro": it names the effect (a smoothed upscale)
+        // instead of implying the crisp default is the unfaithful one — the
+        // original scaled nothing at all (scale_filter.hpp).
+        const char* labels[kRows] = {"VSync", "Native cadence", "Show FPS", "Soft scaling"};
         const bool vals[kRows] = {!*toggles_.uncap_fps, *toggles_.native_cadence,
-                                  *toggles_.show_fps};
+                                  *toggles_.show_fps, *toggles_.soft_scaling};
         float ry = win.y + 16.0f + 2.0f * lh;
         for (int i = 0; i < kRows; ++i) {
             const bool sel = (i == row);

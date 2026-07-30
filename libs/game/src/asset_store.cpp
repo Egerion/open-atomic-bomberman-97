@@ -316,7 +316,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir,
             "POWSPOOG", "POWGOLD",  "POWTRIG",  "POWJELLY", "POWEBOLA", "POWRAND"};
         for (int i = 0; i < sim::kPowerupKinds; ++i) {
             auto img = assets::pcx::load(res_dir / (std::string(kPowFiles[i]) + ".PCX"));
-            sdl::TexturePtr tex{make_texture(ren, img, SDL_SCALEMODE_NEAREST, snap)};
+            sdl::TexturePtr tex{make_texture(ren, img, TextureArt::Classic, snap)};
             powerups_[i] = {tex.get(), img.width, img.height, 0, 0};
             powerup_textures_.push_back(std::move(tex));
             // Optional HD icon (DATA_HD/RES/POW*.PCX), truecolour + LINEAR, kept
@@ -326,7 +326,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir,
             if (fs::exists(hp)) {
                 try {
                     auto himg = assets::pcx::load(hp);
-                    sdl::TexturePtr htex{make_texture(ren, himg, SDL_SCALEMODE_LINEAR, nullptr)};
+                    sdl::TexturePtr htex{make_texture(ren, himg, TextureArt::HighRes, nullptr)};
                     if (htex) {
                         powerups_[i].tex_hd = htex.get();
                         powerup_textures_.push_back(std::move(htex));
@@ -595,8 +595,8 @@ bool AssetStore::load_stage(int stage) {
         const fs::path hd_field = game_dir_ / "DATA_HD" / "RES" / (field_base + ".PCX");
         if (fs::exists(hd_field)) {
             try {
-                field_hd_.reset(make_texture(ren_, assets::pcx::load(hd_field),
-                                             SDL_SCALEMODE_LINEAR));
+                field_hd_.reset(
+                    make_texture(ren_, assets::pcx::load(hd_field), TextureArt::HighRes));
             } catch (const std::exception& e) {
                 std::fprintf(stderr, "HD stage %d field load failed: %s\n", stage, e.what());
             }
@@ -674,7 +674,7 @@ const AssetStore::StagePreview& AssetStore::stage_preview(int stage) const {
     }
     try {
         auto img = assets::pcx::load(game_dir_ / "DATA" / "RES" / (field_base + ".PCX"));
-        sdl::TexturePtr tex{make_texture(ren_, img, SDL_SCALEMODE_NEAREST, &colorpal_)};
+        sdl::TexturePtr tex{make_texture(ren_, img, TextureArt::Classic, &colorpal_)};
         sp.field = tex.get();
         stage_preview_field_.emplace(stage, std::move(tex));
     } catch (const std::exception& e) {
@@ -709,7 +709,7 @@ const Sprite& AssetStore::frontend_pcx(const std::string& name) const {
         try {
             auto img = assets::pcx::load(game_dir_ / "DATA" / "RES" / (name + ".PCX"));
             sdl::TexturePtr tex{
-                make_texture(ren_, img, SDL_SCALEMODE_NEAREST, snap ? &colorpal_ : nullptr)};
+                make_texture(ren_, img, TextureArt::Classic, snap ? &colorpal_ : nullptr)};
             sp = {tex.get(), img.width, img.height, 0, 0};
             front_textures_.push_back(std::move(tex));
         } catch (const std::exception& e) {
@@ -730,7 +730,7 @@ const Sprite& AssetStore::frontend_pcx(const std::string& name) const {
     if (fs::exists(hd_path)) {
         try {
             auto img = assets::pcx::load(hd_path);
-            sdl::TexturePtr tex{make_texture(ren_, img, SDL_SCALEMODE_LINEAR)};
+            sdl::TexturePtr tex{make_texture(ren_, img, TextureArt::HighRes)};
             if (tex) {
                 hd.tex = tex.get();
                 front_textures_hd_.push_back(std::move(tex));

@@ -222,6 +222,7 @@ AppInput MenuScreen::run() {
                 VideoSettingsScreen(ctx_, {.uncap_fps = &state_.uncap_fps,
                                            .native_cadence = &state_.native_cadence,
                                            .show_fps = &state_.show_fps,
+                                           .soft_scaling = &state_.soft_scaling,
                                            .options_dirty = &state_.options_dirty})
                     .run();
                 continue;

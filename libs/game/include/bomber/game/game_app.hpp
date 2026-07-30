@@ -842,6 +842,16 @@ private:
     // F7 — draw the FPS / cadence indicator (next to the match clock). Default
     // ON while this is a live A/B feature; will be driven by a persisted setting.
     bool show_fps_ = true;
+    // PORT ENHANCEMENT — the F10 panel's "SOFT SCALING" row (scale_filter.hpp,
+    // "soft_scaling=" in options.ini). OFF = the crisp nearest-neighbour upscale
+    // the port has always used; ON = linear, the smoothed look a modern GPU/
+    // display scaler gives the original's 640x480 output. Explicitly NOT a
+    // fidelity setting — the 1997 build scales nothing — so it defaults OFF and
+    // nobody who does not ask for it sees a different picture. Applied through
+    // set_scale_filter() (sprites.hpp), which is live: no reload, no restart.
+    // PINNED OFF on a capture run (load_config), because it changes every scaled
+    // pixel of every tests/visual frame.
+    bool soft_scaling_ = false;
     // F3 — the in-match NETPLAY diagnostic panel (screens/net_overlay.hpp).
     //
     // OFF by default and DELIBERATELY NOT PERSISTED: it is never read from or
