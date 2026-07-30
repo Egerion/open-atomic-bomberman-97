@@ -208,6 +208,16 @@ void NetStatsTracker::on_stall() {
 
 void NetStatsTracker::on_rephase_hold() { ++s_.rephase_holds; }
 
+void NetStatsTracker::on_timing(int raw_advantage, int sustained, bool suppressed, int lead,
+                                int spread) {
+    s_.frame_advantage = raw_advantage;
+    s_.sustained_advantage = sustained;
+    s_.local_lead = lead;
+    s_.peer_depth_spread = spread;
+    if (lead > 0) ++s_.lead_pumps;
+    if (suppressed) ++s_.rephase_suppressed;
+}
+
 void NetStatsTracker::end_pump(std::uint32_t tick, std::uint32_t confirmed,
                                const std::array<std::uint32_t, sim::kMaxPlayers>& remote_next,
                                std::uint16_t dropped, bool desynced, std::uint32_t desync_tick,
@@ -247,8 +257,23 @@ void NetStatsTracker::end_pump(std::uint32_t tick, std::uint32_t confirmed,
         // both sides. Judged on the LATEST sample, not the session minimum: an
         // offset builds up over a match, and a good sample from before it did
         // says nothing about what the numbers mean now.
+        //
+        // A LOCAL LEAD BREAKS THE SAME PREMISE, and more completely. While we file
+        // our input k ticks early (rollback_session.hpp's jitter note) it reaches
+        // the peer BEFORE the peer gets to that tick, so its frontier stops rising
+        // on our input's ARRIVAL and starts rising on its own progress: the sample
+        // becomes max(one_way, lead + offset) + one_way, which is still an upper
+        // bound on the path but no longer an estimate of it. No ratio test can see
+        // that — the lead inflates the sample and DEFLATES the lag at the same time
+        // — so it is declared rather than detected. The alternative was to let the
+        // number silently change meaning, which is precisely what this file exists
+        // not to do: the owner's whole jitter table was built by discarding the
+        // readings this flag marks. `peer_depth_spread` is the arrival-variance
+        // reading that survives a lead, and is what to read instead.
         const int lag_ms = p.lag_ticks * (1000 / kPumpHz);
-        p.rtt_offset_bound = p.rtt_ms >= 0 && p.lag_ticks >= 2 && p.rtt_ms * 2 < lag_ms * 3;
+        p.rtt_offset_bound =
+            p.rtt_ms >= 0 &&
+            (s_.local_lead > 0 || (p.lag_ticks >= 2 && p.rtt_ms * 2 < lag_ms * 3));
     }
 }
 
@@ -278,8 +303,11 @@ std::string format_session_log_line(const SessionSummary& s) {
             static_cast<long long>(n.elapsed_ms / 1000), static_cast<unsigned>(n.tick),
             static_cast<unsigned>(n.confirmed), n.prediction_depth, n.max_prediction,
             n.worst_prediction_depth);
-    appendf(out, " stalls=%u rephase=%u rollbacks=%u resim_ticks=%u rx=%u bad=%u",
+    appendf(out, " stalls=%u rephase=%u absorbed=%u adv=%d/%d lead=%dt(%u) spread=%dt",
             static_cast<unsigned>(n.stall_pumps), static_cast<unsigned>(n.rephase_holds),
+            static_cast<unsigned>(n.rephase_suppressed), n.frame_advantage, n.sustained_advantage,
+            n.local_lead, static_cast<unsigned>(n.lead_pumps), n.peer_depth_spread);
+    appendf(out, " rollbacks=%u resim_ticks=%u rx=%u bad=%u",
             static_cast<unsigned>(n.rollbacks), static_cast<unsigned>(n.resim_ticks),
             static_cast<unsigned>(n.rx_packets), static_cast<unsigned>(n.rx_malformed));
     if (n.desynced) appendf(out, " desync_tick=%u", static_cast<unsigned>(n.desync_tick));
