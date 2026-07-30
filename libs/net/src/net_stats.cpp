@@ -26,6 +26,7 @@ const char* end_reason_name(SessionEndReason r) {
         case SessionEndReason::PeerLostBetweenRounds: return "peer-lost-between-rounds";
         case SessionEndReason::WindowClosed: return "window-closed";
         case SessionEndReason::LeftSession: return "left-session";
+        case SessionEndReason::LeftStalled: return "left-stalled";
         case SessionEndReason::Unknown: break;
     }
     return "unknown";
@@ -205,6 +206,8 @@ void NetStatsTracker::on_stall() {
     ++win_stalls_;
 }
 
+void NetStatsTracker::on_rephase_hold() { ++s_.rephase_holds; }
+
 void NetStatsTracker::end_pump(std::uint32_t tick, std::uint32_t confirmed,
                                const std::array<std::uint32_t, sim::kMaxPlayers>& remote_next,
                                std::uint16_t dropped, bool desynced, std::uint32_t desync_tick,
@@ -275,10 +278,10 @@ std::string format_session_log_line(const SessionSummary& s) {
             static_cast<long long>(n.elapsed_ms / 1000), static_cast<unsigned>(n.tick),
             static_cast<unsigned>(n.confirmed), n.prediction_depth, n.max_prediction,
             n.worst_prediction_depth);
-    appendf(out, " stalls=%u rollbacks=%u resim_ticks=%u rx=%u bad=%u",
-            static_cast<unsigned>(n.stall_pumps), static_cast<unsigned>(n.rollbacks),
-            static_cast<unsigned>(n.resim_ticks), static_cast<unsigned>(n.rx_packets),
-            static_cast<unsigned>(n.rx_malformed));
+    appendf(out, " stalls=%u rephase=%u rollbacks=%u resim_ticks=%u rx=%u bad=%u",
+            static_cast<unsigned>(n.stall_pumps), static_cast<unsigned>(n.rephase_holds),
+            static_cast<unsigned>(n.rollbacks), static_cast<unsigned>(n.resim_ticks),
+            static_cast<unsigned>(n.rx_packets), static_cast<unsigned>(n.rx_malformed));
     if (n.desynced) appendf(out, " desync_tick=%u", static_cast<unsigned>(n.desync_tick));
     if (n.dropped_seats != 0)
         appendf(out, " dropped_seats=0x%03X", static_cast<unsigned>(n.dropped_seats));
