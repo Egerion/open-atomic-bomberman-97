@@ -15,7 +15,13 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 CT="$(command -v clang-tidy || true)"
 if [ -z "$CT" ]; then
-  for cand in "/c/Program Files/Microsoft Visual Studio/"*/*/VC/Tools/Llvm/x64/bin/clang-tidy.exe; do
+  # BOTH Program Files roots. The 64-bit one alone was enough while the machine
+  # ran the VS IDE, but Build Tools installs under "Program Files (x86)" even
+  # for a 64-bit toolchain — so an IDE->Build Tools swap makes the gate fail to
+  # find a clang-tidy that is sitting right there. It fails loudly rather than
+  # silently, but it still blocks a push for no reason.
+  for cand in "/c/Program Files/Microsoft Visual Studio/"*/*/VC/Tools/Llvm/x64/bin/clang-tidy.exe \
+              "/c/Program Files (x86)/Microsoft Visual Studio/"*/*/VC/Tools/Llvm/x64/bin/clang-tidy.exe; do
     if [ -x "$cand" ]; then CT="$cand"; break; fi
   done
 fi
