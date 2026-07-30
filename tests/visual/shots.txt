@@ -188,8 +188,16 @@
 # The five bm_shots.txt front-end frames are NOT recaptured: a recapture pass
 # reprinted all five byte-identical, as expected for a match-only change.
 # headless 89/89 green at recapture time.
+# --- the combined capture, and the only one that matches a shipping build ---
+# Taken with BOTH changes in the tree. `walking` came back byte-identical to
+# change 2's own capture, so the per-frame tail does not reach tick 10 once the
+# actor fix is in; the other four differ from BOTH single-change captures, which
+# is why neither branch's file could simply be taken. Eyeballed brick_crumble
+# before pinning: coherent scene, the belt row visible only where the flame has
+# opened it, which is the behaviour change 2 is there to produce.
+# bm_shots.txt reprinted byte-identical in the same pass and is unchanged.
 walking                 10    f1291cfa9a5acd3f72072edf4647c00d21dbf9929e4ee366ece90dd55e02d5d9
-bomb_pulse               40    f389ff1646c584699cafecb3ff9053e9f567e591a4c6bdb6ba86aba3adcf2242
-explosion_mid_flame     65    41e071b20cdf9a9988c95be19a4fc58ea2a1a9b47fe0dc8d8da524376e0aeb0e
-brick_crumble           68    3a2f03f0159fa99b23eb0a82a9e6e7c75843e1c8009c60379ccf7d9e2bf31f1b
-powerup_revealed        76    15cf9579125bd0de5691d9f883ee90cdd2bf04bec92ff5dae28d844ec369696c
+bomb_pulse               40    4e8442989e87e556e8a5cebcfc29b1b4555999348a293378f61f07c1b5215e68
+explosion_mid_flame     65    bf340184ef006db69ba05ad795240108bdf890423858f15c187b2e6a325bb3de
+brick_crumble           68    732ad6cb9aaba28324db9ae91db4b10cd6e80598b022a1f6acbf6d64fa76d1fc
+powerup_revealed        76    2a004c6662dc54d4254c078683441fea6c86088f0841deba17af4a289a84f0d8
