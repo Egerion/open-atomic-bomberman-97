@@ -53,8 +53,10 @@
 #include <cstdint>
 #include <cstdio>
 
+#include "bomber/net/migrating_transport.hpp"
 #include "bomber/net/rollback_session.hpp"
 #include "bomber/net/transport.hpp"
+#include "fanout_bus.hpp"
 #include "helpers.hpp"
 #include "ms_clock_harness.hpp"
 
@@ -412,6 +414,135 @@ TEST_CASE("jitter: the lead may be raised and lowered inside a live round") {
     CHECK(r.b.ticks >= 580);
     CHECK(r.confirmed_a > 550);
     CHECK(r.confirmed_b > 550);
+}
+
+namespace {
+
+// A 3-seat star peer, the same shape tests/net/test_host_migration.cpp uses:
+// its own sim, its own session, and the MigratingTransport indirection that lets
+// the far end be re-pointed without the session learning that it moved.
+constexpr std::uint16_t kAll3 = 0x7;
+constexpr int kStarTimeout = 40;  // pumps of silence before a seat is declared dropped
+
+sim::MatchConfig three_config() {
+    sim::MatchConfig cfg = open_config();
+    cfg.spawns = {{0, 0}, {14, 10}, {14, 0}};
+    cfg.player_count = 3;
+    return cfg;
+}
+
+struct StarPeer {
+    StarPeer(std::size_t endpoint, int seat, test::StarBus& bus, int host_seat)
+        : sim(three_config()),
+          link(bus, endpoint),
+          wire(&link),
+          session(sim, static_cast<std::uint16_t>(1U << seat), kAll3, /*max_prediction=*/8, wire,
+                  net::DropPolicy{/*revert_to_ai=*/true, /*is_host=*/seat == host_seat,
+                                  kStarTimeout, /*host_seat=*/host_seat}),
+          seat_index(seat) {}
+
+    void pump(std::uint32_t tick) {
+        session.advance(net::test::seat_input(seat_index, net::test::scripted(seat_index, tick)));
+    }
+
+    sim::Simulation sim;
+    test::StarTransport link;
+    net::MigratingTransport wire;
+    net::RollbackSession session;
+    int seat_index;
+};
+
+}  // namespace
+
+TEST_CASE("jitter: a hub dies while the absorber is holding a lead") {
+    // THE SEAM BETWEEN THE TWO FEATURES, which neither suite covered on its own:
+    // tests/net/test_host_migration.cpp runs on a flat-latency star, so the lead
+    // never engages there and its migrations are all measured with the absorber
+    // dormant; everything above this runs two peers with no hub to lose.
+    //
+    // The concern is concrete: a migration freezes `peer_depth_` at whatever the
+    // dying hub last relayed, and the step back to live values after the heal
+    // looks exactly like arrival variance — so an absorber reading it could buy
+    // input lag for a peer whose real problem is that it is behind and needs to
+    // catch up. `rephase_eligible()` refuses while `migration_healing()`, and the
+    // advantage window is discarded rather than padded, so both mechanisms go
+    // quiet together. What this case actually PROVES is the weaker, still
+    // unproven-until-now claim that the two features coexist; see the coverage
+    // note at the bottom for the part it does not reach.
+    test::StarBus bus(3, /*latency=*/1, /*jitter_steps=*/6, /*persist_pct=*/35);
+    StarPeer host(0, 0, bus, /*host_seat=*/0);
+    StarPeer g1(1, 1, bus, /*host_seat=*/0);
+    StarPeer g2(2, 2, bus, /*host_seat=*/0);
+
+    std::uint32_t t = 0;
+    for (; t < 120; ++t) {
+        host.pump(t);
+        g1.pump(t);
+        g2.pump(t);
+        bus.step();
+    }
+    // The premise: the link really is jittery enough that the absorber engaged.
+    // Without this the rest of the case would pass vacuously on a dormant lead.
+    REQUIRE(g1.session.stats().lead_pumps > 0);
+    REQUIRE(g2.session.stats().lead_pumps > 0);
+
+    const std::uint32_t holds_before_1 = g1.session.stats().rephase_holds;
+    const std::uint32_t holds_before_2 = g2.session.stats().rephase_holds;
+
+    bus.kill(0);  // the hub stops responding, and with it g1 <-> g2
+
+    for (int i = 0; i < kStarTimeout + 120; ++i, ++t) {
+        g1.pump(t);
+        g2.pump(t);
+        if (g1.session.current_hub() == 1 && bus.hub() != 1) bus.set_hub(1);
+        bus.step();
+    }
+
+    // The migration still happens, and still converges, with the absorber live.
+    CHECK(g1.session.current_hub() == 1);
+    CHECK(g2.session.current_hub() == 1);
+    CHECK_FALSE(g1.session.desynced());
+    CHECK_FALSE(g2.session.desynced());
+    CHECK(g1.session.confirmed_tick() > 120);
+    CHECK(g2.session.confirmed_tick() > 120);
+    // ...and they agree about the history, which is what `desynced()` above
+    // already proves tick by tick. Their FRONTIERS are deliberately only required
+    // to be close, not equal: on a jittery link two peers' confirmation frontiers
+    // legitimately sit a tick or two apart at any given instant — that is the
+    // subject of this whole file — so pinning them equal at an arbitrary stopping
+    // point would be asserting the absence of the thing being studied.
+    const std::uint32_t c1 = g1.session.confirmed_tick();
+    const std::uint32_t c2 = g2.session.confirmed_tick();
+    CHECK((c1 > c2 ? c1 - c2 : c2 - c1) <= 4);
+
+    // The controller does not run away across the outage: a hold storm would show
+    // here as a count approaching the window length. Bounded, not pinned — see the
+    // coverage note below for what this does and does not establish.
+    const std::uint32_t holds_1 = g1.session.stats().rephase_holds - holds_before_1;
+    const std::uint32_t holds_2 = g2.session.stats().rephase_holds - holds_before_2;
+    std::printf("  migration under a lead: holds during outage+heal = %u / %u of %d pumps\n",
+                holds_1, holds_2, kStarTimeout + 120);
+    CHECK(holds_1 <= 60);
+    CHECK(holds_2 <= 60);
+
+    // HONEST COVERAGE NOTE, in the spirit of the one resend_from() carries in
+    // rollback_session.cpp. This case establishes that the two features COEXIST —
+    // a hub dies while the absorber is holding a lead, and the survivors still
+    // elect, converge and agree. It does NOT isolate the `migration_healing()`
+    // guard in rephase_eligible(): deleting that guard leaves this case green, and
+    // leaves the hold counts above statistically unchanged (measured 21/16 with
+    // the guard against 22/15 without it).
+    //
+    // The reason is worth writing down rather than rediscovering. The holds that
+    // happen here are in the window BEFORE the drop is declared, where the
+    // frontier is already pinned but `host_lost_` is still zero, so the guard does
+    // not apply — and there a hold is indistinguishable from the cap stall it
+    // replaces, because the display cannot advance either way. The guard covers
+    // the HEAL that follows, and reaching a state where it changes the outcome
+    // needs a survivor still making progress while healing, which this topology
+    // does not produce. Kept because the reasoning behind it is sound and the cost
+    // is a suppressed hold; treat it as defensive, and if it ever needs
+    // justifying, build that case first.
 }
 
 TEST_CASE("jitter: the older synchronous LoopbackLink rig sees no change at all") {
