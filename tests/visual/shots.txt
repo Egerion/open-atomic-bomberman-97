@@ -130,8 +130,29 @@
 # eyeball review recorded above. Verified: 5/5 against the real install, and 5/5
 # across a full random_start x conveyor_speed x team_play sweep of options.ini,
 # which before the pin produced twelve different sets of five.
-walking                 10    4acce93f8e799b24cc24d2833777f270ad112c8d67ce9b86414adf24f173820e
-bomb_pulse               40    2186552552f598614849aedf072547ce3e3cd6f773f204ee5320610e39f2cb88
-explosion_mid_flame     65    89281f200ffb75b36e0daf637a5b417488f00e7123a5fecadac781d46f05bf32
-brick_crumble           68    9544112bcd3ddf2e9e8a43c3ab9b522c180a48cbb3cead34807bae124b593aa0
-powerup_revealed        76    8ce43d390b4e423e2323cf24f43bfa869711f422029fe57468fc99b24eedf23a
+#
+# Recaptured 2026-07-30 (the per-FRAME bomb-action tail; docs/re/facts.md "The
+# bomb-action tail is per-FRAME, not per-tick"). A SIM change, not a renderer
+# one, and all five shots move because the demo's very first bomb does: the
+# original creates it in the frame whose key edge asked for it, so the eight
+# remaining sub-frames of that tick already see a bomb on the tile. Deferring
+# the tail to the tick's end hid it from them. Player 1 drops at tick 7 and is
+# standing on it, so its walk resolves a fraction of a pixel differently from
+# tick 7 onward, and every later shot inherits that. Checked, not assumed:
+# BOMBER_DEMO_TRACE diffs the two event streams to ONE added event (a bomb at
+# tick 49 that the old tail refused because it tested the tick's END tile), and
+# a pixel diff of `walking` is a thin outline around one player sprite, i.e. a
+# sub-pixel shift, on a frame whose tile coordinates are unchanged. Nothing
+# else in the field moves.
+#
+# The pre-change build was re-run against this same install first and matched
+# all five rows below's PREDECESSORS exactly, so the environment was hermetic
+# at capture time -- the failure mode this file's 2026-07-28 note describes was
+# checked for, and ruled out, before recapturing. Two recapture passes gave
+# identical hashes. bm_shots.txt is UNCHANGED: the front end has no sim behind
+# it.
+walking                 10    2483ba0ec136d47c00f136487f851d77945d33dee4c7ec10b23b5a124250985c
+bomb_pulse               40    2681d2bad6f73ba3a01e0c8821a5e152e175b7a040f34d577d7bbb38e04a86a4
+explosion_mid_flame     65    7772822d5efc34b160a5cd5903246641f75e02bbfdd99535bbe5b759d824b2b4
+brick_crumble           68    78496b611b9479397e3f3d528881b921d4c1d3e8891fa5e4a7a3d3052af6bdb1
+powerup_revealed        76    ac85f898d2867f1489c55b6d9308839d0a9cf434bd9ce1c72f860d4145f63e71
