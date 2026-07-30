@@ -104,6 +104,16 @@ target_link_libraries(bomber_net_match_config_tests PRIVATE bomber::net)
 bomber_add_test(bomber_net_setup_tests net_setup test_setup_session.cpp)
 target_link_libraries(bomber_net_setup_tests PRIVATE bomber::net)
 
+# The CLI netplay path's config exchange: the cross-build door for BOARD
+# DERIVATION, which build_hash structurally cannot cover (its scenarios
+# hand-build a MatchConfig and never call match::apply_actors) and which the
+# --host/--join wire could not enforce anyway (no handshake, no version field).
+# Pins that the guest adopts the HOST's bytes over its own derivation, and that
+# a peer which speaks no setup traffic is REFUSED rather than tolerated. Links
+# bomber::match because the divergence under test lives in apply_actors.
+bomber_add_test(bomber_net_cli_config_tests net_cli_config test_cli_config_exchange.cpp)
+target_link_libraries(bomber_net_cli_config_tests PRIVATE bomber::net bomber::match)
+
 # StarHubTransport: the >2-seat host-relay star — fan-out, guest->guest
 # reflection, and the stranger-drop guard.
 bomber_add_test(bomber_net_star_tests net_star test_star_hub.cpp)

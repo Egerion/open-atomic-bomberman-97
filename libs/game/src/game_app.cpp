@@ -1089,7 +1089,10 @@ int GameApp::run_netplay() {
     // lockstep match run in place of the front-end. The CLI carries --seed on
     // BOTH peers, so there is no discovery and NO seed handshake here — bind +
     // set_peer straight from opts_ and hand off to the shared match core
-    // (run_netplay_match). The MENU path (present_net_host/join) runs the
+    // (run_netplay_match), which agrees the CONFIG over the wire before it
+    // starts (exchange_cli_netplay_config; the seed alone is not enough, because
+    // the board it derives depends on both peers running the same libs/match).
+    // The MENU path (present_net_host/join) runs the
     // SeedHandshake instead; both funnel into that same core. CANNOT be
     // runtime-tested here (no display / second instance) — validated live.
     const bool host = opts_.net_role == 1;
@@ -1121,8 +1124,13 @@ int GameApp::run_netplay() {
 }
 
 sim::MatchConfig GameApp::canonical_netplay_config(std::uint32_t seed) const {
-    // CANONICAL 2-human MatchConfig — byte-identical on both peers regardless of
-    // each machine's options.ini / level pick, with NO setup traffic at all.
+    // CANONICAL 2-human MatchConfig, built from the shared seed alone and
+    // independent of each machine's options.ini / level pick.
+    //
+    // IT IS NO LONGER DERIVED ON BOTH PEERS. Only the HOST calls this; the guest
+    // receives the resulting bytes through exchange_cli_netplay_config, because
+    // "the same seed gives the same board" holds only while both peers run the
+    // same libs/match — and nothing on the CLI wire could check that.
     // Deterministic lockstep needs an identical seed AND identical config
     // (ADR-0010 seed/roster parity), so this deliberately IGNORES the live
     // per-machine options_/selected_level_/team_play_/gold state and builds only
@@ -1155,12 +1163,90 @@ sim::MatchConfig GameApp::canonical_netplay_config(std::uint32_t seed) const {
     return cfg;
 }
 
+bool GameApp::exchange_cli_netplay_config(net::UdpTransport& transport, bool is_host,
+                                          std::uint32_t seed, sim::MatchConfig& out_cfg) {
+    // THE CLI'S CONFIG EXCHANGE. It exists because "both peers derive the same
+    // board from the same seed" is a promise the code cannot keep across builds.
+    // canonical_netplay_config() runs the WHOLE derivation locally — the .SCH
+    // fill, pick_stage, EXTRA<n>.RES and match::apply_actors — and all of that
+    // lives in libs/match, OUTSIDE the reach of every guard we have: build_hash's
+    // scenarios hand-build a MatchConfig and never call apply_actors, and the CLI
+    // path consults build_hash (or any version field) at NO point anyway — it has
+    // no handshake at all. So a board-derivation change shipped to one peer and
+    // not the other used to produce two different boards and a tick-0 desync with
+    // nothing on the wire to catch it. That is not hypothetical: dropping
+    // apply_actors' actor-tile blanking (docs/re/facts.md "Stage actors do not
+    // clear the tile they sit on") moves up to 43% of a stage's bricks and moves
+    // neither the goldens nor build_hash.
+    //
+    // The fix is to stop deriving the board twice, exactly as the interactive
+    // lobby path already does (present_net_setup): the HOST derives it and ships
+    // the whole serialized sim::MatchConfig (match_config_codec.hpp), the guest
+    // uses those bytes verbatim. Then no future change to libs/match can make two
+    // peers disagree, whether or not anyone remembers to move a digest.
+    //
+    // It is also SELF-ENFORCING against an unpatched partner, which is why this
+    // needs no kWireProtocolVersion bump (nothing in this path reads one): a peer
+    // built before this change sends no setup traffic and answers none, so a new
+    // HOST never collects its ack and a new GUEST never receives a config —
+    // either way the exchange times out and the match is REFUSED here, loudly,
+    // instead of starting on two different boards.
+
+    // Shorter than SetupSession's 30 s default: --host/--join are SCRIPTED, so
+    // there is no human editing a roster on the far side to wait for.
+    constexpr int kCliSetupTimeoutMs = 15000;
+    constexpr std::uint64_t kCliSetupSettleMs = 300;
+
+    const std::uint16_t local_seats = is_host ? std::uint16_t{0b01} : std::uint16_t{0b10};
+    const std::uint16_t guest_seats = is_host ? std::uint16_t{0b10} : std::uint16_t{0};
+    net::SetupSession session(transport, is_host, local_seats, guest_seats, kCliSetupTimeoutMs);
+    if (is_host) session.confirm(canonical_netplay_config(seed));
+
+    while (session.phase() != net::SetupSession::Phase::Final) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev))
+            if (ev.type == SDL_EVENT_QUIT) return false;
+        session.step(static_cast<std::int64_t>(SDL_GetTicks()));
+        if (session.failed()) {
+            std::fprintf(stderr,
+                         "netplay: match-config exchange timed out after %d ms — the peer is gone "
+                         "or is running a build from before the CLI exchanged configs.\n",
+                         kCliSetupTimeoutMs);
+            return false;
+        }
+        SDL_Delay(2);
+    }
+    out_cfg = session.final_config();
+
+    if (!is_host) {
+        // SETTLE, for the reason present_net_setup's guest settles: our ack may
+        // be the datagram that is lost, and SetupSession only re-acks when the
+        // host's next burst arrives — which we would never see if we left the
+        // instant we decoded. Safe against the one-pump-at-a-time rule because
+        // RollbackSession re-sends its whole input window every pump.
+        const std::uint64_t settle_until = SDL_GetTicks() + kCliSetupSettleMs;
+        while (SDL_GetTicks() < settle_until) {
+            SDL_Event sev;
+            while (SDL_PollEvent(&sev))
+                if (sev.type == SDL_EVENT_QUIT) return false;
+            session.step(static_cast<std::int64_t>(SDL_GetTicks()));
+            SDL_Delay(2);
+        }
+    }
+    std::printf("netplay: match config agreed (%s), stage %d\n", is_host ? "sent" : "received",
+                out_cfg.tuning.level_index);
+    return true;
+}
+
 AppInput GameApp::run_netplay_match(net::UdpTransport& transport, int role, std::uint32_t seed) {
     // The ADR-0010 role-derived CLI entry (--host/--join): host owns seat 0, guest
-    // seat 1, and the config is the canonical one both peers derive from the
-    // shared --seed with no setup exchange (see canonical_netplay_config).
-    return run_netplay_match_seats(transport, role == 1 ? 0b01u : 0b10u, /*all_seats=*/0b11u,
-                                   /*is_host=*/role == 1, canonical_netplay_config(seed));
+    // seat 1, and the config is the HOST's canonical_netplay_config(seed) shipped
+    // over the wire — never derived twice (see exchange_cli_netplay_config).
+    const bool is_host = role == 1;
+    sim::MatchConfig cfg;
+    if (!exchange_cli_netplay_config(transport, is_host, seed, cfg)) return AppInput::Back;
+    return run_netplay_match_seats(transport, is_host ? 0b01u : 0b10u, /*all_seats=*/0b11u, is_host,
+                                   cfg);
 }
 
 namespace {
