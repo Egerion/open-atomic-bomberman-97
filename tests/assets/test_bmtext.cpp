@@ -54,6 +54,47 @@ TEST_CASE("tabs expand to 4-column stops") {
     CHECK(seg(doc, 0, 0).value == "A   B");
 }
 
+TEST_CASE("each tab leaves the column counter one ahead of the text emitted") {
+    // sub_41302D's pass-2 expander shares ONE counter between the tab stop and
+    // the buffer limit and bumps it once per SOURCE character, so a tab advances
+    // it once more than the spaces it wrote. The next tab on the line therefore
+    // resolves against an inflated column. This is the original's behaviour, not
+    // a transcription slip, and the shipped column art depends on it.
+    //
+    // "\tJohn Price \t": leading tab -> 4 spaces, counter 5 (not 4). 11 more
+    // characters -> counter 16, 15 written. The second tab runs 16 -> 20, i.e.
+    // FOUR spaces; the textbook rule (col 15) would emit exactly one.
+    CHECK(expand_tabs("\tJohn Price \t(for Sound)") ==
+          "    John Price     (for Sound)");
+    // One tab, no drift yet: identical either way.
+    CHECK(expand_tabs("\tTim Cain") == "    Tim Cain");
+    // A trailing tab after an odd run: counter 16 -> 20, four spaces.
+    CHECK(expand_tabs("\tKaycee Vardaman\t") == "    Kaycee Vardaman    ");
+    // Tabs alone: every one lands on a 4-stop from the inflated counter, so the
+    // run grows 4,3,3,3... rather than a flat 4,4,4.
+    CHECK(expand_tabs("\t\t\t") == "          ");
+}
+
+TEST_CASE("tab expansion counts the <IMG tag's own characters") {
+    // The original expands the WHOLE raw line into its scratch buffer before the
+    // render pass ever scans for "<IMG", so a tag's characters occupy columns for
+    // any LATER tab on the same line.
+    BmDocument doc = parse("<IMGa>\tX");
+    REQUIRE(doc.lines.size() == 1);
+    REQUIRE(doc.lines[0].size() == 2);
+    CHECK(doc.lines[0][0].is_image());
+    // "<IMGa>" is 6 characters, so the tab runs col 6 -> 8: two spaces.
+    CHECK(doc.lines[0][1].value == "  X");
+}
+
+TEST_CASE("expansion stops at the original's 256-byte scratch buffer") {
+    // `while (col < 255)`: no shipped .BM line expands past 63 columns, so this
+    // never fires on real data — it is here so a hostile file cannot grow a row
+    // without bound.
+    const std::string wide(400, 'x');
+    CHECK(expand_tabs(wide).size() == 255);
+}
+
 TEST_CASE("angle-bracket prose that is not <IMG stays literal text") {
     // <ESC>, <button> etc. are documented as literal in the shipped files.
     BmDocument doc = parse("press the <ESC> key");

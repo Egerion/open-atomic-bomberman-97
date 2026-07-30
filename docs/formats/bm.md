@@ -22,8 +22,36 @@ the same routine with their own filenames.
   stops on the stream's EOF flag (`*(FILE+12) & 0x10`). Everything from the
   first `0x1A` onward is not screen content.
 - **Tabs** (`0x09`) expand to spaces up to the next 4-column tab stop
-  (`sub_41302D`: `while (col & 3) emit ' '`). Text art in the files
-  (`CREDITS.BM`, `NETWORK.BM`) relies on this 4-wide expansion.
+  (`sub_41302D`: `do { *dst++ = ' '; ++col; } while (col & 3);`). Text art in the
+  files (`CREDITS.BM`, `NETWORK.BM`) relies on this 4-wide expansion.
+
+  **The stop drifts, and the drift is part of the format.** The expander keeps
+  ONE counter for both the tab stop and the 255-character buffer limit, and the
+  loop bumps it once per SOURCE character *on top of* the once-per-space the tab
+  branch already did:
+
+  ```c
+  for (col = 0; *src && col < 255; src++, col++)
+      if (*src == '\t') do { *dst++ = ' '; col++; } while (col & 3);
+      else *dst++ = *src;
+  ```
+
+  So after a tab the counter sits one column AHEAD of the text actually written,
+  and every further tab on the same line resolves against that inflated column.
+  The shipped files were authored against this: in `CREDITS.BM` the three
+  `(for ...)` annotations (`Tim Cain`, `John Price`, `Darren Monahan`) land at
+  x = 179 / 189 / 190 px in FONT6 under the real rule; the third has no tab
+  before its parenthesis, so it is a fixed anchor, and the textbook
+  "next multiple of 4" rule tears the middle one 37 px out of the column
+  (191 / 153 / 190). Our parser reproduces the drift (`bmtext::expand_tabs`).
+
+- Expansion runs over the **whole raw line**, `<IMGname>` tags included, before
+  the render pass scans for `<IMG` — so a tag's own characters occupy columns for
+  any later tab on the line. Same order in our parser.
+
+- The scratch buffer is 256 bytes and the loop stops at `col == 255`. No shipped
+  `.BM` line expands past 63 columns, so this never fires on real data; the port
+  keeps it as a bound on hostile input.
 - There is **no header line** and no global directives — line 1 is already
   content (e.g. `Atomic Bomberman Credits`). Help screens conventionally frame a
   title with rows of `*` or `~`, but that is ordinary text, not markup.
@@ -38,6 +66,44 @@ Exactly one tag form exists: an inline image reference.
 ```
 <IMGname>
 ```
+
+### Transparency
+
+The inline image is blitted with `sub_4428E4` → `sub_44AED5`, whose inner loop is
+
+```c
+v = *src++;  if (v) *dst = v;        /* BM95.EXE @ 0x44AED5 */
+```
+
+— a source byte of **zero is skipped**, so **palette index 0 is the key colour**.
+The key is an *index*, not a colour: `CREDBAR.PCX` is 81% index 0,
+`BOMBDUDE.PCX` 88% and `QALOGO.PCX` 67% (all three would otherwise be black
+rectangles), while `JERM.PCX` and `KURT.PCX` — the two photographs — contain no
+index 0 at all and store their real blacks at index 255. Keying on RGB would eat
+holes out of those two. In the three images that do use the key, index 0 is the
+only source of RGB(0,0,0), which is what makes the `DATA_HD` rule below exact.
+
+The full-screen backdrops (`MAINMENU`, `GLUE<n>`, the `WINZ` border) are copied
+opaquely by a different primitive and must NOT be keyed. `DATA_HD` ships 24-bit
+upscales with no palette at all; those paint the keyed region as literal black,
+so the port keys RGB(0,0,0) there — but only for assets whose classic image
+actually used index 0.
+
+### Palette
+
+`sub_41302D` loads each image with `sub_4150F0` (pseudo.c 16370) =
+`sub_41BE63` = raw decode + `sub_41BBBD`, the **master-palette snap** (the same
+snapping loader `MAINMENU`/`GLUE<n>` use, not the own-palette `sub_415120` path
+`TITLE`/`DRAW`/`WINZ` use). `sub_41BBBD` builds its 256-entry remap through the
+15-bit reverse LUT starting at entry 1, leaving **entry 0 fixed** — the key
+survives the snap.
+
+It cannot be otherwise: the viewer never uploads a palette, so on 8-bit hardware
+these images are physically displayable only through the palette already active.
+That the active palette is `COLOR.PAL`'s master is corroborated by the art —
+`JERM.PCX` and `KURT.PCX` are already 100% master-palette colours, so the snap is
+the identity for them, while the other three shift (`CREDBAR` by up to 39/255 on
+its yellows).
 
 `sub_41302D` scans each line with `strstr(line,"<IMG")`; on a hit it advances 4
 bytes past `<IMG`, finds the closing `>` with `strchr`, and NUL-terminates
