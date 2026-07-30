@@ -191,14 +191,27 @@ inline void apply_actors(sim::MatchConfig& cfg, const std::vector<assets::extra:
         if (x < 0 || x >= sim::kGridWidth || y < 0 || y >= sim::kGridHeight) return;
         cfg.actor_type[y][x] = t;
         cfg.actor_dir[y][x] = static_cast<std::uint8_t>(dir & 3);
-        // An actor sits on OPEN floor. The original clears the tile as it drops
-        // the actor — the warphole init explicitly runs sub_425E9B(x,y,0)
-        // (pseudo.c case 1), and every actor type must be walkable to work. A
-        // brick/solid left under an actor (from the scheme or the brick fill,
-        // which run BEFORE this overlay) renders it as a "closed" rock and
-        // blocks access — the warphole-looks-closed bug. Clear the cell so the
-        // conveyor/arrow/warphole/trampoline is both visible and walkable.
-        cfg.cells[y][x] = sim::Cell::Blank;
+        // DELIBERATELY NO CELL WRITE — an actor does NOT clear the tile it sits
+        // on (docs/re/facts.md "Stage actors do not clear the tile they sit
+        // on"). sub_4056CA's four cases are asymmetric: only case 1 (warphole)
+        // writes a cell, through sub_425E9B, and it is handled on the Warphole
+        // branch below. Cases 0 (dirarrow), 2 (conveyor) and 3 (trampoline)
+        // contain no cells write at all — each only gates its DRAWING on
+        // `if (!sub_425FB9(x,y))`, i.e. "draw the belt/arrow/trampoline only
+        // while the tile is empty". A sweep of the whole cells-writer family
+        // (sub_425E36/425E9B/425EFC/425F79, 16 call sites) finds flame, the
+        // netplay tile sync, the warphole pair, the fill, tile regeneration and
+        // the HURRY wall — and no actor placement.
+        //
+        // Blanking here was a live divergence worth up to a THIRD of a stage's
+        // bricks — measured on BASIC.SCH at 4 players over 400 seeds, ANCIENT
+        // EGYPT (44 dirarrows) lost 32.3 of 98.8 bricks, 32.7%, and INNER CITY
+        // TRASH (32 conveyors) 28.7, 29.1% — and it opened those tiles for
+        // walking from round start where the original has them brick-blocked
+        // until somebody bombs them. The
+        // "warphole looks closed" concern the old comment cited is the renderer's
+        // job and is already handled the original's way: renderer.cpp's actor
+        // pass skips a tile that is not Blank, which IS `!sub_425FB9(x,y)`.
     };
     std::uint32_t lcg = seed ? seed : 0x1234567u;  // setup-only stream
     auto roll = [&]() {
@@ -208,9 +221,11 @@ inline void apply_actors(sim::MatchConfig& cfg, const std::vector<assets::extra:
 
     // Warphole one-time setup knockout (sub_4056CA case 1, the block guarded by
     // the +146 latch still being clear): when a warphole is first activated it
-    // clears its OWN tile (through sub_425E9B with cell value 0 — place()
-    // already does this) AND then clears ONE
-    // RANDOM ADJACENT tile too. The original's search is a nested rejection
+    // clears its OWN tile (through sub_425E9B with cell value 0) AND then clears
+    // ONE RANDOM ADJACENT tile too. This is the ONLY one of the four actor cases
+    // that writes a cell at all — see place() above.
+    //
+    // The original's search is a nested rejection
     // loop: the INNER loop draws a cardinal direction with rand()%4 and offsets
     // the warphole's tile by that direction's dx/dy, repeating while the
     // resulting X is negative; the OUTER loop repeats that whole inner search
@@ -250,7 +265,8 @@ inline void apply_actors(sim::MatchConfig& cfg, const std::vector<assets::extra:
                 place(a.x, a.y, sim::ActorType::Warphole, 0);
                 if (a.x >= 0 && a.x < sim::kGridWidth && a.y >= 0 && a.y < sim::kGridHeight) {
                     warps.push_back({a.x, a.y, a.idno, a.linkto});
-                    knockout_neighbour(a.x, a.y);  // clear one random neighbour
+                    cfg.cells[a.y][a.x] = sim::Cell::Blank;  // sub_425E9B(x, y, 0), own tile
+                    knockout_neighbour(a.x, a.y);            // then one random neighbour
                 }
                 break;
             case Kind::Trampoline:
