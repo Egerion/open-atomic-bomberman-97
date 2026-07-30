@@ -492,6 +492,34 @@ TEST_CASE(
     CHECK(seed_campaign_ai_slots(lcg_a, 5) == seed_campaign_ai_slots(lcg_b, 5));
 }
 
+// sub_422928 @0x422977 only claims a slot whose type byte currently reads 0, and
+// its caller sub_40151B never clears one — so a campaign STAGE ADVANCE adds AI to
+// the standing roster instead of replacing it. This is what keeps the human alive
+// across a stage transition: the port used to blank all ten slots first, which
+// deleted the player on every advance and left an AI-only roster the round pacing
+// then read as "no human survivor" and replayed forever.
+TEST_CASE("seed_campaign_ai_slots never claims an occupied slot") {
+    std::uint32_t lcg = 0x5EEDu;
+    std::array<bool, kMaxPlayers> occupied{};
+    occupied[3] = true;  // the human's slot, set on the PLAYER INPUT screen
+    occupied[7] = true;  // an AI a previous stage already seeded
+    auto slots = seed_campaign_ai_slots(lcg, 4, occupied);
+    CHECK(slots.size() == 4);
+    for (int s : slots) {
+        CHECK(s != 3);
+        CHECK(s != 7);
+    }
+}
+
+TEST_CASE("seed_campaign_ai_slots clamps to the FREE slots, and a full roster seeds nothing") {
+    std::uint32_t lcg = 0x5EEDu;
+    std::array<bool, kMaxPlayers> occupied{};
+    for (int i = 0; i < kMaxPlayers - 2; ++i) occupied[static_cast<std::size_t>(i)] = true;
+    CHECK(seed_campaign_ai_slots(lcg, 9, occupied).size() == 2);  // only two seats left
+    occupied.fill(true);
+    CHECK(seed_campaign_ai_slots(lcg, 3, occupied).empty());
+}
+
 // docs/re/campaign.md "Round pacing" clauses 4-5 (sub_4016DA, pseudo.c
 // 4634-4648): the scan over slots 0..9 returns early once sub_421DD2 reports a
 // slot type that is neither 0 nor 1 and sub_4228C4 reports that slot alive;

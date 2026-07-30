@@ -83,18 +83,29 @@ inline bool load_campaign_stage(int index, CampaignState state) {
     // a sequential fill from slot 0. Only the AI COUNT (field 7) seeds
     // player slots at all; rovers/ghosts are NOT player slots (see below),
     // so folding them into COMPUTER slots (the prior port behaviour) was a
-    // mislabelling, now removed. Every slot starts OFF, then exactly
-    // `ai_count` distinct slots (clamped to kMaxPlayers) are flipped to
-    // COMPUTER at random, matching sub_422928's rand()-modulo-10 + retry-on-
-    // occupied shape but using the presentation LCG (state.setup_lcg), never
-    // State::rng — this only steers which slot ids get the pre-supplied
+    // mislabelling, now removed. Exactly `ai_count` distinct FREE slots are
+    // flipped to COMPUTER at random, matching sub_422928's rand()-modulo-10 +
+    // retry-on-occupied shape but using the presentation LCG (state.setup_lcg),
+    // never State::rng — this only steers which slot ids get the pre-supplied
     // roster, no sim RNG draw.
-    for (int slot = 0; slot < sim::kMaxPlayers; ++slot) {
-        state.setup_type[slot] = 0;  // OFF (sub_421E33(i,0,0) semantics)
-        state.setup_sub[slot] = 0;
-        state.setup_team[slot] = 0;
-    }
-    for (int slot : seed_campaign_ai_slots(state.setup_lcg, stage.ai_count)) state.setup_type[slot] = 1;
+    //
+    // The roster is NOT cleared first — CORRECTED 2026-07-30, and this one was
+    // load-bearing rather than cosmetic. sub_40151B @0x40151B has no reset in
+    // it: the per-slot loop it runs before seeding calls sub_42288C, which only
+    // clears a UI latch, and sub_422928 @0x422977 refuses any slot whose type
+    // byte is already non-zero. So the human the player set up on the PLAYER
+    // INPUT screen survives every stage transition, and each stage's AI is
+    // ADDED to the standing roster. The port used to reset all ten slots to OFF
+    // here, which is invisible while the picker arms stage 0 (the setup screen
+    // still follows) but DELETES THE PLAYER on every stage advance after it —
+    // leaving an AI-only roster, which the round pacing then reads as "no human
+    // survivor" and replays forever. It stayed hidden only because the advance
+    // used to require winning a whole best-of-N match first.
+    std::array<bool, sim::kMaxPlayers> occupied{};
+    for (int slot = 0; slot < sim::kMaxPlayers; ++slot)
+        occupied[static_cast<std::size_t>(slot)] = state.setup_type[slot] != 0;
+    for (int slot : seed_campaign_ai_slots(state.setup_lcg, stage.ai_count, occupied))
+        state.setup_type[slot] = 1;
     // Rovers/ghosts (fields 3-6, docs/re/campaign.md "Rover/ghost/AI
     // roster") are NOT player slots — they are autonomous roaming map-hazard
     // actors, now a real libs/sim actor kind (RoverSystem: spawn, wander AI,

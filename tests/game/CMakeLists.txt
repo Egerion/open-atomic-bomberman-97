@@ -42,6 +42,16 @@ target_link_libraries(bomber_frontend_tests
 target_include_directories(bomber_frontend_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
 add_test(NAME frontend COMMAND bomber_frontend_tests)
 
+# The CAMPAIGN round end (campaign_round_end.hpp): sub_4016DA's pacing verdict
+# and the 0x42A63B branch that skips the whole outcome tier. Header-only with no
+# dependency at all, so this target needs nothing but the game include dir — and
+# it is headless precisely because the alternative is proving a hidden mode's
+# screen flow by hand through a five-keypress easter egg.
+add_executable(bomber_campaign_round_end_tests test_campaign_round_end.cpp)
+target_link_libraries(bomber_campaign_round_end_tests PRIVATE doctest::doctest bomber::warnings)
+target_include_directories(bomber_campaign_round_end_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+add_test(NAME campaign_round_end COMMAND bomber_campaign_round_end_tests)
+
 # Goldman wheel PURE math (goldman_wheel.hpp) is SDL-free like app_flow.hpp:
 # own target linking only the game include dir + sim (for PowerupType).
 add_executable(bomber_goldman_wheel_tests test_goldman_wheel.cpp)
