@@ -203,8 +203,34 @@ public:
     // first request so the match path pays nothing for it and a missing file
     // just yields an empty Sprite the Screen skips. Keyed by the same base name
     // the original passes to its screen primitive (sub_42A088): "IPLOGO",
-    // "HSLOGO", "MAINMENU", "DRAW", "BONUS", "CREDBAR", etc. Cached by name.
+    // "HSLOGO", "MAINMENU", "DRAW", "BONUS", "WINZ", etc. Cached by name. The
+    // art is loaded fully OPAQUE, which is right for a backdrop and wrong for a
+    // `.BM` inline image — those go through bm_inline_pcx below.
     const Sprite& frontend_pcx(const std::string& name) const;
+
+    // The SAME DATA/RES PCX files, loaded the way the `.BM` text-screen viewer
+    // loads them — a DIFFERENT path from frontend_pcx above, because sub_41302D
+    // differs from the backdrop loader in both respects that matter:
+    //
+    //  * TRANSPARENCY. The inline `<IMGname>` blit is sub_4428E4 -> sub_44AED5,
+    //    which skips source bytes equal to 0, so palette index 0 is a key
+    //    colour (key_color.hpp). Backdrops are copied opaquely and must not be
+    //    keyed. Without this, CREDITS.BM's CREDBAR/QALOGO/BOMBDUDE draw as
+    //    black rectangles.
+    //  * PALETTE. sub_41302D loads via sub_4150F0 (pseudo.c 16370), i.e.
+    //    sub_41BE63 = raw decode + sub_41BBBD, the master-palette snap — the
+    //    same snapping loader MAINMENU/GLUE<n> use, and NOT the own-palette
+    //    sub_415120 path TITLE/DRAW/WINZ use. It cannot be otherwise: the
+    //    viewer never uploads a palette, so on 8-bit hardware these images are
+    //    physically displayable only through the palette already active.
+    //    Corroboration that the active palette is COLOR.PAL's master: JERM.PCX
+    //    and KURT.PCX are 100% master-palette colours already, so the snap is
+    //    the identity for them; the other three shift (CREDBAR by up to 39/255
+    //    on its yellows), which is what the original shows too.
+    //
+    // Cached separately from frontend_pcx so an image used both ways (none
+    // today) keeps both renditions. Missing files yield an empty Sprite.
+    const Sprite& bm_inline_pcx(const std::string& name) const;
 
     // The Goldman wheel's "ring" pointer sequence (docs/re/goldman-roulette.md
     // §3/§7, aRing) — RESOLVED: MISC.ANI owns it (its sequence table is
@@ -394,6 +420,14 @@ private:
     // lazily. Owners live in front_textures_ to keep the Sprites' tex valid.
     mutable std::map<std::string, Sprite> front_pcx_;
     mutable std::vector<sdl::TexturePtr> front_textures_;
+    // The `.BM` viewer's own keyed + snapped rendition of the same files
+    // (bm_inline_pcx). Separate caches, separate texture owners; bm_pcx_keyed_
+    // remembers whether the CLASSIC image used index 0, which is the only way
+    // to know whether the indexless 24-bit DATA_HD upscale should be keyed.
+    mutable std::map<std::string, Sprite> bm_pcx_;
+    mutable std::map<std::string, Sprite> bm_pcx_hd_;
+    mutable std::map<std::string, bool> bm_pcx_keyed_;
+    mutable std::vector<sdl::TexturePtr> bm_textures_;
     // HD front-end textures retain the classic Sprite geometry. This keeps all
     // original UI coordinates intact while their backing texture is higher
     // resolution. They are only selected while hd_enabled_ is true.

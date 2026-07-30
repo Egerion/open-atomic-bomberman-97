@@ -304,11 +304,15 @@ void BmScreen::draw(SDL_Renderer* ren) const {
                 if (row_visible) font_->draw(ren, run, x, y, kInkR, kInkG, kInkB);
                 x += w;
             } else {
-                // Inline image: look it up as a front-end PCX by its base name
-                // (case as written; the install FS was case-insensitive). A
-                // missing image draws nothing but still advances (matches the
-                // original skipping an image whose palette/asset failed to load).
-                const Sprite& sp = assets_->frontend_pcx(seg.value);
+                // Inline image, through the VIEWER's own loader — keyed on
+                // palette index 0 and snapped to the master palette, which is
+                // what sub_41302D's sub_4150F0 load + sub_44AED5 blit do and
+                // what frontend_pcx (the opaque backdrop path) does not; see
+                // AssetStore::bm_inline_pcx. Looked up by base name, case as
+                // written (the install FS was case-insensitive). A missing image
+                // draws nothing but still advances (matching the original
+                // skipping an image whose palette/asset failed to load).
+                const Sprite& sp = assets_->bm_inline_pcx(seg.value);
                 if (sp.tex) {
                     // CENTER the image vertically on the row: sub_41302D sets the
                     // blit Y to `rowY - (imageHeight - lineHeight)/2` (integer

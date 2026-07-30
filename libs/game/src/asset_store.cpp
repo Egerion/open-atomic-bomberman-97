@@ -9,6 +9,7 @@
 #include "bomber/assets/bmfont.hpp"
 #include "bomber/assets/pcx.hpp"
 #include "bomber/assets/rmp.hpp"
+#include "bomber/game/key_color.hpp"
 
 namespace bomber::game {
 
@@ -740,6 +741,54 @@ const Sprite& AssetStore::frontend_pcx(const std::string& name) const {
         }
     }
     return front_pcx_hd_.emplace(name, hd).first->second;
+}
+
+const Sprite& AssetStore::bm_inline_pcx(const std::string& name) const {
+    auto classic = bm_pcx_.find(name);
+    if (classic == bm_pcx_.end()) {
+        // Cache an entry for every request (even failures) so a missing file
+        // logs once and thereafter returns the same empty Sprite the viewer
+        // skips — the same guarded-cache shape frontend_pcx uses.
+        Sprite sp{};
+        try {
+            auto img = assets::pcx::load(game_dir_ / "DATA" / "RES" / (name + ".PCX"));
+            bm_pcx_keyed_.emplace(name, uses_key_index(img));
+            apply_key_index(img);  // sub_44AED5's index-0 skip
+            // Snapped to COLOR.PAL like every other sub_4150F0 load; remap()
+            // already leaves the keyed texels alone, matching sub_41BBBD's own
+            // `v5[0] = 0`.
+            sdl::TexturePtr tex{make_texture(ren_, img, TextureArt::Classic, &colorpal_)};
+            sp = {tex.get(), img.width, img.height, 0, 0};
+            bm_textures_.push_back(std::move(tex));
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "BM inline PCX '%s' load failed: %s\n", name.c_str(), e.what());
+        }
+        classic = bm_pcx_.emplace(name, sp).first;
+    }
+    if (!hd_enabled_) return classic->second;
+
+    if (auto it = bm_pcx_hd_.find(name); it != bm_pcx_hd_.end()) return it->second;
+
+    // Same rule as frontend_pcx: the HD texture inherits the CLASSIC w/h so the
+    // 640x480 layout is untouched. Whether to key comes from the CLASSIC image,
+    // because the 24-bit HD file has no index to test (key_color.hpp).
+    Sprite hd = classic->second;
+    const fs::path hd_path = game_dir_ / "DATA_HD" / "RES" / (name + ".PCX");
+    if (fs::exists(hd_path)) {
+        try {
+            auto img = assets::pcx::load(hd_path);
+            if (auto k = bm_pcx_keyed_.find(name); k != bm_pcx_keyed_.end() && k->second)
+                apply_key_black(img);
+            sdl::TexturePtr tex{make_texture(ren_, img, TextureArt::HighRes)};
+            if (tex) {
+                hd.tex = tex.get();
+                bm_textures_.push_back(std::move(tex));
+            }
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "HD BM inline PCX '%s' skipped: %s\n", name.c_str(), e.what());
+        }
+    }
+    return bm_pcx_hd_.emplace(name, hd).first->second;
 }
 
 }  // namespace bomber::game

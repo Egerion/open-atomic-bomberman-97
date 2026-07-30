@@ -66,6 +66,14 @@ target_link_libraries(bomber_alpha_bleed_tests PRIVATE bomber::assets doctest::d
 target_include_directories(bomber_alpha_bleed_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
 add_test(NAME alpha_bleed COMMAND bomber_alpha_bleed_tests)
 
+# The `.BM` viewer's transparent-blit key (key_color.hpp): sub_44AED5 skips
+# palette index 0. SDL-free pixel rules over assets::Image, same shape as the
+# alpha_bleed suite above.
+add_executable(bomber_key_color_tests test_key_color.cpp)
+target_link_libraries(bomber_key_color_tests PRIVATE bomber::assets doctest::doctest bomber::warnings)
+target_include_directories(bomber_key_color_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+add_test(NAME key_color COMMAND bomber_key_color_tests)
+
 # Scheme editor's pure grid model (editor_grid.hpp/.cpp) is SDL-free despite
 # living under libs/game/src — compiled directly into its own test binary rather
 # than linking bomber_game_core (which pulls in SDL3).
