@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <bit>  // popcount, for the star-only host-migration gate
 #include <cstddef>
 #include <cstdint>
 #include <unordered_map>
@@ -479,7 +480,30 @@ private:
 
     // --- host migration internals (design §8.1/§8.2) --------------------------
 
-    bool migration_enabled() const { return drop_.host_seat >= 0; }
+    // Migration arms ONLY for a star — a match of more than two seats. The seat
+    // count is the match's, not the survivors', so a 4-seat match that has
+    // already lost two players keeps the machinery it started with.
+    //
+    // THE TWO-SEAT CASE IS DELIBERATELY EXCLUDED, and it is a safety gate rather
+    // than a missing feature. With two seats the data plane cannot tell a DEAD
+    // PEER from a DEAD PATH — the peer that stopped arriving may be gone, or may
+    // be alive, still playing, and merely unreachable (design §4.2, observed
+    // live: RX 0/s, ~100% LOSS, BAD 0 on a direct match deep into a session) —
+    // and with nobody else at the table there is no third party whose view could
+    // settle it. Electing on that guess makes each side hand the OTHER's seat to
+    // the AI and play on inside a private, divergent game that neither player
+    // can distinguish from a real one. A freeze is worse gameplay and better
+    // information, so until §4.2's oracle exists the two-seat case is left
+    // exactly as it was. Pinned by "a TWO-PEER path death must NOT trigger an
+    // election" in tests/net/test_host_migration.cpp.
+    //
+    // A star is different in the one way that matters: the survivors can still
+    // hear EACH OTHER once rewired, so "the hub is unreachable from everyone"
+    // is a conclusion the remaining peers reach together rather than a guess one
+    // peer makes alone.
+    bool migration_enabled() const {
+        return drop_.host_seat >= 0 && std::popcount(all_seats_) > 2;
+    }
     // A migration is decided but not yet paid off: the frontier has not climbed
     // clear of the tick the hub died at. Gates the WIDE re-send, the re-phase
     // suppression, and — the one that is a correctness matter rather than a

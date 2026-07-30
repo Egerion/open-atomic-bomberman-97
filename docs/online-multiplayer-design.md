@@ -276,15 +276,15 @@ failing over or ending cleanly.
 
 Host migration supplies part of the answer and is **not** the whole of it:
 
-- If the vanished peer was the **hub**, §8 now covers it: survivors elect a new
-  one and play on with the lost seat on AI, instead of stalling forever. That is
-  a real fix for the observed symptom in the case where the host is the machine
-  that disappears.
-- If the peer is **alive and only the path died**, migration does the wrong
-  thing in a quiet way: each side AIs the other and both play on, diverging into
-  two private games that neither player can tell apart from a real one. This is
-  the case that needs discrimination, and it is why the feature must not be read
-  as closing §4.2.
+- If the vanished peer was the **hub of a star (>2 seats)**, §8 covers it:
+  survivors elect a new one and play on with the lost seat on AI, instead of
+  stalling forever.
+- **For the 2-seat match this capture came from, §8 deliberately does nothing.**
+  Migration is gated to a star precisely because the failure above is
+  indistinguishable from a dead peer, and acting on the guess would give each
+  side a private divergent game rather than a visible stall. The observed
+  configuration therefore behaves exactly as it did before host migration
+  existed. This section stays open.
 
 **What the frozen protocol already allows, verified against the Go source** — so
 the remaining work needs no server change:
@@ -432,6 +432,33 @@ Three corrections this section needed once it met the code:
   compares its correct post-handoff hash against the pre-handoff one the other
   peer already broadcast, and reports a divergence that never happened. If `T` is
   older than the retained window the session says so loudly rather than guessing.
+
+**Migration arms for a STAR ONLY — matches of more than two seats.** This is a
+safety gate, not an unfinished edge case, and it was added after the two-seat
+behaviour was measured rather than reasoned about.
+
+With two seats the data plane cannot distinguish a **dead peer** from a **dead
+path**: the peer that stopped arriving may be gone, or may be alive, still
+playing, and merely unreachable (§4.2 — observed live as `RX 0/s`, `~100% LOSS`,
+`BAD 0` on a direct match deep into a session). With nobody else at the table
+there is no third party whose view could settle it. Electing on that guess makes
+*each* side hand the *other's* seat to the AI and play on, inside two private
+divergent games that neither player can tell from a real one — strictly worse
+than the freeze it would replace, because a freeze is at least visible.
+
+Measured before the gate existed, on a severed 2-seat direct path with **both
+peers alive and pumping**: the guest set `host_lost_seats() == 1`, promoted
+itself (`hosting() == true`), scheduled the host's seat to AI at tick 39 and set
+`players[0].ai`. The host does the mirror image. Both tests are in
+`tests/net/test_host_migration.cpp`, including the deliberately awkward one: a
+2-seat host that is *genuinely* dead is **also** left alone, because from inside
+the survivor the two runs are byte-for-byte identical.
+
+A star differs in the one way that matters: the survivors can still hear *each
+other* once rewired, so "the hub is unreachable from everyone" is a conclusion
+the remaining peers reach together rather than a guess one peer makes alone.
+Lifting the gate needs §4.2's oracle (the lobby's `RosterUpdate`), not a better
+guess on the data plane.
 
 ### 8.2 Deterministic re-election
 

@@ -305,6 +305,15 @@ online-specific ones:
     silences every survivor to every other survivor simultaneously, so an
     ungated rule elects a new hub, declares it lost one timeout later, and
     cascades until every peer has elected itself.
+  - **It arms for a STAR ONLY (>2 seats).** With two seats a dead peer and a
+    dead path are indistinguishable on the data plane and there is no third
+    party to settle it, so electing means both sides AI each other and play on
+    in two private divergent games — worse than the visible stall it replaces.
+    Measured, not reasoned: on a severed 2-seat direct path with both peers
+    alive, the guest promoted itself and AI'd the host at tick 39. The 2-seat
+    case keeps its pre-migration behaviour, including when the host is
+    genuinely dead, since the survivor cannot tell those apart. Lifting this
+    needs design §4.2's `RosterUpdate` oracle.
   Implemented in `libs/net` and covered by `tests/net/test_host_migration.cpp`;
   the front-end half (re-anchor call, fresh punch, rebuilt `StarHubTransport`)
   is NOT implemented, so the mechanism is proven against a modelled rewire

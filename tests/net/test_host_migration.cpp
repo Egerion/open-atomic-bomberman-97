@@ -510,11 +510,19 @@ TEST_CASE("host migration: the election chains when the successor dies too") {
     CHECK_FALSE(g2.session.aborted());
 }
 
-TEST_CASE("host migration: a lone guest elects itself when its 2-seat host dies") {
-    // The degenerate topology, and the one the LIMITATION in detect_drops() used
-    // to name: with two seats there is nobody to tell, so the survivor must
-    // schedule the handoff on its own authority rather than wait for a decree
-    // that can never come. Before migration this case hung forever.
+TEST_CASE("host migration: a 2-seat host death is left alone even when REALLY dead") {
+    // The companion to the path-death case below, and the reason the gate is on
+    // SEAT COUNT rather than on some liveness judgement: here the host really is
+    // dead (killed, not merely unreachable), and the survivor STILL does not
+    // elect. That is deliberate, and it is the whole point — from inside the
+    // guest, this run and the severed-path run below are byte-for-byte
+    // indistinguishable. Acting on one means acting on the other.
+    //
+    // So the 2-seat host death keeps its pre-migration behaviour: with Options
+    // row 12 ON the guest stalls (the shell's double-Esc bail-out is the way
+    // out); with it OFF, detect_drops() still ends the match loudly, as it
+    // always did. Closing this properly needs §4.2's dead-peer/dead-path oracle
+    // — the lobby's RosterUpdate — not a better guess on the data plane.
     test::StarBus bus(2, /*latency=*/1);
     Peer host(0, 0, kSeat0 | kSeat1, bus, /*host_seat=*/0);
     Peer guest(1, 1, kSeat0 | kSeat1, bus, /*host_seat=*/0);
@@ -525,8 +533,7 @@ TEST_CASE("host migration: a lone guest elects itself when its 2-seat host dies"
         guest.pump(t);
         bus.step();
     }
-    const std::uint32_t frozen = guest.session.confirmed_tick();
-    REQUIRE(frozen > 20);
+    REQUIRE(guest.session.confirmed_tick() > 20);
     REQUIRE_FALSE(guest.session.hosting());
 
     bus.kill(0);
@@ -536,13 +543,58 @@ TEST_CASE("host migration: a lone guest elects itself when its 2-seat host dies"
         bus.step();
     }
 
-    CHECK(guest.session.host_lost_seats() == kSeat0);
-    CHECK(guest.session.current_hub() == 1);
-    CHECK(guest.session.hosting());
-    CHECK_FALSE(guest.session.aborted());
-    CHECK(guest.sim.state().players[0].ai);
-    // The whole point: it did not hang. The sim ran on past where the host died.
-    CHECK(guest.session.confirmed_tick() > frozen + 40);
+    CHECK(guest.session.host_lost_seats() == 0);
+    CHECK_FALSE(guest.session.hosting());
+    CHECK(guest.session.current_hub() == -1);  // migration never armed at 2 seats
+    CHECK(guest.session.handoff_tick(0) == net::RollbackSession::kNoHandoff);
+    CHECK_FALSE(guest.sim.state().players[0].ai);
+}
+
+TEST_CASE("host migration: a TWO-PEER path death must NOT trigger an election") {
+    // THE OWNER'S ACTUAL CONFIGURATION, and the failure he captured: 2 seats,
+    // path=direct, RX 0/s, ~100% LOSS, BAD 0 — nothing arriving at all, deep
+    // into a long session, with the peer almost certainly still alive and still
+    // playing. The data plane cannot tell that apart from a dead peer, and with
+    // only two seats there is no third party who could.
+    //
+    // Both peers are ALIVE here and neither is killed: the PATH dies, in both
+    // directions, while both keep simulating and keep sending. Nobody has
+    // "dropped" in any sense the sim can observe — they simply cannot hear each
+    // other any more.
+    //
+    // Migration must stay out of this. Electing here means the guest AIs the
+    // host while the host AIs the guest, and both play on inside private,
+    // divergent games that neither player can distinguish from a real one. That
+    // is strictly worse than the freeze it would replace, because a freeze is at
+    // least visible. Until §4.2's dead-peer/dead-path oracle exists, the 2-seat
+    // case is left exactly as it was.
+    test::StarBus bus(2, /*latency=*/1);
+    Peer host(0, 0, kSeat0 | kSeat1, bus, /*host_seat=*/0);
+    Peer guest(1, 1, kSeat0 | kSeat1, bus, /*host_seat=*/0);
+
+    std::uint32_t t = 0;
+    for (; t < 40; ++t) {
+        host.pump(t);
+        guest.pump(t);
+        bus.step();
+    }
+    REQUIRE(guest.session.confirmed_tick() > 20);  // a healthy direct match first
+
+    // The path dies both ways. Neither peer is dead; neither stops pumping.
+    host.ear.set_deaf(true);
+    guest.ear.set_deaf(true);
+    for (int i = 0; i < kTimeout + 120; ++i, ++t) {
+        host.pump(t);
+        guest.pump(t);
+        bus.step();
+    }
+
+    // NO ELECTION. The guest must not promote itself, and the hub must still be
+    // the seat that started as hub.
+    CHECK(guest.session.host_lost_seats() == 0);
+    CHECK_FALSE(guest.session.hosting());
+    CHECK(guest.session.handoff_tick(0) == net::RollbackSession::kNoHandoff);
+    CHECK_FALSE(guest.sim.state().players[0].ai);
 }
 
 TEST_CASE("host migration: a HostLost naming a NON-hub seat is refused") {
