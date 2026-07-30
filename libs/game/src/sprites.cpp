@@ -23,6 +23,68 @@ std::unordered_set<SDL_Texture*>& classic_textures() {
     return reg;
 }
 
+// Make an image SAFE TO SAMPLE LINEARLY, by bleeding each fully-transparent
+// texel's RGB out of its opaque neighbours (the standard "alpha dilate").
+//
+// Linear filtering reads a texel's RGB even where its ALPHA is zero, and SDL's
+// default blend mode is non-premultiplied — so the blend at a sprite edge mixes
+// in whatever colour sits behind the transparency. The 1997 art stores the KEY
+// COLOUR there: ani.cpp's decode zeroes only the alpha (`rgba[i*4+3] = (v ==
+// key_color) ? 0 : 255`) and leaves the key colour's RGB in place. Without this
+// pass, switching SOFT SCALING on drew a magenta halo around every cel — a
+// defect a player would report as a bug, not as "the smoothing I asked for".
+// Measured on the tick-10 demo frame before the fix: a visible key-colour fringe
+// along every tile and sprite edge.
+//
+// Applied to EVERY uploaded image, not just the classic ones: the DATA_HD
+// overrides are always uploaded LINEAR (they are de-dithered 4x art), so they
+// have always had this fringe, independently of the soft-scaling toggle.
+//
+// NEAREST cannot see the difference — a zero-alpha texel contributes nothing to
+// the blend whatever its RGB — so the crisp path, and every tests/visual pin
+// captured under it, stays byte-identical (verified: visual_golden 5/5).
+//
+// In-place is safe: the pass only WRITES texels with alpha 0 and only READS
+// texels with alpha != 0, so a bled texel can never become a source and the
+// result does not cascade across the image.
+void bleed_transparent_rgb(assets::Image& img) {
+    const int w = img.width, h = img.height;
+    if (w <= 0 || h <= 0) return;
+    const std::size_t need = static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 4;
+    if (img.rgba.size() < need) return;  // 1997 files are untrusted input
+    std::uint8_t* px = img.rgba.data();
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            std::uint8_t* p = px + (static_cast<std::size_t>(y) * static_cast<std::size_t>(w) +
+                                   static_cast<std::size_t>(x)) *
+                                      4;
+            if (p[3] != 0) continue;
+            int r = 0, g = 0, b = 0, n = 0;
+            for (int dy = -1; dy <= 1; ++dy) {
+                const int ny = y + dy;
+                if (ny < 0 || ny >= h) continue;
+                for (int dx = -1; dx <= 1; ++dx) {
+                    const int nx = x + dx;
+                    if ((dx == 0 && dy == 0) || nx < 0 || nx >= w) continue;
+                    const std::uint8_t* q =
+                        px + (static_cast<std::size_t>(ny) * static_cast<std::size_t>(w) +
+                              static_cast<std::size_t>(nx)) *
+                                 4;
+                    if (q[3] == 0) continue;
+                    r += q[0];
+                    g += q[1];
+                    b += q[2];
+                    ++n;
+                }
+            }
+            if (n == 0) continue;  // deep inside a transparent region: nothing to bleed
+            p[0] = static_cast<std::uint8_t>(r / n);
+            p[1] = static_cast<std::uint8_t>(g / n);
+            p[2] = static_cast<std::uint8_t>(b / n);
+        }
+    }
+}
+
 }  // namespace
 
 SDL_ScaleMode sdl_scale_mode(ScaleFilter filter) {
@@ -48,16 +110,18 @@ void destroy_texture(SDL_Texture* tex) {
 
 SDL_Texture* make_texture(SDL_Renderer* ren, const assets::Image& img, TextureArt art,
                           const assets::colorpal::Palette* snap) {
-    // In-match master-palette snap (colorpal.hpp): quantize a COPY so the
-    // caller's decoded image is left intact (recolor paths reuse it). A no-op
-    // when snap is null/inert.
-    assets::Image snapped;
-    const assets::Image* src = &img;
-    if (snap && snap->ok()) {
-        snapped = img;
-        snap->remap(snapped);
-        src = &snapped;
-    }
+    // Work on a COPY so the caller's decoded image is left intact (the recolour
+    // paths re-read it, and bleed_transparent_rgb below mutates pixels). The
+    // in-match master-palette snap (colorpal.hpp) folds into the same copy; it is
+    // a no-op when snap is null/inert.
+    assets::Image work = img;
+    if (snap && snap->ok()) snap->remap(work);
+    // Every uploaded texture is left safe to sample linearly, whatever the
+    // current filter is — the filter can be toggled at any time and an already
+    // uploaded texture cannot be re-encoded then (the CPU pixels are freed after
+    // upload, drop_classic_cpu).
+    bleed_transparent_rgb(work);
+    const assets::Image* src = &work;
     SDL_Surface* surf =
         SDL_CreateSurfaceFrom(src->width, src->height, SDL_PIXELFORMAT_RGBA32,
                               const_cast<std::uint8_t*>(src->rgba.data()), src->width * 4);
