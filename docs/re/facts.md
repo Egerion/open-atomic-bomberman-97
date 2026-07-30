@@ -5510,19 +5510,32 @@ enumerated and read:
 - Three thin wrappers, `sub_425E9B` (26802), `sub_425EFC` (26825, unused by
   anything relevant), `sub_425F79` (26851) — all just call `sub_425E36`
   plus a redraw.
-- All ~19 call sites of the whole family: bomb-flame burn-through (pseudo.c
-  7252, 7266, 25669, 27412 — the standard "flame reaches a brick, ignite it"
-  path), netplay tile-sync replication (12149, 12189, 12483, 12637, 22406 —
-  gated on `dword_460058`'s netplay flag, corrects a remote player's tile if
-  it desyncs onto a brick), the warphole neighbour clear (26537/26541,
-  already ported — see the warphole entry elsewhere in this file), and the
-  HURRY wall drop (27235, `docs/re/enclosure.md`). **None run at match setup
-  or reference the spawn-coordinate arrays** `dword_46460C`/`dword_46465C`.
+- All call sites of the whole family (16 on a 2026-07-30 re-sweep):
+  **the WARPHOLE pair (pseudo.c 7252/7266)** — `sub_4056CA` case 1's one-time
+  activation, which clears the warphole's OWN tile and then one random
+  cardinal neighbour (already ported — see "Stage actors do not clear the tile
+  they sit on" below); bomb-flame burn-through (25669, 27412 — the standard
+  "flame reaches a brick, ignite it" path); netplay tile-sync replication
+  (12149, 12189, 12483, 12637, 22406 — gated on `dword_460058`'s netplay flag,
+  corrects a remote player's tile if it desyncs onto a brick); **the POWERUP
+  RELOCATION inside `sub_425704` (26537/26541)**, which moves a powerup lying
+  on open floor onto a randomly chosen brick tile; the fill and the tile
+  regeneration; and the HURRY wall drop (27235, `docs/re/enclosure.md`).
+  **None run at match setup or reference the spawn-coordinate arrays**
+  `dword_46460C`/`dword_46465C`.
+  (CITATION CORRECTION, 2026-07-30: this list previously labelled 7252/7266
+  "bomb-flame burn-through" and 26537/26541 "the warphole neighbour clear" —
+  it is the reverse, as written above. The conclusion of this section is
+  unaffected: neither site runs at setup. The relabelling matters because the
+  stage-actor entry below depends on reading `sub_4056CA` correctly.)
 - The round-init sequence itself, `sub_410B6E` (pseudo.c ~14689-14857): board
   build `sub_4260F5` → field/background load `sub_4165FC` (a `FIELD%u.PLT`
   background BITMAP, unrelated to the tile grid) → tile redraw `sub_42633C`
-  → player placement `sub_4214BC` → powerup scatter `sub_4258E5` → rovers
-  `sub_40551F` → campaign hazards `sub_40151B`. Read in full: `sub_4214BC`
+  → player placement `sub_4214BC` → powerup scatter `sub_4258E5` → the
+  `EXTRA<N>.RES` STAGE-ACTOR LOADER `sub_40551F` (CITATION CORRECTION,
+  2026-07-30: previously labelled "rovers" here; the campaign rover/ghost
+  spawner is `sub_40151B`, the next step) → campaign hazards `sub_40151B`.
+  Read in full: `sub_4214BC`
   (23865-23962) only stores each player's resolved pixel coordinates into
   its own struct (`sub_40F48C`, itself just another struct-field setter,
   UNRELATED to the netplay position-sync arrays of the same name pattern
@@ -5980,6 +5993,95 @@ additive mechanisms"). That conclusion was reached by observing that
 `sub_4214BC` contains no scheme-table access and inferring a separate path
 from its absence; the actual path is the scheme writing into the value table
 `sub_4214BC` reads. That document has been corrected in place.
+
+## Stage actors do not clear the tile they sit on — CONFIRMED + PORTED (2026-07-30, `sub_4056CA`)
+
+**The divergence.** `match::apply_actors`' `place()` helper
+(`libs/match/include/bomber/match/match_factory.hpp`) set
+`cfg.cells[y][x] = Cell::Blank` under **every** stage actor — conveyor,
+dirarrow, warphole and trampoline alike. The original clears for the
+**warphole only**.
+
+**The evidence.** `sub_4056CA` is the per-actor tick/init dispatcher, and its
+four cases are asymmetric:
+
+- **case 1 (warphole)** — the one-time activation block guarded by the actor's
+  +146 latch calls `sub_425E9B` **twice**: once on its OWN tile with cell value
+  0, and once on a randomly chosen cardinal neighbour (pseudo.c 7252/7266; the
+  nested rejection loop is documented under "Warphole knockout" and ported).
+- **case 0 (dirarrow)**, **case 2 (conveyor)**, **case 3 (trampoline)** —
+  **no cells write at all.** Each only gates its DRAWING on
+  `if (!sub_425FB9(x,y))`, i.e. "draw the belt/arrow/trampoline only while this
+  tile is empty floor". A brick sitting on a conveyor is therefore normal in
+  the original: the belt is simply not drawn, and it is not walkable, until
+  somebody bombs the brick away.
+
+Corroborated two ways beyond the decompile:
+
+1. A sweep of the whole cells-writer family (`sub_425E36` and its wrappers
+   `sub_425E9B` / `sub_425EFC` / `sub_425F79`) finds 16 call sites — flame,
+   the netplay tile sync, the warphole pair, the powerup relocation in
+   `sub_425704`, the fill, tile regeneration and the HURRY wall. **None of them
+   is actor placement.** (The same sweep is written up under "Spawn-pocket
+   clear" above, whose call-site labels were corrected on the same date.)
+2. Play observation from someone who plays both: in the original the belts and
+   arrows are UNDER BRICKS at round start and have to be bombed open.
+
+**What it cost.** Measured, not estimated: a probe built `build_match_config`
++ `apply_actors` on the shipped `BASIC.SCH` (90% brick density) at 4 players
+over 400 seeds, against the shipped `EXTRA<N>.RES` files, and counted bricks
+with and without the blanking. Percentages are of the board's bricks AFTER
+`build_state`'s spawn-pocket clear, i.e. what a player actually sees:
+
+| stage | level | actors | bricks lost | share |
+|-------|-------|--------|-------------|-------|
+| 3  | ANCIENT EGYPT     | 44 dirarrows              | 32.3 of 98.8 | **32.7%** |
+| 10 | INNER CITY TRASH  | 32 conveyors              | 28.7 of 98.8 | **29.1%** |
+| 2  | HOCKEY RINK       | 12                        | 10.8 of 98.8 | 10.9% |
+| 9  | DEEP FOREST GREEN | 4 fixed + 4 random tramps |  3.6 of 98.8 |  3.6% |
+| 4  | COAL MINE         | 4 warpholes               |  0.0 of 91.7 |  0.0% |
+
+The loss is exactly `fixed non-warphole actor count x density`, since every
+stock actor tile is a brick candidate. COAL MINE is the control: its actors are
+all warpholes, which still clear, so it is unaffected — which is also why it is
+worth knowing that a `--demo`-driven visual capture on a warphole-only stage
+would prove nothing about this change. Random `-T,H` trampolines never cost a
+brick either way: their placement branch already required an already-blank tile.
+
+Those tiles were also walkable from round start where the original has them
+blocked.
+
+**The port.** `place()` now writes only `actor_type`/`actor_dir`; the Warphole
+branch does its own `cells[y][x] = Blank` before `knockout_neighbour`. The
+random `-T,H` trampoline branch already required `cells == Blank`, so it is
+unaffected. The "warphole looks closed" worry the old comment cited is the
+renderer's job and was already handled the original's way:
+`libs/game/src/renderer.cpp`'s actor pass skips a tile whose cell is not
+`Blank`, which is exactly `!sub_425FB9(x,y)`.
+
+**Hash impact — and the hole it exposed.** This change moves NEITHER the
+goldens NOR `build_hash`: both hand-build a `MatchConfig` on already-blank
+cells and never call `apply_actors`, which lives in `libs/match`, outside the
+digest's stated scope. The interactive lobby path was already safe (it
+serialises `cfg.cells`/`actor_type` over the wire), but the CLI
+`--host`/`--join` path derived the board LOCALLY ON BOTH PEERS and consults no
+`build_hash` and no protocol version at all, so a patched and an unpatched build
+would have generated different boards and desynced with nothing to catch it.
+Closed structurally rather than by digest: the CLI path now runs the same
+`net::SetupSession` config exchange the lobby path uses
+(`GameApp::exchange_cli_netplay_config`), so the board is derived ONCE, by the
+host, and shipped. See ADR-0010/0011 and the function's own comment.
+
+**Two adjacent divergences remain OPEN and are NOT settled by this entry:**
+
+1. **Actor resolution runs before the powerup scatter.** The binary's round-init
+   order is fill `sub_4260F5` → placement `sub_4214BC` → scatter `sub_4258E5` →
+   actor load `sub_40551F`; the port resolves actors before `build_state`
+   scatters. Untouched here.
+2. **`random_start` is per-round in the port**, where the binary shuffles once
+   per match.
+
+Both move the goldens, so they belong to a `libs/sim` batch, not to this fix.
 
 ## Warphole/trampoline entry predicate — CONFIRMED + PORTED (2026-07-28, `sub_41EC84`/`sub_41F29B`)
 
