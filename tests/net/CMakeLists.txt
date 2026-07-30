@@ -30,6 +30,18 @@ target_link_libraries(bomber_net_rollback_tests PRIVATE bomber::net)
 bomber_add_test(bomber_net_pacing_tests net_pacing test_rollback_pacing.cpp)
 target_link_libraries(bomber_net_pacing_tests PRIVATE bomber::net)
 
+# The per-match KILL TALLY under rollback: an accumulator in the presentation
+# layer fed by State::events, which replays. Two peers with different prediction
+# histories reached different totals — and so different win-by-kills verdicts —
+# from a simulation that never desynced, and no hash-based guard could see it
+# because events are deliberately outside state_hash. Drives both peers over the
+# shared ms_clock_harness rig and calls the REAL libs/game wiring
+# (net_tally.hpp — header-only and SDL-free, hence the game include dir), so the
+# suite fails if either half of the fix is reverted.
+bomber_add_test(bomber_net_kill_tally_tests net_kill_tally test_kill_tally.cpp)
+target_link_libraries(bomber_net_kill_tally_tests PRIVATE bomber::net)
+target_include_directories(bomber_net_kill_tally_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+
 # In-match netplay DIAGNOSTICS (net_stats.hpp): the ack-RTT derived from the
 # confirmed frontier a peer's InputRange already carries (no new wire message,
 # so no wire-version bump), the rollback/stall/lag counters, the loss ESTIMATE,
