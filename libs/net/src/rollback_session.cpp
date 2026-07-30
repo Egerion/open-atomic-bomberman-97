@@ -641,25 +641,13 @@ void RollbackSession::advance_impl(const sim::TickInputs& local_input) {
     const int raw = eligible ? frame_advantage() : 0;
     note_advantage(raw);
     const int sustained = eligible ? sustained_advantage() : 0;
-    // ...OR AT ONCE, on an advantage larger than the measured variance can
-    // explain. The window buys noise immunity with reaction time, and a whole
-    // second of it is far too slow for the case the re-phasing was built for: a
-    // peer whose frame loop freezes hands the pair several ticks of skew in one
-    // go, and waiting out the window lets that skew spend the entire prediction
-    // budget first. (Measured, not feared: with the window alone, both freeze
-    // scenarios in test_rollback_pacing.cpp went back to reaching the cap.)
-    //
-    // So the wait is required only where jitter is a PLAUSIBLE explanation, and
-    // `peer_depth_spread()` is the yardstick for that — measured off the wire, not
-    // tuned. On a steady path it is 0 and this reduces to the unfiltered rule the
-    // controller shipped with; under the live 90 ms condition it is ~6, so an
-    // advantage would have to exceed the whole prediction cap to skip the wait,
-    // which arrival variance cannot manufacture.
-    //
-    // Both arms imply `raw >= kRephaseAdvantageTicks` (a minimum is never above the
-    // current sample, and the spread is never negative), so this can still only
-    // ever hold on a pump the unfiltered controller would also have held — the
-    // property the whole "a clean path is untouched" argument rests on.
+    // The decision is the window's MINIMUM, or — for an advantage larger than the
+    // measured variance can explain — the current sample on its own, so that a
+    // frozen peer's several ticks of skew are not left to spend the whole
+    // prediction budget while the window fills. Both arms imply
+    // `raw >= kRephaseAdvantageTicks`, which is what keeps this a subset of the
+    // unfiltered controller's holds. See the header's jitter note for why each
+    // half is shaped the way it is, and what was measured with and without them.
     const bool raw_asks = eligible && raw >= kRephaseAdvantageTicks;
     const bool sustained_asks =
         eligible && (sustained >= kRephaseAdvantageTicks ||

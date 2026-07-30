@@ -95,22 +95,39 @@
 // not. The same reasoning `rtt_min_ms` is built on — variance can only ever add
 // delay, so the floor of a window is the excursion-free reading.
 //
+// A window buys noise immunity with REACTION TIME, though, and a full second of
+// it is far too slow for the very case the re-phasing was built for: a peer whose
+// frame loop freezes hands the pair several ticks of skew at once, and waiting the
+// window out lets that skew spend the entire prediction budget first. (Measured,
+// not feared — with the window alone both freeze scenarios in
+// test_rollback_pacing.cpp went straight back to reaching the cap.) So the wait is
+// required only where jitter is a PLAUSIBLE explanation, and there is a measured
+// yardstick for that: an advantage larger than `peer_depth_spread()` plus the
+// threshold is acted on at once. On a steady path the spread is 0 and the rule
+// reduces to the unfiltered one this controller shipped with — which is why the
+// whole clock-skew half of tests/net/test_rollback_pacing.cpp is numerically
+// IDENTICAL to the build before this. Under the live 90 ms condition the spread is
+// ~6, so an advantage would have to exceed the entire prediction cap to skip the
+// wait, and arrival variance cannot manufacture that.
+//
 // Two properties make this safe to ship rather than merely plausible:
-//   * min(window) <= the current sample ALWAYS, so a pump this holds is a pump the
-//     unfiltered controller would also have held. The filter can only ever hold
-//     LESS. On a path that never triggered it, every branch is taken identically
-//     and the two builds are the same program.
+//   * BOTH arms imply the old predicate — a minimum is never above the current
+//     sample, and a spread is never negative — so a pump this holds is a pump the
+//     unfiltered controller would also have held. It can only ever hold LESS. On a
+//     path that never triggered it, every branch is taken identically and the two
+//     builds are the same program.
 //   * it is self-limiting. Each hold moves this peer one tick back, which lowers
 //     the next sample, which lowers the minimum — so a skew of N is shed in N
 //     holds and the controller stops. No integrator, no gain to tune.
 //
 // Filtering the controller stops the game running in slow motion, but it does not
 // make a single late packet arrive any sooner: with the phase left alone, the
-// CORRECTIONS a burst causes are exactly the path's own. Measured: display holds
-// fell 70% and the tick rate came back, while re-simulated ticks went slightly
-// UP — the old spurious holds had been buying a little re-sim work with a lot of
-// the player's frame rate. Absorbing the arrivals themselves is the second half,
-// and it is a different mechanism.
+// CORRECTIONS a burst causes are exactly the path's own. Measured by ablation at
+// the live condition — the filter alone took held pumps from 71 to 33 and the rate
+// from 17.6 to 18.9 t/s, while re-simulated ticks went UP, from 1298 to ~1408. The
+// spurious holds had been buying a little re-sim work with a lot of the player's
+// frame rate. Absorbing the arrivals themselves is the second half, and it is a
+// different mechanism.
 //
 // THE LOCAL LEAD — adaptive input delay that needs NO AGREEMENT and NO WIRE
 // CHANGE. The received wisdom is that input delay is a shared constant: both
