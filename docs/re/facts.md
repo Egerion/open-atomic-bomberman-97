@@ -6414,8 +6414,10 @@ the same pass and NOT a hashed value. The three per-state anim blocks in
 `sub_41F29B` are not uniform: `kick %s` exits at **0x4201A9** on a "less" jump
 (reset when `+80 >= statecnt`, so it lives `statecnt` steps), while `punch %s`
 (**0x420244**) and `pickup %s` (**0x4202DF**) exit on "less-or-equal" (reset
-only when `+80 > statecnt`, so they live `statecnt + 1`). `sub_41DA5C` returns
-the sequence's step count, 10 for `pickup <dir>`, so state 4 really does last
+only when `+80 > statecnt`, so they live `statecnt + 1`). `sub_41DA5C` is a
+plain table read — sequence index × 0x3C into `dword_461B5C`, field +0x34, with
+a bounds check against `dword_461B58` — i.e. the per-sequence count this file's
+ANI audit already pins at 10 for `pickup <dir>`. So state 4 really does last
 **11** steps where the renderer's `pickup_pose_` uses 10. Presentation only, no
 hash, and it belongs to `libs/game` — left for the front-end pass that owns that
 file, recorded here so it is a citation and not a re-derivation.
