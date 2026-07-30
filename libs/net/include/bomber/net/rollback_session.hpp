@@ -43,15 +43,55 @@
 // RE'd Options row 12) and the `handoff_` schedule at the bottom of the class
 // (the rollback-safe part).
 //
+// RE-PHASING (the standing-lag cure; no wire change). MEASURED 2026-07-30 with a
+// two-peer harness on INDEPENDENT wall clocks (tests/net/test_rollback_pacing
+// .cpp): any freeze of a peer's frame loop longer than MatchRunner's 200 ms
+// catch-up clamp has its excess wall time DISCARDED, so that peer falls
+// permanently behind its partner — a 400 ms window drag costs a standing 4 ticks
+// and nothing ever gives them back. The prediction cap was the only re-phasing
+// mechanism there was, and it only engages once the WHOLE budget is spent: the
+// peer that is ahead stalls at 8/8 for the rest of the round, so every ordinary
+// packet-timing wobble becomes a visible stutter. A live Turkey<->Lithuania
+// record showed exactly that end state — depth=8/8, lag=lag_max=8, rollbacks=0
+// (the peer was never WRONG, only late) on a ~100 ms path where the healthy
+// depth is 2.
+//
+// The cure is GGPO's frame-advantage time-sync, and the numbers it needs are
+// already on the wire. An InputRange spans [sender's confirmed, sender's head),
+// so its LENGTH is the sender's own prediction depth — i.e. the peer's own lag,
+// measured on the peer. Ours minus theirs cancels the path delay (which both
+// contain equally) and leaves twice the CLOCK SKEW, which is the part that should
+// not be there. Past a small threshold the peer that is ahead holds one tick per
+// pump until the skew is gone, so depth returns to the path baseline instead of
+// parking at the cap. Purely a decision about WHEN this peer simulates — never
+// about WHAT it simulates — so no hashed state and no golden can move.
+
 // ROUND ABANDON -> DRAW (wire v8, MatchCtlKind::EndRound). Esc during an online
 // round is a LOCAL keypress and therefore must not be a local ACT: a peer that
 // stopped its own sim would have simulated — and tallied — a different number of
 // ticks than its partner, which is the same divergence class the drop handoff
-// exists to avoid. So Esc routes through request_end_round(): the HOST schedules
-// an end tick and broadcasts it, a GUEST only asks. Every peer then stops at
-// exactly that tick and the round is a DRAW BY DECREE (nobody inspects the
-// frozen state for a winner), so the match shell above can replay a round
-// instead of tearing the connection down.
+// exists to avoid. So it routes through request_end_round(): an end tick is
+// scheduled and broadcast, every peer stops at exactly that tick, and the round
+// is a DRAW BY DECREE (nobody inspects the frozen state for a winner), so the
+// match shell above can replay a round instead of tearing the connection down.
+//
+// STOPPING THE MATCH IS THE HOST'S ALONE, and this NARROWED on 2026-07-30.
+// request_end_round() used to have a guest branch: a guest sent
+// MatchCtlKind::EndRoundRequest and the host converted it into the decision. That
+// made any guest able to force-end any round at will with no host confirmation —
+// a griefing lever, and the owner independently asked for the authority model
+// that removes it. So a guest's request_end_round() is now a no-op, and a host
+// IGNORES an inbound EndRoundRequest. The second half is the one that matters:
+// kWireProtocolVersion is unchanged at 8, so a peer running the previous build
+// still connects, and refusing the message is what stops it still driving us.
+// The kind stays in the enum and decode() still accepts it precisely so that
+// older peer is turned away rather than disconnected.
+//
+// LEAVING is a different act and is NOT host-only — it is not in this class at
+// all. Stopping changes what BOTH machines simulate and so needs one authority;
+// leaving only removes yourself, must never depend on a peer answering, and is
+// the match shell's own business (MatchRunner's double-Esc bail-out, which tears
+// the transport down locally and never sends anything).
 
 namespace bomber::net {
 
@@ -134,6 +174,10 @@ public:
     // caller and test byte-identical.
     void advance(const sim::TickInputs& local_input, std::int64_t now_ms = -1);
 
+    // The cap this session was built with. The match shell reads it to size its
+    // own wall-clock catch-up allowance against the same bound.
+    int max_prediction() const { return max_prediction_; }
+
     std::uint32_t predicted_tick() const { return tick_; }   // next tick to simulate speculatively
     std::uint32_t confirmed_tick() const { return confirmed_; }  // highest all-inputs-known tick
     const sim::Simulation& sim() const { return *sim_; }
@@ -165,12 +209,11 @@ public:
 
     // --- round abandon (Esc), wire v8 ----------------------------------------
 
-    // "The player at THIS machine wants out of this round." On the HOST that is
-    // the decision itself: an end tick is scheduled and broadcast at once. On a
-    // GUEST it only sends MatchCtlKind::EndRoundRequest, re-sent every pump
-    // until the host's EndRound comes back — a guest NEVER ends a round on its
-    // own authority. Idempotent: a second press while an end is already
-    // scheduled does nothing.
+    // "Stop this round." HOST ONLY — see the authority note at the top of this
+    // file. On the host an end tick is scheduled and broadcast at once; on a
+    // guest this is a NO-OP, because a guest has no say in what both machines
+    // simulate. Idempotent: a second call while an end is already scheduled does
+    // nothing.
     void request_end_round();
 
     // An end tick is agreed (on either peer). The match shell reads this to tell
@@ -213,6 +256,15 @@ private:
     void note_peer_hash(std::uint32_t tick, std::uint64_t peer_hash);
     void prune();
 
+    // How far the newest input we hold from any still-awaited remote seat trails
+    // our own speculative head — the same quantity the overlay calls `lag`.
+    int local_lag() const;
+    // The worst of the peers' OWN lags, read off the length of the InputRanges
+    // they send (see the re-phasing note at the top of this file).
+    int peer_lag() const;
+    // "This peer is ahead of its partner by more than the path alone explains."
+    bool should_rephase() const;
+
     // Seats whose input is still EXCHANGED at `tick`: all_seats_ minus every
     // seat already handed to the AI by then. The single tick-keyed predicate
     // behind both "what does the sim get fed" (assemble) and "whose input must
@@ -231,8 +283,8 @@ private:
     // schedule_handoff is: the EARLIEST tick wins, so a duplicate, a re-send and
     // an out-of-order copy all reduce to a no-op and every peer converges.
     void schedule_end_round(std::uint32_t at_tick);
-    // Redundant re-send of whatever this role owes the shell: the host's
-    // EndRound once one is scheduled, a guest's EndRoundRequest until it is.
+    // HOST-only redundant re-send of a scheduled EndRound. A guest owes the
+    // shell nothing here: it has no say in when a round stops.
     void broadcast_end_round();
 
     sim::Simulation* sim_;  // BORROWED
@@ -281,8 +333,16 @@ private:
     // shell bookkeeping and must survive a rollback untouched; unlike it, it
     // never reaches the sim at all, so no golden hash can move because of it.
     std::uint32_t end_tick_ = kNoEndRound;
-    // GUEST only: our Esc is outstanding, so keep asking every pump.
-    bool end_requested_ = false;
+
+    // Each remote seat's OWN prediction depth, taken from the length of the last
+    // InputRange it sent. Not hashed, not sent, and not part of any correctness
+    // decision — it only ever decides whether THIS peer holds a tick to let its
+    // partner catch up.
+    std::array<int, sim::kMaxPlayers> peer_depth_{};
+    bool peer_heard_ = false;  // nothing to compare against until a peer speaks
+    // A re-phase hold is spread over alternate pumps so a skew is shed at half
+    // rate rather than freezing the display outright.
+    bool rephase_held_ = false;
 
     bool desynced_ = false;
     std::uint32_t desync_tick_ = 0;

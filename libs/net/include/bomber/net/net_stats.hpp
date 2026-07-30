@@ -187,6 +187,14 @@ struct NetStats {
     std::uint32_t stall_pumps = 0;
     int stalls_per_sec = 0;
 
+    // EXACT. Pumps this peer held DELIBERATELY, to give back clock skew its
+    // partner had lost (rollback_session.hpp's re-phasing note). Distinct from a
+    // stall on purpose: a stall is the cap refusing to let us run, a re-phase hold
+    // is us choosing not to. A healthy match shows a burst of these after each
+    // hitch and none in between; a permanently rising count means the two machines
+    // cannot hold the same tick rate at all, which is a different fault.
+    std::uint32_t rephase_holds = 0;
+
     // EXACT. A rollback is one mispredicted remote input; `resim_ticks` is the
     // total number of ticks replayed to correct them. Re-sims per second is the
     // CPU cost of the correction, and a high count with a low rollback count
@@ -256,6 +264,9 @@ public:
     // This pump could not simulate — the prediction cap held it.
     void on_stall();
 
+    // This pump WOULD have simulated, and chose not to, to shed clock skew.
+    void on_rephase_hold();
+
     // Called at the bottom of every pump with the session's live state.
     // `remote_next[s]` is the first tick no input is held for from seat s, which
     // is what makes `lag_ticks` exact.
@@ -312,6 +323,13 @@ enum class SessionEndReason : std::uint8_t {
     PeerLostBetweenRounds,  // the between-rounds config exchange never completed
     WindowClosed,           // the local player closed the window mid-match
     LeftSession,            // the local player walked out (Ctrl+Q / Escape at an outcome screen)
+    // The double-Esc BAIL-OUT: the local player left a match that had stopped
+    // responding. Deliberately its own reason rather than another LeftSession —
+    // the whole point of the bail-out is that it is used when something is
+    // already wrong, so a log full of these says the netcode is failing people,
+    // where a log full of LeftSession says only that players leave. The note
+    // carries the session's depth/stall numbers at the moment they gave up.
+    LeftStalled,
 };
 
 const char* end_reason_name(SessionEndReason r);

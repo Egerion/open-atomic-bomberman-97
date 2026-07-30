@@ -14,6 +14,7 @@
 #include "bomber/game/goldman_wheel.hpp"             // kClogsPrizeId / wheel_prize_to_powerup
 #include "bomber/game/input.hpp"                     // SlotInputType
 #include "bomber/game/match_outcome.hpp"             // is_team_mode
+#include "bomber/game/net_esc.hpp"                   // NetEscState (the online Esc rule)
 #include "bomber/game/renderer.hpp"                  // kScreenW
 #include "bomber/game/results.hpp"                   // tally_kills
 #include "bomber/game/screens/campaign_screens.hpp"  // HelpBrowserModal (the in-round F1)
@@ -238,6 +239,45 @@ sim::MatchConfig MatchRunner::build_config(std::uint32_t seed) const {
     return cfg;
 }
 
+void MatchRunner::leave(NetLeave how) {
+    if (state_.net_leave != nullptr) *state_.net_leave = how;
+}
+
+void MatchRunner::draw_net_esc_prompt() {
+    if (state_.net_session == nullptr || !ctx_.front_font.loaded()) return;
+    // Two short lines, bottom-centre — the one region nothing else occupies
+    // in-match (the F3 panel is top-left, the fps stack top-right, the clock top
+    // centre-right, the score rows are VALUELST-placed and the chat tab is closed
+    // online). Same reduced scale and manual 1-px outline the fps overlay uses,
+    // so it stays legible over any field art.
+    constexpr float kS = 0.7f;
+    // The two sides must NOT read the same. A guest shown "press Enter" or
+    // "ending round" would be watching for something that is never going to
+    // happen — which is exactly the confusion this started from.
+    const char* first = state_.net_is_host ? "ENDING ROUND - DRAW" : "ONLY THE HOST CAN STOP THE MATCH";
+    const char* second = "PRESS ESC AGAIN TO LEAVE THE MATCH";
+    const float lh = static_cast<float>(ctx_.front_font.line_height()) * kS;
+    float y = static_cast<float>(kScreenH) - 6.0f - 2.0f * lh;
+    for (const char* s : {first, second}) {
+        const std::string line = s;
+        const float x =
+            (static_cast<float>(kScreenW) - static_cast<float>(ctx_.front_font.measure(line)) * kS) /
+            2.0f;
+        ctx_.front_font.draw(ctx_.sdl, line, x - 1, y, 0, 0, 0, kS);
+        ctx_.front_font.draw(ctx_.sdl, line, x + 1, y, 0, 0, 0, kS);
+        ctx_.front_font.draw(ctx_.sdl, line, x, y - 1, 0, 0, 0, kS);
+        ctx_.front_font.draw(ctx_.sdl, line, x, y + 1, 0, 0, 0, kS);
+        ctx_.front_font.draw(ctx_.sdl, line, x, y, 255, 220, 90, kS);
+        y += lh;
+    }
+}
+
+MatchCadence MatchRunner::cadence(std::uint64_t acc, std::uint64_t tick_ns) const {
+    return match_cadence(state_.native_cadence, state_.net_session != nullptr,
+                         static_cast<int>(state_.sim.systems_accum_ms()), sim::kMsPerTick, acc,
+                         tick_ns);
+}
+
 sim::TickInputs MatchRunner::collect_inputs() const {
     sim::TickInputs in;
     const sim::TickInputs kb = ctx_.keyboard.read();
@@ -332,7 +372,18 @@ void MatchRunner::draw_fps_overlay(int fps) {
     float y = 2.0f;
     line(buf, y, state_.uncap_fps);
     y += lh;
-    line(state_.native_cadence ? "NATIVE" : "20HZ", y, state_.native_cadence);
+    // WHAT IS IN EFFECT, not what the key says. F9 stays pressable online — the
+    // toggle lives in GameApp's global event filter, shared with every screen, and
+    // silently swallowing it there would be a second special case to keep in sync
+    // with this one — but a netplay match ignores it, so the row would otherwise
+    // read NATIVE while the sim ran fixed-tick. "(NET)" says WHY it is ignored,
+    // which is the difference between an honest overlay and a player pressing F9
+    // repeatedly wondering what is broken.
+    const bool native = cadence(0, 1).native;
+    const char* label = native                  ? "NATIVE"
+                        : state_.native_cadence ? "20HZ (NET)"
+                                                : "20HZ";
+    line(label, y, native);
     y += lh;
     line(state_.uncap_fps ? "UNCAP" : "VSYNC", y, state_.uncap_fps);
 }
@@ -410,6 +461,13 @@ AppInput MatchRunner::run() {
         bool action1 = false, action2 = false;
     };
     std::array<TapLatch, sim::kMaxPlayers> tap_latch{};
+    // The ONLINE Esc rule (net_esc.hpp — pure, so the dead-peer case it exists
+    // for is pinned headlessly rather than only on two real machines).
+    NetEscState esc;
+    const auto stop_outstanding = [&] {
+        return state_.net_session != nullptr && state_.net_session->end_round_scheduled() &&
+               !state_.net_session->round_ended();
+    };
     // Round-end / linger bookkeeping for ONE advanced 50 ms tick. Called from
     // both the fixed-tick catch-up loop and the F9 native-cadence path (once per
     // 50 ms systems pass). Returns true when the post-round linger has elapsed
@@ -493,8 +551,15 @@ AppInput MatchRunner::run() {
             // prompt, straight to the standard teardown). Wired here as the
             // faithful key.
             if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_Q &&
-                (ev.key.mod & SDL_KMOD_CTRL) != 0)
+                (ev.key.mod & SDL_KMOD_CTRL) != 0) {
+                // ONLINE it is a LEAVE, and it says so rather than leaving the
+                // shell to deduce it from the frozen sim state. The teardown
+                // itself is shared with the double-Esc bail-out below: both are
+                // the same act (walk out now, tell nobody, close the socket) and
+                // differ only in the reason they leave in netdiag.log.
+                leave(NetLeave::Forfeit);
                 return AppInput::MatchOver;
+            }
             // Esc also bails to the menu — a PORT CONVENIENCE, not a binary
             // fact: the same doc's finding is that literal Esc (27) is INERT
             // mid-round in the original (falls through the round loop's key
@@ -504,24 +569,48 @@ AppInput MatchRunner::run() {
             // matching its own (inert) Esc — see the doc's "Port status"
             // paragraph for the full rationale.
             //
-            // ONLINE it is neither of those. Esc used to return MatchOver here
-            // too, which the netplay caller read as a forfeit and answered by
-            // dropping the whole connection — one keypress and the session was
-            // gone. Worse, the DECISION was local: this peer left the round
-            // while its partner kept ticking, so the two had simulated a
-            // different number of ticks by the time anything looked at the
-            // frozen state. So an online Esc asks the SESSION instead
-            // (rollback_session.hpp's request_end_round): the host schedules an
-            // agreed end tick and broadcasts it, a guest sends a request, and
-            // both peers stop at the same tick with the round declared a DRAW —
-            // then replay a round, exactly like the local flow's draw tier.
-            // Ctrl+Q above is untouched and remains the "really leave" key.
+            // ONLINE it is neither of those, and it is TWO different things
+            // depending on how many times you press it.
+            //
+            // FIRST PRESS — "stop the round", and HOST ONLY. Esc must not be a
+            // local act: a peer that stopped its own sim would have simulated,
+            // and tallied, a different number of ticks than its partner. So it
+            // routes through the session (rollback_session.hpp), the host
+            // schedules an agreed end tick and broadcasts it, and both peers stop
+            // there with the round declared a DRAW. A GUEST's first press does
+            // NOTHING to the match — request_end_round() is a no-op for it — which
+            // is deliberate: the guest branch that used to send EndRoundRequest
+            // let any guest force-end any round with no host confirmation.
+            //
+            // SECOND PRESS — "leave", and available to EVERYONE. This is the
+            // escape hatch the MatchCtl change removed by accident: with the peer
+            // stalled the host's decision never comes back, so Esc looked dead
+            // and there was no way out of a broken match at all. Note WHY it
+            // looked dead — the loop is fine. SDL_PollEvent runs at the top of
+            // every frame, and a session held at the prediction cap returns from
+            // advance() immediately, so the key was always being read; it simply
+            // had nothing to do but wait on a peer that was not answering. So the
+            // fix is not to revive the loop, it is to give the key a meaning that
+            // needs no peer: leave() is local, sends nothing, and the transport
+            // closes on the way out.
+            //
+            // WHY A SECOND PRESS AND NOT A TIMER OR A CONFIRM DIALOG. Esc during
+            // a round already means "stop", and a modal would have to be
+            // dismissed — with what, on a machine where the player is already
+            // convinced input is being ignored? Two presses need no new input
+            // vocabulary and cannot be reached accidentally. The window is
+            // deliberately short and, crucially, VISIBLE: the first press puts a
+            // line on screen that says a second one leaves, which is what makes
+            // this discoverable at the moment it is needed rather than a secret.
             if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_ESCAPE) {
-                if (state_.net_session != nullptr) {
-                    state_.net_session->request_end_round();
-                    continue;
+                if (state_.net_session == nullptr) return AppInput::MatchOver;
+                if (esc.press(SDL_GetTicks(), stop_outstanding()) == EscPress::Leave) {
+                    leave(NetLeave::Stalled);
+                    return AppInput::MatchOver;
                 }
-                return AppInput::MatchOver;
+                // Host only; a no-op on a guest, by the session's own rule.
+                state_.net_session->request_end_round();
+                continue;
             }
             // docs/re/in-match-shell.md §1, auxiliary key table row
             // 0x13B=315=F1 (local only, matching `!sub_40C06A()` — no
@@ -597,10 +686,14 @@ AppInput MatchRunner::run() {
         }
         // Netplay MUST use the deterministic fixed-tick path: Simulation::frame()
         // (the F9 native-cadence driver) advances on the real wall-clock delta,
-        // which differs per machine and would instantly desync the peers. So the
-        // net_session gate forces the else branch below regardless of the live F9
-        // lever (a normal match is unchanged — net_session is null).
-        if (state_.native_cadence && !state_.net_session) {
+        // which differs per machine and would instantly desync the peers. That rule
+        // now lives in ONE place — match_cadence.hpp, see its header for why — and
+        // every consumer of the lever reads it through that, including the three
+        // PRESENTATION ones that used to read the raw flag and so switched
+        // interpolation off in a netplay match the sim was correctly running
+        // fixed-tick. A local match is unchanged (net_session is null).
+        const MatchCadence cad = cadence(acc, tick_ns);
+        if (cad.native) {
             // F9 native-cadence path: advance the sim ONE displayed frame on the
             // measured wall-clock delta. Simulation::frame runs the movement/AI
             // pass at frame rate and drains the 50 ms systems pass off its own
@@ -732,36 +825,30 @@ AppInput MatchRunner::run() {
         state_.renderer.set_gold_player(
             state_.gold_player,
             ::bomber::game::is_team_mode(state_.team_play, state_.sim.state(), state_.setup_team));
-        // Tell the renderer which animation clock to use (F9): per-frame walk/
-        // fidget phase advance in native cadence, once-per-tick otherwise.
+        // The three PRESENTATION values the cadence lever feeds, all resolved
+        // together by match_cadence.hpp so they cannot disagree (its header carries
+        // the full rationale, including the netplay bug that came of them
+        // disagreeing). Re-derived HERE rather than reusing `cad` from above,
+        // because both inputs have moved since: the catch-up loop has drained `acc`,
+        // and a native frame has advanced systems_accum_ms.
+        //
+        //  * native        — Renderer's animation clock: per-frame walk/fidget
+        //                    phase advance in native cadence, once-per-tick else.
+        //  * entity_interp — glide fraction for the 50 ms-stepped entities (flying
+        //                    and sliding bombs, rovers).
+        //  * interp_alpha  — the inter-tick blend (renderer.hpp's draw_frame doc).
+        //                    The original needed none, because its gameplay driver
+        //                    itself ran per displayed frame on the ms delta
+        //                    (sub_42A191); our fixed 20 Hz sim recovers that
+        //                    on-screen fluidity here, cosmetically. THIS is what a
+        //                    netplay match with F9 on used to lose.
+        const MatchCadence draw = cadence(acc, tick_ns);
         // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — emplaced in init()
-        state_.renderer.set_native_cadence(state_.native_cadence);
-        // F9: glide fraction for the 50 ms-stepped entities (flying/sliding
-        // bombs, rovers) = how far into the current 50 ms tick this frame falls.
+        state_.renderer.set_native_cadence(draw.native);
         // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — emplaced in init()
-        state_.renderer.set_entity_interp(state_.native_cadence
-                                              ? static_cast<float>(state_.sim.systems_accum_ms()) /
-                                                    static_cast<float>(sim::kMsPerTick)
-                                              : 1.0f);
-        // Inter-tick interpolation fraction (renderer.hpp's draw_frame doc):
-        // acc < tick_ns after the catch-up loop, so this is in [0,1) — how far
-        // into the current 50 ms tick this displayed frame falls. The original
-        // needed no such blend because its gameplay driver itself ran per
-        // displayed frame on the ms delta (sub_42A191); our fixed 20 Hz sim
-        // recovers that on-screen fluidity here, cosmetically.
-        // Native-cadence mode renders the sim's live state directly (alpha=1 =>
-        // player_interp/interp_pos return the current position, no lerp): the
-        // sim already ran at frame rate this frame, so there is nothing to blend.
-        float interp_alpha =
-            state_.native_cadence ? 1.0f : static_cast<float>(acc) / static_cast<float>(tick_ns);
-        // A NETPLAY stall breaks the catch-up loop early with acc still >=
-        // tick_ns (the sim is frozen waiting for the peer), which would push
-        // alpha past 1 and EXTRAPOLATE entities forward during the pause; clamp
-        // so the last simulated pose is held instead. No-op on every other path
-        // (the loop always drains acc below tick_ns there, so alpha < 1 already).
-        if (interp_alpha > 1.0f) interp_alpha = 1.0f;
+        state_.renderer.set_entity_interp(draw.entity_interp);
         // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — emplaced in init()
-        state_.renderer.draw_frame(state_.sim.state(), interp_alpha);
+        state_.renderer.draw_frame(state_.sim.state(), draw.interp_alpha);
         // The player-row HUD strip (docs/re/in-match-shell.md "The player
         // row") needs GameApp's own win_count_/kill_count_/front_font_, none
         // of which Renderer owns — drawn as a GameApp-side overlay on top of
@@ -770,6 +857,7 @@ AppInput MatchRunner::run() {
         // logically part of the same pass).
         draw_player_row(state_.sim.state());
         draw_fps_overlay(shown_fps);
+        if (esc.armed(SDL_GetTicks(), stop_outstanding())) draw_net_esc_prompt();
         // F3: the netplay diagnostic panel. Double-gated on purpose — it needs
         // BOTH the toggle (session-only, never persisted, so nothing can carry
         // it into a run) and a live netplay session (a capture never has one),
@@ -810,7 +898,7 @@ AppInput MatchRunner::run() {
             // there — leave the lattice free-running (its own origin) instead
             // of re-anchoring it onto `last`, which would silently turn the
             // absolute target back into a relative one.
-            if (!state_.native_cadence || state_.net_session) pacer.set_anchor(last - acc);
+            if (!draw.native) pacer.set_anchor(last - acc);
             wait = pacer.plan_subframe(after_present_ns);
         } else {
             pacer.set_period(period_ns);

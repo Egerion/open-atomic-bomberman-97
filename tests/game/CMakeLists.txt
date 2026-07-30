@@ -11,6 +11,25 @@ target_link_libraries(bomber_anim_tests PRIVATE doctest::doctest bomber::warning
 target_include_directories(bomber_anim_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
 add_test(NAME anim COMMAND bomber_anim_tests)
 
+# The F9 cadence lever resolved once for all four of its consumers
+# (match_cadence.hpp). Header-only and SDL-free, so the rule "netplay is
+# fixed-tick 20 Hz, on the presentation side too" is pinned without a window —
+# which is the point: nothing in the game notices when one of the four disagrees,
+# and for a while three of them did.
+add_executable(bomber_match_cadence_tests test_match_cadence.cpp)
+target_link_libraries(bomber_match_cadence_tests PRIVATE doctest::doctest bomber::warnings)
+target_include_directories(bomber_match_cadence_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+add_test(NAME match_cadence COMMAND bomber_match_cadence_tests)
+
+# The ONLINE Esc rule (net_esc.hpp): one press stops the round (host only), a
+# second one LEAVES (everyone). Pure and SDL-free precisely so the case it exists
+# for — a peer that has stopped responding — is a headless test rather than
+# something only reproducible with two machines and a broken network.
+add_executable(bomber_net_esc_tests test_net_esc.cpp)
+target_link_libraries(bomber_net_esc_tests PRIVATE doctest::doctest bomber::warnings)
+target_include_directories(bomber_net_esc_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+add_test(NAME net_esc COMMAND bomber_net_esc_tests)
+
 # Front-end flow core (app_flow.hpp + input.hpp's slot-type cycle): pure
 # next(state,input) plus cycle_slot_input_type, and the best-of-N match decision
 # (match_outcome.hpp's round_winner/match_clinch/reset_match_scores). input.hpp

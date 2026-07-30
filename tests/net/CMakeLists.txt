@@ -22,6 +22,14 @@ target_link_libraries(bomber_net_udp_tests PRIVATE bomber::net)
 bomber_add_test(bomber_net_rollback_tests net_rollback test_rollback_session.cpp)
 target_link_libraries(bomber_net_rollback_tests PRIVATE bomber::net)
 
+# Rollback PACING on independent wall clocks — the standing-lag regression. Every
+# other session suite pumps both peers inside one synchronous step(), which cannot
+# express a per-machine wall-clock skew, a per-direction delay, or the frame loop
+# the pump is nested inside; a live match pinned at the prediction cap for a whole
+# round was invisible to all of them.
+bomber_add_test(bomber_net_pacing_tests net_pacing test_rollback_pacing.cpp)
+target_link_libraries(bomber_net_pacing_tests PRIVATE bomber::net)
+
 # In-match netplay DIAGNOSTICS (net_stats.hpp): the ack-RTT derived from the
 # confirmed frontier a peer's InputRange already carries (no new wire message,
 # so no wire-version bump), the rollback/stall/lag counters, the loss ESTIMATE,
