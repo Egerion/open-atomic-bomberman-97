@@ -302,6 +302,21 @@ TEST_CASE("jitter: high arrival variance costs measurably less than it did") {
     // clock that delivered 20. Almost all of them were the re-phase controller
     // firing on arrival noise rather than on any real clock skew.
     //
+    // THE TWO MECHANISMS INTERLOCK — measured by ablation, and the reason neither
+    // may be removed as "the part that was not doing much":
+    //
+    //     neither (= main)      17.63 t/s | HELD 71 | resim 1298
+    //     filter only           18.90 t/s | HELD 33 | resim 1413
+    //     lead only             17.50 t/s | HELD 75 | resim  808
+    //     both                  19.70 t/s | HELD  9 | resim 1010
+    //
+    // The filter is what recovers the frame rate; the lead is what recovers the
+    // correction work. And the LEAD ALONE IS WORSE THAN NEITHER: it lowers the
+    // peer's reported depth, which inflates the raw frame advantage, which makes
+    // the unfiltered controller hold even more often than it already did. A lead
+    // shipped without the filter would have made the reported symptom worse while
+    // improving every number underneath it.
+    //
     // ROLLBACK COUNT IS DELIBERATELY NOT ASSERTED DOWN, and the reason is worth
     // recording: bursts COALESCE corrections (a run of late inputs lands together
     // and is fixed by one deep rollback), so the jittery condition already showed
