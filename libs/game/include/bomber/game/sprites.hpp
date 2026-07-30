@@ -105,6 +105,22 @@ SDL_Texture* make_texture(SDL_Renderer* ren, const assets::Image& img,
                           TextureArt art = TextureArt::Classic,
                           const assets::colorpal::Palette* snap = nullptr);
 
+// Maps a source rect expressed in a Sprite's CLASSIC 640x480 coordinate space
+// onto its BACKING TEXTURE, which may be a DATA_HD replacement several times
+// larger.
+//
+// Every Sprite keeps its classic w/h whatever texture is behind it (that is what
+// keeps the front-end's 1997 layout coordinates intact — see Sprite::tex_hd and
+// asset_store.cpp frontend_pcx), so any draw that passes a PARTIAL src rect has
+// to rescale it or it samples the top-left corner of an HD texture and shows a
+// sliver of the art. Draws that pass `nullptr` (the whole texture) are already
+// correct and need nothing.
+//
+// Returns `classic` unchanged when the texture is null or already 1x, so the
+// classic path is bit-identical.
+SDL_FRect texture_src_rect(SDL_Texture* tex, int classic_w, int classic_h,
+                           const SDL_FRect& classic);
+
 // Retargets the green armour of the pre-rendered player sprites, a faithful
 // port of the engine's remap-table builder sub_414A65 (0x414A65): a
 // green-dominant pixel (G > R && G > B) has its green EXCESS over the (R+B)/2

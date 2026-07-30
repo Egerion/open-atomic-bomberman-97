@@ -341,8 +341,14 @@ void BmScreen::draw(SDL_Renderer* ren) const {
                     if (x + static_cast<float>(draw_w) > clip_right)
                         draw_w = static_cast<int>(clip_right - x);
                     if (draw_h > 0 && draw_w > 0) {
-                        SDL_FRect src{0.0f, static_cast<float>(src_y),
-                                      static_cast<float>(draw_w), static_cast<float>(draw_h)};
+                        // The src rect is in the sprite's CLASSIC space; behind
+                        // it may be a 4x DATA_HD texture, which would otherwise
+                        // sample a sliver of the corner (sprites.hpp
+                        // texture_src_rect). Identity when HD is off.
+                        const SDL_FRect src = texture_src_rect(
+                            sp.tex, sp.w, sp.h,
+                            SDL_FRect{0.0f, static_cast<float>(src_y),
+                                      static_cast<float>(draw_w), static_cast<float>(draw_h)});
                         SDL_FRect dst{x, static_cast<float>(img_top),
                                       static_cast<float>(draw_w), static_cast<float>(draw_h)};
                         SDL_RenderTexture(ren, sp.tex, &src, &dst);

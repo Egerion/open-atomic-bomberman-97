@@ -52,8 +52,11 @@ float text_w(const FontTextures& font, const std::string& s) {
 // the walking offset plus one cell still fits inside the extent, and the
 // remainder (extent minus offset) otherwise, translated here to src/dst rect
 // pairs.
-void tile_patch(SDL_Renderer* ren, SDL_Texture* tex, const SDL_FRect& src, float dx, float dy,
-                float dw, float dh) {
+// `src` and the cell geometry are in the sprite's CLASSIC space; `cw`/`ch` are
+// its classic pixel size so a DATA_HD texture behind it can be sampled at the
+// right scale (sprites.hpp texture_src_rect — identity while HD is off).
+void tile_patch(SDL_Renderer* ren, SDL_Texture* tex, int cw, int ch, const SDL_FRect& src,
+                float dx, float dy, float dw, float dh) {
     // Integer tile index (not a float loop counter): ox/oy are derived as
     // index*cell, mirroring sub_416B43's integer `i`-stepped extent walk and
     // avoiding accumulated float drift.
@@ -63,7 +66,7 @@ void tile_patch(SDL_Renderer* ren, SDL_Texture* tex, const SDL_FRect& src, float
         for (int iy = 0; iy * src.h < dh; ++iy) {
             const float oy = iy * src.h;
             const float h = std::min(src.h, dh - oy);
-            SDL_FRect s{src.x, src.y, w, h};
+            SDL_FRect s = texture_src_rect(tex, cw, ch, SDL_FRect{src.x, src.y, w, h});
             SDL_FRect d{dx + ox, dy + oy, w, h};
             SDL_RenderTexture(ren, tex, &s, &d);
         }
@@ -98,24 +101,36 @@ void draw_dialog_chrome(SDL_Renderer* ren, const DialogRect& r, const Sprite* wi
     const float cw = static_cast<float>(winz->w) / kPatchCells;
     const float ch = static_cast<float>(winz->h) / kPatchCells;
     SDL_Texture* tex = winz->tex;
+    // Every src rect below is in WINZ's classic 72x72 space; src() rescales it
+    // onto whatever texture is actually bound (a 4x DATA_HD WINZ would otherwise
+    // hand every band the top-left ninth of its border art).
+    const int cls_w = winz->w, cls_h = winz->h;
+    const auto src = [tex, cls_w, cls_h](const SDL_FRect& rect) {
+        return texture_src_rect(tex, cls_w, cls_h, rect);
+    };
     // Center cell tiled across the WHOLE window (the original's first loop
     // runs the full 0..w / 0..h range; the edge/corner bands then overwrite
     // their strips).
-    tile_patch(ren, tex, SDL_FRect{cw, ch, cw, ch}, r.x, r.y, r.w, r.h);
+    tile_patch(ren, tex, cls_w, cls_h, SDL_FRect{cw, ch, cw, ch}, r.x, r.y, r.w, r.h);
     // Top / bottom edge cells, tiled horizontally.
-    tile_patch(ren, tex, SDL_FRect{cw, 0, cw, ch}, r.x, r.y, r.w, std::min(ch, r.h));
-    tile_patch(ren, tex, SDL_FRect{cw, 2 * ch, cw, ch}, r.x, r.y + r.h - ch, r.w, ch);
+    tile_patch(ren, tex, cls_w, cls_h, SDL_FRect{cw, 0, cw, ch}, r.x, r.y, r.w,
+               std::min(ch, r.h));
+    tile_patch(ren, tex, cls_w, cls_h, SDL_FRect{cw, 2 * ch, cw, ch}, r.x, r.y + r.h - ch, r.w,
+               ch);
     // Left / right edge cells, tiled vertically.
-    tile_patch(ren, tex, SDL_FRect{0, ch, cw, ch}, r.x, r.y, std::min(cw, r.w), r.h);
-    tile_patch(ren, tex, SDL_FRect{2 * cw, ch, cw, ch}, r.x + r.w - cw, r.y, cw, r.h);
+    tile_patch(ren, tex, cls_w, cls_h, SDL_FRect{0, ch, cw, ch}, r.x, r.y, std::min(cw, r.w),
+               r.h);
+    tile_patch(ren, tex, cls_w, cls_h, SDL_FRect{2 * cw, ch, cw, ch}, r.x + r.w - cw, r.y, cw,
+               r.h);
     // Four pinned corners.
-    SDL_FRect tl_s{0, 0, cw, ch}, tl_d{r.x, r.y, cw, ch};
+    SDL_FRect tl_s = src(SDL_FRect{0, 0, cw, ch}), tl_d{r.x, r.y, cw, ch};
     SDL_RenderTexture(ren, tex, &tl_s, &tl_d);
-    SDL_FRect tr_s{2 * cw, 0, cw, ch}, tr_d{r.x + r.w - cw, r.y, cw, ch};
+    SDL_FRect tr_s = src(SDL_FRect{2 * cw, 0, cw, ch}), tr_d{r.x + r.w - cw, r.y, cw, ch};
     SDL_RenderTexture(ren, tex, &tr_s, &tr_d);
-    SDL_FRect bl_s{0, 2 * ch, cw, ch}, bl_d{r.x, r.y + r.h - ch, cw, ch};
+    SDL_FRect bl_s = src(SDL_FRect{0, 2 * ch, cw, ch}), bl_d{r.x, r.y + r.h - ch, cw, ch};
     SDL_RenderTexture(ren, tex, &bl_s, &bl_d);
-    SDL_FRect br_s{2 * cw, 2 * ch, cw, ch}, br_d{r.x + r.w - cw, r.y + r.h - ch, cw, ch};
+    SDL_FRect br_s = src(SDL_FRect{2 * cw, 2 * ch, cw, ch}),
+              br_d{r.x + r.w - cw, r.y + r.h - ch, cw, ch};
     SDL_RenderTexture(ren, tex, &br_s, &br_d);
 }
 
