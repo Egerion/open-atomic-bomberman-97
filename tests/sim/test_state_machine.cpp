@@ -66,8 +66,38 @@ TEST_CASE("a grab starts pickup_pause, not the head-hit stun counter") {
     s.tick(TickInputs{});  // release for a fresh edge
     s.tick(press1(0));     // grab it
     REQUIRE(p.carrying);
-    CHECK(p.pickup_pause == s.state().tuning.pickup_pause);
+    // getvalue(665) + 1: the compare at 0x41FA55 is non-strict (facts.md
+    // "The grab's movement pause is getvalue(665) + 1 ticks").
+    CHECK(p.pickup_pause == s.state().tuning.pickup_pause + 1);
     CHECK(p.stun == 0);
+}
+
+TEST_CASE("the grab's movement pause is getvalue(665) + 1 ticks") {
+    // The gate at 0x41FA42 isolates the anim counter +80 out of the dword at
+    // player+78, calls getvalue(665), compares, and SKIPS the block on a
+    // "greater" jump — i.e. it blocks while `+80 <= getvalue(665)`, a
+    // NON-STRICT compare over +80 = 0..getvalue(665). With +80 zeroed by the
+    // grab and rising one step per 50 ms anim tick that is getvalue(665) + 1
+    // ticks of blocked input, not getvalue(665). The port used to seed the
+    // countdown with the bare value and came up one tick short.
+    // facts.md "The grab's movement pause is getvalue(665) + 1 ticks".
+    Simulation s(open_config());
+    Player& p = s.state().players[0];
+    p.grab = true;
+    s.tick(press1(0));     // drop own bomb underfoot
+    s.tick(TickInputs{});  // release for a fresh edge
+    s.tick(press1(0));     // grab it
+    REQUIRE(p.carrying);
+
+    const int window = s.state().tuning.pickup_pause + 1;
+    TickInputs carry_down;
+    carry_down.players[0].down = true;
+    carry_down.players[0].action1 = true;  // hold, or the release would throw
+    const Fixed y0 = p.y;
+    run(s, window, carry_down);
+    CHECK(p.y == y0);  // blocked for the WHOLE window
+    s.tick(carry_down);
+    CHECK(p.y > y0);  // and free on the very next tick
 }
 
 TEST_CASE("pickup_pause blocks new input like a stun, then releases") {
