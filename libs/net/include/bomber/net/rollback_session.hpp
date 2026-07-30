@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <bit>  // popcount, for the star-only host-migration gate
 #include <cstddef>
 #include <cstdint>
 #include <unordered_map>
@@ -118,6 +119,31 @@
 // both peers have compared and agreed on: an accumulator fed from it is guarded
 // by the desync check that could not see the old one.
 //
+// HOST MIGRATION ADDS A SECOND RESIDUAL of the same shape and the same bound.
+// A migration can move `confirmed_` BACKWARDS (rewind_for_migration), which is
+// the only thing in this class that does. The stream is therefore emitted at
+// most once per tick (`events_through_`) — without that guard the rewound window
+// would be drained twice and every kill in it double-counted, which is the exact
+// failure above, reintroduced.
+//
+// COVERAGE, HONESTLY: the un-confirm branch itself is NOT reached by
+// tests/net/test_host_migration.cpp — measured, and pinned there as a negative so
+// the gap cannot rot silently. Confirming a tick needs every awaited seat, so no
+// peer gets far above the tick the hub's input stops at, and the adopted tick is
+// the lowest such tick across peers. So `events_through_` and the un-confirm are
+// both DEFENSIVE here, not proven. The hash purge beside them IS proven, because
+// it runs on every adoption whether or not the frontier moves.
+//
+// What the guard CANNOT recover is agreement across that window. A survivor that
+// had already confirmed past the adopted tick drained those ticks' events as
+// computed WITH the dead hub's input; a survivor that never got that far drains
+// them as re-simulated with the seat on AI. The two disagree, and the earlier
+// peer cannot retract what the shell already consumed. The window is bounded by
+// `max_prediction` (≤ 400 ms at the default cap of 8) and sits around the instant
+// a host died, so it is the same "taken on trust" class as the speculative tail
+// rather than a new one — but it is a real divergence, not a covered case, and a
+// tally that must agree exactly across a host migration does not yet exist.
+//
 // The residual is the SPECULATIVE TAIL — the at-most-`max_prediction` ticks
 // between confirmed_ and the head at the moment the round stops. Both peers stop
 // at the same TICK, so drain_remaining_events() lets the shell close the range on
@@ -126,6 +152,50 @@
 // the ordinary round-end path, empty of kills — the shell lingers 3 s (60 ticks)
 // after the last side falls before it reads the tally, which is far longer than
 // the confirmation frontier ever trails.
+
+// HOST MIGRATION (wire v9, ADR-0011 decision 5, design §8). Everything above
+// assumes the hub is alive: the drop->AI handoff is scheduled by the host, and
+// detect_drops() below used to carry a LIMITATION saying so — if the seat that
+// went silent was the HOST's, nobody scheduled and the guests stalled forever.
+// This is the cure, and it has three parts that must be read together.
+//
+//   DETECTION (§8.1). MsgType::HostLost, announced by EVERY survivor rather
+//   than by one designated peer, because the machine that would normally decree
+//   it is the one that died. Survivors DISAGREE about the tick — it is a local
+//   quantity, differing by however many of the hub's last datagrams each lost —
+//   and the LOWEST proposal wins everywhere. Monotone, so no agreement protocol.
+//
+//   ELECTION (§8.2). A pure function of the drop schedule: the starting hub
+//   keeps the role while live, else the lowest surviving seat, chaining if the
+//   successor dies too. No vote is exchanged and none is needed, because every
+//   peer computes it from state they already agree on.
+//
+//     THE ELECTION READS THE SCHEDULE, NOT THE CONFIRMED FRONTIER, and that is a
+//     RETRACTION of the obvious design rather than an oversight. Evaluating the
+//     role at the frontier — so a peer takes it only once the migration is
+//     agreed history — is unimplementable over the very topology the role exists
+//     for, and it DEADLOCKS: the frontier cannot cross the migration tick until
+//     the survivors exchange input; their input only ever reached each other
+//     through the dead hub's reflection; and it will not flow again until
+//     somebody WITH THE ROLE rewires the star. The frontier gate gates the
+//     migration on itself. Reading the schedule is safe for the reason the
+//     schedule exists: an entry only ever comes from an announcement or a
+//     hard-timeout detection, it is idempotent and earliest-wins, and the role
+//     decides nothing hashed — only which peer emits Drop frames. The tick-keyed
+//     seats_awaited()/apply_handoffs() pair the sim reads is untouched.
+//
+//   RE-ANCHORING is NOT here. Rebuilding the star, re-punching to the new hub
+//   and moving the lobby anchor are the caller's (MigratingTransport +
+//   LobbyFlow::begin_migration + HostMigrationDriver). This class only decides
+//   WHEN the role moves and holds the sim still while it does.
+//
+// Two consequences that are easy to miss and were both measured:
+//   * a migration un-confirms (rewind_for_migration) — the only place the
+//     frontier moves backwards — so snapshots are retained BELOW confirmed_
+//     while migration is enabled; and
+//   * send_local's start tick widens while a migration heals (resend_from),
+//     because a severed star breaks the invariant that a peer missing an old
+//     input is still stalled at it.
 
 namespace bomber::net {
 
@@ -167,6 +237,28 @@ struct DropPolicy {
     // and ordinary network hiccups all blow past a few seconds too, so the
     // threshold must mean "genuinely gone", not "briefly busy".
     int timeout_ticks = 0;
+
+    // HOST MIGRATION (wire v9, design §8). The seat that is the HUB, or -1 (the
+    // default) to disable migration entirely — which is what every pre-existing
+    // caller and test gets, so their behaviour is byte-identical to before: the
+    // role stays whatever `is_host` said, MsgType::HostLost is ignored on
+    // arrival, and prune() keeps its old window.
+    //
+    // With it set, `is_host` stops being the answer to "am I driving the game"
+    // and becomes only the SEED of it: the role is recomputed every pump from
+    // the drop schedule (hosting()), so it can move to this machine mid-round
+    // when the hub dies. The two are kept as separate fields rather than one
+    // because they answer different questions — `is_host` is "did the user press
+    // Host", `host_seat` is "which seat is the hub right now" — and only the
+    // second can change.
+    //
+    // LAST IN THE STRUCT DELIBERATELY. Every existing caller and test builds a
+    // DropPolicy by POSITIONAL aggregate init (`{revert_to_ai, is_host,
+    // timeout}`), so a field inserted above `timeout_ticks` silently rebinds
+    // that third argument and turns drop detection off everywhere. That is not
+    // hypothetical — it is exactly what happened when this field was first added
+    // in the middle, and tests/net/test_peer_drop.cpp caught it. Append here.
+    int host_seat = -1;
 };
 
 class RollbackSession {
@@ -284,6 +376,42 @@ public:
     // that has not caught up yet still can.
     bool round_ended() const { return end_tick_ != kNoEndRound && tick_ >= end_tick_; }
 
+    // --- host migration (wire v9, design §8) ---------------------------------
+
+    // The seat currently holding the HUB role, or -1 when migration is off. A
+    // pure function of (drop schedule, DropPolicy::host_seat) — see hosting().
+    int current_hub() const { return hub_; }
+    // "This machine is the one driving the game." Equal to DropPolicy::is_host
+    // when migration is off; recomputed from the election when it is on.
+    bool hosting() const;
+    // Seats this session has recorded as a LOST HUB, as opposed to an ordinary
+    // dropped guest. Non-zero means a migration has been decided locally; the
+    // caller (HostMigrationDriver) polls it to start rewiring the star.
+    std::uint16_t host_lost_seats() const { return host_lost_; }
+
+    // THE MIGRATION STALL. While held, advance() receives and re-sends but
+    // simulates nothing and runs no drop detection, so the confirmed frontier —
+    // and with it the floor of the retained rewind window — stays exactly where
+    // the hub's death left it. The caller holds this for the rewire window and
+    // releases it once a path exists again.
+    //
+    // Releasing also re-arms every silence counter, because by the time a
+    // migration starts every remote seat has been silent for longer than the drop
+    // timeout — that is HOW the hub's loss was detected — so a naive release
+    // would declare the whole surviving table dropped one pump later.
+    //
+    // HONEST COVERAGE NOTE: that re-arm is belt-and-braces, NOT the mechanism the
+    // suite actually proves. Reverting it alone leaves tests/net/
+    // test_host_migration.cpp green, because two other things already cover the
+    // window: detect_drops() declares nothing at all while migration_healing(),
+    // and heard() zeroes the counter the moment the rewired star delivers
+    // anything. The cascade test discriminates against the HEALING GUARD — revert
+    // that and it fails loudly. The re-arm is kept because it is free and makes
+    // the property hold even if the guard's window is later narrowed, but do not
+    // read the passing test as evidence for it.
+    void set_migration_hold(bool held);
+    bool migration_held() const { return migration_hold_; }
+
     static constexpr std::uint32_t kNoHandoff = 0xFFFFFFFFU;
     static constexpr std::uint32_t kNoEndRound = 0xFFFFFFFFU;
 
@@ -350,6 +478,68 @@ private:
     // shell nothing here: it has no say in when a round stops.
     void broadcast_end_round();
 
+    // --- host migration internals (design §8.1/§8.2) --------------------------
+
+    // Migration arms ONLY for a star — a match of more than two seats. The seat
+    // count is the match's, not the survivors', so a 4-seat match that has
+    // already lost two players keeps the machinery it started with.
+    //
+    // THE TWO-SEAT CASE IS DELIBERATELY EXCLUDED, and it is a safety gate rather
+    // than a missing feature. With two seats the data plane cannot tell a DEAD
+    // PEER from a DEAD PATH — the peer that stopped arriving may be gone, or may
+    // be alive, still playing, and merely unreachable (design §4.2, observed
+    // live: RX 0/s, ~100% LOSS, BAD 0 on a direct match deep into a session) —
+    // and with nobody else at the table there is no third party whose view could
+    // settle it. Electing on that guess makes each side hand the OTHER's seat to
+    // the AI and play on inside a private, divergent game that neither player
+    // can distinguish from a real one. A freeze is worse gameplay and better
+    // information, so until §4.2's oracle exists the two-seat case is left
+    // exactly as it was. Pinned by "a TWO-PEER path death must NOT trigger an
+    // election" in tests/net/test_host_migration.cpp.
+    //
+    // A star is different in the one way that matters: the survivors can still
+    // hear EACH OTHER once rewired, so "the hub is unreachable from everyone"
+    // is a conclusion the remaining peers reach together rather than a guess one
+    // peer makes alone.
+    bool migration_enabled() const {
+        return drop_.host_seat >= 0 && std::popcount(all_seats_) > 2;
+    }
+    // A migration is decided but not yet paid off: the frontier has not climbed
+    // clear of the tick the hub died at. Gates the WIDE re-send, the re-phase
+    // suppression, and — the one that is a correctness matter rather than a
+    // tuning one — the refusal to declare a SECOND host loss (see detect_drops).
+    bool migration_healing() const { return host_lost_ != 0 && confirmed_ < heal_until_; }
+    // THE ELECTION, and it is a pure function — no vote, no message, no
+    // coordinator (design §8.2). The seat that STARTED as the hub keeps the role
+    // while it is live (whoever pressed Host need not be seat 0); once it is
+    // gone the LOWEST surviving seat takes over, and the rule CHAINS — if the
+    // elected hub dies too, the next-lowest succeeds it by the same rule.
+    int hub_of(std::uint16_t live) const;
+    // The survivor set the election runs over: all_seats_ minus every seat with
+    // a scheduled handoff. Deliberately derived from the SCHEDULE and not from
+    // the hashed State — a player who has been blown up still runs a machine and
+    // can still be the hub — which is also what makes it recomputable after any
+    // rollback and identical on every peer.
+    std::uint16_t live_seats() const;
+    // Where the redundant local-input re-send starts. Normally confirmed_; while
+    // a migration heals, widened down to the oldest retained tick. See the .cpp
+    // for why the usual invariant does not hold across a severed star.
+    std::uint32_t resend_from() const;
+    // Un-confirm back to `at_tick` so ticks simulated with the dead hub's real
+    // input can be redone with the seat on AI, and purge every hash at or above
+    // it on BOTH sides. Returns false if `at_tick` is older than the retained
+    // window, in which case the caller reports a desync rather than guessing.
+    // THE ONE PLACE THIS CLASS MOVES ITS FRONTIER BACKWARDS.
+    bool rewind_for_migration(std::uint32_t at_tick);
+    // Adopt an announced (or locally detected) host loss. Lowest tick wins, so
+    // concurrent announcements from survivors that disagree converge with no
+    // agreement protocol.
+    void adopt_host_lost(int seat, std::uint32_t at_tick);
+    // Re-send of every recorded host loss. NOT hub-only, unlike every other
+    // broadcast here: the announcement is ABOUT the hub, so the machine the
+    // redundancy discipline normally leans on is the one that is gone.
+    void broadcast_host_lost();
+
     sim::Simulation* sim_;  // BORROWED
     Transport* transport_;
     std::uint16_t local_seats_;
@@ -376,6 +566,12 @@ private:
     // by advance_confirmed(), which is also the only place the confirmed hash is
     // taken — so the two can never disagree about which ticks are final.
     std::vector<sim::Event> confirmed_events_;
+    // High-water mark of ticks whose events have ALREADY entered the stream, so
+    // no tick can enter it twice. `confirmed_` alone cannot serve, because host
+    // migration moves that backwards; this only ever rises. See the emit site in
+    // advance_confirmed() for why the distinction is a correctness matter and
+    // not bookkeeping.
+    std::uint32_t events_through_ = 0;
 
     // The peer-drop SCHEDULE — the durable, tick-keyed record that survives
     // rollback. Deliberately NOT a one-shot mutation of State: `Player::ai` is
@@ -400,6 +596,26 @@ private:
     // shell bookkeeping and must survive a rollback untouched; unlike it, it
     // never reaches the sim at all, so no golden hash can move because of it.
     std::uint32_t end_tick_ = kNoEndRound;
+
+    // --- host migration state (all outside sim::State; none of it is hashed) --
+
+    // The seat currently elected hub, recomputed every pump from live_seats().
+    // -1 while migration is off.
+    int hub_ = -1;
+    // Seats recorded as a LOST HUB rather than an ordinary dropped guest. Drives
+    // broadcast_host_lost() (every holder re-sends) and the wide re-send window.
+    std::uint16_t host_lost_ = 0;
+    // The tick above which the WIDE redundant re-send may stop (resend_from()):
+    // a full rewind window past the migration tick, i.e. once no survivor can
+    // still be waiting on an input either side has already finalised. Raised,
+    // never lowered, so a second host loss extends it.
+    std::uint32_t heal_until_ = 0;
+    // The oldest tick still retained. prune() keeps a fixed window BELOW
+    // confirmed_ while migration is enabled, because rewind_for_migration() has
+    // to be able to un-confirm into it; this is that floor, and it only rises.
+    std::uint32_t oldest_slot_ = 0;
+    // The caller-driven stall across the rewire. See set_migration_hold().
+    bool migration_hold_ = false;
 
     // Each remote seat's OWN prediction depth, taken from the length of the last
     // InputRange it sent. Not hashed, not sent, and not part of any correctness

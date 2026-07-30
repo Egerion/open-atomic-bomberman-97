@@ -17,8 +17,10 @@ CT="$(command -v clang-tidy || true)"
 if [ -z "$CT" ]; then
   # Both Program Files roots: the IDE editions install under the 64-bit one,
   # but Build Tools — the IDE-less toolchain, which is all this repo needs —
-  # lands in "Program Files (x86)". Searching only the former silently fails
-  # the gate on a perfectly good machine.
+  # lands in "Program Files (x86)". Searching only the former fails the gate on
+  # a perfectly good machine. It fails LOUDLY (the exit below says so), so
+  # nothing was ever linted by accident — but it still blocks a push for no
+  # reason, which is how this was found.
   for root in "/c/Program Files/Microsoft Visual Studio" \
               "/c/Program Files (x86)/Microsoft Visual Studio"; do
     for cand in "$root/"*/*/VC/Tools/Llvm/x64/bin/clang-tidy.exe; do

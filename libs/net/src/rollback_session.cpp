@@ -33,6 +33,17 @@ constexpr std::uint32_t kEndRoundSlackTicks = 12;
 // margin is a factor of two over the +/-1 tick a pump-boundary can contribute.
 constexpr int kRephaseAdvantageTicks = 2;
 
+// How far BELOW the confirmed frontier snapshots are retained while host
+// migration is enabled — the depth from which rewind_for_migration() can still
+// un-confirm. It has to exceed the worst overshoot between two survivors, and
+// that overshoot is bounded: a peer stops producing input `max_prediction` ticks
+// past its own confirmed frontier, so a peer holding MORE of the dying hub's
+// input than its neighbour can only confirm `max_prediction` ticks past the tick
+// the neighbour will propose. 64 (3.2 s at 20 Hz) is several times the largest
+// sane cap, and costs 64 retained State copies only for a migration-enabled
+// session — every other caller keeps prune()'s old behaviour exactly.
+constexpr std::uint32_t kMigrationRewindWindow = 64;
+
 bool same_input(const sim::PlayerInput& a, const sim::PlayerInput& b) {
     return pack_input(a) == pack_input(b);
 }
@@ -50,7 +61,10 @@ RollbackSession::RollbackSession(sim::Simulation& sim, std::uint16_t local_seats
       drop_(drop),
       tick_(start_tick),
       confirmed_(start_tick),
-      rollback_to_(start_tick) {
+      rollback_to_(start_tick),
+      events_through_(start_tick),
+      hub_(drop.host_seat),
+      oldest_slot_(start_tick) {
     // Diagnostics only (net_stats.hpp). transport.path() is asked ONCE here, at
     // the one moment the session and its transport are certainly the pair that
     // will carry this round — which is what makes "which path is carrying the
@@ -175,10 +189,18 @@ void RollbackSession::receive() {
                         static_cast<int>(m.range.per_tick.size());
             peer_heard_ = true;
             // THE ACK-RTT SAMPLE, and the reason this diagnostic needs no new
-            // wire message: an InputRange always begins at the SENDER'S confirmed
-            // frontier (send_local(confirmed_) on every path through advance()),
-            // and that frontier cannot pass a tick our input has not reached. So
-            // `first_tick` is an acknowledgement of our own tick first_tick-1.
+            // wire message: an InputRange normally begins at the SENDER'S
+            // confirmed frontier (send_local(resend_from())), and that frontier
+            // cannot pass a tick our input has not reached. So `first_tick` is an
+            // acknowledgement of our own tick first_tick-1.
+            //
+            // ONE EXCEPTION, and it is deliberately left uncorrected: while a
+            // HOST MIGRATION heals, resend_from() widens the window below the
+            // sender's frontier (see there), so first_tick UNDERSTATES what the
+            // sender has acknowledged and the RTT it yields reads high for those
+            // few ticks. Diagnostics only — nothing here feeds a correctness
+            // decision — and a migration is exactly when an inflated RTT is the
+            // honest thing to show anyway, so it is not worth a wire field to fix.
             note_input_seats(remote, m.range.first_tick);
             for (std::size_t i = 0; i < m.range.per_tick.size(); ++i)
                 apply_remote(m.range.first_tick + static_cast<std::uint32_t>(i), remote,
@@ -198,6 +220,23 @@ void RollbackSession::receive() {
             const int seat = static_cast<int>(m.drop.seat);  // decode() bounds-checked it
             if ((all_seats_ & static_cast<std::uint16_t>(1U << seat)) != 0)
                 schedule_handoff(seat, m.drop.at_tick);
+        } else if (m.type == MsgType::HostLost) {
+            // The hub is gone, announced by a survivor (design §8.1). Ignored
+            // entirely when migration is off, so a session that never opted in
+            // behaves exactly as it did before wire v9 — and ignored unless
+            // Options row 12 is ON, because without it a lost peer is a
+            // match-ending condition that detect_drops() already handles
+            // locally on every peer, with no seat to hand to anyone.
+            //
+            // Accepted from ANY peer, unlike a Drop: there is no authority left
+            // to check it against. What keeps that safe is that it may only name
+            // the seat we currently believe is the hub — so it can never be used
+            // to hand an ordinary guest's seat to the AI, which is the decree
+            // MsgType::Drop still reserves to the elected hub.
+            const int seat = static_cast<int>(m.host_lost.seat);  // decode() bounds-checked it
+            if (migration_enabled() && drop_.revert_to_ai && seat == hub_ &&
+                (all_seats_ & static_cast<std::uint16_t>(1U << seat)) != 0)
+                adopt_host_lost(seat, m.host_lost.at_tick);
         } else if (m.type == MsgType::Hash) {
             note_peer_hash(m.hash.tick_index, m.hash.hash);
         } else if (m.type == MsgType::MatchCtl) {
@@ -207,7 +246,11 @@ void RollbackSession::receive() {
                 // host ever sends one; a guest that somehow does is not obeyed,
                 // because a guest's EndRound is not addressed to anyone (its own
                 // Esc never reaches this class at all).
-                if (!drop_.is_host) schedule_end_round(m.match_ctl.at_tick);
+                // hosting(), not drop_.is_host: after a migration the machine
+                // that must ignore an inbound EndRound is the ELECTED hub, which
+                // may be this one. A promoted peer that still deferred to the
+                // flag would obey an echo of its own announcement.
+                if (!hosting()) schedule_end_round(m.match_ctl.at_tick);
             }
             // EndRoundRequest is DELIBERATELY IGNORED — see the authority note at
             // the top of rollback_session.hpp. It used to let any guest force-end
@@ -297,8 +340,22 @@ void RollbackSession::advance_confirmed() {
         // same tick, the same snapshot and the same moment the hash above is
         // taken from — an accumulator fed from here is covered by the very
         // comparison that hash is about to be exchanged for.
-        if (const std::vector<sim::Event>* ev = events_of(confirmed_))
-            confirmed_events_.insert(confirmed_events_.end(), ev->begin(), ev->end());
+        //
+        // ONCE PER TICK, EVER — that is what `events_through_` is for, and it is
+        // load-bearing only because HOST MIGRATION can move `confirmed_`
+        // BACKWARDS (rewind_for_migration, the one place that happens). Without
+        // the guard the re-walk from the adopted tick would push those ticks'
+        // events into the stream a SECOND time, and an accumulator fed from it
+        // would double-count every kill in that window — precisely the bug the
+        // confirmed stream was introduced to fix, reintroduced through the one
+        // door its author could not have known about. Events are excluded from
+        // state_hash by design, so neither the desync check nor build_hash would
+        // have said a word.
+        if (confirmed_ >= events_through_) {
+            if (const std::vector<sim::Event>* ev = events_of(confirmed_))
+                confirmed_events_.insert(confirmed_events_.end(), ev->begin(), ev->end());
+            events_through_ = confirmed_ + 1;
+        }
         const std::vector<std::uint8_t> hp = encode_hash(confirmed_, h);
         transport_->send(hp.data(), hp.size());
         const auto peer = peer_hash_.find(confirmed_);
@@ -371,6 +428,156 @@ void RollbackSession::schedule_handoff(int seat, std::uint32_t at_tick) {
     }
 }
 
+int RollbackSession::hub_of(std::uint16_t live) const {
+    if (!migration_enabled()) return -1;
+    // The seat that STARTED as the hub keeps the role while it is live — it need
+    // not be the lowest one (whoever pressed "host" got it). "Lowest surviving"
+    // is the tie-break the survivors fall back on once it is gone, and it chains:
+    // if the elected hub dies too, the next-lowest takes over by the same rule.
+    if (drop_.host_seat < sim::kMaxPlayers &&
+        (live & static_cast<std::uint16_t>(1U << drop_.host_seat)) != 0)
+        return drop_.host_seat;
+    for (int s = 0; s < sim::kMaxPlayers; ++s)
+        if ((live & static_cast<std::uint16_t>(1U << s)) != 0) return s;
+    return -1;  // everyone is gone; the caller is ending the match anyway
+}
+
+std::uint16_t RollbackSession::live_seats() const {
+    // The same subtraction seats_awaited() makes, with the tick condition
+    // dropped: every scheduled handoff counts, whether or not the frontier has
+    // reached it. AI and empty slots were never in all_seats_, and a seat is
+    // never removed for anything that lives in the hashed State (a DEAD player
+    // still runs a machine and can still be the hub), so the answer depends on
+    // the schedule alone — identical on every peer, and unchanged by a rollback.
+    std::uint16_t m = all_seats_;
+    if (dropped_ == 0) return m;
+    for (int s = 0; s < sim::kMaxPlayers; ++s)
+        if (handoff_[static_cast<std::size_t>(s)] != kNoHandoff)
+            m = static_cast<std::uint16_t>(m & ~static_cast<std::uint16_t>(1U << s));
+    return m;
+}
+
+bool RollbackSession::hosting() const {
+    if (!migration_enabled()) return drop_.is_host;  // fixed role, pre-migration behaviour
+    // Exactly one peer answers true, because exactly one machine owns the
+    // elected seat. The role moves the moment the schedule records the old hub's
+    // loss — deliberately not when the frontier crosses it; see the header's
+    // retraction note on why the frontier gate deadlocks.
+    return hub_ >= 0 && hub_ < sim::kMaxPlayers &&
+           (local_seats_ & static_cast<std::uint16_t>(1U << hub_)) != 0;
+}
+
+void RollbackSession::set_migration_hold(bool held) {
+    if (migration_hold_ == held) return;
+    migration_hold_ = held;
+    if (held) return;
+    // See the header: the counters are already past the timeout when a migration
+    // begins, so a release without this is a table-wide cascade one pump later.
+    silence_.fill(0);
+}
+
+std::uint32_t RollbackSession::resend_from() const {
+    // Normally confirmed_ is enough, and the invariant behind that is worth
+    // stating because a migration is exactly where it fails: a peer missing an
+    // older input is STALLED at it, so nobody can have finalised past it, so
+    // nobody needs it re-sent.
+    //
+    // A severed star breaks that. Both survivors' knowledge of each other froze
+    // at the instant the reflector died — at DIFFERENT points, because they lost
+    // different amounts of its final output — so their frontiers sit several
+    // ticks apart, and the peer that is behind needs inputs the peer that is
+    // ahead has already finalised and stopped re-sending. Measured: a 3-seat
+    // star test wedged eight ticks apart with the migration otherwise perfectly
+    // converged.
+    //
+    // So while a migration heals, widen the window down to the oldest tick still
+    // retained. One local seat's input is a byte per tick, so even 64 ticks is a
+    // small datagram, and it lasts only until the frontier is clear of the
+    // migration.
+    //
+    // HONEST COVERAGE NOTE: this widening is CARRIED FROM THE EARLIER BRANCH'S
+    // MEASUREMENT, not proven by tests/net/test_host_migration.cpp — reverting it
+    // leaves that suite green. The suite's divergence case does not reach the
+    // wedge because the peer that is ahead gets REWOUND to the adopted tick, and
+    // re-sending from a rewound frontier already covers what the peer behind
+    // needs. The documented wedge needs a survivor to be behind on a tick BELOW
+    // the migration tick, which this suite does not construct. Kept because the
+    // failure it describes was observed on the earlier branch and the cost is a
+    // few dozen bytes per datagram for a second or two; treat it as defensive,
+    // and if it ever needs justifying, build that case first.
+    if (!migration_healing()) return confirmed_;
+    return oldest_slot_ < confirmed_ ? oldest_slot_ : confirmed_;
+}
+
+bool RollbackSession::rewind_for_migration(std::uint32_t at_tick) {
+    // EVERY hash at or above `at_tick` — ours and every peer's — was computed
+    // before this announcement existed, i.e. over a history that included the
+    // dead hub's input, and describes ticks that are about to be re-simulated
+    // with the seat on AI. They are not evidence of anything any more.
+    //
+    // Purging BOTH sides is what keeps the convergence quiet. The peer holding
+    // the LOWER tick never rolls back at all — it simply starts confirming past
+    // its own frontier — but the peer holding the higher one had already
+    // confirmed and BROADCAST hashes for those ticks, so without this the lower
+    // peer compares its correct post-handoff hash against a stale pre-handoff
+    // one and reports a divergence that never happened. The cost is a few ticks
+    // of lost desync coverage around the migration; both sides re-exchange from
+    // there on.
+    for (auto it = hash_.begin(); it != hash_.end();)
+        it = (it->first >= at_tick) ? hash_.erase(it) : std::next(it);
+    for (auto it = peer_hash_.begin(); it != peer_hash_.end();)
+        it = (it->first >= at_tick) ? peer_hash_.erase(it) : std::next(it);
+
+    if (at_tick >= confirmed_) return true;  // nothing final sits above it: an ordinary rollback
+    // We finalised ticks the announcer never could, because we happened to
+    // receive more of the dying hub's datagrams than it did. Those ticks were
+    // simulated with the hub's real input and must be redone with the AI, so the
+    // frontier itself has to move back — the one place this class un-confirms.
+    // Legal only for a HOST loss: with a live hub there is a single scheduler and
+    // its tick is a lower bound by construction (it hears every guest first), so
+    // the same situation there means a genuine disagreement and stays loud.
+    if (snapshots_.find(at_tick) == snapshots_.end())
+        return false;  // older than the retained window
+    confirmed_ = at_tick;
+    return true;
+}
+
+void RollbackSession::adopt_host_lost(int seat, std::uint32_t at_tick) {
+    const std::size_t si = static_cast<std::size_t>(seat);
+    // Remember it as a host loss even when the tick is no news: this peer is now
+    // one of the announcers, and the redundant re-send is the only thing keeping
+    // the message alive with the hub gone.
+    host_lost_ = static_cast<std::uint16_t>(host_lost_ | static_cast<std::uint16_t>(1U << seat));
+    // How long the WIDE redundant re-send stays on (resend_from): until the
+    // frontier is a whole rewind window clear of the migration tick, i.e. until
+    // no survivor can still be waiting on an input either side has finalised.
+    // Raised, never lowered, so a second host loss extends it.
+    const std::uint32_t heal = at_tick + kMigrationRewindWindow;
+    if (heal > heal_until_) heal_until_ = heal;
+    if (handoff_[si] != kNoHandoff && at_tick >= handoff_[si]) return;  // ours is already lower
+    // Lowering the tick is what makes concurrent announcements converge: it
+    // re-schedules the handoff, and because apply_handoffs() re-asserts the
+    // schedule at the head of every simulation of a tick, the re-simulation
+    // schedule_handoff triggers lands on the same state everywhere.
+    // false = out of the retained window; schedule_handoff then says so loudly.
+    rewind_for_migration(at_tick);
+    schedule_handoff(seat, at_tick);
+}
+
+void RollbackSession::broadcast_host_lost() {
+    // Unlike broadcast_handoffs() this is NOT hub-only. The announcement is about
+    // the hub, so the one machine the redundancy discipline usually leans on is
+    // the machine that is gone; every peer holding the record re-sends it every
+    // pump instead, which also carries it to a survivor that heard nothing.
+    if (host_lost_ == 0) return;
+    for (int s = 0; s < sim::kMaxPlayers; ++s) {
+        if ((host_lost_ & static_cast<std::uint16_t>(1U << s)) == 0) continue;
+        const std::vector<std::uint8_t> pkt =
+            encode_host_lost(static_cast<std::uint8_t>(s), handoff_[static_cast<std::size_t>(s)]);
+        transport_->send(pkt.data(), pkt.size());
+    }
+}
+
 void RollbackSession::detect_drops() {
     if (drop_.timeout_ticks <= 0 || aborted_) return;
     for (int s = 0; s < sim::kMaxPlayers; ++s) {
@@ -388,13 +595,46 @@ void RollbackSession::detect_drops() {
             aborted_ = true;
             return;
         }
-        // A guest never mutates hashed State on its own authority — it waits for
-        // the host's Drop. LIMITATION: if the seat that went silent is the
-        // HOST's, nobody schedules and the guests stay stalled. Curing that is
-        // host migration (ADR-0011 Risks, its own bullet: deterministic
-        // re-election of the lowest surviving seat), which is not implemented
-        // yet; this increment covers guest drops only.
-        if (!drop_.is_host) continue;
+        // NOTHING NEW IS DECLARED WHILE A MIGRATION IS STILL HEALING, and this
+        // is a correctness guard rather than a nicety. When the hub dies the
+        // star is severed, so EVERY survivor goes silent to EVERY other survivor
+        // at the same instant — not just the corpse. Left ungated that silence
+        // is read as evidence twice over, and both readings are wrong:
+        //
+        //   * the seat just elected to replace the hub is itself declared lost
+        //     one timeout later, and the next, and the next — the election
+        //     chains until every peer has elected ITSELF and the table has split
+        //     into as many one-player games as there are survivors; and
+        //   * the moment a survivor does take the role, it decrees an ordinary
+        //     Drop on the OTHER survivor, which is equally silent and equally
+        //     alive.
+        //
+        // Both were measured in this suite's 3-seat star before the guard: the
+        // first left two survivors on different hubs, the second left the
+        // elected hub having AI'd its only remaining peer, and both ended in a
+        // desync. More silence during a known outage is not new information.
+        // The chain rule stays intact for the case it is actually for — a
+        // successor that dies once the star is working again, which this suite
+        // also covers.
+        if (migration_healing()) continue;
+        // THE HUB'S OWN SEAT went silent. This is the case that used to hang:
+        // a guest never mutates hashed State on its own authority, so with the
+        // host gone nobody scheduled and every guest stalled forever. Now EVERY
+        // survivor announces it (design §8.1) — there is no authority to defer
+        // to, because the machine that had it is the one that died — under the
+        // separate MsgType::HostLost tag, so accepting it from a non-hub does
+        // not also make an ordinary guest-drop decree acceptable from one.
+        if (migration_enabled() && s == hub_) {
+            adopt_host_lost(s, remote_next_[si]);
+            const std::vector<std::uint8_t> pkt =
+                encode_host_lost(static_cast<std::uint8_t>(s), handoff_[si]);
+            transport_->send(pkt.data(), pkt.size());
+            continue;
+        }
+        // An ordinary guest drop stays a decree, and the decree is the ELECTED
+        // hub's — which after a migration may well be this machine. hosting()
+        // is what makes that the same line of code before and after.
+        if (!hosting()) continue;
         // The handoff tick is the FIRST tick we hold no input for from this seat
         // — see DropFrame on why it is retroactive. remote_next_ starts at the
         // session's own base tick, so a seat that never sent anything at all is
@@ -412,10 +652,16 @@ void RollbackSession::broadcast_handoffs() {
     // it yet is still stalled at exactly `at_tick` (it cannot confirm past a
     // tick whose input never arrives), so a late copy always lands inside the
     // rollback window — there is no deadline to miss, only a delay to shorten.
-    if (!drop_.is_host || dropped_ == 0) return;
+    if (!hosting() || dropped_ == 0) return;
     for (int s = 0; s < sim::kMaxPlayers; ++s) {
         const std::uint32_t at = handoff_[static_cast<std::size_t>(s)];
         if (at == kNoHandoff) continue;
+        // A host loss is re-announced by broadcast_host_lost(), under its own
+        // tag and by every holder rather than only by the hub. Re-sending it
+        // here as a Drop as well would be the elected hub retroactively decreeing
+        // its predecessor's death, which is precisely the authority the separate
+        // tag exists to keep apart.
+        if ((host_lost_ & static_cast<std::uint16_t>(1U << s)) != 0) continue;
         const std::vector<std::uint8_t> pkt = encode_drop(static_cast<std::uint8_t>(s), at);
         transport_->send(pkt.data(), pkt.size());
     }
@@ -447,11 +693,22 @@ void RollbackSession::broadcast_end_round() {
 
 void RollbackSession::prune() {
     // Everything strictly below confirmed_ is final and never needed again
-    // (rollback never targets a confirmed tick).
+    // (rollback never targets a confirmed tick) — UNLESS host migration is on,
+    // where rewind_for_migration() may move the frontier BACKWARDS onto a tick
+    // whose snapshot would otherwise be gone. Then a fixed window below the
+    // frontier is retained instead, and it is also what resend_from() re-sends
+    // from while a migration heals.
+    std::uint32_t keep_from = confirmed_;
+    if (migration_enabled())
+        keep_from = (confirmed_ > kMigrationRewindWindow) ? confirmed_ - kMigrationRewindWindow : 0;
     for (auto it = slots_.begin(); it != slots_.end();)
-        it = (it->first < confirmed_) ? slots_.erase(it) : std::next(it);
+        it = (it->first < keep_from) ? slots_.erase(it) : std::next(it);
     for (auto it = snapshots_.begin(); it != snapshots_.end();)
-        it = (it->first < confirmed_) ? snapshots_.erase(it) : std::next(it);
+        it = (it->first < keep_from) ? snapshots_.erase(it) : std::next(it);
+    // The floor only ever RISES. confirmed_ can move back (rewind_for_migration)
+    // but the ticks below it are gone for good once erased, so resend_from() must
+    // never name one of them.
+    if (keep_from > oldest_slot_) oldest_slot_ = keep_from;
     const std::uint32_t keep = (confirmed_ > kHashWindow) ? confirmed_ - kHashWindow : 0;
     for (auto it = hash_.begin(); it != hash_.end();)
         it = (it->first < keep) ? hash_.erase(it) : std::next(it);
@@ -488,6 +745,15 @@ bool RollbackSession::should_rephase() const {
     // no clock to align with.
     if (!peer_heard_ || aborted_ || end_tick_ != kNoEndRound) return false;
     if ((remote_seats_ & seats_awaited(tick_)) == 0) return false;
+    // NOT WHILE A MIGRATION IS HEALING, and this is a genuine interaction rather
+    // than caution. Both of the numbers this compares are meaningless there:
+    // local_lag() is enormous because the frontier was pinned for the whole
+    // outage while tick_ ran on, and peer_lag() is read from InputRange lengths
+    // last received BEFORE the hub died, so it is stale by the length of the
+    // outage. The difference would clear the threshold on every pump and hold a
+    // tick each time — throttling precisely the peer that most needs to catch up
+    // to the survivors it has just been reconnected to.
+    if (migration_healing()) return false;
     return local_lag() - peer_lag() >= kRephaseAdvantageTicks;
 }
 
@@ -505,7 +771,13 @@ void RollbackSession::advance_impl(const sim::TickInputs& local_input) {
     receive();
     // Detection sits BEFORE the rollback so a handoff announced or decided this
     // pump is folded into the same re-simulation rather than the next one.
-    detect_drops();
+    //
+    // NOT while a migration is held. Every remote seat is ALREADY past the drop
+    // timeout by then — that silence is how the hub's loss was detected — so
+    // counting through the rewire would declare the entire surviving table
+    // dropped, which is the one-lost-host-becomes-a-table-wide-cascade failure
+    // set_migration_hold() exists to prevent.
+    if (!migration_hold_) detect_drops();
     if (aborted_) return;
     if (rollback_pending_) {
         resimulate(rollback_to_);
@@ -515,6 +787,25 @@ void RollbackSession::advance_impl(const sim::TickInputs& local_input) {
     broadcast_handoffs();
     broadcast_end_round();
 
+    // THE ELECTION, re-evaluated every pump (design §8.2). A pure function of the
+    // drop schedule, so every peer computes the same answer with nothing
+    // exchanged, and it re-derives correctly after any rollback.
+    hub_ = hub_of(live_seats());
+    broadcast_host_lost();
+
+    // THE MIGRATION STALL. Keep talking — into whatever the caller has attached,
+    // possibly nothing at all yet — but simulate nothing, so the frontier, and
+    // with it the floor of the retained rewind window, stays exactly where the
+    // hub's death left it. prune() is deliberately not reached either.
+    //
+    // FIRST among the early returns on purpose: it is the strongest of them
+    // ("the frontier must not move"), and it is the only one that must re-send
+    // from the WIDE window rather than from confirmed_.
+    if (migration_hold_) {
+        send_local(resend_from());
+        return;
+    }
+
     // The round has reached its agreed abandon tick: simulate nothing more, but
     // KEEP PUMPING. A peer that is still short of the end tick needs our input
     // window to get there, and one that has not seen the announcement at all
@@ -522,7 +813,7 @@ void RollbackSession::advance_impl(const sim::TickInputs& local_input) {
     // peer this message exists to bring along. The caller stops calling us once
     // its own shell has moved on (round_ended()).
     if (round_ended()) {
-        send_local(confirmed_);
+        send_local(resend_from());
         return;
     }
 
@@ -536,7 +827,7 @@ void RollbackSession::advance_impl(const sim::TickInputs& local_input) {
     if (!rephase_held_ && should_rephase()) {
         rephase_held_ = true;
         stats_.on_rephase_hold();
-        send_local(confirmed_);  // the peer still needs our window to catch up
+        send_local(resend_from());  // the peer still needs our window to catch up
         return;
     }
     rephase_held_ = false;
@@ -549,7 +840,7 @@ void RollbackSession::advance_impl(const sim::TickInputs& local_input) {
         // a displayed frame the game was not allowed to advance because a peer's
         // input had not arrived — so it is counted rather than merely happening.
         stats_.on_stall();
-        send_local(confirmed_);
+        send_local(resend_from());
         return;
     }
 
@@ -576,7 +867,7 @@ void RollbackSession::advance_impl(const sim::TickInputs& local_input) {
     // That instant is one end of the ack-RTT (net_stats.hpp); the other is the
     // peer's confirmed frontier rising past it.
     stats_.on_local_tick(tick_ - 1);
-    send_local(confirmed_);  // now covers [confirmed_, tick_): includes the just-simulated tick
+    send_local(resend_from());  // covers [.., tick_): includes the just-simulated tick
     prune();
 }
 

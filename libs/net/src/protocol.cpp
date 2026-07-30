@@ -43,6 +43,7 @@ constexpr std::size_t kPunchFrameBytes = 1 + 4 + 1;  // tag + nonce u32 + is_pon
 constexpr std::size_t kProbeFrameBytes = 1 + 4 + 1;  // tag + nonce u32 + seen_peer u8
 constexpr std::size_t kDropFrameBytes = 1 + 1 + 4;   // tag + seat u8 + at_tick u32
 constexpr std::size_t kMatchCtlFrameBytes = 1 + 1 + 4;  // tag + kind u8 + at_tick u32
+constexpr std::size_t kHostLostFrameBytes = 1 + 1 + 4;  // tag + seat u8 + at_tick u32
 constexpr std::size_t kAckFrameBytes = 1 + 4 + 4 + 1;  // tag + revision + checksum + seat u8
 // tag + revision u32 + level_index u8 + rounds u8 + name_len u8
 constexpr std::size_t kPreviewHeaderBytes = 1 + 4 + 1 + 1 + 1;
@@ -110,6 +111,14 @@ std::vector<std::uint8_t> encode_match_ctl(MatchCtlKind kind, std::uint32_t at_t
     std::vector<std::uint8_t> b;
     b.push_back(static_cast<std::uint8_t>(MsgType::MatchCtl));
     b.push_back(static_cast<std::uint8_t>(kind));
+    put_u32_le(b, at_tick);
+    return b;
+}
+
+std::vector<std::uint8_t> encode_host_lost(std::uint8_t seat, std::uint32_t at_tick) {
+    std::vector<std::uint8_t> b;
+    b.push_back(static_cast<std::uint8_t>(MsgType::HostLost));
+    b.push_back(seat);
     put_u32_le(b, at_tick);
     return b;
 }
@@ -222,6 +231,14 @@ bool decode(const std::uint8_t* data, std::size_t size, Message* out) {
         out->type = MsgType::MatchCtl;
         out->match_ctl.kind = static_cast<MatchCtlKind>(data[1]);
         out->match_ctl.at_tick = get_u32_le(data + 2);
+        return true;
+    }
+    if (tag == MsgType::HostLost) {
+        if (size != kHostLostFrameBytes) return false;
+        if (data[1] >= sim::kMaxPlayers) return false;  // untrusted: seat must index a real slot
+        out->type = MsgType::HostLost;
+        out->host_lost.seat = data[1];
+        out->host_lost.at_tick = get_u32_le(data + 2);
         return true;
     }
     if (tag == MsgType::SetupAck) {

@@ -265,6 +265,59 @@ screens but not during the match, and setup traffic is host→guest only, so
 "silence" is not a valid signal there. Closing that fully needs a guest-side
 keepalive in `SetupSession` plus a late transport swap behind an indirection.
 
+### 4.2 A path that dies MID-MATCH (open; analysis only)
+
+Observed live, deep into a healthy session (round 53, ~1124 ticks in): `RX 0/s`,
+`~100% LOSS`, `BAD 0` — not malformed datagrams, *none at all* — with `PRED 8/8`
+and `STALL 10/s` as consequences of nothing arriving. Consistent with a NAT
+binding expiring or a transient network event. §4.1's verification runs before
+tick 0 and nothing re-verifies afterwards, so the match freezes rather than
+failing over or ending cleanly.
+
+Host migration supplies part of the answer and is **not** the whole of it:
+
+- If the vanished peer was the **hub of a star (>2 seats)**, §8 covers it:
+  survivors elect a new one and play on with the lost seat on AI, instead of
+  stalling forever.
+- **For the 2-seat match this capture came from, §8 deliberately does nothing.**
+  Migration is gated to a star precisely because the failure above is
+  indistinguishable from a dead peer, and acting on the guess would give each
+  side a private divergent game rather than a visible stall. The observed
+  configuration therefore behaves exactly as it did before host migration
+  existed. This section stays open.
+
+**What the frozen protocol already allows, verified against the Go source** — so
+the remaining work needs no server change:
+
+- **Mid-match relay allocation is ungated.** `handleAllocateRelay` checks
+  membership and seat only; it never reads lobby state. Allocation is idempotent
+  per (lobby, seat), and PROTOCOL.md §6.1 explicitly blesses the mid-match retry.
+  The relay learns each seat's address from its first datagram, so no candidate
+  exchange is needed — which matters, because §8.3 notes candidates are *not*
+  relayed mid-match.
+- **The control plane is still there**, provided somebody keeps pumping
+  `LobbyFlow` during the match (§8.3). Nothing does today; the same driver host
+  migration needs would supply it.
+- **`RosterUpdate` is the peer-liveness oracle**, broadcast unconditionally
+  mid-match from both the disconnect path and the reaper. A peer that QUIT loses
+  its seat immediately; a peer whose UDP path died keeps heart-beating and never
+  produces one. A member that loses its socket **cannot rejoin** (joins are
+  refused once IN_PROGRESS), so the signal is one-way and needs no false-positive
+  handling.
+  **But the timing asymmetry is the catch:** a clean quit shows up instantly,
+  while a hard crash or a machine going dark takes the 30 s deadline plus up to
+  10 s of reaper granularity. So "no roster change yet" is *inconclusive*, not
+  proof the peer is alive, and a failover that fires in ~2 s must not read it as
+  such. A correct design either waits out that window before deciding, or acts
+  only on the fast arm (an explicit disconnect) and treats everything else as
+  undetermined.
+
+Deliberately NOT used: `MatchOver` would flip the lobby back to OPEN and
+re-enable candidate relay, which looks like a free renegotiation and is a trap —
+it clears every ready flag, broadcasts a roster update every client's UI reads as
+"match over", re-opens the lobby to joins, and a second `StartMatch` would mint a
+new seed and desync the running match.
+
 ---
 
 ## 5. Lobby state machines
@@ -344,19 +397,104 @@ migration moves only two *roles*: the **signaling anchor** and (for N>2) the
 ### 8.1 Detecting host loss
 
 The host's *seat* times out like any peer (§ drop→AI, ADR-0011 Risks): after a
-hard silence window the peer that first notices broadcasts, on the data plane, a
-`HostLost { at_tick: T }` to the surviving hub-reachable peers (for 2P, the lone
-guest simply schedules it locally). `T` is a near-future tick chosen the same way
-the drop→AI handoff picks its tick, so **every** peer acts at the identical tick.
+hard silence window a survivor broadcasts, on the data plane, a
+`HostLost { seat, at_tick: T }` to the surviving hub-reachable peers (for 2P, the
+lone guest simply schedules it locally and elects itself — it is not gated on
+having anyone to tell).
+
+`MsgType::HostLost` (opcode 11, wire v9) is a **separate tag from `Drop` despite
+an identical payload**, and the difference is authority rather than bytes: a
+`Drop` is the hub's decree and only the hub may send one, while a `HostLost` is
+an observation about the hub, which by definition cannot come from it. Keeping
+them apart is what lets a peer accept "the hub is gone" from a non-hub without
+also accepting an ordinary seat-drop decree from one. A `HostLost` naming any
+seat other than the one we currently believe is the hub is refused.
+
+Three corrections this section needed once it met the code:
+
+- **`T` is RETROACTIVE, not "near-future".** It is the announcer's first tick
+  with no input from the hub, exactly as `DropFrame`'s is. A future `T` cannot
+  work for the same reason it cannot work there: the ticks between the hub's last
+  input and `T` could never be *confirmed*, so the session would speculate past
+  the cap and never unstall — the hang the message exists to cure.
+- **Not "the peer that first notices" — every survivor announces, and they
+  disagree.** `T` is a *local* quantity: peers hold different amounts of a dying
+  hub's output, so their proposals differ by however many of its last datagrams
+  each happened to lose. Everyone adopts the **lowest** `T` seen. Monotone, so no
+  agreement protocol is needed. Because the hub cannot re-send its own death
+  notice, *every* holder re-sends it each pump, not just one designated peer.
+- **"Lowest wins" alone is not sufficient.** A peer that received MORE of the
+  hub's dying output can already have **confirmed** past the tick it must adopt.
+  Adopting therefore has to *un-confirm* back to `T` — the one place the session
+  moves its frontier backwards — which needs snapshots retained below
+  `confirmed_`. It must also discard every hash at or above `T`, on **both**
+  sides: the lagging peer never rolls back at all, so without the purge it
+  compares its correct post-handoff hash against the pre-handoff one the other
+  peer already broadcast, and reports a divergence that never happened. If `T` is
+  older than the retained window the session says so loudly rather than guessing.
+
+**Migration arms for a STAR ONLY — matches of more than two seats.** This is a
+safety gate, not an unfinished edge case, and it was added after the two-seat
+behaviour was measured rather than reasoned about.
+
+With two seats the data plane cannot distinguish a **dead peer** from a **dead
+path**: the peer that stopped arriving may be gone, or may be alive, still
+playing, and merely unreachable (§4.2 — observed live as `RX 0/s`, `~100% LOSS`,
+`BAD 0` on a direct match deep into a session). With nobody else at the table
+there is no third party whose view could settle it. Electing on that guess makes
+*each* side hand the *other's* seat to the AI and play on, inside two private
+divergent games that neither player can tell from a real one — strictly worse
+than the freeze it would replace, because a freeze is at least visible.
+
+Measured before the gate existed, on a severed 2-seat direct path with **both
+peers alive and pumping**: the guest set `host_lost_seats() == 1`, promoted
+itself (`hosting() == true`), scheduled the host's seat to AI at tick 39 and set
+`players[0].ai`. The host does the mirror image. Both tests are in
+`tests/net/test_host_migration.cpp`, including the deliberately awkward one: a
+2-seat host that is *genuinely* dead is **also** left alone, because from inside
+the survivor the two runs are byte-for-byte identical.
+
+A star differs in the one way that matters: the survivors can still hear *each
+other* once rewired, so "the hub is unreachable from everyone" is a conclusion
+the remaining peers reach together rather than a guess one peer makes alone.
+Lifting the gate needs §4.2's oracle (the lobby's `RosterUpdate`), not a better
+guess on the data plane.
 
 ### 8.2 Deterministic re-election
 
-At tick `T`, with no messages exchanged, every surviving peer computes the new
-hub as **the lowest surviving seat index**. Survivorship is derived from the same
-per-seat liveness the drop→AI handoff already tracks, which is identical on every
-peer (it is a function of the shared `State` + the agreed drop schedule). So all
-peers elect the same hub with zero coordination — the election is a pure function
-of shared state, exactly like an AI input.
+With no messages exchanged, every surviving peer computes the new hub as **the
+seat that started as hub while it is still live, else the lowest surviving seat
+index**. Survivorship is derived from the agreed drop schedule alone —
+deliberately *not* from `State`: a player who has been blown up still runs a
+machine and can still be the hub, and keeping the election out of hashed state is
+what makes it recomputable after any rollback. So all peers elect the same hub
+with zero coordination — the election is a pure function of (schedule, tick).
+
+The rule **chains**: if the elected hub dies too, the next-lowest survivor takes
+over by the same rule.
+
+**A refinement that RETRACTS the obvious design.** Evaluating the role at the
+peer's *confirmed frontier* — so that a peer takes it only once the migration is
+agreed history — is unimplementable over the very topology the role exists for,
+and it deadlocks. The frontier cannot cross `T` until the survivors exchange
+input; their input only ever reached each other through the dead hub's
+reflection; and it will not flow again until somebody *with the role* rewires the
+star. The frontier gate therefore gates the migration on itself. The election
+reads the **schedule** (`live_seats()`), not the frontier. That is safe for the
+reason the schedule exists: an entry only ever comes from an announcement or a
+hard-timeout detection, it is idempotent and earliest-wins, and the role decides
+nothing hashed — only which peer emits `Drop` frames.
+
+**Nothing new is declared while a migration is still healing**, and this is a
+correctness guard rather than a nicety. When the hub dies the star is severed, so
+every survivor goes silent to *every* other survivor at the same instant — not
+just the corpse. Ungated, that silence is read as evidence twice over: the seat
+just elected is itself declared lost one timeout later (the election chains all
+the way down until every peer has elected *itself* and the table has split into
+as many one-player games as there are survivors), and the moment a survivor does
+take the role it decrees an ordinary `Drop` on the other survivor, which is
+equally silent and equally alive. Both were measured in
+`tests/net/test_host_migration.cpp` before the guard existed.
 
 ### 8.3 Re-anchoring + reconnecting
 
@@ -374,6 +512,50 @@ The hard sub-case (ADR-0011 Risks): a guest that reached the *old* hub only via
 relay must re-punch/re-allocate to the new hub, which can exceed the drop timeout
 and surface as a brief "migrating…" overlay. v1 accepts the stall; a later
 refinement pre-warms a backup-hub path so migration is seamless.
+
+#### What is implemented, and what is not
+
+**Implemented in `libs/net` and covered by `tests/net/test_host_migration.cpp`:**
+detection (`MsgType::HostLost`), the election and its chaining, the un-confirm +
+hash purge that makes disagreeing survivors converge, the healing guard that
+stops the election cascading, and `MigratingTransport` — the indirection the
+session borrows so the far end can be re-pointed without it noticing.
+`RollbackSession::set_migration_hold()` is the stall across the rewire.
+
+**NOT implemented:** the front-end half. Nothing yet calls
+`LobbyClient::reanchor()`, no `roster_digest` is computed C++-side, no fresh
+punch to the new hub is driven, and no `StarHubTransport` is rebuilt on the
+promoted guest. So the mechanism is proven against a modelled rewire
+(`StarBus::set_hub`) and not against a real one. **The session-level claims below
+are loopback-only** — see the report's honest-limits section.
+
+#### Constraints the frozen protocol imposes (verified against the Go source)
+
+- **The lobby survives a match.** `HeartbeatInterval` (10 s) × `HeartbeatMiss`
+  (3) = a 30 s per-member deadline, and a lobby is deleted **only** when its
+  member map empties. There is no age check and no IN_PROGRESS-specific timer —
+  `createdAt` is written and never read. One member frame every <30 s keeps the
+  lobby, its code and its roster alive indefinitely, in any state. So the
+  re-anchor is available mid-match *provided somebody keeps pumping `LobbyFlow`
+  during the match*, which nothing currently does.
+- **`ReanchorLobby` works while IN_PROGRESS.** Its handler checks membership,
+  host-seat vacancy and the roster digest — **not** lobby state. It is expected
+  to be refused at first ("the host seat is still occupied") until the dead
+  host's socket is reaped, and is never load-bearing for the match itself; what
+  it buys is the code staying resolvable and a rematch having an anchor.
+- **Candidates are the pre-match ones.** `relaysCandidates()` is
+  `OPEN || LOCKED`, so a mid-match `Candidates` frame is accepted, validated and
+  then **silently dropped**. No fresh exchange is available and none can be
+  published. Each survivor already holds its new hub's addresses from the
+  pre-match fan-out, so the re-punch has something to aim at; the cost is that a
+  peer whose mapping has since changed cannot republish, and for it the re-punch
+  fails.
+- **Relay is still two seats only.** `RelayedTransport` addresses one destination
+  seat, so a relayed star cannot exist. Applied to the **survivors**, so two
+  survivors of a four-seat match do get the relay. Above two there is no
+  fallback and one unreachable peer ends the match for the table. Lifting it
+  needs a relay allocation that fans out — a matchmaker change, and therefore a
+  PROTOCOL.md change, out of scope by construction.
 
 ## 9. Match setup after the punch (host-authoritative)
 
