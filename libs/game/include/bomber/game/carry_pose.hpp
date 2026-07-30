@@ -160,4 +160,39 @@ constexpr CarryOffset carried_bomb_offset(bool in_pickup_state, int arc_x, int a
     return CarryOffset{10 + arc_x, arc_y};
 }
 
+// THE HEAD-STUNNED IDLE POSE SPINS.
+//
+// `sub_41F29B`'s idle branch normally builds `stand %s` from the player's own
+// facing. While the head-stun word +58 is still non-zero it does not: the
+// direction it formats is the state's own elapsed-frame counter masked to two
+// bits, `+80 & 3` (the cosmetic standing-animation pick facts.md's "Stun does
+// NOT gate flame-death or pickup" already noted at ~23086 without unpacking).
+// `sub_421F7E` zeroes +80 at the moment of the bonk and it counts up one per
+// displayed frame, so a bonked bomberman's sprite turns on the spot for the
+// whole 16-frame stun instead of holding the way it was facing — the visual
+// tell that a hit landed. The port drew the plain facing and had no tell at all.
+//
+// THE MASKED VALUE IS A `godir`, NOT ONE OF OUR `Direction`s, and the two orders
+// differ. The original formats through `off_45BCC4[godir & 3] =
+// {"north","east","south","west"}` (`sub_413AED`, docs/re/sequence-map.md), so
+// the cycle is compass-CLOCKWISE: N, E, S, W. Our `sim::Direction` is
+// {Up, Down, Left, Right} and `sequences.cpp`'s own table maps those to
+// {north, south, west, east}. Feeding `& 3` straight into our index would spin
+// N, S, W, E — the same four frames, in an order the original never shows.
+// `kGodirToDirection` is that adapter, and it is the whole reason this is a
+// named function with a test rather than two characters at the draw site.
+inline constexpr int kGodirToDirection[4] = {0, 3, 1, 2};  // N, E, S, W -> Up, Right, Down, Left
+
+// The direction index the idle `stand <dir>` pose is drawn with.
+// `stun_remaining` is `Player::stun`, the port's +58 (a countdown, where the
+// original's +80 counts up); `stun_total` is `Tuning::head_stun_frames`, what
+// `sub_421F7E` overwrote +58 with, so `total - remaining` is the elapsed frame
+// count +80 holds. Returns `facing` unchanged when no stun is running, which is
+// every frame of a normal match — nothing else in the port can set +58.
+constexpr int stunned_stand_facing(int facing, int stun_remaining, int stun_total) {
+    if (stun_remaining <= 0) return facing;
+    const int elapsed = stun_total - stun_remaining;
+    return kGodirToDirection[(elapsed > 0 ? elapsed : 0) & 3];
+}
+
 }  // namespace bomber::game

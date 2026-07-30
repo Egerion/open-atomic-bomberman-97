@@ -164,9 +164,9 @@ void AudioEngine::play(int id) {
     start_voice(bank_.pick(id), true);
 }
 
-void AudioEngine::play_exact(int id) {
+void AudioEngine::play_exact(int id, std::uint64_t frame) {
     if (!ok_) return;
-    start_voice(bank_.name(id) ? id : -1, true);
+    start_voice(bank_.pick_exact(id, frame), true);
 }
 
 void AudioEngine::play_debounced(int id, std::uint64_t frame) {

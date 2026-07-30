@@ -83,6 +83,32 @@ public:
     // jelly-bounce SFX uses this in the original (`sub_423776`).
     int pick_debounced(int id, std::uint64_t frame);
 
+    // `sub_4278F2`'s selection half: NO group walk at all — the caller named a
+    // slot and gets that slot, or -1 if it is empty.
+    //
+    // The sting in the tail is the play counter. `sub_427961` ends
+    // `counts[pick] += 1` (0x427AB0); `sub_4278F2` ends `counts[id] =
+    // dword_464994` (0x427950-0x427956) — the SAME array, but ASSIGNED the
+    // game-frame counter. Since `pick` is least-played-first, a slot left
+    // holding a frame number in the thousands can never again equal its group's
+    // minimum, so an exact play effectively RETIRES that member from every
+    // ordinary pick on its group for the rest of the session. (Effectively, not
+    // absolutely: `pick`'s 200-draw ceiling still plays whatever the last draw
+    // was, so a group that is entirely retired degrades to uniform rather than
+    // going silent. The original's escape is VALUELST id 7's 30-minute SOUNDLST
+    // re-load, which is deliberately not ported.)
+    //
+    // Audible consequence in the shipped data: a death whose anim index lands in
+    // 10-13 plays one of the trampoline clips as its overlay (the authoring
+    // collision in docs/re/sound-engine.md §10) and thereby narrows the
+    // trampoline group for the rest of the session. That session-long loss of
+    // variety is a real, hearable behaviour of the original, not an artifact.
+    //
+    // It is an assignment and not a max(), so a stamp with a SMALL frame can
+    // also lower a counter — which is exactly what the binary does; the port
+    // does not "improve" it.
+    int pick_exact(int id, std::uint64_t frame);
+
     // The clip base name in a slot, or nullptr when the slot is empty. Slot ids
     // are only meaningful for ids `pick` returned: the cull COMPACTS blocks, so
     // after load a slot may hold a name SOUNDLST authored at a different id.
@@ -91,6 +117,11 @@ public:
     // Members of the group starting at `id`, in slot order (introspection for
     // tests and for the debug survey; not used on the play path).
     std::vector<int> group(int id) const;
+
+    // A slot's play counter (`dword_463088[id]`), or -1 for an out-of-range id.
+    // Introspection only — it exists so a test can tell the two tails apart:
+    // `pick` bumps this by one, `pick_exact` stamps a frame number into it.
+    int play_count(int id) const;
 
     int size() const { return static_cast<int>(slots_.size()); }
 

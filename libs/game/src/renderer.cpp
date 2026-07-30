@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <string>
 
+#include "bomber/audio/death_anim.hpp"
 #include "bomber/game/anim_pace.hpp"
 #include "bomber/game/carry_pose.hpp"
 #include "bomber/game/hud_format.hpp"
@@ -372,9 +373,17 @@ void Renderer::on_events(const sim::State& s, bool tick_advanced) {
                 if (pool.empty()) break;
                 DeathFx fx;
                 fx.player = colour;  // NOLINT(bugprone-signed-char-misuse) — range-checked above
-                fx.anim =
-                    static_cast<std::size_t>(s.tick + static_cast<std::uint64_t>(ev.player) * 7u) %
-                    pool.size();
+                // WHICH death animation, shared with the audio side. The
+                // original has one `actor[+4]` that both the `die green %d`
+                // sprite name and the `sub_4278F2(340 + actor[+4])` overlay read
+                // (docs/re/sound-engine.md §10); the port keeps the same
+                // one-value property without adding a hashed field, by deriving
+                // it here and in SoundDirector from the same pure function of
+                // (tick, victim slot). This is the same arithmetic that was
+                // inline here before — the shipped install ships exactly 24
+                // `die green N` sequences, so `pool.size()` is 24 and the value
+                // is byte-identical (the visual pins do not move).
+                fx.anim = death_anim_slot(s.tick, ev.player, pool.size());
                 fx.x = kFieldOriginX + s.players[ev.player].x / static_cast<float>(sim::kScale);
                 fx.y = kFieldOriginY + s.players[ev.player].y / static_cast<float>(sim::kScale) +
                        sim::kTileH / 2.0f - 1.0f;
@@ -1037,7 +1046,15 @@ void Renderer::draw_world(const sim::State& s) {
                     break;
                 case PlayerPose::Walk:
                 case PlayerPose::Stand:
-                    a = pf.moving ? &q.walk[body_colour][dir] : &q.stand[body_colour][dir];
+                    // The IDLE half takes its direction from the head-stun
+                    // spin when one is running (carry_pose.hpp's
+                    // stunned_stand_facing — sub_41F29B's idle branch formats
+                    // `stand %s` from `+80 & 3` while +58 is set). The walking
+                    // half is untouched: the mask is in the idle name-build
+                    // only, and a stunned player can still be pushed along.
+                    a = pf.moving ? &q.walk[body_colour][dir]
+                                  : &q.stand[body_colour][stunned_stand_facing(
+                                        dir, p.stun, s.tuning.head_stun_frames)];
                     ph = walk_ph;
                     break;
             }
