@@ -139,6 +139,85 @@ TEST_CASE("play counts are charged even when the group is smaller than the block
     for (int i = 0; i < 5; ++i) CHECK(bank.pick(160) == 160);
 }
 
+TEST_CASE("an exact play takes the named slot and never walks the group") {
+    // sub_4278F2 is sub_427961 with the group walk removed: the caller gets the
+    // slot it named, or nothing when that slot is empty.
+    bomber::assets::res::SoundList list;
+    add_run(list, 350, 4, "trampo");
+    SoundBank bank = loaded(list);
+
+    CHECK(bank.pick_exact(352, 10) == 352);
+    CHECK(bank.pick_exact(350, 11) == 350);
+    CHECK(bank.pick_exact(354, 12) == -1);  // past the run
+    CHECK(bank.pick_exact(-1, 13) == -1);
+    CHECK(bank.pick_exact(99999, 14) == -1);
+}
+
+TEST_CASE("an exact play STAMPS the frame where an ordinary pick increments") {
+    // The one-line difference with the audible consequence. sub_427961 ends
+    // `counts[pick] += 1` (0x427AB0); sub_4278F2 ends `counts[id] =
+    // dword_464994` (0x427950) — the same array, ASSIGNED the game-frame
+    // counter. docs/re/sound-engine.md §4.
+    bomber::assets::res::SoundList list;
+    add_run(list, 350, 4, "trampo");
+    SoundBank bank = loaded(list);
+
+    CHECK(bank.play_count(350) == 0);
+    bank.pick_exact(350, 9000);
+    CHECK(bank.play_count(350) == 9000);
+    // It is an ASSIGNMENT, not a max() and not an increment: a later stamp with
+    // a smaller frame lowers the counter again. The port does not "improve" on
+    // that — a re-loaded SOUNDLST is exactly how the original recovers.
+    bank.pick_exact(350, 5);
+    CHECK(bank.play_count(350) == 5);
+    // An empty slot is refused and charges nothing.
+    const int before = bank.play_count(353);
+    CHECK(bank.pick_exact(354, 7777) == -1);
+    CHECK(bank.play_count(353) == before);
+}
+
+TEST_CASE("a stamped slot is retired from its group's rotation") {
+    // THE SESSION-LONG NARROWING. Because the pick is least-played-first, a slot
+    // holding a frame number in the thousands can never again equal its group's
+    // minimum, so ordinary picks stop choosing it. In the shipped data this is
+    // what a death whose anim index lands in 10-13 does to the trampoline group:
+    // one exact play and that clip is gone from the trampoline TILE's four-way
+    // pick for the rest of the session (docs/re/sound-engine.md §4, §10).
+    bomber::assets::res::SoundList list;
+    add_run(list, 350, 4, "trampo");
+    SoundBank bank = loaded(list);
+
+    bank.pick_exact(352, 9000);  // the death overlay's exact play
+
+    std::set<int> heard;
+    for (int i = 0; i < 60; ++i) heard.insert(bank.pick(350));
+    // The other three still cycle equal-use; 352 is never drawn.
+    CHECK(heard == std::set<int>{350, 351, 353});
+
+    // Contrast: an ORDINARY play of the same slot only costs it one cycle.
+    SoundBank plain = loaded(list);
+    plain.pick_exact(352, 0);  // stamp with frame 0 == "unplayed"
+    std::set<int> all;
+    for (int i = 0; i < 60; ++i) all.insert(plain.pick(350));
+    CHECK(all == std::set<int>{350, 351, 352, 353});
+}
+
+TEST_CASE("a fully retired group degrades to uniform rather than going silent") {
+    // The 200-draw ceiling is a fallback, not a policy: when NO member sits at
+    // the minimum the last draw is used anyway, so a group every one of whose
+    // members has been stamped still plays something.
+    bomber::assets::res::SoundList list;
+    add_run(list, 350, 4, "trampo");
+    SoundBank bank = loaded(list);
+    for (int i = 0; i < 4; ++i) bank.pick_exact(350 + i, 9000 + i);
+
+    for (int i = 0; i < 20; ++i) {
+        const int got = bank.pick(350);
+        CHECK(got >= 350);
+        CHECK(got <= 353);
+    }
+}
+
 TEST_CASE("the jelly debounce swallows re-triggers within three frames") {
     bomber::assets::res::SoundList list;
     add_run(list, 135, 3, "boun");

@@ -1,19 +1,8 @@
 #include "bomber/audio/sound_director.hpp"
 
+#include "bomber/audio/death_anim.hpp"
+
 namespace bomber::game {
-
-namespace {
-
-// The death-anim overlay's two constants (see the PlayerDied case).
-// `340 + anim`, where anim is 1-based: SOUNDLST 341 is `burnedup`.
-constexpr int kDeathOverlayBase = 340;  // the literal added at 0x41DDDF
-// VALUELST id 105, authored 24 — the death-animation count the original's roll
-// takes its modulo from (sub_41DE63 @0x41DEFD). Not read live from VALUELST:
-// SoundDirector talks only to SoundSink and has no values handle, so a modified
-// VALUELST would not move this. Authored-24 is the shipped install's value.
-constexpr int kDeathAnimCount = 24;
-
-}  // namespace
 
 void SoundDirector::reset() {
     pending_.clear();
@@ -138,7 +127,12 @@ void SoundDirector::on_tick(const sim::State& s) {
                 // last reset() (one per round, matching the original's
                 // per-arm draw) and reuse it thereafter.
                 if (wall_slam_id_ < 0) wall_slam_id_ = 140 + audio_.roll(3);
-                audio_.play_exact(wall_slam_id_);
+                // The frame is what `sub_4278F2` stamps into the slot's play
+                // counter (SoundBank::pick_exact). Harmless here — 140-142 are
+                // never reached by a GROUP pick, since the only caller of the
+                // 140 block is this same exact play — but it is the same
+                // primitive, so it gets the same argument.
+                audio_.play_exact(wall_slam_id_, s.tick);
                 break;
             case sim::Event::Type::BombPunched:
                 // The glove swings on every press (the event fires regardless so
@@ -279,18 +273,28 @@ void SoundDirector::on_tick(const sim::State& s) {
                 // are the `trampo`/`bombhit` blocks, authored for entirely
                 // different cues INSIDE the range this overlay reserved — and
                 // because sub_4278F2 addresses a slot directly, a death that
-                // rolls anim 10-13 or 20-23 plays one of those. That is the
+                // lands on anim 10-13 or 20-23 plays one of those. That is the
                 // ORIGINAL's data collision, reproduced here deliberately; see
                 // the doc before "fixing" it. The other 15 values hit empty slots
                 // and sub_4278F2 returns without a sound, which SoundBank's own
                 // null-name early-out already reproduces.
                 //
-                // The draw is on the PRESENTATION rng (root CLAUDE.md rule 6).
-                // In the original this index is a real gameplay value — it picks
-                // the death sprite and travels over the wire — so peers hear the
-                // same overlay; here they need not, which is a cosmetic-only
-                // divergence and the price of keeping State::rng untouched.
-                audio_.play_exact(kDeathOverlayBase + audio_.roll(kDeathAnimCount) + 1);
+                // WHICH anim is NOT rolled here. It used to be — an
+                // `audio_.roll(24)` of the director's own, independent of the
+                // one the renderer had already made — so the overlay described
+                // the corpse it was played over about one time in 24, and the
+                // burnedup clip was as likely to accompany any of the other 23
+                // sprites as its own. `death_anim_index` is the shared
+                // derivation both sides now call, on the two values they
+                // already agree on (this tick, this victim's slot); see
+                // bomber/audio/death_anim.hpp for why that cannot drift.
+                //
+                // `s.tick` is also what sub_4278F2 stamps into the slot's play
+                // counter (SoundBank::pick_exact) — so a death that lands on
+                // 350-353 narrows the trampoline group for the rest of the
+                // session, as it does in the original.
+                const int anim = death_anim_index(s.tick, ev.player);
+                audio_.play_exact(death_overlay_sound(anim), s.tick);
                 // Post-death taunt from a survivor (VALUELST id 95: 1-in-N,
                 // sub_427961(700) call site). FIXED (docs/re/id-audit.md):
                 // the taunt group is SOUNDLST 700..999 ("after a player

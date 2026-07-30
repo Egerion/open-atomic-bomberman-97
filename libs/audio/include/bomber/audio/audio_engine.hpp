@@ -89,8 +89,14 @@ public:
     // sub_4278F2 — plays the named slot with NO group pick. Only two call sites
     // in the binary do this: the enclosure wall-slam (which draws its own
     // `rand() % 3` once per arm and then replays the same id, docs/re/facts.md
-    // "Wall-slam SFX") and the death handler's cause-specific overlay.
-    void play_exact(int id) override;
+    // "Wall-slam SFX") and the death handler's death-anim overlay.
+    //
+    // `frame` is the caller's game-frame counter (dword_464994; the port passes
+    // the sim tick, as it does for play_debounced). It is not a timing hint —
+    // sub_4278F2 STAMPS it into the slot's play counter where sub_427961 would
+    // have incremented, retiring that slot from its group's least-played
+    // rotation. SoundBank::pick_exact carries the full reading.
+    void play_exact(int id, std::uint64_t frame) override;
 
     // sub_427BFB — the group pick again, but onto a voice that is NOT counted
     // against the concurrency cap and cannot be refused by it. The four screen

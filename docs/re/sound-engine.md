@@ -154,9 +154,17 @@ owner reported is real and this is where it comes from.
     touches is left with a play count in the thousands, and §2's least-played
     rejection sampler will not choose it again for the rest of the session
     (until VALUELST id 7's periodic re-roll zeroes the counters). Live
-    consequence: a death that rolls anim 10-13 quietly retires that member of
-    the trampoline group. NOT yet ported — `SoundBank::play_exact` has no frame
-    to assign — and left as a follow-up rather than guessed at.
+    consequence: a death whose anim index lands in 10-13 quietly retires that
+    member of the trampoline group.
+    **PORTED 2026-07-30** (`SoundBank::pick_exact`): `play_exact` now takes the
+    caller's frame — the sim tick, the same clock `play_debounced` already
+    reads — and stamps it, so the port narrows its groups over a session the
+    way the original does. Two details are transliterated rather than tidied:
+    it is an *assignment*, so a stamp with a small frame can also LOWER a
+    counter, and the retirement is only *effective*, not absolute — §2's
+    200-draw ceiling still plays the last draw, so a group whose every member
+    has been stamped degrades to uniform instead of falling silent. Pinned by
+    four cases in `tests/audio/test_sound_bank.cpp`.
 - **`sub_427BFB`** picks identically but plays through `sub_427B36`, which builds
   its own sound object outside the counted pool. Its four callers:
   `sub_42B060` → 2800 (title intro), `sub_412987` → 2600 (menu quit),
@@ -200,11 +208,14 @@ count entirely.
 
 - **`SoundBank`** (`sound_bank.hpp/.cpp`) is the SDL-free selection engine: slot
   table, cull table, compaction, least-played-first pick with the 200-draw
-  ceiling, and the 3-frame debounce. Unit-tested (`ctest -R sound_bank`).
+  ceiling, the 3-frame debounce, and `pick_exact`'s frame stamp. Unit-tested
+  (`ctest -R sound_bank`).
 - **`AudioEngine`** exposes the same four primitives — `play` (`sub_427961`),
   `play_exact` (`sub_4278F2`), `play_sting` (`sub_427BFB`, its own uncapped
   stream) and `play_debounced` (`sub_427ABB`) — and enforces the cap by reading
-  VALUELST id 8 at init, dropping rather than stealing.
+  VALUELST id 8 at init, dropping rather than stealing. Each is a thin shell
+  over the matching `SoundBank` decision, so every rule above is testable
+  headlessly; nothing that decides anything lives on the SDL side.
 - The cosmetic generator is **seeded from the wall clock at init**. That single
   line is the fix for the reported bug: the old engine did pick randomly, but
   from a hardcoded LCG seed, so every launch produced the identical sequence and
@@ -217,9 +228,10 @@ Wiring them together would desync every online match and move every golden hash.
 No golden moved with this change.
 
 **Deliberately not ported:** the low-memory `keep = 1` arm (the port has no
-LOWMEM mode), the VALUELST-id-7 30-minute re-roll, the selective/total sound
-pre-caching arms (VALUELST ids 3 and 4, both authored `0`), and the death
-handler's `sub_4278F2(340 + actor[+4])` overlay (field unidentified).
+LOWMEM mode), the VALUELST-id-7 30-minute re-roll, and the selective/total sound
+pre-caching arms (VALUELST ids 3 and 4, both authored `0`). The death handler's
+`sub_4278F2(340 + actor[+4])` overlay was on this list while `actor[+4]` was
+unidentified; it is §10 now, and ported.
 
 ## 7. Corrections to earlier notes
 
@@ -508,10 +520,37 @@ caller (`sub_427961(350)` at `0x41EE4C`, gated on tile type 3) and that one is a
 four-member **group** pick, whereas the death overlay always plays the same exact
 member — anim 10 is always `1017`, anim 13 always `trampo`.
 
-**Port divergence, stated up front.** The port draws the index on the
-presentation RNG (root `CLAUDE.md` rule 6), so two peers can hear different
-overlays for the same death. In the original the index is a genuine gameplay
-value — it selects the death sprite and is replicated — so if the port ever
-renders per-anim death visuals the index must move into `State` and be hashed.
-As a sound-only feature it stays cosmetic. The LOWMEM force-to-1 arm is not
-ported (the port has no LOWMEM mode), consistent with §6.
+**One index, two consumers — how the port keeps them together (2026-07-30).**
+The original never has to solve this: `actor[+4]` is a single field, and both
+the corpse (`sub_41F29B`'s tail builds `die green %d` from it) and this overlay
+read it, so the sound always describes the sprite on screen. The port renders
+in `libs/game` and sounds in `libs/audio`, and the index is cosmetic — rule 6
+forbids `State::rng`, and `PlayerDied` carries the KILLER, not the animation.
+
+The first cut of the overlay rolled a second, independent index on the audio
+side. That is worse than it sounds: the renderer had *already* chosen an
+animation, so the two agreed 1 time in 24 and `burnedup` was as likely to play
+over any of the other 23 sprites as over its own.
+
+Both sides now call one pure function, `death_anim_index(tick, victim_slot)`
+(`libs/audio/include/bomber/audio/death_anim.hpp`) — the arithmetic the
+renderer was already using inline, promoted to the lowest module both can see.
+Nothing is stored, handed over, or ordered: the same two integers, off the same
+`const State&`, on the same tick. There is no state in which the sound can
+describe a different corpse than the one drawn.
+
+The derivation itself is flagged as a **port-only stand-in** for
+`rand() % 24 + 1`, not an extraction. It buys back the property the original
+gets from replicating the field: `tick` and the victim's slot are hashed sim
+state, so two peers now draw *and* hear the same death — which the earlier
+"peers can hear different overlays" divergence conceded and an independent
+per-machine LCG could never fix. It also lines up exactly with the shipped art:
+XPLODE1-17.ANI contribute 24 `die green N` sequences in ascending order, so the
+renderer's pool index is `death_anim_index() - 1` and anim N really is
+`die green N`. If the port ever needs the index for something the sim reads, it
+must move into `State` and be hashed; as a draw-and-sound value it stays
+cosmetic. The LOWMEM force-to-1 arm is not ported (the port has no LOWMEM
+mode), consistent with §6.
+
+Because the overlay is an EXACT play, it also stamps (§4): a death that lands
+on anim 10-13 narrows the trampoline group for the rest of the session.

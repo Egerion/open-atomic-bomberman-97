@@ -16,6 +16,12 @@
 //   play_debounced <- sub_427ABB  play() with the 3-frame same-group debounce
 // `chance`/`roll` are the cosmetic draws — presentation RNG, NEVER State::rng
 // (root CLAUDE.md determinism rule 6).
+//
+// TWO of the three take a `frame`, for different reasons, and the difference is
+// worth keeping straight: `play_debounced` READS it (has this group played in
+// the last 3 frames?), while `play_exact` WRITES it — `sub_4278F2` ends by
+// STAMPING the frame counter into the slot's play count instead of bumping it,
+// which retires that slot from its group's rotation. See SoundBank::pick_exact.
 
 namespace bomber::game {
 
@@ -23,7 +29,7 @@ class SoundSink {
 public:
     virtual ~SoundSink() = default;
     virtual void play(int id) = 0;
-    virtual void play_exact(int id) = 0;
+    virtual void play_exact(int id, std::uint64_t frame) = 0;
     virtual void play_debounced(int id, std::uint64_t frame) = 0;
     virtual bool chance(int n) = 0;
     virtual int roll(int n) = 0;
