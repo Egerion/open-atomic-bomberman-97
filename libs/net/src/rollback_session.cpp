@@ -648,15 +648,14 @@ void RollbackSession::advance_impl(const sim::TickInputs& local_input) {
     // `raw >= kRephaseAdvantageTicks`, which is what keeps this a subset of the
     // unfiltered controller's holds. See the header's jitter note for why each
     // half is shaped the way it is, and what was measured with and without them.
+    const int spread = peer_depth_spread();
     const bool raw_asks = eligible && raw >= kRephaseAdvantageTicks;
-    const bool sustained_asks =
-        eligible && (sustained >= kRephaseAdvantageTicks ||
-                     raw >= peer_depth_spread() + kRephaseAdvantageTicks);
+    const bool sustained_asks = eligible && (sustained >= kRephaseAdvantageTicks ||
+                                             raw >= spread + kRephaseAdvantageTicks);
     // "The raw reading wanted this tick and the filter kept it" — the absorber's
     // own meter, and the only way to see from the outside that it is doing
     // anything (net_stats.hpp). Not a decision input: nothing below reads it.
-    stats_.on_timing(raw, sustained, !rephase_held_ && raw_asks && !sustained_asks, lead_,
-                     peer_depth_spread());
+    stats_.on_timing(raw, sustained, !rephase_held_ && raw_asks && !sustained_asks, lead_, spread);
     if (!rephase_held_ && sustained_asks) {
         rephase_held_ = true;
         stats_.on_rephase_hold();
