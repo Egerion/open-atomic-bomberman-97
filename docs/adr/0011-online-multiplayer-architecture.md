@@ -374,6 +374,45 @@ below touches `libs/sim` or any golden hash.
 Cross-cutting and present from Phase 1 on: the `build_hash` door check, the loud
 desync abort (already in `RollbackSession`), and the LE-wire reaffirmation.
 
+## Amendment (2026-07-30): input delay under rollback is LOCAL, not shared
+
+Decision 1 above says "keep a *small* shared `input_delay` (1–2 ticks) even under
+rollback to cut the misprediction rate on good links (standard GGPO)". The size
+was right and the word **shared** was wrong, and the distinction turns out to be
+the difference between a change that needs a new executable in every player's
+hands and one that does not.
+
+`input_delay` must be shared in `LockstepSession` because there it is a
+**schedule**: it decides which tick a sampled input applies to, so two peers
+holding different values file the same keypress against different ticks and
+simulate different games. `RollbackSession` has no such schedule. It carries
+"seat *s*'s input for tick *T*" and every peer feeds that value to tick *T*.
+Whether the owner of seat *s* chose that value from the keyboard as of tick *T*
+or as of two ticks earlier is **invisible to every other peer and cannot make
+them disagree**. So a peer may lead its own input by any amount, change it
+mid-match, and do it while its partner does something else entirely, with no new
+wire message and no `kWireProtocolVersion` bump.
+
+Consequences taken up in `RollbackSession` (see its "arrival variance" note):
+
+- The lead is **adaptive and defaults to zero**, because a lead *is* the input
+  lag rollback exists to remove. It is spent only against measured arrival
+  variance — the spread of the peer's own prediction depth, which every
+  `InputRange` already carries in its length — and never against mere distance: a
+  slow but steady path holds a constant depth and is charged nothing.
+- The one invariant that makes it safe to move mid-match is that the tick a local
+  sample is filed against only ever advances, and a filed tick is never
+  re-decided. A peer may already hold, and have confirmed and hashed, an input
+  filed several ticks ago.
+- It is capped at 2 ticks (100 ms), the upper end of the range this ADR already
+  argued for.
+
+Measured over `tests/net/test_jitter_absorb.cpp` against 13 live
+Turkey↔Lithuania sessions in which jitter, not latency, separated the playable
+rounds from the unplayable ones. Nothing in the amendment reaches `libs/sim`, so
+no golden and no `build_hash` moves; a build carrying it still plays a build that
+does not.
+
 ## Consequences
 
 - **The seam holds.** Rollback vs lockstep is already a `Session` choice; direct

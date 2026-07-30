@@ -170,7 +170,7 @@ void draw_net_overlay(SDL_Renderer* ren, const FontTextures& font, const net::Ne
         if (p.rtt_offset_bound) any_offset_bound = true;
     }
     const int footer_rows = any_offset_bound ? 1 : 0;
-    const float h = kPad * 2 + lh * static_cast<float>(6 + peer_count * 2 + footer_rows) +
+    const float h = kPad * 2 + lh * static_cast<float>(7 + peer_count * 2 + footer_rows) +
                     static_cast<float>(peer_count) * (kSparkH + 3.0f);
     const SDL_FRect panel{kMargin, kMargin, kPanelW, h};
     draw_slab(ren, panel);
@@ -209,16 +209,29 @@ void draw_net_overlay(SDL_Renderer* ren, const FontTextures& font, const net::Ne
 
     // 4. THE STUTTER LINE. A pump the session was not allowed to simulate is
     //    what the player feels as a hitch; if this is zero the stutter is not
-    //    the netcode, and that alone rules out half a day of guessing.
+    //    the netcode, and that alone rules out half a day of guessing. Add
+    //    HOLD below to it for the whole picture: a re-phase hold returns before
+    //    the cap check, so it costs the same displayed tick and is NOT a stall.
     row(fmt("STALL %d/s  (%u)", s.stalls_per_sec, static_cast<unsigned>(s.stall_pumps)),
         s.stalls_per_sec > 0 ? kBad : kOk);
 
-    // 5. The correction workload.
+    // 5. THE ARRIVAL-VARIANCE ABSORBER (rollback_session.hpp's jitter note), and
+    //    the only line here that names something the PLAYER pays for: each tick
+    //    of LEAD is 50 ms of local input lag, spent to put our input on the wire
+    //    before the peer needs it. On a clean path this row reads all zeros, and
+    //    that is the whole guarantee — if it does not, the link is being measured
+    //    as jittery (SPREAD, in ticks) and the absorber is at work. HOLD is the
+    //    skew correction, ABS the number of holds jitter no longer costs us.
+    row(fmt("LEAD %dt SPRD %dt HOLD %u ABS %u", s.local_lead, s.peer_depth_spread,
+            static_cast<unsigned>(s.rephase_holds), static_cast<unsigned>(s.rephase_suppressed)),
+        s.local_lead > 0 ? kWarn : kOk);
+
+    // 6. The correction workload.
     row(fmt("RB %d/s  RESIM %d/s  (%u)", s.rollbacks_per_sec, s.resim_ticks_per_sec,
             static_cast<unsigned>(s.rollbacks)),
         s.resim_ticks_per_sec > net::kPumpHz ? kWarn : kOk);
 
-    // 6. Raw traffic. A non-zero BAD count means something on the path is
+    // 7. Raw traffic. A non-zero BAD count means something on the path is
     //    corrupting or injecting — nothing else here would show that.
     row(fmt("RX %d/s  BAD %u", s.rx_per_sec, static_cast<unsigned>(s.rx_malformed)),
         s.rx_malformed > 0 ? kBad : kOk);
@@ -301,6 +314,15 @@ AppInput present_net_session_end(ScreenContext ctx, const net::SessionSummary& s
         fmt("STALLS %u   ROLLBACKS %u   RESIM %u", static_cast<unsigned>(s.stall_pumps),
             static_cast<unsigned>(s.rollbacks), static_cast<unsigned>(s.resim_ticks)),
         kOk);
+    // The absorber's own row. All zeros means the path never needed it, which is
+    // as much a result as a non-zero one — a laggy report with nothing here says
+    // the arrival timing was not the cause.
+    rows.emplace_back(fmt("HOLDS %u   ABSORBED %u   LEAD %ut PUMPS %u",
+                          static_cast<unsigned>(s.rephase_holds),
+                          static_cast<unsigned>(s.rephase_suppressed),
+                          static_cast<unsigned>(s.local_lead),
+                          static_cast<unsigned>(s.lead_pumps)),
+                      s.lead_pumps > 0 ? kWarn : kOk);
     rows.emplace_back(fmt("PACKETS %u   MALFORMED %u", static_cast<unsigned>(s.rx_packets),
                           static_cast<unsigned>(s.rx_malformed)),
                       s.rx_malformed > 0 ? kBad : kOk);

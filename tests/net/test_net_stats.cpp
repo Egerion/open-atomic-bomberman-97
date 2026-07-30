@@ -488,6 +488,12 @@ TEST_CASE("net stats: the end-of-session log line is one greppable record") {
     s.stats.worst_prediction_depth = 64;
     s.stats.stall_pumps = 418;
     s.stats.rephase_holds = 26;
+    s.stats.rephase_suppressed = 311;
+    s.stats.frame_advantage = 5;
+    s.stats.sustained_advantage = 3;
+    s.stats.local_lead = 2;
+    s.stats.lead_pumps = 1580;
+    s.stats.peer_depth_spread = 6;
     s.stats.rollbacks = 97;
     s.stats.resim_ticks = 612;
     s.stats.rx_packets = 24880;
@@ -512,7 +518,8 @@ TEST_CASE("net stats: the end-of-session log line is one greppable record") {
     CHECK(line ==
           "2026-07-29 14:03:11 netdiag end=desync path=relayed host=1 round=2 "
           "local_seats=0x001 all_seats=0x003 elapsed=92s tick=1264 confirmed=1201 depth=63/64 "
-          "depth_max=64 stalls=418 rephase=26 rollbacks=97 resim_ticks=612 rx=24880 bad=3 "
+          "depth_max=64 stalls=418 rephase=26 absorbed=311 adv=5/3 lead=2t(1580) spread=6t "
+          "rollbacks=97 resim_ticks=612 rx=24880 bad=3 "
           "desync_tick=1201 "
           "| seat1 live=1 lag=63t lag_max=71t rtt=214/188/940(last/min/max)ms jitter=41ms "
           "rx=12440(18/s) dup=9412 loss~10%\n");

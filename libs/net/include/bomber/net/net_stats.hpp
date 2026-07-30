@@ -20,14 +20,16 @@
 // TWO RULES SHAPED THE DESIGN, and both are load-bearing:
 //
 //  1. NO NEW WIRE MESSAGE. Every number here is derived from traffic that
-//     already flows. `kWireProtocolVersion` is at 8 and the unmerged
-//     host-migration branch is earmarked for 9; taking 9 for a diagnostic would
-//     push that branch to 10 and invalidate every build in the wild — the
-//     build_hash door refuses a mismatch, so each bump means hand-delivering
-//     exes. Nothing in this file encodes or decodes anything, so build_hash is
-//     untouched and a machine running this build still plays a machine that is
-//     not. See the derivations on each field for how far that gets us, and where
-//     it costs accuracy (the ack-RTT is the one real compromise).
+//     already flows. A bump invalidates every build in the wild — the build_hash
+//     door refuses a mismatch, so each one means hand-delivering exes — and the
+//     version has always been somebody else's to spend: it was at 8 with host
+//     migration earmarked for 9 when this file was written, and host migration
+//     has since landed and taken 9. Nothing in this file encodes or decodes
+//     anything, so it cost neither number then and costs neither now, and a
+//     machine running this build still plays one that is not. See the derivations
+//     on each field for how far that gets us, and where it costs accuracy (the
+//     ack-RTT is the one real compromise, and the local input lead widened it —
+//     `rtt_offset_bound`).
 //
 //  2. THE COUNTING MUST NOT PERTURB WHAT IT MEASURES. Every buffer here is a
 //     fixed-size array owned by value: no allocation on any packet path, no
@@ -109,7 +111,11 @@ struct PeerStats {
     //   * up to one of the peer's 50 ms pumps (it can only answer on a pump);
     //   * any time the peer spent BEHIND tick T-1 before it could confirm it;
     //   * in a >2-seat match, the wait for the SLOWEST other seat, since a
-    //     peer's confirmed frontier is gated by every seat it awaits.
+    //     peer's confirmed frontier is gated by every seat it awaits;
+    //   * `local_lead` * 50 ms, whenever the arrival-variance absorber has a lead
+    //     in force — our input then reaches the peer before the peer reaches that
+    //     tick, so the frontier rises on the peer's schedule and not on arrival.
+    //     That case sets `rtt_offset_bound` unconditionally, below.
     // Read `rtt_min_ms` as the best estimate of the real path and `rtt_ms` /
     // the sparkline as the thing that spikes — BUT ONLY WHEN `rtt_offset_bound`
     // below is clear. Getting a tight pairwise RTT unconditionally would need a
@@ -193,7 +199,49 @@ struct NetStats {
     // is us choosing not to. A healthy match shows a burst of these after each
     // hitch and none in between; a permanently rising count means the two machines
     // cannot hold the same tick rate at all, which is a different fault.
+    //
+    // NOTE FOR READING A LOG: a re-phase hold RETURNS BEFORE the prediction-cap
+    // check, so a pump spent holding is never also counted as a stall. `stalls=0`
+    // on a line whose `rephase` is large therefore does NOT mean the cap was out
+    // of the picture — add the two together to get "pumps that could not advance
+    // the display", which is the number the player actually feels.
     std::uint32_t rephase_holds = 0;
+
+    // --- THE ARRIVAL-VARIANCE FILTER (rollback_session.hpp's jitter note) -----
+    //
+    // EXACT. `frame_advantage` is the raw per-pump comparison the re-phase
+    // controller is built on — our own prediction depth minus the peer's, which
+    // cancels the path delay and leaves twice the clock skew. `sustained` is the
+    // part of it that has held for the WHOLE filter window, and is what the
+    // controller now acts on.
+    //
+    // On a clean path the two are the same number every pump. The GAP between them
+    // is arrival variance, i.e. exactly the quantity that separated the silky live
+    // sessions from the laggy ones, made visible instead of inferred.
+    int frame_advantage = 0;
+    int sustained_advantage = 0;
+
+    // EXACT. Pumps where the RAW reading asked for a hold and the filter refused
+    // — displayed ticks that jitter used to cost and no longer does. Zero on a
+    // clean path, by construction: the filtered reading can never exceed the raw
+    // one, so a pump the filter holds is a pump the raw reading would have held
+    // too. This is the one number that says how much the absorber is doing.
+    std::uint32_t rephase_suppressed = 0;
+
+    // EXACT. The LOCAL INPUT LEAD in ticks (rollback_session.hpp's jitter note):
+    // how far ahead of our own head we are filing and sending our input, so that
+    // the peer has it before it needs it. This is the only thing here the player
+    // PAYS for — each tick is 50 ms of local input lag — so it is on the overlay
+    // rather than inferred, and it is 0 on any path that does not need it.
+    int local_lead = 0;
+    // EXACT. Pumps spent with a lead in force, i.e. how much of this session the
+    // player paid input lag for. Zero on a clean path.
+    std::uint32_t lead_pumps = 0;
+    // EXACT. The arrival variance that set it: the spread (max minus min over the
+    // window) of the peer's OWN prediction depth, which every InputRange carries
+    // for free. A steady path reads 0 here however SLOW it is — which is what
+    // stops a merely-distant peer from being charged input lag.
+    int peer_depth_spread = 0;
 
     // EXACT. A rollback is one mispredicted remote input; `resim_ticks` is the
     // total number of ticks replayed to correct them. Re-sims per second is the
@@ -266,6 +314,14 @@ public:
 
     // This pump WOULD have simulated, and chose not to, to shed clock skew.
     void on_rephase_hold();
+
+    // The whole input-timing decision for this pump, in one call because it is one
+    // decision taken at one point: the re-phase controller's raw and filtered
+    // readings, whether the filter refused a hold the raw reading asked for, and
+    // the local input lead in force with the arrival variance that set it. Called
+    // every pump, so the overlay shows a live reading rather than a stale
+    // last-decision one.
+    void on_timing(int raw_advantage, int sustained, bool suppressed, int lead, int spread);
 
     // Called at the bottom of every pump with the session's live state.
     // `remote_next[s]` is the first tick no input is held for from seat s, which

@@ -30,6 +30,17 @@ target_link_libraries(bomber_net_rollback_tests PRIVATE bomber::net)
 bomber_add_test(bomber_net_pacing_tests net_pacing test_rollback_pacing.cpp)
 target_link_libraries(bomber_net_pacing_tests PRIVATE bomber::net)
 
+# ARRIVAL VARIANCE (jitter), the second live report. 13 real Turkey<->Lithuania
+# sessions separated the silky ones from the badly laggy ones on exactly one
+# variable — jitter went from <=6 ms to 85-99 ms while base RTT barely moved — so
+# this suite replays both conditions over the ms_clock_harness rig (which grew a
+# CORRELATED delay model for it: white per-packet noise is absorbed by the
+# redundant input window, runs of late packets are not). It pins that a jittery
+# path costs measurably less than it did, and that the clean path's behaviour is
+# byte-for-byte what it was.
+bomber_add_test(bomber_net_jitter_tests net_jitter test_jitter_absorb.cpp)
+target_link_libraries(bomber_net_jitter_tests PRIVATE bomber::net)
+
 # The per-match KILL TALLY under rollback: an accumulator in the presentation
 # layer fed by State::events, which replays. Two peers with different prediction
 # histories reached different totals — and so different win-by-kills verdicts —

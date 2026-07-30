@@ -68,6 +68,127 @@
 // pump until the skew is gone, so depth returns to the path baseline instead of
 // parking at the cap. Purely a decision about WHEN this peer simulates — never
 // about WHAT it simulates — so no hashed state and no golden can move.
+//
+// ARRIVAL VARIANCE (jitter), and why the controller above needed a filter.
+// MEASURED 2026-07-30 from 13 real Turkey<->Lithuania sessions in netdiag.log
+// (the readings not flagged [OFFSET-BOUND,NOT-PATH]): the sessions the owner
+// called silky and the ones he called badly laggy are separated by exactly ONE
+// variable. Base RTT barely moved — 80-156 ms in both groups — while JITTER went
+// from <=6 ms to 85-99 ms. Anything keyed to mean latency would be aimed at the
+// wrong number.
+//
+// Jitter's damage was not the packets, it was THIS CONTROLLER reading them. Both
+// halves of the comparison are instantaneous samples: our own lag is where the
+// newest arrival happens to have left the frontier, and the peer's is the length
+// of whichever InputRange landed last. Under 90 ms of arrival variance each
+// swings a tick or two on its own, so their DIFFERENCE crosses a threshold of 2
+// on noise alone — and a hold costs a displayed tick. Reproduced in
+// tests/net/test_jitter_absorb.cpp over the ms-clock rig at the live conditions:
+// at ~80 ms jitter the pair spent 12% of its pumps holding and ran the match at
+// 17.6 ticks a second instead of 20, ON BOTH MACHINES. That is not a stutter, it
+// is the whole game in slow motion, and it is self-inflicted. Corrections got
+// deeper with it (4.6 re-simulated ticks per rollback against 2.0 on a clean
+// path) because the two peers were chasing each other's phase.
+//
+// THE CURE IS TO MEASURE THE SUSTAINED ADVANTAGE, not an instant of it: the
+// controller acts on the MINIMUM of the last kRephaseWindowPumps samples. A clock
+// skew is permanent, so it survives a minimum; a jitter burst is not, so it does
+// not. The same reasoning `rtt_min_ms` is built on — variance can only ever add
+// delay, so the floor of a window is the excursion-free reading.
+//
+// A window buys noise immunity with REACTION TIME, though, and a full second of
+// it is far too slow for the very case the re-phasing was built for: a peer whose
+// frame loop freezes hands the pair several ticks of skew at once, and waiting the
+// window out lets that skew spend the entire prediction budget first. (Measured,
+// not feared — with the window alone both freeze scenarios in
+// test_rollback_pacing.cpp went straight back to reaching the cap.) So the wait is
+// required only where jitter is a PLAUSIBLE explanation, and there is a measured
+// yardstick for that: an advantage larger than `peer_depth_spread()` plus the
+// threshold is acted on at once. On a steady path the spread is 0 and the rule
+// reduces to the unfiltered one this controller shipped with — which is why the
+// whole clock-skew half of tests/net/test_rollback_pacing.cpp is numerically
+// IDENTICAL to the build before this. Under the live 90 ms condition the spread is
+// ~6, so an advantage would have to exceed the entire prediction cap to skip the
+// wait, and arrival variance cannot manufacture that.
+//
+// Two properties make this safe to ship rather than merely plausible:
+//   * BOTH arms imply the old predicate — a minimum is never above the current
+//     sample, and a spread is never negative — so a pump this holds is a pump the
+//     unfiltered controller would also have held. It can only ever hold LESS. On a
+//     path that never triggered it, every branch is taken identically and the two
+//     builds are the same program.
+//   * it is self-limiting. Each hold moves this peer one tick back, which lowers
+//     the next sample, which lowers the minimum — so a skew of N is shed in N
+//     holds and the controller stops. No integrator, no gain to tune.
+//
+// Filtering the controller stops the game running in slow motion, but it does not
+// make a single late packet arrive any sooner: with the phase left alone, the
+// CORRECTIONS a burst causes are exactly the path's own. Measured by ablation at
+// the live condition — the filter alone took held pumps from 71 to 33 and the rate
+// from 17.6 to 18.9 t/s, while re-simulated ticks went UP, from 1298 to ~1408. The
+// spurious holds had been buying a little re-sim work with a lot of the player's
+// frame rate. Absorbing the arrivals themselves is the second half, and it is a
+// different mechanism.
+//
+// THE LOCAL LEAD — adaptive input delay that needs NO AGREEMENT and NO WIRE
+// CHANGE. The received wisdom is that input delay is a shared constant: both
+// peers must apply the same one or they desync, `input_delay` is the SERVER's at
+// match start, and changing it costs a kWireProtocolVersion bump and a new
+// executable in every player's hands. THAT IS TRUE OF LOCKSTEP AND FALSE HERE,
+// and the difference is worth stating precisely.
+//
+// LockstepSession's `input_delay` is a SCHEDULE: it decides WHICH TICK a sampled
+// input applies to, so two peers with different values file the same keypress
+// against different ticks and simulate different games. This session has no such
+// schedule. It sends "seat s's input for tick T" and every peer feeds that value
+// to tick T, whatever it is. How the owner of seat s CHOSE that value — from the
+// keyboard as of tick T, or as of two ticks earlier — is invisible to everyone
+// else and cannot make them disagree. So a peer may lead its own input by any
+// amount, change it mid-match, and do it while its partner does something else
+// entirely, without a single byte of new protocol.
+//
+// What the lead buys is real: filing our input k ticks ahead of our own head puts
+// it on the wire k*50 ms before the peer needs it, so up to k*50 ms of arrival
+// variance costs that peer NOTHING — no prediction, no misprediction, no re-sim.
+// Unlike the phase, this is NOT zero-sum: we pay for it in our OWN input
+// responsiveness, not out of our partner's budget.
+//
+// It is therefore held at ZERO unless arrival variance is actually being seen,
+// because a lead is exactly the input lag rollback exists to avoid, and the owner's
+// condition on this work was that a clean path must behave as it does today. The
+// trigger is the SPREAD of the peer's own prediction depth (max minus min across
+// the window) — which arrives free in the length of every InputRange, and which a
+// steady path leaves at zero however SLOW it is. A 300 ms path with no jitter
+// holds a constant depth and gets no lead; a 100 ms path that bursts gets one.
+// ADR-0011 already argued for a small delay of 1-2 ticks on this evidence; the cap
+// here is 2, and it is spent only where the measurements say it is earned.
+//
+// THE ONE RULE THAT MAKES CHANGING IT SAFE: `local_next_` — the tick our next
+// local sample will be filed against — only ever moves FORWARD, and a tick that
+// has been filed is never re-decided. The peer may already hold, and have
+// confirmed and hashed, an input we filed three ticks ago; rewriting it would be
+// a genuine desync. Raising the lead therefore files the current sample TWICE
+// (the player's input is held one extra tick, 50 ms, unnoticeable) and lowering it
+// files NOTHING for one pump and lets the head catch up. Neither rewrites
+// anything, so the lead can move at any moment in a live match.
+//
+// WHAT WAS DELIBERATELY NOT BUILT, because the measurements rule it out:
+//   * a RECEIVE-SIDE JITTER BUFFER. Delaying an input we already hold is strictly
+//     worse than using it: it converts a confirmed tick back into a predicted one.
+//     A buffer belongs on the SEND side, which is what the lead is.
+//   * BIASING THE PHASE TARGET so this peer deliberately runs late enough to
+//     absorb a burst. Prediction depth between two peers IS zero-sum — ours is
+//     (d+skew)/tick, theirs is (d-skew)/tick, and the sum is fixed by the path —
+//     so the slack we gain that way is charged to the partner, twice over, and
+//     with both peers doing it they ratchet each other backwards, which is the
+//     slow motion above with extra steps.
+//   * a kWireProtocolVersion bump. Nothing here encodes or decodes anything new.
+//     A build carrying this still plays a build that does not: the lead is
+//     invisible to the peer except as input arriving early, which every version
+//     of this session has always accepted (apply_remote files a future tick
+//     without comment). The one asymmetry is that a peer on an older build reads
+//     our InputRange length as our prediction depth and so over-reads it by our
+//     lead — which makes IT hold LESS, the safe direction, and by at most 2.
 
 // ROUND ABANDON -> DRAW (wire v8, MatchCtlKind::EndRound). Esc during an online
 // round is a LOCAL keypress and therefore must not be a local ACT: a peer that
@@ -198,6 +319,38 @@
 //     input is still stalled at it.
 
 namespace bomber::net {
+
+// How many pumps of frame-advantage history the re-phase controller must see the
+// advantage hold across before it acts on it (the jitter note above). One second
+// at 20 Hz — long enough to outlast the correlated delay bursts a congested path
+// produces (the modelled ones in tests/net/test_jitter_absorb.cpp run a few
+// hundred milliseconds), short enough that a genuine skew is still shed inside
+// about a second and a half, against a live report that lived with one for a
+// whole round. A window is a SPAN OF PUMPS rather than of milliseconds on
+// purpose: the thing being filtered is measured in ticks.
+inline constexpr int kRephaseWindowPumps = 20;
+
+// The most local input lead the absorber will ever take (the jitter note above).
+// Two ticks is 100 ms of arrival variance absorbed, and 100 ms of input lag paid
+// for it — the upper end of the 1-2 ticks ADR-0011 §"Keep a small shared
+// input_delay" already argued for, and the value the lobby picks for the lockstep
+// path. Deliberately small: past this the cure is worse than the disease, and the
+// rest of the burst is what rollback is FOR.
+//
+// THIS IS THE KNOB. It is the only number here that costs the player something he
+// can feel, and feel is the one thing a loopback harness cannot measure — so it is
+// meant to be judged in a live match and turned down if 100 ms reads worse than
+// the corrections it removes. 1 halves both; 0 disables the lead entirely and
+// leaves the re-phase filter, which is inert on a clean path either way.
+inline constexpr int kMaxLocalLeadTicks = 2;
+
+// How much spread in the peer's own prediction depth is treated as ordinary
+// rather than as arrival variance worth spending input lag on. A pump boundary
+// alone moves that depth by one tick on ANY path, and a second tick of slop keeps
+// a merely-unlucky sample from putting input lag on a link that does not need it.
+// The measured clean and 5 ms-jitter conditions both sit at or below this, which
+// is what makes "a clean path is untouched" a fact rather than a hope.
+inline constexpr int kLeadDeadbandTicks = 2;
 
 // What the session does when a remote seat goes SILENT for a hard window
 // (ADR-0011 Risks, "Dropped/late peers"). Within `max_prediction` the seat is
@@ -453,8 +606,52 @@ private:
     // The worst of the peers' OWN lags, read off the length of the InputRanges
     // they send (see the re-phasing note at the top of this file).
     int peer_lag() const;
-    // "This peer is ahead of its partner by more than the path alone explains."
-    bool should_rephase() const;
+    // "How far ahead of its partner is this peer" — ours minus theirs, which
+    // cancels the path delay and leaves twice the clock skew. One instantaneous
+    // sample, and therefore full of arrival variance: see sustained_advantage().
+    int frame_advantage() const;
+    // The part of that advantage which has held for the WHOLE window — the
+    // minimum of the last kRephaseWindowPumps samples, and the only reading the
+    // controller acts on (the jitter note at the top of this file). Never above
+    // the current sample, so it can only ever hold LESS than the raw reading.
+    int sustained_advantage() const;
+    // Is a re-phase decision even meaningful right now — a peer is present, the
+    // match is still running, and no host migration is currently making both
+    // readings lie? Separated from the advantage test so the raw and filtered
+    // readings are compared against exactly the same preconditions, so the
+    // diagnostic can say honestly which of the two refused, and so the local lead
+    // (lead_target) inherits every one of those preconditions rather than
+    // re-stating them.
+    bool rephase_eligible() const;
+    // Push this pump's raw advantage and the peer's reported depth into their
+    // windows. Called EVERY pump including held ones — otherwise neither window
+    // would span a fixed stretch of time.
+    //
+    // An INELIGIBLE pump does not contribute a sample, it DISCARDS the window.
+    // The two situations that make a pump ineligible — no peer heard yet, and a
+    // host migration healing — are both ones where the readings already taken
+    // describe a world that no longer exists: a migration freezes `peer_depth_`
+    // at whatever the hub last relayed, so the step back to live values would
+    // register as arrival variance and buy a lead nobody asked for. Starting over
+    // costs one window of inaction, which is the same state a session opens in.
+    void note_advantage(bool eligible, int raw);
+
+    // THE LOCAL LEAD (the jitter note at the top of this file).
+    // How much arrival variance the peer is currently living with, in ticks: the
+    // SPREAD of its own prediction depth across the window. Zero on any steady
+    // path, however slow, which is what keeps the lead off a clean link.
+    int peer_depth_spread() const;
+    // The lead that spread justifies, deadbanded and capped. 0 unless the peer is
+    // genuinely being hit by variance.
+    int lead_target() const;
+    // Move `lead_` at most one tick toward the target. One tick per pump is the
+    // whole rate limit the mechanism needs: raising it holds the local sample for
+    // one extra tick and lowering it re-uses the previous one, and neither is
+    // visible at 50 ms, where a multi-tick jump would be.
+    void update_lead();
+    // File the local sample against every still-unfiled tick up to the lead's
+    // head. NEVER rewrites a filed tick — see the header note's "one rule".
+    void file_local(const sim::TickInputs& local_input);
 
     // Seats whose input is still EXCHANGED at `tick`: all_seats_ minus every
     // seat already handed to the AI by then. The single tick-keyed predicate
@@ -622,10 +819,41 @@ private:
     // decision — it only ever decides whether THIS peer holds a tick to let its
     // partner catch up.
     std::array<int, sim::kMaxPlayers> peer_depth_{};
+    // The highest confirmed frontier each seat has reported, and whether it has
+    // reported one at all. A sender's frontier only ever RISES, so a datagram
+    // whose frontier has not is one that overtook a newer one on the way — and
+    // the stale window it carries reads as the peer having suddenly caught up,
+    // which is precisely the reading that makes this peer decide it is ahead.
+    // Reordering is rare on a quiet path and routine on a jittery one, so this
+    // guard costs nothing where it is not needed and removes a noise source where
+    // it is. (net_stats' ack-RTT already gates on the same rise, for the same
+    // reason.)
+    std::array<std::uint32_t, sim::kMaxPlayers> peer_frontier_{};
+    std::array<bool, sim::kMaxPlayers> peer_frontier_any_{};
     bool peer_heard_ = false;  // nothing to compare against until a peer speaks
     // A re-phase hold is spread over alternate pumps so a skew is shed at half
     // rate rather than freezing the display outright.
     bool rephase_held_ = false;
+    // The frame-advantage window (the jitter note at the top of this file). A
+    // plain ring of the last kRephaseWindowPumps samples — the only query is a
+    // MINIMUM over the whole window, so which slot is newest does not matter, and
+    // the scan is twenty integer compares once per pump.
+    std::array<int, kRephaseWindowPumps> advantage_{};
+    std::size_t advantage_next_ = 0;
+    int advantage_count_ = 0;  // samples so far; below a full window, no decision
+    // The peer's own prediction depth over the same window. Its SPREAD is the
+    // arrival variance the local lead exists to absorb (the jitter note); shares
+    // advantage_next_/advantage_count_ because both are sampled in the same place
+    // on the same pump and a second index could only ever disagree.
+    std::array<int, kRephaseWindowPumps> peer_window_{};
+
+    // THE LOCAL INPUT LEAD. `local_next_` is the tick our next local sample will
+    // be filed against and is MONOTONE — the single invariant that makes moving
+    // the lead mid-match safe (see the header). At a lead of 0 it equals `tick_`
+    // at every point either is read, which is what makes a clean path byte-for-
+    // byte the session it was before this existed.
+    std::uint32_t local_next_ = 0;
+    int lead_ = 0;
 
     bool desynced_ = false;
     std::uint32_t desync_tick_ = 0;
