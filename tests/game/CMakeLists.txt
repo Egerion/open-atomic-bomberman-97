@@ -58,6 +58,14 @@ target_link_libraries(bomber_scale_filter_tests PRIVATE doctest::doctest bomber:
 target_include_directories(bomber_scale_filter_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
 add_test(NAME scale_filter COMMAND bomber_scale_filter_tests)
 
+# The alpha-dilate pass every texture upload runs (alpha_bleed.hpp): SDL-free
+# pixel rules over assets::Image, so this links bomber::assets for that type and
+# nothing else.
+add_executable(bomber_alpha_bleed_tests test_alpha_bleed.cpp)
+target_link_libraries(bomber_alpha_bleed_tests PRIVATE bomber::assets doctest::doctest bomber::warnings)
+target_include_directories(bomber_alpha_bleed_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+add_test(NAME alpha_bleed COMMAND bomber_alpha_bleed_tests)
+
 # Scheme editor's pure grid model (editor_grid.hpp/.cpp) is SDL-free despite
 # living under libs/game/src — compiled directly into its own test binary rather
 # than linking bomber_game_core (which pulls in SDL3).
