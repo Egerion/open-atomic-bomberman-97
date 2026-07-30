@@ -362,6 +362,115 @@ TEST_CASE("host migration: releasing the hold does not cascade the surviving tab
     CHECK_FALSE(g2.session.aborted());
 }
 
+TEST_CASE("host migration: the confirmed event stream never drains a tick twice") {
+    // THE COLLISION BETWEEN THIS FEATURE AND THE CONFIRMED EVENT STREAM.
+    // advance_confirmed() pushes each tick's events into the stream as the
+    // frontier rises, on the reasonable assumption that the frontier only rises.
+    // rewind_for_migration() breaks that assumption — it is the one place in the
+    // class that moves confirmed_ BACKWARDS — so the re-walk would push the
+    // rewound window's events a second time and an accumulator fed from the
+    // stream would double-count every kill in it. That is the very bug the
+    // confirmed stream exists to prevent, arriving through a door its author
+    // could not have known about, and NOTHING would catch it: events are
+    // excluded from state_hash by design, so the desync check, the goldens and
+    // build_hash are all blind to it.
+    //
+    // The pin expresses the property DIRECTLY rather than counting: events for
+    // tick t can only enter the stream as the frontier passes t, so a drain that
+    // yields events while the frontier sits at or below one we have already
+    // drained past is, by definition, a tick being emitted a second time. A
+    // count-based pin is too weak here — this scenario produces few deaths, so a
+    // duplicated window hides comfortably under any plausible bound.
+    test::StarBus bus(3, /*latency=*/1);
+    Peer host(0, 0, kAll3, bus, /*host_seat=*/0);
+    Peer g1(1, 1, kAll3, bus, /*host_seat=*/0);
+    Peer g2(2, 2, kAll3, bus, /*host_seat=*/0);
+
+    std::vector<sim::Event> drained;
+    std::uint32_t drained_through = 0;
+    bool re_emitted = false;
+    std::size_t total = 0;
+    const auto drain = [&]() {
+        std::vector<sim::Event> chunk;
+        g1.session.drain_confirmed_events(chunk);
+        const std::uint32_t c = g1.session.confirmed_tick();
+        if (!chunk.empty() && c <= drained_through) re_emitted = true;
+        if (c > drained_through) drained_through = c;
+        total += chunk.size();
+        drained.insert(drained.end(), chunk.begin(), chunk.end());
+    };
+
+    std::uint32_t t = 0;
+    for (; t < 40; ++t) {
+        host.pump(t);
+        g1.pump(t);
+        g2.pump(t);
+        drain();
+        bus.step();
+    }
+
+    // Reproduce the divergent-frontier setup, which is the shape that forces the
+    // un-confirm: g2 loses only seat 0's frames, so g1 confirms past the tick g2
+    // will propose and must later be rewound below its own frontier.
+    g2.ear.mute_seat(0);
+    for (int i = 0; i < 14; ++i, ++t) {
+        host.pump(t);
+        g1.pump(t);
+        g2.pump(t);
+        drain();
+        bus.step();
+    }
+    bus.kill(0);
+    for (int i = 0; i < 4; ++i, ++t) {
+        g1.pump(t);
+        g2.pump(t);
+        drain();
+        bus.step();
+    }
+    g2.ear.unmute();
+
+    const std::uint32_t before_rewind = g1.session.confirmed_tick();
+    bus.set_hub(1);
+    bool frontier_moved_back = false;
+    for (int i = 0; i < kTimeout + 200; ++i, ++t) {
+        const std::uint32_t pre = g1.session.confirmed_tick();
+        g1.pump(t);
+        if (g1.session.confirmed_tick() < pre) frontier_moved_back = true;
+        g2.pump(t);
+        drain();
+        bus.step();
+    }
+
+    // MEASURED, AND RECORDED RATHER THAN ASSERTED: this scenario does NOT drive
+    // the frontier backwards, so rewind_for_migration()'s un-confirm branch is
+    // NOT reached here — and the suite has no other case that reaches it either.
+    // The guard below is therefore DEFENSIVE, not proven: reverting
+    // `events_through_` leaves this suite green. It is kept because the hazard it
+    // closes is real and silent (events are excluded from state_hash, so a
+    // double-drained window would show up only as a wrong kill tally on one
+    // machine), but do not read a passing run as evidence for it.
+    //
+    // Why the branch is hard to reach: confirming a tick needs EVERY awaited
+    // seat, so no peer can confirm past the tick the hub's input stops at, and
+    // the adopted tick is the LOWEST such tick across peers. Getting above it
+    // requires one survivor to hold strictly more of the hub's tail AND to have
+    // every other seat's input for that span — which the surviving peer, stalled
+    // at its own cap, stops supplying at almost the same moment.
+    CHECK_FALSE(frontier_moved_back);
+
+    // The migration really did move g1's frontier backwards — otherwise this
+    // case proves nothing about the interaction it is named for.
+    REQUIRE(g1.session.handoff_tick(0) < before_rewind);
+    REQUIRE(g1.session.host_lost_seats() == kSeat0);
+
+    // Every event drained belongs to a distinct confirmed tick. A tick whose
+    // events entered the stream twice would push the total above the number of
+    // ticks that were ever confirmed.
+    CHECK(total > 0);           // the pin would be vacuous on an event-free run
+    CHECK_FALSE(re_emitted);    // no confirmed tick entered the stream twice
+    CHECK_FALSE(g1.session.desynced());
+}
+
 TEST_CASE("host migration: the election chains when the successor dies too") {
     // "Lowest surviving seat" is a rule, not a single step. If the elected hub
     // dies as well, the next-lowest survivor takes over by the same rule, with

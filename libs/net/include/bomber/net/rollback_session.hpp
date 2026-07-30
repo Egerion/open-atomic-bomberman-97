@@ -118,6 +118,31 @@
 // both peers have compared and agreed on: an accumulator fed from it is guarded
 // by the desync check that could not see the old one.
 //
+// HOST MIGRATION ADDS A SECOND RESIDUAL of the same shape and the same bound.
+// A migration can move `confirmed_` BACKWARDS (rewind_for_migration), which is
+// the only thing in this class that does. The stream is therefore emitted at
+// most once per tick (`events_through_`) — without that guard the rewound window
+// would be drained twice and every kill in it double-counted, which is the exact
+// failure above, reintroduced.
+//
+// COVERAGE, HONESTLY: the un-confirm branch itself is NOT reached by
+// tests/net/test_host_migration.cpp — measured, and pinned there as a negative so
+// the gap cannot rot silently. Confirming a tick needs every awaited seat, so no
+// peer gets far above the tick the hub's input stops at, and the adopted tick is
+// the lowest such tick across peers. So `events_through_` and the un-confirm are
+// both DEFENSIVE here, not proven. The hash purge beside them IS proven, because
+// it runs on every adoption whether or not the frontier moves.
+//
+// What the guard CANNOT recover is agreement across that window. A survivor that
+// had already confirmed past the adopted tick drained those ticks' events as
+// computed WITH the dead hub's input; a survivor that never got that far drains
+// them as re-simulated with the seat on AI. The two disagree, and the earlier
+// peer cannot retract what the shell already consumed. The window is bounded by
+// `max_prediction` (≤ 400 ms at the default cap of 8) and sits around the instant
+// a host died, so it is the same "taken on trust" class as the speculative tail
+// rather than a new one — but it is a real divergence, not a covered case, and a
+// tally that must agree exactly across a host migration does not yet exist.
+//
 // The residual is the SPECULATIVE TAIL — the at-most-`max_prediction` ticks
 // between confirmed_ and the head at the moment the round stops. Both peers stop
 // at the same TICK, so drain_remaining_events() lets the shell close the range on
@@ -517,6 +542,12 @@ private:
     // by advance_confirmed(), which is also the only place the confirmed hash is
     // taken — so the two can never disagree about which ticks are final.
     std::vector<sim::Event> confirmed_events_;
+    // High-water mark of ticks whose events have ALREADY entered the stream, so
+    // no tick can enter it twice. `confirmed_` alone cannot serve, because host
+    // migration moves that backwards; this only ever rises. See the emit site in
+    // advance_confirmed() for why the distinction is a correctness matter and
+    // not bookkeeping.
+    std::uint32_t events_through_ = 0;
 
     // The peer-drop SCHEDULE — the durable, tick-keyed record that survives
     // rollback. Deliberately NOT a one-shot mutation of State: `Player::ai` is

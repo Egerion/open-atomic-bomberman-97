@@ -62,6 +62,7 @@ RollbackSession::RollbackSession(sim::Simulation& sim, std::uint16_t local_seats
       tick_(start_tick),
       confirmed_(start_tick),
       rollback_to_(start_tick),
+      events_through_(start_tick),
       hub_(drop.host_seat),
       oldest_slot_(start_tick) {
     // Diagnostics only (net_stats.hpp). transport.path() is asked ONCE here, at
@@ -339,8 +340,22 @@ void RollbackSession::advance_confirmed() {
         // same tick, the same snapshot and the same moment the hash above is
         // taken from — an accumulator fed from here is covered by the very
         // comparison that hash is about to be exchanged for.
-        if (const std::vector<sim::Event>* ev = events_of(confirmed_))
-            confirmed_events_.insert(confirmed_events_.end(), ev->begin(), ev->end());
+        //
+        // ONCE PER TICK, EVER — that is what `events_through_` is for, and it is
+        // load-bearing only because HOST MIGRATION can move `confirmed_`
+        // BACKWARDS (rewind_for_migration, the one place that happens). Without
+        // the guard the re-walk from the adopted tick would push those ticks'
+        // events into the stream a SECOND time, and an accumulator fed from it
+        // would double-count every kill in that window — precisely the bug the
+        // confirmed stream was introduced to fix, reintroduced through the one
+        // door its author could not have known about. Events are excluded from
+        // state_hash by design, so neither the desync check nor build_hash would
+        // have said a word.
+        if (confirmed_ >= events_through_) {
+            if (const std::vector<sim::Event>* ev = events_of(confirmed_))
+                confirmed_events_.insert(confirmed_events_.end(), ev->begin(), ev->end());
+            events_through_ = confirmed_ + 1;
+        }
         const std::vector<std::uint8_t> hp = encode_hash(confirmed_, h);
         transport_->send(hp.data(), hp.size());
         const auto peer = peer_hash_.find(confirmed_);
