@@ -10,6 +10,7 @@
 #include <system_error>
 
 #include "bomber/assets/image.hpp"
+#include "bomber/game/credits_addendum.hpp"
 #include "bomber/game/sprites.hpp"
 
 namespace bomber::game {
@@ -202,6 +203,12 @@ void BmScreen::enter(const std::string& bm_name) {
     } catch (const std::exception& e) {
         std::fprintf(stderr, "BM screen '%s' load failed: %s\n", bm_name.c_str(), e.what());
     }
+    // The port's own credits addendum, appended in memory only — the install's
+    // CREDITS.BM is 1997 game data and is opened read-only (credits_addendum.hpp
+    // explains the choice). It is appended even when the load above failed, so a
+    // user whose CREDITS.BM is missing still gets a page rather than a blank
+    // window.
+    if (bm_name == "CREDITS") append_credits_addendum(doc_);
 }
 
 int BmScreen::visible_rows() const {
@@ -312,7 +319,9 @@ void BmScreen::draw(SDL_Renderer* ren) const {
                 // written (the install FS was case-insensitive). A missing image
                 // draws nothing but still advances (matching the original
                 // skipping an image whose palette/asset failed to load).
-                const Sprite& sp = assets_->bm_inline_pcx(seg.value);
+                const Sprite& sp = seg.value == kAuthorPhotoTag
+                                       ? assets_->author_photo()  // compiled-in, not DATA/RES
+                                       : assets_->bm_inline_pcx(seg.value);
                 if (sp.tex) {
                     // CENTER the image vertically on the row: sub_41302D sets the
                     // blit Y to `rowY - (imageHeight - lineHeight)/2` (integer

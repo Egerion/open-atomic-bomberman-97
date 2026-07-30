@@ -232,6 +232,16 @@ public:
     // today) keeps both renditions. Missing files yield an empty Sprite.
     const Sprite& bm_inline_pcx(const std::string& name) const;
 
+    // The credits addendum's author photograph (credits_addendum.hpp). Decoded
+    // from a byte array COMPILED INTO the executable, not from a file: the whole
+    // point of the single-file build is that the user drops one exe into their
+    // install and it runs, so an asset that has to travel beside it would undo
+    // that. It is a 24-bit PCX, which the existing parser already handles (the
+    // 3-plane variant DATA_HD uses), so no image-decoding dependency is added
+    // and the photograph carries no palette index that could be mistaken for
+    // the transparency key. Uploaded once, on first request.
+    const Sprite& author_photo() const;
+
     // The Goldman wheel's "ring" pointer sequence (docs/re/goldman-roulette.md
     // §3/§7, aRing) — RESOLVED: MISC.ANI owns it (its sequence table is
     // cursor1/goldman/ring/safe/scan/teamring0/teamring1, checked against the
@@ -428,6 +438,10 @@ private:
     mutable std::map<std::string, Sprite> bm_pcx_hd_;
     mutable std::map<std::string, bool> bm_pcx_keyed_;
     mutable std::vector<sdl::TexturePtr> bm_textures_;
+    // The compiled-in author photograph (author_photo()), decoded once.
+    mutable Sprite author_photo_{};
+    mutable bool author_photo_ready_ = false;
+    mutable sdl::TexturePtr author_photo_tex_;
     // HD front-end textures retain the classic Sprite geometry. This keeps all
     // original UI coordinates intact while their backing texture is higher
     // resolution. They are only selected while hd_enabled_ is true.

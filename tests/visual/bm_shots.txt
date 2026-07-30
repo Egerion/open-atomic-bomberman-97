@@ -1,0 +1,33 @@
+# Front-end `.BM` text-screen pins (tests/visual/README.md "The pinned .BM
+# frames"). One row per frame: `<label> <BM_NAME> <scroll_lines> <sha256>`.
+# Each is its own `--bm-shot` run -- unlike shots.txt's five, which share one
+# scripted match, a text screen has no match behind it.
+#
+# Hermetic on the same terms as shots.txt: --bm-shot is a capture_run(), so
+# options.ini's soft_scaling / show_fps / vsync / native_cadence are pinned
+# rather than read (game_app.cpp load_config), and DATA_HD artwork is off at
+# boot and only ever turned on by a keypress. Proven the same way: two
+# consecutive recapture passes produced identical hashes for all five.
+#
+# Captured 2026-07-30, on the commit that fixed the three faults these frames
+# exist to hold down. All five BMPs were eyeballed before pinning:
+#   * the inline-image transparency key (palette index 0, sub_44AED5). Before
+#     the fix CREDBAR (credits_top) and QALOGO (credits_qalogo) were black
+#     rectangles.
+#   * the drifting tab stop (sub_41302D's pass-2 expander). credits_columns is
+#     the row that proves it: the three "(for ...)" annotations sit at
+#     179/189/190 px, and the middle one was 37 px out of that column before.
+#   * partial src rects against DATA_HD textures (sprites.hpp
+#     texture_src_rect). NOT covered here -- a capture always renders classic
+#     art, so these hashes would not move if that regressed. Verified by eye.
+# The last two rows are the port's own addendum (credits_addendum.hpp): the
+# page carrying the compiled-in photograph, and the prose page after it.
+#
+# ASCII only in this file: cmake file(STRINGS) splits lines at non-ASCII bytes.
+#
+# label                 name      scroll  sha256
+credits_top             CREDITS   0       612951cb0482fcc712ed85f0e080a11fc8d7b5cbfbc3675d6c8a4287e6e4b8e7
+credits_columns         CREDITS   33      5b3209c2a00bfd825299351f49c509ea7ab08ad863888e2eed75807974e5beef
+credits_qalogo          CREDITS   115     dcedb4f689e551202de8622d8c39a527d4f2c110c444268cd3481220e29aa2f7
+credits_addendum_photo  CREDITS   160     1aad7d8c868e6119f520fbad45851aaffab82057e1b6ee749df5289aff1b0625
+credits_addendum_text   CREDITS   180     42ff02c50af21fc48d1bc6d2aedf4030e6abe33632826ef34b4c7f8ca951181c

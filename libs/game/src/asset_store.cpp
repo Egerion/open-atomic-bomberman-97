@@ -1,8 +1,10 @@
 #include "bomber/game/asset_store.hpp"
 
 #include <algorithm>  // std::min (boot-loading progress clamp)
+#include <cstdint>
 #include <cstdio>
 #include <exception>
+#include <span>
 #include <string>
 #include <utility>
 
@@ -789,6 +791,28 @@ const Sprite& AssetStore::bm_inline_pcx(const std::string& name) const {
         }
     }
     return bm_pcx_hd_.emplace(name, hd).first->second;
+}
+
+// Defined by the generated author_photo_data.cpp (cmake/EmbedBinary.cmake).
+extern const unsigned char kAuthorPhotoPcx[];
+extern const unsigned int kAuthorPhotoPcx_size;
+
+const Sprite& AssetStore::author_photo() const {
+    if (author_photo_ready_) return author_photo_;
+    author_photo_ready_ = true;  // one attempt; a failure stays an empty Sprite
+    try {
+        // TextureArt::HighRes, not Classic: this is a photograph, not 1997
+        // palettised art, so it has no business in the soft-scaling registry
+        // that toggles the classic textures between nearest and linear.
+        auto img = assets::pcx::parse(
+            std::span<const std::uint8_t>(kAuthorPhotoPcx, kAuthorPhotoPcx_size),
+            "<embedded author photo>");
+        author_photo_tex_.reset(make_texture(ren_, img, TextureArt::HighRes));
+        author_photo_ = {author_photo_tex_.get(), img.width, img.height, 0, 0};
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "embedded author photo failed: %s\n", e.what());
+    }
+    return author_photo_;
 }
 
 }  // namespace bomber::game

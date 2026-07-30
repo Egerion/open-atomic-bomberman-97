@@ -93,6 +93,15 @@ target_link_libraries(bomber_key_color_tests PRIVATE bomber::assets doctest::doc
 target_include_directories(bomber_key_color_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
 add_test(NAME key_color COMMAND bomber_key_color_tests)
 
+# The port's own credits addendum (credits_addendum.hpp): the layout budget and
+# the centred photograph's clearance, driven through the same bmtext parser the
+# install's .BM files go through. SDL-free; links bomber::assets for the parser.
+add_executable(bomber_credits_addendum_tests test_credits_addendum.cpp)
+target_link_libraries(bomber_credits_addendum_tests
+  PRIVATE bomber::assets doctest::doctest bomber::warnings)
+target_include_directories(bomber_credits_addendum_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+add_test(NAME credits_addendum COMMAND bomber_credits_addendum_tests)
+
 # Scheme editor's pure grid model (editor_grid.hpp/.cpp) is SDL-free despite
 # living under libs/game/src — compiled directly into its own test binary rather
 # than linking bomber_game_core (which pulls in SDL3).

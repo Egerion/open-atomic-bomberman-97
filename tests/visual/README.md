@@ -107,6 +107,32 @@ All five come from one scripted 2-player match on the real install's
 first-rotation level (`BASIC.SCH`, fixed seed) — see `shots.txt` for the
 exact hashes.
 
+## The pinned `.BM` frames
+
+The five above are all *in-match*, so for a long time nothing pinned a single
+pixel of the front end. `bm_shots.txt` is the second manifest, one row per
+frame: `<label> <BM_NAME> <scroll_lines> <sha256>`, each captured by its own
+`bomber_game --bm-shot <NAME> <out.bmp> <scroll>` run. A `.BM` text screen has
+no match behind it — it is one frame of the `sub_41302D` viewer at a scroll
+position — so unlike `shots.txt` there is nothing to share a run with.
+
+| label                    | screen  | scroll | scenario |
+|--------------------------|---------|--------|----------|
+| `credits_top`             | CREDITS | 0      | the CREDBAR banner + the JERM/KURT photographs: the inline-image transparency key |
+| `credits_columns`         | CREDITS | 33     | the three `(for ...)` annotations, i.e. the tab-stop column |
+| `credits_qalogo`          | CREDITS | 115    | the QA logo, the largest keyed image on the page |
+| `credits_addendum_photo`  | CREDITS | 160    | the port's own addendum: the compiled-in author photograph |
+| `credits_addendum_text`   | CREDITS | 180    | the addendum's prose, at the page break |
+
+`--bm-shot` is a `capture_run()` (`game_app.cpp`), so it gets the same
+`options.ini` pins the demo path does; `DATA_HD` artwork is off at boot and only
+a keypress turns it on, so a capture always renders classic art. Two consecutive
+recapture passes produce identical hashes for all five.
+
+Recapture uses the same command as above — `BOMBER_RECAPTURE=1` prints
+`RECAPTURE-BM <label> <name> <scroll> <hash>` rows alongside the match ones, and
+both manifests are refreshed in one pass.
+
 ## Recapturing
 
 Recapture whenever a renderer change is deliberate — do it in the SAME

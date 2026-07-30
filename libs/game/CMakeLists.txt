@@ -2,7 +2,19 @@
 # renderer, audio, input mapping, and the application shell. Reads the sim
 # state and events; never mutates them.
 
+# The credits addendum's author photograph, compiled in rather than shipped
+# beside the exe — the whole point of the single-file build is that the user
+# drops ONE file into their install (see cmake/EmbedBinary.cmake). It is a
+# 24-bit PCX so it needs no image-decoding dependency: libs/assets' own parser
+# already reads the 3-plane variant DATA_HD uses.
+include(${CMAKE_SOURCE_DIR}/cmake/EmbedBinary.cmake)
+bomber_embed_binary(
+  ${CMAKE_SOURCE_DIR}/assets/me/me.pcx
+  ${CMAKE_CURRENT_BINARY_DIR}/generated/author_photo_data.cpp
+  kAuthorPhotoPcx)
+
 add_library(bomber_game_core STATIC
+  ${CMAKE_CURRENT_BINARY_DIR}/generated/author_photo_data.cpp
   src/sprites.cpp
   src/asset_store.cpp
   src/sequences.cpp

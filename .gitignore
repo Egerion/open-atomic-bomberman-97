@@ -37,6 +37,11 @@ DATA/
 *.RMP
 *.rmp
 extracted/
+# ...except assets/, which holds OUR OWN artwork — the window icon and the
+# credits photograph. Nothing from the 1997 install goes there, and these files
+# are COMPILED INTO the executable (apps/game/app.rc, cmake/EmbedBinary.cmake),
+# so the blanket extension rules above must not swallow them.
+!assets/**
 
 # Reverse-engineering working material — facts only live in docs/re/*.md.
 # The binary, IDA database, and decompiler output stay out of the repo.

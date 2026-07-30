@@ -1,2 +1,10 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Binary assets compiled INTO the executable (the icon via apps/game/app.rc, the
+# credits photo via libs/game's author-photo codegen). Never eol-normalize
+# these: a single CRLF rewrite inside a PCX scanline corrupts the image and the
+# corruption only shows up at runtime.
+*.pcx binary
+*.jpg binary
+*.ico binary
