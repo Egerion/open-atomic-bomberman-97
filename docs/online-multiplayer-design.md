@@ -325,7 +325,13 @@ timeout. No `State`, no `tick`, no gameplay logic ever lives on the server.
 - **Derivation** (tick = 50 ms): one-way ≈ RTT/2.
   - `input_delay` (shared, in StartMatch) — a small constant, 1–2 ticks, chosen
     by the host from the *worst-seat* RTT; it must be identical on all peers, so
-    the host decides and ships it.
+    the host decides and ships it. **This applies to `LockstepSession` only.**
+    Under `RollbackSession` input delay is *local* and needs no agreement at all
+    (ADR-0011's 2026-07-30 amendment): there is no schedule mapping a sample to a
+    tick, so a peer may lead its own input and change that lead mid-match without
+    a wire message. It does so ADAPTIVELY, off measured arrival variance rather
+    than off RTT — see `rollback_session.hpp`'s "arrival variance" note. Nothing
+    keys the rollback path to the `input_delay` the lobby ships.
   - `max_prediction` (local, per peer) — `ceil(one_way_ms / 50) + margin`, clamped
     to roughly 2..8. Each peer sets its own from its own RTT; it is a display
     policy and does not affect determinism (only confirmed ticks are hashed).
