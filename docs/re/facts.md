@@ -786,6 +786,42 @@ its own pass: see the "RESOLVED 2026-07-10: stunned-but-alive movement
 ported" box above (stun only skips the input decode and the bomb-action
 block; the stage-actor mover still runs, golden proven inert).
 
+### The head-stunned IDLE pose SPINS through all four facings — PORTED (2026-07-30, `sub_41F29B` idle branch ~23086)
+
+The cosmetic half of the stun, and the one thing on screen that says a bonk
+landed. `sub_41F29B`'s idle branch normally formats `stand %s` from the
+player's own facing. **While the head-stun word +58 is non-zero it formats
+`+80 & 3` instead** — the state's own elapsed-frame counter, masked to two
+bits. `sub_421F7E` zeroes +80 at the moment of the hit (already recorded above,
+and mirrored by `PowerupSystem::head_hit`) and it counts up one per displayed
+frame, so a bonked bomberman's sprite turns on the spot for the whole 16-frame
+stun instead of holding the direction it was walking. This is the "one cosmetic
+standing-animation frame pick at ~23086" the "Stun does NOT gate flame-death or
+pickup" entry above noted in passing without unpacking; it is a direction pick,
+not a frame pick.
+
+**The masked value is a `godir`, and our `Direction` is not.** The original
+formats through `off_45BCC4[godir & 3] = {"north","east","south","west"}`
+(`sub_413AED`, docs/re/sequence-map.md), so the cycle is compass-CLOCKWISE:
+north, east, south, west. `sim::Direction` is `{Up, Down, Left, Right}` and
+`sequences.cpp` maps those to `{north, south, west, east}`. Feeding `& 3`
+straight into our index would draw the same four sprites in an order the
+original never shows, so the port carries the adapter explicitly
+(`kGodirToDirection = {0, 3, 1, 2}` in `carry_pose.hpp`).
+
+**Walking is NOT affected.** The mask lives in the idle name-build only. A
+stunned player can still be shoved along by a conveyor or a fresh push, and
+that path keeps the plain facing.
+
+Ported in `carry_pose.hpp`'s `stunned_stand_facing` (SDL-free and header-only,
+like the rest of that file's `sub_41F29B` name-build logic) and applied at the
+one draw site in `Renderer::draw_world`. Pinned by four cases in
+`tests/game/test_anim.cpp`, including the clockwise order — the failure mode
+worth a test is spinning the wrong way, not spinning at all. **Presentation
+only**: no `State` field, no RNG, no hashed value; the visual goldens do not
+move because nothing in the scripted demo ever takes a head hit, and with
+`stun == 0` the helper returns the facing unchanged.
+
 ## Player state machine (+78) — COMPLETE (2026-07-11 full-enumeration audit)
 
 The original models each player's action/movement mode with ONE state word at

@@ -1046,7 +1046,15 @@ void Renderer::draw_world(const sim::State& s) {
                     break;
                 case PlayerPose::Walk:
                 case PlayerPose::Stand:
-                    a = pf.moving ? &q.walk[body_colour][dir] : &q.stand[body_colour][dir];
+                    // The IDLE half takes its direction from the head-stun
+                    // spin when one is running (carry_pose.hpp's
+                    // stunned_stand_facing — sub_41F29B's idle branch formats
+                    // `stand %s` from `+80 & 3` while +58 is set). The walking
+                    // half is untouched: the mask is in the idle name-build
+                    // only, and a stunned player can still be pushed along.
+                    a = pf.moving ? &q.walk[body_colour][dir]
+                                  : &q.stand[body_colour][stunned_stand_facing(
+                                        dir, p.stun, s.tuning.head_stun_frames)];
                     ph = walk_ph;
                     break;
             }
