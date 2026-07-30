@@ -156,7 +156,10 @@ TEST_CASE("a thrown bomb launches from the carrier's exact position, not the til
     TickInputs walk;
     walk.players[0].down = true;
     walk.players[0].action1 = true;
-    for (int i = 0; i < 3; ++i) s.tick(walk);
+    // The first `pickup_pause + 1` ticks are the grab's movement pause (the
+    // non-strict `+80 <= getvalue(665)` window, facts.md); only the ones after
+    // it actually move the carrier off the tile centre.
+    for (int i = 0; i < s.state().tuning.pickup_pause + 1 + 3; ++i) s.tick(walk);
     REQUIRE(s.state().players[0].carrying);
     const Fixed carrier_y = s.state().players[0].y;
     // grid.hpp is a private sim header, so spell the tile centre out here.

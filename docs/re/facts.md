@@ -1863,6 +1863,8 @@ board grabs on the first winning roll, and a 4-seat pillar match with a
 grab+punch AI produces 6 grabs and 6 throws over 7 drops.
 
 **A second, RELATED gap, diagnosed but NOT fixed here — the deferred tail.**
+(**CLOSED 2026-07-30** — see "The bomb-action tail is per-FRAME, not per-tick".
+The diagnosis below stands as written; only the "not fixed here" does not.)
 The original evaluates the bomb-action tail every frame, so the tail sees the
 position the brain decided at. The port runs the brain per sub-frame but the
 tail once per tick, at the END-of-tick position, and `bomb_actions` re-tests
@@ -6317,24 +6319,163 @@ so this is a behaviour change under the determinism contract:
 
 ### Adjacent, NOT fixed here
 
-- **The grab's movement pause may be one tick short.** The gate is
-  `if (+78 == 4 && frame_counter <= getvalue(665))` (pseudo.c 23017-23023),
-  which suppresses input acquisition and forces the bomb key byte `+56` to 1.
-  With `+80` zeroed by the grab and `getvalue(665) = 2` that is a NON-strict
-  comparison over `+80 = 0,1,2` — three ticks after the grab tick, where
-  `Player::pickup_pause` gives two. The compared variable is a decompiler
-  artifact (`v14`) rather than a named `+80` read, so this is NEEDS-VERIFY, not
-  a confirmed divergence; also a hashed field, so same cost as above.
-- **State 4's own length may be one tick short.** The exit is
-  `+80 > sub_41DA5C(seq)` (pseudo.c ~23404), i.e. the pose survives `+80` = 0..10
-  for a 10-step `pickup <dir>` = 11 ticks; `pickup_pose_` is seeded with the
-  step count, 10. Presentation-only and within the noise, but it now bounds how
-  much of the throw playout is visible.
+- ~~**The grab's movement pause may be one tick short.**~~ **CONFIRMED and
+  fixed 2026-07-30** — see "The grab's movement pause is getvalue(665) + 1
+  ticks" below. The NEEDS-VERIFY caveat (the compared value was a decompiler
+  temporary, not a named `+80` read) is discharged: the instruction stream says
+  the same thing the reconstruction did.
+- ~~**State 4's own length may be one tick short.**~~ **CONFIRMED 2026-07-30**,
+  same entry's postscript. `pickup <dir>` really does survive `+80` = 0..10 =
+  11 steps.
 - **The head-stun pose spins.** In the idle branch the direction byte fed to
   `stand %s` is `+80 & 3` when `+58` (head-hit stun) is non-zero, not the
   player's facing — a stunned player's sprite cycles through all four facings.
   Our renderer draws the plain stand pose in the facing direction. Separate
   mechanic (head hit, not the glove); left for its own pass.
+
+## VALUELST id 121 is dead in the original — CONFIRMED + PORT FIXED (2026-07-30, `sub_41F29B`/`sub_41095A`)
+
+The port gated disease expiry on `Tuning::diseases_time_limited` (VALUELST id
+121, "are diseases time limited?"). The original applies no such gate.
+
+- **The ager consults no global.** In `sub_41F29B`'s per-frame player block, the
+  disease pass at **0x41F671-0x41F697** tests the age field `+120` for non-zero,
+  adds the frame delta (the same `dword_464958` every anim counter reads) to it,
+  compares the result against the duration `+124`, and on "greater" calls
+  `sub_41DF4C` — the cure. There is no test of any global anywhere in that
+  block. Expiry is unconditional.
+- **The value IS read, into a word with no reader.** `sub_41095A`'s init block
+  stores `getvalue(121)` at **0x410A5B** into `dword_464988` (it sits between
+  the id-120 store to `dword_464990` and the id-122 store to `dword_464A74`, so
+  it is plainly a mechanical "read the flags" run). A byte scan of the WHOLE
+  image for that address finds **exactly one reference — that store.** Nothing
+  reads it back.
+
+So `121,0` changes nothing in the original, while the port turned it into
+permanent, permanently-infectious diseases the game cannot produce. **Fix:
+`DiseaseSystem::spread_and_age` expires unconditionally.** The `Tuning` field
+stays — it is on the `MatchConfig` wire (`match_config_codec.cpp`) and deleting
+it would move a wire layout for no gain — but is now inert, and says so.
+
+This is the second VALUELST id proven dead-but-consumed alongside 122
+(`diseases_will_recycle`, whose comparison at 0x41DF97 has no body); see
+`docs/valuelst-map.md`'s row for 121, which had already diagnosed it.
+
+**Hash impact.** No golden moves: every golden leaves the flag at its default
+`true`, which is the branch the port already took, so the change is inert for
+them — a real coverage gap, not evidence the change is inert. `build_hash`
+therefore gains **scenario 6**, the first disease scenario in that file, built
+with the flag OFF (2695214498 -> 977392888 across the fix). Tests:
+`tests/sim/test_disease.cpp` "expiry ignores VALUELST id 121".
+
+## The bomb-action tail is per-FRAME, not per-tick — CONFIRMED + PORTED (2026-07-30, `sub_41F29B`)
+
+Closes the "second, RELATED gap, diagnosed but NOT fixed here" left open by "AI
+key presses manufacture their own edge" (2026-07-28), and retires that entry's
+warning that `simulation.cpp`'s "only [in] the auto-drop diseases' intra-tick
+attempt density" claim was incomplete.
+
+**What the original does.** `sub_41F29B` is the PER-DISPLAYED-FRAME player pass.
+Within one call it acquires input, runs the mover (`sub_41EC84`), falls into the
+`+78` state dispatch at LABEL_155, and only then reaches the bomb-action tail at
+LABEL_246. Every one of the tail's four blocks therefore evaluates against the
+position that frame's mover just committed, on the frame whose acquisition set
+the key bytes. The port ran the mover per canonical sub-frame but deferred the
+tail to once per tick, which broke that in two ways:
+
+1. **Position staleness.** The grab/spooge "own bomb underfoot" probe and the
+   plain drop's target tile read the END-of-tick position, up to `kSubFrames-1`
+   frames after the deciding frame. The observable symptom was the AI: behaviour
+   0 short-circuits the chain only on the frames it WINS its 1-in-2 roll, so an
+   AI that won early in a tick and walked on a later frame it lost was no longer
+   standing on its bomb when the tail ran, and the grab was silently discarded
+   (~6 grabs per 7 drops instead of essentially all).
+2. **Auto-drop density.** Diarrhea/super force `+56 = 1` **and** `+54 = 0`
+   INSIDE the tail, i.e. they manufacture a fresh edge on every frame. Per tick,
+   the port gave them one attempt where the original takes `kSubFrames`.
+
+**Ported:** `player_turn`'s `bomb_actions` now takes that frame's input sample
+and is invoked from inside the sub-frame loop, after the mover and its kick
+probe — and from inside the bounce/warp branches' frame loops too, which reach
+the tail by the state-5 jump and the 6/7 fall-through. Edge-gating is unchanged,
+so a held human key still drops exactly once per press: frame 0 sees the edge
+and latches `+54`, the rest see none. Two consequences worth naming:
+
+- A tick-granular key press now resolves on **sub-frame 0**, before a normal
+  walk crosses a tile boundary. `tests/sim/test_tick_order.cpp`'s old "a
+  picked-up powerup is usable the same tick" case relied on the deferral and had
+  to be rebuilt at frame granularity; the original refuses that same drop, so
+  the rewrite is a correction, not a concession.
+- The **state-4 pause gate must be re-evaluated per frame too**. It is
+  `paused_entering || pickup_pause > 0`: the pre-decrement snapshot keeps a
+  running pause covering the whole tick it is decremented on, and the live field
+  catches one armed mid-tick. Without the second half, an AI's behaviour 0 grabs
+  on frame f and its own carrying branch throws the bomb again on frame f+1 —
+  the original's per-frame gate at 0x41FA42 blocks exactly that.
+
+**Hash impact.** Golden B moves (recaptured in the same commit); A/C/D/E are
+byte-identical — none of them drives the bomb key across a tile boundary or
+holds a glove. `build_hash` scenarios 3 and 5 both discriminate it
+(3366107864 -> the shipping digest; see `build_hash.cpp`'s scenario 5 comment
+for the per-scenario numbers).
+
+**`tests/visual` moves too, and this is the first SIM change that has moved
+it.** All five pinned frames, because the demo's very first bomb lands in the
+frame that asked for it instead of at the tick's end, so the eight remaining
+sub-frames of tick 7 see a bomb on the tile that used to be empty and player 1
+(standing on it) walks a fraction of a pixel differently from there on. Ruled
+in rather than assumed: the pre-change build was re-run against the same
+install and reproduced the OLD five hashes exactly (so this is not the
+`options.ini` drift `shots.txt` records for 2026-07-28), a `BOMBER_DEMO_TRACE`
+diff of the two event streams differs by exactly one added event — a bomb at
+tick 49 the old tail refused on the tick's END tile — and a pixel diff of
+`walking` is a thin outline around one player sprite on a frame whose tile
+coordinates are unchanged. `bm_shots.txt` is untouched: the front-end frames
+have no sim behind them.
+
+## The grab's movement pause is getvalue(665) + 1 ticks — CONFIRMED + PORTED (2026-07-30, `sub_41F29B` @ 0x41FA42)
+
+The 2026-07-28 note flagged this as NEEDS-VERIFY because the decompiler named
+the compared value after a temporary rather than as a `+80` read, leaving open
+whether the non-strict comparison was real or a reconstruction artifact.
+**Settled by reading the instructions**, and it is real.
+
+The gate sits at **0x41FA42-0x41FA63**, inside the per-frame acquisition block:
+it loads the DWORD at `player+78`, arithmetic-shifts it right 16 to isolate the
+HIGH half (the anim counter `+80` — the two are adjacent words), calls
+`getvalue` with 665, compares the two, and the branch that SKIPS the block is a
+**"greater" jump**. So the block — which clears the new-input flag and forces
+the bomb-key byte `+56` to 1 — runs on `+80 <= getvalue(665)`. Non-strict,
+confirmed at the instruction level, not inferred from the C.
+
+`+80` is zeroed by the grab and advances one step per 50 ms on the shared anim
+ms-accumulator, so the default `getvalue(665) = 2` blocks `+80` = 0, 1, 2 =
+**three ticks**. `BombSystem::try_grab` seeded `Player::pickup_pause` with the
+bare value and blocked two. Fixed: seed `getvalue(665) + 1`.
+
+A second, pre-existing inconsistency went with it. The movement gate used the
+PRE-decrement snapshot of `pickup_pause` while the bomb-action tail's skip used
+the POST-decrement value, so the tail came back one tick before movement did.
+The original drives both from that ONE test at 0x41FA42 and they cannot differ;
+both now use the snapshot.
+
+**Postscript — state 4's own length, the presentation sibling.** Confirmed in
+the same pass and NOT a hashed value. The three per-state anim blocks in
+`sub_41F29B` are not uniform: `kick %s` exits at **0x4201A9** on a "less" jump
+(reset when `+80 >= statecnt`, so it lives `statecnt` steps), while `punch %s`
+(**0x420244**) and `pickup %s` (**0x4202DF**) exit on "less-or-equal" (reset
+only when `+80 > statecnt`, so they live `statecnt + 1`). `sub_41DA5C` is a
+plain table read — sequence index × 0x3C into `dword_461B5C`, field +0x34, with
+a bounds check against `dword_461B58` — i.e. the per-sequence count this file's
+ANI audit already pins at 10 for `pickup <dir>`. So state 4 really does last
+**11** steps where the renderer's `pickup_pose_` uses 10. Presentation only, no
+hash, and it belongs to `libs/game` — left for the front-end pass that owns that
+file, recorded here so it is a citation and not a re-derivation.
+
+**Hash impact.** Golden B moves (same recapture as the entry above);
+`build_hash` scenario 5 discriminates it ALONE (4051077992 vs the shipping
+digest). Tests: `tests/sim/test_state_machine.cpp` "the grab's movement pause is
+getvalue(665) + 1 ticks".
 
 ## Still guessed — not yet extracted from the binary
 
