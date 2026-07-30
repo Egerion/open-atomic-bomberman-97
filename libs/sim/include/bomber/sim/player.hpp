@@ -75,7 +75,11 @@ struct Player {
     // state==4, each tick compares the state's own elapsed-frame counter
     // (+80 — word 40 of the player record, shared with the kick/punch/warp anim
     // timers) against
-    // `getvalue(665)` (our `pickup_pause`, id 665, docs/valuelst-map.md); while
+    // `getvalue(665)` (our `pickup_pause`, id 665, docs/valuelst-map.md). The
+    // comparison is NON-STRICT — `+80 <= getvalue(665)`, confirmed at the
+    // instruction level at 0x41FA55 (the skip branch is a "greater" jump), so
+    // the window is getvalue(665) + 1 ticks and BombSystem::try_grab seeds this
+    // countdown accordingly. While
     // the counter is still within that window it clears the new-input flag
     // (blocking new input, same as a head-stun) AND FORCES the bomb-key-down
     // byte +56 to 1, so the bomb-action tail's throw check (which needs +56

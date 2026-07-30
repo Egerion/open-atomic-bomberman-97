@@ -180,8 +180,18 @@ void DiseaseSystem::spread_and_age() {
         // recaptured.
         if (p.disease_fresh > 0)
             p.disease_fresh = p.disease_fresh > kSubFrames ? p.disease_fresh - kSubFrames : 0;
-        if (p.disease_timer > 0 && s.tuning.diseases_time_limited && --p.disease_timer <= 0)
-            clear(p);
+        // Expiry is UNCONDITIONAL in the original (facts.md "VALUELST id 121 is
+        // dead in the original"). The per-frame ager at 0x41F671-0x41F697 tests
+        // only the age field itself (+120 non-zero), adds the frame delta to it,
+        // compares it against the duration (+124) and cures via sub_41DF4C — it
+        // reads no global at all. `getvalue(121)` IS read once, at 0x410A5B in
+        // the init sub_41095A, into dword_464988, and a whole-image scan for
+        // that address finds exactly that one write and no reader. So the flag
+        // cannot suppress expiry there; gating on it here invented permanent,
+        // permanently-infectious diseases the original cannot produce.
+        // `Tuning::diseases_time_limited` is deliberately KEPT (it is on the
+        // MatchConfig wire, match_config_codec.cpp) but is now inert.
+        if (p.disease_timer > 0 && --p.disease_timer <= 0) clear(p);
     }
 
     // Contagion: a diseased player overlapping a healthy one hands the whole
