@@ -2,29 +2,77 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <unordered_set>
 #include <utility>
+
+#include "bomber/game/alpha_bleed.hpp"
 
 namespace bomber::game {
 
-SDL_Texture* make_texture(SDL_Renderer* ren, const assets::Image& img, SDL_ScaleMode scale_mode,
+namespace {
+
+// The live filter + the classic textures it applies to (sprites.hpp
+// "THE SCALING FILTER" for why this is a registry rather than a container walk).
+// File-scope because make_texture is a free function called from every texture
+// owner in the process (AssetStore, FontTextures, BmScreen, the viewer) — there
+// is no object all of them already share to hang it off.
+ScaleFilter g_filter = ScaleFilter::Crisp;
+// unordered_set, not vector: teardown destroys tens of thousands of textures
+// (2327 ANI frames x 10 recoloured player sets alone), and a linear erase per
+// destroy would make quitting quadratic.
+std::unordered_set<SDL_Texture*>& classic_textures() {
+    static std::unordered_set<SDL_Texture*> reg;
+    return reg;
+}
+
+}  // namespace
+
+SDL_ScaleMode sdl_scale_mode(ScaleFilter filter) {
+    return filter == ScaleFilter::Soft ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST;
+}
+
+ScaleFilter scale_filter() { return g_filter; }
+
+void set_scale_filter(ScaleFilter filter) {
+    g_filter = filter;
+    const SDL_ScaleMode mode = sdl_scale_mode(filter);
+    // Live: SDL_SetTextureScaleMode only writes a field the next draw reads, so
+    // the very next presented frame is already filtered the new way — no
+    // reload, no window recreate, nothing to restart.
+    for (SDL_Texture* t : classic_textures()) SDL_SetTextureScaleMode(t, mode);
+}
+
+void destroy_texture(SDL_Texture* tex) {
+    if (!tex) return;
+    classic_textures().erase(tex);
+    SDL_DestroyTexture(tex);
+}
+
+SDL_Texture* make_texture(SDL_Renderer* ren, const assets::Image& img, TextureArt art,
                           const assets::colorpal::Palette* snap) {
-    // In-match master-palette snap (colorpal.hpp): quantize a COPY so the
-    // caller's decoded image is left intact (recolor paths reuse it). A no-op
-    // when snap is null/inert.
-    assets::Image snapped;
-    const assets::Image* src = &img;
-    if (snap && snap->ok()) {
-        snapped = img;
-        snap->remap(snapped);
-        src = &snapped;
-    }
+    // Work on a COPY so the caller's decoded image is left intact (the recolour
+    // paths re-read it, and bleed_transparent_rgb below mutates pixels). The
+    // in-match master-palette snap (colorpal.hpp) folds into the same copy; it is
+    // a no-op when snap is null/inert.
+    assets::Image work = img;
+    if (snap && snap->ok()) snap->remap(work);
+    // Every uploaded texture is left safe to sample linearly, whatever the
+    // current filter is — the filter can be toggled at any time and an already
+    // uploaded texture cannot be re-encoded then (the CPU pixels are freed after
+    // upload, drop_classic_cpu).
+    bleed_transparent_rgb(work);
+    const assets::Image* src = &work;
     SDL_Surface* surf =
         SDL_CreateSurfaceFrom(src->width, src->height, SDL_PIXELFORMAT_RGBA32,
                               const_cast<std::uint8_t*>(src->rgba.data()), src->width * 4);
     if (!surf) return nullptr;
     SDL_Texture* tex = SDL_CreateTextureFromSurface(ren, surf);
     SDL_DestroySurface(surf);
-    if (tex) SDL_SetTextureScaleMode(tex, scale_mode);
+    if (tex) {
+        SDL_SetTextureScaleMode(tex, sdl_scale_mode(art_filter(art, g_filter)));
+        // Only classic art tracks the toggle; HD art is linear for good.
+        if (art == TextureArt::Classic) classic_textures().insert(tex);
+    }
     return tex;
 }
 
@@ -130,7 +178,7 @@ void AniTextures::load(SDL_Renderer* ren, const std::filesystem::path& path,
     // (recolored() re-snaps its own copies).
     for (std::size_t i = 0; i < data_.frames.size(); ++i)
         if (!data_.frames[i].image.empty())
-            textures_[i] = make_texture(ren, data_.frames[i].image, SDL_SCALEMODE_NEAREST, snap);
+            textures_[i] = make_texture(ren, data_.frames[i].image, TextureArt::Classic, snap);
 }
 
 AniTextures AniTextures::recolored(SDL_Renderer* ren, const std::int32_t rgb[3],
@@ -142,7 +190,7 @@ AniTextures AniTextures::recolored(SDL_Renderer* ren, const std::int32_t rgb[3],
         auto& f = out.data_.frames[i];
         if (f.image.empty()) continue;
         f.image = recolor_image(std::move(f.image), rgb);
-        out.textures_[i] = make_texture(ren, f.image, SDL_SCALEMODE_NEAREST, snap);
+        out.textures_[i] = make_texture(ren, f.image, TextureArt::Classic, snap);
     }
     out.drop_classic_cpu();  // textures uploaded; free this set's classic CPU pixels
     // Recolour the base's retained HD frames too (never paletted -> green-excess),
@@ -156,7 +204,7 @@ AniTextures AniTextures::recolored(SDL_Renderer* ren, const std::int32_t rgb[3],
         for (std::size_t i = 0; i < hd_images_.size(); ++i) {
             if (hd_images_[i].empty()) continue;
             assets::Image img = recolor_image(hd_images_[i], rgb);
-            out.hd_textures_[i] = make_texture(ren, img, SDL_SCALEMODE_LINEAR, nullptr);
+            out.hd_textures_[i] = make_texture(ren, img, TextureArt::HighRes, nullptr);
         }
     }
     return out;
@@ -190,7 +238,7 @@ AniTextures AniTextures::recolored(SDL_Renderer* ren, const std::array<std::uint
         // recolor_image_master already emits final master-palette RGB, so the
         // make_texture snap is an idempotent no-op there; it still snaps the
         // paletted/fallback outputs.
-        out.textures_[i] = make_texture(ren, f.image, SDL_SCALEMODE_NEAREST, snap);
+        out.textures_[i] = make_texture(ren, f.image, TextureArt::Classic, snap);
     }
     out.drop_classic_cpu();  // textures uploaded; free this set's classic CPU pixels
     // HD frames are re-encoded as type-4 truecolour (never paletted), so the
@@ -204,7 +252,7 @@ AniTextures AniTextures::recolored(SDL_Renderer* ren, const std::array<std::uint
         for (std::size_t i = 0; i < hd_images_.size(); ++i) {
             if (hd_images_[i].empty()) continue;
             assets::Image img = recolor_image(hd_images_[i], tail);
-            out.hd_textures_[i] = make_texture(ren, img, SDL_SCALEMODE_LINEAR, nullptr);
+            out.hd_textures_[i] = make_texture(ren, img, TextureArt::HighRes, nullptr);
         }
     }
     return out;
@@ -217,7 +265,7 @@ void AniTextures::build_recolored_hd(SDL_Renderer* ren, const AniTextures& src,
     // upload LINEAR/un-snapped exactly like recolored()'s HD block. src.hd_images_
     // is the shared base source: copied per frame, never mutated or retained here.
     for (auto* t : hd_textures_)
-        if (t) SDL_DestroyTexture(t);
+        destroy_texture(t);
     hd_textures_.clear();
     hd_images_ = {};
     if (src.hd_images_.empty()) return;
@@ -225,7 +273,7 @@ void AniTextures::build_recolored_hd(SDL_Renderer* ren, const AniTextures& src,
     for (std::size_t i = 0; i < src.hd_images_.size(); ++i) {
         if (src.hd_images_[i].empty()) continue;
         assets::Image img = recolor_image(src.hd_images_[i], rgb);
-        hd_textures_[i] = make_texture(ren, img, SDL_SCALEMODE_LINEAR, nullptr);
+        hd_textures_[i] = make_texture(ren, img, TextureArt::HighRes, nullptr);
     }
 }
 
@@ -245,10 +293,10 @@ void AniTextures::drop_hd_cpu() { hd_images_ = {}; }
 
 void AniTextures::reset() {
     for (auto* t : textures_)
-        if (t) SDL_DestroyTexture(t);
+        destroy_texture(t);
     textures_.clear();
     for (auto* t : hd_textures_)
-        if (t) SDL_DestroyTexture(t);
+        destroy_texture(t);
     hd_textures_.clear();
     hd_images_.clear();
     data_ = {};
@@ -257,7 +305,7 @@ void AniTextures::reset() {
 void AniTextures::load_hd_overlay(SDL_Renderer* ren, const std::filesystem::path& hd_path) {
     // Fresh overlay each call.
     for (auto* t : hd_textures_)
-        if (t) SDL_DestroyTexture(t);
+        destroy_texture(t);
     hd_textures_.clear();
     hd_images_.clear();
     // The HD ANI is a 1:1 upscale of the classic file — decoded the same way.
@@ -273,7 +321,7 @@ void AniTextures::load_hd_overlay(SDL_Renderer* ren, const std::filesystem::path
         if (!hd_images_[i].empty())
             // LINEAR + no palette snap: the HD path is truecolour, matching the
             // HD field/front-end PCX loads (asset_store.cpp).
-            hd_textures_[i] = make_texture(ren, hd_images_[i], SDL_SCALEMODE_LINEAR, nullptr);
+            hd_textures_[i] = make_texture(ren, hd_images_[i], TextureArt::HighRes, nullptr);
     }
 }
 

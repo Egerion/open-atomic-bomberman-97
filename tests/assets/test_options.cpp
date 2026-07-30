@@ -346,6 +346,91 @@ TEST_CASE("save_options: fullscreen= is appended/rewritten in place, preserving 
     fs::remove(p);
 }
 
+TEST_CASE("options.ini: the four Video Settings keys are port-only bools that round-trip") {
+    // vsync/native_cadence/show_fps/soft_scaling (install.hpp) — none of them
+    // exist in the 1997 binary, all four persist through the same
+    // read-modify-write as the RE'd rows.
+    auto p = write_temp("vsync=0\nnative_cadence=1\nshow_fps=1\nsoft_scaling=1\n");
+    auto opts = load_options(p);
+    REQUIRE(opts.vsync.has_value());
+    CHECK(*opts.vsync == false);
+    REQUIRE(opts.native_cadence.has_value());
+    CHECK(*opts.native_cadence == true);
+    REQUIRE(opts.show_fps.has_value());
+    CHECK(*opts.show_fps == true);
+    REQUIRE(opts.soft_scaling.has_value());
+    CHECK(*opts.soft_scaling == true);
+    fs::remove(p);
+
+    // soft_scaling=0 is a real false, not "absent".
+    auto p2 = write_temp("soft_scaling=0\n");
+    auto opts2 = load_options(p2);
+    REQUIRE(opts2.soft_scaling.has_value());
+    CHECK(*opts2.soft_scaling == false);
+    fs::remove(p2);
+}
+
+TEST_CASE("options.ini: an OLDER file (no soft_scaling=) loads fine and defaults to crisp") {
+    // Backward compatibility, both directions of the version skew:
+    //  - a file written before the key existed must load with the field EMPTY,
+    //    so GameApp falls back to its own default (OFF/crisp);
+    //  - and it must not be disturbed by the absence (no throw, no other field
+    //    perturbed).
+    auto p = write_temp(";Bomberman Options file.\nlevelno=1\nvsync=1\n");
+    auto opts = load_options(p);
+    CHECK(!opts.soft_scaling.has_value());
+    REQUIRE(opts.vsync.has_value());
+    CHECK(*opts.vsync == true);
+    fs::remove(p);
+}
+
+TEST_CASE("options.ini: an UNKNOWN (newer/hand-added) key never breaks the load or the save") {
+    // The other direction of the same skew: an options.ini written by a NEWER
+    // build (or hand-edited) carries keys this build has never heard of. They
+    // must be ignored on read and survive a write VERBATIM — otherwise saving
+    // from an older exe would silently strip a newer build's settings.
+    auto p = write_temp(
+        ";Bomberman Options file.\n"
+        "levelno=1\n"
+        "some_future_option=7\n"
+        "soft_scaling=1\n");
+    auto opts = load_options(p);
+    REQUIRE(opts.levelno.has_value());
+    REQUIRE(opts.soft_scaling.has_value());
+    CHECK(*opts.soft_scaling == true);
+
+    Options out;
+    out.soft_scaling = false;
+    save_options(p, out);
+    std::string body;
+    {
+        std::ifstream in(p);
+        std::ostringstream ss;
+        ss << in.rdbuf();
+        body = ss.str();
+    }
+    CHECK(body.find("some_future_option=7") != std::string::npos);  // untouched
+    std::size_t first = body.find("soft_scaling=");
+    REQUIRE(first != std::string::npos);
+    CHECK(body.find("soft_scaling=", first + 1) == std::string::npos);  // rewritten in place
+    auto reread = load_options(p);
+    REQUIRE(reread.soft_scaling.has_value());
+    CHECK(*reread.soft_scaling == false);
+    fs::remove(p);
+}
+
+TEST_CASE("save_options: soft_scaling= is appended to a file that lacks it") {
+    auto p = write_temp("levelno=1\n");
+    Options out;
+    out.soft_scaling = true;
+    save_options(p, out);
+    auto reread = load_options(p);
+    REQUIRE(reread.soft_scaling.has_value());
+    CHECK(*reread.soft_scaling == true);
+    CHECK(reread.levelno.has_value());  // the pre-existing key survived
+    fs::remove(p);
+}
+
 TEST_CASE(
     "options.ini: keydef= triples parse into KeyDef, out-of-range set/action drops the line") {
     auto p = write_temp(

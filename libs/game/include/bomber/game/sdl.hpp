@@ -7,6 +7,15 @@
 // Minimal RAII wrappers around the SDL3 objects the game owns. Keeps SDL
 // lifetime management out of the application logic.
 
+namespace bomber::game {
+// sprites.cpp — destroys a texture AND drops it from the scaling-filter registry
+// (sprites.hpp "THE SCALING FILTER"). Forward-declared rather than included so
+// this RAII header keeps depending on nothing but SDL; every TexturePtr owner in
+// the codebase holds a make_texture() texture, so the deleter must go through it
+// or set_scale_filter would later stamp a freed pointer.
+void destroy_texture(SDL_Texture* tex);
+}  // namespace bomber::game
+
 namespace bomber::game::sdl {
 
 struct WindowDeleter {
@@ -20,9 +29,7 @@ struct RendererDeleter {
     }
 };
 struct TextureDeleter {
-    void operator()(SDL_Texture* t) const {
-        if (t) SDL_DestroyTexture(t);
-    }
+    void operator()(SDL_Texture* t) const { bomber::game::destroy_texture(t); }
 };
 
 using WindowPtr = std::unique_ptr<SDL_Window, WindowDeleter>;

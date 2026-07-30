@@ -568,6 +568,17 @@ bool GameApp::load_config(const fs::path& game, const fs::path& scheme_path) {
         uncap_fps_ = capture ? false : !loaded_opts.vsync.value_or(true);
         native_cadence_ = capture ? false : loaded_opts.native_cadence.value_or(false);
         show_fps_ = capture ? false : loaded_opts.show_fps.value_or(false);
+        // "soft_scaling=" — the fourth Video Settings key, and the one with the
+        // widest reach into a captured frame: it swaps nearest for linear
+        // sampling on EVERY classic texture, so a saved `soft_scaling=1` would
+        // re-hash all five tests/visual pins at once (the same failure mode
+        // random_start/conveyor_speed/team_play/playtime/show_fps/native_cadence/
+        // vsync each had). scale_filter_for() is the pin, and it is unit-tested
+        // (tests/game/test_scale_filter.cpp) rather than trusted as a ternary.
+        soft_scaling_ = capture ? false : loaded_opts.soft_scaling.value_or(false);
+        // Set BEFORE load_assets() uploads anything, so the boot textures are
+        // created with the right sampling mode instead of being re-stamped.
+        set_scale_filter(scale_filter_for(soft_scaling_, capture));
     } catch (const std::exception& e) {
         std::fprintf(stderr, "%s\n", e.what());
         return false;
@@ -2274,6 +2285,7 @@ MenuState GameApp::menu_state() {
                      .uncap_fps = uncap_fps_,
                      .native_cadence = native_cadence_,
                      .show_fps = show_fps_,
+                     .soft_scaling = soft_scaling_,
                      .options_dirty = options_dirty_,
                      .setup_lcg = setup_lcg_,
                      .scheme = scheme_,
@@ -3158,6 +3170,7 @@ void GameApp::flush_options() {
     to_write.vsync = !uncap_fps_;
     to_write.native_cadence = native_cadence_;
     to_write.show_fps = show_fps_;
+    to_write.soft_scaling = soft_scaling_;
     // keydef=: always write the live KeyboardMapper bindings (both sets, all
     // 6 UI-exposed actions) so a rebind through the remap screen survives a
     // restart — translated back into the ORIGINAL's DOS/AT scancode space
