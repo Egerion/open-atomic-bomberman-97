@@ -6383,6 +6383,20 @@ holds a glove. `build_hash` scenarios 3 and 5 both discriminate it
 (3366107864 -> the shipping digest; see `build_hash.cpp`'s scenario 5 comment
 for the per-scenario numbers).
 
+**`tests/visual` moves too, and this is the first SIM change that has moved
+it.** All five pinned frames, because the demo's very first bomb lands in the
+frame that asked for it instead of at the tick's end, so the eight remaining
+sub-frames of tick 7 see a bomb on the tile that used to be empty and player 1
+(standing on it) walks a fraction of a pixel differently from there on. Ruled
+in rather than assumed: the pre-change build was re-run against the same
+install and reproduced the OLD five hashes exactly (so this is not the
+`options.ini` drift `shots.txt` records for 2026-07-28), a `BOMBER_DEMO_TRACE`
+diff of the two event streams differs by exactly one added event — a bomb at
+tick 49 the old tail refused on the tick's END tile — and a pixel diff of
+`walking` is a thin outline around one player sprite on a frame whose tile
+coordinates are unchanged. `bm_shots.txt` is untouched: the front-end frames
+have no sim behind them.
+
 ## The grab's movement pause is getvalue(665) + 1 ticks — CONFIRMED + PORTED (2026-07-30, `sub_41F29B` @ 0x41FA42)
 
 The 2026-07-28 note flagged this as NEEDS-VERIFY because the decompiler named
