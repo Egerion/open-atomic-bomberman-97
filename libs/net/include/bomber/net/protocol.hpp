@@ -30,7 +30,8 @@ enum class MsgType : std::uint8_t {
     SetupChunk = 7,
     SetupAck = 8,
     Probe = 9,
-    MatchCtl = 10
+    MatchCtl = 10,
+    HostLost = 11
 };
 
 // THE MATCH-SHELL CONTROL MESSAGE (wire v8). Everything above is about the
@@ -153,6 +154,34 @@ struct DropFrame {
     std::uint32_t at_tick = 0;   // first tick simulated with that seat on AI
 };
 
+// HOST MIGRATION's detection message (wire v9, ADR-0011 decision 5,
+// docs/online-multiplayer-design.md §8.1): the drop->AI handoff of the HUB's own
+// seat. It is a SEPARATE message from DropFrame despite carrying identical
+// fields, and the difference is authority, not payload:
+//
+//   * a Drop is the hub's DECREE — exactly one machine ever sends it, and every
+//     peer obeys it unconditionally;
+//   * a HostLost is a survivor's OBSERVATION about the machine that would
+//     otherwise have decreed it. Nobody has authority here, because the only
+//     peer that had it is the one that died, so EVERY survivor announces and
+//     every survivor re-sends (broadcast_host_lost is not hub-only).
+//
+// Keeping them apart is what lets a peer accept "the hub is gone" from a
+// non-hub, while still refusing an ordinary guest-drop decree from one. Sharing
+// the Drop tag would have made any guest able to hand any seat to the AI.
+//
+// `at_tick` is RETROACTIVE for exactly DropFrame's reason (see above), plus one
+// of its own: survivors DISAGREE about it. It is a local quantity — peers hold
+// different amounts of a dying hub's final output — so proposals differ by
+// however many of its last datagrams each happened to lose. The LOWEST proposal
+// wins everywhere, which is monotone and therefore needs no agreement protocol;
+// adopting one below our own confirmed frontier is the single case that makes
+// the session un-confirm (RollbackSession::rewind_for_migration).
+struct HostLostFrame {
+    std::uint8_t seat = 0;      // the seat that was the hub (< sim::kMaxPlayers)
+    std::uint32_t at_tick = 0;  // announcer's first tick with no input from it
+};
+
 // A CONTIGUOUS run of input frames sharing one seat_mask — the redundancy the
 // lockstep session sends every tick so a dropped UDP packet is recovered by the
 // next one (each packet re-carries the whole un-confirmed local-input window).
@@ -247,7 +276,7 @@ inline constexpr std::size_t kMaxSetupChunks =
 
 // One decoded datagram: exactly one of `input` / `range` / `hash` / `hello` /
 // `punch` / `drop` / `setup_preview` / `setup_chunk` / `setup_ack` /
-// `match_ctl` is meaningful per `type`.
+// `match_ctl` / `host_lost` is meaningful per `type`.
 struct Message {
     MsgType type = MsgType::Input;
     InputFrame input;
@@ -261,6 +290,7 @@ struct Message {
     SetupChunkFrame setup_chunk;
     SetupAckFrame setup_ack;
     MatchCtlFrame match_ctl;
+    HostLostFrame host_lost;
 };
 
 // [MsgType::Input][input_codec frame] — the seats in `seat_mask`, stamped `tick`.
@@ -299,6 +329,12 @@ std::vector<std::uint8_t> encode_drop(std::uint8_t seat, std::uint32_t at_tick);
 // unknown kind means a peer that disagrees with us about the protocol, and the
 // build_hash door is what is supposed to have caught that.
 std::vector<std::uint8_t> encode_match_ctl(MatchCtlKind kind, std::uint32_t at_tick);
+
+// [MsgType::HostLost][seat u8][at_tick u32-LE] — 6 bytes. Byte-identical in
+// shape to MsgType::Drop and deliberately NOT the same tag; see HostLostFrame on
+// why the authority difference needs its own opcode. Decode rejects a seat index
+// outside [0, sim::kMaxPlayers), exactly as Drop does.
+std::vector<std::uint8_t> encode_host_lost(std::uint8_t seat, std::uint32_t at_tick);
 
 // [MsgType::SetupPreview][revision u32-LE][level_index u8][rounds u8]
 //   [name_len u8][name_len bytes][10 * slot_kind u8][10 * team u8] — 28..60

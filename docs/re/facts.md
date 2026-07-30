@@ -786,6 +786,42 @@ its own pass: see the "RESOLVED 2026-07-10: stunned-but-alive movement
 ported" box above (stun only skips the input decode and the bomb-action
 block; the stage-actor mover still runs, golden proven inert).
 
+### The head-stunned IDLE pose SPINS through all four facings — PORTED (2026-07-30, `sub_41F29B` idle branch ~23086)
+
+The cosmetic half of the stun, and the one thing on screen that says a bonk
+landed. `sub_41F29B`'s idle branch normally formats `stand %s` from the
+player's own facing. **While the head-stun word +58 is non-zero it formats
+`+80 & 3` instead** — the state's own elapsed-frame counter, masked to two
+bits. `sub_421F7E` zeroes +80 at the moment of the hit (already recorded above,
+and mirrored by `PowerupSystem::head_hit`) and it counts up one per displayed
+frame, so a bonked bomberman's sprite turns on the spot for the whole 16-frame
+stun instead of holding the direction it was walking. This is the "one cosmetic
+standing-animation frame pick at ~23086" the "Stun does NOT gate flame-death or
+pickup" entry above noted in passing without unpacking; it is a direction pick,
+not a frame pick.
+
+**The masked value is a `godir`, and our `Direction` is not.** The original
+formats through `off_45BCC4[godir & 3] = {"north","east","south","west"}`
+(`sub_413AED`, docs/re/sequence-map.md), so the cycle is compass-CLOCKWISE:
+north, east, south, west. `sim::Direction` is `{Up, Down, Left, Right}` and
+`sequences.cpp` maps those to `{north, south, west, east}`. Feeding `& 3`
+straight into our index would draw the same four sprites in an order the
+original never shows, so the port carries the adapter explicitly
+(`kGodirToDirection = {0, 3, 1, 2}` in `carry_pose.hpp`).
+
+**Walking is NOT affected.** The mask lives in the idle name-build only. A
+stunned player can still be shoved along by a conveyor or a fresh push, and
+that path keeps the plain facing.
+
+Ported in `carry_pose.hpp`'s `stunned_stand_facing` (SDL-free and header-only,
+like the rest of that file's `sub_41F29B` name-build logic) and applied at the
+one draw site in `Renderer::draw_world`. Pinned by four cases in
+`tests/game/test_anim.cpp`, including the clockwise order — the failure mode
+worth a test is spinning the wrong way, not spinning at all. **Presentation
+only**: no `State` field, no RNG, no hashed value; the visual goldens do not
+move because nothing in the scripted demo ever takes a head hit, and with
+`stun == 0` the helper returns the facing unchanged.
+
 ## Player state machine (+78) — COMPLETE (2026-07-11 full-enumeration audit)
 
 The original models each player's action/movement mode with ONE state word at
@@ -1827,6 +1863,8 @@ board grabs on the first winning roll, and a 4-seat pillar match with a
 grab+punch AI produces 6 grabs and 6 throws over 7 drops.
 
 **A second, RELATED gap, diagnosed but NOT fixed here — the deferred tail.**
+(**CLOSED 2026-07-30** — see "The bomb-action tail is per-FRAME, not per-tick".
+The diagnosis below stands as written; only the "not fixed here" does not.)
 The original evaluates the bomb-action tail every frame, so the tail sees the
 position the brain decided at. The port runs the brain per sub-frame but the
 tail once per tick, at the END-of-tick position, and `bomb_actions` re-tests
@@ -5472,19 +5510,32 @@ enumerated and read:
 - Three thin wrappers, `sub_425E9B` (26802), `sub_425EFC` (26825, unused by
   anything relevant), `sub_425F79` (26851) — all just call `sub_425E36`
   plus a redraw.
-- All ~19 call sites of the whole family: bomb-flame burn-through (pseudo.c
-  7252, 7266, 25669, 27412 — the standard "flame reaches a brick, ignite it"
-  path), netplay tile-sync replication (12149, 12189, 12483, 12637, 22406 —
-  gated on `dword_460058`'s netplay flag, corrects a remote player's tile if
-  it desyncs onto a brick), the warphole neighbour clear (26537/26541,
-  already ported — see the warphole entry elsewhere in this file), and the
-  HURRY wall drop (27235, `docs/re/enclosure.md`). **None run at match setup
-  or reference the spawn-coordinate arrays** `dword_46460C`/`dword_46465C`.
+- All call sites of the whole family (16 on a 2026-07-30 re-sweep):
+  **the WARPHOLE pair (pseudo.c 7252/7266)** — `sub_4056CA` case 1's one-time
+  activation, which clears the warphole's OWN tile and then one random
+  cardinal neighbour (already ported — see "Stage actors do not clear the tile
+  they sit on" below); bomb-flame burn-through (25669, 27412 — the standard
+  "flame reaches a brick, ignite it" path); netplay tile-sync replication
+  (12149, 12189, 12483, 12637, 22406 — gated on `dword_460058`'s netplay flag,
+  corrects a remote player's tile if it desyncs onto a brick); **the POWERUP
+  RELOCATION inside `sub_425704` (26537/26541)**, which moves a powerup lying
+  on open floor onto a randomly chosen brick tile; the fill and the tile
+  regeneration; and the HURRY wall drop (27235, `docs/re/enclosure.md`).
+  **None run at match setup or reference the spawn-coordinate arrays**
+  `dword_46460C`/`dword_46465C`.
+  (CITATION CORRECTION, 2026-07-30: this list previously labelled 7252/7266
+  "bomb-flame burn-through" and 26537/26541 "the warphole neighbour clear" —
+  it is the reverse, as written above. The conclusion of this section is
+  unaffected: neither site runs at setup. The relabelling matters because the
+  stage-actor entry below depends on reading `sub_4056CA` correctly.)
 - The round-init sequence itself, `sub_410B6E` (pseudo.c ~14689-14857): board
   build `sub_4260F5` → field/background load `sub_4165FC` (a `FIELD%u.PLT`
   background BITMAP, unrelated to the tile grid) → tile redraw `sub_42633C`
-  → player placement `sub_4214BC` → powerup scatter `sub_4258E5` → rovers
-  `sub_40551F` → campaign hazards `sub_40151B`. Read in full: `sub_4214BC`
+  → player placement `sub_4214BC` → powerup scatter `sub_4258E5` → the
+  `EXTRA<N>.RES` STAGE-ACTOR LOADER `sub_40551F` (CITATION CORRECTION,
+  2026-07-30: previously labelled "rovers" here; the campaign rover/ghost
+  spawner is `sub_40151B`, the next step) → campaign hazards `sub_40151B`.
+  Read in full: `sub_4214BC`
   (23865-23962) only stores each player's resolved pixel coordinates into
   its own struct (`sub_40F48C`, itself just another struct-field setter,
   UNRELATED to the netplay position-sync arrays of the same name pattern
@@ -5943,6 +5994,95 @@ additive mechanisms"). That conclusion was reached by observing that
 from its absence; the actual path is the scheme writing into the value table
 `sub_4214BC` reads. That document has been corrected in place.
 
+## Stage actors do not clear the tile they sit on — CONFIRMED + PORTED (2026-07-30, `sub_4056CA`)
+
+**The divergence.** `match::apply_actors`' `place()` helper
+(`libs/match/include/bomber/match/match_factory.hpp`) set
+`cfg.cells[y][x] = Cell::Blank` under **every** stage actor — conveyor,
+dirarrow, warphole and trampoline alike. The original clears for the
+**warphole only**.
+
+**The evidence.** `sub_4056CA` is the per-actor tick/init dispatcher, and its
+four cases are asymmetric:
+
+- **case 1 (warphole)** — the one-time activation block guarded by the actor's
+  +146 latch calls `sub_425E9B` **twice**: once on its OWN tile with cell value
+  0, and once on a randomly chosen cardinal neighbour (pseudo.c 7252/7266; the
+  nested rejection loop is documented under "Warphole knockout" and ported).
+- **case 0 (dirarrow)**, **case 2 (conveyor)**, **case 3 (trampoline)** —
+  **no cells write at all.** Each only gates its DRAWING on
+  `if (!sub_425FB9(x,y))`, i.e. "draw the belt/arrow/trampoline only while this
+  tile is empty floor". A brick sitting on a conveyor is therefore normal in
+  the original: the belt is simply not drawn, and it is not walkable, until
+  somebody bombs the brick away.
+
+Corroborated two ways beyond the decompile:
+
+1. A sweep of the whole cells-writer family (`sub_425E36` and its wrappers
+   `sub_425E9B` / `sub_425EFC` / `sub_425F79`) finds 16 call sites — flame,
+   the netplay tile sync, the warphole pair, the powerup relocation in
+   `sub_425704`, the fill, tile regeneration and the HURRY wall. **None of them
+   is actor placement.** (The same sweep is written up under "Spawn-pocket
+   clear" above, whose call-site labels were corrected on the same date.)
+2. Play observation from someone who plays both: in the original the belts and
+   arrows are UNDER BRICKS at round start and have to be bombed open.
+
+**What it cost.** Measured, not estimated: a probe built `build_match_config`
++ `apply_actors` on the shipped `BASIC.SCH` (90% brick density) at 4 players
+over 400 seeds, against the shipped `EXTRA<N>.RES` files, and counted bricks
+with and without the blanking. Percentages are of the board's bricks AFTER
+`build_state`'s spawn-pocket clear, i.e. what a player actually sees:
+
+| stage | level | actors | bricks lost | share |
+|-------|-------|--------|-------------|-------|
+| 3  | ANCIENT EGYPT     | 44 dirarrows              | 32.3 of 98.8 | **32.7%** |
+| 10 | INNER CITY TRASH  | 32 conveyors              | 28.7 of 98.8 | **29.1%** |
+| 2  | HOCKEY RINK       | 12                        | 10.8 of 98.8 | 10.9% |
+| 9  | DEEP FOREST GREEN | 4 fixed + 4 random tramps |  3.6 of 98.8 |  3.6% |
+| 4  | COAL MINE         | 4 warpholes               |  0.0 of 91.7 |  0.0% |
+
+The loss is exactly `fixed non-warphole actor count x density`, since every
+stock actor tile is a brick candidate. COAL MINE is the control: its actors are
+all warpholes, which still clear, so it is unaffected — which is also why it is
+worth knowing that a `--demo`-driven visual capture on a warphole-only stage
+would prove nothing about this change. Random `-T,H` trampolines never cost a
+brick either way: their placement branch already required an already-blank tile.
+
+Those tiles were also walkable from round start where the original has them
+blocked.
+
+**The port.** `place()` now writes only `actor_type`/`actor_dir`; the Warphole
+branch does its own `cells[y][x] = Blank` before `knockout_neighbour`. The
+random `-T,H` trampoline branch already required `cells == Blank`, so it is
+unaffected. The "warphole looks closed" worry the old comment cited is the
+renderer's job and was already handled the original's way:
+`libs/game/src/renderer.cpp`'s actor pass skips a tile whose cell is not
+`Blank`, which is exactly `!sub_425FB9(x,y)`.
+
+**Hash impact — and the hole it exposed.** This change moves NEITHER the
+goldens NOR `build_hash`: both hand-build a `MatchConfig` on already-blank
+cells and never call `apply_actors`, which lives in `libs/match`, outside the
+digest's stated scope. The interactive lobby path was already safe (it
+serialises `cfg.cells`/`actor_type` over the wire), but the CLI
+`--host`/`--join` path derived the board LOCALLY ON BOTH PEERS and consults no
+`build_hash` and no protocol version at all, so a patched and an unpatched build
+would have generated different boards and desynced with nothing to catch it.
+Closed structurally rather than by digest: the CLI path now runs the same
+`net::SetupSession` config exchange the lobby path uses
+(`GameApp::exchange_cli_netplay_config`), so the board is derived ONCE, by the
+host, and shipped. See ADR-0010/0011 and the function's own comment.
+
+**Two adjacent divergences remain OPEN and are NOT settled by this entry:**
+
+1. **Actor resolution runs before the powerup scatter.** The binary's round-init
+   order is fill `sub_4260F5` → placement `sub_4214BC` → scatter `sub_4258E5` →
+   actor load `sub_40551F`; the port resolves actors before `build_state`
+   scatters. Untouched here.
+2. **`random_start` is per-round in the port**, where the binary shuffles once
+   per match.
+
+Both move the goldens, so they belong to a `libs/sim` batch, not to this fix.
+
 ## Warphole/trampoline entry predicate — CONFIRMED + PORTED (2026-07-28, `sub_41EC84`/`sub_41F29B`)
 
 Raised as a feel report ("in the original you pass through a warp hole
@@ -6281,24 +6421,163 @@ so this is a behaviour change under the determinism contract:
 
 ### Adjacent, NOT fixed here
 
-- **The grab's movement pause may be one tick short.** The gate is
-  `if (+78 == 4 && frame_counter <= getvalue(665))` (pseudo.c 23017-23023),
-  which suppresses input acquisition and forces the bomb key byte `+56` to 1.
-  With `+80` zeroed by the grab and `getvalue(665) = 2` that is a NON-strict
-  comparison over `+80 = 0,1,2` — three ticks after the grab tick, where
-  `Player::pickup_pause` gives two. The compared variable is a decompiler
-  artifact (`v14`) rather than a named `+80` read, so this is NEEDS-VERIFY, not
-  a confirmed divergence; also a hashed field, so same cost as above.
-- **State 4's own length may be one tick short.** The exit is
-  `+80 > sub_41DA5C(seq)` (pseudo.c ~23404), i.e. the pose survives `+80` = 0..10
-  for a 10-step `pickup <dir>` = 11 ticks; `pickup_pose_` is seeded with the
-  step count, 10. Presentation-only and within the noise, but it now bounds how
-  much of the throw playout is visible.
+- ~~**The grab's movement pause may be one tick short.**~~ **CONFIRMED and
+  fixed 2026-07-30** — see "The grab's movement pause is getvalue(665) + 1
+  ticks" below. The NEEDS-VERIFY caveat (the compared value was a decompiler
+  temporary, not a named `+80` read) is discharged: the instruction stream says
+  the same thing the reconstruction did.
+- ~~**State 4's own length may be one tick short.**~~ **CONFIRMED 2026-07-30**,
+  same entry's postscript. `pickup <dir>` really does survive `+80` = 0..10 =
+  11 steps.
 - **The head-stun pose spins.** In the idle branch the direction byte fed to
   `stand %s` is `+80 & 3` when `+58` (head-hit stun) is non-zero, not the
   player's facing — a stunned player's sprite cycles through all four facings.
   Our renderer draws the plain stand pose in the facing direction. Separate
   mechanic (head hit, not the glove); left for its own pass.
+
+## VALUELST id 121 is dead in the original — CONFIRMED + PORT FIXED (2026-07-30, `sub_41F29B`/`sub_41095A`)
+
+The port gated disease expiry on `Tuning::diseases_time_limited` (VALUELST id
+121, "are diseases time limited?"). The original applies no such gate.
+
+- **The ager consults no global.** In `sub_41F29B`'s per-frame player block, the
+  disease pass at **0x41F671-0x41F697** tests the age field `+120` for non-zero,
+  adds the frame delta (the same `dword_464958` every anim counter reads) to it,
+  compares the result against the duration `+124`, and on "greater" calls
+  `sub_41DF4C` — the cure. There is no test of any global anywhere in that
+  block. Expiry is unconditional.
+- **The value IS read, into a word with no reader.** `sub_41095A`'s init block
+  stores `getvalue(121)` at **0x410A5B** into `dword_464988` (it sits between
+  the id-120 store to `dword_464990` and the id-122 store to `dword_464A74`, so
+  it is plainly a mechanical "read the flags" run). A byte scan of the WHOLE
+  image for that address finds **exactly one reference — that store.** Nothing
+  reads it back.
+
+So `121,0` changes nothing in the original, while the port turned it into
+permanent, permanently-infectious diseases the game cannot produce. **Fix:
+`DiseaseSystem::spread_and_age` expires unconditionally.** The `Tuning` field
+stays — it is on the `MatchConfig` wire (`match_config_codec.cpp`) and deleting
+it would move a wire layout for no gain — but is now inert, and says so.
+
+This is the second VALUELST id proven dead-but-consumed alongside 122
+(`diseases_will_recycle`, whose comparison at 0x41DF97 has no body); see
+`docs/valuelst-map.md`'s row for 121, which had already diagnosed it.
+
+**Hash impact.** No golden moves: every golden leaves the flag at its default
+`true`, which is the branch the port already took, so the change is inert for
+them — a real coverage gap, not evidence the change is inert. `build_hash`
+therefore gains **scenario 6**, the first disease scenario in that file, built
+with the flag OFF (2695214498 -> 977392888 across the fix). Tests:
+`tests/sim/test_disease.cpp` "expiry ignores VALUELST id 121".
+
+## The bomb-action tail is per-FRAME, not per-tick — CONFIRMED + PORTED (2026-07-30, `sub_41F29B`)
+
+Closes the "second, RELATED gap, diagnosed but NOT fixed here" left open by "AI
+key presses manufacture their own edge" (2026-07-28), and retires that entry's
+warning that `simulation.cpp`'s "only [in] the auto-drop diseases' intra-tick
+attempt density" claim was incomplete.
+
+**What the original does.** `sub_41F29B` is the PER-DISPLAYED-FRAME player pass.
+Within one call it acquires input, runs the mover (`sub_41EC84`), falls into the
+`+78` state dispatch at LABEL_155, and only then reaches the bomb-action tail at
+LABEL_246. Every one of the tail's four blocks therefore evaluates against the
+position that frame's mover just committed, on the frame whose acquisition set
+the key bytes. The port ran the mover per canonical sub-frame but deferred the
+tail to once per tick, which broke that in two ways:
+
+1. **Position staleness.** The grab/spooge "own bomb underfoot" probe and the
+   plain drop's target tile read the END-of-tick position, up to `kSubFrames-1`
+   frames after the deciding frame. The observable symptom was the AI: behaviour
+   0 short-circuits the chain only on the frames it WINS its 1-in-2 roll, so an
+   AI that won early in a tick and walked on a later frame it lost was no longer
+   standing on its bomb when the tail ran, and the grab was silently discarded
+   (~6 grabs per 7 drops instead of essentially all).
+2. **Auto-drop density.** Diarrhea/super force `+56 = 1` **and** `+54 = 0`
+   INSIDE the tail, i.e. they manufacture a fresh edge on every frame. Per tick,
+   the port gave them one attempt where the original takes `kSubFrames`.
+
+**Ported:** `player_turn`'s `bomb_actions` now takes that frame's input sample
+and is invoked from inside the sub-frame loop, after the mover and its kick
+probe — and from inside the bounce/warp branches' frame loops too, which reach
+the tail by the state-5 jump and the 6/7 fall-through. Edge-gating is unchanged,
+so a held human key still drops exactly once per press: frame 0 sees the edge
+and latches `+54`, the rest see none. Two consequences worth naming:
+
+- A tick-granular key press now resolves on **sub-frame 0**, before a normal
+  walk crosses a tile boundary. `tests/sim/test_tick_order.cpp`'s old "a
+  picked-up powerup is usable the same tick" case relied on the deferral and had
+  to be rebuilt at frame granularity; the original refuses that same drop, so
+  the rewrite is a correction, not a concession.
+- The **state-4 pause gate must be re-evaluated per frame too**. It is
+  `paused_entering || pickup_pause > 0`: the pre-decrement snapshot keeps a
+  running pause covering the whole tick it is decremented on, and the live field
+  catches one armed mid-tick. Without the second half, an AI's behaviour 0 grabs
+  on frame f and its own carrying branch throws the bomb again on frame f+1 —
+  the original's per-frame gate at 0x41FA42 blocks exactly that.
+
+**Hash impact.** Golden B moves (recaptured in the same commit); A/C/D/E are
+byte-identical — none of them drives the bomb key across a tile boundary or
+holds a glove. `build_hash` scenarios 3 and 5 both discriminate it
+(3366107864 -> the shipping digest; see `build_hash.cpp`'s scenario 5 comment
+for the per-scenario numbers).
+
+**`tests/visual` moves too, and this is the first SIM change that has moved
+it.** All five pinned frames, because the demo's very first bomb lands in the
+frame that asked for it instead of at the tick's end, so the eight remaining
+sub-frames of tick 7 see a bomb on the tile that used to be empty and player 1
+(standing on it) walks a fraction of a pixel differently from there on. Ruled
+in rather than assumed: the pre-change build was re-run against the same
+install and reproduced the OLD five hashes exactly (so this is not the
+`options.ini` drift `shots.txt` records for 2026-07-28), a `BOMBER_DEMO_TRACE`
+diff of the two event streams differs by exactly one added event — a bomb at
+tick 49 the old tail refused on the tick's END tile — and a pixel diff of
+`walking` is a thin outline around one player sprite on a frame whose tile
+coordinates are unchanged. `bm_shots.txt` is untouched: the front-end frames
+have no sim behind them.
+
+## The grab's movement pause is getvalue(665) + 1 ticks — CONFIRMED + PORTED (2026-07-30, `sub_41F29B` @ 0x41FA42)
+
+The 2026-07-28 note flagged this as NEEDS-VERIFY because the decompiler named
+the compared value after a temporary rather than as a `+80` read, leaving open
+whether the non-strict comparison was real or a reconstruction artifact.
+**Settled by reading the instructions**, and it is real.
+
+The gate sits at **0x41FA42-0x41FA63**, inside the per-frame acquisition block:
+it loads the DWORD at `player+78`, arithmetic-shifts it right 16 to isolate the
+HIGH half (the anim counter `+80` — the two are adjacent words), calls
+`getvalue` with 665, compares the two, and the branch that SKIPS the block is a
+**"greater" jump**. So the block — which clears the new-input flag and forces
+the bomb-key byte `+56` to 1 — runs on `+80 <= getvalue(665)`. Non-strict,
+confirmed at the instruction level, not inferred from the C.
+
+`+80` is zeroed by the grab and advances one step per 50 ms on the shared anim
+ms-accumulator, so the default `getvalue(665) = 2` blocks `+80` = 0, 1, 2 =
+**three ticks**. `BombSystem::try_grab` seeded `Player::pickup_pause` with the
+bare value and blocked two. Fixed: seed `getvalue(665) + 1`.
+
+A second, pre-existing inconsistency went with it. The movement gate used the
+PRE-decrement snapshot of `pickup_pause` while the bomb-action tail's skip used
+the POST-decrement value, so the tail came back one tick before movement did.
+The original drives both from that ONE test at 0x41FA42 and they cannot differ;
+both now use the snapshot.
+
+**Postscript — state 4's own length, the presentation sibling.** Confirmed in
+the same pass and NOT a hashed value. The three per-state anim blocks in
+`sub_41F29B` are not uniform: `kick %s` exits at **0x4201A9** on a "less" jump
+(reset when `+80 >= statecnt`, so it lives `statecnt` steps), while `punch %s`
+(**0x420244**) and `pickup %s` (**0x4202DF**) exit on "less-or-equal" (reset
+only when `+80 > statecnt`, so they live `statecnt + 1`). `sub_41DA5C` is a
+plain table read — sequence index × 0x3C into `dword_461B5C`, field +0x34, with
+a bounds check against `dword_461B58` — i.e. the per-sequence count this file's
+ANI audit already pins at 10 for `pickup <dir>`. So state 4 really does last
+**11** steps where the renderer's `pickup_pose_` uses 10. Presentation only, no
+hash, and it belongs to `libs/game` — left for the front-end pass that owns that
+file, recorded here so it is a citation and not a re-derivation.
+
+**Hash impact.** Golden B moves (same recapture as the entry above);
+`build_hash` scenario 5 discriminates it ALONE (4051077992 vs the shipping
+digest). Tests: `tests/sim/test_state_machine.cpp` "the grab's movement pause is
+getvalue(665) + 1 ticks".
 
 ## Still guessed — not yet extracted from the binary
 

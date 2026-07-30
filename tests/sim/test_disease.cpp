@@ -300,3 +300,32 @@ TEST_CASE("multiply=off infects only the first target and clears the source") {
     CHECK(s.state().players[1].sick(Disease::Fast));   // first in slot order caught it
     CHECK(!s.state().players[2].sick(Disease::Fast));  // scan stopped after the first match
 }
+
+TEST_CASE("expiry ignores VALUELST id 121 — the flag is dead in the original") {
+    // The per-frame ager at 0x41F671-0x41F697 tests only the age field itself,
+    // adds the frame delta to it, compares it against the duration and cures —
+    // no global is consulted. getvalue(121) IS read, once, at 0x410A5B into a
+    // word that a whole-image scan shows has exactly that one reference and no
+    // reader. So `121,0` changes nothing in the original, and the port must not
+    // let it invent a permanent, permanently-infectious disease.
+    // facts.md "VALUELST id 121 is dead in the original".
+    MatchConfig cfg = open_config();
+    cfg.tuning.diseases_time_limited = false;
+    Simulation s(cfg);
+    infect(s.state().players[0], Disease::Slow, 5);
+    run(s, 5);
+    CHECK(s.state().players[0].disease_timer == 0);
+    CHECK(!s.state().players[0].sick(Disease::Slow));
+
+    // And a contagion source with the flag off stops being one, instead of
+    // re-infecting everything it touches for the rest of the round.
+    MatchConfig two = open_config();
+    two.tuning.diseases_time_limited = false;
+    Simulation t(two);
+    infect(t.state().players[0], Disease::Fast, 3);
+    run(t, 4);
+    t.state().players[1].x = t.state().players[0].x;
+    t.state().players[1].y = t.state().players[0].y;
+    run(t, 2);
+    CHECK(!t.state().players[1].sick(Disease::Fast));
+}

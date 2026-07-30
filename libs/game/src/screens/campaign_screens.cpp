@@ -230,6 +230,40 @@ AppInput CampaignBannerScreen::run() {
     }
 }
 
+AppInput CampaignUnsuccessfulScreen::run() {
+    // sub_42A3F6's campaign arm, 0x42A660-0x42A686 (docs/re/campaign.md "Round
+    // end"). Same sub_414340 acknowledge modal as the "Congratulations!" one
+    // below, and confirmed to use the same ink pair: 0x42A662 loads ecx from
+    // byte_49D38F and 0x42A66A loads ebx from byte_49A390 = (164,0,0) dark red,
+    // instruction for instruction what sub_40133F does at 0x401374/0x40137C.
+    // Line order follows the routine's own EAX-top/EDX-bottom rule: eax =
+    // getstring(0x4D8 = 1240) = "Oh Well!" on top, edx = getstring(0x4DD = 1245)
+    // = "Campaign unsuccessful!" below — the same header-word-on-top shape as
+    // "NOTE!"/"Warning!"/"Congratulations!".
+    const std::string top = ctx_.assets.getstring(1240, "Oh Well!");
+    const std::string bottom = ctx_.assets.getstring(1245, "Campaign unsuccessful!");
+    const std::string ok = ctx_.assets.getstring(27, " Ok ");
+    while (true) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
+            if (ev.type != SDL_EVENT_KEY_DOWN) continue;
+            ctx_.audio.play(20);  // nav blip on any key (sub_427961(20))
+            if (ev.key.key == SDLK_RETURN || ev.key.key == SDLK_KP_ENTER ||
+                ev.key.key == SDLK_SPACE || ev.key.key == SDLK_ESCAPE)
+                return AppInput::Advance;
+        }
+        ctx_.audio.update_music();
+        SDL_SetRenderDrawColor(ctx_.sdl, 0, 0, 0, 255);
+        SDL_RenderClear(ctx_.sdl);
+        backdrop_.renderer.draw_frame(backdrop_.state);
+        draw_acknowledge_dialog(ctx_.sdl, ctx_.front_font, &ctx_.assets.frontend_pcx("WINZ"), top,
+                                bottom, ok, 164, 0, 0);  // byte_49A390 = (164,0,0) dark red
+        SDL_RenderPresent(ctx_.sdl);
+        SDL_Delay(2);
+    }
+}
+
 AppInput CampaignCompleteScreen::run() {
     // sub_40133F's stage-exhausted branch (batch_0x401010.cpp:288-296): when
     // `++dword_4648B0 >= dword_45E014` the original pops a blocking sub_414340

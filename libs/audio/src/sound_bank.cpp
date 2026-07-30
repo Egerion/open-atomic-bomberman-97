@@ -1,6 +1,7 @@
 #include "bomber/audio/sound_bank.hpp"
 
 #include <algorithm>
+#include <limits>
 
 namespace bomber::game {
 namespace {
@@ -88,6 +89,11 @@ std::vector<int> SoundBank::group(int id) const {
     return out;
 }
 
+int SoundBank::play_count(int id) const {
+    if (id < 0 || id >= static_cast<int>(plays_.size())) return -1;
+    return plays_[static_cast<std::size_t>(id)];
+}
+
 const std::string* SoundBank::name(int id) const {
     if (id < 0 || id >= static_cast<int>(slots_.size())) return nullptr;
     const std::string& s = slots_[static_cast<std::size_t>(id)];
@@ -130,6 +136,18 @@ int SoundBank::pick_debounced(int id, std::uint64_t frame) {
     const int chosen = pick(id);
     if (chosen >= 0) last_frame_[id] = frame;
     return chosen;
+}
+
+int SoundBank::pick_exact(int id, std::uint64_t frame) {
+    if (name(id) == nullptr) return -1;
+    // `counts[id] = dword_464994` (0x427950). An ASSIGNMENT of the frame
+    // counter, not an increment — see the header for what that costs the group.
+    // The clamp is the port's only addition: `plays_` is `int` and the caller
+    // hands us a 64-bit tick, and a saturated counter is indistinguishable from
+    // any other very large one as far as the least-played test is concerned.
+    constexpr std::uint64_t kMax = static_cast<std::uint64_t>(std::numeric_limits<int>::max());
+    plays_[static_cast<std::size_t>(id)] = static_cast<int>(frame < kMax ? frame : kMax);
+    return id;
 }
 
 std::uint32_t SoundBank::next_rand() {

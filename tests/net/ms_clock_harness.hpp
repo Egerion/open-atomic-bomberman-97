@@ -72,8 +72,20 @@ inline sim::PlayerInput scripted(int seat, std::uint32_t tick) {
 // arrival schedule.
 class MsLink {
 public:
-    MsLink(int a_to_b_ms, int b_to_a_ms, int jitter_ms, int persist_pct = 0)
-        : delay_{a_to_b_ms, b_to_a_ms}, jitter_(jitter_ms), persist_pct_(persist_pct) {}
+    // `seed` picks WHICH realisation of the delay process this run gets. It
+    // matters more than it looks: the arrival schedule is consumed in send order,
+    // so any behaviour change that alters how many datagrams a peer sends
+    // reshuffles every later delay. A jittery run is therefore CHAOTIC — two
+    // builds that differ by one held tick diverge into genuinely different
+    // histories — and a threshold fitted to one realisation is fitted to noise.
+    // Suites that assert on a jittery path should sweep several seeds and assert
+    // on the aggregate; the default reproduces the original single realisation.
+    MsLink(int a_to_b_ms, int b_to_a_ms, int jitter_ms, int persist_pct = 0,
+           unsigned seed = 0x1234567U)
+        : delay_{a_to_b_ms, b_to_a_ms},
+          jitter_(jitter_ms),
+          persist_pct_(persist_pct),
+          rng_(seed) {}
 
     void send(int from, const std::uint8_t* d, std::size_t n, std::int64_t now) {
         const std::size_t f = static_cast<std::size_t>(from);
@@ -143,7 +155,7 @@ private:
     std::array<std::int64_t, 2> delay_;
     int jitter_;
     int persist_pct_;
-    unsigned rng_ = 0x1234567U;
+    unsigned rng_;
     std::array<std::int64_t, 2> last_extra_{};
     std::array<bool, 2> seen_{};
     std::array<std::int64_t, 2> delta_sum_{};

@@ -15,6 +15,7 @@
 #include "bomber/game/asset_store.hpp"
 #include "bomber/audio/audio_engine.hpp"
 #include "bomber/game/bmscreen.hpp"
+#include "bomber/game/campaign_round_end.hpp"
 #include "bomber/game/campaign_screen.hpp"
 #include "bomber/game/chat_overlay.hpp"
 #include "bomber/game/editor_screen.hpp"
@@ -231,16 +232,30 @@ private:
     // no test/golden/demo path sets. The CLI path carries --seed on both peers,
     // so it skips the handshake and calls run_netplay_match() directly.
     int run_netplay();
-    // The CLI's config: byte-identical on both peers from the shared seed alone —
-    // the default scheme_ + the install VALUELST, ignoring every per-machine
+    // The CLI's config, built from the shared seed alone — the default scheme_ +
+    // the install VALUELST, ignoring every per-machine
     // options_/selected_level_/team_play_/gold overlay, 2 humans in seats 0/1 and
     // the stage picked from the seed. It exists ONLY for `--host`/`--join`, which
-    // are scripted, non-interactive entries (ADR-0010 §3.3: no discovery, no
+    // are scripted, non-interactive entries (ADR-0010 §3.3: no discovery, no seed
     // handshake, both peers pass --seed on the command line) with no second
-    // machine to drive a setup screen. Every INTERACTIVE path — the lobby rows and
+    // machine to drive a setup screen. Called on the HOST ONLY — the guest takes
+    // the result over the wire (exchange_cli_netplay_config below), because two
+    // builds of libs/match can derive two different boards from one seed and the
+    // CLI wire has nothing that would notice. Every INTERACTIVE path — the lobby rows and
     // the direct HOST LAN GAME / JOIN BY IP rows — runs present_net_setup instead
     // and agrees a real config, which is the whole point of the setup stage.
     sim::MatchConfig canonical_netplay_config(std::uint32_t seed) const;
+    // The CLI's own config exchange, over the SAME net::SetupSession the lobby
+    // path uses: the HOST derives canonical_netplay_config(seed) and ships the
+    // serialized bytes; the guest adopts them verbatim into `out_cfg`. Board
+    // derivation (match::build_match_config + match::apply_actors) therefore
+    // happens ONCE per match instead of once per peer — the CLI path checks no
+    // build_hash and no protocol version, so a libs/match change shipped to one
+    // side only used to desync silently on tick 0. Returns false on timeout
+    // (which is exactly what an unpatched partner produces, since it neither
+    // sends nor answers setup traffic) or on a window close.
+    bool exchange_cli_netplay_config(net::UdpTransport& transport, bool is_host,
+                                     std::uint32_t seed, sim::MatchConfig& out_cfg);
     // The match-running CORE shared by the CLI (run_netplay) and the menu connect
     // screens: given an ALREADY-connected transport, this peer's `role` (1 =
     // host/seat 0, 2 = guest/seat 1), and the agreed `seed`, it runs the canonical
@@ -502,6 +517,10 @@ private:
     // modal (sub_40133F stage-exhausted branch, getstring 1220/1225) shown once
     // the last campaign stage is cleared, before returning to the menu.
     AppInput present_campaign_complete();
+    // The "Oh Well! / Campaign unsuccessful!" round-end banner (sub_42A3F6's
+    // campaign arm @0x42A660, getstring 1240/1245) — the ONLY screen a campaign
+    // round end is allowed to show, and only when the pacing verdict is 2.
+    AppInput present_campaign_unsuccessful();
     // The IPLOGO -> HSLOGO -> TITLE boot presentation (sub_42B060). LINEAR — no
     // attract re-run: each screen advances on a key OR the getvalue(12) = 7 s
     // timeout, and the title's Advance (key or timeout) returns so run_app drops
@@ -568,8 +587,9 @@ private:
     //
     // The winner of the round just ended (sole survivor index, or -1 for a draw).
     int round_winner() const;
-    // Campaign clauses 4-5: no human/joystick player survives this round.
-    bool campaign_no_human_survivor() const;
+    // (Campaign clauses 4-5 had a forwarder here too, until the campaign round
+    // end stopped being a special case inside the outcome tier. Its only caller
+    // is now MatchRunner, which reaches the free function directly.)
     // At least two ACTIVE players share a MatchConfig team (dword_464964).
     bool is_team_mode() const;
     // The §1 v73 match-clinch check; the clinching player's index, or -1.
@@ -745,6 +765,13 @@ private:
     // present_setup for one frame-cycle at stage start alongside getstring
     // 1230="Prepare to begin Campaign!"; empty when campaign mode is off.
     std::string campaign_banner_;
+    // What sub_4016DA left behind at the end of a campaign round: dword_464894
+    // plus clause 5's stage decrement (campaign_round_end.hpp). Written by
+    // MatchRunner at the moment the round ends, read once by run_app's Results
+    // handler to choose between "stage clear" (no screen at all), "Oh Well!" and
+    // "replay this stage" — and reset by the runner before every round, exactly
+    // as sub_40151B clears the verdict per stage.
+    CampaignPacing campaign_pacing_;  // dword_464894 (+ the 0x401786 decrement)
 
     // The Goldman wheel's pending gold player (dword_46492C, docs/re/goldman-
     // roulette.md §2): -1 = none pending, else a player index (solo) or a

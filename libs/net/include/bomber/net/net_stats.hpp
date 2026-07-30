@@ -20,14 +20,16 @@
 // TWO RULES SHAPED THE DESIGN, and both are load-bearing:
 //
 //  1. NO NEW WIRE MESSAGE. Every number here is derived from traffic that
-//     already flows. `kWireProtocolVersion` is at 8 and the unmerged
-//     host-migration branch is earmarked for 9; taking 9 for a diagnostic would
-//     push that branch to 10 and invalidate every build in the wild — the
-//     build_hash door refuses a mismatch, so each bump means hand-delivering
-//     exes. Nothing in this file encodes or decodes anything, so build_hash is
-//     untouched and a machine running this build still plays a machine that is
-//     not. See the derivations on each field for how far that gets us, and where
-//     it costs accuracy (the ack-RTT is the one real compromise).
+//     already flows. A bump invalidates every build in the wild — the build_hash
+//     door refuses a mismatch, so each one means hand-delivering exes — and the
+//     version has always been somebody else's to spend: it was at 8 with host
+//     migration earmarked for 9 when this file was written, and host migration
+//     has since landed and taken 9. Nothing in this file encodes or decodes
+//     anything, so it cost neither number then and costs neither now, and a
+//     machine running this build still plays one that is not. See the derivations
+//     on each field for how far that gets us, and where it costs accuracy (the
+//     ack-RTT is the one real compromise, and the local input lead widened it —
+//     `rtt_offset_bound`).
 //
 //  2. THE COUNTING MUST NOT PERTURB WHAT IT MEASURES. Every buffer here is a
 //     fixed-size array owned by value: no allocation on any packet path, no

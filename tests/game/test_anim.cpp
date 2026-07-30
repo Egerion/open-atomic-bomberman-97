@@ -19,6 +19,7 @@ using bomber::game::carry_arc_index;
 using bomber::game::PlayerPose;
 using bomber::game::PoseFlags;
 using bomber::game::select_player_pose;
+using bomber::game::stunned_stand_facing;
 
 TEST_CASE("frame selection wraps modulo the step count") {
     // A 4-step looping sequence, exactly like the original's counter % statecnt.
@@ -170,4 +171,62 @@ TEST_CASE("the held bomb leaves the curve and rides above the head") {
     CHECK(carried_bomb_offset(false, 12, 40).lift == 40);
     CHECK(carried_bomb_offset(false, 25, 30).forward == 10);
     CHECK(carried_bomb_offset(false, 25, 30).lift == 40);
+}
+
+// Direction indices below are `sim::Direction`: 0 Up, 1 Down, 2 Left, 3 Right
+// (sequences.cpp names them north/south/west/east in that order). Spelled out
+// rather than included, because this suite links nothing but the game headers.
+constexpr int kUp = 0, kDown = 1, kLeft = 2, kRight = 3;
+
+TEST_CASE("an unstunned player stands the way it faces") {
+    // The mask is inside sub_41F29B's `+58 != 0` arm, so with no head-stun
+    // running the idle pose is the plain facing — which is every frame of a
+    // normal match, and why this change cannot move a visual pin.
+    for (int facing = 0; facing < 4; ++facing) {
+        CHECK(stunned_stand_facing(facing, 0, 16) == facing);
+        CHECK(stunned_stand_facing(facing, -1, 16) == facing);
+    }
+}
+
+TEST_CASE("a head-stunned player's stand pose cycles all four facings") {
+    // sub_41F29B's idle branch formats `stand %s` from `+80 & 3` while +58 is
+    // set. +80 is zeroed by sub_421F7E at the bonk and counts up one per
+    // displayed frame; Player::stun is the same clock as a countdown from
+    // Tuning::head_stun_frames, so elapsed = total - remaining.
+    //
+    // The FACING ARGUMENT IS IGNORED for the whole stun — the same elapsed
+    // count gives the same sprite whichever way the player was pointing.
+    for (int facing = 0; facing < 4; ++facing) {
+        CAPTURE(facing);
+        CHECK(stunned_stand_facing(facing, 16, 16) == kUp);     // elapsed 0
+        CHECK(stunned_stand_facing(facing, 15, 16) == kRight);  // elapsed 1
+        CHECK(stunned_stand_facing(facing, 14, 16) == kDown);   // elapsed 2
+        CHECK(stunned_stand_facing(facing, 13, 16) == kLeft);   // elapsed 3
+        CHECK(stunned_stand_facing(facing, 12, 16) == kUp);     // elapsed 4, wraps
+    }
+}
+
+TEST_CASE("the stun spin turns CLOCKWISE, in the original's godir order") {
+    // The load-bearing detail. The masked value indexes the ORIGINAL's name
+    // table off_45BCC4 = {"north","east","south","west"} (sub_413AED,
+    // docs/re/sequence-map.md), not our Direction enum. Feeding `& 3` straight
+    // into our index would draw the same four sprites in the order
+    // north, south, west, east — a spin the original never shows. This case is
+    // the adapter's reason to exist; if it fails, the bomberman is spinning
+    // wrong, not merely differently.
+    const int expected[4] = {kUp, kRight, kDown, kLeft};  // N, E, S, W
+    for (int elapsed = 0; elapsed < 16; ++elapsed) {
+        CAPTURE(elapsed);
+        CHECK(stunned_stand_facing(kDown, 16 - elapsed, 16) == expected[elapsed % 4]);
+    }
+    // Four full turns over the confirmed 16-frame stun (sub_421F7E's literal).
+    CHECK(16 / 4 == 4);
+}
+
+TEST_CASE("a nonsensical stun pair cannot index out of the table") {
+    // Defensive only: nothing in the port sets stun above head_stun_frames, but
+    // a negative elapsed would be an out-of-bounds read rather than a wrong
+    // sprite, so it clamps to the first entry.
+    CHECK(stunned_stand_facing(kLeft, 40, 16) == kUp);
+    CHECK(stunned_stand_facing(kLeft, 1, 0) == kUp);
 }

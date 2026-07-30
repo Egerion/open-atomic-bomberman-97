@@ -116,14 +116,26 @@ inline std::string victory_background_name(bool team_mode, int clinched_player, 
 // slot is currently OFF, claims it (flips to COMPUTER) — otherwise it keeps
 // re-rolling. This is NOT a sequential fill from slot 0. `lcg` is advanced
 // in place (an LCG step per draw, the same shape as GameApp's setup_lcg_/
-// goldman_lcg_ presentation RNGs — never sim::State::rng). `all_off` must be
-// true for every slot on entry (the caller resets the roster first, matching
-// sub_40151B running once per fresh stage over a cleared roster). Returns
-// the set of newly-COMPUTER slot indices (ascending, for test convenience);
-// the caller applies them to setup_type_.
-inline std::vector<int> seed_campaign_ai_slots(std::uint32_t& lcg, int ai_count) {
+// goldman_lcg_ presentation RNGs — never sim::State::rng). Returns the set of
+// newly-COMPUTER slot indices (ascending, for test convenience); the caller
+// applies them to setup_type_.
+//
+// `occupied` marks the slots that are ALREADY taken and must not be claimed —
+// confirmed 2026-07-30 from the raw disassembly of the two functions involved.
+// sub_422928 @0x422977 tests the candidate slot's own type byte (+0x10) and
+// only writes 1 when it currently reads 0, re-rolling otherwise; and its caller
+// sub_40151B @0x40151B never clears a slot at all — the per-slot call it makes
+// first (sub_42288C, 0x40156C) only resets a "dialog already shown" latch. So a
+// campaign STAGE ADVANCE adds `ai_count` AI on top of the roster already
+// standing; it does not start from a blank one. This parameter defaults to "all
+// free" so the pure unit tests and any fresh-roster caller read unchanged.
+inline std::vector<int> seed_campaign_ai_slots(std::uint32_t& lcg, int ai_count,
+                                               std::array<bool, sim::kMaxPlayers> occupied = {}) {
     std::array<bool, sim::kMaxPlayers> claimed{};
-    int to_seed = ai_count < 0 ? 0 : (ai_count > sim::kMaxPlayers ? sim::kMaxPlayers : ai_count);
+    int free_slots = 0;
+    for (int i = 0; i < sim::kMaxPlayers; ++i)
+        if (!occupied[static_cast<std::size_t>(i)]) ++free_slots;
+    int to_seed = ai_count < 0 ? 0 : (ai_count > free_slots ? free_slots : ai_count);
     int seeded = 0;
     int guard = 0;
     // sub_422928 itself retries up to 100 rand() draws PER call before giving
@@ -134,6 +146,7 @@ inline std::vector<int> seed_campaign_ai_slots(std::uint32_t& lcg, int ai_count)
         ++guard;
         lcg = lcg * 1664525u + 1013904223u;
         int slot = static_cast<int>((lcg >> 16) % sim::kMaxPlayers);
+        if (occupied[static_cast<std::size_t>(slot)]) continue;
         if (claimed[static_cast<std::size_t>(slot)]) continue;
         claimed[static_cast<std::size_t>(slot)] = true;
         ++seeded;

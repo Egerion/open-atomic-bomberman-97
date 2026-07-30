@@ -253,3 +253,88 @@ TEST_CASE("warphole knockout: an edge warphole never clears out of bounds") {
     CHECK((right != down));           // exactly one of the two in-bounds neighbours
     CHECK(count_blanks(cfg) == 2);    // own + one neighbour; no OOB write happened
 }
+
+// THE WARPHOLE IS THE ONLY ACTOR THAT CLEARS A CELL (docs/re/facts.md "Stage
+// actors do not clear the tile they sit on"). sub_4056CA case 1 writes cells
+// through sub_425E9B; cases 0/2/3 write no cell at all and only GATE THEIR
+// DRAWING on `!sub_425FB9(x,y)`. apply_actors used to blank every actor tile,
+// which cost ANCIENT EGYPT 43% of its bricks (44 dirarrows) and INNER CITY
+// TRASH 40% (32 conveyors), and made those tiles walkable from round start
+// where the original has them brick-blocked until somebody bombs them.
+namespace {
+
+// One non-warphole actor of `kind` at an interior tile of an all-brick board.
+sim::MatchConfig one_actor_board(assets::extra::Kind kind, int dir = 0) {
+    auto cfg = all_brick_config();
+    std::vector<assets::extra::Actor> actors;
+    assets::extra::Actor a;
+    a.kind = kind;
+    a.x = 7;
+    a.y = 5;
+    a.dir = dir;
+    actors.push_back(a);
+    match::apply_actors(cfg, actors, 0xC0FFEEu);
+    return cfg;
+}
+
+}  // namespace
+
+TEST_CASE("stage actors: conveyor/dirarrow/trampoline leave the brick under them") {
+    for (auto kind : {assets::extra::Kind::Conveyor, assets::extra::Kind::DirArrow,
+                      assets::extra::Kind::Trampoline}) {
+        auto cfg = one_actor_board(kind);
+        CHECK(cfg.cells[5][7] == sim::Cell::Brick);  // the tile is NOT cleared
+        CHECK(count_blanks(cfg) == 0);               // and nothing else is either
+        CHECK(cfg.actor_type[5][7] != sim::ActorType::None);  // the actor is still placed
+    }
+}
+
+TEST_CASE("stage actors: the actor and its direction land regardless of the cell") {
+    auto cfg = one_actor_board(assets::extra::Kind::Conveyor, /*dir=*/2);
+    CHECK(cfg.actor_type[5][7] == sim::ActorType::Conveyor);
+    CHECK(cfg.actor_dir[5][7] == 2);
+    CHECK(cfg.cells[5][7] == sim::Cell::Brick);
+}
+
+TEST_CASE("stage actors: a warphole still clears, and only the warphole does") {
+    // Mixed board: a conveyor, a dirarrow, a fixed trampoline and one warphole.
+    auto cfg = all_brick_config();
+    std::vector<assets::extra::Actor> actors;
+    auto add = [&](assets::extra::Kind k, int x, int y) {
+        assets::extra::Actor a;
+        a.kind = k;
+        a.x = x;
+        a.y = y;
+        actors.push_back(a);
+    };
+    add(assets::extra::Kind::Conveyor, 1, 1);
+    add(assets::extra::Kind::DirArrow, 3, 1);
+    add(assets::extra::Kind::Trampoline, 5, 1);
+    add(assets::extra::Kind::Warphole, 7, 5);
+    match::apply_actors(cfg, actors, 0xC0FFEEu);
+
+    CHECK(cfg.cells[1][1] == sim::Cell::Brick);
+    CHECK(cfg.cells[1][3] == sim::Cell::Brick);
+    CHECK(cfg.cells[1][5] == sim::Cell::Brick);
+    CHECK(cfg.cells[5][7] == sim::Cell::Blank);  // warphole own tile (sub_425E9B)
+    CHECK(count_blanks(cfg) == 2);               // + exactly one knocked-out neighbour
+}
+
+TEST_CASE("stage actors: a random '-T,H' trampoline still needs an already-blank tile") {
+    // The random branch's own precondition (odd parity, unoccupied, Blank) is
+    // unchanged by dropping the blanking: on an all-brick board it can never
+    // place, so no tile is opened by accident.
+    auto cfg = all_brick_config();
+    std::vector<assets::extra::Actor> actors;
+    assets::extra::Actor a;
+    a.kind = assets::extra::Kind::Trampoline;
+    a.random = true;
+    actors.push_back(a);
+    match::apply_actors(cfg, actors, 0xC0FFEEu);
+    CHECK(count_blanks(cfg) == 0);
+    int placed = 0;
+    for (int y = 0; y < sim::kGridHeight; ++y)
+        for (int x = 0; x < sim::kGridWidth; ++x)
+            if (cfg.actor_type[y][x] != sim::ActorType::None) ++placed;
+    CHECK(placed == 0);
+}

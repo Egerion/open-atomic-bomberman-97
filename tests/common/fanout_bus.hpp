@@ -98,11 +98,13 @@ public:
         : queues_(endpoints), endpoints_(endpoints), latency_(latency) {}
 
     void send(std::size_t from, const std::uint8_t* data, std::size_t size) {
+        if (dead(from)) return;  // a corpse's socket sends nothing
         const std::vector<std::uint8_t> pkt(data, data + size);
-        if (from == kHub) {
-            for (std::size_t to = 1; to < endpoints_; ++to) enqueue(to, pkt, kHub);  // fan-out
+        if (from == hub_) {
+            for (std::size_t to = 0; to < endpoints_; ++to)
+                if (to != hub_) enqueue(to, pkt, hub_);  // fan-out
         } else {
-            enqueue(kHub, pkt, from);  // a guest talks to the hub and nobody else
+            enqueue(hub_, pkt, from);  // a guest talks to the hub and nobody else
         }
     }
 
@@ -113,10 +115,10 @@ public:
             const std::size_t from = it->from;
             std::vector<std::uint8_t> pkt = std::move(it->packet);
             q.erase(it);
-            // The reflection, verbatim and only on the hub's own poll.
-            if (at == kHub && from != kHub)
-                for (std::size_t to = 1; to < endpoints_; ++to)
-                    if (to != from) enqueue(to, pkt, kHub);
+            // The reflection, verbatim and only on the CURRENT hub's own poll.
+            if (at == hub_ && from != hub_)
+                for (std::size_t to = 0; to < endpoints_; ++to)
+                    if (to != from && to != hub_) enqueue(to, pkt, hub_);
             *out = std::move(pkt);
             return true;
         }
@@ -125,6 +127,30 @@ public:
 
     void step() { ++step_; }
     std::size_t endpoints() const { return endpoints_; }
+
+    // --- host migration support (tests/net/test_host_migration.cpp) -----------
+
+    // THE REWIRE. Moves the reflector, exactly as a migration rebuilds a
+    // StarHubTransport on the promoted guest's own socket. Datagrams already in
+    // flight toward the old hub are deliberately NOT re-routed: they were
+    // addressed to a machine that is gone, and losing them is the real outage.
+    void set_hub(std::size_t hub) { hub_ = hub; }
+    std::size_t hub() const { return hub_; }
+
+    // A GENUINELY DEAD endpoint — it stops responding, it does not leave
+    // politely. Nothing it sends leaves, nothing addressed to it is ever
+    // delivered, and (when it is the hub) nothing it would have reflected is
+    // reflected. This is the distinction the task cares about: a peer that
+    // announces its exit is the easy case and is not what kills a real match.
+    void kill(std::size_t at) {
+        dead_.push_back(at);
+        queues_[at].clear();
+    }
+    bool dead(std::size_t at) const {
+        for (const std::size_t d : dead_)
+            if (d == at) return true;
+        return false;
+    }
 
     static constexpr std::size_t kHub = 0;
 
@@ -136,14 +162,17 @@ private:
     };
 
     void enqueue(std::size_t to, const std::vector<std::uint8_t>& pkt, std::size_t from) {
+        if (dead(to)) return;  // nothing is ever delivered to a corpse
         queues_[to].push_back({step_ + latency_, from, pkt});
     }
 
     // Grouped by alignment, as everything in this codebase is
     // (clang-analyzer-optin.performance.Padding).
     std::vector<std::deque<Pending>> queues_;
+    std::vector<std::size_t> dead_;
     std::int64_t step_ = 0;
     std::size_t endpoints_;
+    std::size_t hub_ = kHub;
     int latency_;
 };
 

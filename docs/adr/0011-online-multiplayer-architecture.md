@@ -284,6 +284,40 @@ online-specific ones:
   new hub, which can exceed the drop timeout and surface as a brief "migrating…"
   stall. Acceptable for v1; smoothing it (pre-warming a backup hub path) is a
   later refinement.
+  *Revised once the session half was implemented (2026-07-30, design §8):*
+  three claims above needed correcting, and one is a retraction.
+  - "Lowest surviving seat index" is the TIE-BREAK, not the rule. The seat that
+    STARTED as hub keeps the role while it is live (whoever pressed Host need
+    not be seat 0); lowest-surviving is what the survivors fall back on, and it
+    chains if the successor dies too.
+  - The election reads the drop SCHEDULE, not the confirmed frontier and not
+    `State`. Gating it on the frontier — the obvious reading of "at the agreed
+    migration tick" — **deadlocks over the very topology the role exists for**:
+    the frontier cannot cross the migration tick until survivors exchange
+    input, their input only reached each other through the dead hub's
+    reflection, and it will not flow again until somebody WITH the role rewires
+    the star. Keeping it out of `State` also matters for a second reason: a
+    player who has been blown up still runs a machine and can still be the hub.
+  - "The sim never pauses beyond the stall the drop already caused" is right,
+    but the pause is now DELIBERATE (`RollbackSession::set_migration_hold`),
+    and a further guard was needed that this bullet did not anticipate: while a
+    migration is healing, NO new drop may be declared at all. A severed star
+    silences every survivor to every other survivor simultaneously, so an
+    ungated rule elects a new hub, declares it lost one timeout later, and
+    cascades until every peer has elected itself.
+  - **It arms for a STAR ONLY (>2 seats).** With two seats a dead peer and a
+    dead path are indistinguishable on the data plane and there is no third
+    party to settle it, so electing means both sides AI each other and play on
+    in two private divergent games — worse than the visible stall it replaces.
+    Measured, not reasoned: on a severed 2-seat direct path with both peers
+    alive, the guest promoted itself and AI'd the host at tick 39. The 2-seat
+    case keeps its pre-migration behaviour, including when the host is
+    genuinely dead, since the survivor cannot tell those apart. Lifting this
+    needs design §4.2's `RosterUpdate` oracle.
+  Implemented in `libs/net` and covered by `tests/net/test_host_migration.cpp`;
+  the front-end half (re-anchor call, fresh punch, rebuilt `StarHubTransport`)
+  is NOT implemented, so the mechanism is proven against a modelled rewire
+  rather than a real one.
 - **Anti-cheat via `state_hash` is tamper-EVIDENT, not tamper-PROOF.** The hash
   exchange catches a client whose sim diverges (modified rules, desync) within
   one Hash round — good enough to detect a broken/hacked build and abort. It does

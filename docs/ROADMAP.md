@@ -525,11 +525,35 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       dialog, replacing the former accept-sting stand-in — see
       `docs/re/campaign.md` "Campaign-activation confirmation dialog" for the
       line-order derivation.
-      **Remaining scope calls** (unchanged from before, still deliberate):
-      mid-round abandon (Esc/Ctrl+Q inside `run_match`) is indistinguishable
-      from a real draw/time-up and so does not itself clear campaign state
-      — it replays the same stage like any other draw, avoiding a widened
-      `run_match` return contract for this port.
+      **Round end REDONE 2026-07-30** (`docs/re/campaign.md` "Round end").
+      Two of the claims above turned out to be wrong, and both were doing
+      damage. (a) Clause 2 is NOT the survivor count — `sub_410578` @0x410578
+      is the round CLOCK's remaining whole seconds, and since `sub_421969`
+      @0x421977 returns a constant 2 in campaign mode, a campaign round has no
+      survivor-count end at all; with eight of the seventeen shipped stages
+      carrying `ai_count` 0, a lone human was already "the only side" before
+      the first tick, so the port ended those stages instantly. (b) The
+      campaign round end was still routed through the ordinary outcome tier,
+      which the original skips entirely at 0x42A63B. Both are now fixed: the
+      decision is the pure `campaign_round_end.hpp` (verdict + tail), pinned
+      by `tests/game/test_campaign_round_end.cpp`; the stage advance moved off
+      the VICTORY branch to EVERY campaign round end (where `sub_410B6E` sits);
+      the clause-4/5 replay is an input to that plan rather than a
+      `round_winner()` override; the 1240/1245 "Oh Well!"/"Campaign
+      unsuccessful!" modal is ported (`CampaignUnsuccessfulScreen`), as is the
+      previously-skipped 1220/1225 exhaustion modal; and `load_campaign_stage`
+      no longer blanks the roster before seeding, which had been deleting the
+      human player on every stage advance (`sub_40151B` never clears a slot;
+      `sub_422928` @0x422977 only claims one that is already OFF).
+      Mid-round abandon now leaves for the menu rather than replaying: with
+      the pacing verdict latched, an aborted round is exactly the original's
+      "verdict still 0 at the loop tail" case, which its Ctrl+Q handler has
+      already pointed at the menu (`dword_464A68 = 2` @0x42A579).
+      **Still open** (needs `libs/sim`): a stage with zero rovers AND zero
+      ghosts should clear itself ~2 s in, because `dword_464820` is recounted
+      from scratch every tick; `RoverSystem::tick` returns early when
+      `campaign_hazards_active` is false, so the port runs the full clock
+      instead. Affects `SIMPLE.CAM`'s "Just One Dude".
       **SUPERSEDED same day by the rover/ghost port below**: the "deliberately
       NOT ported here" call on rovers/ghosts, and round-pacing clauses 1/3
       needing them, no longer apply — see the next item.

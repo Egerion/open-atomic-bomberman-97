@@ -130,8 +130,74 @@
 # eyeball review recorded above. Verified: 5/5 against the real install, and 5/5
 # across a full random_start x conveyor_speed x team_play sweep of options.ini,
 # which before the pin produced twelve different sets of five.
-walking                 10    4acce93f8e799b24cc24d2833777f270ad112c8d67ce9b86414adf24f173820e
-bomb_pulse               40    2186552552f598614849aedf072547ce3e3cd6f773f204ee5320610e39f2cb88
-explosion_mid_flame     65    89281f200ffb75b36e0daf637a5b417488f00e7123a5fecadac781d46f05bf32
-brick_crumble           68    9544112bcd3ddf2e9e8a43c3ab9b522c180a48cbb3cead34807bae124b593aa0
-powerup_revealed        76    8ce43d390b4e423e2323cf24f43bfa869711f422029fe57468fc99b24eedf23a
+#
+# RECAPTURED TWICE on 2026-07-30, for two sim changes that landed within hours
+# of each other. Both notes are kept because both are true, and neither set of
+# hashes each produced ALONE survives: the rows at the bottom were captured once
+# more with BOTH changes in the tree, which is the only state that ever ships.
+# Recapturing per-branch and merging the files would have pinned a board no
+# build can produce.
+#
+# --- change 1 of 2 ---
+# Recaptured 2026-07-30 (the per-FRAME bomb-action tail; docs/re/facts.md "The
+# bomb-action tail is per-FRAME, not per-tick"). A SIM change, not a renderer
+# one, and all five shots move because the demo's very first bomb does: the
+# original creates it in the frame whose key edge asked for it, so the eight
+# remaining sub-frames of that tick already see a bomb on the tile. Deferring
+# the tail to the tick's end hid it from them. Player 1 drops at tick 7 and is
+# standing on it, so its walk resolves a fraction of a pixel differently from
+# tick 7 onward, and every later shot inherits that. Checked, not assumed:
+# BOMBER_DEMO_TRACE diffs the two event streams to ONE added event (a bomb at
+# tick 49 that the old tail refused because it tested the tick's END tile), and
+# a pixel diff of `walking` is a thin outline around one player sprite, i.e. a
+# sub-pixel shift, on a frame whose tile coordinates are unchanged. Nothing
+# else in the field moves.
+#
+# The pre-change build was re-run against this same install first and matched
+# all five rows below's PREDECESSORS exactly, so the environment was hermetic
+# at capture time -- the failure mode this file's 2026-07-28 note describes was
+# checked for, and ruled out, before recapturing. Two recapture passes gave
+# identical hashes. bm_shots.txt is UNCHANGED: the front end has no sim behind
+# it.
+#
+# --- change 2 of 2 ---
+# ALL FIVE recaptured 2026-07-30 (facts.md "Stage actors do not clear the tile
+# they sit on"): apply_actors used to blank cfg.cells under EVERY stage actor;
+# sub_4056CA clears for the WARPHOLE only (cases 0/2/3 write no cell and gate
+# just their DRAWING on !sub_425FB9). This demo is on level 10, INNER CITY
+# TRASH, whose EXTRA10.RES is 32 conveyors -- so the harness exercises the
+# change head-on rather than incidentally, and all five frames move. Of those
+# 32 belt tiles, 28.7 on average were bricks the old code deleted; the belts
+# are now visible only where build_state's spawn pockets open them, which is
+# exactly the original's "the belts are under bricks at round start and have to
+# be bombed open". A denser board also re-times the whole match: the scripted
+# input is tick-indexed and does not adapt, so the bomb/flame/powerup
+# choreography behind ticks 40-76 differs from the old pins.
+#
+# BMPs eyeballed before pinning (walking t10, brick_crumble t68): coherent
+# scenes, not glitches -- the y=2 belt row and the x=12 belt column are fully
+# bricked over, the y=8 row is open only across the two spawn pockets, and
+# brick_crumble still shows a flame cross, crumbling bricks and both players.
+# COVERAGE NOTE, deliberate and worth knowing: pinning conveyor_speed=2 was
+# justified (game_app.cpp kCaptureConveyorSpeed) by the first bomb riding the
+# belt "across the board". With the belts correctly bricked at round start that
+# ride is now short, so these five frames cover less of the belt path than they
+# used to. That is the faithful behaviour, not a regression to fix here; a
+# later shot at a tick after the belts are bombed open would restore it.
+#
+# The five bm_shots.txt front-end frames are NOT recaptured: a recapture pass
+# reprinted all five byte-identical, as expected for a match-only change.
+# headless 89/89 green at recapture time.
+# --- the combined capture, and the only one that matches a shipping build ---
+# Taken with BOTH changes in the tree. `walking` came back byte-identical to
+# change 2's own capture, so the per-frame tail does not reach tick 10 once the
+# actor fix is in; the other four differ from BOTH single-change captures, which
+# is why neither branch's file could simply be taken. Eyeballed brick_crumble
+# before pinning: coherent scene, the belt row visible only where the flame has
+# opened it, which is the behaviour change 2 is there to produce.
+# bm_shots.txt reprinted byte-identical in the same pass and is unchanged.
+walking                 10    f1291cfa9a5acd3f72072edf4647c00d21dbf9929e4ee366ece90dd55e02d5d9
+bomb_pulse               40    4e8442989e87e556e8a5cebcfc29b1b4555999348a293378f61f07c1b5215e68
+explosion_mid_flame     65    bf340184ef006db69ba05ad795240108bdf890423858f15c187b2e6a325bb3de
+brick_crumble           68    732ad6cb9aaba28324db9ae91db4b10cd6e80598b022a1f6acbf6d64fa76d1fc
+powerup_revealed        76    2a004c6662dc54d4254c078683441fea6c86088f0841deba17af4a289a84f0d8

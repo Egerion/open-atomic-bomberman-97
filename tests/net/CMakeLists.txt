@@ -75,6 +75,9 @@ target_link_libraries(bomber_net_round_rotation_tests PRIVATE bomber::net)
 bomber_add_test(bomber_net_peer_drop_tests net_peer_drop test_peer_drop.cpp)
 target_link_libraries(bomber_net_peer_drop_tests PRIVATE bomber::net)
 
+bomber_add_test(bomber_net_host_migration_tests net_host_migration test_host_migration.cpp)
+target_link_libraries(bomber_net_host_migration_tests PRIVATE bomber::net)
+
 # Match shell (wire v8): the host-authoritative round ABANDON (Esc -> one agreed
 # end tick -> draw, instead of a local freeze that dropped the connection) and
 # the post-match REMATCH rendezvous that hands the same transport back to the
@@ -114,6 +117,16 @@ target_link_libraries(bomber_net_match_config_tests PRIVATE bomber::net)
 # tolerance, and the never-partially-applied guarantee.
 bomber_add_test(bomber_net_setup_tests net_setup test_setup_session.cpp)
 target_link_libraries(bomber_net_setup_tests PRIVATE bomber::net)
+
+# The CLI netplay path's config exchange: the cross-build door for BOARD
+# DERIVATION, which build_hash structurally cannot cover (its scenarios
+# hand-build a MatchConfig and never call match::apply_actors) and which the
+# --host/--join wire could not enforce anyway (no handshake, no version field).
+# Pins that the guest adopts the HOST's bytes over its own derivation, and that
+# a peer which speaks no setup traffic is REFUSED rather than tolerated. Links
+# bomber::match because the divergence under test lives in apply_actors.
+bomber_add_test(bomber_net_cli_config_tests net_cli_config test_cli_config_exchange.cpp)
+target_link_libraries(bomber_net_cli_config_tests PRIVATE bomber::net bomber::match)
 
 # StarHubTransport: the >2-seat host-relay star — fan-out, guest->guest
 # reflection, and the stranger-drop guard.

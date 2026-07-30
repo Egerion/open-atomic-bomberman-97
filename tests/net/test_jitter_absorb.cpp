@@ -27,7 +27,7 @@
 // which is right for a standing clock skew and wrong for a burst of late
 // arrivals — both halves of the comparison are instantaneous samples and under
 // real jitter both are noise. Measured here at the live conditions, BEFORE the
-// change: the pair spent 71 of 600 pumps holding and ran the match at 17.6 ticks
+// change: the pair spent 102 of 600 pumps holding and ran the match at 16.6 ticks
 // a second instead of 20, ON BOTH MACHINES. Not a stutter — the whole game in
 // slow motion, self-inflicted, with `stalls` reading near zero throughout
 // because a re-phase hold returns before the cap check and so hides the stall it
@@ -86,7 +86,19 @@ struct Scenario {
     // engage AND retreat inside one session.
     int burst_from_ms = -1;
     int burst_to_ms = -1;
+    // WHICH REALISATION of the delay process. A jittery run is chaotic: the
+    // arrival schedule is consumed in send order, so one extra held tick
+    // reshuffles every later delay and the two builds walk into different
+    // histories. Any assertion about a jittery path therefore has to be made over
+    // a SWEEP of these, never over one (see kSeeds).
+    unsigned seed = 0x1234567U;
 };
+
+// Enough realisations that a single unlucky one cannot carry a verdict, few
+// enough that the suite stays a couple of seconds. Arbitrary constants, chosen
+// once and then left alone — re-picking them after seeing a result would be
+// fitting the test to the answer.
+constexpr unsigned kSeeds[] = {0x1234567U, 0xA5A5A5A5U, 0x0BADF00DU, 0x51EED00DU, 0xC0FFEE11U};
 
 struct Side {
     int ticks = 0;
@@ -134,7 +146,7 @@ Result measure(const Scenario& sc) {
     std::int64_t now = 0;
     const bool windowed = sc.burst_from_ms >= 0;
     MsLink link(sc.one_way_ms, sc.one_way_ms, windowed ? 0 : sc.spread_ms,
-                windowed ? 0 : sc.persist_pct);
+                windowed ? 0 : sc.persist_pct, sc.seed);
     MsTransport ta(link, 0, now);
     MsTransport tb(link, 1, now);
     sim::Simulation sa(open_config());
@@ -292,54 +304,79 @@ TEST_CASE("jitter: a clean path is BYTE-IDENTICAL to the build before the absorb
 }
 
 TEST_CASE("jitter: high arrival variance costs measurably less than it did") {
-    // THE POINT OF THE WHOLE CHANGE, at the live laggy condition. Measured on the
-    // pre-change build (main at f9a45bf), 30 s, per peer:
+    // THE POINT OF THE WHOLE CHANGE, at the live laggy condition. All figures here
+    // are MEANS over kSeeds x both peers, measured on the tree at the host
+    // migration merge; the baseline row is this same build with both mechanisms
+    // ablated, so it is what main does today rather than a remembered number.
     //
-    //     rate 17.63 t/s | HELD 71 (rephase 63 + stall 8) | resim 1298 | rb 280
+    //     neither (= main)   16.57 t/s | HELD 102 (rephase 98) | resim 1182
+    //     filter only        19.07 t/s | HELD  28 (rephase  6) | resim 1397
+    //     lead only          17.30 t/s | HELD  80 (rephase 80) | resim  778
+    //     both               19.57 t/s | HELD  12 (rephase  9) | resim  977
     //
-    // The 71 held pumps are 12% of the round that the display was not allowed to
-    // advance, and they are the slow motion: 17.63 ticks a second against a wall
-    // clock that delivered 20. Almost all of them were the re-phase controller
-    // firing on arrival noise rather than on any real clock skew.
+    // 102 of 600 pumps is 17% of the round the display was not allowed to advance,
+    // and it is the slow motion: 16.6 ticks a second against a wall clock that
+    // delivered 20. Nearly all of it is the re-phase controller firing on arrival
+    // noise rather than on any real clock skew.
     //
-    // THE TWO MECHANISMS INTERLOCK — measured by ablation, and the reason neither
-    // may be removed as "the part that was not doing much":
+    // THE TWO MECHANISMS DO DIFFERENT JOBS, which is why neither may be dropped as
+    // "the part that was not doing much": the FILTER is what recovers the frame
+    // rate (16.6 -> 19.1) and on its own makes the correction work WORSE (1182 ->
+    // 1397), because the holds it removes had been suppressing re-simulation with
+    // the player's frame rate. The LEAD is what recovers the correction work
+    // (1397 -> 977 on top of the filter) and on its own barely touches the rate.
     //
-    //     neither (= main)      17.63 t/s | HELD 71 | resim 1298
-    //     filter only           18.90 t/s | HELD 33 | resim 1413
-    //     lead only             17.50 t/s | HELD 75 | resim  808
-    //     both                  19.70 t/s | HELD  9 | resim 1010
+    // AN EARLIER VERSION OF THIS COMMENT CLAIMED THE LEAD ALONE WAS WORSE THAN
+    // NEITHER. That was one realisation of a chaotic system read as a trend; over
+    // the seed sweep it is not true (17.30 against 16.57). Left recorded because
+    // the mistake is the reason this case sweeps at all.
     //
-    // The filter is what recovers the frame rate; the lead is what recovers the
-    // correction work. And the LEAD ALONE IS WORSE THAN NEITHER: it lowers the
-    // peer's reported depth, which inflates the raw frame advantage, which makes
-    // the unfiltered controller hold even more often than it already did. A lead
-    // shipped without the filter would have made the reported symptom worse while
-    // improving every number underneath it.
-    //
-    // ROLLBACK COUNT IS DELIBERATELY NOT ASSERTED DOWN, and the reason is worth
-    // recording: bursts COALESCE corrections (a run of late inputs lands together
-    // and is fixed by one deep rollback), so the jittery condition already showed
-    // FEWER rollbacks than the clean one — 280 against 399 — while doing far more
-    // work per rollback. The count does fall here (280/267 -> ~259/251) but only
-    // by single-digit percents, which is not a signal worth pinning a suite to.
-    // `resim_ticks` is the honest measure of correction cost, and the held-pump
-    // count is the honest measure of what the player feels.
-    const Scenario sc = high_jitter();
-    const Result r = measure(sc);
-    trace(sc, r);
-
-    CHECK_FALSE(r.desynced);
-    for (const Side& v : {r.a, r.b}) {
-        CHECK(v.held() <= 20);       // was 71 — the 12% of the round spent frozen
-        CHECK(v.rephase <= 15);      // was 63; what is left is the onset of each
-                                     // burst, before the variance yardstick has
-                                     // caught up with it, and it is real skew
-        CHECK(v.absorbed >= 50);     // holds the filter refused: the absorber's work
-        CHECK(v.lead_pumps >= 200);  // the lead was earned and spent
-        CHECK(v.resim <= 1150u);     // was 1298/1278
-        CHECK(v.ticks >= 585);       // 19.5 t/s; was 529, i.e. 17.63 t/s
+    // ROLLBACK COUNT IS DELIBERATELY NOT ASSERTED DOWN. Bursts COALESCE
+    // corrections — a run of late inputs lands together and is fixed by one deep
+    // rollback — so the jittery condition shows FEWER rollbacks than the clean one
+    // while doing far more work per rollback. `resim_ticks` is the honest measure
+    // of correction cost, and the held-pump count is the honest measure of what
+    // the player feels.
+    // ASSERTED OVER A SEED SWEEP, NOT OVER ONE RUN, and that is not belt-and-
+    // braces. A jittery path is CHAOTIC with respect to the build under test: the
+    // delay schedule is consumed in send order, so a single extra held tick
+    // reshuffles every later arrival and the two builds walk into genuinely
+    // different histories. A per-seed threshold would be fitted to noise — the
+    // first version of this case was, and it broke on a change that improved
+    // every mean. So each figure below is a MEAN over kSeeds, and the bounds are
+    // set well clear of the spread rather than snug against one realisation.
+    long long held = 0, rephase = 0, absorbed = 0, lead_pumps = 0, resim = 0, ticks = 0, rb = 0;
+    int runs = 0;
+    for (const unsigned seed : kSeeds) {
+        Scenario sc = high_jitter();
+        sc.seed = seed;
+        const Result r = measure(sc);
+        trace(sc, r);
+        CHECK_FALSE(r.desynced);
+        for (const Side& v : {r.a, r.b}) {
+            held += v.held();
+            rephase += v.rephase;
+            absorbed += v.absorbed;
+            lead_pumps += v.lead_pumps;
+            resim += v.resim;
+            ticks += v.ticks;
+            rb += v.rollbacks;
+            ++runs;
+        }
     }
+    const auto mean = [runs](long long total) { return total / runs; };
+    std::printf(
+        "  MEAN over %d peer-runs: %.2f t/s | HELD %lld (rephase %lld) | absorbed %lld | "
+        "lead_pumps %lld | rb %lld resim %lld\n",
+        runs, static_cast<double>(mean(ticks)) / 30.0, mean(held), mean(rephase), mean(absorbed),
+        mean(lead_pumps), mean(rb), mean(resim));
+
+    CHECK(mean(held) <= 30);          // was 71
+    CHECK(mean(rephase) <= 25);       // was 63
+    CHECK(mean(absorbed) >= 40);      // holds the filter refused: the absorber's work
+    CHECK(mean(lead_pumps) >= 200);   // the lead was earned and spent
+    CHECK(mean(resim) <= 1150);       // was 1288
+    CHECK(mean(ticks) >= 575);        // 19.2 t/s; was 529, i.e. 17.63 t/s
 }
 
 TEST_CASE("jitter: the lead may be raised and lowered inside a live round") {

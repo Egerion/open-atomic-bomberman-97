@@ -198,7 +198,12 @@ struct Tuning {
     std::int32_t disease_frames[kDiseaseKinds] = {300, 300, 300, 300, 300, 300, 300, 300, 300};
     std::int32_t disease_freshness = 10;    // id 129: ticks before a disease can pass again
     std::int32_t disease_cure_chance = 10;  // id 125: 1-in-N cure per fresh powerup
-    bool diseases_time_limited = true;      // id 121: wears off after its duration
+    // id 121: INERT — parsed and carried on the MatchConfig wire, read by
+    // nothing. The original stores getvalue(121) into a global with no reader
+    // and expires diseases unconditionally; see DiseaseSystem::spread_and_age
+    // and facts.md "VALUELST id 121 is dead in the original". Kept as a field
+    // so the wire layout of MatchConfig does not move.
+    bool diseases_time_limited = true;
     bool diseases_multiply = true;          // id 123: on contact both keep it
     bool diseases_curable = true;           // id 124: a fresh powerup can cure
     // id 120 ("can diseases be blown up like all other powerups?",

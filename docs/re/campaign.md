@@ -149,6 +149,22 @@ record), it does exactly this, in order:
    **rovers / rover_speed** (fields 3/4). Its result is the function's own
    return value.
 
+**The roster is never cleared — CONFIRMED 2026-07-30, and this one bit the
+port.** Nothing in `sub_40151B` resets a player slot: step 2's `sub_42288C` is
+a latch reset (below), and step 3's `sub_422928` @`0x422928` draws
+`rand() % 10`, reads that slot's own type byte at `+0x10`, and writes 1 to it
+**only when it currently reads 0** (`0x422977`), re-rolling otherwise, up to
+100 attempts. So a campaign stage transition ADDS `ai_count` computer players
+to whatever roster is already standing — the human the player configured on the
+PLAYER INPUT screen survives every stage, and AI accumulates across stages
+(most shipped stages ask for 0, which is presumably why that accumulation is
+never conspicuous). The port's `load_campaign_stage` used to blank all ten
+slots before seeding, which is invisible while the picker arms stage 0 (the
+setup screen still follows it) but DELETED THE PLAYER on every stage advance
+after it, leaving an AI-only roster that clause 5 then reads as "no human
+survivor" — an endless replay. Fixed 2026-07-30 by passing the occupied-slot
+mask into `seed_campaign_ai_slots` and dropping the reset.
+
 `sub_42288C(i)` (pseudo.c 24755) tests `byte_461BD4[152*i]` and, only if it
 currently reads 1, writes 0 back to it
 — a per-slot "dialog already shown" latch reset, reading NOTHING from the
@@ -477,9 +493,35 @@ Per tick, in this exact order:
 
 1. `sub_401F76()` — drive every rover/ghost's mover one tick; this is what
    sets `dword_464820` = the live rover/ghost count read two steps below.
-2. If `sub_410578() <= 1` — the survivor-SIDE count, the same query the
-   normal round-end uses — then `dword_464894 ← 2`, forcing the round-over
-   phase.
+   **It is a FRESH count every tick** (`sub_401F76` zeroes its own local at
+   `0x401F84` and stores the total at `0x401FFE`), so a stage that spawned no
+   rovers and no ghosts at all reads 0 from its very first pass — see the
+   0-hazard note under clause 3.
+2. If `sub_410578() <= 1` then `dword_464894 ← 2`, forcing the round-over
+   phase. **CORRECTED 2026-07-30: `sub_410578` is the round CLOCK, not a
+   survivor count.** This entry previously read "the survivor-SIDE count, the
+   same query the normal round-end uses", which is wrong in both halves and
+   led the port to end campaign rounds on the wrong condition entirely. The
+   whole of `sub_410578` @`0x410578` is
+   `(dword_4601A8 == 1001) ? 1001 : dword_4601A4`: `dword_4601A8` is the
+   configured round limit in seconds (written by the setter at `0x4104A8`,
+   which also stores `limit * 1000` into `dword_4601AC`) with 1001 as its
+   "no limit" sentinel, and `dword_4601A4` is the remaining whole seconds.
+   The sentinel is the same one `sub_41087D` @`0x41088B` tests to answer
+   "clock expired", and `libs/sim`'s enclosure stepper already reads this
+   global as remaining-seconds (`EnclosureSystem::update`) — only this clause
+   list had it as a survivor query. `cmp eax,1 / jg` @`0x4016F2` makes the
+   threshold **<= 1 second**, and the 1001 sentinel is > 1, so an unlimited
+   round never trips it.
+
+   The consequence is structural: **a campaign round has no survivor-count
+   end at all.** The round loop's own player-count guard is unreachable while
+   campaign is active — `sub_421969` @`0x421977` returns a CONSTANT 2 whenever
+   `dword_46489C` is set, so the `cmp eax,1 / jg` at `0x42A631` always skips
+   the round-end helper `sub_410522`, and the campaign arm at `0x42A644` then
+   consults `dword_464894` and nothing else. Killing every AI opponent does
+   not end a campaign stage. Clearing the monsters does (clause 3), or running
+   the clock down (this clause), or dying (clause 5).
 3. Branch on `dword_464820`:
    - **non-zero** (rovers/ghosts still alive): `dword_4646C0 ← 0` — hold the
      "all clear" timer pinned at 0;
@@ -501,10 +543,12 @@ Five distinct clauses, not one:
 1. **`sub_401F76()`** is the rover/ghost mover DRIVER (see previous section)
    — this is why `sub_4016DA` must run every tick while campaign is active,
    not just at round boundaries.
-2. **`sub_410578()<=1`** is the SAME "at most one survivor side" check the
-   normal (non-campaign) round already uses — this is not new logic, just
-   applied here too. Our port's existing `sides_remaining(s) <= 1` (
-   `run_match`, `game_app.cpp`) already covers this exactly.
+2. **`sub_410578()<=1`** is the round CLOCK reaching its last whole second
+   (see the CORRECTION in the clause list above). Our port's
+   `sides_remaining(s) <= 1` was NOT this and never was: it is now the
+   campaign branch of `MatchRunner::advance_round_end`, comparing
+   `State::ticks_left / kTicksPerSecond <= 1` — the same flooring
+   `EnclosureSystem::update` applies to the same quantity.
 3. **The `dword_4646C0` grace timer** ADDS a campaign-only extra condition:
    once every rover/ghost is dead (`dword_464820 == 0`), wait `2 *
    dword_46494C * getvalue(25)` wall-clock ms (== `2 * 50ms * 20` = a FIXED
@@ -512,7 +556,26 @@ Five distinct clauses, not one:
    frames... do you have to out-survive the other guy? ...only a nominal
    frame rate used as a REFERENCE for other frame-count-based values", i.e.
    this is not itself a live round timer, just a units constant) before
-   flagging `dword_464894 = 1` ("stage clear, pending" — distinct from `=2`,
+   flagging `dword_464894 = 1` ("stage clear, pending").
+
+   **0-hazard stages clear on their own, ~2 s in — OPEN PORT DIVERGENCE
+   (2026-07-30).** Because `dword_464820` is recomputed from scratch every
+   tick (clause 1), a stage whose `.CAM` line asks for zero rovers AND zero
+   ghosts reads 0 immediately and this timer starts accumulating at round
+   start, so the original clears it after the 2 s grace with verdict 1 and
+   moves straight on. Two shipped stages are like that: `SIMPLE.CAM`'s "Just
+   One Dude" and — via the same arithmetic — any hand-authored line with both
+   counts zero. The port does NOT reproduce it: `RoverSystem::tick`
+   (`libs/sim`) returns immediately when `State::campaign_hazards_active` is
+   false, which `build_state` only sets when at least one rover or ghost was
+   requested, so `hazard_clear_timer` never leaves 0 and such a stage runs its
+   full clock instead. Fixing it means making the sim's grace timer run for a
+   campaign match with no hazards at all, i.e. a hashed-state change in
+   `libs/sim`; recorded here rather than done, since the round-end pass that
+   found it was scoped to `libs/game`. Not a hang — clause 2's clock still
+   ends the round.
+
+   Distinct from `=2`,
    "round over now", but both reach the SAME `sub_410B6E()` dialog/advance
    call at the round-tick level, `=2` additionally showing the getstring
    1245/1240 "Campaign unsuccessful!"/"Oh Well!" message per the consumer at
@@ -531,11 +594,18 @@ Five distinct clauses, not one:
    replays the SAME stage) and forces immediate round-over. This is a
    "campaign doesn't skip a stage just because everyone died" safety net.
 
-**Port status — PORTED 2026-07-09, all 5 clauses.** Clause 2 (survivor count)
-was already exactly what our port's existing best-of-N
-`sides_remaining(s)<=1`/`ticks_left==0` round-end check implements — no new
-code needed there. Clauses 1, 3, 4, 5 are now driven by `RoverSystem` and a
-small campaign-pacing helper:
+**Port status — PORTED 2026-07-09, all 5 clauses; clause 2 REDONE 2026-07-30.**
+Clause 2 was recorded here as "already exactly what our port's existing best-of-N
+`sides_remaining(s)<=1`/`ticks_left==0` round-end check implements — no new code
+needed there", on the strength of the mislabelling corrected above. It was not
+the same check, and the difference was not academic: eight of the seventeen
+shipped stages carry `ai_count` 0, so a lone human WAS the only surviving side
+before the first tick and the port ended (and, after 2026-07-30, would have
+advanced past) those stages instantly. The campaign branch of
+`MatchRunner::advance_round_end` now evaluates the three verdict clauses
+directly and the survivor rule is confined to non-campaign play, where it
+belongs. Clauses 1, 3, 4, 5 are driven by `RoverSystem` and the campaign-pacing
+helpers:
 
 - Clause 1 (`sub_401F76` mover drive) = `RoverSystem::tick`, called from
   `run_tick` — see "Sim port" below for the exact placement.
@@ -552,21 +622,18 @@ small campaign-pacing helper:
   `bomber::game::campaign_round_needs_replay` (`results.hpp`, SDL-free,
   doctested in `test_frontend.cpp`: all-COMPUTER-alive replays, a single live
   human/joystick slot blocks it, a dead or absent human slot does not, and an
-  empty roster replays vacuously), wired into `GameApp::run_app` via the
+  empty roster replays vacuously), reached through the
   `campaign_no_human_survivor()` wrapper (gathers `sim::State::players[]`
-  present/alive plus `setup_type_[]` into the arrays the predicate needs). On
-  round end, `w = round_winner()` is overridden to `-1` (a plain draw) the
-  instant `campaign_no_human_survivor()` holds — even when `round_winner()`
-  itself returned a "winner" (a COMPUTER-only survivor) — so the round is
-  routed into the SAME draw/replay branch a mutual total wipeout already
-  used. `campaign_stage_index_` is only ever incremented in the `w>=0`
-  match-over branch, which the override already excludes, so "replay a
-  round" on this path is exactly "replay the same campaign stage" for free —
-  matching `--dword_4648B0` before the immediate round-over without a
-  separate decrement.
+  present/alive plus `setup_type_[]` into the arrays the predicate needs).
+  Since 2026-07-30 it is BOTH a round-end clause (`MatchRunner`) and the
+  advance-vs-replay input to `campaign_round_end` (`run_app`), which is what
+  the original's single `--dword_4648B0; dword_464894 = 2` pair does: end the
+  round now, and cancel the increment `sub_40133F` is about to make. The
+  earlier port routed it through the ordinary DRAW branch by overriding
+  `round_winner()` to `-1`; that override is gone with the rest of the
+  campaign special-casing in the outcome tier.
 
-Clause 2 needed no change. See "Sim port" and "Presentation" below for file-
-level detail.
+See "Round end" and "Presentation" below for file-level detail.
 
 ## Round end — a campaign round SKIPS the whole outcome tier (2026-07-28)
 
@@ -590,15 +657,81 @@ entirely:
 `= 1` at `0x42A5BE` on this same path. So it is the pacing verdict, and only
 verdict 2 gets a banner.
 
-**Port status — PARTIALLY divergent, deliberately.** The port routes a campaign
-round end through the ordinary Results tier, so it shows DRAW / RESULTS /
-VICTORY where the original shows none of them. As of 2026-07-28 the MUSIC half
-is fixed — `game_app.cpp`'s `start_outcome_music()` returns early when
-`campaign_active_`, so those screens no longer swap 1130 in over the stage track
-the round init left playing. The SCREENS half is not fixed: removing them
-touches the stage advance, the gold-player assignment and the scoreboard, and
-wants its own change with its own tests. Recorded here so it is a known,
-scoped gap rather than an unnoticed one.
+### The arm itself, instruction by instruction (2026-07-30)
+
+Read from raw disassembly (same method as the `sub_422351` re-pin: PE section
+table -> VA->file offset, capstone; no dump retained, `CLAUDE.md`), because the
+2026-07-28 pass established WHAT the arm skips without pinning what it does.
+
+- `0x42A644` `dword_464894 == 0` -> `0x42A6A4`, which is a bare `jmp 0x42AFF8`.
+  Verdict 0 means the round simply has not ended; **`0x42AFF8` is the round
+  loop's TAIL, not the function exit** — it tests the menu sentinel
+  `dword_464A68` and, while that is 0, jumps back to `0x42A47C` for the next
+  pass. That one fact reframes the 2026-07-28 table's last row: the campaign
+  arm does not "exit", it goes round again with the next stage armed.
+- `0x42A64D` `sub_42A16F(1)` — the same freeze bracket the in-round F1 browser
+  uses; `0x42A690` `sub_42A16F(0)` releases it after the arm is done.
+- `0x42A657` `dword_464894 == 2`? If not, jump over the modal to `0x42A68B`.
+- `0x42A660-0x42A686` the modal: `ecx` <- `byte_49D38F`, `ebx` <-
+  `byte_49A390` = (164,0,0) dark red, `eax` <- getstring(`0x4D8` = 1240),
+  parked in `edx`, then `eax` <- getstring(`0x4DD` = 1245), then `sub_414340`.
+  By that routine's own EAX-top/EDX-bottom rule (pinned under "Campaign-
+  activation confirmation dialog"), **"Oh Well!" is the TOP line and "Campaign
+  unsuccessful!" the bottom** — the same header-word-on-top shape as
+  NOTE!/Warning!/Congratulations!. The ink pair is instruction-for-instruction
+  what `sub_40133F` loads at `0x401374`/`0x40137C` for its own
+  "Congratulations!" modal, so the two share a look.
+- `0x42A68B` `sub_410B6E` — the ROUND INIT, and the whole reason the arm
+  needs nothing else. Its body: `sub_42A16F(1)`, then `sub_40133F` at
+  `0x410B86` (advance the stage + banner, or Congratulations +
+  `dword_464A68 = 10`), then `dword_464A68 == 10`? bail out at `0x410B92`;
+  otherwise carry on and, at `0x410D1A`, call `sub_40151B` — the per-stage
+  seeder that clears the verdict, adds the stage's AI, resets the hazard timer
+  and spawns the rovers/ghosts. **So "advance the stage" and "seed the next
+  stage" are one call, and it happens after EVERY campaign round.**
+- `0x42A697`/`0x42A6A4` both land on `0x42AFF8`, where a set `dword_464A68`
+  (2 from a Ctrl+Q forfeit at `0x42A579`, or 10 from a finished campaign)
+  leaves for the menu and 0 goes round again.
+
+The one remaining `dword_464894` writer the list above names without
+explaining, the `= 1` at `0x42A5BE`, is a KEY HANDLER, not part of the pacing:
+it sits in the round loop's key switch, in the arm the raw key `0x144` (324)
+selects at `0x42A4D5`, behind two guards — `sub_413D01` must return non-zero
+and `dword_46489C` must be set. So with campaign active (and whatever
+`sub_413D01` gates, most plausibly a debug/cheat flag) that key forces verdict
+1, i.e. "clear this stage and move on". Not ported: a skip-stage key for a
+hidden mode is not worth the surface, and nothing else depends on it.
+
+By contrast the normal arm at `0x42A6A9` is the familiar shape: the forced-end
+flag `dword_464AEC`, then the player count `sub_421947` @`0x42A6B2`, then the
+clock `sub_41087D` @`0x42A6BE`, and only once one of those says "over" does it
+fall into `0x42A6CB` — the attract-abort check, the 1130 start, and the
+DRAW/RESULTS/VICTORY tier with its `sub_421B56` win award at `0x42A919`.
+
+**Port status — PORTED 2026-07-30.** The decision is
+`libs/game/include/bomber/game/campaign_round_end.hpp` (`campaign_verdict` =
+`sub_4016DA`'s three writes in order; `campaign_round_end` = the `0x42A63B`
+tail), pure and pinned by `tests/game/test_campaign_round_end.cpp`. The SDL
+side is `run_app`'s Results handler, which now takes the campaign arm before
+anything in the outcome tier runs, and the new `CampaignUnsuccessfulScreen`
+(`screens/campaign_screens.cpp`) for the 1240/1245 modal. Three things moved
+rather than being deleted with the screens they sat behind:
+
+- **the stage advance**, which used to hang off the VICTORY branch and so
+  required clinching a whole best-of-N match — it is now every campaign round
+  end, matching `sub_410B6E`'s position in the arm;
+- **the clause 4/5 replay**, formerly expressed as a `round_winner()` override
+  into the DRAW branch, now the `no_human_survivor` input that cancels the
+  advance;
+- **the roster seed**, which `load_campaign_stage` used to precede with a
+  reset of all ten slots — see the correction under "Rover/ghost/AI roster".
+
+The win tally, the clinch, the gold-player write and the 1130 cue are simply
+not reached in campaign mode any more; the earlier `start_outcome_music()`
+campaign gate is gone because the tier it guarded is now unreachable from a
+campaign round. Non-campaign play is untouched: `campaign_round_end` returns
+"run the outcome tier" and nothing else whenever `dword_46489C` is clear, and
+the runner's survivor/clock rule is unchanged outside the campaign branch.
 
 ## Stage banner — CONFIRMED (`sub_40133F`, pseudo.c 4443-4504) and PORTED 2026-07-09
 
@@ -641,12 +774,12 @@ an unattended stage-transition doesn't stall). Called both when the picker
 arms stage 0 (`present_campaign_picker`) and on every subsequent stage
 advance (`run_app`'s Results handler, replacing the prior "no on-screen
 reproduction" gap). The stage-exhausted variant (getstring 1220/1225,
-"Congratulations!") is NOT ported — our port's existing "stage list
-exhausted -> clear campaign, fall through to the menu" path (`campaign_
-active_ = false`) has no dedicated dialog of its own either, consistent
-with how the port already treats that transition; flagged as a smaller
-follow-up alongside `sub_4016DA`'s remaining round-pacing gap rather than
-addressed here.
+"Congratulations!") is ported too — `CampaignCompleteScreen`
+(`screens/campaign_screens.cpp`), the same `sub_414340` acknowledge modal in
+`byte_49A390` dark red. Both are now driven from `campaign_round_end`'s plan
+(`next_stage` vs `show_complete`) rather than from the shape of the outcome
+tier's branches, which is what let the exhausted case be silently skipped for
+so long.
 
 ## Campaign-activation confirmation dialog — PORTED 2026-07-09 (`sub_4015C6`)
 

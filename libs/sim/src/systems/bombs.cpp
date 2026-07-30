@@ -190,7 +190,18 @@ bool BombSystem::try_grab(Player& p, int who) {
     // in-progress head-hit stun countdown, which cannot happen: a grab needs a
     // fresh input edge (+56), which the head-stun's new-input acquisition gate
     // already blocks, so this path is never reached while p.stun > 0.
-    p.pickup_pause = s_.tuning.pickup_pause;
+    //
+    // The window is getvalue(665) + 1 ticks, not getvalue(665). CONFIRMED at
+    // the instruction level 2026-07-30 (the reading was NEEDS-VERIFY because
+    // the decompiler named the compared value after a temporary, not after
+    // +80): the gate at 0x41FA42-0x41FA57 loads the dword at player+78, shifts
+    // the high half down to isolate the anim counter +80, calls getvalue with
+    // 665, and the branch that SKIPS the block is a "greater" jump — so the
+    // block runs on the NON-STRICT `+80 <= getvalue(665)`. +80 is zeroed by the
+    // grab and rises one step per 50 ms anim tick, so the default 2 covers
+    // +80 = 0, 1, 2 = THREE ticks of blocked input. Seeding the countdown with
+    // getvalue(665) gave two.
+    p.pickup_pause = s_.tuning.pickup_pause + 1;
     s_.events.push_back({Event::Type::BombGrabbed, static_cast<std::int8_t>(who),
                          static_cast<std::int8_t>(p.tile_x()),
                          static_cast<std::int8_t>(p.tile_y()), 0});

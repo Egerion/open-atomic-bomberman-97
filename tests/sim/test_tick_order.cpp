@@ -92,32 +92,65 @@ TEST_CASE("mid-walk pickup beats a same-tick flame arm (token no longer shields 
     CHECK(flame_tokens == 1);
 }
 
-TEST_CASE("a picked-up powerup is usable the same tick (pickup precedes the bomb actions)") {
-    // ExtraBomb picked up mid-walk raises the capacity BEFORE the same
-    // turn's drop block (sub_41F29B LABEL_246 runs after the mover).
-    MatchConfig cfg = open_config();
-    const int arrive = probe_arrival_tick(cfg, 2);
-    REQUIRE(arrive > 0);
+TEST_CASE("the bomb-action tail fires in the deciding FRAME, not at the tick's end") {
+    // sub_41F29B's tail (LABEL_246) runs once per DISPLAYED frame, right after
+    // that frame's mover — so a key edge, which a held key produces on the
+    // FIRST frame only, is resolved at the position the player had one
+    // sub-frame into the tick, not at the tick's endpoint up to kSubFrames-1
+    // frames later. Until 2026-07-30 the port deferred the whole tail to the
+    // end of the tick, which is the divergence this pins (facts.md "The
+    // bomb-action tail is per-FRAME").
+    //
+    // Park the player 3 px short of the tile-2 boundary: the first sub-frame's
+    // ~1.1 px step leaves it in tile 1, the full tick's ~9.2 px carries it into
+    // tile 2. The bomb must land on tile 1.
+    Simulation s(open_config());
+    Player& p = s.state().players[0];
+    p.x = 2 * kTileWF - 3 * kScale;
+    const int start_tile = p.tile_x();
 
+    TickInputs go;
+    go.players[0].right = true;
+    go.players[0].action1 = true;
+    s.tick(go);
+
+    REQUIRE(p.tile_x() == start_tile + 1);  // the tick really did cross a boundary
+    REQUIRE(s.state().bombs.size() == 1);
+    CHECK(s.state().bombs[0].tile_x() == start_tile);
+}
+
+TEST_CASE("a picked-up powerup is usable the same FRAME (pickup precedes the bomb actions)") {
+    // ExtraBomb picked up mid-walk raises the capacity BEFORE the bomb-action
+    // tail — sub_41F29B runs the mover, then LABEL_246, in that order, WITHIN
+    // ONE FRAME. Since 2026-07-30 our tail runs per canonical sub-frame too
+    // (facts.md "The bomb-action tail is per-FRAME"), so the pin has to be
+    // built at frame granularity: park the player one pixel short of the token
+    // tile so the FIRST sub-frame's pixel step crosses the boundary, and that
+    // same sub-frame's tail then sees the raised capacity.
+    //
+    // The old tick-granular construction — press the key on the arrival tick —
+    // no longer demonstrates anything, and correctly so: a held key edges on
+    // sub-frame 0, several sub-frames BEFORE a normal walk crosses the tile
+    // boundary, so the original refuses that drop as well.
+    MatchConfig cfg = open_config();
     Simulation s(cfg);
     s.state().floor[0][2] = PowerupType::ExtraBomb;
     s.state().players[0].max_bombs = 1;
 
-    // Spend the whole capacity first: drop at spawn, then walk east.
+    // Spend the whole capacity first: drop at spawn.
     s.tick(press1(0));
     REQUIRE(s.state().bombs.size() == 1);
+    s.tick(TickInputs{});  // release, so the next press is a fresh edge
 
-    TickInputs right;
-    right.players[0].right = true;
-    // The spawn-drop tick did not move the player, so arrival is `arrive`
-    // walking ticks after it.
-    for (int t = 1; t < arrive; ++t) s.tick(right);
-    TickInputs last = right;
-    last.players[0].action1 = true;  // fresh press on the arrival tick
-    s.tick(last);
+    // One pixel short of tile 2, so sub-frame 0 steps into it.
+    s.state().players[0].x = 2 * kTileWF - kScale;
+    TickInputs go;
+    go.players[0].right = true;
+    go.players[0].action1 = true;
+    s.tick(go);
 
-    CHECK(s.state().players[0].max_bombs == 2);  // token applied this tick...
-    CHECK(s.state().bombs.size() == 2);          // ...and already spendable this tick
+    CHECK(s.state().players[0].max_bombs == 2);  // token applied this frame...
+    CHECK(s.state().bombs.size() == 2);          // ...and already spendable in it
 }
 
 TEST_CASE("walking into a flame on its last tick of life kills (per-pixel check sees pre-aging value)") {
