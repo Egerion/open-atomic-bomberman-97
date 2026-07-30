@@ -23,6 +23,31 @@ namespace bomber::net {
 class RollbackSession;
 }  // namespace bomber::net
 
+namespace bomber::game {
+
+// HOW THE LOCAL PLAYER WALKED OUT of an online round. Both values are UNILATERAL
+// and IMMEDIATE by definition: they tear the transport down locally and send
+// nothing, because a bail-out that needs the network is not a bail-out — the
+// case it exists for is precisely a peer that has stopped answering.
+//
+// This is separate from stopping the round (RollbackSession::request_end_round,
+// which is host-only and DOES need both machines to agree, because it changes
+// what both of them simulate). Leaving only removes yourself, so it is available
+// to host and guest alike.
+enum class NetLeave : std::uint8_t {
+    None = 0,
+    // Ctrl+Q — the faithful key. CONFIRMED as the original's only mid-round
+    // abort (docs/re/in-match-shell.md "Esc negative finding"): raw key 0x11,
+    // no confirm prompt, straight to the standard teardown.
+    Forfeit,
+    // Double-Esc — the PORT's bail-out from a match that stopped responding.
+    // Same teardown, different reason in netdiag.log, because the two say very
+    // different things about whether the netcode is working.
+    Stalled,
+};
+
+}  // namespace bomber::game
+
 // Seam 2 (ADR-0009 §"shared front-end state" / §10 MatchRunner): the non-service
 // state the match runtime (run_match + its start_match / collect_inputs /
 // draw_player_row / draw_fps_overlay members) reads/writes, bundled by reference
@@ -84,6 +109,7 @@ struct MatchRunnerState {
     const bool& demo;                                     // GameApp::opts_.demo (round-start freeze disarm)
 
     // --- Netplay hook (increment 5b, ADR-0010 §3.3 step 5) ---
+    // (NetLeave is declared above the struct — see its own comment.)
     // When non-null, MatchRunner::run() drives the (borrowed) sim through this
     // lockstep session instead of ticking it directly, forcing the deterministic
     // fixed-tick path (never the F9 frame() cadence). GameApp::run_netplay owns
@@ -91,6 +117,19 @@ struct MatchRunnerState {
     // so the sim tick/seed path — and the golden hashes — are untouched.
     net::RollbackSession* net_session = nullptr;
     std::uint16_t net_local_seats = 0;  // this peer's human-seat bitmask (bit s == seat s)
+    bool net_is_host = false;  // stopping the match is host-only; leaving is not
+
+    // How the local player WALKED OUT of an online round, if they did — written
+    // by MatchRunner, read by the match shell.
+    //
+    // It is an explicit out-parameter because the shell used to INFER the act
+    // from the frozen sim state ("MatchOver, but more than one side is alive and
+    // the clock has time left, so it must have been Ctrl+Q"). That inference is
+    // wrong at both edges: a forfeit pressed in the instant the last opponent
+    // died reads as a natural round end, and a bail-out pressed after an abandon
+    // was already agreed reads as a draw and rotates into another round. Saying
+    // what happened costs one enum and removes the guess.
+    NetLeave* net_leave = nullptr;
 };
 
 }  // namespace bomber::game

@@ -2,7 +2,8 @@
 
 #include <cstdint>
 
-#include "bomber/game/app_flow.hpp"  // AppInput
+#include "bomber/game/app_flow.hpp"      // AppInput
+#include "bomber/game/match_cadence.hpp"  // MatchCadence (the F9 lever, resolved once)
 #include "bomber/game/screen_context.hpp"
 #include "bomber/game/screens/match_runner_state.hpp"
 #include "bomber/sim/match_config.hpp"  // sim::MatchConfig (build_config)
@@ -54,6 +55,12 @@ public:
     sim::MatchConfig build_config(std::uint32_t seed) const;
 
 private:
+    // The F9 lever as it ACTUALLY APPLIES this frame, plus the two interpolation
+    // values that follow from it — all three from match_cadence.hpp's one pure
+    // function, so they cannot disagree (see its header for the bug that shape
+    // exists to prevent). `acc`/`tick_ns` are run()'s fixed-tick accumulator.
+    MatchCadence cadence(std::uint64_t acc, std::uint64_t tick_ns) const;
+
     // Assembles one tick's TickInputs across every roster slot (keyboard sub 0/1,
     // joystick sub, OFF/COMPUTER neutral). DETERMINISM-sensitive — feeds the sim.
     sim::TickInputs collect_inputs() const;
@@ -62,6 +69,12 @@ private:
     void draw_player_row(const sim::State& s);
     // The F8 framerate / cadence / vsync indicator overlay (top-right of the view).
     void draw_fps_overlay(int fps);
+    // The two-line prompt an online Esc raises: what the FIRST press did (which
+    // differs between host and guest, so the two must not be told the same thing)
+    // and that a second press leaves. Drawn only while the Esc window is armed.
+    void draw_net_esc_prompt();
+    // Record how the local player walked out, for the match shell to read.
+    void leave(NetLeave how);
 
     ScreenContext ctx_;
     MatchRunnerState state_;

@@ -1528,6 +1528,9 @@ AppInput GameApp::run_netplay_match_seats(net::Transport& transport, std::uint16
         MatchRunnerState mrs = match_runner_state();
         mrs.net_session = &session;
         mrs.net_local_seats = local_seats;
+        mrs.net_is_host = is_host;
+        NetLeave left = NetLeave::None;
+        mrs.net_leave = &left;
         result = MatchRunner(sctx(), mrs).run();
         // Whatever this round ended as, the log line should carry ITS numbers.
         recorder.snapshot(session, round);
@@ -1561,6 +1564,38 @@ AppInput GameApp::run_netplay_match_seats(net::Transport& transport, std::uint16
             // to show it on — but the log line is exactly why this case is worth
             // latching: it is the one the player cannot report themselves.
             recorder.latch(net::SessionEndReason::WindowClosed);
+            break;
+        }
+        // THE LOCAL PLAYER WALKED OUT — Ctrl+Q's faithful forfeit, or the
+        // double-Esc bail-out from a match that stopped responding. Checked FIRST
+        // and read from an explicit flag, not inferred: the old test for Ctrl+Q
+        // ("more than one side alive and time left") sat BELOW the abandon branch,
+        // so a bail-out pressed after an abandon had been agreed would have been
+        // read as a draw and rotated into another round instead of leaving.
+        //
+        // Everything a bail-out needs happens by simply LEAVING THIS LOOP, which
+        // is what makes it unilateral: `break` runs the RollbackSession destructor,
+        // returns Advance with *rematch still false, so run_netplay_session
+        // returns, the enclosing present_net_* frame drops its UdpTransport (whose
+        // destructor closes the socket), and run_app maps NetHost/NetJoin+Advance
+        // back to the main menu. No confirmation, no message, nothing waited on.
+        if (left != NetLeave::None) {
+            const bool stalled = left == NetLeave::Stalled;
+            result = AppInput::Advance;  // straight out to the menu
+            recorder.latch(stalled ? net::SessionEndReason::LeftStalled
+                                   : net::SessionEndReason::LeftSession);
+            // The numbers at the moment they gave up are the whole value of the
+            // record: "left-stalled with depth 8/8" is a bug report, where a bare
+            // "left" is a player who stopped enjoying themselves.
+            const net::NetStats& ns = session.stats();
+            char note[128];
+            std::snprintf(note, sizeof(note),
+                          stalled ? "double-Esc bail-out; depth=%d/%d stalls=%u rephase=%u"
+                                  : "Ctrl+Q forfeit; depth=%d/%d stalls=%u rephase=%u",
+                          ns.prediction_depth, ns.max_prediction,
+                          static_cast<unsigned>(ns.stall_pumps),
+                          static_cast<unsigned>(ns.rephase_holds));
+            recorder.note(note);
             break;
         }
         // AN ABANDONED ROUND (somebody pressed Esc). The decision was the HOST's
@@ -1602,19 +1637,11 @@ AppInput GameApp::run_netplay_match_seats(net::Transport& transport, std::uint16
             std::printf("netplay: round %d abandoned at tick %u — draw\n", round,
                         static_cast<unsigned>(session.end_round_tick()));
         }
-        // MatchRunner returns MatchOver for a natural round end AND for the
-        // Ctrl+Q forfeit, so tell them apart from the state itself: a round that
-        // really ended has one side left or a spent clock (the same condition its
-        // own advance_round_end() waited on). Esc no longer reaches here — it
-        // became the abandon above — so this is the Ctrl+Q "really leave" key,
-        // which stays a unilateral, connection-ending forfeit on purpose.
-        if (!abandoned && sim::sides_remaining(sim_.state()) > 1 &&
-            sim_.state().ticks_left > 0) {
-            result = AppInput::Advance;  // forfeited to the menu
-            recorder.latch(net::SessionEndReason::LeftSession);
-            recorder.note("Ctrl+Q forfeit");
-            break;
-        }
+        // (The Ctrl+Q forfeit used to be DEDUCED here, from "MatchOver but more
+        // than one side is alive and the clock has time left". It is now stated
+        // outright by the branch above, alongside the double-Esc bail-out it
+        // shares a teardown with — see that branch for why the deduction had to
+        // go rather than merely move.)
 
         // THE OUTCOME, computed with no traffic at all: both peers ran the same
         // deterministic sim over the same inputs, so round_winner()/the tally/the
@@ -1695,7 +1722,17 @@ AppInput GameApp::run_netplay_match_seats(net::Transport& transport, std::uint16
             // once the config exchange is the barrier.)
             audio_.play_random_in_range(kDrawStingLo, kDrawStingHi);
             ScreenDef ds = draw_screen();
-            ds.dwell_ms = 0;  // a human is playing by definition online: wait for Enter
+            // ADVANCING IS THE HOST'S. The host waits for its own Enter (dwell 0);
+            // a GUEST is never asked to press anything and simply auto-advances on
+            // DRAW's own 6 s dwell — the original's `sub_42A3F6` auto-advance — into
+            // the scoreboard, where it already waits for the host's next-round
+            // confirmation. Requiring Enter on BOTH machines here is what the owner
+            // hit: two people staring at DRAW.PCX, each waiting for the other.
+            //
+            // Deliberately NOT gated on the rotation gate: that gate's ready() is
+            // "the next round is agreed", and consuming it here would flash the
+            // scoreboard past before either player could read it.
+            if (is_host) ds.dwell_ms = 0;
             result = present_asset_screen(sctx(), ds);
             if (result != AppInput::Advance) {
                 recorder.latch(result == AppInput::Quit ? net::SessionEndReason::WindowClosed

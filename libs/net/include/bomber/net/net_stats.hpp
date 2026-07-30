@@ -323,6 +323,13 @@ enum class SessionEndReason : std::uint8_t {
     PeerLostBetweenRounds,  // the between-rounds config exchange never completed
     WindowClosed,           // the local player closed the window mid-match
     LeftSession,            // the local player walked out (Ctrl+Q / Escape at an outcome screen)
+    // The double-Esc BAIL-OUT: the local player left a match that had stopped
+    // responding. Deliberately its own reason rather than another LeftSession —
+    // the whole point of the bail-out is that it is used when something is
+    // already wrong, so a log full of these says the netcode is failing people,
+    // where a log full of LeftSession says only that players leave. The note
+    // carries the session's depth/stall numbers at the moment they gave up.
+    LeftStalled,
 };
 
 const char* end_reason_name(SessionEndReason r);

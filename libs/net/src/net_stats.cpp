@@ -26,6 +26,7 @@ const char* end_reason_name(SessionEndReason r) {
         case SessionEndReason::PeerLostBetweenRounds: return "peer-lost-between-rounds";
         case SessionEndReason::WindowClosed: return "window-closed";
         case SessionEndReason::LeftSession: return "left-session";
+        case SessionEndReason::LeftStalled: return "left-stalled";
         case SessionEndReason::Unknown: break;
     }
     return "unknown";

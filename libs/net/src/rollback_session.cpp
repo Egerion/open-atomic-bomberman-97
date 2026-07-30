@@ -203,14 +203,16 @@ void RollbackSession::receive() {
         } else if (m.type == MsgType::MatchCtl) {
             if (m.match_ctl.kind == MatchCtlKind::EndRound) {
                 // Obeyed by EVERY peer including the host's own echo over a star
-                // — idempotent, so re-sends and reordering are all no-ops.
-                schedule_end_round(m.match_ctl.at_tick);
-            } else if (m.match_ctl.kind == MatchCtlKind::EndRoundRequest && drop_.is_host) {
-                // A guest asked. The host turns that into THE decision, on its
-                // own clock, so the tick is still one nobody has passed. A guest
-                // that receives this (a star reflects) ignores it.
-                request_end_round();
+                // — idempotent, so re-sends and reordering are all no-ops. Only a
+                // host ever sends one; a guest that somehow does is not obeyed,
+                // because a guest's EndRound is not addressed to anyone (its own
+                // Esc never reaches this class at all).
+                if (!drop_.is_host) schedule_end_round(m.match_ctl.at_tick);
             }
+            // EndRoundRequest is DELIBERATELY IGNORED — see the authority note at
+            // the top of rollback_session.hpp. It used to let any guest force-end
+            // any round; the message is still decoded (wire v8 is unchanged, so a
+            // peer on the previous build still connects) and simply does nothing.
             // RematchWait/Rematch belong to the post-match shell (rematch_session
             // .hpp), which runs after this session is done — not ours to read.
         }
@@ -387,34 +389,26 @@ void RollbackSession::broadcast_handoffs() {
 }
 
 void RollbackSession::request_end_round() {
+    // HOST ONLY. A guest asking is not "a request that may be granted" — it is
+    // nothing at all, so that the authority lives in one place instead of in the
+    // caller's discipline. See the note at the top of the header.
+    if (!drop_.is_host) return;
     if (aborted_ || end_tick_ != kNoEndRound) return;  // already ending: nothing to decide
-    if (drop_.is_host) {
-        schedule_end_round(tick_ + static_cast<std::uint32_t>(max_prediction_) +
-                           kEndRoundSlackTicks);
-    } else {
-        end_requested_ = true;  // broadcast_end_round() re-asks every pump
-    }
+    schedule_end_round(tick_ + static_cast<std::uint32_t>(max_prediction_) + kEndRoundSlackTicks);
     broadcast_end_round();  // don't wait a pump to say so
 }
 
 void RollbackSession::schedule_end_round(std::uint32_t at_tick) {
     if (end_tick_ != kNoEndRound && at_tick >= end_tick_) return;  // earliest wins
     end_tick_ = at_tick;
-    end_requested_ = false;  // a guest's question has been answered
 }
 
 void RollbackSession::broadcast_end_round() {
     // The same redundancy broadcast_handoffs() uses, and for the same reason: a
     // peer that misses this keeps simulating a round the host has already left,
     // and there is no other channel that would ever tell it.
-    if (end_tick_ != kNoEndRound) {
-        if (!drop_.is_host) return;  // guests echo nothing; the host owns the decision
-        const std::vector<std::uint8_t> pkt = encode_match_ctl(MatchCtlKind::EndRound, end_tick_);
-        transport_->send(pkt.data(), pkt.size());
-        return;
-    }
-    if (!end_requested_) return;
-    const std::vector<std::uint8_t> pkt = encode_match_ctl(MatchCtlKind::EndRoundRequest, 0);
+    if (!drop_.is_host || end_tick_ == kNoEndRound) return;
+    const std::vector<std::uint8_t> pkt = encode_match_ctl(MatchCtlKind::EndRound, end_tick_);
     transport_->send(pkt.data(), pkt.size());
 }
 

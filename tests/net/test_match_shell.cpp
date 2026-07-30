@@ -166,10 +166,14 @@ TEST_CASE("abandon: the host's Esc stops BOTH peers at one agreed tick") {
     CHECK(p.sa.hash() == p.sb.hash());
 }
 
-TEST_CASE("abandon: a GUEST cannot end a round on its own authority") {
-    // The guest's peer is a bare transport nobody is answering on — a host that
-    // is not listening for this decision. If Esc were a local act the guest would
-    // stop; it must not.
+TEST_CASE("abandon: a GUEST cannot end a round, and does not even ASK") {
+    // NARROWED 2026-07-30. A guest used to send MatchCtlKind::EndRoundRequest,
+    // which the host converted into the decision — so any guest could force-end
+    // any round at will, with no host confirmation. The owner asked for the
+    // authority model that removes it, and it is also the safer one.
+    //
+    // The guest's peer is a bare transport nobody answers on, so every datagram
+    // it emits is countable on the other side of the link.
     net::LoopbackLink link(/*latency=*/0);
     net::LoopbackTransport tg(link, 0);
     net::LoopbackTransport tsilent(link, 1);
@@ -178,11 +182,8 @@ TEST_CASE("abandon: a GUEST cannot end a round on its own authority") {
                                net::DropPolicy{false, /*is_host=*/false, 0});
 
     guest.request_end_round();
-    CHECK_FALSE(guest.end_round_scheduled());  // it ASKED; it did not decide
-    CHECK_FALSE(guest.round_ended());
+    CHECK_FALSE(guest.end_round_scheduled());  // it did not decide...
 
-    // It keeps asking, and keeps playing (stalling at the prediction cap on the
-    // absent peer, but never ending the round).
     int requests = 0;
     for (int i = 0; i < 100; ++i) {
         guest.advance(seat_input(1, scripted(1, guest.predicted_tick())));
@@ -197,27 +198,123 @@ TEST_CASE("abandon: a GUEST cannot end a round on its own authority") {
     }
     CHECK_FALSE(guest.round_ended());
     CHECK_FALSE(guest.end_round_scheduled());
-    CHECK(requests > 1);  // re-asked every pump, because UDP loses things
+    CHECK(requests == 0);  // ...and it did not ask, either
 }
 
-TEST_CASE("abandon: a guest's Esc becomes the HOST's decision, and both stop together") {
+TEST_CASE("abandon: a guest's Esc perturbs NEITHER peer's match") {
+    // The requirement stated positively: after the narrowing, a guest pressing
+    // Esc must leave both simulations exactly as they were — same ticks, same
+    // hash, still progressing. Both peers are driven over the link, because a
+    // one-sided test would prove only what the peer that pressed the key does.
     Pair p(/*latency=*/4);
     p.pump_n(60);
+    const std::uint32_t host_tick = p.host.predicted_tick();
+    const std::uint32_t guest_tick = p.guest.predicted_tick();
 
     p.guest.request_end_round();
-    CHECK_FALSE(p.guest.end_round_scheduled());  // still only a request
+    // Nothing scheduled, anywhere, immediately...
+    CHECK_FALSE(p.guest.end_round_scheduled());
+    CHECK_FALSE(p.host.end_round_scheduled());
+    CHECK(p.host.predicted_tick() == host_tick);
+    CHECK(p.guest.predicted_tick() == guest_tick);
 
-    for (int i = 0; i < 200 && !(p.host.round_ended() && p.guest.round_ended()); ++i) p.pump();
-
-    CHECK(p.host.round_ended());
-    CHECK(p.guest.round_ended());
-    CHECK(p.host.end_round_scheduled());
-    CHECK(p.guest.end_round_tick() == p.host.end_round_tick());
-    CHECK(p.host.predicted_tick() == p.guest.predicted_tick());
+    // ...nor after the request has had every chance to travel and be acted on.
+    p.pump_n(120);
+    CHECK_FALSE(p.host.end_round_scheduled());
+    CHECK_FALSE(p.guest.end_round_scheduled());
+    CHECK_FALSE(p.host.round_ended());
+    CHECK_FALSE(p.guest.round_ended());
+    // The match is still RUNNING, not merely un-ended — a test that only checked
+    // "no end scheduled" would pass on two frozen peers.
+    CHECK(p.host.predicted_tick() > host_tick + 100);
+    CHECK(p.guest.predicted_tick() > guest_tick + 100);
+    // ...and in agreement the whole way. Deliberately NOT a raw sa.hash() ==
+    // sb.hash(): mid-match those are SPECULATIVE states, which differ between the
+    // peers moment to moment by design — that is what rollback IS. desynced() is
+    // the stronger claim and the right one: it is false only if every CONFIRMED
+    // tick's hash matched, over all 180 of them, on both peers.
     CHECK_FALSE(p.host.desynced());
     CHECK_FALSE(p.guest.desynced());
+    CHECK(p.host.confirmed_tick() > host_tick);
+    CHECK(p.guest.confirmed_tick() > guest_tick);
+}
+
+TEST_CASE("abandon: a HOST ignores an EndRoundRequest from an older peer") {
+    // The half that actually removes the griefing lever. kWireProtocolVersion is
+    // unchanged at 8, so a peer running the PREVIOUS build still connects and
+    // still sends this message — refusing to act on it is the only thing that
+    // stops it driving us. The kind stays decodable on purpose (the codec case
+    // above still round-trips it) so such a peer is turned away, not disconnected.
+    Pair p(/*latency=*/0);
     p.pump_n(20);
-    CHECK(p.sa.hash() == p.sb.hash());
+    const std::vector<std::uint8_t> req =
+        net::encode_match_ctl(net::MatchCtlKind::EndRoundRequest, 0);
+    for (int i = 0; i < 10; ++i) {
+        p.tb.send(req.data(), req.size());  // the guest side of the link
+        p.link.step();
+        p.host.advance(seat_input(0, scripted(0, p.host.predicted_tick())));
+    }
+    CHECK_FALSE(p.host.end_round_scheduled());
+    CHECK_FALSE(p.host.round_ended());
+}
+
+TEST_CASE("abandon: a guest's forged EndRound is not obeyed either") {
+    // A guest cannot skip the request and simply ANNOUNCE the decision: EndRound
+    // is a host-to-guest message, so a host does not act on an inbound one. (Its
+    // own is applied directly by request_end_round, never via the echo.)
+    Pair p(/*latency=*/0);
+    p.pump_n(20);
+    const std::vector<std::uint8_t> forged =
+        net::encode_match_ctl(net::MatchCtlKind::EndRound, p.host.predicted_tick() + 5);
+    p.tb.send(forged.data(), forged.size());
+    p.link.step();
+    p.host.advance(seat_input(0, scripted(0, p.host.predicted_tick())));
+    CHECK_FALSE(p.host.end_round_scheduled());
+}
+
+TEST_CASE("abandon: against a DEAD peer the host's stop never completes — hence the bail-out") {
+    // WHY LEAVING CANNOT BE ALLOWED TO NEED THE NETWORK, pinned. The host presses
+    // Esc against a peer that has stopped responding: the end tick is scheduled
+    // and re-announced forever, but the round can never REACH it, because the
+    // host stalls at the prediction cap waiting for input that is not coming. So
+    // "press Esc and wait" is not an exit at all, and the only way out is the
+    // local double-Esc bail-out (net_esc.hpp, whose own suite pins that the way
+    // out stays open for exactly as long as this state persists).
+    net::LoopbackLink link(/*latency=*/0);
+    net::LoopbackTransport th(link, 0);
+    net::LoopbackTransport tdead(link, 1);  // nobody ever pumps this side
+    sim::Simulation sh(open_config());
+    net::RollbackSession host(sh, kSeat0, kBoth, /*max_prediction=*/8, th,
+                              net::DropPolicy{false, /*is_host=*/true, 0});
+
+    for (int i = 0; i < 40; ++i) {
+        host.advance(seat_input(0, scripted(0, host.predicted_tick())));
+        link.step();
+    }
+    host.request_end_round();
+    REQUIRE(host.end_round_scheduled());
+    const std::uint32_t at = host.end_round_tick();
+
+    for (int i = 0; i < 2000; ++i) {
+        host.advance(seat_input(0, scripted(0, host.predicted_tick())));
+        link.step();
+    }
+    // Two thousand pumps — a minute and a half of real time — and the round has
+    // not ended and never will: the head is stuck at the cap, short of the tick.
+    CHECK_FALSE(host.round_ended());
+    CHECK(host.predicted_tick() < at);
+    CHECK(host.stats().stall_pumps > 0);
+    // And it is still shouting into the void, so a peer that came back would
+    // still be told. The exit is the player's, not the protocol's.
+    std::vector<std::uint8_t> pkt;
+    int announcements = 0;
+    while (tdead.poll(&pkt)) {
+        net::Message m;
+        if (net::decode(pkt.data(), pkt.size(), &m) && m.type == net::MsgType::MatchCtl &&
+            m.match_ctl.kind == net::MatchCtlKind::EndRound)
+            ++announcements;
+    }
+    CHECK(announcements > 1);
 }
 
 TEST_CASE("abandon: the host re-announces every pump — one datagram is not a protocol") {
