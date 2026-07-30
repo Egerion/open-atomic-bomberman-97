@@ -63,9 +63,26 @@ std::uint32_t build_hash();
 //             would drop the socket the moment a match ended. Both are silent
 //             divergences rather than loud ones, so the pair has to be refused
 //             at the lobby door.
-//             NOTE FOR WHOEVER MERGES SECOND: the unmerged host-migration branch
-//             also needs a bump. This one took 8; move the other to 9 (and
-//             re-check this file against main before merging).
-inline constexpr std::uint32_t kWireProtocolVersion = 8;
+//   v8 -> v9: added MsgType::HostLost — HOST MIGRATION's detection message
+//             (protocol.hpp's HostLostFrame, design §8.1): "the HUB's seat went
+//             silent, hand it to the AI from tick X", announced by any survivor
+//             because the one machine that could have decreed it is the one that
+//             died. It is a distinct tag from MsgType::Drop despite an identical
+//             payload, precisely so a peer can accept "the hub is gone" from a
+//             non-hub without also accepting an ordinary seat-drop decree from
+//             one.
+//             A v8 peer is refused for a reason stronger than "misses a
+//             feature": it answers the message with silence but keeps PLAYING.
+//             Its hub dies, the v9 survivors adopt a handoff tick, re-elect and
+//             re-simulate those ticks with the seat on AI — and the v8 peer,
+//             having ignored the announcement, simulates the same ticks with the
+//             hub's last predicted input. Both sides then run on happily with
+//             DIFFERENT hashed State. That is a silent divergence that the hash
+//             exchange reports as a desync a few ticks later, blaming the wrong
+//             machine; and if the v8 peer is itself the elected successor it will
+//             never take the role at all, so the survivors wait forever on a hub
+//             that does not know it is one. Neither failure is recoverable
+//             in-match, so the pair is refused at the lobby door.
+inline constexpr std::uint32_t kWireProtocolVersion = 9;
 
 }  // namespace bomber::net
