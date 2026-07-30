@@ -927,7 +927,10 @@ TEST_CASE("grab picks the bomb up, throw launches it, fuse resumes") {
     CHECK(s.state().bombs.empty());
     CHECK(p.carrying);
     CHECK(p.bombs_placed == 1);  // slot stays reserved while held
-    CHECK(p.pickup_pause == s.state().tuning.pickup_pause);
+    // The window is getvalue(665) + 1: the original's gate is the NON-STRICT
+    // `+80 <= getvalue(665)` (0x41FA55, facts.md "The grab's movement pause is
+    // getvalue(665) + 1 ticks").
+    CHECK(p.pickup_pause == s.state().tuning.pickup_pause + 1);
     CHECK(p.stun == 0);  // independent counter (facts.md "Player state machine (+78)")
     // Pickup pause: movement does nothing while stunned. HOLD the bomb key the
     // whole time so the bomb stays carried (releasing it would throw).
@@ -935,7 +938,7 @@ TEST_CASE("grab picks the bomb up, throw launches it, fuse resumes") {
     TickInputs carry_down;
     carry_down.players[0].down = true;
     carry_down.players[0].action1 = true;  // keep holding -> keep carrying
-    run(s, s.state().tuning.pickup_pause, carry_down);
+    run(s, s.state().tuning.pickup_pause + 1, carry_down);
     CHECK(p.y == before);
     run(s, 6, carry_down);  // free again; ends on row 2 (no pillars on even rows)
     CHECK(p.y > before);
