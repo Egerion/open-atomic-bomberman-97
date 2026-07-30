@@ -63,13 +63,17 @@ constexpr int kPlayers = 10;
 
 using Kills = std::array<int, sim::kMaxPlayers>;
 
-// Four players packed into the top-left corner: seats 0 and 1 are the two network
-// peers, slots 2 and 3 are PRESENT BYSTANDERS (outside `all_seats`, so the session
-// feeds them neutral input and they stand still). The bystanders exist to produce
-// ATTRIBUTED kills — `tally_kills` deliberately ignores a self-kill, so a scenario
-// where the two peers only blow themselves up would tally zero and prove nothing —
-// and to keep the round undecided long enough for several deaths, since the sim
-// freezes every fuse once one side remains.
+// A FULL ROSTER packed into two rows: seats 0 and 1 (spawning adjacent, well
+// inside each other's blast reach) are the two network peers, and slots 2..9 are
+// PRESENT BYSTANDERS — outside `all_seats`, so the session feeds them neutral
+// input and they stand where they spawned.
+//
+// Both details are load-bearing. The bystanders produce ATTRIBUTED kills, which
+// is the only kind that counts: `tally_kills` deliberately drops a self-kill, so
+// a scenario where the peers only blow themselves up would tally zero and prove
+// nothing. And a crowd keeps the round UNDECIDED for a few hundred ticks, since
+// the sim freezes every fuse the moment one side remains — with two players the
+// first death ends the round and there is almost nothing left to disagree about.
 sim::MatchConfig duel_config() {
     sim::MatchConfig cfg = sim::test::open_config();
     cfg.spawns = {{0, 0}, {2, 0}, {4, 0}, {6, 0}, {8, 0},
