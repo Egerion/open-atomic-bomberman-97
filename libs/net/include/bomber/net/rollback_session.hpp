@@ -313,13 +313,20 @@ public:
     // the hub's death left it. The caller holds this for the rewire window and
     // releases it once a path exists again.
     //
-    // RELEASING RE-ARMS EVERY SILENCE COUNTER, and that is not a detail. By the
-    // time a migration starts, every remote seat has been silent for longer than
-    // the drop timeout — that is HOW the hub's loss was detected. Releasing
-    // without re-arming declares the whole surviving table dropped one pump
-    // later, and the survivors then hand each other's seats to the AI at
-    // different ticks and report a desync. Measured in tests/net/
-    // test_host_migration.cpp ("releasing the hold does not cascade").
+    // Releasing also re-arms every silence counter, because by the time a
+    // migration starts every remote seat has been silent for longer than the drop
+    // timeout — that is HOW the hub's loss was detected — so a naive release
+    // would declare the whole surviving table dropped one pump later.
+    //
+    // HONEST COVERAGE NOTE: that re-arm is belt-and-braces, NOT the mechanism the
+    // suite actually proves. Reverting it alone leaves tests/net/
+    // test_host_migration.cpp green, because two other things already cover the
+    // window: detect_drops() declares nothing at all while migration_healing(),
+    // and heard() zeroes the counter the moment the rewired star delivers
+    // anything. The cascade test discriminates against the HEALING GUARD — revert
+    // that and it fails loudly. The re-arm is kept because it is free and makes
+    // the property hold even if the guard's window is later narrowed, but do not
+    // read the passing test as evidence for it.
     void set_migration_hold(bool held);
     bool migration_held() const { return migration_hold_; }
 
@@ -385,6 +392,11 @@ private:
     // --- host migration internals (design §8.1/§8.2) --------------------------
 
     bool migration_enabled() const { return drop_.host_seat >= 0; }
+    // A migration is decided but not yet paid off: the frontier has not climbed
+    // clear of the tick the hub died at. Gates the WIDE re-send, the re-phase
+    // suppression, and — the one that is a correctness matter rather than a
+    // tuning one — the refusal to declare a SECOND host loss (see detect_drops).
+    bool migration_healing() const { return host_lost_ != 0 && confirmed_ < heal_until_; }
     // THE ELECTION, and it is a pure function — no vote, no message, no
     // coordinator (design §8.2). The seat that STARTED as the hub keeps the role
     // while it is live (whoever pressed Host need not be seat 0); once it is

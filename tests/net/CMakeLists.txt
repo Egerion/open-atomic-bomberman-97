@@ -52,6 +52,9 @@ target_link_libraries(bomber_net_round_rotation_tests PRIVATE bomber::net)
 bomber_add_test(bomber_net_peer_drop_tests net_peer_drop test_peer_drop.cpp)
 target_link_libraries(bomber_net_peer_drop_tests PRIVATE bomber::net)
 
+bomber_add_test(bomber_net_host_migration_tests net_host_migration test_host_migration.cpp)
+target_link_libraries(bomber_net_host_migration_tests PRIVATE bomber::net)
+
 # Match shell (wire v8): the host-authoritative round ABANDON (Esc -> one agreed
 # end tick -> draw, instead of a local freeze that dropped the connection) and
 # the post-match REMATCH rendezvous that hands the same transport back to the

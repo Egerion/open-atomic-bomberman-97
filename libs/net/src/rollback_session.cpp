@@ -446,7 +446,18 @@ std::uint32_t RollbackSession::resend_from() const {
     // retained. One local seat's input is a byte per tick, so even 64 ticks is a
     // small datagram, and it lasts only until the frontier is clear of the
     // migration.
-    if (host_lost_ == 0 || confirmed_ >= heal_until_) return confirmed_;
+    //
+    // HONEST COVERAGE NOTE: this widening is CARRIED FROM THE EARLIER BRANCH'S
+    // MEASUREMENT, not proven by tests/net/test_host_migration.cpp — reverting it
+    // leaves that suite green. The suite's divergence case does not reach the
+    // wedge because the peer that is ahead gets REWOUND to the adopted tick, and
+    // re-sending from a rewound frontier already covers what the peer behind
+    // needs. The documented wedge needs a survivor to be behind on a tick BELOW
+    // the migration tick, which this suite does not construct. Kept because the
+    // failure it describes was observed on the earlier branch and the cost is a
+    // few dozen bytes per datagram for a second or two; treat it as defensive,
+    // and if it ever needs justifying, build that case first.
+    if (!migration_healing()) return confirmed_;
     return oldest_slot_ < confirmed_ ? oldest_slot_ : confirmed_;
 }
 
@@ -536,6 +547,28 @@ void RollbackSession::detect_drops() {
             aborted_ = true;
             return;
         }
+        // NOTHING NEW IS DECLARED WHILE A MIGRATION IS STILL HEALING, and this
+        // is a correctness guard rather than a nicety. When the hub dies the
+        // star is severed, so EVERY survivor goes silent to EVERY other survivor
+        // at the same instant — not just the corpse. Left ungated that silence
+        // is read as evidence twice over, and both readings are wrong:
+        //
+        //   * the seat just elected to replace the hub is itself declared lost
+        //     one timeout later, and the next, and the next — the election
+        //     chains until every peer has elected ITSELF and the table has split
+        //     into as many one-player games as there are survivors; and
+        //   * the moment a survivor does take the role, it decrees an ordinary
+        //     Drop on the OTHER survivor, which is equally silent and equally
+        //     alive.
+        //
+        // Both were measured in this suite's 3-seat star before the guard: the
+        // first left two survivors on different hubs, the second left the
+        // elected hub having AI'd its only remaining peer, and both ended in a
+        // desync. More silence during a known outage is not new information.
+        // The chain rule stays intact for the case it is actually for — a
+        // successor that dies once the star is working again, which this suite
+        // also covers.
+        if (migration_healing()) continue;
         // THE HUB'S OWN SEAT went silent. This is the case that used to hang:
         // a guest never mutates hashed State on its own authority, so with the
         // host gone nobody scheduled and every guest stalled forever. Now EVERY
@@ -672,7 +705,7 @@ bool RollbackSession::should_rephase() const {
     // outage. The difference would clear the threshold on every pump and hold a
     // tick each time — throttling precisely the peer that most needs to catch up
     // to the survivors it has just been reconnected to.
-    if (host_lost_ != 0 && confirmed_ < heal_until_) return false;
+    if (migration_healing()) return false;
     return local_lag() - peer_lag() >= kRephaseAdvantageTicks;
 }
 
