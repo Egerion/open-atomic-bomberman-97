@@ -155,6 +155,9 @@ TEST_CASE("C: a head-hit-sized stun blocks placement for its whole 16-frame wind
     // never acquires while +58 > 0, and LABEL_246 sees it blocked).
     int refused_stun = 0;
     const int full_ticks = stun0 / kSubFrames;  // ticks with every sub-frame stunned
+    // Should head_stun_frames ever fall below kSubFrames the loop empties and
+    // `refused_stun == full_ticks` becomes 0 == 0, pinning nothing.
+    REQUIRE(full_ticks >= 1);
     for (int t = 0; t < full_ticks; ++t) {
         const char* r = refusal_reason(st, 0);
         put(p, 4, 4);
@@ -298,6 +301,61 @@ bool arena_open_tile(int tx, int ty) {
     return tx >= 0 && tx < kGridWidth && ty >= 0 && ty < kGridHeight && !(tx % 2 == 1 && ty % 2 == 1);
 }
 
+// Scrub every modifier that could refuse a drop for a reason other than the core
+// gate: healthy, upright, no grab/spooge/trigger double-tap, generous slot
+// budget. Named because "what is deliberately NOT under test here" is the whole
+// design of the pure-gate fuzzer.
+void reset_to_bare_dropper(Player& p) {
+    p.present = true;
+    p.alive = true;
+    p.stun = 0;
+    p.bounce = 0;
+    p.warp = 0;
+    p.carrying = false;
+    p.grab = p.spooge = p.trigger = p.kick = p.punch = false;
+    p.goldflame = false;
+    p.jelly = false;
+    for (auto& d : p.disease) d = false;
+    p.disease_timer = 0;
+    p.max_bombs = 99;
+    p.flame = 1;
+}
+
+// A uniformly drawn open tile, retried until it lands off a pillar.
+std::pair<int, int> random_open_tile(Rng32& rng) {
+    int tx = 0, ty = 0;
+    do {
+        tx = rng.below(kGridWidth);
+        ty = rng.below(kGridHeight);
+    } while (!arena_open_tile(tx, ty));
+    return {tx, ty};
+}
+
+// One tick of the walking fuzzer's input: a random direction two thirds of the
+// time (the other third stands still, which is what puts a drop and a tile
+// boundary on the same tick) plus the caller's press level.
+TickInputs random_walk_input(Rng32& rng, bool press) {
+    TickInputs in;
+    in.players[0].action1 = press;
+    switch (rng.below(6)) {
+        case 0: in.players[0].up = true; break;
+        case 1: in.players[0].right = true; break;
+        case 2: in.players[0].down = true; break;
+        case 3: in.players[0].left = true; break;
+        default: break;  // 4/5: stand still
+    }
+    return in;
+}
+
+// Keep the actor alive across its own blasts so a run does not stall on death:
+// this fuzzer is about placement, not survival.
+void revive_at_origin(Player& p) {
+    if (p.alive) return;
+    p.alive = true;
+    p.bombs_placed = 0;
+    put(p, 0, 0);
+}
+
 }  // namespace
 
 // --- G: exhaustive placement fuzzer, pure gate ---------------------------
@@ -308,7 +366,10 @@ bool arena_open_tile(int tx, int ty) {
 // under-limit) and assert the sim agrees BYTE-for-byte, every tick, across many
 // seeds. A single intermittent "legal press produced no bomb" would trip here.
 TEST_CASE("G: placement never vanishes under a randomized press/position fuzz") {
-    long long checked = 0, vanished = 0, phantom = 0;
+    // `legal` is the coverage floor. `vanished == 0` is a claim about the ticks
+    // where a drop was OWED, so a fuzz that never produced one would satisfy it
+    // having exercised nothing.
+    long long checked = 0, vanished = 0, phantom = 0, legal = 0;
     for (std::uint32_t seed = 1; seed <= 40; ++seed) {
         Simulation s(open_config());
         State& st = s.state();
@@ -319,27 +380,8 @@ TEST_CASE("G: placement never vanishes under a randomized press/position fuzz") 
         bool prev_press = false;
 
         for (int t = 0; t < 400; ++t) {
-            // Scrub every modifier so this isolates the raw drop gate: healthy,
-            // upright, no grab/spooge/trigger double-tap, generous slot budget.
-            p.present = true;
-            p.alive = true;
-            p.stun = 0;
-            p.bounce = 0;
-            p.warp = 0;
-            p.carrying = false;
-            p.grab = p.spooge = p.trigger = p.kick = p.punch = false;
-            p.goldflame = false;
-            p.jelly = false;
-            for (auto& d : p.disease) d = false;
-            p.disease_timer = 0;
-            p.max_bombs = 99;
-            p.flame = 1;
-
-            int tx, ty;
-            do {
-                tx = rng.below(kGridWidth);
-                ty = rng.below(kGridHeight);
-            } while (!arena_open_tile(tx, ty));
+            reset_to_bare_dropper(p);
+            const auto [tx, ty] = random_open_tile(rng);
             put(p, tx, ty);
 
             const bool press = rng.below(3) != 0;  // ~2/3 held
@@ -354,6 +396,7 @@ TEST_CASE("G: placement never vanishes under a randomized press/position fuzz") 
 
             const bool got = placed_this_tick(s, 0);
             ++checked;
+            if (should_place) ++legal;
             if (should_place && !got) {
                 ++vanished;
                 if (vanished <= 5)
@@ -366,7 +409,9 @@ TEST_CASE("G: placement never vanishes under a randomized press/position fuzz") 
             }
         }
     }
-    std::printf("[G] checked=%lld vanished=%lld phantom=%lld\n", checked, vanished, phantom);
+    std::printf("[G] checked=%lld legal=%lld vanished=%lld phantom=%lld\n", checked, legal,
+                vanished, phantom);
+    CHECK(legal > 0);  // the fuzz really did owe some drops
     CHECK(vanished == 0);
     CHECK(phantom == 0);
 }
@@ -379,7 +424,7 @@ TEST_CASE("G: placement never vanishes under a randomized press/position fuzz") 
 // tile), where the pre-tick gate cleanly predicts the outcome; movement ticks
 // still run, building the adjacency/boundary states the assertion ticks probe.
 TEST_CASE("H: placement never vanishes while walking among its own bombs") {
-    long long checked = 0, vanished = 0;
+    long long checked = 0, vanished = 0, legal = 0;  // `legal` = ticks a drop was OWED
     for (std::uint32_t seed = 1; seed <= 30; ++seed) {
         Simulation s(open_config());
         State& st = s.state();
@@ -393,13 +438,7 @@ TEST_CASE("H: placement never vanishes while walking among its own bombs") {
         bool prev_press = false;
 
         for (int t = 0; t < 500; ++t) {
-            // Keep the actor alive across its own blasts so the run doesn't stall
-            // on death (we are fuzzing placement, not survival).
-            if (!p.alive) {
-                p.alive = true;
-                p.bombs_placed = 0;
-                put(p, 0, 0);
-            }
+            revive_at_origin(p);
             const int tx0 = p.tile_x(), ty0 = p.tile_y();
             const bool blocked_before = tile_blocked(st, tx0, ty0);
             const bool bomb_before = tile_has_bomb(st, tx0, ty0);
@@ -416,14 +455,7 @@ TEST_CASE("H: placement never vanishes while walking among its own bombs") {
                                  st.flame[ty0][tx0] == 0;
 
             const bool press = rng.below(3) != 0;
-            const int mv = rng.below(6);  // 0..3 = walk a dir, 4/5 = stand still
-            TickInputs in;
-            in.players[0].action1 = press;
-            if (mv == 0) in.players[0].up = true;
-            else if (mv == 1) in.players[0].right = true;
-            else if (mv == 2) in.players[0].down = true;
-            else if (mv == 3) in.players[0].left = true;
-
+            const TickInputs in = random_walk_input(rng, press);
             const bool rising = press && !prev_press;
             s.tick(in);
             prev_press = press;
@@ -437,6 +469,7 @@ TEST_CASE("H: placement never vanishes while walking among its own bombs") {
             if (stayed && healthy) {
                 const bool should = rising && !blocked_before && !bomb_before && under_limit;
                 ++checked;
+                if (should) ++legal;
                 if (should && !got) {
                     ++vanished;
                     if (vanished <= 5)
@@ -446,7 +479,11 @@ TEST_CASE("H: placement never vanishes while walking among its own bombs") {
             }
         }
     }
-    std::printf("[H] checked=%lld vanished=%lld\n", checked, vanished);
+    std::printf("[H] checked=%lld legal=%lld vanished=%lld\n", checked, legal, vanished);
+    // `checked` is itself only reached when the walker STAYED on its tile, so H
+    // had two ways to assert nothing: no stayed tick, or no owed drop among them.
+    CHECK(checked > 0);
+    CHECK(legal > 0);
     CHECK(vanished == 0);
 }
 
@@ -521,8 +558,13 @@ TEST_CASE("J: a fresh press after stun recovery always places") {
 TEST_CASE("K: pressing through a chain explosion never eats a legal drop") {
     Simulation s(open_config());
     State& st = s.state();
-    st.players[1].present = false;
-    st.players[1].alive = false;
+    // Player 1 STAYS ALIVE, parked in its far corner. Removing it — which this
+    // case used to do — leaves one side standing, and the round-end freeze
+    // (bombs F1, sub_42331C @ 25603, and see helpers.hpp's park_players_clear)
+    // then halts every fuse and chain. A never burned, B was never chained, the
+    // slot never freed, so not one of the 60 ticks below ever OWED a drop and
+    // `vanished == 0` held over an empty set: the case ran the whole explosion
+    // window without an explosion in it. `legal > 0` is what now says so.
     Player& p = st.players[0];
     p.max_bombs = 2;
     p.flame = 3;  // A at (0,0) reaches (2,0)
@@ -545,7 +587,7 @@ TEST_CASE("K: pressing through a chain explosion never eats a legal drop") {
 
     // Park the owner on a safe far tile and drum action1 (release/press) while A
     // burns and chains B. The safe tile (6,8) is clear of both blasts.
-    long long checked = 0, vanished = 0;
+    long long checked = 0, vanished = 0, legal = 0;  // `legal` = ticks a drop was OWED
     bool prev_press = false;
     for (int t = 0; t < 60; ++t) {
         put(p, 6, 8);
@@ -562,11 +604,13 @@ TEST_CASE("K: pressing through a chain explosion never eats a legal drop") {
         put(p, 6, 8);
         const bool got = placed_this_tick(s, 0);
         ++checked;
+        if (should) ++legal;
         if (should && !got) {
             ++vanished;
             std::printf("[K] VANISH t=%d placed=%d bombs=%d\n", t, got, p.bombs_placed);
         }
     }
-    std::printf("[K] checked=%lld vanished=%lld\n", checked, vanished);
+    std::printf("[K] checked=%lld legal=%lld vanished=%lld\n", checked, legal, vanished);
+    CHECK(legal > 0);  // the chain really did free a slot to drop into
     CHECK(vanished == 0);
 }

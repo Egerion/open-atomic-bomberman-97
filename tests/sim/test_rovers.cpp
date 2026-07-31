@@ -43,16 +43,21 @@ TEST_CASE("rover/ghost spawn is deterministic and draws no RNG when count==0") {
 }
 
 TEST_CASE("a non-campaign config leaves the golden RNG stream untouched") {
-    // Two configs, identical except one runs through RoverSystem::spawn with
-    // count==0 (still called from build_state) — proves the early-out is a
-    // true no-op, not just "happens to match" for THIS scenario.
+    // The pair has to be count==0 against count>0. Setting campaign_rovers = 0
+    // explicitly, as this case used to, assigns the field its own DEFAULT
+    // (match_config.hpp) — so both sims were built from byte-identical configs
+    // and the case compared a value with itself. Spawning for real is what makes
+    // "the early-out draws nothing" a claim that can be wrong: the stream has to
+    // stay put on the zero side and MOVE on the other.
     MatchConfig cfg = open_config();
     Simulation baseline(cfg);
-    cfg.campaign_rovers = 0;
-    cfg.campaign_ghosts = 0;
-    Simulation with_zero_counts(cfg);
-    CHECK(baseline.hash() == with_zero_counts.hash());
-    CHECK(baseline.state().rng == with_zero_counts.state().rng);
+    cfg.campaign_rovers = 3;
+    cfg.campaign_rover_speed = 200;
+    Simulation with_rovers(cfg);
+    CHECK(baseline.state().rovers.empty());
+    CHECK_FALSE(with_rovers.state().rovers.empty());
+    CHECK(baseline.hash() != with_rovers.hash());
+    CHECK(baseline.state().rng != with_rovers.state().rng);
 }
 
 TEST_CASE("rovers spawn at least 3 tiles from every player and never on a wall") {
@@ -61,7 +66,9 @@ TEST_CASE("rovers spawn at least 3 tiles from every player and never on a wall")
     cfg.campaign_rover_speed = 200;
     Simulation s(cfg);
     const State& st = s.state();
-    CHECK(st.rovers.size() <= 3);  // may be fewer if placement failed (unlikely here)
+    // REQUIRE, not a `<= 3` ceiling: zero rovers satisfied that bound AND emptied
+    // every per-rover assertion below, so a spawn that placed nothing went green.
+    REQUIRE(st.rovers.size() == 3);
     for (const auto& r : st.rovers) {
         CHECK(r.alive);
         CHECK(r.kind == RoverKind::Rover);
@@ -240,7 +247,17 @@ TEST_CASE("a rover dying to a flame with no owner reports -1, not a garbage slot
         255;  // no attributable owner (matches Player slot sentinel usage elsewhere)
 
     for (int i = 0; i < 5 && !st.rovers.empty(); ++i) s.tick(TickInputs{});
-    CHECK(st.rovers.empty());
+    CHECK(st.rovers.empty());  // reaped after death
+    // The -1 in the case title was never actually asserted: reaping is all the
+    // case used to check, so a death that reported a garbage slot passed. Same
+    // shape as the owned-flame case above, which does pin its slot.
+    bool found = false;
+    for (const auto& e : st.events) {
+        if (e.type != Event::Type::RoverDied) continue;
+        found = true;
+        CHECK(e.data == -1);  // no attributable owner, not slot 255 truncated
+    }
+    CHECK(found);
 }
 
 // ---- Landing-tile kill (NOT a punch) ------------------------------------

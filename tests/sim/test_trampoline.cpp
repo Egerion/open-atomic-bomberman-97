@@ -209,9 +209,15 @@ TEST_CASE("the apex relocation is deterministic for a fixed seed") {
         while (p.bounce > kApexBounce) s.tick(TickInputs{});
         return std::pair<int, int>{p.tile_x(), p.tile_y()};
     };
-    // Same seed -> identical landing (replay determinism); this also proves the
-    // relocation runs on State::rng, not a cosmetic stream.
-    CHECK(land(7) == land(7));
+    // Same seed -> identical landing (replay determinism). `land(7) == land(7)`
+    // alone was f(x) == f(x): it holds for ANY deterministic function, including
+    // one that relocates nowhere and returns the trampoline tile both times. Pin
+    // the value as well, so the case fails if the relocation stops happening.
+    // (That it draws State::rng rather than a cosmetic stream is the NEXT case's
+    // claim, not this one's — replaying identically proves only determinism.)
+    const std::pair<int, int> first = land(7);
+    CHECK(first == land(7));
+    CHECK(first != std::pair<int, int>{4, 4});  // it really left the trampoline tile
 }
 
 TEST_CASE("the relocation draws the sim RNG (and only at a real hop)") {

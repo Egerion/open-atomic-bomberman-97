@@ -13,38 +13,19 @@
 
 #include "bomber/net/rollback_session.hpp"
 #include "bomber/net/transport.hpp"
-#include "helpers.hpp"  // bomber::sim::test::open_config
+#include "helpers.hpp"        // bomber::sim::test::open_config
+#include "input_scripts.hpp"  // the antiphase walk; see that header on the three scripts
 
 using namespace bomber;                  // NOLINT(google-build-using-namespace) — test-local
 using bomber::sim::test::open_config;
+using bomber::test::scripted_cycle6;
+using bomber::test::seat_input;
 
 namespace {
 
 constexpr std::uint16_t kSeat0 = 0x1;
 constexpr std::uint16_t kSeat1 = 0x2;
 constexpr std::uint16_t kBoth = 0x3;
-
-sim::TickInputs seat_input(int seat, const sim::PlayerInput& in) {
-    sim::TickInputs t;
-    t.players[static_cast<std::size_t>(seat)] = in;
-    return t;
-}
-
-// Per-seat script that CHANGES most ticks, phase-shifted per seat, so each peer's
-// "repeat the last remote input" prediction is frequently WRONG — forcing real
-// rollbacks rather than lucky correct guesses.
-sim::PlayerInput scripted(int seat, std::uint32_t tick) {
-    sim::PlayerInput in;
-    switch ((tick + static_cast<std::uint32_t>(seat) * 3U) % 6U) {
-        case 0: in.right = true; break;
-        case 1: in.down = true; break;
-        case 2: in.left = true; break;
-        case 3: in.up = true; break;
-        case 4: in.action1 = true; break;
-        default: break;
-    }
-    return in;
-}
 
 }  // namespace
 
@@ -58,8 +39,8 @@ TEST_CASE("rollback: peers' confirmed states stay in perfect agreement under lat
     net::RollbackSession b(sb, kSeat1, kBoth, /*max_prediction=*/16, tb);
 
     auto pump = [&] {
-        a.advance(seat_input(0, scripted(0, a.predicted_tick())));
-        b.advance(seat_input(1, scripted(1, b.predicted_tick())));
+        a.advance(seat_input(0, scripted_cycle6(0, a.predicted_tick())));
+        b.advance(seat_input(1, scripted_cycle6(1, b.predicted_tick())));
         link.step();
     };
 
@@ -104,8 +85,8 @@ TEST_CASE("rollback: the hash exchange still catches a real divergence (mismatch
     net::RollbackSession b(sb, kSeat1, kBoth, /*max_prediction=*/8, tb);
 
     for (int i = 0; i < 100; ++i) {
-        a.advance(seat_input(0, scripted(0, a.predicted_tick())));
-        b.advance(seat_input(1, scripted(1, b.predicted_tick())));
+        a.advance(seat_input(0, scripted_cycle6(0, a.predicted_tick())));
+        b.advance(seat_input(1, scripted_cycle6(1, b.predicted_tick())));
         link.step();
     }
     CHECK(a.desynced());

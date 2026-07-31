@@ -54,6 +54,21 @@ std::string join(const std::vector<std::string>& names) {
 
 }  // namespace
 
+// Every field the comparator knows about, counted. Measured, not derived — bump
+// it deliberately when MatchConfig or Tuning gains a field, in the same commit
+// that teaches match_config_compare.hpp about it.
+constexpr std::size_t kComparedFields = 75;
+
+TEST_CASE("the comparator still names every field it is supposed to") {
+    // The tripwire for the direction the round-trip assertion CANNOT see. The
+    // round-trip asserts `match_config_diffs(...).empty()`, so a field quietly
+    // dropped from the comparator simply stops being compared and everything
+    // stays green — measured: deleting one BOMBER_CMP line leaves the whole codec
+    // suite passing. Counting is what makes that deletion loud.
+    const auto report = sim::test::compare_match_config(sim::MatchConfig{}, sim::MatchConfig{});
+    CHECK(report.size() == kComparedFields);
+}
+
 TEST_CASE("the distinctive config really differs from a default one in every field") {
     // Guards the round-trip below: if the filler left a field at its default,
     // a codec that skipped that field would still round-trip "equal".

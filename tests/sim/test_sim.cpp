@@ -412,7 +412,14 @@ TEST_CASE("a placed bomb blocks re-entry onto its tile") {
 }
 
 TEST_CASE("kick sends a resting bomb sliding") {
-    Simulation s(test_config());
+    // The fuse has to outlast the walk. At the stock 40 frames the bomb had
+    // already detonated by the time the old assertion ran, and it read
+    // `bombs.empty() || bombs[0].tile_x() > 2` — whose left disjunct was
+    // therefore always true. The case passed with the kick deleted, and with the
+    // drop refused.
+    MatchConfig cfg = test_config();
+    cfg.tuning.fuse_frames = 400;
+    Simulation s(cfg);
     s.state().players[0].kick = true;
     s.state().players[0].x = 2 * kTileWF + kTileWF / 2;
     s.state().players[0].y = 2 * kTileHF + kTileHF / 2;
@@ -424,8 +431,9 @@ TEST_CASE("kick sends a resting bomb sliding") {
     TickInputs right;
     right.players[0].right = true;
     run(s, 30, right);
-    bool bomb_moved = s.state().bombs.empty() || s.state().bombs[0].tile_x() > 2;
-    CHECK(bomb_moved);
+    REQUIRE(s.state().bombs.size() == 1);    // still fuse-bound: it was kicked, not burnt
+    CHECK(s.state().bombs[0].moving);        // the kick latched
+    CHECK(s.state().bombs[0].tile_x() > 2);  // and carried it east off the drop tile
 }
 
 TEST_CASE("full-state determinism incl. seeded setup") {

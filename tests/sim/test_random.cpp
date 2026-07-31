@@ -39,12 +39,16 @@ TEST_CASE("random can roll a skull") {
     Simulation s(cfg);
     Player& p = s.state().players[0];
     s.state().floor[p.tile_y()][p.tile_x()] = PowerupType::Random;
+    // Against the position BEFORE the pickup. `p.x != 0` was a tautology: x is a
+    // fixed-point tile-CENTRE, so a player on tile (0,0) already holds
+    // kTileWF / 2, and no roll can ever drive it to zero.
+    const auto x_before = p.x;
     run(s, 1);
     bool infected = false;
     for (const auto& e : s.state().events)
         if (e.type == Event::Type::Infected) infected = true;
     CHECK(infected);
-    CHECK((p.disease_timer > 0 || p.x != 0));  // sick (or swapped, if rolled)
+    CHECK((p.disease_timer > 0 || p.x != x_before));  // sick, or swapped if Swap rolled
 }
 
 TEST_CASE("random never yields another random") {
@@ -52,16 +56,30 @@ TEST_CASE("random never yields another random") {
     MatchConfig cfg = open_config();
     Simulation s(cfg);
     Player& p = s.state().players[0];
-    for (int i = 0; i < 50; ++i) {
+    constexpr int kPickups = 50;
+    int picked = 0, infected = 0;
+    for (int i = 0; i < kPickups; ++i) {
         s.state().floor[p.tile_y()][p.tile_x()] = PowerupType::Random;
         run(s, 1);
         for (const auto& e : s.state().events) {
-            if (e.type == Event::Type::PowerupPicked) {
-                CHECK(e.data != static_cast<std::int8_t>(PowerupType::Random));
-                CHECK(e.data < 12);
-            }
+            if (e.type == Event::Type::Infected) ++infected;
+            if (e.type != Event::Type::PowerupPicked) continue;
+            ++picked;
+            CHECK(e.data != static_cast<std::int8_t>(PowerupType::Random));
+            CHECK(e.data < 12);
         }
     }
+    // The witness, without which this case is 50 laps of asserting nothing: the
+    // two bounds above live inside a doubly-guarded loop, so a reroll that stops
+    // firing (or a dispatcher that stops emitting the event) empties the body and
+    // goes green for exactly the regression the case exists to catch.
+    //
+    // Every pickup lands as ONE of two events, which is why the floor is the sum
+    // rather than `picked == 50`: a roll of Disease/SuperDisease announces
+    // Infected instead of PowerupPicked. Measured on this seed, 42 of the 50
+    // rolls are ordinary kinds and 8 are skulls.
+    CHECK(picked > 0);
+    CHECK(picked + infected == kPickups);
 }
 
 TEST_CASE("random consumes deterministic RNG") {

@@ -27,38 +27,20 @@
 #include "bomber/net/rollback_session.hpp"
 #include "bomber/net/round_rotation.hpp"
 #include "bomber/net/transport.hpp"
-#include "fanout_bus.hpp"  // bomber::test::StarBus — the 3-seat migration case
-#include "helpers.hpp"     // bomber::sim::test::open_config
+#include "fanout_bus.hpp"     // bomber::test::StarBus — the 3-seat migration case
+#include "helpers.hpp"        // bomber::sim::test::open_config
+#include "input_scripts.hpp"  // the antiphase walk; see that header on the three scripts
 
 using namespace bomber;  // NOLINT(google-build-using-namespace) — test-local
 using bomber::sim::test::open_config;
+using bomber::test::scripted_cycle6;
+using bomber::test::seat_input;
 
 namespace {
 
 constexpr std::uint16_t kSeat0 = 0x1;
 constexpr std::uint16_t kSeat1 = 0x2;
 constexpr std::uint16_t kBoth = 0x3;
-
-sim::TickInputs seat_input(int seat, const sim::PlayerInput& in) {
-    sim::TickInputs t;
-    t.players[static_cast<std::size_t>(seat)] = in;
-    return t;
-}
-
-// The same scripted walk the rotation suite uses: enough real input that
-// prediction genuinely mispredicts and the rollback path is exercised.
-sim::PlayerInput scripted(int seat, std::uint32_t tick) {
-    sim::PlayerInput in;
-    switch ((tick + static_cast<std::uint32_t>(seat) * 3U) % 6U) {
-        case 0: in.right = true; break;
-        case 1: in.down = true; break;
-        case 2: in.left = true; break;
-        case 3: in.up = true; break;
-        case 4: in.action1 = true; break;
-        default: break;
-    }
-    return in;
-}
 
 // Two peers over one link, wired exactly as GameApp::run_netplay_match_seats
 // wires them: seat 0 is the host, seat 1 the guest, prediction capped at 8.
@@ -74,8 +56,8 @@ struct Pair {
 
     // One pump of both peers plus one step of the delivery clock.
     void pump() {
-        host.advance(seat_input(0, scripted(0, host.predicted_tick())));
-        guest.advance(seat_input(1, scripted(1, guest.predicted_tick())));
+        host.advance(seat_input(0, scripted_cycle6(0, host.predicted_tick())));
+        guest.advance(seat_input(1, scripted_cycle6(1, guest.predicted_tick())));
         link.step();
     }
 
@@ -187,7 +169,7 @@ TEST_CASE("abandon: a GUEST cannot end a round, and does not even ASK") {
 
     int requests = 0;
     for (int i = 0; i < 100; ++i) {
-        guest.advance(seat_input(1, scripted(1, guest.predicted_tick())));
+        guest.advance(seat_input(1, scripted_cycle6(1, guest.predicted_tick())));
         link.step();
         std::vector<std::uint8_t> pkt;
         while (tsilent.poll(&pkt)) {
@@ -250,11 +232,17 @@ TEST_CASE("abandon: a HOST ignores an EndRoundRequest from an older peer") {
     p.pump_n(20);
     const std::vector<std::uint8_t> req =
         net::encode_match_ctl(net::MatchCtlKind::EndRoundRequest, 0);
+    const std::uint32_t rx_before = p.host.stats().rx_packets;
     for (int i = 0; i < 10; ++i) {
         p.tb.send(req.data(), req.size());  // the guest side of the link
         p.link.step();
-        p.host.advance(seat_input(0, scripted(0, p.host.predicted_tick())));
+        p.host.advance(seat_input(0, scripted_cycle6(0, p.host.predicted_tick())));
     }
+    // Both claims below are negatives, so they also hold if the forged frames
+    // never arrived at all — and the guest session is not pumped here, so this
+    // injection is the host's ONLY inbound traffic. Pin the delivery, or the case
+    // proves nothing about refusing anything.
+    CHECK(p.host.stats().rx_packets >= rx_before + 10);
     CHECK_FALSE(p.host.end_round_scheduled());
     CHECK_FALSE(p.host.round_ended());
 }
@@ -267,9 +255,11 @@ TEST_CASE("abandon: a guest's forged EndRound is not obeyed either") {
     p.pump_n(20);
     const std::vector<std::uint8_t> forged =
         net::encode_match_ctl(net::MatchCtlKind::EndRound, p.host.predicted_tick() + 5);
+    const std::uint32_t rx_before = p.host.stats().rx_packets;
     p.tb.send(forged.data(), forged.size());
     p.link.step();
-    p.host.advance(seat_input(0, scripted(0, p.host.predicted_tick())));
+    p.host.advance(seat_input(0, scripted_cycle6(0, p.host.predicted_tick())));
+    CHECK(p.host.stats().rx_packets > rx_before);  // it arrived, and was then refused
     CHECK_FALSE(p.host.end_round_scheduled());
 }
 
@@ -289,7 +279,7 @@ TEST_CASE("abandon: against a DEAD peer the host's stop never completes — henc
                               net::DropPolicy{false, /*is_host=*/true, 0});
 
     for (int i = 0; i < 40; ++i) {
-        host.advance(seat_input(0, scripted(0, host.predicted_tick())));
+        host.advance(seat_input(0, scripted_cycle6(0, host.predicted_tick())));
         link.step();
     }
     host.request_end_round();
@@ -297,7 +287,7 @@ TEST_CASE("abandon: against a DEAD peer the host's stop never completes — henc
     const std::uint32_t at = host.end_round_tick();
 
     for (int i = 0; i < 2000; ++i) {
-        host.advance(seat_input(0, scripted(0, host.predicted_tick())));
+        host.advance(seat_input(0, scripted_cycle6(0, host.predicted_tick())));
         link.step();
     }
     // Two thousand pumps — a minute and a half of real time — and the round has
@@ -335,7 +325,7 @@ TEST_CASE("abandon: the host re-announces every pump — one datagram is not a p
     host.request_end_round();
     int announcements = 0;
     for (int i = 0; i < 50; ++i) {
-        host.advance(seat_input(0, scripted(0, host.predicted_tick())));
+        host.advance(seat_input(0, scripted_cycle6(0, host.predicted_tick())));
         link.step();
         std::vector<std::uint8_t> pkt;
         while (tsilent.poll(&pkt)) {
@@ -385,7 +375,7 @@ TEST_CASE("abandon: an announcement is idempotent and order-free") {
         net::encode_match_ctl(net::MatchCtlKind::EndRound, first - 2);
     p.ta.send(earlier.data(), earlier.size());
     p.link.step();
-    p.guest.advance(seat_input(1, scripted(1, p.guest.predicted_tick())));
+    p.guest.advance(seat_input(1, scripted_cycle6(1, p.guest.predicted_tick())));
     CHECK(p.guest.end_round_tick() == first - 2);
 }
 
@@ -417,7 +407,7 @@ struct StarPeer {
           seat_index(seat) {}
 
     void pump(std::uint32_t tick) {
-        session.advance(seat_input(seat_index, scripted(seat_index, tick)));
+        session.advance(seat_input(seat_index, scripted_cycle6(seat_index, tick)));
     }
 
     sim::Simulation sim;

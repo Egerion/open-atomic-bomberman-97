@@ -45,8 +45,15 @@ TEST_CASE("rendezvous punches a direct path over localhost, then carries data") 
     // Each latched the other's actual address as the winning path.
     CHECK(ra.winner()->port == b.local_port());
     CHECK(rb.winner()->port == a.local_port());
-    CHECK(ra.rtt_ms() >= 0);
-    CHECK(rb.rtt_ms() >= 0);
+    // `>= 0` could not fail: rtt_ms_ starts at 0, rendezvous.cpp clamps a
+    // negative sample to 0, and the multi-peer path seeds its worst at 0 — so a
+    // punch that latched a winner without ever timing one passed. The synthetic
+    // clock above advances 5 ms per step, so a real sample is a positive
+    // multiple of 5, and the 5 s deadline bounds it from above.
+    CHECK(ra.rtt_ms() > 0);
+    CHECK(rb.rtt_ms() > 0);
+    CHECK(ra.rtt_ms() < 5000);
+    CHECK(rb.rtt_ms() < 5000);
 
     // set_peer() ran on both, so an ordinary send()/poll() now flows over the
     // punched path.

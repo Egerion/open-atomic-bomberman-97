@@ -442,7 +442,8 @@ struct StarPeer {
           seat_index(seat) {}
 
     void pump(std::uint32_t tick) {
-        session.advance(net::test::seat_input(seat_index, net::test::scripted(seat_index, tick)));
+        session.advance(
+            net::test::seat_input(seat_index, net::test::scripted_cycle6(seat_index, tick)));
     }
 
     sim::Simulation sim;
@@ -561,8 +562,8 @@ TEST_CASE("jitter: the older synchronous LoopbackLink rig sees no change at all"
     net::RollbackSession b(sb, kSeat1, kBoth, /*max_prediction=*/8, tb);
 
     for (int i = 0; i < 400; ++i) {
-        a.advance(net::test::seat_input(0, net::test::scripted(0, a.predicted_tick())));
-        b.advance(net::test::seat_input(1, net::test::scripted(1, b.predicted_tick())));
+        a.advance(net::test::seat_input(0, net::test::scripted_cycle6(0, a.predicted_tick())));
+        b.advance(net::test::seat_input(1, net::test::scripted_cycle6(1, b.predicted_tick())));
         link.step();
     }
 

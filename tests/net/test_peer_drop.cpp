@@ -21,13 +21,16 @@
 #include "bomber/net/protocol.hpp"
 #include "bomber/net/rollback_session.hpp"
 #include "bomber/net/transport.hpp"
-#include "fanout_bus.hpp"  // bomber::test::FanoutBus / BusTransport
-#include "helpers.hpp"     // bomber::sim::test::open_config
+#include "fanout_bus.hpp"     // bomber::test::FanoutBus / BusTransport
+#include "helpers.hpp"        // bomber::sim::test::open_config
+#include "input_scripts.hpp"  // the antiphase walk; see that header on the three scripts
 
 using namespace bomber;  // NOLINT(google-build-using-namespace) — test-local
 using bomber::sim::test::open_config;
 using bomber::test::BusTransport;
 using bomber::test::FanoutBus;
+using bomber::test::scripted_cycle6;
+using bomber::test::seat_input;
 
 namespace {
 
@@ -42,29 +45,6 @@ sim::MatchConfig three_config() {
     cfg.spawns = {{0, 0}, {14, 10}, {14, 0}};
     cfg.player_count = 3;
     return cfg;
-}
-
-sim::TickInputs seat_input(int seat, const sim::PlayerInput& in) {
-    sim::TickInputs t;
-    t.players[static_cast<std::size_t>(seat)] = in;
-    return t;
-}
-
-// Per-seat script that changes most ticks and is phase-shifted per seat, so
-// "repeat the peer's last input" is frequently WRONG and real rollbacks happen.
-// A pure function of (seat, tick): the inputs a tick is simulated with are the
-// same on every peer and in every re-simulation.
-sim::PlayerInput scripted(int seat, std::uint32_t tick) {
-    sim::PlayerInput in;
-    switch ((tick + static_cast<std::uint32_t>(seat) * 3U) % 6U) {
-        case 0: in.right = true; break;
-        case 1: in.down = true; break;
-        case 2: in.left = true; break;
-        case 3: in.up = true; break;
-        case 4: in.action1 = true; break;
-        default: break;
-    }
-    return in;
 }
 
 }  // namespace
@@ -87,9 +67,9 @@ TEST_CASE("peer drop: the host hands a silent seat to the AI and nobody stalls")
 
     // Phase 1: all three alive.
     for (int i = 0; i < 60; ++i) {
-        a.advance(seat_input(0, scripted(0, a.predicted_tick())));
-        b.advance(seat_input(1, scripted(1, b.predicted_tick())));
-        c.advance(seat_input(2, scripted(2, c.predicted_tick())));
+        a.advance(seat_input(0, scripted_cycle6(0, a.predicted_tick())));
+        b.advance(seat_input(1, scripted_cycle6(1, b.predicted_tick())));
+        c.advance(seat_input(2, scripted_cycle6(2, c.predicted_tick())));
         bus.step();
     }
     const std::uint32_t alive_frontier = a.confirmed_tick();
@@ -100,8 +80,8 @@ TEST_CASE("peer drop: the host hands a silent seat to the AI and nobody stalls")
     // receives. A and B keep going.
     const std::uint32_t stall_tick = a.predicted_tick();
     for (int i = 0; i < 20; ++i) {
-        a.advance(seat_input(0, scripted(0, a.predicted_tick())));
-        b.advance(seat_input(1, scripted(1, b.predicted_tick())));
+        a.advance(seat_input(0, scripted_cycle6(0, a.predicted_tick())));
+        b.advance(seat_input(1, scripted_cycle6(1, b.predicted_tick())));
         bus.step();
     }
     // The old behaviour, still intact BEFORE the timeout: the display runs at
@@ -111,8 +91,8 @@ TEST_CASE("peer drop: the host hands a silent seat to the AI and nobody stalls")
 
     // Phase 3: past the hard timeout the host schedules + broadcasts the handoff.
     for (int i = 0; i < 120; ++i) {
-        a.advance(seat_input(0, scripted(0, a.predicted_tick())));
-        b.advance(seat_input(1, scripted(1, b.predicted_tick())));
+        a.advance(seat_input(0, scripted_cycle6(0, a.predicted_tick())));
+        b.advance(seat_input(1, scripted_cycle6(1, b.predicted_tick())));
         bus.step();
     }
 
@@ -181,7 +161,7 @@ TEST_CASE("peer drop: a rollback ACROSS the handoff tick keeps the peers identic
         const std::uint32_t base = (a.predicted_tick() > 4) ? a.predicted_tick() - 4 : 0;
         std::vector<sim::TickInputs> window;
         for (std::uint32_t t = base; t < base + 8; ++t)
-            window.push_back(seat_input(2, scripted(2, t)));
+            window.push_back(seat_input(2, scripted_cycle6(2, t)));
         const std::vector<std::uint8_t> pkt = net::encode_input_range(base, kSeat2, window);
         bus.inject(0, pkt);
         bus.inject(1, pkt);
@@ -194,8 +174,8 @@ TEST_CASE("peer drop: a rollback ACROSS the handoff tick keeps the peers identic
             bus.inject(1, drop, /*extra_latency=*/7);
         }
 
-        a.advance(seat_input(0, scripted(0, a.predicted_tick())));
-        b.advance(seat_input(1, scripted(1, b.predicted_tick())));
+        a.advance(seat_input(0, scripted_cycle6(0, a.predicted_tick())));
+        b.advance(seat_input(1, scripted_cycle6(1, b.predicted_tick())));
         if (a.confirmed_tick() < kHandoff && a.predicted_tick() > kHandoff) straddled = true;
         if (b.confirmed_tick() < kHandoff && b.predicted_tick() > kHandoff) straddled = true;
         bus.step();
@@ -230,7 +210,7 @@ TEST_CASE("peer drop: the handoff message is idempotent, duplicated and out of o
             const std::uint32_t base = (a.predicted_tick() > 4) ? a.predicted_tick() - 4 : 0;
             std::vector<sim::TickInputs> window;
             for (std::uint32_t t = base; t < base + 8; ++t)
-                window.push_back(seat_input(2, scripted(2, t)));
+                window.push_back(seat_input(2, scripted_cycle6(2, t)));
             const std::vector<std::uint8_t> pkt = net::encode_input_range(base, kSeat2, window);
             bus.inject(0, pkt);
             bus.inject(1, pkt);
@@ -247,8 +227,8 @@ TEST_CASE("peer drop: the handoff message is idempotent, duplicated and out of o
                 bus.inject(0, late, 0);
                 bus.inject(1, late, 2);
             }
-            a.advance(seat_input(0, scripted(0, a.predicted_tick())));
-            b.advance(seat_input(1, scripted(1, b.predicted_tick())));
+            a.advance(seat_input(0, scripted_cycle6(0, a.predicted_tick())));
+            b.advance(seat_input(1, scripted_cycle6(1, b.predicted_tick())));
             bus.step();
         }
     };
@@ -300,7 +280,7 @@ TEST_CASE("peer drop: a malformed Drop frame is rejected, never acted on") {
         bad[1] = 200;  // impossible seat
         bus.inject(0, bad);
         bus.inject(0, {static_cast<std::uint8_t>(net::MsgType::Drop)});  // tag only
-        a.advance(seat_input(0, scripted(0, a.predicted_tick())));
+        a.advance(seat_input(0, scripted_cycle6(0, a.predicted_tick())));
         bus.step();
     }
     CHECK(a.dropped_seats() == 0);
@@ -312,7 +292,7 @@ TEST_CASE("peer drop: a malformed Drop frame is rejected, never acted on") {
     // or empty slot) is equally inert: there is nothing to hand over.
     for (int i = 0; i < 5; ++i) {
         bus.inject(0, net::encode_drop(1, 0));
-        a.advance(seat_input(0, scripted(0, a.predicted_tick())));
+        a.advance(seat_input(0, scripted_cycle6(0, a.predicted_tick())));
         bus.step();
     }
     CHECK(a.dropped_seats() == 0);
@@ -338,16 +318,16 @@ TEST_CASE("peer drop: with 'lost net players revert to AI' OFF the match ends, i
     net::RollbackSession c(s2, kSeat2, kAll3, /*max_prediction=*/8, t2, guest);
 
     for (int i = 0; i < 60; ++i) {
-        a.advance(seat_input(0, scripted(0, a.predicted_tick())));
-        b.advance(seat_input(1, scripted(1, b.predicted_tick())));
-        c.advance(seat_input(2, scripted(2, c.predicted_tick())));
+        a.advance(seat_input(0, scripted_cycle6(0, a.predicted_tick())));
+        b.advance(seat_input(1, scripted_cycle6(1, b.predicted_tick())));
+        c.advance(seat_input(2, scripted_cycle6(2, c.predicted_tick())));
         bus.step();
     }
     CHECK_FALSE(a.aborted());
 
     for (int i = 0; i < 200; ++i) {  // C dies
-        a.advance(seat_input(0, scripted(0, a.predicted_tick())));
-        b.advance(seat_input(1, scripted(1, b.predicted_tick())));
+        a.advance(seat_input(0, scripted_cycle6(0, a.predicted_tick())));
+        b.advance(seat_input(1, scripted_cycle6(1, b.predicted_tick())));
         bus.step();
     }
 
@@ -364,7 +344,7 @@ TEST_CASE("peer drop: with 'lost net players revert to AI' OFF the match ends, i
     // answer instead of a session that quietly keeps pumping.
     const std::uint32_t frozen = a.predicted_tick();
     for (int i = 0; i < 50; ++i) {
-        a.advance(seat_input(0, scripted(0, a.predicted_tick())));
+        a.advance(seat_input(0, scripted_cycle6(0, a.predicted_tick())));
         bus.step();
     }
     CHECK(a.predicted_tick() == frozen);

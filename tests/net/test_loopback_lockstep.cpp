@@ -14,30 +14,16 @@
 #include <vector>
 
 #include "bomber/net/input_codec.hpp"
-#include "helpers.hpp"  // bomber::sim::test::open_config (+ pulls in simulation.hpp)
+#include "helpers.hpp"        // bomber::sim::test::open_config (+ pulls in simulation.hpp)
+#include "input_scripts.hpp"  // the SPARSER walk; see that header on the three scripts
 
 using namespace bomber;                  // NOLINT(google-build-using-namespace) — test-local
 using bomber::sim::test::open_config;
+using bomber::test::scripted_cycle8;
 
 namespace {
 
 std::uint16_t seat_bit(int seat) { return static_cast<std::uint16_t>(1U << seat); }
-
-// A deterministic per-seat input script: cycle moves and drop a bomb every 8th
-// tick, phase-shifted per seat so the two seats issue DIFFERENT inputs (a real
-// divergence test, not two idle players).
-sim::PlayerInput scripted(int seat, int tick) {
-    sim::PlayerInput in;
-    switch ((tick + seat * 7) % 8) {
-        case 0: in.right = true; break;
-        case 1: in.down = true; break;
-        case 2: in.left = true; break;
-        case 3: in.up = true; break;
-        case 4: in.action1 = true; break;  // drop bomb
-        default: break;                     // idle
-    }
-    return in;
-}
 
 }  // namespace
 
@@ -99,8 +85,9 @@ TEST_CASE("loopback lockstep: two peers exchanging packed inputs stay hash-ident
     // except through the wire codec.
     constexpr int kTicks = 600;  // 30 s at 20 Hz — long enough to run bombs/flames/deaths
     for (int t = 0; t < kTicks; ++t) {
-        const sim::PlayerInput a_local = scripted(0, t);
-        const sim::PlayerInput b_local = scripted(1, t);
+        const auto tick = static_cast<std::uint32_t>(t);
+        const sim::PlayerInput a_local = scripted_cycle8(0, tick);
+        const sim::PlayerInput b_local = scripted_cycle8(1, tick);
 
         // Each peer serializes ONLY its own seat and "sends" it.
         sim::TickInputs a_only;

@@ -142,8 +142,10 @@ TEST_CASE("live: a certificate that does not verify is refused") {
     const std::string wrong_host_url =
         env_or("BOMBER_TLS_WRONGHOST_URL", "wss://wrong.host.badssl.com/");
 
+    int endpoints_checked = 0;
     for (const std::string& u : {url, wrong_host_url}) {
         if (u.empty()) continue;  // an override can blank one endpoint out
+        ++endpoints_checked;
         LobbyClient c;
         REQUIRE(c.connect(u));
         // It must never open, and it must say why. Automatic reconnection is
@@ -160,6 +162,10 @@ TEST_CASE("live: a certificate that does not verify is refused") {
         CHECK(blamed_the_certificate);
         c.close();
     }
+    // BOMBER_TLS_LIVE set but BOTH overrides blanked out skipped every endpoint
+    // and passed — this suite's own "green, having verified nothing" shape, one
+    // level below the build switch that produced it the first time.
+    CHECK(endpoints_checked > 0);
 }
 
 #endif  // BOMBER_HAS_LOBBY_TLS
