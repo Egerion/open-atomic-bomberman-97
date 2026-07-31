@@ -89,22 +89,37 @@ endif()
 add_subdirectory(libs/audio)
 add_subdirectory(apps/abtool)
 
-# libs/game is now split on the SDL boundary the same way, and for the same
-# reason. It is BOTH halves in one directory: bomber::game_util (SDL-free — the
-# §11 log seam and the scheme editor's pure grid model) is declared
-# unconditionally, and bomber::game itself early-returns unless the viewer is on.
-# So this line must sit here, before tests/, and libs/platform — which only the
-# SDL half needs — must still precede it whenever that half is being built.
+# The presentation stack. What was one 13k-line libs/game — renderer, asset
+# store, UI chrome, input, editor, every screen, the whole netplay front end and
+# the app shell in a single target with 73 public headers — is eight packages,
+# declared here in dependency order so the graph is visible from one screen:
 #
-# What this buys: tests/game's editor_grid suite used to RECOMPILE
-# libs/game/src/editor_grid.cpp into its own binary because the only target
-# offering it dragged in SDL3. That is the same shape libs/audio was fixed out of
-# — a suite that rebuilds the code instead of linking it is testing its own copy,
-# and nothing catches the day the two diverge.
+#   game_util -> input, render -> ui -> netui -> editor -> frontend -> netplay -> game
+#
+# bomber::game_util is FIRST and is declared UNCONDITIONALLY, because it is the
+# SDL-free floor: the front-end state machine, the pixel/pacing rules, the
+# match and results bookkeeping, the editor's grid model, the log seam. The
+# `headless` preset — the one scripts/test.sh builds for the pre-push hook —
+# compiles all of it, so tests/game's suites LINK it instead of recompiling its
+# sources into their own binaries. That is the shape libs/audio was fixed into
+# and the shape three separate "green having verified nothing" gates were fixed
+# out of; keeping the SDL-free half below the SDL line is what makes it hold.
+#
+# Everything after it needs SDL3, so each of those directories early-returns
+# unless BOMBER_BUILD_VIEWER is on, and libs/platform — which the SDL half needs
+# for the frame clock/pacer — must precede them whenever that half is built.
+add_subdirectory(libs/game_util)
 if(BOMBER_BUILD_VIEWER)
-  add_subdirectory(libs/platform)  # engine-base (ADR-0008): must precede libs/game
+  add_subdirectory(libs/platform)  # engine-base (ADR-0008): must precede the SDL packages
+  add_subdirectory(libs/input)     # keyboard/gamepad/DOS scancodes (SDL-free headers)
+  add_subdirectory(libs/render)    # textures, sprites, sequences, the world renderer
+  add_subdirectory(libs/ui)        # Screen/ScreenContext, .BM viewer, dialog chrome
+  add_subdirectory(libs/netui)     # chat + setup-link + F3 panel: net widgets inside screens
+  add_subdirectory(libs/editor)    # the .SCH scheme editor
+  add_subdirectory(libs/frontend)  # every front-end screen + MatchRunner
+  add_subdirectory(libs/netplay)   # lobby, connect, online match, runner
 endif()
-add_subdirectory(libs/game)
+add_subdirectory(libs/game)        # the app shell (GameApp); early-returns without the viewer
 
 enable_testing()
 add_subdirectory(tests)

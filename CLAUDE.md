@@ -12,18 +12,61 @@ Component-based layout; each component is one CMake target with its public
 headers under `include/bomber/<name>/`. Dependencies point one way only:
 
 ```
-apps/game ─────► libs/game ──► libs/match ──► libs/assets   (SDL-free)
-apps/viewer ───► (SDL3)   ├──► libs/audio  ─► libs/sim      (dependency-free)
-                          ├──► libs/net   ──┘
-                          └──► libs/platform (SDL3)
-apps/abtool ─────────────────► libs/match, libs/sim, libs/assets
-tests ───────────────────────► libs/sim, libs/net (+ doctest)
+                            THE PRESENTATION STACK (all SDL3 except game_util)
+
+apps/game ────► libs/game ───► libs/netplay ──► libs/frontend ──► libs/editor ─┐
+                (GameApp)      lobby/connect/   every screen +    the .SCH      │
+                               online match     MatchRunner       editor        │
+                                    │                │                │        │
+                                    └────────────────┴──► libs/netui ─┴────────►│
+                                                          chat, setup link,     │
+                                                          F3 panel              │
+                                                                                ▼
+apps/viewer ──────────────────────────────────────────────────────► libs/ui ────┤
+                                                    Screen/ScreenContext, .BM    │
+                                                    viewer, dialog chrome        │
+                                                                                 ▼
+                                          libs/render ◄──────────────► libs/input
+                                          textures, sprites,    keyboard/gamepad
+                                          sequences, Renderer   (SDL-free headers)
+                                                    │                │
+                                                    └────────┬───────┘
+                                                             ▼
+                                                    libs/game_util   ◄── SDL-FREE
+                                                    app_flow, results, match
+                                                    outcome, editor grid, the
+                                                    pixel/pacing rules, log seam
+
+                            THE SDL-FREE CORE (unchanged)
+
+libs/game_util ─► libs/match ──► libs/assets                (no SDL anywhere)
+libs/render    ├─► libs/audio ──► libs/sim                  (dependency-free)
+libs/frontend  ├─► libs/net   ──┘
+libs/netplay   └─► libs/platform (SDL3)
+apps/abtool ─────► libs/match, libs/sim, libs/assets
+tests ───────────► libs/sim, libs/net, libs/game_util (+ doctest)
 
 libs/core — header-only, depends on NOTHING; anything above may depend on it.
 
 services/matchmaker (Go, separate build) ◄── libs/net's lobby layer, over the
                                              wire only — no code shared
 ```
+
+The presentation arrows point ONE WAY, bottom to top:
+
+    game_util → {input, render} → ui → netui → editor → frontend → netplay → game
+
+Two of those arrows surprise people, and both are dependency facts rather than
+taste. **The editor is BELOW the front end** because the front end opens it (the
+main menu and the options screen both do), not the other way round; the generic
+modals they share — the help browser, the filename prompt — therefore live in
+`libs/ui`, and leaving either in `libs/frontend` is what would make frontend and
+editor mutually dependent. **`netui` is BELOW the front end and `netplay` is
+ABOVE it**, because the local setup and map-select screens EMBED the chat
+overlay and the online setup link, while the lobby/connect/match runner DRIVE
+those same screens. One package spanning both halves needs an arrow in each
+direction across the same boundary; split where the arrow actually points and
+neither half needs the other.
 
 - **libs/core** (`bomber::core`) — SDL-free, dependency-free shared vocabulary
   (ADR-0008): the fixed-point pixel unit + field geometry, slot/rate limits,
@@ -69,7 +112,8 @@ services/matchmaker (Go, separate build) ◄── libs/net's lobby layer, over 
   ranges), and `bomber::audio` adds `AudioEngine` (SDL PCM stream pool, music +
   SFX) on top. The split is what puts the SDL-free half inside the pre-push gate
   (see "Build & test"); `tests/audio` links `audio_core` rather than recompiling
-  its sources. Depends on assets and sim; nothing depends on it but `libs/game`.
+  its sources. Depends on assets and sim; only the presentation stack depends on
+  it (`libs/render` and everything above).
   Its cosmetic RNG is its own and never touches `State::rng` (determinism rule
   6). Note the namespace is still `bomber::game` pending a mechanical rename.
   `AudioEngine` exposes the binary's three play primitives — `play`
@@ -92,10 +136,63 @@ services/matchmaker (Go, separate build) ◄── libs/net's lobby layer, over 
   exactly `kSubFrames` steps, so the only honest target is one distinct step per
   present. The number on the overlay therefore means "distinct images
   delivered" and will read below 180 on a machine that cannot make them.
-- **libs/game** (`bomber::game`) — SDL3 presentation and the front-end:
-  `AssetStore` (textures, recoloring), `SequenceSet`, `Renderer`,
-  `KeyboardMapper`, the per-screen classes under `src/screens/` (ADR-0009), and
-  `GameApp`. Reads `State` + `events`; never mutates them.
+- **The presentation stack** — eight packages, each one CMake target with public
+  headers under `include/bomber/<name>/`, split out of what used to be a single
+  13k-line `libs/game` holding the renderer, the asset store, the UI chrome,
+  input, the editor, every screen, the whole netplay front end and the app shell
+  behind one namespace and 73 headers in one directory. All of them read `State`
+  + `events` and never mutate them.
+  - **libs/game_util** (`bomber::game_util`) — the **SDL-FREE floor**, and the
+    only one of the eight the `headless` preset builds. Pure models: the
+    front-end state machine (`app_flow`), the match/results bookkeeping
+    (`results`, `match_outcome`, `campaign_round_end`, `net_tally`, `net_esc`),
+    the pixel and pacing rules the renderer applies (`alpha_bleed`, `key_color`,
+    `scale_filter`, `anim_pace`, `carry_pose`), the list-dialog geometry, the
+    editor's grid model, and the §11 log seam. Being SDL-free is what puts it
+    inside the pre-push gate (see "Build & test"), so `tests/game`'s suites LINK
+    or include it rather than recompiling sources. **Grow this package by
+    preference**: a rule that can be stated without SDL belongs here, where a
+    headless test can pin it. Adding a file that includes SDL breaks `headless`
+    immediately, which is the intended feedback.
+  - **libs/input** (`bomber::input`) — keyboard, gamepad, DOS-scancode bridge.
+    Its public headers are deliberately SDL-free (bindings are plain `int`) so
+    the headless suites can pin the binding model; only the three `.cpp` files
+    need SDL, which is why the target is SDL-gated but the include dir stands
+    alone.
+  - **libs/render** (`bomber::render`) — how a pixel gets on screen: the SDL
+    RAII shims, `AssetStore` (textures, recolouring), `SequenceSet`, sprite
+    banks, and the world `Renderer`. Knows nothing about screens or dialogs.
+  - **libs/ui** (`bomber::ui`) — the reusable chrome: the `Screen` primitive
+    (`sub_42A088`), the `ScreenContext` bundle every screen is handed, the `.BM`
+    text viewer + font textures (`sub_41302D`), the window/dialog/list chrome,
+    and the two generic modals (help browser, filename prompt). `BmScreen` is
+    here rather than in `render` because `bmscreen.cpp` draws through
+    `dialog_chrome` while `dialog_chrome.hpp` includes `bmscreen.hpp` — they are
+    one layer, and splitting them would need an arrow back up out of `render`.
+  - **libs/netui** (`bomber::netui`) — the net widgets drawn INSIDE another
+    screen: the chat overlay, the online setup link + its roster mapping, and
+    the F3 diagnostic panel. Below the front end; owns no event loop that
+    sequences screens.
+  - **libs/editor** (`bomber::editor`) — the `.SCH` scheme editor's SDL surface
+    over `game_util`'s grid model.
+  - **libs/frontend** (`bomber::frontend`) — every screen the player sees, plus
+    `MatchRunner`, the presentation-side driver of the deterministic sim. The
+    largest package, and readable as a unit because its twenty-odd classes share
+    ONE idiom: take a `ScreenContext`, own a nested SDL event loop, return an
+    `AppInput`. `MatchRunner` is here rather than in the shell because it IS
+    `AppState::Match` and because `netplay` drives it. GOLDEN-SENSITIVE —
+    `match_runner.cpp` reproduces the sim's seeding and per-tick input assembly
+    statement-for-statement.
+  - **libs/netplay** (`bomber::netplay`) — the online session end to end: lobby,
+    connect/host, the best-of-N online match, and the runner that sequences
+    them. Top of the stack; nothing in the front end knows it exists.
+  - **libs/game** (`bomber::game`) — the APPLICATION SHELL and only that.
+    `GameApp`: SDL/window lifetime, the install resolve, the options.ini round
+    trip, and the `AppState` loop that hands control to one screen at a time.
+  - The C++ NAMESPACE is still `bomber::game` throughout, as it is in
+    `libs/audio` — target identity and namespace are already decoupled here, and
+    renaming 13k lines of namespace qualification is a separate mechanical
+    commit, not part of a move.
 - **services/matchmaker** — a small Go service (NOT part of the C++/CMake
   build) that introduces peers and relays for the ones whose NAT refuses a
   direct path. It never simulates and never sees `State`.
@@ -249,10 +346,14 @@ was declared only inside the root `CMakeLists.txt`'s `BOMBER_BUILD_VIEWER`
 block, so `headless` compiled none of it, and `tests/audio` papered over half of
 that by recompiling `sound_bank.cpp`/`sound_director.cpp` into its own binaries.
 Its SDL-free half is now the always-built `bomber::audio_core` and the suites
-link it. What the gate still CANNOT cover is anything that includes SDL —
-`audio_engine.cpp`, `libs/game`, `libs/platform`, `apps/game|viewer`; those are
-compiled by CI's linux/macos/windows-fetch matrix and parsed (with clang, not
-MSVC) by `scripts/lint.sh`. Runtime verification against
+link it. The presentation stack is split on the same line and for the same
+reason: `bomber::game_util` is declared unconditionally and everything above it
+early-returns without the viewer. What the gate still CANNOT cover is anything
+that includes SDL — `audio_engine.cpp`, `libs/platform`, and the seven SDL
+presentation packages (`input`, `render`, `ui`, `netui`, `editor`, `frontend`,
+`netplay`) plus `libs/game` and `apps/game|viewer`; those are compiled by CI's
+linux/macos/windows-fetch matrix and parsed (with clang, not MSVC) by
+`scripts/lint.sh`. Runtime verification against
 a real install: `abtool survey <game_dir>` and `bomber_viewer <game_dir>
 --selftest`. The game auto-detects the install via `BOMBER_GAME_DIR`,
 `gamedir.txt`, or the standard paths (`libs/assets/src/install.cpp`).

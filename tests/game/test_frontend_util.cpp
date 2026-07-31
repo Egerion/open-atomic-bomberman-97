@@ -25,7 +25,7 @@
 #include <set>
 #include <string>
 
-#include "bomber/game/frontend_util.hpp"
+#include "bomber/game_util/frontend_util.hpp"
 
 namespace fs = std::filesystem;
 using bomber::game::pick_glue;

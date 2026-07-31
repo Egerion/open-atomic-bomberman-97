@@ -3,7 +3,7 @@
 # One row per pinned frame: `<label> <tick> <sha256-of-the-BMP>`. `label`
 # names both the --demo-shots save point and the scenario it's meant to
 # regression-test; `tick` is the sim tick (20 Hz) at which the SCRIPTED demo
-# match (bomber::game::demo_inputs, libs/game/src/input.cpp) reaches that
+# match (bomber::game::demo_inputs, libs/input/src/input.cpp) reaches that
 # moment, against the shipped BASIC.SCH scheme and a real install's
 # VALUELST.RES/level rotation. Recapture procedure: see README.md.
 #

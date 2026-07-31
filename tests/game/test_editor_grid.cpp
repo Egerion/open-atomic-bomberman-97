@@ -8,7 +8,7 @@
 #include <doctest/doctest.h>
 
 #include "bomber/assets/sch.hpp"
-#include "bomber/game/editor_grid.hpp"
+#include "bomber/game_util/editor_grid.hpp"
 
 using namespace bomber::game;
 

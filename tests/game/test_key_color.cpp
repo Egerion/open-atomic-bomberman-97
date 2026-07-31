@@ -9,7 +9,7 @@
 #include <cstdint>
 
 #include "bomber/assets/image.hpp"
-#include "bomber/game/key_color.hpp"
+#include "bomber/game_util/key_color.hpp"
 
 using bomber::assets::Image;
 using namespace bomber::game;

@@ -10,8 +10,8 @@
 #include <cstdint>
 #include <vector>
 
-#include "bomber/game/anim_pace.hpp"
-#include "bomber/game/carry_pose.hpp"
+#include "bomber/game_util/anim_pace.hpp"
+#include "bomber/game_util/carry_pose.hpp"
 
 using bomber::game::anim_step_index;
 using bomber::game::carried_bomb_offset;

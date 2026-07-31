@@ -1,7 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
-#include "bomber/game/campaign_round_end.hpp"
+#include "bomber/game_util/campaign_round_end.hpp"
 
 // The CAMPAIGN round end (docs/re/campaign.md "Round end", sub_42A3F6 @0x42A63B
 // + sub_4016DA). Every case here is a screen-flow decision that used to live

@@ -1,5 +1,10 @@
 add_executable(bomber_viewer main.cpp)
-target_link_libraries(bomber_viewer PRIVATE bomber::game bomber::warnings)
+# bomber::render, not bomber::game: the viewer opens its own window and draws
+# ANI banks (AniTextures), so the renderer package is all it needs. It used to
+# link the whole presentation layer because there was only one target to link;
+# the split makes the real dependency visible, and now a change to a screen or
+# to the lobby cannot rebuild or break this tool.
+target_link_libraries(bomber_viewer PRIVATE bomber::render bomber::warnings)
 
 # Windows: copy any runtime DLLs next to the exe (see apps/game/CMakeLists.txt).
 # With SDL3 linked statically TARGET_RUNTIME_DLLS is empty, so the $<IF:...>

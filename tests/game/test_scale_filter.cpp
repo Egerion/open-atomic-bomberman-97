@@ -1,7 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
-#include "bomber/game/scale_filter.hpp"
+#include "bomber/game_util/scale_filter.hpp"
 
 // The PORT-ONLY "Soft scaling" toggle's pure decisions (scale_filter.hpp). SDL-
 // free, so this suite runs under the headless preset where the pins that matter

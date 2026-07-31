@@ -60,7 +60,7 @@ target_link_libraries(bomber_net_jitter_tests PRIVATE bomber::net)
 # suite fails if either half of the fix is reverted.
 bomber_add_test(bomber_net_kill_tally_tests net_kill_tally test_kill_tally.cpp)
 target_link_libraries(bomber_net_kill_tally_tests PRIVATE bomber::net)
-target_include_directories(bomber_net_kill_tally_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+target_include_directories(bomber_net_kill_tally_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game_util/include)
 
 # In-match netplay DIAGNOSTICS (net_stats.hpp): the ack-RTT derived from the
 # confirmed frontier a peer's InputRange already carries (no new wire message,

@@ -4,8 +4,8 @@
 #include <array>
 #include <string>
 
-#include "bomber/game/net_setup_roster.hpp"
 #include "bomber/net/protocol.hpp"
+#include "bomber/netui/net_setup_roster.hpp"
 
 // The PURE half of the online setup stage (net_setup_roster.hpp): the roster
 // mapping between a machine's 10 slots and the wire preview, and the level-index
