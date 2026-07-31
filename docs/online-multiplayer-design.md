@@ -397,7 +397,7 @@ timeout. No `State`, no `tick`, no gameplay logic ever lives on the server.
     (ADR-0011's 2026-07-30 amendment): there is no schedule mapping a sample to a
     tick, so a peer may lead its own input and change that lead mid-match without
     a wire message. It does so ADAPTIVELY, off measured arrival variance rather
-    than off RTT — see `rollback_session.hpp`'s "arrival variance" note. Nothing
+    than off RTT — see `docs/net-rollback.md` §1.3–§1.4. Nothing
     keys the rollback path to the `input_delay` the lobby ships.
   - `max_prediction` (local, per peer) — `ceil(one_way_ms / 50) + margin`, clamped
     to roughly 2..8. Each peer sets its own from its own RTT; it is a display
