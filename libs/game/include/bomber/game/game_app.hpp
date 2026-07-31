@@ -11,15 +11,16 @@
 #include "bomber/assets/campaign.hpp"
 #include "bomber/assets/reslist.hpp"
 #include "bomber/assets/sch.hpp"
+#include "bomber/audio/audio_engine.hpp"
+#include "bomber/audio/sound_director.hpp"
 #include "bomber/game/app_flow.hpp"
 #include "bomber/game/asset_store.hpp"
-#include "bomber/audio/audio_engine.hpp"
 #include "bomber/game/bmscreen.hpp"
 #include "bomber/game/campaign_round_end.hpp"
 #include "bomber/game/campaign_screen.hpp"
 #include "bomber/game/chat_overlay.hpp"
-#include "bomber/game/editor_screen.hpp"
 #include "bomber/game/cursor_indicator.hpp"
+#include "bomber/game/editor_screen.hpp"
 #include "bomber/game/gamepad.hpp"
 #include "bomber/game/goldman_screen.hpp"
 #include "bomber/game/input.hpp"
@@ -34,26 +35,25 @@
 #include "bomber/game/screens/match_backdrop.hpp"
 #include "bomber/game/screens/match_runner_state.hpp"
 #include "bomber/game/screens/menu_state.hpp"
+#include "bomber/game/screens/netplay_runner.hpp"
+#include "bomber/game/screens/netplay_state.hpp"
 #include "bomber/game/screens/options_state.hpp"
 #include "bomber/game/screens/results_state.hpp"
 #include "bomber/game/screens/setup_state.hpp"
 #include "bomber/game/sdl.hpp"
 #include "bomber/game/sequences.hpp"
-#include "bomber/audio/sound_director.hpp"
 #include "bomber/sim/match_config.hpp"
 #include "bomber/sim/simulation.hpp"
 
 // The playable front-end: owns the SDL window, the asset store, the
 // presentation systems, and the match lifecycle around the deterministic sim.
-
-// The netplay transport is only ever named by reference in a couple of method
-// signatures (run_netplay_match + the connect-screen entry points); the heavy
-// socket header stays out of this widely-included header — game_app.cpp pulls
-// in the real bomber/net/udp_transport.hpp.
-namespace bomber::net {
-class Transport;     // the abstract seam: a bare socket, the star hub, or the relay
-class UdpTransport;  // the concrete socket the CLI paths bind for themselves
-}  // namespace bomber::net
+//
+// NETPLAY IS NOT HERE. The CLI entry, the connect/lobby leaves, the online setup
+// stage and the match/round/rematch loop all live in NetplayRunner
+// (screens/netplay_runner.hpp) and NetplayMatch (screens/netplay_match.hpp).
+// This class only DISPATCHES to them — netplay() below builds one from the two
+// seams, and run()/run_app() call it in three places. No net type is named in
+// this header at all any more, so the heavy socket headers stay out of it.
 
 namespace bomber::game {
 
@@ -223,168 +223,23 @@ private:
     void seed_default_node_name();
     void start_match(std::uint32_t seed);
     int run_demo();
-    // Netplay entry (increment 5b, ADR-0010 §3.3 step 5): runs ONE 2-player UDP
-    // lockstep match in place of the front-end when opts_.net_role != 0. Uses the
-    // CANONICAL MatchConfig (canonical_netplay_config below) so both peers seed
-    // sim_ byte-identically with no setup traffic at all, then drives the SAME
-    // MatchRunner::run() through a net::RollbackSession (seam net_session).
-    // Returns a process exit code. GOLDEN-SAFE: only reachable via net_role, which
-    // no test/golden/demo path sets. The CLI path carries --seed on both peers,
-    // so it skips the handshake and calls run_netplay_match() directly.
-    int run_netplay();
-    // The CLI's config, built from the shared seed alone — the default scheme_ +
-    // the install VALUELST, ignoring every per-machine
-    // options_/selected_level_/team_play_/gold overlay, 2 humans in seats 0/1 and
-    // the stage picked from the seed. It exists ONLY for `--host`/`--join`, which
-    // are scripted, non-interactive entries (ADR-0010 §3.3: no discovery, no seed
-    // handshake, both peers pass --seed on the command line) with no second
-    // machine to drive a setup screen. Called on the HOST ONLY — the guest takes
-    // the result over the wire (exchange_cli_netplay_config below), because two
-    // builds of libs/match can derive two different boards from one seed and the
-    // CLI wire has nothing that would notice. Every INTERACTIVE path — the lobby rows and
-    // the direct HOST LAN GAME / JOIN BY IP rows — runs present_net_setup instead
-    // and agrees a real config, which is the whole point of the setup stage.
-    sim::MatchConfig canonical_netplay_config(std::uint32_t seed) const;
-    // The CLI's own config exchange, over the SAME net::SetupSession the lobby
-    // path uses: the HOST derives canonical_netplay_config(seed) and ships the
-    // serialized bytes; the guest adopts them verbatim into `out_cfg`. Board
-    // derivation (match::build_match_config + match::apply_actors) therefore
-    // happens ONCE per match instead of once per peer — the CLI path checks no
-    // build_hash and no protocol version, so a libs/match change shipped to one
-    // side only used to desync silently on tick 0. Returns false on timeout
-    // (which is exactly what an unpatched partner produces, since it neither
-    // sends nor answers setup traffic) or on a window close.
-    bool exchange_cli_netplay_config(net::UdpTransport& transport, bool is_host,
-                                     std::uint32_t seed, sim::MatchConfig& out_cfg);
-    // The match-running CORE shared by the CLI (run_netplay) and the menu connect
-    // screens: given an ALREADY-connected transport, this peer's `role` (1 =
-    // host/seat 0, 2 = guest/seat 1), and the agreed `seed`, it runs the canonical
-    // config through run_netplay_match_seats. CLI-only now that the direct-IP rows
-    // agree a config through present_net_setup.
-    AppInput run_netplay_match(net::UdpTransport& transport, int role, std::uint32_t seed);
-    // The REAL core, taking the seat ownership as an explicit MASK rather than
-    // deriving it from a role (ADR-0011 Phase 1d): the online lobby's server hands
-    // each peer an AUTHORITATIVE local_seats_mask in its StartMatch (design §1.6),
-    // so the GUI passes that straight through instead of assuming host==seat 0.
+    // NETPLAY DISPATCH (ADR-0009, screens/netplay_runner.hpp). Eleven methods and
+    // ~1000 lines of connect/setup/match/round/rematch orchestration used to sit
+    // here, in the app shell, next to the fullscreen toggle and the options
+    // writer; they are now NetplayRunner's, and this is the whole of what the
+    // shell keeps. Built fresh on demand like sctx() — the runner holds only
+    // reference bundles, so it is a stack object per entry, never a member.
     //
-    // `cfg` is THE agreed MatchConfig and is used verbatim — the whole board, the
-    // roster, the stage index, the tuning and the seed. On the host it is what
-    // present_net_setup confirmed; on the guest it is SetupSession::final_config(),
-    // i.e. the host's exact bytes (match_config_codec.hpp). It replaces the
-    // hard-coded canonical config this used to build, which was a determinism
-    // shortcut that cost online play its map choice, its AI slots and its roster.
-    //
-    // `all_seats` is EVERY network seat in the match, not a literal 0b11: over a
-    // star (ADR-0011 decisions 2+4) `transport` fans out to every guest and
-    // reflects between them, so the RollbackSession — which already accepts
-    // arbitrary masks — carries as many peers as the lobby seated. The online
-    // path takes it from the server's seat_assign; the CLI/LAN pairs pass 0b11.
-    // AI slots are NOT in the mask: they are simulated identically everywhere
-    // from the shared config and their input never crosses the wire.
-    // `is_host` gates the peer-drop handoff: only the hub may schedule a silent
-    // seat's move to the AI (net::DropPolicy), since a guest must never mutate
-    // the hashed State on its own authority.
-    //
-    // A MATCH, NOT A ROUND. `cfg` seeds round 0; a round that ends without a
-    // clinch runs the outcome screen with a between-rounds gate over it
-    // (screens/net_round_gate.hpp) and starts the next round on the config the
-    // HOST confirms through that gate — the same `sub_42A3F6` best-of-N loop the
-    // local Play flow runs, with the host driving the advance exactly as the
-    // original's network client does (docs/re/in-match-shell.md "The round-end
-    // shell"). Every round's seed and tick base come from net::round_rotation.hpp,
-    // so both peers agree on which round they are in with no extra traffic.
-    // Returns Advance once the match is decided/abandoned, Quit on a window close.
-    //
-    // `round_base` is an IN/OUT round counter that survives across MATCHES played
-    // over one transport (see run_netplay_session): every round's tick space is
-    // net::round_tick_base(*round_base + round), so match 2's round 0 cannot land
-    // in the tick space match 1 was still sending into. nullptr = start at 0 and
-    // report nothing, which is every single-match caller.
-    // `rematch` is set true when the match was DECIDED and both peers agreed
-    // (net::RematchSession) to walk back to the setup screens over the same
-    // transport instead of tearing it down. nullptr = the caller does not offer a
-    // rematch, and the transport is dropped as before.
-    AppInput run_netplay_match_seats(net::Transport& transport, std::uint16_t local_seats,
-                                     std::uint16_t all_seats, bool is_host,
-                                     const sim::MatchConfig& cfg, int* round_base = nullptr,
-                                     bool* rematch = nullptr);
-    // A whole NETPLAY SESSION over one connected transport: setup -> match ->
-    // setup -> match -> ... The connect step (lobby punch or direct handshake)
-    // happens once, and finishing a match returns BOTH peers to the roster/map
-    // screens with the link intact, which is the entire point — the transport used
-    // to die with the first match, so a rematch meant re-punching through the
-    // lobby, and by then the matchmaker has reaped the room anyway (it drops a
-    // lobby ~30 s into a match). Nothing below this line needs the control plane.
-    //
-    // `cfg` is round 0 of the FIRST match, already agreed by the caller's own
-    // present_net_setup. Later matches agree their own through this loop. Returns
-    // exactly what run_netplay_match_seats/present_net_setup last returned.
-    AppInput run_netplay_session(net::Transport& transport, std::uint16_t local_seats,
-                                 std::uint16_t all_seats, bool is_host, std::uint32_t seed,
-                                 const sim::MatchConfig& cfg, ChatOverlay* chat = nullptr);
-    // THE ONLINE SETUP STAGE (docs/re/network-screens.md §7, ADR-0011): runs
-    // between the connect step (lobby punch or direct seed handshake) and the
-    // match, over the SAME transport, so an online game finally gets the real
-    // roster/AI and map screens instead of a hard-coded config.
-    //
-    // HOST — drives the ordinary SetupScreen + MapSelectScreen (the very screens
-    // menu row 0 uses), publishing a preview after each edit; on Enter it builds
-    // the config through MatchRunner::build_config — the SAME build the local
-    // start_match path does from the SAME screens — and confirms it.
-    // GUEST — renders those same two screens READ-ONLY from the preview, buzzing
-    // SFX 40 at any edit key, and adopts the confirmed config.
-    //
-    // Returns Advance with `out_cfg` filled (Phase::Final — EVERY peer holds it),
-    // Back if the stage was left/timed out (the reason is already shown on the
-    // acknowledge modal), or Quit on a window close. STOPS pumping the setup
-    // session before returning: the match session drains the same transport and
-    // whichever polls first eats the datagram (setup_session.hpp's one
-    // obligation).
-    //
-    // `chat` is the lobby-chat overlay (PORT-ONLY, chat_overlay.hpp) composited
-    // over both screens and pumped by them, so the conversation started in the
-    // waiting room carries on here. nullptr on the direct/LAN paths, which have
-    // no matchmaker connection to chat over.
-    // `all_seats` is every network seat, as in run_netplay_match_seats: the host
-    // waits for an ack from EACH of the others before Phase::Final, so a
-    // >2-peer star cannot start the match while somebody is still reassembling
-    // the config (setup_session.hpp).
-    AppInput present_net_setup(net::Transport& transport, bool is_host,
-                               std::uint16_t local_seats, std::uint16_t all_seats,
-                               std::uint32_t seed, sim::MatchConfig& out_cfg,
-                               ChatOverlay* chat = nullptr);
-    // Menu row 1 (START NET GAME) now opens the NETWORK GAME menu (LobbyScreen):
-    // the online lobby entry points plus the ADR-0010 direct/LAN rows. Menu row 2
-    // (JOIN NET GAME -> present_net_join) stays the UNCHANGED direct-IP join, so
-    // the no-server path keeps working exactly as it did.
-    AppInput present_net_host();
-    AppInput present_net_join();
-    // The ADR-0010 direct-UDP host (bind kNetDefaultPort + the seed handshake) —
-    // the old present_net_host body, now reached from the NETWORK GAME menu's
-    // HOST LAN GAME row.
-    AppInput present_net_direct_host();
-    // The online lobby leaf (ADR-0011 Phase 1d): resolve the matchmaker URL, bind
-    // the one socket LobbyFlow reuses for STUN/punch/match, run the waiting room,
-    // and on Phase::Ready run the match with the SERVER's seed + seat mask.
-    // `browse` (Phase 3) only changes where a GUEST's lobby code comes from — the
-    // PUBLIC GAMES browser instead of the typed-code prompt; the waiting room and
-    // the match hand-off below it are the same code either way.
-    //
-    // DECLARED unconditionally but DEFINED only under BOMBER_HAS_LOBBY: that
-    // define is PUBLIC on bomber::net, which libs/game links PRIVATEly, so it is
-    // visible while compiling bomber_game_core but NOT to apps/game including
-    // this header — guarding the declarations would give GameApp two different
-    // definitions across translation units (an ODR violation). Nothing outside
-    // the guarded call site in game_app.cpp references these, so a lobby-off
-    // build simply never emits or needs them.
-    AppInput present_net_online(bool host, bool browse = false, bool is_public = false);
-    // Matchmaker endpoint resolution, in the documented precedence order:
-    // --matchmaker / --matchmaker-stun CLI flags, then BOMBER_MATCHMAKER_URL /
-    // BOMBER_MATCHMAKER_STUN_HOST / BOMBER_MATCHMAKER_STUN_PORT, then the
-    // compile-time placeholder constants in game_app.cpp.
-    std::string matchmaker_url() const;
-    std::string matchmaker_stun_host() const;
-    std::uint16_t matchmaker_stun_port() const;
+    // run()'s --host/--join path calls netplay().run_cli(); run_app's
+    // NetHost/NetJoin arms call present_network_menu()/present_direct_join().
+    NetplayRunner netplay();
+    // The netplay flow's two seams, the same shape as sctx()/match_runner_state():
+    // netplay_seams() bundles the per-screen state BUILDERS the flow needs to call
+    // (it drives the ordinary setup/level/scoreboard screens and the MatchRunner
+    // itself), and netplay_state() bundles the shell members it reads and writes.
+    // Both are cheap reference bundles, built fresh on demand.
+    NetplaySeams netplay_seams();
+    NetplayState netplay_state();
     // --bm-shot capture: draw one `.BM` screen over MAINMENU and SaveBMP it.
     int run_bm_shot();
     int run_menu_shot();
@@ -398,7 +253,32 @@ private:
     // Boot -> Logo -> Title -> Menu -> Match -> Results -> Menu around the
     // existing match loop. The pure transition graph lives in app_flow.hpp; the
     // methods below are the thin SDL side (render, audio, input) per state.
+    //
+    // The DISPATCH only. Two of its states used to own a hundred-plus-line
+    // handler inline — the Play flow under Menu and the outcome tail under
+    // Results — which is what made a switch over eight states 408 lines long.
+    // Both are their own methods below; the loop is now one arm each.
     int run_app();
+    // The pre-match flow reached from Play (sub_42A3F6's head): campaign reset,
+    // the 1020 track, the attract short-circuit, the Goldman wheel, then the
+    // PLAYER INPUT and LEVEL & ROUNDS screens. Returns StartMatch to play,
+    // Advance if the player backed out (Menu -> Menu), or no value if the
+    // window closed — run_app's only two outcomes for that arm, said in the
+    // return type rather than through the shared `ev`.
+    std::optional<AppInput> run_play_flow();
+    // The two pre-match screens under it (sub_410F81 then sub_406DDE). True =
+    // both confirmed, false = Esc aborted the whole flow, no value = the window
+    // closed. It was written as a `while (!started)` loop that could never run
+    // twice — every path either sets `started` or breaks — so it is straight
+    // line here, which is also what the RE comment says it is.
+    std::optional<bool> run_prematch_screens();
+    // A CAMPAIGN round end (docs/re/campaign.md "Round end"): the arm that
+    // shows at most one modal and then advances or replays the stage. Returns
+    // CampaignContinue, Advance, or no value on a window close.
+    std::optional<AppInput> run_campaign_round_end(const CampaignRoundEnd& plan);
+    // The ORDINARY three-tier outcome tail (sub_42A3F6): tally, clinch, then
+    // DRAW / RESULTS / VICTORY. Returns the flow-graph event, Quit included.
+    AppInput run_outcome_tier();
     // Builds a fresh ScreenContext (the shared-services bundle) from this app's
     // stable members, so an extracted screen class can run without threading
     // GameApp's whole member set (ADR-0008 god-object decomposition). Cheap —

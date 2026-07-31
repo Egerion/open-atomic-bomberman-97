@@ -66,8 +66,8 @@ enum class LobbyMenuChoice : std::uint8_t {
 
 // The waiting room's outcome. `ready` means LobbyFlow reached Phase::Ready, so
 // the transport is punched-and-connected and the two fields below are the
-// SERVER's authoritative match parameters (design §1.6) — GameApp feeds them
-// straight to run_netplay_match_seats() instead of deriving seats from a role.
+// SERVER's authoritative match parameters (design §1.6) — NetplayRunner feeds
+// them straight into a NetSeats instead of deriving seats from a role.
 struct LobbyRoomResult {
     bool ready = false;
     bool window_closed = false;
