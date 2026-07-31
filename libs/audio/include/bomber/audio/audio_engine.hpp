@@ -104,18 +104,27 @@ public:
     // winner (2000). NOT blocking: the binary follows the quit sting with an
     // explicit Sleep(4000) to keep the process alive long enough to hear it,
     // which would be pointless if the call waited.
-    void play_sting(int id);
+    //
+    // Two of the four used to go through play_random_in_range instead, i.e.
+    // through the COUNTED 5-voice pool, where a busy results transition could
+    // drop them — the original cannot swallow a victory sting. That function is
+    // gone; the optional `hi` is the one thing it did that this did not, so the
+    // block bound moved here rather than being dropped with it: SOUNDLST's
+    // blocks sit back to back, and pick()'s group is "the contiguous run of
+    // authored names from `lo`", so a block with no hole before the next one's
+    // base would let the pick walk into it (a "we have a winner" take on a
+    // DRAW). A pick past `hi` is dropped, not played. -1 = no bound.
+    //
+    // One sting voice exists, and a new sting clears it — which is fine only
+    // because no two of the four call sites can fire together (title at boot,
+    // quit on exit, and draw/winner are mutually exclusive per round end).
+    void play_sting(int lo, int hi = -1);
 
     // sub_427ABB — `play` with the original's 3-frame re-trigger debounce on the
     // same group. `frame` is the caller's game-frame counter (dword_464994; the
     // port passes the sim tick, the same ~20 Hz logic step). Only the jelly
     // bounce uses this.
     void play_debounced(int id, std::uint64_t frame) override;
-
-    // Legacy spelling kept for the call sites that name the authored block
-    // explicitly. The original's group is the contiguous run from `lo`, so this
-    // is `play(lo)` with the run clamped to the block end.
-    void play_random_in_range(int lo, int hi);
 
 private:
     std::uint32_t next_rand();

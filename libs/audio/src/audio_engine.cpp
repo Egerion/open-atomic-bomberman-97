@@ -174,21 +174,18 @@ void AudioEngine::play_debounced(int id, std::uint64_t frame) {
     start_voice(bank_.pick_debounced(id, frame), true);
 }
 
-void AudioEngine::play_sting(int id) {
+void AudioEngine::play_sting(int lo, int hi) {
     if (!ok_) return;
+    const int slot = bank_.pick(lo);
+    // The contiguous run never spills past the authored block in practice; the
+    // clamp keeps the caller's stated bound honest anyway. (It also charges the
+    // pick either way, exactly as before — bank_.pick has already counted it.)
+    if (hi >= 0 && (slot < lo || slot > hi)) return;
     // sub_427BFB: same group pick, but the binary builds its own sound object
     // outside the counted pool, so the cap can neither refuse it nor be
     // charged for it. One dedicated stream mirrors that (and one sting at a
     // time is all the four call sites can ever produce).
-    start_voice(bank_.pick(id), false);
-}
-
-void AudioEngine::play_random_in_range(int lo, int hi) {
-    if (!ok_) return;
-    const int slot = bank_.pick(lo);
-    // The contiguous run never spills past the authored block in practice; the
-    // clamp keeps the caller's stated bound honest anyway.
-    if (slot >= lo && slot <= hi) start_voice(slot, true);
+    start_voice(slot, false);
 }
 
 void AudioEngine::start_voice(int slot, bool counted) {

@@ -272,6 +272,34 @@ TEST_CASE("against the real SOUNDLST.RES") {
     CHECK(bank.name(1120) != nullptr);  // the generic stage-track fallback
 }
 
+TEST_CASE("a group with no hole before the next block walks into it") {
+    // WHY AudioEngine::play_sting takes a `hi`. A group is "the contiguous run
+    // of occupied slots from the base" and knows nothing about where SOUNDLST's
+    // authored BLOCK ends, so two blocks laid end to end with no empty slot
+    // between them are one group as far as pick() is concerned. On the real
+    // file that would mean a "we have a winner" take (2000) played on a DRAW
+    // (1700) — which is why the draw/winner sting sites name their block's last
+    // id and a pick past it is dropped rather than played.
+    bomber::assets::res::SoundList list;
+    add_run(list, 1700, 3, "tie");     // the draw block...
+    add_run(list, 1703, 3, "winner");  // ...immediately followed by the next one
+    SoundBank bank = loaded(list);
+
+    CHECK(bank.group(1700).size() == 6);  // one group, both blocks
+    bool crossed = false;
+    for (int i = 0; i < 12; ++i)
+        if (bank.pick(1700) > 1702) crossed = true;
+    CHECK(crossed);  // and the pick really does land outside the draw block
+
+    // A hole is the only thing that separates them, and the shipped file is not
+    // guaranteed to have one — hence the bound, not a hope.
+    bomber::assets::res::SoundList spaced;
+    add_run(spaced, 1700, 3, "tie");
+    add_run(spaced, 1704, 3, "winner");
+    SoundBank sbank = loaded(spaced);
+    CHECK(sbank.group(1700).size() == 3);
+}
+
 TEST_CASE("an empty sound list is inert rather than fatal") {
     SoundBank bank;
     bomber::assets::res::SoundList list;
