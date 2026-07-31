@@ -187,6 +187,22 @@ struct TimingSample {
     bool suppressed = false;
 };
 
+// The session state a pump ends in. A parameter object rather than seven
+// arguments (coding-standards §3): every field is session state that already
+// travels together, and a positional list this long is the shape that lets a
+// caller transpose two of them unnoticed.
+struct PumpSnapshot {
+    std::uint32_t tick = 0;
+    std::uint32_t confirmed = 0;
+    // First tick no input is held for from each seat — what makes `lag_ticks`
+    // exact rather than inferred.
+    std::array<std::uint32_t, sim::kMaxPlayers> remote_next{};
+    std::uint16_t dropped = 0;
+    bool desynced = false;
+    std::uint32_t desync_tick = 0;
+    bool aborted = false;
+};
+
 // The accumulator. Fed by RollbackSession at a handful of points; owns no heap.
 //
 // Every method is safe to call without a clock: pass -1 for `now_ms` (the default
@@ -214,11 +230,7 @@ public:
     // last-decision one.
     void on_timing(const TimingSample& t);
 
-    // Bottom of every pump. `remote_next[s]` is the first tick no input is held
-    // for from seat s, which is what makes `lag_ticks` exact.
-    void end_pump(std::uint32_t tick, std::uint32_t confirmed,
-                  const std::array<std::uint32_t, sim::kMaxPlayers>& remote_next,
-                  std::uint16_t dropped, bool desynced, std::uint32_t desync_tick, bool aborted);
+    void end_pump(const PumpSnapshot& s);  // bottom of every pump
 
     const NetStats& stats() const { return s_; }
 

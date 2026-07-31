@@ -196,11 +196,11 @@ TEST_CASE("net stats: an ack-RTT dominated by the peer's tick offset says so") {
     t.begin_pump(0);
     t.on_local_tick(99);
     remote_next[1] = 92;  // we hold nothing newer than tick 91 from the peer
-    t.end_pump(/*tick=*/100, /*confirmed=*/92, remote_next, 0, false, 0, false);
+    t.end_pump({/*tick=*/100, /*confirmed=*/92, remote_next, 0, false, 0, false});
 
     t.begin_pump(400);
     t.on_input_from(/*seat=*/1, /*first_tick=*/100);  // acknowledges our tick 99
-    t.end_pump(/*tick=*/100, /*confirmed=*/92, remote_next, 0, false, 0, false);
+    t.end_pump({/*tick=*/100, /*confirmed=*/92, remote_next, 0, false, 0, false});
 
     const net::PeerStats& ahead = t.stats().peers[1];
     REQUIRE(ahead.rtt_ms == 400);
@@ -223,10 +223,10 @@ TEST_CASE("net stats: an ack-RTT dominated by the peer's tick offset says so") {
     healthy.begin_pump(0);
     healthy.on_local_tick(99);
     remote_next[1] = 98;
-    healthy.end_pump(100, 98, remote_next, 0, false, 0, false);
+    healthy.end_pump({100, 98, remote_next, 0, false, 0, false});
     healthy.begin_pump(200);  // 2 ticks of lag, a 200 ms round trip
     healthy.on_input_from(1, 100);
-    healthy.end_pump(100, 98, remote_next, 0, false, 0, false);
+    healthy.end_pump({100, 98, remote_next, 0, false, 0, false});
     CHECK(healthy.stats().peers[1].lag_ticks == 2);
     CHECK_FALSE(healthy.stats().peers[1].rtt_offset_bound);
 }
@@ -303,8 +303,8 @@ TEST_CASE("net stats: rates and the loss ESTIMATE come off completed one-second 
         t.begin_pump(1000 + i * kPumpMs);
         t.on_datagram(true);
         t.on_input_from(1, static_cast<std::uint32_t>(i + 1));
-        t.end_pump(static_cast<std::uint32_t>(i), static_cast<std::uint32_t>(i), next, 0, false, 0,
-                   false);
+        t.end_pump({static_cast<std::uint32_t>(i), static_cast<std::uint32_t>(i), next, 0, false, 0,
+                    false});
     }
     t.begin_pump(2000);  // closes the window
     CHECK(t.stats().peers[1].recv_per_sec == net::kPumpHz);
@@ -330,7 +330,7 @@ TEST_CASE("net stats: a seat handed to the AI stops reading as packet loss") {
     t.begin(net::NetPath::Direct, kSeat1, 0, 8);
     const std::array<std::uint32_t, sim::kMaxPlayers> next{};
     t.begin_pump(1000);
-    t.end_pump(0, 0, next, /*dropped=*/kSeat1, false, 0, false);
+    t.end_pump({0, 0, next, /*dropped=*/kSeat1, false, 0, false});
     t.begin_pump(2100);  // roll a window with no traffic at all
     CHECK_FALSE(t.stats().peers[1].live);
     CHECK(t.stats().peers[1].recv_per_sec == 0);

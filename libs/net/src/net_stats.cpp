@@ -234,23 +234,21 @@ void NetStatsTracker::update_peer(int seat, std::uint32_t tick, std::uint32_t ne
         p.rtt_ms >= 0 && (s_.local_lead > 0 || (p.lag_ticks >= 2 && p.rtt_ms * 2 < lag_ms * 3));
 }
 
-void NetStatsTracker::end_pump(std::uint32_t tick, std::uint32_t confirmed,
-                               const std::array<std::uint32_t, sim::kMaxPlayers>& remote_next,
-                               std::uint16_t dropped, bool desynced, std::uint32_t desync_tick,
-                               bool aborted) {
-    s_.tick = tick;
-    s_.confirmed = confirmed;
-    s_.prediction_depth = static_cast<int>(tick > confirmed ? tick - confirmed : 0);
+void NetStatsTracker::end_pump(const PumpSnapshot& snap) {
+    s_.tick = snap.tick;
+    s_.confirmed = snap.confirmed;
+    s_.prediction_depth =
+        static_cast<int>(snap.tick > snap.confirmed ? snap.tick - snap.confirmed : 0);
     s_.worst_prediction_depth = std::max(s_.worst_prediction_depth, s_.prediction_depth);
-    s_.dropped_seats = dropped;
-    s_.desynced = desynced;
-    s_.desync_tick = desync_tick;
-    s_.aborted = aborted;
+    s_.dropped_seats = snap.dropped;
+    s_.desynced = snap.desynced;
+    s_.desync_tick = snap.desync_tick;
+    s_.aborted = snap.aborted;
     for (int s = 0; s < sim::kMaxPlayers; ++s) {
         const std::size_t si = static_cast<std::size_t>(s);
         if (!s_.peers[si].tracked) continue;
-        const bool live = (dropped & static_cast<std::uint16_t>(1U << s)) == 0;
-        update_peer(s, tick, remote_next[si], live);
+        const bool live = (snap.dropped & static_cast<std::uint16_t>(1U << s)) == 0;
+        update_peer(s, snap.tick, snap.remote_next[si], live);
     }
 }
 

@@ -727,7 +727,7 @@ void RollbackSession::advance(const sim::TickInputs& local_input, std::int64_t n
     // (determinism rule 1) and no hashed field can depend on one.
     stats_.begin_pump(now_ms);
     advance_impl(local_input);
-    stats_.end_pump(tick_, confirmed_, remote_next_, dropped_, desynced_, desync_tick_, aborted_);
+    stats_.end_pump({tick_, confirmed_, remote_next_, dropped_, desynced_, desync_tick_, aborted_});
 }
 
 void RollbackSession::advance_impl(const sim::TickInputs& local_input) {
