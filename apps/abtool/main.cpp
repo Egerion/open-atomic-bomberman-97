@@ -9,44 +9,63 @@
 
 #include <cstdio>
 #include <exception>
+#include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "commands.hpp"
 
+namespace {
+
+// Every abtool verb has the same positional shape: the verb, one required
+// subject path, and at most two optional trailing operands. Modelling that
+// shape once removes the size-check-then-maybe-take-a-pointer dance that was
+// repeated verbatim at four of the six call sites, and it owns the paths so
+// `option()` can hand back the `const fs::path*` that commands.hpp already uses
+// to mean "the caller omitted this".
+class CommandLine {
+public:
+    CommandLine(int argc, char** argv) : args_(argv + 1, argv + argc) {
+        if (args_.size() >= 2) subject_ = args_[1];
+        if (args_.size() >= 3) option_ = args_[2];
+    }
+
+    // A verb only dispatches once its required subject is present; without it
+    // the caller falls through to the usage text.
+    bool is(std::string_view verb) const { return args_.size() >= 2 && args_[0] == verb; }
+
+    const std::filesystem::path& subject() const { return subject_; }
+    const std::filesystem::path* option() const { return args_.size() >= 3 ? &option_ : nullptr; }
+
+    // The third operand, the only numeric one any verb takes (simrun's tick
+    // count). Throws like the rest of the parse, into main's handler below.
+    int count_or(int fallback) const { return args_.size() >= 4 ? std::stoi(args_[3]) : fallback; }
+
+private:
+    std::vector<std::string> args_;
+    std::filesystem::path subject_;
+    std::filesystem::path option_;
+};
+
+}  // namespace
+
 int main(int argc, char** argv) {
     using namespace bomber::tools;
-    namespace fs = std::filesystem;
 
-    // Whole body in the try (not just the dispatch): `args`'s construction can
-    // throw bad_alloc too, and a bare `main` must not let any exception escape
-    // (bugprone-exception-escape) — catch (...) as a last resort below the
-    // std::exception handler covers non-standard-derived throws as well.
+    // Whole body in the try (not just the dispatch): the command line's
+    // construction can throw bad_alloc too, and a bare `main` must not let any
+    // exception escape (bugprone-exception-escape) — catch (...) as a last
+    // resort below the std::exception handler covers non-standard-derived
+    // throws as well.
     try {
-        std::vector<std::string> args(argv + 1, argv + argc);
-        if (args.size() >= 2 && args[0] == "survey") return cmd_survey(args[1]);
-        if (args.size() >= 2 && args[0] == "ani") {
-            fs::path out;
-            if (args.size() >= 3) out = args[2];
-            return cmd_ani(args[1], args.size() >= 3 ? &out : nullptr);
-        }
-        if (args.size() >= 2 && args[0] == "sch") return cmd_sch(args[1]);
-        if (args.size() >= 2 && args[0] == "simrun") {
-            fs::path game;
-            if (args.size() >= 3) game = args[2];
-            int ticks = args.size() >= 4 ? std::stoi(args[3]) : 400;
-            return cmd_simrun(args[1], args.size() >= 3 ? &game : nullptr, ticks);
-        }
-        if (args.size() >= 2 && args[0] == "pcx") {
-            fs::path out;
-            if (args.size() >= 3) out = args[2];
-            return cmd_pcx(args[1], args.size() >= 3 ? &out : nullptr);
-        }
-        if (args.size() >= 2 && args[0] == "rss") {
-            fs::path out;
-            if (args.size() >= 3) out = args[2];
-            return cmd_rss(args[1], args.size() >= 3 ? &out : nullptr);
-        }
+        const CommandLine cmd(argc, argv);
+        if (cmd.is("survey")) return cmd_survey(cmd.subject());
+        if (cmd.is("ani")) return cmd_ani(cmd.subject(), cmd.option());
+        if (cmd.is("sch")) return cmd_sch(cmd.subject());
+        if (cmd.is("simrun")) return cmd_simrun(cmd.subject(), cmd.option(), cmd.count_or(400));
+        if (cmd.is("pcx")) return cmd_pcx(cmd.subject(), cmd.option());
+        if (cmd.is("rss")) return cmd_rss(cmd.subject(), cmd.option());
     } catch (const std::exception& e) {
         std::fprintf(stderr, "error: %s\n", e.what());
         return 1;
