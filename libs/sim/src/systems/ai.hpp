@@ -43,11 +43,12 @@ namespace bomber::sim {
 // completes all 8 behaviours.
 //
 // TEAM (docs/re/ai.md "TEAM WIRING LANDED 2026-07-08", §3.4/§5.3): the original's
-// only genuine team compare is behaviour 4's +84 byte, gated on the team-mode
-// global dword_464964 — the +62 compare in the grab behaviour is the bomb OWNER,
-// a mislabel ai.md §1.1/§3.0 retracts. The port carries the real one: Player::team
-// (player.hpp) is a HASHED field, copied verbatim from MatchConfig::team[] at
-// setup, read through same_team() by the enemy scans and the enemy finder. So this
+// genuine team compares are the +84 byte in behaviour 4 (sub_40ABED) and in the
+// enemy finder (sub_422718), both gated on the team-mode global dword_464964 —
+// the +62 compare in the grab behaviour is the bomb OWNER, a mislabel ai.md
+// §1.1/§3.0 retracts. The port carries the real ones: Player::team (player.hpp)
+// is a HASHED field, copied verbatim from MatchConfig::team[] at setup, read
+// through same_team() by the enemy cross-scan and the finder. So this
 // is NOT the old "slot != self" reduction and the hash layout DID grow by one word
 // per player — tests/sim/test_golden.cpp took a one-time constant recapture for it
 // (see that file's note). Unchanged is the BEHAVIOUR of an all-zero-team roster:
