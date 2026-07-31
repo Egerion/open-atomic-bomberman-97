@@ -11,22 +11,13 @@
 
 // The TURN-like RELAY fallback (ADR-0011 decision 3, design §4): when the hole
 // punch fails — symmetric NAT / CGNAT, where the port the STUN server saw is not
-// the port used toward the peer — the peers route their datagrams through a
-// public-IP forwarder on the matchmaker instead.
+// the port used toward the peer — the peers route through a public-IP forwarder
+// on the matchmaker instead.
 //
-// This is deliberately just another `Transport`: the RollbackSession stacked on
-// top is byte-for-byte identical whether it runs direct or relayed, so the
-// fallback is a one-object swap decided by the Rendezvous outcome. The relay
-// never decodes the payload (ADR-0011: the server never simulates) — it only
-// reads the routing header this class prepends.
-//
-// FROZEN wire format (services/matchmaker/PROTOCOL.md §6), both directions:
-//
-//     [16 bytes alloc_id (binary)][1 byte seat][opaque payload …]
-//
-// Outbound the alloc_id is OURS and the seat is the DESTINATION; inbound the
-// alloc_id is ours again and the seat is the SENDER's — so a receiver always
-// strips the same fixed 17-byte prefix.
+// Deliberately just another `Transport`: the session stacked on top is
+// byte-for-byte identical direct or relayed. The relay never decodes the payload
+// (the server never simulates), only the FROZEN routing header this class
+// prepends — docs/net-wire-format.md, PROTOCOL.md §6.
 namespace bomber::net {
 
 inline constexpr std::size_t kRelayAllocIdBytes = 16;
@@ -52,16 +43,16 @@ public:
     NetPath path() const override { return NetPath::Relayed; }
 
     // The sender seat off the header of the datagram most recently returned by
-    // poll(); -1 before any. DIAGNOSTIC ONLY — it never had the caller this
-    // comment used to claim ("the N-player star reads this to attribute
-    // inputs"). A relay is TWO SEATS by construction: this class addresses
-    // exactly one destination seat, so LobbyFlow::can_relay() refuses the
-    // fallback for a star, and a 2-seat peer already knows who the sender is.
-    // Kept because the field costs nothing and naming the far seat is worth
-    // having when a relayed match is being read out of a log.
+    // poll(); -1 before any. DIAGNOSTIC ONLY: a relay is TWO SEATS by
+    // construction (this class addresses exactly one destination, so
+    // LobbyFlow::can_relay() refuses the fallback for a star), and a 2-seat peer
+    // already knows who the sender is. Kept because naming the far seat is worth
+    // having when a relayed match is read out of a log.
     int last_src_seat() const { return last_src_seat_; }
 
 private:
+    bool addressed_to_us(const std::vector<std::uint8_t>& buf) const;
+
     UdpTransport& socket_;
     std::string relay_host_;
     std::uint16_t relay_port_;

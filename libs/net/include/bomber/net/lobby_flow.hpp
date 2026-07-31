@@ -14,19 +14,14 @@
 #include "bomber/net/udp_transport.hpp"
 
 // The online-lobby STATE MACHINE (ADR-0011, design §5.1): one SDL-free object
-// that drives the whole pre-match sequence — connect to the matchmaker, create
-// or join a lobby, gather candidates (local + STUN reflexive), exchange them,
-// wait in the room, and on the host's START punch a direct UDP path — then hands
-// the caller a CONNECTED transport plus the authoritative match parameters.
+// driving the whole pre-match sequence — connect, create or join, gather and
+// exchange candidates, wait in the room, punch on the host's START — and then
+// handing the caller a CONNECTED transport plus the match parameters.
 //
-// Keeping it here (not in libs/game) means the GUI screen is thin: it renders
-// phase()/roster()/code() and forwards the user's intents, while every protocol
-// rule lives in one headless-testable place. handle_server_message() is public
-// precisely so tests can drive the machine with synthetic frames and assert the
-// transitions without a live server.
-//
-// Clock-injected like Rendezvous/StunClient: step(now_ms) takes the caller's
-// monotonic clock, so libs/net stays clock-free.
+// Keeping it here rather than in libs/game means the GUI screen is thin, and
+// every protocol rule lives in one headless-testable place.
+// handle_server_message() is public precisely so tests can drive the machine
+// with synthetic frames and no live server. Clock-injected.
 namespace bomber::net {
 
 class LobbyClient;
@@ -67,13 +62,11 @@ public:
         std::uint32_t seed = 0;
         int input_delay = 2;
         std::uint16_t local_seats_mask = 0;  // the seats THIS peer owns
-        // Every NETWORK seat in the match, derived from `seat_assign` (the
-        // server's final seat→player binding). This is the `all_seats` a
-        // RollbackSession is built with and the set a SetupSession collects acks
-        // over — so the whole match layer reads its seat topology from the
-        // server's answer instead of a hard-coded 0b11. AI slots are NOT here:
-        // they are simulated identically on every peer from the shared config
-        // and their input never crosses the wire.
+        // Every NETWORK seat in the match, derived from the server's final
+        // seat->player binding: the `all_seats` a RollbackSession is built with
+        // and the set a SetupSession collects acks over. AI slots are NOT here —
+        // they are simulated identically everywhere from the shared config and
+        // their input never crosses the wire.
         std::uint16_t all_seats_mask = 0;
         int hub_seat = 0;
         std::vector<int> seat_assign;
@@ -126,12 +119,10 @@ public:
 
     // --- PORT-ONLY lobby chat (PROTOCOL.md §7) ---
     //
-    // NOT a reverse-engineered feature: the 1997 game has no chat. It lives on
-    // the control plane because that is the only link players share while they
-    // are still in the lobby, and it stays usable for as long as this object
-    // does — which is now past the punch, through the online setup screens.
+    // NOT a reverse-engineered feature: the 1997 game has no chat. It rides the
+    // control plane, the only link players share while still in the lobby.
     //
-    // The chat token bucket, mirrored EXACTLY from the server's so the client
+    // The token bucket is mirrored EXACTLY from the server's, so the client
     // refuses (and can say why) precisely where the server would drop.
     static constexpr std::int64_t kChatCreditPerMsgMs = 2000;  // what one message costs
     static constexpr int kChatBurstMsgs = 4;                   // how many may be banked
@@ -169,20 +160,24 @@ private:
     // this machine is the hub of one, then hand over to verification.
     void step_rendezvous(std::int64_t now_ms);
     void begin_rendezvous(std::int64_t now_ms);
-    void begin_relay_fallback();  // no verified path → ask the server for an allocation
-    // Enter Verifying on whatever transport() currently is: build the probe (if
-    // it is not already up), pump it, and act on its verdict.
+    // Are the addresses this peer must punch toward all in hand? START does not
+    // wait for the candidate exchange, so "missing" means "not yet" until
+    // kCandidateWaitMs has passed — and fail()s after it.
+    bool peer_candidates_ready(const std::vector<int>& seats, bool star, bool am_hub,
+                               std::int64_t now_ms);
+    bool build_hub_punch(const std::vector<int>& seats);  // multi-peer, hub only
+    bool build_guest_punch(bool star);                    // 2-peer, toward the hub
+    void begin_relay_fallback();  // no verified path -> ask the server for an allocation
+    // Enter Verifying on whatever transport() currently is: build the probe (if it
+    // is not already up), pump it, and act on its verdict.
     void step_verify(std::int64_t now_ms);
     // Does this match have a relay fallback at all? RelayedTransport addresses
     // exactly ONE destination seat, so only a 2-seat match can escalate.
     //
-    // IT DOES NOT DECIDE WHETHER TO VERIFY, and it used to: "only a match that
-    // can escalate is worth verifying" reads plausibly and is wrong, because a
-    // star guest punches with the 2-PEER Rendezvous — the single-sided latch
-    // LinkProbe exists to remove — and skipping the probe let it start a match
-    // its hub had already abandoned. EVERY topology verifies (step()); what this
-    // decides is only what happens when verification EXPIRES: escalate to the
-    // relay, or fail, because a star has nowhere to converge TO.
+    // IT DOES NOT DECIDE WHETHER TO VERIFY — every topology verifies, and gating
+    // that on this was a shipped bug (design §4.1). What it decides is only what
+    // happens when verification EXPIRES: escalate to the relay, or fail, because
+    // a star has nowhere to converge TO.
     bool can_relay() const;
     // Every peer derives every seat's punch nonce identically from the shared
     // seed, so an inbound ping's nonce names its sender's seat.
@@ -194,13 +189,9 @@ private:
 
     // --- the arms of handle_server_message() ---------------------------------
     //
-    // That function is a FLAT dispatch over LobbyMsgType and stays one, which is
-    // the shape a reader can walk (coding-standards §8). What did not belong
-    // inside it is the tangle a handful of arms carried — a four-way reason→
-    // message table, a five-way error table, and StartMatch's three-pass seat-mask
-    // derivation — all of which read as nesting under a case label and read as
-    // ordinary functions here. Named for what they decide, not for the message
-    // that triggers them.
+    // That function is a FLAT dispatch over LobbyMsgType and stays one
+    // (coding-standards §8). Named for what they decide, not for the message that
+    // triggers them.
     void adopt_roster(const std::vector<RosterEntry>& roster);
     void fail_join_rejected(const std::string& reason);
     void adopt_match_start(const LobbyServerMessage& msg);
@@ -208,12 +199,12 @@ private:
     // taken from the server's authoritative seat_assign rather than assumed.
     std::uint16_t derive_all_seats_mask() const;
     void report_server_error(const LobbyServerMessage& msg);
+    void adopt_peer_candidates(const LobbyServerMessage& msg);
     void adopt_relay_allocation(const LobbyServerMessage& msg);
     void append_chat_line(const LobbyServerMessage& msg);
 
-    // Members are grouped by ALIGNMENT, not by topic (the topics are called out
-    // in the comments instead): pointer-sized first, then 4-byte, then the
-    // 1-byte flags. Interleaving them by topic cost ~35 bytes of padding, which
+    // Members are grouped by ALIGNMENT, not by topic: interleaving them by topic
+    // cost ~35 bytes of padding, which
     // clang-analyzer-optin.performance.Padding rightly flags.
 
     // --- pointer-aligned ---

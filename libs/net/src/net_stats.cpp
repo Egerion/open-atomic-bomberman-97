@@ -67,37 +67,38 @@ void NetStatsTracker::begin_pump(std::int64_t now_ms) {
     }
     s_.elapsed_ms = now_ms - begin_ms_;
 
-    // Close every 100 ms sparkline bucket the clock has walked past. A bucket
-    // with no sample in it is pushed as 0 — a GAP, not a carried-forward level:
-    // "no acknowledgement arrived in that 100 ms" is exactly what we want to be
-    // able to see, and holding the previous value would hide it.
     while (bucket_start_ms_ >= 0 && now_ms - bucket_start_ms_ >= kRttBucketMs) {
-        for (int s = 0; s < sim::kMaxPlayers; ++s) {
-            const std::size_t si = static_cast<std::size_t>(s);
-            if (!s_.peers[si].tracked) continue;
-            const int worst = bucket_worst_[si];
-            PeerStats& p = s_.peers[si];
-            const auto value = static_cast<std::uint16_t>(worst < 0 ? 0 : std::min(worst, 0xFFFF));
-            if (p.rtt_history_len < kRttHistory) {
-                p.rtt_history[p.rtt_history_len++] = value;
-            } else {
-                // Fixed-size FIFO: 48 uint16 shifted ten times a second is far
-                // below the noise floor of anything this measures, and it keeps
-                // the drawer free of ring-index arithmetic.
-                std::copy(p.rtt_history.begin() + 1, p.rtt_history.end(), p.rtt_history.begin());
-                p.rtt_history[kRttHistory - 1] = value;
-            }
-            bucket_worst_[si] = -1;
-            p.rtt_recent_max_ms = -1;
-            for (std::size_t i = 0; i < p.rtt_history_len; ++i)
-                if (p.rtt_history[i] != 0)
-                    p.rtt_recent_max_ms =
-                        std::max(p.rtt_recent_max_ms, static_cast<int>(p.rtt_history[i]));
-        }
+        close_rtt_bucket();
         bucket_start_ms_ += kRttBucketMs;
     }
 
     if (window_start_ms_ >= 0 && now_ms - window_start_ms_ >= kRateWindowMs) roll_windows();
+}
+
+void NetStatsTracker::close_rtt_bucket() {
+    // A bucket with no sample in it is pushed as 0 — a GAP, not a carried-forward
+    // level: "no acknowledgement arrived in that 100 ms" is exactly what we want
+    // to be able to see, and holding the previous value would hide it.
+    for (int s = 0; s < sim::kMaxPlayers; ++s) {
+        const std::size_t si = static_cast<std::size_t>(s);
+        PeerStats& p = s_.peers[si];
+        if (!p.tracked) continue;
+        const int worst = bucket_worst_[si];
+        const auto value = static_cast<std::uint16_t>(worst < 0 ? 0 : std::min(worst, 0xFFFF));
+        // A shifted fixed-size FIFO, not a ring: 48 uint16 moved ten times a
+        // second is far below the noise floor of anything this measures, and it
+        // keeps the drawer free of ring-index arithmetic.
+        const bool full = (p.rtt_history_len == kRttHistory);
+        if (full) std::copy(p.rtt_history.begin() + 1, p.rtt_history.end(), p.rtt_history.begin());
+        if (!full) ++p.rtt_history_len;
+        p.rtt_history[p.rtt_history_len - 1] = value;
+        bucket_worst_[si] = -1;
+        p.rtt_recent_max_ms = -1;
+        for (std::size_t i = 0; i < p.rtt_history_len; ++i)
+            if (p.rtt_history[i] != 0)
+                p.rtt_recent_max_ms =
+                    std::max(p.rtt_recent_max_ms, static_cast<int>(p.rtt_history[i]));
+    }
 }
 
 void NetStatsTracker::roll_windows() {
@@ -209,14 +210,28 @@ void NetStatsTracker::on_stall() {
 
 void NetStatsTracker::on_rephase_hold() { ++s_.rephase_holds; }
 
-void NetStatsTracker::on_timing(int raw_advantage, int sustained, bool suppressed, int lead,
-                                int spread) {
-    s_.frame_advantage = raw_advantage;
-    s_.sustained_advantage = sustained;
-    s_.local_lead = lead;
-    s_.peer_depth_spread = spread;
-    if (lead > 0) ++s_.lead_pumps;
-    if (suppressed) ++s_.rephase_suppressed;
+void NetStatsTracker::on_timing(const TimingSample& t) {
+    s_.frame_advantage = t.raw_advantage;
+    s_.sustained_advantage = t.sustained;
+    s_.local_lead = t.lead;
+    s_.peer_depth_spread = t.spread;
+    if (t.lead > 0) ++s_.lead_pumps;
+    if (t.suppressed) ++s_.rephase_suppressed;
+}
+
+void NetStatsTracker::update_peer(int seat, std::uint32_t tick, std::uint32_t next, bool live) {
+    PeerStats& p = s_.peers[static_cast<std::size_t>(seat)];
+    p.live = live;
+    p.lag_ticks = static_cast<int>(tick > next ? tick - next : 0);
+    if (p.live) p.worst_lag_ticks = std::max(p.worst_lag_ticks, p.lag_ticks);
+    // Is the ack-RTT measuring the wire, or this peer's tick offset from us? A
+    // healthy reading sits near 2x the lag and a contaminated one near 1x, so the
+    // cut at 1.5x has a factor of two of margin on both sides; a local lead
+    // breaks the premise outright and is declared rather than detected. The two
+    // models this falls out of are in docs/net-rollback.md §4.2.
+    const int lag_ms = p.lag_ticks * (1000 / kPumpHz);
+    p.rtt_offset_bound =
+        p.rtt_ms >= 0 && (s_.local_lead > 0 || (p.lag_ticks >= 2 && p.rtt_ms * 2 < lag_ms * 3));
 }
 
 void NetStatsTracker::end_pump(std::uint32_t tick, std::uint32_t confirmed,
@@ -233,48 +248,9 @@ void NetStatsTracker::end_pump(std::uint32_t tick, std::uint32_t confirmed,
     s_.aborted = aborted;
     for (int s = 0; s < sim::kMaxPlayers; ++s) {
         const std::size_t si = static_cast<std::size_t>(s);
-        PeerStats& p = s_.peers[si];
-        if (!p.tracked) continue;
-        p.live = (dropped & static_cast<std::uint16_t>(1U << s)) == 0;
-        const std::uint32_t next = remote_next[si];
-        p.lag_ticks = static_cast<int>(tick > next ? tick - next : 0);
-        if (p.live) p.worst_lag_ticks = std::max(p.worst_lag_ticks, p.lag_ticks);
-        // Is the ack-RTT measuring the wire, or this peer's tick offset from us?
-        // The sample is max(offset, one_way) + one_way, so once the offset
-        // dominates it equals the offset — which `lag_ticks` also measures. One
-        // pump of slack, because the ack can only be answered on a pump boundary.
-        // A RATIO TEST, and it falls straight out of the two models rather than
-        // being a tuned threshold. Write the one-way delay as d and the peer's
-        // wall-clock lead over us as G, both in pumps:
-        //   * peers LEVEL (G = 0): our input for T reaches the peer d after we
-        //     sent it and it answers at once, so the sample is 2d — while the lag
-        //     is only the d it takes the peer's own input to reach us. rtt = 2*lag.
-        //   * peer BEHIND (G > d): the peer cannot answer until it reaches T, so
-        //     the sample is G+d — and the lag is G+d too, because its newest
-        //     input is exactly that far back. rtt = lag, and the reading has
-        //     stopped containing any information about the wire.
-        // So a healthy reading sits near 2x the lag and a contaminated one near
-        // 1x. Cutting at 1.5x separates them with a factor of two of margin on
-        // both sides. Judged on the LATEST sample, not the session minimum: an
-        // offset builds up over a match, and a good sample from before it did
-        // says nothing about what the numbers mean now.
-        //
-        // A LOCAL LEAD BREAKS THE SAME PREMISE, and more completely. While we file
-        // our input k ticks early (rollback_session.hpp's jitter note) it reaches
-        // the peer BEFORE the peer gets to that tick, so its frontier stops rising
-        // on our input's ARRIVAL and starts rising on its own progress: the sample
-        // becomes max(one_way, lead + offset) + one_way, which is still an upper
-        // bound on the path but no longer an estimate of it. No ratio test can see
-        // that — the lead inflates the sample and DEFLATES the lag at the same time
-        // — so it is declared rather than detected. The alternative was to let the
-        // number silently change meaning, which is precisely what this file exists
-        // not to do: the owner's whole jitter table was built by discarding the
-        // readings this flag marks. `peer_depth_spread` is the arrival-variance
-        // reading that survives a lead, and is what to read instead.
-        const int lag_ms = p.lag_ticks * (1000 / kPumpHz);
-        p.rtt_offset_bound =
-            p.rtt_ms >= 0 &&
-            (s_.local_lead > 0 || (p.lag_ticks >= 2 && p.rtt_ms * 2 < lag_ms * 3));
+        if (!s_.peers[si].tracked) continue;
+        const bool live = (dropped & static_cast<std::uint16_t>(1U << s)) == 0;
+        update_peer(s, tick, remote_next[si], live);
     }
 }
 

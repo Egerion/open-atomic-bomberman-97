@@ -22,17 +22,15 @@ void SeedHandshake::step() {
     while (transport_->poll(&buf)) {
         Message m;
         if (!decode(buf.data(), buf.size(), &m) || m.type != MsgType::Hello) continue;
-        if (is_host_) {
-            // The guest's ACK proves the link is two-way (poll() has now learned
-            // the guest's address, so has_peer() holds) — the host is done.
-            if (m.hello.is_ack) done_ = true;
-        } else {
-            // The host's announcement — adopt its seed and finish.
-            if (!m.hello.is_ack) {
-                seed_ = m.hello.seed;
-                done_ = true;
-            }
-        }
+        // A host is finished by the guest's ACK, which proves the link is two-way
+        // (poll() has now learned the guest's address, so has_peer() holds); a
+        // guest is finished by the host's announcement, whose seed it adopts.
+        // Either way the frame that finishes us is the OTHER side's, so our own
+        // kind reflected back is ignored.
+        const bool from_peer = (m.hello.is_ack == is_host_);
+        if (!from_peer) continue;
+        if (!is_host_) seed_ = m.hello.seed;
+        done_ = true;
     }
 }
 

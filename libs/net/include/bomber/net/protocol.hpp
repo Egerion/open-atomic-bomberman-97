@@ -9,13 +9,11 @@
 #include "bomber/net/input_codec.hpp"
 #include "bomber/net/match_config_codec.hpp"
 
-// The message layer over the raw input codec (input_codec.hpp): a lockstep peer
-// exchanges exactly two kinds of datagram — per-tick INPUT and per-tick HASH —
-// so every packet carries a one-byte MsgType tag ahead of its payload. INPUT
-// reuses input_codec's frame verbatim; HASH is a tick + the state_hash digest
-// the desync detector compares (ADR-0010: state_hash IS the on-wire integrity
-// check). Everything stays untrusted-input safe: decode() bounds-checks the tag
-// and the payload and rejects anything malformed.
+// The message layer over the raw input codec: every packet carries a one-byte
+// MsgType tag ahead of its payload. INPUT reuses input_codec's frame verbatim;
+// HASH is a tick plus the state_hash digest the desync detector compares
+// (ADR-0010: state_hash IS the on-wire integrity check). Untrusted-input safe
+// throughout — decode() bounds-checks the tag and the payload.
 
 namespace bomber::net {
 
@@ -34,61 +32,43 @@ enum class MsgType : std::uint8_t {
     HostLost = 11
 };
 
-// THE MATCH-SHELL CONTROL MESSAGE (wire v8). Everything above is about the
-// CONTENT of a match — inputs, hashes, the config it is built from. This one is
-// about the SHELL around it: when a round stops and when the peers leave the
-// outcome screens. Both used to be LOCAL decisions on each machine, which is a
-// desync by construction — one peer's Esc froze its own sim while the other kept
-// ticking, and "the match is over" was reached (and the socket dropped) whenever
-// each peer independently felt like it.
+// THE MATCH-SHELL CONTROL MESSAGE (wire v8, docs/online-multiplayer-design.md
+// §10). Everything above is about the CONTENT of a match; this one is about the
+// SHELL around it — when a round stops and when the peers leave the outcome
+// screens. Both used to be LOCAL decisions, which is a desync by construction.
 //
-// HOST-AUTHORITATIVE, exactly like the original's network screens
-// (docs/re/network-screens.md §7): the machine driving the game decides and
-// broadcasts; a client (`sub_40C06A() == 1`) may only ask. This port went one
-// step FURTHER than the original on 2026-07-30 and removed even the asking —
-// see EndRoundRequest, which is now a value with no sender and no reader.
-//
-// "The machine driving the game" is RollbackSession::hosting(), the elected
-// hub, not whoever pressed Host: in a star the role can move mid-match.
+// HOST-AUTHORITATIVE, like the original's network screens
+// (docs/re/network-screens.md §7), and "the host" means
+// RollbackSession::hosting() — the ELECTED hub, not whoever pressed Host.
 enum class MatchCtlKind : std::uint8_t {
     // HOST -> everyone. "Stop this round; `at_tick` is the first tick NOBODY
-    // simulates." The outcome is a DRAW by DECREE, not by inspecting the frozen
-    // state: an abandoned round tallies nothing, so the two peers cannot
-    // disagree about who won it. Idempotent and order-free like MsgType::Drop —
-    // the EARLIEST announced tick wins — and re-sent every pump, because a peer
-    // that misses it keeps simulating into a round the host has already left.
+    // simulates." The outcome is a DRAW BY DECREE, not read out of the frozen
+    // state, so the two peers cannot disagree about who won it. Idempotent and
+    // order-free — the EARLIEST tick wins — and re-sent every pump.
     //
-    // `at_tick` is in the FUTURE (the host's own speculative tick plus a lead
-    // above the prediction cap), unlike DropFrame's deliberately retroactive
-    // one. The reasons are opposite: a drop tick must be reachable when a seat's
-    // input will NEVER arrive, whereas here every seat is live and still
-    // sending, so a future tick is reachable by definition — and it has to be
-    // future, because a peer that has already speculated past it would stop
-    // having simulated (and tallied) more ticks than the host did.
+    // `at_tick` is in the FUTURE, unlike DropFrame's deliberately retroactive
+    // one, and the reasons are opposite: a drop tick must be reachable when a
+    // seat's input will NEVER arrive, whereas here every seat is live, so a
+    // future tick is reachable by definition — and it MUST be future, because a
+    // peer that had already speculated past it would stop having simulated (and
+    // tallied) more of the round than the host did.
     EndRound = 0,
-    // RETIRED 2026-07-30, AND DELIBERATELY STILL HERE. It used to mean "the
-    // player at this machine pressed Esc" — a guest's request that the host
-    // converted into an EndRound — which made any guest able to force-end any
-    // round with no host confirmation. BOTH halves are gone: nothing encodes
-    // this any more (RollbackSession::request_end_round returns immediately
-    // unless the session is hosting()) and nothing acts on an inbound one
-    // (receive() reads the tag and does nothing with it).
+    // RETIRED, AND DELIBERATELY STILL HERE. It used to be a guest's request that
+    // the host granted, i.e. a lever letting any guest force-end any round with
+    // no host confirmation. Nothing sends it and nothing acts on an inbound one.
     //
-    // The ENUMERATOR stays and decode() still accepts it, because
+    // THE ENUMERATOR STAYS and decode() still accepts it, because
     // kWireProtocolVersion did not move: a peer on the previous build still
-    // connects and still sends this, and the point is to turn that peer away
+    // connects and still sends this, and the point is to turn that peer AWAY
     // rather than disconnect it on an unknown kind. Removing the value would
     // also renumber RematchWait/Rematch, which is a wire break for no gain.
     EndRoundRequest = 1,
-    // HOST -> everyone. Pure LIVENESS while the host is reading the post-match
-    // RESULTS/VICTORY screens. Without it a guest waiting on the host cannot
-    // tell "still deciding" from "gone", and the only safe reading of silence is
-    // "gone" — which is precisely the connection drop this whole change removes.
+    // HOST -> everyone. Pure LIVENESS while the host reads the post-match
+    // screens. Without it a guest cannot tell "still deciding" from "gone", and
+    // the only safe reading of silence is "gone".
     RematchWait = 2,
-    // HOST -> everyone. "I am leaving the outcome screens for the setup screens
-    // now." The guests follow, and the SAME transport carries the next
-    // SetupSession — so finishing a match returns both peers to map selection
-    // with the session intact instead of tearing it down.
+    // HOST -> everyone. "I am leaving the outcome screens for the setup screens."
+    // The guests follow and the SAME transport carries the next SetupSession.
     Rematch = 3,
 };
 
@@ -109,86 +89,59 @@ struct HashFrame {
 };
 
 // The pre-match seed handshake (handshake.hpp): the ONE datagram exchanged
-// before any INPUT/HASH flows, so both peers agree on the shared match seed
-// without a --seed on each command line. The HOST announces its seed
-// (is_ack=false); the GUEST replies with an ACK (is_ack=true, seed unused) once
-// it has adopted that seed. Both re-send every pump so a dropped packet
-// self-heals (SeedHandshake).
+// before any INPUT/HASH flows, so both peers agree on the shared match seed. The
+// HOST announces its seed (is_ack=false); the GUEST replies with an ACK
+// (is_ack=true, seed unused). Both re-send every pump so a drop self-heals.
 struct HelloFrame {
     std::uint32_t seed = 0;
     bool is_ack = false;
 };
 
-// One NAT hole-punch probe (ADR-0011 §3, docs/online-multiplayer-design.md §3):
-// the Rendezvous sends a PING (is_pong=false) with a fresh `nonce` to each of the
-// peer's candidate addresses; a peer that receives a PING echoes it back as a
-// PONG (is_pong=true, same nonce). The first candidate whose PING→PONG→PING round
-// completes becomes the chosen match path, and its round-trip is the first RTT
-// sample. Rides the SAME UDP socket the match then borrows, so it needs a MsgType
-// tag to sit alongside Input/Hash/Hello.
+// One NAT hole-punch probe (ADR-0011 §3, design §3): the Rendezvous sends a PING
+// (is_pong=false) with a fresh `nonce` to each of the peer's candidate
+// addresses; a peer receiving one echoes it as a PONG (same nonce). The first
+// candidate whose round completes becomes the match path, and its round-trip is
+// the first RTT sample. Rides the SAME UDP socket the match then borrows.
 struct PunchFrame {
     std::uint32_t nonce = 0;
     bool is_pong = false;
 };
 
-// One PATH-VERIFICATION probe (link_probe.hpp). The punch proves a path to the
-// peer that RECEIVED the pong; it proves nothing about whether the peer reached
-// the same conclusion before its own deadline, and a peer that decides
-// differently ends up on a transport the other one is not on. The probe is the
-// mutual half: it runs over the CHOSEN Transport (direct socket or relay) and
-// both ends must agree before the match layer is handed anything.
-//
-// `nonce` is the sender's per-seat punch nonce, so a reflected copy of our own
-// datagram (the star hub reflects) is recognised and ignored. `seen_peer` is the
-// whole protocol: "I have already received a datagram from you on this path".
-// Receiving a probe proves peer→me; receiving one with seen_peer set proves
-// me→peer as well, which is the mutual proof neither side can derive alone.
+// One PATH-VERIFICATION probe (link_probe.hpp, design §4.1). `nonce` is the
+// sender's per-seat punch nonce, so a reflected copy of our own datagram is
+// recognised and ignored. `seen_peer` is the whole protocol: receiving a probe
+// proves peer->me, and receiving one with seen_peer set proves me->peer too —
+// the mutual proof neither side can derive alone.
 struct ProbeFrame {
     std::uint32_t nonce = 0;
     bool seen_peer = false;
 };
 
-// The peer-drop control message (ADR-0011 Risks, "Dropped/late peers"): the
-// HOST announces "seat `seat` produced no input from tick `at_tick` on, hand it
-// to the AI". Every peer applies it at that exact tick, so the deterministic
-// AISystem derives identical inputs everywhere and the hash stays equal.
+// The peer-drop control message: the HOST announces "seat `seat` produced no
+// input from tick `at_tick` on, hand it to the AI". Every peer applies it at that
+// exact tick, so the deterministic AISystem derives identical inputs everywhere.
 //
-// `at_tick` is RETROACTIVE — the first tick for which the host holds no input
-// from that seat, which is at or below every peer's `confirmed_tick()`. It is
-// deliberately NOT a tick in the future: ticks between the seat's last input and
-// a future handoff tick could never be CONFIRMED (their missing input never
-// arrives), so the session would keep speculating and never unstall — exactly
-// the hang this message exists to cure. Placing it at the first missing tick
-// means a peer that has not received the message yet is simply still stalled
-// there, so a late arrival always lands inside the rollback window.
+// `at_tick` is RETROACTIVE — the first tick the host holds no input for — and
+// deliberately NOT in the future: ticks between the seat's last input and a
+// future handoff tick could never be CONFIRMED, so the session would speculate
+// and never unstall, which is the hang this message cures. At the first missing
+// tick, a peer that has not received the message is simply still stalled there,
+// so a late copy always lands inside the rollback window.
 struct DropFrame {
-    std::uint8_t seat = 0;       // the dropped seat index (< sim::kMaxPlayers)
-    std::uint32_t at_tick = 0;   // first tick simulated with that seat on AI
+    std::uint8_t seat = 0;      // the dropped seat index (< sim::kMaxPlayers)
+    std::uint32_t at_tick = 0;  // first tick simulated with that seat on AI
 };
 
-// HOST MIGRATION's detection message (wire v9, ADR-0011 decision 5,
-// docs/online-multiplayer-design.md §8.1): the drop->AI handoff of the HUB's own
-// seat. It is a SEPARATE message from DropFrame despite carrying identical
-// fields, and the difference is authority, not payload:
+// HOST MIGRATION's detection message (wire v9, design §8.1). A SEPARATE message
+// from DropFrame despite identical fields, and the difference is AUTHORITY: a
+// Drop is the hub's decree, a HostLost is a survivor's observation about the
+// machine that would otherwise have decreed it. Sharing the tag would let any
+// guest hand any seat to the AI.
 //
-//   * a Drop is the hub's DECREE — exactly one machine ever sends it, and every
-//     peer obeys it unconditionally;
-//   * a HostLost is a survivor's OBSERVATION about the machine that would
-//     otherwise have decreed it. Nobody has authority here, because the only
-//     peer that had it is the one that died, so EVERY survivor announces and
-//     every survivor re-sends (broadcast_host_lost is not hub-only).
-//
-// Keeping them apart is what lets a peer accept "the hub is gone" from a
-// non-hub, while still refusing an ordinary guest-drop decree from one. Sharing
-// the Drop tag would have made any guest able to hand any seat to the AI.
-//
-// `at_tick` is RETROACTIVE for exactly DropFrame's reason (see above), plus one
-// of its own: survivors DISAGREE about it. It is a local quantity — peers hold
-// different amounts of a dying hub's final output — so proposals differ by
-// however many of its last datagrams each happened to lose. The LOWEST proposal
-// wins everywhere, which is monotone and therefore needs no agreement protocol;
-// adopting one below our own confirmed frontier is the single case that makes
-// the session un-confirm (RollbackSession::rewind_for_migration).
+// `at_tick` is RETROACTIVE for DropFrame's reason plus one of its own: survivors
+// DISAGREE about it, holding different amounts of a dying hub's final output.
+// The LOWEST proposal wins — monotone, so no agreement protocol — and adopting
+// one below our own frontier is the single case that un-confirms the session.
 struct HostLostFrame {
     std::uint8_t seat = 0;      // the seat that was the hub (< sim::kMaxPlayers)
     std::uint32_t at_tick = 0;  // announcer's first tick with no input from it
@@ -204,16 +157,14 @@ struct InputRangeFrame {
     std::vector<sim::TickInputs> per_tick;
 };
 
-// --- host-driven match setup (setup_session.hpp) ------------------------------
+// --- host-driven match setup (setup_session.hpp, design §9) -------------------
 //
-// The original's shape, reproduced over our own P2P transport
-// (docs/re/network-screens.md §7): after the connect screens every peer lands in
-// the ORDINARY roster and level screens, the HOST drives them and broadcasts
-// each change (roster slot kind 40, team kind 58, level kind 43, rounds kind
-// 44), and guests are strictly read-only. Our three messages collapse that into
-// a LIVE PREVIEW (everything a read-only display needs, re-sent for UDP loss)
-// plus the FINAL authoritative config (the whole resolved sim::MatchConfig,
-// chunked) and its acknowledgement.
+// The original's shape over our own P2P transport (docs/re/network-screens.md
+// §7): the HOST drives the roster and level screens and broadcasts each change,
+// and guests are strictly read-only. Our three messages collapse that into a
+// LIVE PREVIEW (everything a read-only display needs, re-sent for UDP loss) plus
+// the FINAL authoritative config (the whole resolved sim::MatchConfig, chunked)
+// and its acknowledgement.
 
 // The longest level name a preview may carry. Longer names are rejected on
 // decode rather than truncated — a name that does not fit is a sender that
@@ -259,18 +210,13 @@ struct SetupChunkFrame {
 };
 
 // "Seat `seat` reassembled and decoded revision `revision`, whose blob checksums
-// to `checksum`." Carrying the checksum (not just the revision) means the host
-// learns the guest latched the SAME bytes, not merely something with the same
-// label; carrying the SEAT is what makes a >2-peer lobby possible at all. Over a
-// StarHubTransport the host's chunks reach every guest, so an unattributed ack
-// would only ever mean "somebody has it" — the host would start the match while
-// another guest was still reassembling. With the seat in the frame the host
-// keeps a per-seat mask and reaches Phase::Final only when every expected guest
-// has acked the CURRENT revision (setup_session.hpp).
-//
-// A machine that owns several seats sends one ack PER SEAT, so the host's mask
-// is satisfied whatever the machine↔seat grouping is — the host never has to
-// know which seats share a machine.
+// to `checksum`." The CHECKSUM (not just the revision) tells the host the guest
+// latched the SAME bytes, not merely something with the same label. The SEAT is
+// what makes a >2-peer lobby possible: over a StarHubTransport the host's chunks
+// reach every guest, so an unattributed ack would only mean "somebody has it"
+// and the host would start while another guest was still reassembling. A machine
+// owning several seats sends one ack PER SEAT, so the host never has to know
+// which seats share a machine.
 struct SetupAckFrame {
     std::uint32_t revision = 0;
     std::uint32_t checksum = 0;
@@ -305,73 +251,36 @@ struct Message {
     HostLostFrame host_lost;
 };
 
-// [MsgType::Input][input_codec frame] — the seats in `seat_mask`, stamped `tick`.
+// --- the encoders -------------------------------------------------------------
+//
+// Byte layouts and the exact validation each decode arm performs are tabulated in
+// docs/net-wire-format.md. The rule they all share: a field that indexes anything
+// (a seat, a chunk, an enum) is bounds-checked AT THE WIRE, because an
+// out-of-range value means a peer that disagrees with us about the protocol and
+// the build_hash door is what was supposed to have caught that.
+
 std::vector<std::uint8_t> encode_input(std::uint32_t tick_index, std::uint16_t seat_mask,
                                        const sim::TickInputs& inputs);
-
-// [MsgType::InputRange][first_tick u32-LE][count u8][seat_mask u16-LE]
-//   [count * (one packed byte per set seat)] — `per_tick.size()` consecutive
-// ticks from `first_tick`, each carrying `seat_mask`'s seats. count is capped at
-// 255 (the input-delay window is tiny); an empty range encodes nothing useful
-// and is rejected on decode.
+// `per_tick.size()` consecutive ticks from `first_tick`, each carrying
+// `seat_mask`'s seats. The count rides in a u8, and an empty range is rejected.
 std::vector<std::uint8_t> encode_input_range(std::uint32_t first_tick, std::uint16_t seat_mask,
                                              const std::vector<sim::TickInputs>& per_tick);
-
-// [MsgType::Hash][tick u32-LE][hash u64-LE] — 13 bytes.
 std::vector<std::uint8_t> encode_hash(std::uint32_t tick_index, std::uint64_t hash);
-
-// [MsgType::Hello][seed u32-LE][is_ack u8] — 6 bytes. The host sends its seed
-// (is_ack=false); the guest replies with is_ack=true (seed field ignored).
 std::vector<std::uint8_t> encode_hello(std::uint32_t seed, bool is_ack);
-
-// [MsgType::Punch][nonce u32-LE][is_pong u8] — 6 bytes. A hole-punch PING
-// (is_pong=false) or the PONG echo of one (is_pong=true, same nonce).
 std::vector<std::uint8_t> encode_punch(std::uint32_t nonce, bool is_pong);
-
-// [MsgType::Probe][nonce u32-LE][seen_peer u8] — 6 bytes. A path-verification
-// probe over the chosen Transport (link_probe.hpp).
 std::vector<std::uint8_t> encode_probe(std::uint32_t nonce, bool seen_peer);
-
-// [MsgType::Drop][seat u8][at_tick u32-LE] — 6 bytes. Decode rejects a seat
-// index outside [0, sim::kMaxPlayers).
 std::vector<std::uint8_t> encode_drop(std::uint8_t seat, std::uint32_t at_tick);
-
-// [MsgType::MatchCtl][kind u8][at_tick u32-LE] — 6 bytes. Decode rejects a kind
-// above Rematch, exactly as MsgType::Drop rejects an out-of-range seat: an
-// unknown kind means a peer that disagrees with us about the protocol, and the
-// build_hash door is what is supposed to have caught that.
 std::vector<std::uint8_t> encode_match_ctl(MatchCtlKind kind, std::uint32_t at_tick);
-
-// [MsgType::HostLost][seat u8][at_tick u32-LE] — 6 bytes. Byte-identical in
-// shape to MsgType::Drop and deliberately NOT the same tag; see HostLostFrame on
-// why the authority difference needs its own opcode. Decode rejects a seat index
-// outside [0, sim::kMaxPlayers), exactly as Drop does.
+// Byte-identical in shape to encode_drop and deliberately NOT the same tag; see
+// HostLostFrame on why the authority difference needs its own opcode.
 std::vector<std::uint8_t> encode_host_lost(std::uint8_t seat, std::uint32_t at_tick);
-
-// [MsgType::SetupPreview][revision u32-LE][level_index u8][rounds u8]
-//   [name_len u8][name_len bytes][10 * slot_kind u8][10 * team u8] — 28..60
-// bytes. Decode rejects a name longer than kSetupLevelNameMax, a name byte
-// outside printable ASCII (a hostile peer must not be able to push control
-// characters into the host's level label), a slot kind above Remote, and any
-// length that disagrees with name_len.
 std::vector<std::uint8_t> encode_setup_preview(const SetupPreviewFrame& preview);
-
-// [MsgType::SetupChunk][revision u32-LE][total_len u32-LE][checksum u32-LE]
-//   [chunk_count u8][chunk_index u8][payload] — 15 + up to 1024 bytes. Decode
-// rejects total_len of 0 or above kMaxMatchConfigBytes, a chunk_count that is
-// not exactly ceil(total_len / kSetupChunkPayloadBytes), an index outside that
-// count, and a payload whose length disagrees with the slice it claims to be —
-// so a receiver can never be talked into a short or overlapping reassembly.
 std::vector<std::uint8_t> encode_setup_chunk(const SetupChunkFrame& chunk);
-
-// [MsgType::SetupAck][revision u32-LE][checksum u32-LE][seat u8] — 10 bytes.
-// Decode rejects a seat outside [0, sim::kMaxPlayers), exactly as MsgType::Drop
-// does: the field indexes a per-seat mask, so it is bounds-checked at the wire.
 std::vector<std::uint8_t> encode_setup_ack(std::uint32_t revision, std::uint32_t checksum,
                                            std::uint8_t seat);
 
-// Decode a datagram produced by encode_input/encode_hash. Returns false (leaving
-// *out untouched) on an unknown tag, a short buffer, or a malformed payload.
+// Returns false — leaving *out untouched — on an unknown tag, a short buffer or
+// a malformed payload.
 bool decode(const std::uint8_t* data, std::size_t size, Message* out);
 
 }  // namespace bomber::net

@@ -28,6 +28,9 @@
 
 namespace bomber::net {
 
+// One decoded datagram (protocol.hpp), named here only by reference.
+struct Message;
+
 class LockstepSession {
 public:
     // `sim` is BORROWED (not owned) and must outlive the session — the caller
@@ -61,6 +64,12 @@ public:
 
 private:
     void receive();  // drain the transport: store remote inputs + check peer hashes
+    // ONE decoded datagram, dispatched. NOTE the catch-all in the .cpp: it is a
+    // known latent bug kept intact so that fixing it is its own change.
+    void on_message(const Message& m);
+    void on_single_input(const Message& m);
+    void on_input_range(const Message& m);
+    std::uint16_t remote_of(std::uint16_t seat_mask) const;
     void fill_seats(std::uint32_t tick, std::uint16_t seats, const sim::TickInputs& in);
     void note_peer_hash(std::uint32_t tick, std::uint64_t peer_hash);
     void prune();

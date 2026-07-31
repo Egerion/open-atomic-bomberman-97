@@ -1,5 +1,6 @@
 #include "bomber/net/relayed_transport.hpp"
 
+#include <algorithm>
 #include <utility>
 
 namespace bomber::net {
@@ -46,20 +47,17 @@ void RelayedTransport::send(const std::uint8_t* data, std::size_t size) {
     socket_.send_to(relay_host_, relay_port_, scratch_.data(), scratch_.size());
 }
 
+bool RelayedTransport::addressed_to_us(const std::vector<std::uint8_t>& buf) const {
+    // Untrusted input: anything too short to carry the routing header, or
+    // addressed to a different allocation, is dropped rather than decoded.
+    if (buf.size() <= kRelayHeaderBytes) return false;
+    return std::equal(alloc_id_.begin(), alloc_id_.end(), buf.begin());
+}
+
 bool RelayedTransport::poll(std::vector<std::uint8_t>* out) {
     std::vector<std::uint8_t> buf;
     while (socket_.poll_from(&buf, nullptr, nullptr)) {
-        // Untrusted input: anything too short to carry the routing header, or
-        // addressed to a different allocation, is dropped rather than decoded.
-        if (buf.size() <= kRelayHeaderBytes) continue;
-        bool mine = true;
-        for (std::size_t i = 0; i < kRelayAllocIdBytes; ++i) {
-            if (buf[i] != alloc_id_[i]) {
-                mine = false;
-                break;
-            }
-        }
-        if (!mine) continue;
+        if (!addressed_to_us(buf)) continue;
         last_src_seat_ = static_cast<int>(buf[kRelayAllocIdBytes]);
         out->assign(buf.begin() + static_cast<std::ptrdiff_t>(kRelayHeaderBytes), buf.end());
         return true;

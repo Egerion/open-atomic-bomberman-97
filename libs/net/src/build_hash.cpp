@@ -8,43 +8,33 @@ namespace bomber::net {
 namespace {
 
 // build_hash's job is to stop two peers whose SIMULATIONS DISAGREE from ever
-// reaching tick 0 together. It does that by running fixed, asset-free scenarios
-// and folding their state_hashes: any behaviour change shifts the digest, the
-// lobby door refuses the mismatch, and nobody discovers the divergence halfway
-// through a match instead.
+// reaching tick 0 together: fixed asset-free scenarios are run and their
+// state_hashes folded, so any behaviour change shifts the digest and the lobby
+// door refuses the mismatch.
 //
-// It is therefore only as good as what the scenarios actually EXECUTE, and one
-// long emergent run is not enough — the settings that reach one mechanic
-// suppress another. Measured, not theorised: a single 60-tick full-clock run
-// never armed the enclosure and had no AI seat, so TWO real behaviour fixes
-// (facts.md "AI never bombs a warphole", and the enclosure arm sweep that
-// clears warpholes/trampolines) both left the digest BYTE-IDENTICAL. A peer on
-// the old build was still admitted and only diverged mid-match — exactly the
-// failure this guard exists to prevent. Widening the single scenario then made
-// it worse in a new way: shortening the clock so the walls arm also crushed the
-// AI seat before it could act, so the AI path went dark again.
+// IT IS ONLY AS GOOD AS WHAT THE SCENARIOS EXECUTE, and one long emergent run is
+// not enough — the settings that reach one mechanic suppress another, which is
+// why there is one scenario PER MECHANIC CLASS. When you add a system to
+// libs/sim, add or extend a scenario here and CHECK IT: build the digest before
+// and after and confirm it moved. Coverage by coincidence is not coverage.
 //
-// Hence one scenario PER MECHANIC CLASS, each free to pick settings that suit
-// it. When you add a system to libs/sim, add or extend a scenario here, and
-// CHECK IT: build the digest before and after your change and confirm it moved.
-// Coverage by coincidence is not coverage.
+// docs/net-build-hash.md is the evidence register — what each scenario is
+// MEASURED to discriminate, the reverts that prove it, and the gaps still open.
 
-// The classic (odd,odd) pillar arena with a deterministic brick fill, so
-// setup's powerup-hiding RNG runs.
+// The classic (odd,odd) pillar arena's fill rule, as a pure function of the
+// tile: pillars on odd/odd, a deterministic brick pattern elsewhere so setup's
+// powerup-hiding RNG runs.
+sim::Cell arena_fill(int x, int y) {
+    if (x % 2 == 1 && y % 2 == 1) return sim::Cell::Solid;  // fixed pillars
+    if ((x + y) % 3 == 0) return sim::Cell::Brick;          // destructible, hides powerups
+    return sim::Cell::Blank;
+}
+
 sim::MatchConfig pillar_arena() {
     using namespace sim;
     MatchConfig cfg;
-    for (int y = 0; y < kGridHeight; ++y) {
-        for (int x = 0; x < kGridWidth; ++x) {
-            if (x % 2 == 1 && y % 2 == 1) {
-                cfg.cells[y][x] = Cell::Solid;  // fixed pillars
-            } else if ((x + y) % 3 == 0) {
-                cfg.cells[y][x] = Cell::Brick;  // destructible, hides powerups
-            } else {
-                cfg.cells[y][x] = Cell::Blank;
-            }
-        }
-    }
+    for (int y = 0; y < kGridHeight; ++y)
+        for (int x = 0; x < kGridWidth; ++x) cfg.cells[y][x] = arena_fill(x, y);
     const int rx = kGridWidth - 1;
     const int by = kGridHeight - 1;
     // Keep the four spawn corners clear so nobody is walled in — otherwise the
@@ -108,20 +98,12 @@ std::uint64_t enclosure_scenario_hash() {
 }
 
 // 3. THE AI BRAIN. A FULL clock on purpose: the enclosure must not arm here, or
-// it crushes the AI seat before the brain has done anything worth hashing (that
-// is not hypothetical — it is what a combined scenario actually did). The AI
-// seat spawns ON a warphole whose destination is a second warphole.
+// it crushes the AI seat before the brain has done anything worth hashing.
 //
 // KNOWN GAP, still open FOR THIS SCENARIO: it does NOT discriminate the "AI
 // never bombs a warphole" fix — the digest is byte-identical with and without
-// it. Seating the AI on a warphole was not enough; the likely reason is that a
-// player on a warphole spends its time in the warp movement states rather than
-// deciding to drop, so the guarded branch is never reached. That diagnosis is
-// now corroborated: scenario 5 below covers the brain by seating the AI on
-// PLAIN FLOOR and giving it something to decide about, and it discriminates its
-// fix immediately. AI DECISIONS are therefore no longer uncovered wholesale —
-// but the warphole drop-refusal specifically still is, and closing it wants the
-// same treatment (drive an AI onto a warphole with a reason to drop).
+// it. Scenario 5 covers AI DECISIONS wholesale; the warphole drop-refusal
+// specifically is still uncovered (docs/net-build-hash.md §3).
 std::uint64_t ai_scenario_hash() {
     using namespace sim;
     MatchConfig cfg = pillar_arena();
@@ -151,17 +133,11 @@ sim::TickInputs actor_inputs(int t) {
     return in;
 }
 
-// 4. STAGE ACTORS, DRIVEN. Scenarios 2 and 3 both PLACE warpholes and
-// trampolines, and neither discriminates a change to them: #2's four seats walk
-// to the centre and never reach the actor tiles, #3's AI seat sits in the warp
-// states rather than deciding anything (see its comment). Measured the way this
-// file demands: the "trigger is the -1 APPROACH, not arrival" fix plus the
-// removal of the tramp_latch/warp_latch player fields left the digest
-// BYTE-IDENTICAL across all three, so a peer without that fix was still
-// admitted and would desync on any board carrying an actor — which every stock
-// warphole map does. This scenario exists to make that impossible: it walks a
-// player ONTO a trampoline and THROUGH a warphole whose exit is itself a
-// warphole (the ping-pong case the removed latch used to suppress).
+// 4. STAGE ACTORS, DRIVEN. Scenarios 2 and 3 PLACE warpholes and trampolines
+// without ever reaching them, and PLACEMENT IS NOT COVERAGE: the "trigger is the
+// -1 APPROACH, not arrival" fix left the digest byte-identical across both
+// (docs/net-build-hash.md §4). This one walks a player ONTO a trampoline and
+// THROUGH a warphole whose exit is itself a warphole.
 std::uint64_t stage_actor_scenario_hash() {
     using namespace sim;
     MatchConfig cfg = pillar_arena();
@@ -186,45 +162,19 @@ std::uint64_t stage_actor_scenario_hash() {
     return sim.hash();
 }
 
-// 5. THE AI's KEY PRESSES — the glove path. Scenario 3 seats an AI but, as its
-// own comment records, does not discriminate a change to the brain's DECISIONS.
-// This one is built against the decision path itself: the AI seat is BORN
-// holding the grab and punch gloves, so a run drives behaviour 3's drop, then
-// behaviour 0's grab of the bomb it is standing on, then behaviour 0's carrying
-// release (the throw), then behaviour 1's punch — every one of the four AI
-// key-write sites, each of which manufactures its own input edge (facts.md "AI
-// key presses manufacture their own edge").
+// 5. THE AI's KEY PRESSES — the glove path, and the only scenario built against
+// the brain's DECISIONS. The AI seat is BORN holding the grab and punch gloves,
+// so the run drives all four AI key-write sites: behaviour 3's drop, behaviour
+// 0's grab and carrying release, behaviour 1's punch (facts.md "AI key presses
+// manufacture their own edge").
 //
-// Every constant here was MEASURED, not guessed, because getting a brain to
-// exercise a branch is exactly what this file's history says goes wrong. The
-// obvious version — spare bomb, one brick, 300 ticks — reaches only two drops
-// and grabs on neither, because the AI leaves its own bomb's tile before the
-// once-per-tick action tail evaluates. The brick POCKET is what fixes that: it
-// keeps behaviour 3 supplied with adjacent targets and, with the spare bomb,
-// keeps the AI penned close enough that it is still on the bomb at tail time.
-// As tuned the run makes 3 drops, 3 grabs and 3 throws, the first grab at tick
-// 10 (it was 4/3/3 plus a punch, first grab at tick 11, before the per-frame
-// bomb-action tail of 2026-07-30 changed the trajectory — a grab now lands on
-// the frame that decided it, so the AI is elsewhere by the tick's end).
-// If you edit this scenario, re-measure those — tests/sim/test_ai.cpp
-// "build_hash scenario 5 really drives the glove path" replicates the board and
-// asserts the grab, so it fails loudly if a future edit makes the brain idle.
-//
-// Verified as this file demands: with the 2026-07-28 edge fix reverted and this
-// scenario present the digest changes (1599681701 -> 150405641), so a peer
-// missing that fix is now refused at the door. With only scenarios 1-4 the same
-// revert left the digest byte-identical at 3780851729 — that is the AI gap this
-// scenario closes. Do not fold this into scenario 3: a full clock and a spawn
-// OFF an actor tile are both load-bearing (the warp states and the wall crush
-// each starve the brain in their own way).
-//
-// It has since earned its keep twice more (2026-07-30), and it is the ONLY
-// scenario that catches either. Against the shipping digest of 977392888:
-// reverting the per-frame bomb-action tail moves this hash to
-// 7293458409330077548 and the digest to 3366107864 (scenario 3 moves with it),
-// and reverting the grab pause's getvalue(665)+1 window moves this hash ALONE,
-// to 12594943270607026772, digest 4051077992. Scenarios 1, 2, 4 and 6 are
-// byte-identical under both reverts.
+// EVERY CONSTANT HERE WAS MEASURED — as tuned the run makes 3 drops, 3 grabs and
+// 3 throws, first grab at tick 10 — and the brick POCKET is load-bearing rather
+// than decorative. If you edit this scenario, re-measure: tests/sim/test_ai.cpp
+// "build_hash scenario 5 really drives the glove path" asserts the grab, so it
+// fails loudly if an edit makes the brain idle. Do NOT fold this into scenario
+// 3; the full clock and the spawn OFF an actor tile are both load-bearing.
+// docs/net-build-hash.md §5 has the three reverts this is measured against.
 std::uint64_t ai_gloves_scenario_hash() {
     using namespace sim;
     MatchConfig cfg = pillar_arena();
@@ -264,30 +214,16 @@ sim::TickInputs disease_inputs(int t) {
     return in;
 }
 
-// 6. DISEASES — infection, contagion and EXPIRY. Scenarios 1-5 leave
-// `Tuning::diseases_time_limited` at its default true, and until 2026-07-30 the
-// port gated disease expiry on that flag, so the whole "VALUELST id 121 is dead
-// in the original, stop consuming it" fix was invisible to the digest: every
-// scenario took the same branch either way. A default is not coverage. This
-// scenario turns the flag OFF — the only setting the fix changes anything for,
-// and the setting a scheme authored with `121,0` hands a peer.
+// 6. DISEASES — infection, contagion and EXPIRY. Scenarios 1-5 all leave
+// `Tuning::diseases_time_limited` at its default, so the whole "VALUELST id 121
+// is dead in the original" fix was invisible to the digest: every scenario took
+// the same branch either way. A DEFAULT IS NOT COVERAGE. This one turns the flag
+// off, the only setting the fix changes anything for.
 //
-// It also needs its own board and its own inputs, and both were arrived at by
-// measurement, not by reasoning. The obvious version — pillar_arena plus the
-// shared `canned_inputs` — reaches ZERO infections in 400 ticks: those inputs
-// walk the four seats into each other's bombs, and three of them are dead by
-// tick 100 with the skulls still under unbroken bricks. The corridor below
-// instead guarantees the pickup: every brick in the wall hides a skull (Disease
-// is the only kind with a nonzero count, and a positive count places
-// unconditionally), and seat 0 has to blast through the wall to continue.
-//
-// Measured as this file demands: with the id-121 gate restored the scenario
-// hash changes (10041317218023902939 -> 2524117031108598899) and the digest
-// with it (2695214498 -> 977392888), so a peer still honouring the flag is
-// refused at the door — nothing else in scenarios 1-5 moves. As tuned
-// the run infects seat 0 at tick 129 and passes it to seat 1 on the way back;
-// on a time-limited build both diseases have expired by tick 400, on a
-// gate-honouring one both still read the full duration.
+// Its board and inputs were arrived at by measurement: pillar_arena plus the
+// shared canned_inputs reaches ZERO infections in 400 ticks. The corridor
+// guarantees the pickup instead — every brick in the wall hides a skull, and
+// seat 0 has to blast through to continue (docs/net-build-hash.md §6).
 std::uint64_t disease_scenario_hash() {
     using namespace sim;
     MatchConfig cfg;

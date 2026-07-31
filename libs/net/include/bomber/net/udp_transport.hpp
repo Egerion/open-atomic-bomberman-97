@@ -8,22 +8,19 @@
 
 #include "bomber/net/transport.hpp"
 
-// A real UDP-socket Transport (raw OS sockets — winsock on Windows, BSD sockets
-// on POSIX; NO SDL, so libs/net stays SDL-free and headless-buildable). Binds a
-// local UDP port and aims every datagram at ONE fixed peer — the 2-player
-// lockstep link. Non-blocking: poll() returns false when nothing has arrived.
-// Owns the socket (RAII); winsock is started once per process and cleaned up at
-// exit. Untrusted input like everything else: poll() hands the raw bytes to the
-// caller, which decodes + bounds-checks them (protocol.hpp).
+// A real UDP-socket Transport over raw OS sockets — winsock on Windows, BSD on
+// POSIX, NO SDL, so libs/net stays headless-buildable. Binds a local port and
+// aims every datagram at ONE fixed peer. Non-blocking, owns the socket (RAII),
+// and hands poll()'s raw bytes to the caller to decode and bounds-check.
 
 namespace bomber::net {
 
 // The local IPv4 address this machine would use to REACH `host` — the "host"
-// (LAN) candidate of the rendezvous candidate set (ADR-0011 §3). Found by
-// pointing a throwaway UDP socket at the destination and reading back
-// getsockname(); UDP connect() sends nothing, it only fixes the route, so this
-// costs no traffic and needs no interface-enumeration API. Returns "" on
-// failure (the caller then simply offers no host candidate).
+// (LAN) rendezvous candidate. Found by pointing a throwaway UDP socket at the
+// destination and reading back getsockname(): connect() on UDP sends nothing and
+// only fixes the route, so this costs no traffic and needs no
+// interface-enumeration API. "" on failure, and the caller then offers no host
+// candidate.
 std::string local_ip_toward(const std::string& host, std::uint16_t port);
 
 class UdpTransport : public Transport {
@@ -54,13 +51,12 @@ public:
     // the matchmaker does can affect a match running over this.
     NetPath path() const override { return NetPath::Direct; }
 
-    // --- Address-aware I/O for the Rendezvous hole-punch (ADR-0011 §3) ---
-    // The punch must probe SEVERAL candidate addresses (host / reflexive / relay)
-    // and learn WHICH one answered, neither of which the fixed-peer send()/poll()
-    // pair supports. send_to() aims one datagram at an explicit address; poll_from
-    // reports the source ip:port and — unlike poll() — does NOT auto-learn the
-    // peer, so the punch chooses the winner explicitly (then set_peer()s it, after
-    // which the match uses the plain send()/poll() path). IPv4 only.
+    // --- address-aware I/O for the Rendezvous hole-punch (ADR-0011 §3) --------
+    //
+    // The punch probes SEVERAL candidate addresses and must learn WHICH answered,
+    // neither of which the fixed-peer pair above supports. Unlike poll(),
+    // poll_from() does NOT auto-learn the peer, so the punch chooses its winner
+    // explicitly and set_peer()s it. IPv4 only.
     void send_to(const std::string& host, std::uint16_t port, const std::uint8_t* data,
                  std::size_t size);
     bool poll_from(std::vector<std::uint8_t>* out, std::string* src_ip, std::uint16_t* src_port);
@@ -68,14 +64,13 @@ public:
 private:
     void close_fd();
 
-    // The socket handle as a signed 64-bit value so one field holds both a POSIX
-    // int fd and a Windows SOCKET; -1 means closed (INVALID_SOCKET maps to -1).
+    // Signed 64-bit so one field holds both a POSIX int fd and a Windows SOCKET;
+    // -1 means closed (INVALID_SOCKET maps to -1).
     std::int64_t fd_ = -1;
-    // Resolved peer address, stored opaquely (sockaddr_storage-sized, aligned) so
-    // this header pulls in no OS socket headers. The alignment is what makes the
-    // reinterpret_cast to sockaddr in the .cpp well-defined; the size is a
-    // sockaddr_storage upper bound, checked against the real type where it is
-    // filled.
+    // The resolved peer address, held opaquely so this header pulls in no OS
+    // socket headers. The alignment is what makes the .cpp's reinterpret_cast to
+    // sockaddr well-defined; the size is a sockaddr_storage upper bound, checked
+    // against the real type where it is filled.
     alignas(8) std::array<unsigned char, 128> peer_{};
     unsigned peer_len_ = 0;
 };

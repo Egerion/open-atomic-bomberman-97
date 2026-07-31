@@ -26,22 +26,25 @@ Rendezvous::Rendezvous(UdpTransport& transport, std::vector<PeerSpec> peers,
     for (PeerSpec& p : peers) peers_.push_back(PeerState{std::move(p), {}, false, false, 0});
 }
 
+void Rendezvous::ping_candidates(const std::vector<Candidate>& targets,
+                                 const std::vector<std::uint8_t>& ping) {
+    for (const Candidate& c : targets) transport_.send_to(c.host, c.port, ping.data(), ping.size());
+}
+
 void Rendezvous::send_pings(std::int64_t now_ms) {
     const std::vector<std::uint8_t> ping = encode_punch(nonce_, /*is_pong=*/false);
-    if (multi_) {
-        for (const PeerState& p : peers_) {
-            // Once a peer's real (post-NAT) address is known, aim there too — it
-            // is the address that actually works, which a pre-shared candidate
-            // list may not contain.
-            if (p.addr_known) transport_.send_to(p.addr.host, p.addr.port, ping.data(), ping.size());
-            for (const Candidate& c : p.spec.candidates)
-                transport_.send_to(c.host, c.port, ping.data(), ping.size());
-        }
-    } else {
-        for (const Candidate& c : candidates_)
-            transport_.send_to(c.host, c.port, ping.data(), ping.size());
-    }
     last_ping_ms_ = now_ms;
+    if (!multi_) {
+        ping_candidates(candidates_, ping);
+        return;
+    }
+    for (const PeerState& p : peers_) {
+        // Once a peer's real (post-NAT) address is known, aim there too — it is
+        // the address that actually works, which a pre-shared candidate list may
+        // not contain.
+        if (p.addr_known) transport_.send_to(p.addr.host, p.addr.port, ping.data(), ping.size());
+        ping_candidates(p.spec.candidates, ping);
+    }
 }
 
 void Rendezvous::handle_ping(std::uint32_t nonce, const std::string& ip, std::uint16_t port) {
@@ -78,10 +81,9 @@ void Rendezvous::handle_pong(std::uint32_t nonce, const std::string& ip, std::ui
     // same address (so both directions are proven, and the seat is known).
     for (PeerState& p : peers_) {
         if (!p.addr_known || p.addr.port != port || p.addr.host != ip) continue;
-        if (!p.confirmed) {
-            p.confirmed = true;
-            p.rtt_ms = rtt;
-        }
+        if (p.confirmed) break;  // a duplicate pong keeps the first RTT sample
+        p.confirmed = true;
+        p.rtt_ms = rtt;
         break;
     }
     finish_if_all_confirmed();
@@ -121,10 +123,10 @@ void Rendezvous::step(std::int64_t now_ms) {
         if (!decode(buf.data(), buf.size(), &msg) || msg.type != MsgType::Punch) continue;
         if (!msg.punch.is_pong) {
             handle_ping(msg.punch.nonce, src_ip, src_port);
-        } else {
-            handle_pong(msg.punch.nonce, src_ip, src_port, now_ms);
-            if (state_ == State::Connected) return;
+            continue;
         }
+        handle_pong(msg.punch.nonce, src_ip, src_port, now_ms);
+        if (state_ == State::Connected) return;
     }
 
     if (now_ms - start_ms_ >= timeout_ms_) state_ = State::Failed;

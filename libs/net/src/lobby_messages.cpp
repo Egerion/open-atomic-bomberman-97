@@ -88,6 +88,88 @@ std::string sanitize_printable(const std::string& raw, std::size_t max_bytes) {
     return out.substr(first, out.find_last_not_of(' ') - first + 1);
 }
 
+// --- one parser per server message tag ---------------------------------------
+//
+// A TABLE rather than an if/else chain over `type`: every arm does the same
+// thing (name a LobbyMsgType, read its own fields), so the shape that shows that
+// is a list. Adding a message is one row and one function.
+
+void parse_lobby_created(const json& j, LobbyServerMessage* m) {
+    m->code = j.value("code", std::string());
+    m->lobby_id = j.value("lobby_id", std::string());
+    m->host_token = j.value("host_token", std::string());
+    m->your_seat = j.value("your_seat", -1);
+}
+
+void parse_join_accepted(const json& j, LobbyServerMessage* m) {
+    m->lobby_id = j.value("lobby_id", std::string());
+    m->your_seat = j.value("your_seat", -1);
+    if (j.contains("roster")) m->roster = parse_roster(j["roster"]);
+    if (j.contains("host_candidates")) m->host_candidates = parse_candidates(j["host_candidates"]);
+}
+
+void parse_join_rejected(const json& j, LobbyServerMessage* m) {
+    m->reason = j.value("reason", std::string());
+}
+
+void parse_public_list(const json& j, LobbyServerMessage* m) {
+    m->lobbies = parse_public_lobbies(j);
+}
+
+void parse_roster_update(const json& j, LobbyServerMessage* m) {
+    if (j.contains("roster")) m->roster = parse_roster(j["roster"]);
+}
+
+void parse_peer_candidates(const json& j, LobbyServerMessage* m) {
+    m->candidates_seat = j.value("seat", -1);
+    if (j.contains("list")) m->candidates = parse_candidates(j["list"]);
+}
+
+void parse_reanchor_accepted(const json& j, LobbyServerMessage* m) {
+    m->lobby_id = j.value("lobby_id", std::string());
+    m->code = j.value("code", std::string());
+    m->host_token = j.value("host_token", std::string());
+}
+
+void parse_relay_allocated(const json& j, LobbyServerMessage* m) {
+    m->relay_addr = j.value("relay_addr", std::string());
+    m->alloc_id = j.value("alloc_id", std::string());
+}
+
+void parse_chat(const json& j, LobbyServerMessage* m) {
+    // Stored RAW: this function's job is decoding, not policy. The sanitisers run
+    // where the text is accepted for display (LobbyFlow::append_chat_line).
+    m->chat_seat = j.value("seat", -1);
+    m->chat_name = j.value("name", std::string());
+    m->chat_text = j.value("text", std::string());
+}
+
+void parse_error(const json& j, LobbyServerMessage* m) {
+    m->error_code = j.value("code", std::string());
+    m->error_message = j.value("message", std::string());
+}
+
+struct ParserRow {
+    const char* tag;
+    LobbyMsgType kind;
+    void (*parse)(const json&, LobbyServerMessage*);  // null when the tag has no payload
+};
+
+constexpr std::array<ParserRow, 12> kParsers{{
+    {"LobbyCreated", LobbyMsgType::LobbyCreated, parse_lobby_created},
+    {"JoinAccepted", LobbyMsgType::JoinAccepted, parse_join_accepted},
+    {"JoinRejected", LobbyMsgType::JoinRejected, parse_join_rejected},
+    {"PublicList", LobbyMsgType::PublicList, parse_public_list},
+    {"RosterUpdate", LobbyMsgType::RosterUpdate, parse_roster_update},
+    {"HeartbeatAck", LobbyMsgType::HeartbeatAck, nullptr},
+    {"PeerCandidates", LobbyMsgType::PeerCandidates, parse_peer_candidates},
+    {"StartMatch", LobbyMsgType::StartMatch, parse_start_match},
+    {"ReanchorAccepted", LobbyMsgType::ReanchorAccepted, parse_reanchor_accepted},
+    {"RelayAllocated", LobbyMsgType::RelayAllocated, parse_relay_allocated},
+    {"Chat", LobbyMsgType::Chat, parse_chat},
+    {"Error", LobbyMsgType::Error, parse_error},
+}};
+
 }  // namespace
 
 std::string sanitize_chat_text(const std::string& raw) {
@@ -117,58 +199,13 @@ LobbyServerMessage parse_server_message(const std::string& text) {
     if (!j.is_object()) return m;
     const std::string type = j.value("type", std::string());
 
-    if (type == "LobbyCreated") {
-        m.type = LobbyMsgType::LobbyCreated;
-        m.code = j.value("code", std::string());
-        m.lobby_id = j.value("lobby_id", std::string());
-        m.host_token = j.value("host_token", std::string());
-        m.your_seat = j.value("your_seat", -1);
-    } else if (type == "JoinAccepted") {
-        m.type = LobbyMsgType::JoinAccepted;
-        m.lobby_id = j.value("lobby_id", std::string());
-        m.your_seat = j.value("your_seat", -1);
-        if (j.contains("roster")) m.roster = parse_roster(j["roster"]);
-        if (j.contains("host_candidates")) m.host_candidates = parse_candidates(j["host_candidates"]);
-    } else if (type == "JoinRejected") {
-        m.type = LobbyMsgType::JoinRejected;
-        m.reason = j.value("reason", std::string());
-    } else if (type == "PublicList") {
-        m.type = LobbyMsgType::PublicList;
-        m.lobbies = parse_public_lobbies(j);
-    } else if (type == "RosterUpdate") {
-        m.type = LobbyMsgType::RosterUpdate;
-        if (j.contains("roster")) m.roster = parse_roster(j["roster"]);
-    } else if (type == "HeartbeatAck") {
-        m.type = LobbyMsgType::HeartbeatAck;
-    } else if (type == "PeerCandidates") {
-        m.type = LobbyMsgType::PeerCandidates;
-        m.candidates_seat = j.value("seat", -1);
-        if (j.contains("list")) m.candidates = parse_candidates(j["list"]);
-    } else if (type == "StartMatch") {
-        m.type = LobbyMsgType::StartMatch;
-        parse_start_match(j, &m);
-    } else if (type == "ReanchorAccepted") {
-        m.type = LobbyMsgType::ReanchorAccepted;
-        m.lobby_id = j.value("lobby_id", std::string());
-        m.code = j.value("code", std::string());
-        m.host_token = j.value("host_token", std::string());
-    } else if (type == "RelayAllocated") {
-        m.type = LobbyMsgType::RelayAllocated;
-        m.relay_addr = j.value("relay_addr", std::string());
-        m.alloc_id = j.value("alloc_id", std::string());
-    } else if (type == "Chat") {
-        // Stored raw here — parse_server_message's job is decoding, not policy.
-        // The sanitisers run where the text is accepted for display (LobbyFlow).
-        m.type = LobbyMsgType::Chat;
-        m.chat_seat = j.value("seat", -1);
-        m.chat_name = j.value("name", std::string());
-        m.chat_text = j.value("text", std::string());
-    } else if (type == "Error") {
-        m.type = LobbyMsgType::Error;
-        m.error_code = j.value("code", std::string());
-        m.error_message = j.value("message", std::string());
+    for (const ParserRow& row : kParsers) {
+        if (type != row.tag) continue;
+        m.type = row.kind;
+        if (row.parse != nullptr) row.parse(j, &m);
+        return m;
     }
-    return m;
+    return m;  // an unrecognised tag stays Unknown
 }
 
 std::string encode_stun_probe(const std::string& nonce) {

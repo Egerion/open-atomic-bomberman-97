@@ -57,6 +57,7 @@ public:
 
 private:
     int guest_index(const std::string& ip, std::uint16_t port) const;
+    void reflect_to_others(int from, const std::vector<std::uint8_t>& buf);
 
     UdpTransport& socket_;
     std::vector<Guest> guests_;
