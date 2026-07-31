@@ -199,14 +199,6 @@
 // is a DRAW BY DECREE (nobody inspects the frozen state for a winner), so the
 // match shell above can replay a round instead of tearing the connection down.
 //
-// STOPPING THE MATCH IS THE HOSTING MACHINE'S ALONE — hosting(), not
-// DropPolicy::is_host, and the distinction is the whole of a host migration.
-// After one the old host is a corpse and the ELECTED hub carries is_host ==
-// false, so all three of the sites below (the decision, its broadcast, and the
-// refusal to obey an inbound echo) have to ask the same question or the
-// authority lands nowhere. Two of them did not until 2026-07-31, and the effect
-// was that no machine in a migrated star could abandon a round at all.
-//
 // STOPPING THE MATCH IS THE HOST'S ALONE, and this NARROWED on 2026-07-30.
 // request_end_round() used to have a guest branch: a guest sent
 // MatchCtlKind::EndRoundRequest and the host converted it into the decision. That
@@ -218,6 +210,16 @@
 // still connects, and refusing the message is what stops it still driving us.
 // The kind stays in the enum and decode() still accepts it precisely so that
 // older peer is turned away rather than disconnected.
+//
+// AND "THE HOST" MEANS hosting(), NOT DropPolicy::is_host. The distinction is
+// the whole of a host migration: afterwards the old host is a corpse and the
+// ELECTED hub carries is_host == false, so all three sites — the decision
+// (request_end_round), its broadcast, and the refusal to obey an inbound echo —
+// have to ask the same question or the authority lands nowhere. Two of them
+// asked the raw flag until 2026-07-31, and the effect was that NO MACHINE in a
+// migrated star could abandon a round: the hub was gated out by a flag that
+// still said "guest", and the guests were guests as they always had been. The
+// first Esc silently did nothing everywhere.
 //
 // LEAVING is a different act and is NOT host-only — it is not in this class at
 // all. Stopping changes what BOTH machines simulate and so needs one authority;
