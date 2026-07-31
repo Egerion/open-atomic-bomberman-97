@@ -1,6 +1,6 @@
 // THE KILL TALLY UNDER ROLLBACK — two peers, one agreed simulation, one verdict.
 //
-// The front-end keeps a per-match kill counter (libs/game's results.hpp
+// The front-end keeps a per-match kill counter (libs/game_util's results.hpp
 // `tally_kills`, GameApp::kill_count_) that the RESULTS row shows and that, under
 // Team Play + "win by kills", the MATCH-CLINCH predicate reads. It was summed
 // straight from `sim.state().events`, once per session pump.
@@ -42,8 +42,8 @@
 #include <cstdio>
 #include <vector>
 
-#include "bomber/game/net_tally.hpp"  // tally_netplay_kills — the REAL wiring under test
-#include "bomber/game/results.hpp"    // tally_kills / win_by_kills_clinch
+#include "bomber/game_util/net_tally.hpp"  // tally_netplay_kills — the REAL wiring under test
+#include "bomber/game_util/results.hpp"    // tally_kills / win_by_kills_clinch
 #include "bomber/net/rollback_session.hpp"
 #include "bomber/sim/simulation.hpp"
 #include "helpers.hpp"
@@ -137,7 +137,7 @@ struct Tally {
     void operator()(net::RollbackSession& s) {
         if (done) return;  // MatchRunner has returned MatchOver by now
         // THE FIX: each tick's events handed over exactly once, from the
-        // confirmed stream (libs/game/net_tally.hpp — the real call site).
+        // confirmed stream (libs/game_util's net_tally.hpp — the real call site).
         game::tally_netplay_kills(s, scratch, fixed);
         // THE BUG, kept alive alongside it: sum whatever the live state happens
         // to hold this pump. Verbatim what match_runner.cpp used to do.

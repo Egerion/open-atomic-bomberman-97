@@ -1,14 +1,21 @@
 # SDL-free front-end logic suites (ADR-0008). These exercise header-only pieces
-# of libs/game (anim_pace, app_flow, goldman_wheel) and the pure editor grid
-# model, so they add the game INCLUDE dir directly rather than linking
-# bomber_game_core (which pulls in SDL3) — keeping them buildable under the
-# headless preset. ctest NAMEs unchanged.
+# of the presentation stack (anim_pace, app_flow, goldman_wheel) and the pure
+# editor grid model, so they add an INCLUDE dir directly rather than linking a
+# target that pulls in SDL3 — keeping them buildable under the headless preset.
+# ctest NAMEs unchanged.
+#
+# Nearly all of them now point at libs/game_util/include: when libs/game was
+# split into eight packages, every SDL-free header these suites reach for landed
+# in bomber::game_util, which is the one package the headless preset compiles.
+# The two exceptions below name their own dirs — the input bindings live in
+# bomber::input and the online roster mapping in bomber::netui, both of which
+# have SDL-free public headers even though their targets are SDL-gated.
 
 # ANI pacing helper (anim_pace.hpp): frame = counter % statecnt, mirroring
 # sub_41DAA7. Own target so it needn't link sim.
 add_executable(bomber_anim_tests test_anim.cpp)
 target_link_libraries(bomber_anim_tests PRIVATE doctest::doctest bomber::warnings)
-target_include_directories(bomber_anim_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+target_include_directories(bomber_anim_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game_util/include)
 add_test(NAME anim COMMAND bomber_anim_tests)
 
 # The F9 cadence lever resolved once for all four of its consumers
@@ -18,7 +25,7 @@ add_test(NAME anim COMMAND bomber_anim_tests)
 # and for a while three of them did.
 add_executable(bomber_match_cadence_tests test_match_cadence.cpp)
 target_link_libraries(bomber_match_cadence_tests PRIVATE doctest::doctest bomber::warnings)
-target_include_directories(bomber_match_cadence_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+target_include_directories(bomber_match_cadence_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game_util/include)
 add_test(NAME match_cadence COMMAND bomber_match_cadence_tests)
 
 # The ONLINE Esc rule (net_esc.hpp): one press stops the round (host only), a
@@ -27,7 +34,7 @@ add_test(NAME match_cadence COMMAND bomber_match_cadence_tests)
 # something only reproducible with two machines and a broken network.
 add_executable(bomber_net_esc_tests test_net_esc.cpp)
 target_link_libraries(bomber_net_esc_tests PRIVATE doctest::doctest bomber::warnings)
-target_include_directories(bomber_net_esc_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+target_include_directories(bomber_net_esc_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game_util/include)
 add_test(NAME net_esc COMMAND bomber_net_esc_tests)
 
 # Front-end flow core (app_flow.hpp + input.hpp's slot-type cycle): pure
@@ -39,7 +46,8 @@ add_test(NAME net_esc COMMAND bomber_net_esc_tests)
 add_executable(bomber_frontend_tests test_frontend.cpp)
 target_link_libraries(bomber_frontend_tests
   PRIVATE bomber::assets bomber::sim doctest::doctest bomber::warnings)
-target_include_directories(bomber_frontend_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+target_include_directories(bomber_frontend_tests PRIVATE
+  ${CMAKE_SOURCE_DIR}/libs/game_util/include ${CMAKE_SOURCE_DIR}/libs/input/include)
 add_test(NAME frontend COMMAND bomber_frontend_tests)
 
 # The CAMPAIGN round end (campaign_round_end.hpp): sub_4016DA's pacing verdict
@@ -49,14 +57,14 @@ add_test(NAME frontend COMMAND bomber_frontend_tests)
 # screen flow by hand through a five-keypress easter egg.
 add_executable(bomber_campaign_round_end_tests test_campaign_round_end.cpp)
 target_link_libraries(bomber_campaign_round_end_tests PRIVATE doctest::doctest bomber::warnings)
-target_include_directories(bomber_campaign_round_end_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+target_include_directories(bomber_campaign_round_end_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game_util/include)
 add_test(NAME campaign_round_end COMMAND bomber_campaign_round_end_tests)
 
 # Goldman wheel PURE math (goldman_wheel.hpp) is SDL-free like app_flow.hpp:
 # own target linking only the game include dir + sim (for PowerupType).
 add_executable(bomber_goldman_wheel_tests test_goldman_wheel.cpp)
 target_link_libraries(bomber_goldman_wheel_tests PRIVATE bomber::sim doctest::doctest bomber::warnings)
-target_include_directories(bomber_goldman_wheel_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+target_include_directories(bomber_goldman_wheel_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game_util/include)
 add_test(NAME goldman_wheel COMMAND bomber_goldman_wheel_tests)
 
 # The online setup stage's PURE roster/level mapping (net_setup_roster.hpp): the
@@ -67,7 +75,8 @@ add_test(NAME goldman_wheel COMMAND bomber_goldman_wheel_tests)
 add_executable(bomber_net_setup_roster_tests test_net_setup_roster.cpp)
 target_link_libraries(bomber_net_setup_roster_tests
   PRIVATE bomber::net bomber::sim doctest::doctest bomber::warnings)
-target_include_directories(bomber_net_setup_roster_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+target_include_directories(bomber_net_setup_roster_tests PRIVATE
+  ${CMAKE_SOURCE_DIR}/libs/netui/include ${CMAKE_SOURCE_DIR}/libs/input/include)
 add_test(NAME net_setup_roster COMMAND bomber_net_setup_roster_tests)
 
 # The generic list dialog's pinned pixel geometry (list_dialog_geometry.hpp,
@@ -75,7 +84,7 @@ add_test(NAME net_setup_roster COMMAND bomber_net_setup_roster_tests)
 # this target needs nothing but the game include dir.
 add_executable(bomber_list_dialog_tests test_list_dialog.cpp)
 target_link_libraries(bomber_list_dialog_tests PRIVATE doctest::doctest bomber::warnings)
-target_include_directories(bomber_list_dialog_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+target_include_directories(bomber_list_dialog_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game_util/include)
 add_test(NAME list_dialog COMMAND bomber_list_dialog_tests)
 
 # The PORT-ONLY soft-scaling filter's pure decisions (scale_filter.hpp): which
@@ -84,7 +93,7 @@ add_test(NAME list_dialog COMMAND bomber_list_dialog_tests)
 # suite this needs nothing but the game include dir.
 add_executable(bomber_scale_filter_tests test_scale_filter.cpp)
 target_link_libraries(bomber_scale_filter_tests PRIVATE doctest::doctest bomber::warnings)
-target_include_directories(bomber_scale_filter_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+target_include_directories(bomber_scale_filter_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game_util/include)
 add_test(NAME scale_filter COMMAND bomber_scale_filter_tests)
 
 # The alpha-dilate pass every texture upload runs (alpha_bleed.hpp): SDL-free
@@ -92,7 +101,7 @@ add_test(NAME scale_filter COMMAND bomber_scale_filter_tests)
 # nothing else.
 add_executable(bomber_alpha_bleed_tests test_alpha_bleed.cpp)
 target_link_libraries(bomber_alpha_bleed_tests PRIVATE bomber::assets doctest::doctest bomber::warnings)
-target_include_directories(bomber_alpha_bleed_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+target_include_directories(bomber_alpha_bleed_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game_util/include)
 add_test(NAME alpha_bleed COMMAND bomber_alpha_bleed_tests)
 
 # The `.BM` viewer's transparent-blit key (key_color.hpp): sub_44AED5 skips
@@ -100,7 +109,7 @@ add_test(NAME alpha_bleed COMMAND bomber_alpha_bleed_tests)
 # alpha_bleed suite above.
 add_executable(bomber_key_color_tests test_key_color.cpp)
 target_link_libraries(bomber_key_color_tests PRIVATE bomber::assets doctest::doctest bomber::warnings)
-target_include_directories(bomber_key_color_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+target_include_directories(bomber_key_color_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game_util/include)
 add_test(NAME key_color COMMAND bomber_key_color_tests)
 
 # The port's own credits addendum (credits_addendum.hpp): the layout budget and
@@ -109,7 +118,7 @@ add_test(NAME key_color COMMAND bomber_key_color_tests)
 add_executable(bomber_credits_addendum_tests test_credits_addendum.cpp)
 target_link_libraries(bomber_credits_addendum_tests
   PRIVATE bomber::assets doctest::doctest bomber::warnings)
-target_include_directories(bomber_credits_addendum_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+target_include_directories(bomber_credits_addendum_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game_util/include)
 add_test(NAME credits_addendum COMMAND bomber_credits_addendum_tests)
 
 # The MESSAGES.TXT substitution half of hud_format.hpp (fmt_u/fmt_s/fmt_us). The
@@ -120,7 +129,7 @@ add_test(NAME credits_addendum COMMAND bomber_credits_addendum_tests)
 # this target needs nothing but the game include dir.
 add_executable(bomber_message_splice_tests test_message_splice.cpp)
 target_link_libraries(bomber_message_splice_tests PRIVATE doctest::doctest bomber::warnings)
-target_include_directories(bomber_message_splice_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+target_include_directories(bomber_message_splice_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game_util/include)
 add_test(NAME message_splice COMMAND bomber_message_splice_tests)
 
 # The cross-screen helpers (frontend_util.hpp): the ONE shared presentation LCG
@@ -132,7 +141,7 @@ add_test(NAME message_splice COMMAND bomber_message_splice_tests)
 add_executable(bomber_frontend_util_tests test_frontend_util.cpp)
 target_link_libraries(bomber_frontend_util_tests
   PRIVATE bomber::assets doctest::doctest bomber::warnings)
-target_include_directories(bomber_frontend_util_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+target_include_directories(bomber_frontend_util_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game_util/include)
 add_test(NAME frontend_util COMMAND bomber_frontend_util_tests)
 
 # Scheme editor's pure grid model (editor_grid.hpp/.cpp) is SDL-free despite

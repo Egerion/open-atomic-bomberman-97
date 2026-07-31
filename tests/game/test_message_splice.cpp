@@ -20,7 +20,7 @@
 
 #include <string>
 
-#include "bomber/game/hud_format.hpp"
+#include "bomber/game_util/hud_format.hpp"
 
 using bomber::game::fmt_s;
 using bomber::game::fmt_u;

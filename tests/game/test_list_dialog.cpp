@@ -8,7 +8,7 @@
 
 #include <utility>  // std::pair (the dead-space sweep)
 
-#include "bomber/game/list_dialog_geometry.hpp"
+#include "bomber/game_util/list_dialog_geometry.hpp"
 
 using bomber::game::kListDialogRows;
 using bomber::game::list_dialog_geometry;

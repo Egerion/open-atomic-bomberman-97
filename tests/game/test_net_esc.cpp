@@ -15,7 +15,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
-#include "bomber/game/net_esc.hpp"
+#include "bomber/game_util/net_esc.hpp"
 
 using bomber::game::EscPress;
 using bomber::game::kEscLeaveWindowMs;

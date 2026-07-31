@@ -14,32 +14,32 @@
 #include <string>
 
 #include "bomber/assets/install.hpp"
-#include "bomber/game/anim_pace.hpp"
-#include "bomber/game/bmscreen.hpp"
-#include "bomber/game/dialog_chrome.hpp"
-#include "bomber/game/dos_scancode.hpp"
-#include "bomber/game/frontend_util.hpp"
-#include "bomber/game/hud_format.hpp"
-#include "bomber/game/log.hpp"
-#include "bomber/game/match_outcome.hpp"
-#include "bomber/game/screens/asset_screen.hpp"
-#include "bomber/game/screens/boot_screen.hpp"
-#include "bomber/game/screens/campaign_screens.hpp"
-#include "bomber/game/screens/debug_info_screen.hpp"
-#include "bomber/game/screens/editor_screen_runner.hpp"
-#include "bomber/game/screens/help_screens.hpp"
-#include "bomber/game/screens/map_select_screen.hpp"
-#include "bomber/game/screens/match_runner.hpp"
-#include "bomber/game/screens/menu_screen.hpp"
-#include "bomber/game/screens/net_overlay.hpp"  // F3 panel's toggle key
-#include "bomber/game/screens/options_screens.hpp"
-#include "bomber/game/screens/outcome_tier.hpp"  // the DRAW/VICTORY screens + their cues
-#include "bomber/game/screens/results_screens.hpp"
-#include "bomber/game/screens/scheme_filename_prompt.hpp"
-#include "bomber/game/screens/setup_screen.hpp"
-#include "bomber/game/screens/video_settings_screen.hpp"
-#include "bomber/game/sprites.hpp"
+#include "bomber/editor/editor_screen_runner.hpp"
+#include "bomber/frontend/asset_screen.hpp"
+#include "bomber/frontend/boot_screen.hpp"
+#include "bomber/frontend/campaign_screens.hpp"
+#include "bomber/frontend/debug_info_screen.hpp"
+#include "bomber/frontend/map_select_screen.hpp"
+#include "bomber/frontend/match_runner.hpp"
+#include "bomber/frontend/menu_screen.hpp"
+#include "bomber/frontend/options_screens.hpp"
+#include "bomber/frontend/outcome_tier.hpp"  // the DRAW/VICTORY screens + their cues
+#include "bomber/frontend/results_screens.hpp"
+#include "bomber/frontend/setup_screen.hpp"
+#include "bomber/frontend/video_settings_screen.hpp"
+#include "bomber/game_util/anim_pace.hpp"
+#include "bomber/game_util/frontend_util.hpp"
+#include "bomber/game_util/hud_format.hpp"
+#include "bomber/game_util/log.hpp"
+#include "bomber/game_util/match_outcome.hpp"
+#include "bomber/input/dos_scancode.hpp"
 #include "bomber/match/match_factory.hpp"
+#include "bomber/netui/net_overlay.hpp"  // F3 panel's toggle key
+#include "bomber/render/sprites.hpp"
+#include "bomber/ui/bmscreen.hpp"
+#include "bomber/ui/dialog_chrome.hpp"
+#include "bomber/ui/help_screens.hpp"
+#include "bomber/ui/scheme_filename_prompt.hpp"
 
 // NO bomber/net include is left in this file. The netplay orchestration moved to
 // screens/netplay_runner.cpp and screens/netplay_match.cpp (ADR-0009), which is
@@ -64,7 +64,7 @@ namespace fs = std::filesystem;
 namespace {
 
 // The DialogRect/dialog_rect*/draw_dialog_chrome/draw_dialog_button
-// primitives moved to bomber/game/dialog_chrome.hpp (2026-07-09) so the
+// primitives moved to bomber/ui/dialog_chrome.hpp (2026-07-09) so the
 // scheme editor's own sub_41456C/sub_42E938 dialogs (docs/re/
 // results-and-options.md #5, "exact dialog chrome") can reuse the SAME
 // pinned facts instead of re-deriving them — see that header for the full
@@ -867,7 +867,7 @@ constexpr int kNetMusicId = 1040;  // 0x410 — NETWORK.RSS
 // present_menu.
 
 // fmt_u/fmt_s/fmt_us (the crash-proof single-specifier MESSAGES.TXT splices)
-// moved to bomber/game/hud_format.hpp so the extracted screen classes share the
+// moved to bomber/game_util/hud_format.hpp so the extracted screen classes share the
 // same helpers instead of re-deriving them — see that header.
 
 // The main-menu model (sub_42B9CE) — the MenuItem struct, the seven-row
@@ -1281,7 +1281,7 @@ AppInput GameApp::present_campaign_unsuccessful() {
 }
 
 // The six match-outcome predicates were promoted VERBATIM to free functions in
-// bomber/game/match_outcome.hpp (ADR-0009 §10) so the extracted ScoreboardScreen
+// bomber/game_util/match_outcome.hpp (ADR-0009 §10) so the extracted ScoreboardScreen
 // and MatchRunner — which hold no GameApp& — can call the SAME clinch/outcome
 // logic run_app uses. GameApp keeps these thin 1-line forwarders for its own last
 // remaining caller, run_app (run_match / draw_player_row moved into MatchRunner
@@ -1364,7 +1364,7 @@ AppInput GameApp::present_scoreboard() {
 // A random GLUE<n> backdrop (sub_4148E5 @0x4148E5): getvalue(16) = glue count,
 // rand() % count, load GLUE<n>.PCX. Both pre-match screens share it. The pick is
 // a presentation LCG (setup_lcg_), never State::rng.
-// pick_glue moved to a shared free function in bomber/game/frontend_util.hpp so
+// pick_glue moved to a shared free function in bomber/game_util/frontend_util.hpp so
 // every pre-match screen (and the screens being lifted out of this file) share
 // the one presentation-LCG advance — see that header. Call sites below pass
 // setup_lcg_ + values_ explicitly.

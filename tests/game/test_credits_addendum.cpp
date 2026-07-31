@@ -11,7 +11,7 @@
 #include <cstddef>
 #include <string>
 
-#include "bomber/game/credits_addendum.hpp"
+#include "bomber/game_util/credits_addendum.hpp"
 
 using namespace bomber::game;
 using bomber::assets::bmtext::BmDocument;

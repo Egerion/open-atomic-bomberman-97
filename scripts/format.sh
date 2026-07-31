@@ -58,25 +58,41 @@ if [ -z "$BASE" ]; then
 fi
 
 # Deleted files have no worktree content to format; renames report their new path.
-mapfile -t FILES < <(git diff --name-only --diff-filter=d "$BASE" -- \
+mapfile -t FILES < <(git diff --name-only --diff-filter=d -M "$BASE" -- \
                        '*.cpp' '*.hpp' | grep -v '^build/' || true)
 if [ "${#FILES[@]}" -eq 0 ]; then
   echo "format: no C++ files changed since ${BASE:0:12}."
   exit 0
 fi
 
+# ONE rename-aware diff for the whole change, split per file below.
+#
+# It has to be one diff. Handing `git diff` a pathspec limits the diff BEFORE
+# rename detection runs, so a per-file `git diff -M "$BASE" -- "$f"` never sees
+# the deletion that pairs with the addition and reports a MOVED file as entirely
+# new. That is not a corner case, it is the case this gate is most likely to
+# meet: the first change that relocates files — the eight-package split of
+# libs/game found it — would have had to either fail on thousands of
+# pre-existing lines it never touched or reformat them, and reformatting them is
+# precisely what the header above explains this script exists to avoid. Diff
+# once, filter after.
+DIFF="$(mktemp)"
+trap 'rm -f "$DIFF"' EXIT
+git diff -U0 -M "$BASE" -- '*.cpp' '*.hpp' > "$DIFF"
+
 fails=()
 for f in "${FILES[@]}"; do
   [ -f "$f" ] || continue
   # Post-image hunk headers -> one --lines=A:B per changed range. `@@ -a,b +c,d @@`
   # (d omitted means 1; d == 0 is a pure deletion, which formats nothing).
-  mapfile -t RANGES < <(git diff -U0 "$BASE" -- "$f" | awk '
-    /^@@/ {
+  mapfile -t RANGES < <(awk -v want="b/$f" '
+    /^diff --git / { cur = $4 }
+    cur == want && /^@@/ {
       n = split($3, p, ",");
       start = substr(p[1], 2) + 0;
       len = (n > 1 ? p[2] + 0 : 1);
       if (len > 0) printf "--lines=%d:%d\n", start, start + len - 1;
-    }')
+    }' "$DIFF")
   [ "${#RANGES[@]}" -eq 0 ] && continue
   if ! "$CF" --dry-run --Werror "${RANGES[@]}" "$f" 2>&1; then
     fails+=("$f")

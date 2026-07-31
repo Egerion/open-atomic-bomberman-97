@@ -14,7 +14,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
-#include "bomber/game/match_cadence.hpp"
+#include "bomber/game_util/match_cadence.hpp"
 
 using bomber::game::match_cadence;
 using bomber::game::MatchCadence;

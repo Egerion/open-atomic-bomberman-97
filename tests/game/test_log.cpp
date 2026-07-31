@@ -5,7 +5,7 @@
 #include <string_view>
 #include <vector>
 
-#include "bomber/game/log.hpp"
+#include "bomber/game_util/log.hpp"
 
 // The front-end's diagnostic seam (docs/coding-standards.md §11). libs/game held
 // 69 of the repo's 76 raw console-output sites; 53 of them now route through

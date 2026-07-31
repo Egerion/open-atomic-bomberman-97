@@ -13,12 +13,12 @@
 #include <optional>
 #include <vector>
 
-#include "bomber/game/app_flow.hpp"
-#include "bomber/game/dos_scancode.hpp"
-#include "bomber/game/hud_format.hpp"
-#include "bomber/game/input.hpp"
-#include "bomber/game/match_outcome.hpp"
-#include "bomber/game/results.hpp"
+#include "bomber/game_util/app_flow.hpp"
+#include "bomber/game_util/hud_format.hpp"
+#include "bomber/game_util/match_outcome.hpp"
+#include "bomber/game_util/results.hpp"
+#include "bomber/input/dos_scancode.hpp"
+#include "bomber/input/input.hpp"
 #include "bomber/sim/constants.hpp"
 #include "bomber/sim/event.hpp"
 

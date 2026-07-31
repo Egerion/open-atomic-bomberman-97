@@ -9,7 +9,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
-#include "bomber/game/goldman_wheel.hpp"
+#include "bomber/game_util/goldman_wheel.hpp"
 #include "bomber/sim/types.hpp"
 
 using namespace bomber::game;

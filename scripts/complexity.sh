@@ -61,7 +61,10 @@ fi
 BUILD_DIR="${BUILD_DIR:-build/windows-fetch}"
 INCLUDES=(-Ilibs/sim/include -Ilibs/sim/src -Ilibs/assets/include \
           -Ilibs/audio/include -Ilibs/core/include -Ilibs/platform/include \
-          -Ilibs/match/include -Ilibs/net/include -Ilibs/game/include)
+          -Ilibs/match/include -Ilibs/net/include \
+          -Ilibs/game_util/include -Ilibs/input/include -Ilibs/render/include \
+          -Ilibs/ui/include -Ilibs/netui/include -Ilibs/editor/include \
+          -Ilibs/frontend/include -Ilibs/netplay/include -Ilibs/game/include)
 missing=0
 for dep_inc in "$BUILD_DIR/_deps/sdl3-src/include" \
                "$BUILD_DIR/_deps/ixwebsocket-src" \

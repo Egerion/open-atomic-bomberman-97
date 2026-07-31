@@ -23,7 +23,7 @@
 #include <vector>
 
 #include "bomber/assets/install.hpp"
-#include "bomber/game/sprites.hpp"
+#include "bomber/render/sprites.hpp"
 
 namespace fs = std::filesystem;
 using bomber::game::AniTextures;

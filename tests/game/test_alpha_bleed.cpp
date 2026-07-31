@@ -11,7 +11,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "bomber/game/alpha_bleed.hpp"
+#include "bomber/game_util/alpha_bleed.hpp"
 
 using bomber::assets::Image;
 using bomber::game::bleed_transparent_rgb;

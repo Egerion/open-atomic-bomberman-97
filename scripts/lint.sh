@@ -42,7 +42,10 @@ fi
 # every dependent TU fails to parse rather than being linted.
 INCLUDES=(-Ilibs/sim/include -Ilibs/sim/src -Ilibs/assets/include \
           -Ilibs/audio/include -Ilibs/core/include -Ilibs/platform/include \
-          -Ilibs/match/include -Ilibs/net/include -Ilibs/game/include)
+          -Ilibs/match/include -Ilibs/net/include \
+          -Ilibs/game_util/include -Ilibs/input/include -Ilibs/render/include \
+          -Ilibs/ui/include -Ilibs/netui/include -Ilibs/editor/include \
+          -Ilibs/frontend/include -Ilibs/netplay/include -Ilibs/game/include)
 # The FetchContent dependency headers (SDL3 for libs/game + apps, and the online
 # lobby's WS/JSON pair for libs/net). These are REQUIRED, not optional: without
 # them the dependent TUs fail to PARSE, and clang-tidy reports a parse failure as
