@@ -10,6 +10,8 @@
 42	libs/assets/src/pcx.cpp	parse
 37	libs/assets/src/sch.cpp	load
 52	libs/audio/src/sound_director.cpp	on_tick
+36	libs/game/include/bomber/game/alpha_bleed.hpp	bleed_transparent_rgb
+30	libs/game/include/bomber/game/hud_format.hpp	format_clock
 33	libs/game/src/asset_store.cpp	build_player_sets
 82	libs/game/src/asset_store.cpp	load
 57	libs/game/src/bmscreen.cpp	draw
@@ -44,6 +46,8 @@
 251	libs/game/src/screens/setup_screen.cpp	run
 49	libs/game/src/screens/video_settings_screen.cpp	run
 35	libs/game/src/sequences.cpp	resolve
+36	libs/match/include/bomber/match/match_factory.hpp	apply_actors
+39	libs/match/include/bomber/match/match_factory.hpp	build_match_config
 27	libs/net/src/link_probe.cpp	step
 30	libs/net/src/lobby_flow.cpp	begin_rendezvous
 55	libs/net/src/lobby_flow.cpp	handle_server_message
