@@ -38,56 +38,36 @@ struct MatchConfig {
     // that only set player_count keep their contiguous 0..count-1 roster.
     std::array<bool, kMaxPlayers> active{};
     // Per-player team, from the PLAYER INPUT screen's +84 byte (sub_4223E7,
-    // toggled by 'T'; docs/re/setup-screens.md). Copied verbatim into the
-    // hashed Player::team at setup (setup.cpp) — team mode now gates AI
-    // targeting (docs/re/ai.md §3.4/§5.3) and round-end (docs/re/ai.md TEAM
-    // follow-up). Default 0 everywhere; every existing hand-built config
-    // (tests/golden) leaves every slot at 0, so a fully-zeroed roster behaves
-    // exactly as before this field was wired (our semantics: team mode only
-    // engages when two ACTIVE players share a value).
+    // toggled by 'T'). Copied verbatim into the hashed Player::team; team mode
+    // only engages when two ACTIVE players share a NONZERO value.
     std::array<std::uint8_t, kMaxPlayers> team{};
     std::uint32_t seed = 0x12345678;
     Tuning tuning;
     // Per-scheme powerup overrides (-P rows): >= -999 replaces the spawn count.
     std::array<std::int32_t, kPowerupKinds> spawn_override;
     std::array<bool, kPowerupKinds> forbidden{};
-    // NOTE: there is deliberately no `born_with` array here. The scheme's -P
-    // "born with" field is a COUNT that REPLACES the VALUELST starting
-    // inventory, which the original expresses by writing the value table id
-    // the baseline is read from — so it lands in `tuning.start_with[]`, not in
-    // a second channel of its own (docs/re/facts.md "The .SCH -P row's 2nd
-    // field is a COUNT that REPLACES the starting inventory";
-    // match::build_match_config is the writer).
+    // There is deliberately NO `born_with` array. The scheme's -P "born with"
+    // field is a COUNT that REPLACES the VALUELST starting inventory — the
+    // original expresses it by writing the value-table id the baseline is read
+    // from — so it lands in tuning.start_with[], not in a channel of its own
+    // (facts.md "The .SCH -P row's 2nd field is a COUNT that REPLACES the
+    // starting inventory"; match::build_match_config is the writer).
     //
-    // Per-player born-with OVERLAY (docs/re/goldman-roulette.md §4/§8): the
-    // Goldman wheel's +1 starting-inventory award for the gold player (whole
-    // team in team mode), applied at setup.cpp AFTER the start_with baseline
-    // via PowerupSystem::apply. This one IS a genuine post-baseline increment
-    // in sub_4214BC (`++inventory[86 + prize]`), and it is per-SLOT so only
-    // the gold player/team receives the bump. Default all-false everywhere: a
-    // config with no goldman award behaves byte-identical to before this field
-    // existed (golden hashes unaffected).
+    // The Goldman wheel's award IS a genuine post-baseline increment
+    // (sub_4214BC's `++inventory[86 + prize]`, goldman-roulette.md §4/§8) and is
+    // per-SLOT, so it is a separate overlay applied at setup AFTER the baseline.
     std::array<std::array<bool, kPowerupKinds>, kMaxPlayers> born_with_extra{};
-    // Per-player Goldman wheel CLOGS overlay (docs/re/goldman-roulette.md
-    // §9): clogs (wheel prize id 13) is outside the kPowerupKinds space (it
-    // is never a scheme/-P/spawn/forbid kind, §9.2), so it is NOT part of
-    // born_with_extra — a separate per-player COUNT (not a bool), because
-    // sub_4214BC's per-round inventory RESET (baseline getvalue(50+j), id 63
-    // = 0 for slot 13) runs before the `++player_byte[86+13]` grant, so the
-    // gold player's clogs count is always exactly 0-or-1 EACH round, never a
-    // cross-round running total (§9.3 — "reset-then-+1", NOT accumulation).
-    // game_app.cpp SETS this to 1 for the gold player/team on every
-    // build_match_config call (a fresh MatchConfig each time, so this is a
-    // plain overlay like born_with_extra, not an increment). Default 0
-    // everywhere: a config with no goldman clogs award behaves byte-
-    // identical to before this field existed (golden hashes unaffected).
+    // Clogs (wheel prize id 13) sit outside the kPowerupKinds space — never a
+    // scheme/-P/spawn/forbid kind (§9.2) — so they are their own per-player
+    // COUNT rather than part of born_with_extra. A count and not a bool because
+    // sub_4214BC's per-round inventory RESET runs BEFORE the grant, making the
+    // gold player's clogs exactly 0-or-1 EACH round and never a cross-round
+    // running total (§9.3, "reset-then-+1", not accumulation).
     std::array<std::int32_t, kMaxPlayers> born_with_clogs{};
 
     // Campaign rover/ghost hazard counts + speeds (.CAM fields 3-6,
-    // docs/re/campaign.md "Rover/ghost/AI roster", "Spawning"). Zero on
-    // every non-campaign config (the default) — build_state's spawn calls
-    // are then no-ops (RoverSystem::spawn with count<=0 draws no RNG),
-    // exactly matching every existing scenario's golden hash.
+    // docs/re/campaign.md). Zero on every non-campaign config, and
+    // RoverSystem::spawn with count <= 0 draws no RNG.
     std::int32_t campaign_rovers = 0;
     std::int32_t campaign_rover_speed = 0;
     std::int32_t campaign_ghosts = 0;

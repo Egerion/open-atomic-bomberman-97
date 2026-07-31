@@ -11,74 +11,52 @@ public:
     explicit MovementSystem(State& s) : s_(s) {}
 
     // Step-on callback: invoked when a per-pixel step is one pixel SHORT of a
-    // tile centre along the TRAVEL AXIS, passing that tile — before the step is
-    // committed, and without consulting the perpendicular axis. This is the port
-    // of sub_41EC84's in-loop check for an offset-to-centre of -1; the original
-    // fires the warphole/trampoline step-on DURING the walk, not after it.
-    //
-    // NOT "lands exactly on the centre, both axes aligned": testing the POST-step
-    // position was this port's old behaviour and is why it grabbed players the
-    // original does not (see the retraction at the head of movement.cpp). A plain
-    // function pointer (no heap, deterministic) keeps the stepper body in the
-    // .cpp; ctx carries the caller's state. See docs/re/stage-actors.md §5.
+    // tile centre along the TRAVEL AXIS, passing that tile — pre-step, and
+    // without consulting the perpendicular axis. NOT "lands exactly on the
+    // centre": testing the POST-step position is why this port used to grab
+    // players the original does not (the retraction at the head of movement.cpp).
     using StepOnFn = void (*)(void* ctx, Player& p, int tx, int ty);
 
-    // Per-pixel field callback: invoked after EVERY committed pixel step (the
-    // post-commit slot of sub_41EC84's loop body, pseudo.c 22699-22717), where
-    // the original checks flame death and powerup pickup at the tile of the
-    // player's current pixel position. Returns true if the player DIED — the
-    // mover then abandons the remaining budget and returns, exactly like the
-    // original's mid-loop `return 1` (a killed player never finishes the walk
-    // and never reaches the same turn's bomb actions). See docs/re/facts.md
-    // "Per-tick call order — END-TO-END" finding 1.
+    // Per-pixel field callback, invoked after EVERY committed pixel step, where
+    // the original checks flame death and powerup pickup. Returns true if the
+    // player DIED, which abandons the remaining budget — so a killed player never
+    // finishes the walk and never reaches the same turn's bomb actions.
     using PixelFn = bool (*)(void* ctx, Player& p);
 
-    // Moves one player for ONE SUB-FRAME of delta_ms in direction d (also sets
-    // facing). Positions are integer field pixels; the budget accrues
-    // `frame_budget(speed, delta_ms)` per call (the original's per-displayed-
-    // frame `speed × frameDelta / 50`) and is spent 100 units per one-pixel
-    // step, remainder carried over. The caller (player_turn) invokes this once
-    // per canonical sub-frame (constants.hpp kSubFrameMs).
+    // One sub-frame's move request — a parameter object rather than a
+    // nine-argument signature (docs/coding-standards.md §3). Each field is one of
+    // the terms sub_41F29B hands its mover.
+    struct MoveRequest {
+        Direction dir{};
+        std::int32_t delta_ms = kMsPerTick;
+        // The conveyor term, getvalue(190+idx), SIGNED with or against the belt.
+        std::int32_t extra_budget = 0;
+        // sub_41F29B folds the player's own speed in ONLY when the player
+        // supplied a direction — its case (b). A conveyor forcing an idle player
+        // (case (a)) never reads it at all (docs/re/stage-actors.md §3).
+        bool use_player_speed = true;
+        StepOnFn on_center = nullptr;  // nullptr skips the step-on trigger
+        void* center_ctx = nullptr;
+        PixelFn on_pixel = nullptr;  // nullptr skips the flame-death/pickup check
+        void* pixel_ctx = nullptr;
+    };
+
+    // Moves one player for ONE SUB-FRAME (also sets facing). Positions are
+    // integer field pixels; the budget accrues frame_budget(speed, delta_ms) per
+    // call and is spent 100 units per one-pixel step, remainder carried over.
+    void move(Player& p, const MoveRequest& req);
+
     void move(Player& p, Direction d, std::int32_t delta_ms = kMsPerTick) {
-        move(p, d, 0, nullptr, nullptr, true, nullptr, nullptr, delta_ms);
+        move(p, MoveRequest{d, delta_ms});
     }
 
-    // Full form: `on_center(ctx, p, tx, ty)` fires on each per-pixel step that
-    // is one pixel short of tile (tx,ty)'s centre along the travel axis — the
-    // faithful step-on trigger point (sub_41EC84's offset-to-centre check for
-    // -1), evaluated pre-step. Pass nullptr to skip it.
-    //
-    // extra_budget is the conveyor term, getvalue(190+idx) 1/100-px units
-    // SIGNED (with/against the belt), delta-scaled inside like the speed term
-    // but never disease-scaled — sub_41F29B adds it AFTER those factors.
-    //
-    // use_player_speed selects whether the player's own speed (p.speed, disease-
-    // scaled) is folded into the budget. sub_41F29B only adds it when the player
-    // HAS a movement input (its case (b)); when the conveyor FORCES movement with
-    // no input (case (a)) the budget is exactly the belt term, no speed term
-    // at all. Defaults to true for every ordinary (player-initiated) move.
-    // `on_pixel(pixel_ctx, p)` fires after every committed pixel step (flame
-    // death + pickup live there — sub_41EC84 22699-22717); a true return kills
-    // the walk (death mid-move). Pass nullptr to skip.
-    void move(Player& p, Direction d, std::int32_t extra_budget, StepOnFn on_center, void* ctx,
-              bool use_player_speed = true, PixelFn on_pixel = nullptr, void* pixel_ctx = nullptr,
-              std::int32_t delta_ms = kMsPerTick);
-
-    // Ice / input-lag (VALUELST ids 450-460, Hockey Rink; docs/re/facts.md
-    // "Ice / input-lag", sub_41F29B ~23058-23078). Pushes this SUB-FRAME's
-    // desired direction (`want_godir`: -1 = none, 0..3 = Up/Right/Down/Left)
-    // into `p.ice_history` and returns the EFFECTIVE direction to actually
-    // move with: the oldest-needed sample whose age has reached the level's
-    // ice_delay_ms. The original pushes once per DISPLAYED frame; we push once
-    // per canonical sub-frame, so a slot ages by kMsPerTick/kSubFrames ≈ 5.6 ms
-    // and the 30-slot buffer spans only ~167 ms — deliberately short of the
-    // nominal 250 ms, for the reasons the .cpp gives in full. Safe
-    // to call unconditionally every sub-frame for every player: AI players
-    // are exempt in the original (gated on the player-type byte +16 != 1) and
-    // are returned unchanged with the buffer untouched; on every level but
-    // Hockey Rink ice_delay_ms is 0, so this returns want_godir unchanged
-    // WITHOUT writing the buffer — keeping `p.ice_history` a fixed all-zero
-    // hashed field there (see player.hpp).
+    // Ice / input-lag (VALUELST ids 450-460, Hockey Rink). Pushes this
+    // SUB-FRAME's desired direction into p.ice_history and returns the EFFECTIVE
+    // direction to move with. Safe to call unconditionally for every player:
+    // an AI, and any level with ice_delay_ms == 0, is returned unchanged with the
+    // buffer UNTOUCHED — which is what keeps p.ice_history a fixed all-zero
+    // hashed field elsewhere. See the .cpp for the citations and the deliberately
+    // short buffer span.
     int ice_delay(Player& p, int want_godir) const;
 
 private:

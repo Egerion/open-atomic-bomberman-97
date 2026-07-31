@@ -2,11 +2,12 @@
 // contract. It is the original main loop (sub_42A191) ROTATED to start at the
 // player pass — the original's frame starts at the clock/bomb pass instead,
 // but the two cuts produce the same infinite event stream (docs/re/facts.md
-// "Per-tick call order — END-TO-END"): players act (dying or picking up per
-// pixel step, exactly like the original's mover tail), rovers move, the clock
-// ticks, queued chain-detonations resolve, bombs move, fuses burn, the field
-// ages, the walls close, players collide with the field (the original's
-// next-turn head checks), diseases spread.
+// "Per-tick call order — END-TO-END").
+//
+// player_turn is the port of sub_41F29B, one player's per-DISPLAYED-frame pass.
+// Its rationale — the two input blockers, the bomb-action tail, the flight
+// states, the freeze and the walk event — lives in docs/re/player-turn.md; the
+// section pointers below (§1..§8) are into that page.
 
 #include "bomber/sim/simulation.hpp"
 
@@ -35,13 +36,7 @@ State build_state(const MatchConfig& config);  // setup.cpp
 
 namespace {
 
-// --- System / cadence bundles (ADR-0008: sim TurnContext/Systems) ------------
-// Reference bundles that collapse the per-tick sim calls from 12 parameters to
-// <=4. They are PLUMBING ONLY: never stored in State, never hashed, never
-// touched by RNG. The systems are the same cheap stack objects run_tick already
-// builds; the bundle just hands player_turn ONE reference instead of nine, so
-// the refactor is byte-identical to the old per-parameter signatures by
-// construction (ADR-0003 determinism contract untouched).
+// PLUMBING ONLY: never stored in State, never hashed, never touched by RNG.
 struct Systems {
     DiseaseSystem& diseases;
     PowerupSystem& powerups;
@@ -55,99 +50,92 @@ struct Systems {
     RoverSystem& rovers;
 };
 
-// The sub-frame delta schedule for one turn (constants.hpp): the canonical
-// {6,5,...} x kSubFrames for the deterministic 50 ms tick, or a single measured
-// wall-clock delta x 1 for the F9 native-cadence pass. `advance_timers` gates the
-// once-per-TICK duration counters (see player_turn). The member defaults
-// reproduce the old per-parameter defaults exactly.
+// The sub-frame delta schedule for one turn: the canonical {6,5,...} ×
+// kSubFrames for the deterministic 50 ms tick, or a single measured wall-clock
+// delta × 1 for the F9 native-cadence pass. `advance_timers` gates the
+// once-per-TICK duration counters (docs/re/player-turn.md §1).
 struct Cadence {
     const std::int32_t* sched = kSubFrameMs;
     int n_sub = kSubFrames;
     bool advance_timers = true;
 };
 
-// One player-turn's context: which systems to run against, at what cadence.
 struct TurnContext {
     Systems& sys;
     Cadence cad;
 };
 
+// Death by flame: free the carried bomb's slot, scatter the surplus loadout,
+// announce the kill. The scatter draws State::rng in kind order (docs/re/
+// facts.md "Death powerup scatter") — GOLDEN.
+void kill_by_flame(State& s, int i, PowerupSystem& powerups) {
+    Player& p = s.players[i];
+    const int tx = p.tile_x(), ty = p.tile_y();
+    p.alive = false;
+    if (p.carrying) {
+        p.carrying = false;
+        if (s.players[p.carried_owner].bombs_placed > 0) --s.players[p.carried_owner].bombs_placed;
+    }
+    powerups.death_scatter(p);
+    // Killer attribution (docs/re/results-and-options.md §1): FlameSystem::
+    // spread_to stamped the flame's owner, still valid on the tick the flame is
+    // present. Self-kill is left explicit rather than collapsed to -1 —
+    // event.hpp's convention distinguishes "no killer" from "self".
+    s.events.push_back({Event::Type::PlayerDied, static_cast<std::int8_t>(i),
+                        static_cast<std::int8_t>(tx), static_cast<std::int8_t>(ty),
+                        static_cast<std::int8_t>(s.flame_owner[ty][tx])});
+}
+
+// Random (sub_41E21E case 0xC): reroll uniformly over the 12 real kinds —
+// Random itself is excluded by the modulus — and retry (max 200) while the roll
+// is scheme-forbidden; a skull is a legal outcome. ONE RNG draw per attempt, and
+// the count is part of the contract. None only if every kind is forbidden.
+PowerupType reroll_random(State& s) {
+    for (int tries = 0; tries < 200; ++tries) {
+        auto k = static_cast<PowerupType>(random_below(s, 12));
+        if (!s.forbidden[static_cast<int>(k)]) return k;
+    }
+    return PowerupType::None;
+}
+
 // Flame-death + pickup resolution at one player's CURRENT tile. The original
 // runs this exact pair in TWO places (docs/re/facts.md "Per-tick call order —
-// END-TO-END"): after every committed pixel step inside the mover
-// (sub_41EC84, pseudo.c 22699-22717) and at the head of each player's next
-// turn (sub_41F29B 22915-22926) — flame FIRST, pickup second, both times.
-// Returns true if the player died.
+// END-TO-END"): after every committed pixel step inside the mover (sub_41EC84,
+// pseudo.c 22699-22717) and at the head of each player's next turn (sub_41F29B
+// 22915-22926) — flame FIRST, pickup second, both times. Returns true if the
+// player died.
 bool resolve_player_field(State& s, int i, PowerupSystem& powerups, DiseaseSystem& diseases) {
     Player& p = s.players[i];
     if (!p.present || !p.alive) return false;
     const int tx = p.tile_x(), ty = p.tile_y();
-    if (s.flame[ty][tx] > 0) {
-        // The kill goes through the shared funnel sub_41DE63, which early-outs
-        // while the victim is mid-trampoline-hop or mid-warp (movement states
-        // 5/6/7) — the same immunity already ported for the wall crush
-        // (EnclosureSystem::drop_wall) and the rover landing kill. An immune
-        // player falls through to the pickup below, exactly like the
-        // original, which falls on through whenever sub_41DE63 reports no kill
-        // (pseudo.c 22915-22917).
-        if (p.bounce == 0 && p.warp == 0) {
-            p.alive = false;
-            if (p.carrying) {
-                // The carried bomb dies with the carrier; free the owner's slot.
-                p.carrying = false;
-                if (s.players[p.carried_owner].bombs_placed > 0)
-                    --s.players[p.carried_owner].bombs_placed;
-            }
-            // Death powerup scatter (sub_41DBFE via the shared death funnel
-            // sub_41DE63): the player's surplus over its start-with loadout
-            // rains back onto random floor tiles. Draws State::rng in kind
-            // order (docs/re/facts.md "Death powerup scatter") — GOLDEN.
-            powerups.death_scatter(p);
-            // Killer attribution (docs/re/results-and-options.md §1): the
-            // flame that killed this player was stamped with its owner in
-            // FlameSystem::spread_to (s.flame_owner), still valid here since
-            // this runs the same tick the flame is present. Self-kill (owner
-            // == victim) is left explicit in the event, not collapsed to -1 —
-            // event.hpp's convention distinguishes "no killer" from "self".
-            s.events.push_back({Event::Type::PlayerDied, static_cast<std::int8_t>(i),
-                                static_cast<std::int8_t>(tx), static_cast<std::int8_t>(ty),
-                                static_cast<std::int8_t>(s.flame_owner[ty][tx])});
-            return true;
-        }
+
+    // The kill goes through the shared funnel sub_41DE63, which early-outs while
+    // the victim is mid-trampoline-hop or mid-warp (movement states 5/6/7) — the
+    // same immunity as the wall crush and the rover landing kill. An immune
+    // player falls through to the pickup, exactly like the original, which falls
+    // on through whenever sub_41DE63 reports no kill (pseudo.c 22915-22917).
+    const bool flight_immune = p.bounce != 0 || p.warp != 0;
+    if (s.flame[ty][tx] > 0 && !flight_immune) {
+        kill_by_flame(s, i, powerups);
+        return true;
     }
+
     PowerupType t = s.floor[ty][tx];
-    if (t != PowerupType::None) {
-        diseases.maybe_cure_on_pickup(p);
-        if (t == PowerupType::Random) {
-            // Random (sub_41E21E case 0xC): reroll uniformly over the 12
-            // real kinds — Random itself is excluded by the modulus — and
-            // retry (max 200) while the roll is scheme-forbidden; then
-            // dispatch as the rolled kind (a skull is a legal outcome).
-            // One RNG draw per attempt; the count is part of the contract.
-            PowerupType rolled = PowerupType::None;
-            for (int tries = 0; tries < 200; ++tries) {
-                auto k = static_cast<PowerupType>(random_below(s, 12));
-                if (!s.forbidden[static_cast<int>(k)]) {
-                    rolled = k;
-                    break;
-                }
-            }
-            t = rolled;  // None only if every kind is forbidden
-        }
-        if (t == PowerupType::None) {
-            // fully-forbidden Random: the token is consumed with no effect
-        } else if (t == PowerupType::Disease) {
-            diseases.assign_random(i, 1);
-        } else if (t == PowerupType::SuperDisease) {
-            diseases.assign_random(i, 3);
-        } else {
-            powerups.apply(p, t);
-            s.events.push_back({Event::Type::PowerupPicked, static_cast<std::int8_t>(i),
-                                static_cast<std::int8_t>(tx), static_cast<std::int8_t>(ty),
-                                static_cast<std::int8_t>(t)});
-        }
-        s.floor[ty][tx] = PowerupType::None;
+    if (t == PowerupType::None) return false;
+
+    diseases.maybe_cure_on_pickup(p);
+    if (t == PowerupType::Random) t = reroll_random(s);
+    if (t == PowerupType::Disease) {
+        diseases.assign_random(i, 1);
+    } else if (t == PowerupType::SuperDisease) {
+        diseases.assign_random(i, 3);
+    } else if (t != PowerupType::None) {  // a fully-forbidden Random: consumed, no effect
+        powerups.apply(p, t);
+        s.events.push_back({Event::Type::PowerupPicked, static_cast<std::int8_t>(i),
+                            static_cast<std::int8_t>(tx), static_cast<std::int8_t>(ty),
+                            static_cast<std::int8_t>(t)});
     }
+    s.floor[ty][tx] = PowerupType::None;
     return false;
 }
 
@@ -166,43 +154,41 @@ bool on_move_pixel(void* ctx, Player& /*p*/) {
     return resolve_player_field(*c->s, c->index, *c->powerups, *c->diseases);
 }
 
-// Input decode -> godir (0=Up, 1=Right, 2=Down, 3=Left; -1 = no direction).
-//
-// Faithful to the original input decoder sub_41E61E's multi-key resolution
-// block: collect the four direction flags in GODIR order; if more than one is
-// pressed and at least one leads to an open tile, drop the pressed dirs that are
-// blocked; then the LAST surviving index wins. That last-index bias (Left beats
-// Right, Down beats Up) plus the per-pixel mover makes a player held against a
-// wall with two opposite keys vibrate in place — flip facing every frame — which
-// is the original's beloved "crazy back-and-forth" (only vs a left wall for L+R
-// or a bottom wall for U+D; the other side just slides off).
+// sub_41E61E's multi-key resolution: with more than one direction pressed and at
+// least one leading to an open tile, the blocked pressed dirs are dropped.
+void drop_blocked_dirs(const State& s, const Player& p, std::array<bool, 4>& dir) {
+    if (dir[0] + dir[1] + dir[2] + dir[3] <= 1) return;
+    const int ptx = p.tile_x(), pty = p.tile_y();
+    auto passable = [&](int g) {
+        return grid::tile_open(s, ptx + grid::kDx[g], pty + grid::kDy[g]) &&
+               !grid::bomb_at(s, ptx + grid::kDx[g], pty + grid::kDy[g]);
+    };
+    int open = 0;
+    for (int g = 0; g < 4; ++g)
+        if (dir[g] && passable(g)) ++open;
+    if (open == 0) return;
+    for (int g = 0; g < 4; ++g)
+        if (dir[g] && !passable(g)) dir[g] = false;
+}
+
+// Input decode -> godir (0=Up, 1=Right, 2=Down, 3=Left; -1 = no direction),
+// faithful to sub_41E61E. After the multi-key filter above, the LAST surviving
+// index wins. That last-index bias (Left beats Right, Down beats Up) plus the
+// per-pixel mover makes a player held against a wall with two opposite keys
+// vibrate in place — the original's beloved "crazy back-and-forth".
 //
 // The reversed-controls disease (sub_41F29B ~23049) is applied to the RESOLVED
 // godir — `(g + 2) & 3` — AFTER the opposite-key filter ran on the RAW pressed
 // dirs, and BEFORE the ice buffer (the delayed samples store the reversed
-// value). Humans only: the `+16 != 1` gate exempts computer players, whose
-// chosen direction reaches the mover unflipped. The old port swapped the input
-// flags pre-resolution, which fed the passability filter the flipped dirs —
-// divergent under multi-key input.
+// value). Humans only: the `+16 != 1` gate exempts computer players. Swapping
+// the input flags pre-resolution instead feeds the passability filter the
+// flipped dirs, which diverges under multi-key input.
 //
-// PURE: reads State/Player, mutates nothing, draws NO RNG. That is what makes it
-// safe to lift out of player_turn's sub-frame loop — the call sits at the exact
-// point the inline block did, so the draw order is untouched by construction.
+// PURE: reads State/Player, mutates nothing, draws NO RNG — which is what makes
+// it safe to call from inside player_turn's sub-frame loop.
 int decode_godir(const State& s, const Player& p, const PlayerInput& in) {
     std::array<bool, 4> dir = {in.up, in.right, in.down, in.left};
-    if (dir[0] + dir[1] + dir[2] + dir[3] > 1) {
-        const int ptx = p.tile_x(), pty = p.tile_y();
-        auto passable = [&](int g) {
-            return grid::tile_open(s, ptx + grid::kDx[g], pty + grid::kDy[g]) &&
-                   !grid::bomb_at(s, ptx + grid::kDx[g], pty + grid::kDy[g]);
-        };
-        int open = 0;
-        for (int g = 0; g < 4; ++g)
-            if (dir[g] && passable(g)) ++open;
-        if (open > 0)
-            for (int g = 0; g < 4; ++g)
-                if (dir[g] && !passable(g)) dir[g] = false;
-    }
+    drop_blocked_dirs(s, p, dir);
     int want_godir = -1;
     for (int g = 0; g < 4; ++g)
         if (dir[g]) want_godir = g;
@@ -233,39 +219,84 @@ bool centred_on_axis(const Player& p, int godir) {
     return sx * grid::kDx[godir] + sy * grid::kDy[godir] == 0;
 }
 
-// Step 1: one player's turn — stun, movement (with the reversed-controls
-// disease and the per-pixel flame-death/pickup checks), bomb dropping
-// (edge-gated, spooger, auto-drop diseases), and the action2 priority chain:
-// throw > grab > trigger-detonate > punch.
+// The same disease-scaled accrual MovementSystem::move folds in, summed here for
+// the PlayerWalking event (docs/re/player-turn.md §8).
+Fixed disease_scaled_budget(const Player& p, std::int32_t delta_ms) {
+    Fixed add = frame_budget(p.speed, delta_ms);
+    if (p.sick(Disease::Slow)) add /= 3;
+    if (p.sick(Disease::Fast) || p.sick(Disease::Super)) add = 3 * add / 2;
+    return add;
+}
+
+// One player slot and the bomb system its actions drive.
+struct ActionCtx {
+    State& s;
+    int index;
+    BombSystem& bombs;
+};
+
+// Tail block (3): the action2 edge — stop own sliding bombs (+89), punch (+91),
+// trigger-detonate (+95). The punch is additionally gated on the bomb key being
+// up, which is why a1_now is passed in.
+void resolve_action2_edge(ActionCtx a, bool a1_now) {
+    Player& p = a.s.players[a.index];
+    if (p.kick) a.bombs.stop_own_sliding(a.index);
+    if (p.punch && !a1_now) a.bombs.try_punch(p, static_cast<std::uint8_t>(a.index));
+    if (p.trigger) a.bombs.detonate_triggered(a.index);
+}
+
+// Tail block (4): the drop edge — grab own bomb underfoot (+92), else the
+// spooger line (+93, suppressed under auto-drop), else a plain drop.
+void resolve_drop_edge(ActionCtx a, bool auto_drop) {
+    Player& p = a.s.players[a.index];
+    const Bomb* under = grid::bomb_at(a.s, p.tile_x(), p.tile_y());
+    const bool own = under && under->owner == static_cast<std::uint8_t>(a.index);
+    if (p.grab && own)
+        a.bombs.try_grab(p, a.index);
+    else if (p.spooge && !auto_drop && own)
+        a.bombs.spooge_ahead(p, static_cast<std::uint8_t>(a.index));
+    else
+        a.bombs.drop(p, static_cast<std::uint8_t>(a.index));
+}
+
+// sub_41F29B's bomb-action tail (23277-23380), in the original's exact order:
+// auto-drop force (diarrhea +135 / super +137) -> carried-bomb throw (+37) ->
+// action2 edge -> drop edge, the last gated on the constipation flag !+134.
 //
-// `ai_sys` is non-null for a computer player: the brain re-decides once per
-// canonical SUB-FRAME inside the movement loop below (the exact slot where
-// the original calls sub_40A1C6 instead of reading DirectInput, once per
-// displayed frame — docs/re/facts.md "Canonical frame cadence"). Humans and
-// replays pass their externally-supplied tick input through unchanged.
-// `sched`/`n_sub` are the sub-frame delta schedule for this pass: the canonical
-// {6,5,6,5,...} × kSubFrames for a fixed 50 ms tick (the deterministic default),
-// or a single measured wall-clock delta {delta_ms} × 1 for the F9 native-cadence
-// mode (run once per displayed frame). Everything the loop reads per sub-frame —
-// the AI's re-decide delta, the movement-budget accrual, the stun burn, and
-// (since 2026-07-30) the bomb-action tail — comes off this schedule, so the
-// same body serves both cadences unchanged.
+// Runs on EVERY alive frame regardless of the +78 state, and once per FRAME
+// rather than once per tick. `blocked` models a skipped input acquisition; the
+// pickup-pause window is a DIFFERENT, forced-HELD rule that callers handle by
+// skipping this tail entirely. docs/re/player-turn.md §2 and §3.
+void bomb_action_tail(ActionCtx a, bool blocked, const PlayerInput& frame_in) {
+    Player& p = a.s.players[a.index];
+    const bool auto_drop = p.sick(Disease::Diarrhea) || p.sick(Disease::Super);
+    const bool a1_now = auto_drop || (!blocked && frame_in.action1);  // +56
+    const bool a1_last = !auto_drop && p.prev_action1;                // +54
+    const bool a2_now = !blocked && frame_in.action2;                 // +57
+    const bool a2_last = p.prev_action2;                              // +55
+
+    // The throw fires on the auto-drop force OR on the key being released, and is
+    // NOT gated by constipation.
+    if (p.carrying && (auto_drop || !a1_now)) a.bombs.throw_carried(p, a.index);
+    if (a2_now && !a2_last) resolve_action2_edge(a, a1_now);
+    if (a1_now && !a1_last && !p.sick(Disease::Constipation)) resolve_drop_edge(a, auto_drop);
+
+    // +54/+55 latch the EFFECTIVE keys just used, not the raw sample — see §2.
+    p.prev_action1 = a1_now;
+    p.prev_action2 = a2_now;
+}
+
+// Step 1: one player's turn — stun, movement (with the reversed-controls disease
+// and the per-pixel flame-death/pickup checks), bomb dropping and the action2
+// priority chain: throw > grab > trigger-detonate > punch.
+//
+// The body is a loop over canonical sub-frames because the original runs input
+// acquisition, the AI brain, the movement-budget accrual and the bomb-action
+// tail once per DISPLAYED frame (docs/re/facts.md "Canonical frame cadence").
+// ctx.cad carries that schedule; a computer player's brain re-decides in the
+// exact slot where the original calls sub_40A1C6 instead of reading DirectInput.
 void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) {
-    // `advance_timers` gates the once-per-TICK duration counters that live in
-    // this per-frame-callable turn — pickup_pause, and the trampoline/warp
-    // state timers (tick_bounce/tick_warp). On the deterministic tick path it is
-    // always true; on the F9 native-cadence path (player_turn runs once per
-    // DISPLAYED frame) it is true only on the frame that crosses a 50 ms tick,
-    // so those durations stay 20 Hz-paced instead of counting down ~9x too fast
-    // (the reported trampoline/warp speed-up). Movement/AI/stun/ice keep running
-    // every sub-frame regardless — those ARE per-frame in the original.
     Player& p = s.players[i];
-    // TurnContext unpacking: bind the same local names the body below already
-    // uses, so the plumbing changes but the logic/arithmetic/RNG-draw order stay
-    // byte-identical. `ai_sys` is the AI brain for a computer player, null for a
-    // human/replay (the old caller-side `p.ai ? &ai : nullptr`, moved in here).
-    // The system references are aliases into ctx.sys; the cadence triple mirrors
-    // the old sched/n_sub/advance_timers parameters one-for-one.
     AISystem* ai_sys = p.ai ? &ctx.sys.ai : nullptr;
     BombSystem& bombs = ctx.sys.bombs;
     StageActorSystem& stage = ctx.sys.stage;
@@ -273,199 +304,33 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
     PowerupSystem& powerups = ctx.sys.powerups;
     DiseaseSystem& diseases = ctx.sys.diseases;
     const std::int32_t* sched = ctx.cad.sched;
-    int n_sub = ctx.cad.n_sub;
-    bool advance_timers = ctx.cad.advance_timers;
+    const int n_sub = ctx.cad.n_sub;
+    const bool advance_timers = ctx.cad.advance_timers;
+    const ActionCtx act{s, i, bombs};
 
-    // Head-hit stun (Player::stun == the original's WORD +58, sub_421F7E) and
-    // grab pickup-pause (Player::pickup_pause == the original's state +78==4
-    // window, gated by getvalue(665)/our tuning.pickup_pause) are TWO
-    // independent counters in the original — see the doc comments on both
-    // fields and facts.md "Player state machine (+78) — COMPLETE". They used
-    // to share one field (`stun`), which meant a grab clobbered an
-    // in-progress head-stun countdown (or vice versa); split 2026-07-11.
-    // Either counter clears the original's new-input flag (sub_41F29B
-    // ~22981-23027),
-    // blocking ONLY new-input acquisition — the sub_41E61E / AI-decide call
-    // that would set a new direction (+46) and the bomb-key bytes (+56/+57) —
-    // plus one cosmetic standing-anim pick (~23086). Neither gates the mover:
-    // a blocked-but-alive player leaves +46 at its per-tick -1 reset (22980),
-    // so it takes the IDLE movement branch (23413), and the per-pixel stepper
-    // still runs whenever a STAGE ACTOR drives it — a conveyor keeps carrying
-    // it (23417 sets +46 to the belt dir before calling sub_41EC84, whose body
-    // is itself gated on +46 != -1 at 22572), the belt-forced kick still
-    // probes, and a warphole/trampoline step-on still fires. Only issuing a
-    // NEW direction or bomb action is blocked; an off-belt player simply
-    // stands (Bomberman has no free momentum to coast). Both counters
-    // decrement independently and unconditionally every alive tick (22982-90
-    // for +58; the state-4 anim-frame counter for pickup-pause) — DECREMENT
-    // both and fall through, but force the resolved input to neutral
-    // (want_godir = -1 below) and skip the bomb-action block if EITHER is
-    // active — exactly matching a skipped sub_41E61E, which leaves +46 = -1
-    // and the reset key bytes 0 so no edge-gated action can fire.
-    // The +58 head-stun countdown decrements once per DISPLAYED frame in the
-    // original (22982-22984 runs at the top of every sub_41F29B call, before
-    // the state dispatch) — so it lives in the sub-frame loop below (and in
-    // the bounce/warp branches, whose frames still execute 22982): a 16-frame
-    // stun lasts ~89 ms at the canonical ~180 fps, not 800 ms. pickup_pause
-    // mirrors the state-4 +80 window, which advances on the 50 ms
-    // ms-accumulator like every anim counter — per tick, and (like the old
-    // shared-stun code) it blocks the WHOLE tick it is decremented on: gate
-    // on the pre-decrement value.
-    //
-    // But the GATE itself is per FRAME in the original (0x41FA42 sits in the
-    // per-frame acquisition block), and now that the bomb-action tail is per
-    // frame too that distinction bites: a grab taken on sub-frame f arms the
-    // pause and the ORIGINAL blocks input from frame f+1, whereas a
-    // tick-granular snapshot leaves the rest of the tick unblocked — long
-    // enough for the AI's own behaviour 0 to reach its carrying branch on the
-    // very next frame and throw the bomb it just picked up. So `paused` is
-    // recomputed per sub-frame as `paused_entering || pickup_pause > 0`: the
-    // snapshot keeps a pause that was ALREADY running covering the whole tick
-    // it is decremented on, and the live field catches one armed mid-tick.
+    // Grab pickup-pause (+78 == 4). It blocks the WHOLE tick it is decremented
+    // on, so the movement gate reads the PRE-decrement value, while the live
+    // field additionally catches a pause armed mid-tick. docs/re/player-turn.md
+    // §1 — the two-counter split and the per-frame gate are load-bearing.
     const bool paused_entering = p.pickup_pause > 0;
     if (advance_timers && p.pickup_pause > 0) --p.pickup_pause;
     auto paused_now = [&] { return paused_entering || p.pickup_pause > 0; };
 
-    // The four blocks of sub_41F29B's bomb-action tail (23277-23380), in the original's
-    // exact order: auto-drop force (diarrhea +135 / super +137) -> carried-
-    // bomb throw (+37) -> action2 edge (kick-stop +89 / punch +91 / trigger
-    // +95) -> drop edge (grab +92 / spooge +93 / plain drop), gated !+134.
-    // CONFIRMED (facts.md "Player state machine (+78) — COMPLETE" and
-    // "Diarrhea/super auto-drop x grab-glove"): the tail runs on EVERY alive
-    // FRAME regardless of the +78 state — state 5 (bounce) reaches it via an
-    // explicit jump straight into it (23198), states 6/7 (warp out/in) and 20-39
-    // fall through the state-dispatch join just above it, and nothing in the
-    // new-input gate (the ONE
-    // thing a head-hit stun / grab pause / bounce / warp actually blocks)
-    // touches the tail itself — that gate only guards the EARLIER new-input
-    // acquisition call that would set the raw key bytes +56/+57 from the
-    // controller. `blocked` mirrors that: while blocked, this frame's
-    // effective key bytes start at their per-frame reset of 0 (22976-22979,
-    // which the original runs unconditionally every alive frame, so a fresh
-    // edge NEVER materialises while acquisition is skipped) UNLESS the
-    // auto-drop disease force overrides +56=1 below (that override lives
-    // INSIDE the tail itself, so it fires regardless of `blocked`). This is
-    // why a carried bomb is released on the very first blocked frame (the
-    // throw's "key not down" test on +56 passes immediately — the
-    // release-throw the user can trigger by
-    // walking into a head-stun while carrying) and why the diarrhea/super
-    // auto-drop keeps cycling grab/throw/drop straight through a stun or a
-    // bounce/warp flight, while a genuine NEW manual action (kick-stop/punch/
-    // trigger/drop) cannot fire — its edge needs +56 or +57 actually freshly
-    // DOWN, which requires the input acquisition that `blocked` skips.
-    // pickup_pause (+78==4's own window) is deliberately NOT modelled here:
-    // the original forces +56=1 SUSTAINED (not a fresh edge) for that specific
-    // state instead of leaving it at 0 (23017-23025) — a materially different
-    // "held" rule from the zero-default `blocked` models below. Every call
-    // site therefore fully SKIPS `bomb_actions` while `paused_now()` (see the
-    // pickup-pause doc comment on Player::pickup_pause) and only routes
-    // through `bomb_actions` for p.stun > 0 / bounce / warp.
-    //
-    // p.prev_action1/2 (the original's +54/+55) are updated HERE, to the
-    // EFFECTIVE key values just used (post auto-drop-force, post blocked-
-    // zeroing) — not the raw controller input — mirroring the original's
-    // literal copy of +56 into +54 at the top of the NEXT frame. This also fixes a
-    // latent divergence: the previous port latched the RAW controller sample
-    // unconditionally, which only matched the original whenever auto-drop
-    // was inactive (auto-drop's own in-block override made the raw-vs-
-    // effective distinction inert while the disease stayed active; it can
-    // diverge on the tick a disease is cured with an un-pressed button, which
-    // no scenario/test currently exercises — see facts.md).
-    //
-    // `frame_in` is THIS FRAME's input sample, and the tail is invoked once per
-    // canonical sub-frame from the loop below — not once per tick. See the
-    // "one tail per frame" comment at the head of that loop for why.
-    auto bomb_actions = [&](bool blocked, const PlayerInput& frame_in) {
-        const bool auto_drop = p.sick(Disease::Diarrhea) || p.sick(Disease::Super);
-        const bool a1_now = auto_drop ? true : (blocked ? false : frame_in.action1);  // +56
-        const bool a1_last = auto_drop ? false : p.prev_action1;                      // +54
-        const bool a2_now = blocked ? false : frame_in.action2;                       // +57
-        const bool a2_last = p.prev_action2;                                          // +55
-        const bool drop_edge = a1_now && !a1_last;
-
-        // (2) Throw block (the +37 carrying flag): a carried bomb is thrown when
-        //     the auto-drop force fires OR the key is released (+56 clear) — not gated by
-        //     constipation. While blocked (and not auto-dropping) `a1_now` is
-        //     always false, so this fires on the FIRST blocked tick.
-        if (p.carrying) {
-            if (auto_drop || !a1_now) bombs.throw_carried(p, i);
-        }
-        // (3) Action2 (a fresh edge: +57 set with the previous-frame copy +55
-        //     clear): stop own sliding bombs, punch, trigger-
-        //     detonate. `a2_now` is forced false while blocked, so this never
-        //     fires without a fresh real key press.
-        if (a2_now && !a2_last) {
-            if (p.kick) bombs.stop_own_sliding(i);
-            if (p.punch && !a1_now) bombs.try_punch(p, static_cast<std::uint8_t>(i));
-            if (p.trigger) bombs.detonate_triggered(i);
-        }
-        // (4) Drop block (a fresh edge: +56 set with the previous-frame copy +54
-        //     clear, and the constipation flag +134 clear): grab own bomb underfoot, else
-        //     spooger line (suppressed under auto-drop), else plain drop. Only
-        //     THIS block is gated by constipation. While blocked, only the
-        //     auto-drop-forced edge can reach it.
-        if (drop_edge && !p.sick(Disease::Constipation)) {
-            const Bomb* under = grid::bomb_at(s, p.tile_x(), p.tile_y());
-            const bool own = under && under->owner == static_cast<std::uint8_t>(i);
-            if (p.grab && own)
-                bombs.try_grab(p, i);
-            else if (p.spooge && !auto_drop && own)
-                bombs.spooge_ahead(p, static_cast<std::uint8_t>(i));
-            else
-                bombs.drop(p, static_cast<std::uint8_t>(i));
-        }
-        p.prev_action1 = a1_now;
-        p.prev_action2 = a2_now;
-    };
-
-    // A trampoline hop is a state-gated flight (sub_41F29B state 5 / sub_41DE63):
-    // movement input and bomb actions are ignored until the hop finishes, and the
-    // player cannot be pushed. tick_bounce ticks it down AND, at the apex, teleports
-    // the player to a random nearby open tile (the "fly + random land" — it is NOT
-    // an in-place bounce; see docs/re/stage-actors.md §4). The apex relocation draws
-    // RNG, so it runs here inside the state gate, before any other per-tick draw.
-    //
-    // CONFIRMED (pseudo.c ~23198/23248, the state-5 branch's jump straight into
-    // the bomb-action tail and
-    // the fall-through from states 6/7 into that same tail): the original's
-    // tail — all four blocks, not just the carried-bomb throw-release check
-    // — is NOT skipped during a bounce or warp; it runs every tick regardless of
-    // +78. Because input is fully blocked the whole time (+56 stays 0, never
-    // re-set, unless auto-drop forces it), the throw's "+56 clear" test passes
-    // from the very first
-    // tick, so a player who enters a bounce/warp WHILE CARRYING has the bomb
-    // thrown at their current tile almost immediately, not held through the
-    // whole flight — and a diarrhea/super auto-drop keeps grabbing/throwing/
-    // dropping straight through the flight too. Movement/input are still fully
-    // skipped for the whole bounce/warp duration (the "warp/bounce while
-    // carrying" illegal-in-our-port-only combination the state-machine audit
-    // flagged, facts.md "Player state machine (+78) — COMPLETE") — only the
-    // bomb-action block runs, via the shared `bomb_actions` above. If the flight
-    // was entered mid pickup-pause (a conveyor-carried grab pushed onto a
-    // trampoline/warphole — vanishingly rare, no current scenario reaches it),
-    // `bomb_actions` stays fully skipped per its pickup_pause carve-out above;
-    // preserve the pre-existing narrow release-on-entry fix (main's illegal-
-    // combo guard) for exactly that case so a carried bomb still doesn't ride
-    // through the flight untouched.
-    // Both flights run the IDENTICAL frame body — the two state branches differ
-    // only in which per-phase timer they tick down at the end — so they share one
-    // body here rather than the two byte-identical copies this used to carry.
-    //
-    // 22982 (--+58) and the ice block (23058-23078) both sit ABOVE the state
-    // dispatch, so a flight frame still burns stun AND pushes this frame's -1
-    // godir into the ice buffer — landing on an icy level then replays neutral
-    // input, not a stale pre-flight direction burst (facts.md "Ice / input-lag",
-    // flight-push fix 2026-07-12).
+    // Trampoline hop (state 5) and warp (states 6/7) share one frame body and
+    // differ only in which per-phase timer they tick down. Movement and input are
+    // skipped for the whole flight; the bomb-action tail is NOT, and runs once
+    // per frame of it. The apex/midpoint relocation inside tick_bounce/tick_warp
+    // DRAWS RNG, so it must stay inside this state gate, before any other
+    // per-tick draw. docs/re/player-turn.md §4.
     auto flight_turn = [&](bool bouncing) {
         for (int f = 0; f < n_sub; ++f) {
             if (p.stun > 0) --p.stun;
             (void)movement.ice_delay(p, -1);
-            // One tail per FRAME, not per tick: states 5/6/7 jump straight into
-            // the tail on every frame of the flight, so an auto-drop disease
-            // cycles at frame density here exactly as it does on the ground.
-            if (!paused_now()) bomb_actions(/*blocked=*/true, tick_in);
+            if (!paused_now()) bomb_action_tail(act, /*blocked=*/true, tick_in);
         }
         if (paused_entering) {
+            // The pickup-pause carve-out skips the tail, so release a carried
+            // bomb here rather than let it ride the flight untouched (§4).
             if (p.carrying) bombs.throw_carried(p, i);
             p.prev_action1 = tick_in.action1;
             p.prev_action2 = tick_in.action2;
@@ -481,223 +346,106 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
         flight_turn(/*bouncing=*/true);
         return;
     }
-
-    // A warp is likewise state-gated (player states 6=warp-out, 7=warp-in): the
-    // original ignores movement/input and makes the player invulnerable for the
-    // whole 18-tick warp, relocating it to the exit at the out→in midpoint. Tick
-    // it down (which performs the midpoint relocation) and skip the turn. This is
-    // the fix for the "stuck on entering a warp" report: the prior instantaneous
-    // teleport skipped these phases; now the player warps and, once warp==0, moves
-    // again. See docs/re/stage-actors.md §5. Bomb actions: see the bounce branch
-    // above (the same bomb-action-tail fall-through argument, incl. the
-    // pickup-pause carve-out, applies to states 6/7).
     if (stage.warping(p)) {
         flight_turn(/*bouncing=*/false);
         return;
     }
 
-    // ---- Canonical sub-frame loop (constants.hpp kSubFrames; docs/re/
-    // facts.md "Canonical frame cadence"): the original runs input
-    // acquisition, the AI brain and the movement-budget accrual once per
-    // DISPLAYED frame, not per 50 ms tick. Each iteration below is one
-    // canonical ~180 fps frame: acquire (the AI re-decides — its whims and
-    // timers run at frame rate), decode, push the ice buffer, accrue
-    // frame_budget(speed, delta) and step the per-pixel mover — and then the
-    // bomb-action TAIL, in the same frame, after the mover, exactly where
-    // sub_41F29B runs it (LABEL_246, after the mover's jump to the state
-    // dispatch at LABEL_155).
-    //
-    // The tail used to run ONCE per tick, after this loop. That was wrong in
-    // two ways, and the second one is not cosmetic (facts.md "The bomb-action
-    // tail is per-FRAME"):
-    //   - its POSITION-dependent tests — the grab/spooge "own bomb underfoot"
-    //     probe and the drop tile — read the END-of-tick position, up to
-    //     kSubFrames-1 frames after the frame whose decision set the key. An AI
-    //     that won behaviour 0's grab roll early in a tick and stepped off the
-    //     tile on a later frame it lost found no bomb underfoot at tail time
-    //     and the grab was silently discarded (measured: ~6 grabs per 7 drops
-    //     instead of essentially all of them);
-    //   - the auto-drop diseases (diarrhea/super) force their own edge inside
-    //     the tail, so the original re-attempts a drop every FRAME, not once
-    //     per tick.
-    // Both close by running the tail here. Edge-gating still means a held
-    // human key drops exactly once per press — frame 0 sees the edge and
-    // latches +54, the remaining frames see none.
     FieldCtx fctx{&s, i, &powerups, &diseases};
-    // Round-start input freeze (dword_4621E0; sub_41F29B's acquisition gate at
-    // 23028 demands the new-input flag be set AND dword_4621E0 be zero): while
-    // it runs, the AI brain and the
-    // human input read are BOTH skipped — same slot as the stun gate below,
-    // but without consuming stun (their countdowns are independent). Stage
-    // actors, the ice-buffer flow and the bomb-action tail (with its inputs
-    // dead, so only auto-drop can act) all run normally underneath it.
-    const bool frozen = s.input_freeze > 0;
-    std::int32_t walk_budget = 0;  // summed accruals -> the PlayerWalking event
+    const bool frozen = s.input_freeze > 0;  // docs/re/player-turn.md §7
+    std::int32_t walk_budget = 0;            // summed accruals -> the PlayerWalking event
     for (int sub = 0; sub < n_sub; ++sub) {
         // +58 head-stun: gate first, then decrement — the original's per-frame
         // block at 22982-22984 clears the new-input flag and decrements +58
         // whenever +58 is above zero, in that order.
         const bool sub_stunned = p.stun > 0 || paused_now();
-        // The tail's `blocked` argument is the STUN half only: the pickup-pause
-        // half instead skips the tail entirely (its own, different, forced-HELD
-        // rule — see the carve-out in bomb_actions' doc comment above).
-        const bool stun_blocked = p.stun > 0;
+        const bool stun_blocked = p.stun > 0;  // the tail's `blocked` is this half only (§2)
         if (p.stun > 0) --p.stun;
-        // A flight entered in an earlier sub-frame (trampoline/warp step-on
-        // mid-walk): the original's following frames take the state-5/6/7
-        // branch — no acquisition, no movement — while +58 keeps counting and
-        // the ice buffer keeps flowing (both sit above the state dispatch);
-        // hence continue, not break.
+
+        // A flight entered in an earlier sub-frame: the original's following
+        // frames take the state-5/6/7 branch — no acquisition, no movement —
+        // while +58 keeps counting and the ice buffer keeps flowing (both sit
+        // above the state dispatch); hence continue, not break.
         if (p.bounce > 0 || p.warp > 0) {
             (void)movement.ice_delay(p, -1);
-            if (!paused_now())
-                bomb_actions(/*blocked=*/true, tick_in);  // the state-5/6/7 fall-through
+            if (!paused_now()) bomb_action_tail(act, /*blocked=*/true, tick_in);
             s.sub_trace[i][sub] = {p.x, p.y, p.facing};
             continue;
         }
 
-        // Acquisition. A computer player's brain runs HERE, once per frame
-        // (sub_40A1C6 in sub_41F29B's new-input-gated slot — an AI blocked by
-        // stun/pickup-pause must draw NOTHING this frame, same as the
-        // original skipping the call outright); its action-key presses are
-        // consumed by THIS frame's tail below, so a behaviour that presses and
-        // a behaviour that walks can no longer disagree about where the player
-        // was standing.
+        // Acquisition. A blocked AI must draw NOTHING this frame, same as the
+        // original skipping the sub_40A1C6 call outright.
         PlayerInput sub_in = tick_in;
         if (ai_sys && !sub_stunned && !frozen) ai_sys->decide(i, sub_in, sched[sub]);
 
-        // Input decode -> want_godir (see decode_godir above for the opposite-key
-        // resolution and the reversed-controls disease; pure, no RNG).
-        //
         // A stunned or input-frozen player acquires NO new direction: the
-        // new-input gate skips sub_41E61E, so its input direction is not updated
-        // this frame — it stays at -1 and the mover takes the idle branch (stage
-        // actors still drive it), never a keyed one.
-        //
-        // Rebuilding it as -1 fresh each sub-frame IS faithful: sub_41F29B resets
-        // the native input direction to -1 UNCONDITIONALLY at the top of every
-        // per-frame pass (batch_0x41F29B.cpp:329 — the write is indexed as word
-        // 23 of the player record, i.e. byte offset +46) BEFORE the input gate
-        // re-writes it, so a human who holds no key, or an AI whose behaviour
-        // chain commits no direction, is left at -1 and STOPS (the movement gate
-        // at :394 requires +46 != -1 and so fails). The W3-A audit's "+46 is
-        // sticky / never reset" claim was a FALSE POSITIVE (2026-07-22): its grep
-        // for a byte-offset write to +46 missed this index-notation reset. So the
-        // port's stop-when-the-chain-writes-nothing is exact, not a divergence.
+        // new-input gate skips sub_41E61E, leaving +46 at its unconditional
+        // per-frame -1 reset so the mover takes the idle branch (stage actors
+        // still drive it). Rebuilding it as -1 fresh each sub-frame IS faithful —
+        // docs/re/player-turn.md §6 retracts the "+46 is sticky" audit finding.
         const int want_godir = (sub_stunned || frozen) ? -1 : decode_godir(s, p, sub_in);
 
-        // Ice / input-lag (Hockey Rink, VALUELST ids 450-460; docs/re/facts.md
-        // "Ice / input-lag", sub_41F29B ~23058-23078): replaces this frame's
-        // resolved direction with a delayed sample from the player's own
-        // history for HUMAN players on that level. A faithful no-op everywhere
-        // else (returns want_godir unchanged, touches no state) — see
-        // MovementSystem::ice_delay's doc comment.
+        // Ice / input-lag (Hockey Rink, VALUELST ids 450-460; sub_41F29B
+        // ~23058-23078): replaces this frame's resolved direction with a delayed
+        // sample from the player's own history, for HUMAN players on that level.
+        // A faithful no-op everywhere else — see MovementSystem::ice_delay.
         const int eff_godir = movement.ice_delay(p, want_godir);
         const bool moving = eff_godir >= 0;
+        if (moving) walk_budget += disease_scaled_budget(p, sched[sub]);
 
-        // Walk-state bookkeeping for the PlayerWalking event (emitted once
-        // per tick after the loop — see its doc comment in event.hpp): sum
-        // the same disease-scaled accrual MovementSystem::move folds in.
-        if (moving) {
-            Fixed add = frame_budget(p.speed, sched[sub]);
-            if (p.sick(Disease::Slow)) add /= 3;
-            if (p.sick(Disease::Fast) || p.sick(Disease::Super)) add = 3 * add / 2;
-            walk_budget += add;
-        }
-
-        // Movement, with any conveyor under the player folded in: a belt
-        // speeds/slows a walking player and pushes a standing one along its
-        // direction (StageActorSystem::move_on_actor, port of sub_41F29B's
-        // actor branches). The belt-only push (no input) is handled inside
-        // move_on_actor.
-        //
-        // The per-pixel field callback is the port of sub_41EC84's post-commit
-        // tail (pseudo.c 22699-22717): flame death then pickup at every pixel
-        // step. A mid-move kill abandons the rest of the budget AND the rest
-        // of this turn (the original returns straight into the death branch,
-        // skipping the kick probe, the step-on latches and the bomb-action
-        // tail). A mid-move pickup is usable the SAME tick — it lands
-        // before the bomb-action block below. docs/re/facts.md "Per-tick call
-        // order — END-TO-END" finding 1.
+        // Movement, with any conveyor under the player folded in (the belt-only
+        // push, with no input, is handled inside move_on_actor). The per-pixel
+        // field callback is the port of sub_41EC84's post-commit tail (pseudo.c
+        // 22699-22717): flame death then pickup at every pixel step. A mid-move
+        // kill abandons the rest of the budget AND the rest of this turn — the
+        // original returns straight into the death branch, skipping the kick
+        // probe, the step-on latches and the tail. A mid-move pickup is usable
+        // the SAME tick. facts.md "Per-tick call order — END-TO-END" finding 1.
         stage.move_on_actor(p, eff_godir, moving, sched[sub], &on_move_pixel, &fctx);
         if (!p.alive) {
             p.prev_action1 = sub_in.action1;
             p.prev_action2 = sub_in.action2;
             return;
         }
+
         // Kick probe (the branch sub_41EC84 takes when its offset-to-tile-centre
-        // temporary is zero): the kick fires whenever the
-        // player sits EXACTLY on the tile centre along the travel axis with a
-        // bomb directly ahead — evaluated inside the pixel loop, so a player
-        // WALKING into a bomb kicks it on the ARRIVAL tick (the mover pins
-        // them at the centre; the same-tick loop iteration, with that offset
-        // now zero, dispatches sub_424708), not one tick later as the old stall gate
-        // did. Post-move "centred along the axis" is the same predicate: a
-        // blocked player cannot end the tick anywhere else, and a re-probe
+        // temporary is zero, dispatching sub_424708): a player WALKING into a
+        // bomb kicks it on the ARRIVAL tick, since the mover pins them at the
+        // centre and this same-tick probe then sees the zero offset. Re-probing
         // while parked matches the original's every-iteration re-kick (a
-        // same-direction re-kick is a silent no-op in try_kick). The belt-
-        // forced case (no input) probes along the belt — the original's mover
-        // runs identically there with +46 = the belt dir. facts.md
+        // same-direction re-kick is a silent no-op in try_kick). facts.md
         // "Core-feel audit" §1.
         const int probe = kick_probe_dir(s, p, eff_godir);
         if (probe >= 0 && centred_on_axis(p, probe)) bombs.try_kick(p, grid::from_godir(probe), i);
 
-        // The bomb-action tail, in the frame that decided — see the loop's head
-        // comment. It sits after the mover and its kick probe because the
-        // original's does (LABEL_155's dispatch, then LABEL_246), so the
-        // "own bomb underfoot" probe and the drop tile read THIS frame's
-        // committed position. A pickup-paused player skips it entirely (the
-        // forced-HELD carve-out); its prev_action latch happens once after the
-        // loop instead.
-        if (!paused_now()) bomb_actions(stun_blocked || frozen, sub_in);
+        // The tail sits after the mover and its kick probe because the original's
+        // does (LABEL_155's dispatch, then LABEL_246), so the "own bomb
+        // underfoot" probe and the drop tile read THIS frame's committed
+        // position. A pickup-paused player skips it entirely (§2).
+        if (!paused_now()) bomb_action_tail(act, stun_blocked || frozen, sub_in);
 
-        // Presentation sub-frame trace (State::sub_trace, derived output like
-        // s.events): where this player ended THIS canonical frame — the
-        // renderer plays these back so the original's per-frame micro-motion
-        // (direction flips up to kSubFrames× per tick) survives to the screen
-        // instead of being lerped away between tick endpoints.
+        // Presentation sub-frame trace (State::sub_trace) — derived output like
+        // s.events, never hashed: where this player ended THIS canonical frame,
+        // so the original's per-frame micro-motion survives to the screen instead
+        // of being lerped away between tick endpoints.
         s.sub_trace[i][sub] = {p.x, p.y, p.facing};
     }
 
-    // Presentation walk-state event (see PlayerWalking's doc comment in
-    // event.hpp): the pose/leg-cycle keys off the walking DISPATCH, not off
-    // displacement. Emitted once per tick with the tick's SUMMED per-frame
-    // accruals in whole px, so the renderer's leg cycle advances by exactly
-    // the budget the mover burned. Events are unhashed derived outputs — no
-    // golden impact.
     if (walk_budget > 0) {
-        // Whole-px units for the deterministic tick path (n_sub == kSubFrames):
-        // the summed 9-sub-frame budget is several px, so the int8 truncation is
-        // negligible and the renderer's /3 leg divisor is unchanged (golden/
-        // visual-golden byte-identical). But the F9 per-frame path (n_sub == 1)
-        // emits a SUB-pixel budget every frame; truncated to whole px it clamps
-        // up to 1, inflating the leg cycle ~3x (the reported "walk too fast").
-        // Emit that path in 1/16-px units instead — no clamp-up — and the
-        // renderer's native-cadence divisor (/48 = /3 * 16) undoes the scale, so
-        // the walk speed matches the tick path and is frame-rate-independent,
-        // exactly like the original's fixed-point per-frame leg phase.
+        // Whole px on the deterministic path, 1/16 px on the F9 per-frame path —
+        // docs/re/player-turn.md §8 for why the unit has to differ.
         const Fixed walk_unit = (n_sub == kSubFrames) ? kScale : kScale / 16;
         s.events.push_back(
             {Event::Type::PlayerWalking, static_cast<std::int8_t>(i),
              static_cast<std::int8_t>(p.tile_x()), static_cast<std::int8_t>(p.tile_y()),
              static_cast<std::int8_t>(std::clamp<Fixed>(walk_budget / walk_unit, 1, 127))});
     }
-    // A trampoline/warphole entered during the sub-frame loop above ALSO burns
-    // its first state frame on this very tick. sub_41F29B runs the mover — and
-    // therefore sub_41EC84's step-on trigger — BEFORE the animation/state
-    // dispatch (the mover's exit is a jump to the dispatch head at LABEL_155),
-    // so the frame that sets state 5/6/7 falls straight into the matching state
-    // block and its per-phase frame counter (+80) already reads 1 by the end of
-    // it. Our flight gate sits at the TOP of player_turn, so the trigger tick
-    // would otherwise advance nothing: the hop/warp landed one tick late and
-    // lasted one tick longer than the original's. Ordering matches the original
-    // too — the state block runs before the bomb-action tail below (LABEL_246).
-    //
-    // There is deliberately NO post-tick step-on check here any more. The
-    // original's only trigger site is the mover's -1 test; a "player is standing
-    // on one" fallback let this port take players it should not (see
-    // StageActorSystem's header and docs/re/facts.md "Warphole/trampoline entry
-    // predicate").
+
+    // A trampoline/warphole entered during the sub-frame loop ALSO burns its
+    // first state frame on this very tick, and before the tail: sub_41F29B runs
+    // the mover (and so the step-on trigger) BEFORE the state dispatch. Without
+    // this the hop/warp would land one tick late. There is deliberately NO
+    // post-tick "standing on one" fallback. docs/re/player-turn.md §5.
     if (advance_timers) {
         if (p.bounce > 0)
             stage.tick_bounce(p);
@@ -705,17 +453,12 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
             stage.tick_warp(p);
     }
 
-    // The bomb-action tail itself now runs per FRAME, inside the loop above.
-    // All that is left here is the pickup-paused player's key latch: it skips
-    // the tail entirely for the whole pause window (the forced-HELD carve-out
-    // in `bomb_actions`' doc comment), so its +54/+55 copy has to happen
-    // somewhere, and once per tick is enough for a value that cannot change
-    // within one. The gate is `paused_entering` — the PRE-decrement snapshot,
-    // the same one the movement gate uses. It used to be the post-decrement
-    // value here, which let the tail come back one tick before movement did;
-    // the original drives both from the ONE state-4 test at 0x41FA42, so they
-    // cannot differ. A pause ARMED mid-tick (a grab) needs no latch here: the
-    // frame that grabbed ran the tail, and the tail latches for itself.
+    // The tail runs per frame inside the loop; all that is left is the
+    // pickup-paused player's +54/+55 latch, which the skipped tail never did.
+    // The gate is the PRE-decrement snapshot, the same one the movement gate
+    // uses — the original drives both from the ONE state-4 test at 0x41FA42, so
+    // they cannot differ. A pause armed mid-tick needs no latch: the frame that
+    // grabbed ran the tail, and the tail latches for itself.
     if (paused_entering) {
         p.prev_action1 = tick_in.action1;
         p.prev_action2 = tick_in.action2;
@@ -723,23 +466,11 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
 }
 
 // Tick step 1's body: every present, alive player takes its turn, in SLOT ORDER.
-//
-// A computer player resolves its own input INSIDE its player_turn (ADR-0005 §5,
-// updated by the canonical-frame-cadence port): the brain re-decides once per
-// sub-frame in the movement loop — the exact slot where the original calls
-// sub_40A1C6 instead of reading DirectInput (sub_41F29B, gated on the +16==1
-// tag), once per displayed frame. This keeps the AI's RNG draws interleaved with
-// movement in slot order, as the original interleaves the brain and the mover
-// per player, so the loop order here is part of the determinism contract.
-//
-// The original gates the dispatch (including draws A/B) on its new-input flag
-// being set AND dword_4621E0 being zero (sub_41F29B ~23028) — head-hit stun,
-// pickup-pause, and the flight states 5/6/7 all clear that flag (see
-// player_turn's sub-frame loop, which re-evaluates that gate per frame; a
-// blocked AI draws NOTHING that frame, the same as the original skipping the
-// call outright — RESOLVED, docs/re/ai.md §2/§7; facts.md "Player state machine
-// (+78) — COMPLETE"). The present/alive test below covers the entering/dying/
-// dead modes.
+// A computer player resolves its own input INSIDE its player_turn (ADR-0005 §5),
+// which keeps the AI's RNG draws interleaved with movement in slot order as the
+// original interleaves the brain and the mover per player — so this loop order
+// is part of the determinism contract. The present/alive test covers the
+// entering/dying/dead modes.
 void players_pass(State& s, const TickInputs& inputs, TurnContext& ctx) {
     for (int i = 0; i < kMaxPlayers; ++i) {
         const Player& p = s.players[i];
@@ -748,37 +479,28 @@ void players_pass(State& s, const TickInputs& inputs, TurnContext& ctx) {
     }
 }
 
-// The head checks: flames kill players; floor powerups get picked up (with
-// the pre-pickup cure roll and the skull dispatch). This is the original's
-// NEXT-turn head pair (sub_41F29B 22915-22926) at our rotation's cut point —
-// it runs for every player (moved or not), in slot order, after the walls.
+// The head checks: flames kill players; floor powerups get picked up (with the
+// pre-pickup cure roll and the skull dispatch). This is the original's NEXT-turn
+// head pair (sub_41F29B 22915-22926) at our rotation's cut point — it runs for
+// every player (moved or not), in slot order, after the walls.
 void field_vs_players(State& s, PowerupSystem& powerups, DiseaseSystem& diseases) {
     for (int i = 0; i < kMaxPlayers; ++i) resolve_player_field(s, i, powerups, diseases);
 }
 
 enum class TickPhase : std::uint8_t { Full, Players, Systems };
 
-// `phase` splits the tick for the F9 native-cadence mode (game_app.cpp):
+// `phase` splits the tick for the F9 native-cadence mode (ADR-0007):
 //   Players  = only the per-frame movement/AI pass, run once per DISPLAYED
-//              frame with a single measured wall-clock delta (sched={delta_ms},
-//              n_sub=1) — the low-latency, per-frame responsiveness the native
-//              gets from its ~180 fps free-run.
-//   Systems  = only the 50 ms-quantized systems pass (bombs/flames/enclosure/
-//              diseases + the tick counter), run off a real-time accumulator so
-//              fuse/flame/hurry timers stay on their native 50 ms grid.
-//   Full     = both back-to-back, exactly as the fixed 20 Hz tick always has
-//              (the deterministic default — tick()/tests/oracle unchanged).
-// The Cadence (`sched`/`n_sub`/`advance_timers`) is threaded straight to
-// player_turn via the TurnContext built below.
+//              frame with a single measured wall-clock delta;
+//   Systems  = only the 50 ms-quantized systems pass, run off a real-time
+//              accumulator so fuse/flame/hurry timers stay on their native grid;
+//   Full     = both back-to-back — the deterministic default tick().
 void run_tick(State& s, const TickInputs& inputs, Cadence cad = {},
               TickPhase phase = TickPhase::Full) {
     if (phase != TickPhase::Systems) {
         s.events.clear();
-        // Presentation sub-frame trace prefill (State::sub_trace): every sample
-        // starts at the player's tick-entry position/facing; player_turn's
-        // sub-frame loop overwrites sample f as it moves, and the endpoint
-        // restamp at the bottom of this function pins the LAST sample to the
-        // tick's true final position. Derived output — never hashed.
+        // sub_trace prefill: every sample starts at the tick-entry position;
+        // player_turn overwrites sample f as it moves and step 12 pins the last.
         for (int i = 0; i < kMaxPlayers; ++i) {
             const Player& pp = s.players[i];
             for (int f = 0; f < kSubFrames; ++f) s.sub_trace[i][f] = {pp.x, pp.y, pp.facing};
@@ -798,154 +520,104 @@ void run_tick(State& s, const TickInputs& inputs, Cadence cad = {},
     AISystem ai{s};
     RoverSystem rovers{s};
 
-    // Bundle the systems + this tick's cadence once, then hand player_turn a
-    // single TurnContext reference below (ADR-0008). Pure plumbing — see the
-    // Systems/Cadence/TurnContext comment near the top of this file.
-    Systems sys{diseases, powerups, flames,   bombs, movement,
-                stage,    enclosure, tile_regen, ai,  rovers};
+    Systems sys{diseases, powerups,  flames,     bombs, movement,
+                stage,    enclosure, tile_regen, ai,    rovers};
     TurnContext ctx{sys, cad};
 
     // 1. Players: movement (with conveyor/trampoline actors), bomb drop,
-    //    throw/grab/trigger/punch. The conveyor push is part of the move budget
-    //    and the trampoline hop is triggered on settling, so both live inside
-    //    the player turn (mirroring sub_41F29B, which does movement + the actor
-    //    branches in one pass). No new tick step: the actor effects are folded
-    //    into step 1 exactly where the original applies them.
+    //    throw/grab/trigger/punch. The actor effects are folded into this step
+    //    exactly where the original applies them (sub_41F29B does movement and
+    //    the actor branches in one pass), so they are not a separate tick step.
     if (phase != TickPhase::Systems) players_pass(s, inputs, ctx);
-    // Players-only (F9 per-frame call): stop here — the 50 ms systems pass below
-    // is driven separately off the real-time accumulator in Simulation::frame.
-    if (phase == TickPhase::Players) return;
+    if (phase == TickPhase::Players) return;  // the 50 ms pass is driven separately
 
-    // 1b. Round-start input freeze countdown (dword_4621E0: armed to 50ms ×
-    //     getvalue(30) = 1000 ms by round init sub_4214BC, decremented by the
-    //     measured frame delta at the top of the player-pass entry sub_420F07,
-    //     pseudo.c 23642-23645; while nonzero player_turn's acquisition gate
-    //     skips the AI brain and the human input decode). The original's gate
-    //     opens on the frame at t >= 1000 ms — exactly 1000 ms of dead input.
-    //     At tick granularity that boundary needs the decrement AFTER the
-    //     pass (ticks 0..19 read 20..1 and stay frozen; tick 20 reads 0):
-    //     decrementing before the pass would cut the window one tick short.
-    //     docs/re/facts.md "Round-start input freeze".
+    // 1b. Round-start input freeze countdown. The decrement must come AFTER the
+    //     pass or the window is one tick short — docs/re/player-turn.md §7.
     if (s.input_freeze > 0) --s.input_freeze;
 
     // 2. Campaign rover/ghost hazards: drive the mover 1 tick (spawn/wander/
     // flame-death/landing-tile kill) and the "all hazards dead" grace timer
     // (docs/re/campaign.md "Round pacing", sub_4016DA). The original calls
     // sub_401F76 from the campaign callback IMMEDIATELY AFTER the player pass
-    // (sub_42A191 29527 -> 29528-29529), BEFORE the next frame's bomb pass —
-    // so a rover never reacts to flames lit later in the same gap
-    // (docs/re/facts.md "Per-tick call order — END-TO-END" finding 3). No-op
-    // (zero RNG draws, zero cost) when s.rovers is empty — see
-    // RoverSystem::tick.
+    // (sub_42A191 29527 -> 29528-29529), BEFORE the next frame's bomb pass — so
+    // a rover never reacts to flames lit later in the same gap (facts.md
+    // "Per-tick call order — END-TO-END" finding 3). Zero draws, zero cost when
+    // s.rovers is empty.
     rovers.tick();
 
     // 3. Match clock. The original updates it at the top of the frame
-    // (sub_4105D2, sub_42A191 29518) — after the rovers, before the bomb
-    // pass, in rotation terms — and the enclosure below reads the value
-    // updated this same gap.
+    // (sub_4105D2, sub_42A191 29518) — after the rovers, before the bomb pass,
+    // in rotation terms — and the enclosure below reads the value updated in
+    // this same gap.
     if (s.ticks_left > 0 && --s.ticks_left == 0)
         s.events.push_back({Event::Type::TimeUp, -1, -1, -1, 0});
 
-    // bombs F1 (docs/re/audit/bombs.md finding 1; sub_42331C's per-bomb tail
-    // gated on `sub_421969() > 1` at pseudo.c 25603 / batch_0x422DDD.cpp:799):
-    // once a round is decided down to <= 1 alive SIDE, the original FREEZES
-    // every still-armed bomb — the entire fuse-elapsed accrual, the timeout
-    // explosion, and the nested flame-arm spread all sit behind that gate, so
-    // no fuse counts down, no chain propagates, and no trigger press resolves
-    // (the chain-queue drain's forced elapsed=duration write is inert without
-    // the same gate) until the round transitions. sub_421969 returns a forced
-    // 2 in campaign (dword_46489C), so the freeze is EXEMPT there
-    // (rovers/ghosts are not players; the round does not end by elimination) —
-    // mirrored by !s.campaign_hazards_active. sides_remaining() generalizes
-    // free-for-all (team 0 = distinct sides) and team mode exactly like
-    // dword_4621D4/dword_4621DC. Bomb MOVEMENT (advance_bombs, step 5 — the
-    // switch cases BEFORE the 25603 gate) is NOT frozen; only the fuse/
-    // explosion/chain tail is.
+    // Once a round is decided down to <= 1 alive SIDE the original FREEZES every
+    // still-armed bomb: the fuse accrual, the timeout explosion and the nested
+    // flame-arm spread all sit behind sub_42331C's `sub_421969() > 1` gate at
+    // pseudo.c 25603, so no fuse counts down, no chain propagates and no trigger
+    // press resolves until the round transitions (docs/re/audit/bombs.md finding
+    // 1). Bomb MOVEMENT is the switch cases BEFORE that gate and is NOT frozen.
+    // sub_421969 returns a forced 2 in campaign, so the freeze is EXEMPT there.
     //
-    // The SAME "sub_421969() > 1" predicate is the TOP-LEVEL gate of the
-    // enclosure stepper sub_426818: at native/src/game/batch_0x42583B.cpp lines
-    // 678-679 the routine calls sub_421969 first and wraps its ENTIRE body in a
-    // "greater than 1" test on the result,
-    // so the closing walls and the per-level tile regen inside it freeze on the
-    // very same edge — see step 8. Both sites read the same latched
-    // dword_4621D4 that the frame's player pass (sub_420F07) just recomputed,
-    // so they can never disagree within a frame. Flame aging (sub_426D06,
-    // step 7) has NO such gate and keeps running — that asymmetry is real.
+    // The SAME predicate is the TOP-LEVEL gate of the enclosure stepper
+    // sub_426818, which wraps its ENTIRE body in it (batch_0x42583B.cpp:678-679),
+    // so step 8 freezes on the very same edge. Both sites read the same latched
+    // dword_4621D4 the frame's player pass just recomputed and can never disagree
+    // within a frame. Flame aging (step 7) has NO such gate and keeps running —
+    // that asymmetry is real.
     const bool round_frozen = sides_remaining(s) <= 1 && !s.campaign_hazards_active;
 
-    // 4. Drain the chain-detonation queue (docs/re/facts.md "Chain-reaction
-    // timing", sub_423209/dword_462200): a flame arm that reached another
-    // bomb, a trigger-button press, a flying bomb landing on flame, or a
-    // sliding bomb entering flame all QUEUE their target instead of
-    // exploding it synchronously. The original drains this queue once, at
-    // the very top of its per-frame bomb pass (sub_42331C runs the drain only
-    // when its queue stamp dword_462210 differs from the current tick counter
-    // dword_464994) — the first bomb phase after
-    // the player pass in the rotated stream — so a trigger-button press
-    // (queued during step 1, above) is caught by THIS drain with no player
-    // move in between, while a flame-arm/slide/landing hit (queued during
-    // bombs.advance_bombs / tick_fuses, below — i.e. during the original's
-    // per-bomb-slot loop, which runs AFTER its own drain already fired) is
-    // only caught by the NEXT tick's drain — one chain LINK per tick, not
-    // the whole chain at once. Frozen once the round is decided (bombs F1).
+    // 4. Drain the chain-detonation queue (facts.md "Chain-reaction timing",
+    // sub_423209/dword_462200). The original drains once, at the very top of its
+    // per-frame bomb pass — the first bomb phase after the player pass in the
+    // rotated stream. So a trigger press, queued during step 1, is caught by THIS
+    // drain with no player move in between, while a flame-arm/slide/landing hit
+    // is queued below, after the drain already fired, and waits for the NEXT
+    // tick's: one chain LINK per tick, not the whole chain at once.
     if (!round_frozen) flames.drain_chain_queue();
 
-    // 5. Kicked bombs slide; airborne bombs fly. NOT frozen by bombs F1
-    //    (movement is the original's switch cases, before the freeze gate).
+    // 5. Kicked bombs slide; airborne bombs fly. NOT frozen by bombs F1.
     bombs.advance_bombs();
 
-    // 6. Fuses (paused while a bomb is airborne). Frozen once the round is
-    //    decided down to <= 1 alive side (bombs F1).
+    // 6. Fuses (paused while a bomb is airborne). Frozen by bombs F1.
     if (!round_frozen) bombs.tick_fuses();
 
     // NOTE (documented deviation, facts.md "Per-tick call order" accepted
-    // deviations): the original interleaves steps 5/6 PER BOMB SLOT — slot
-    // k's slide runs after slot j<k's explosion within the same frame. Our
-    // phase split makes same-tick bomb-vs-bomb coincidences uniformly
-    // "movement first"; matching the original exactly would require the
-    // 100-slot first-fit allocator.
+    // deviations): the original interleaves steps 5/6 PER BOMB SLOT — slot k's
+    // slide runs after slot j<k's explosion within the same frame. Our phase
+    // split makes same-tick bomb-vs-bomb coincidences uniformly "movement
+    // first"; matching exactly would require the 100-slot first-fit allocator.
 
-    // 7. Flames fade, bricks finish crumbling (revealing powerups). The
-    // original ages the grid right after its bomb pass (sub_426D06,
-    // sub_42A191 29525) — a flame lit this tick ages once this tick.
+    // 7. Flames fade, bricks finish crumbling (revealing powerups). The original
+    // ages the grid right after its bomb pass (sub_426D06, sub_42A191 29525) — a
+    // flame lit this tick ages once this tick.
     flames.age_flames_and_bricks();
 
     // 8. Walls closing in during the hurry phase, AFTER the flame aging and
-    // BEFORE the head checks (sub_426818 at 29526: after sub_426D06, before
-    // sub_420F07) — a wall crush beats a same-tick flame kill (no killer
-    // credit) and destroys an un-picked-up token under the dropping wall.
-    // Tile regeneration runs immediately before the wall stepper, mirroring
-    // the original: sub_426704 (regen) is called from WITHIN sub_426818,
-    // right before its own arm/disarm/drop logic (docs/re/facts.md
-    // "Per-level tile regeneration"). A no-op on every level but Haunted
-    // House.
+    // BEFORE the head checks (sub_426818 at 29526) — a wall crush beats a
+    // same-tick flame kill (no killer credit) and destroys an un-picked-up token
+    // under the dropping wall. Tile regeneration runs immediately before the wall
+    // stepper because sub_426704 is called from WITHIN sub_426818 (facts.md
+    // "Per-level tile regeneration"); a no-op on every level but Haunted House.
     //
-    // enclosure F2 (docs/re/enclosure.md §8, rewritten 2026-07-26):
-    // sub_426818's whole body — the per-level regen call sub_426704, the
-    // arm/disarm edge, the fading preview, and the 250 ms drop loop — sits
-    // inside the same "sub_421969() > 1" test (native batch_0x42583B.cpp lines
-    // 678-682). So once the round is decided down to <= 1 side the spiral
-    // STOPS DEAD, on the same edge that freezes the bombs, and it never
-    // restarts (sub_421969 only falls further; the outer match loop also
-    // pauses the match clock right there, sub_410522 at
-    // batch_0x4293E5.cpp:1060-1061). Both calls below go behind the gate
-    // because the original has ONE gate covering both. This is a DIFFERENT
-    // question from TimeUp: the clock hitting zero does NOT stop the spiral
-    // (sub_410578 clamps at 0, the predicate stays true) — see §2's "NO
-    // ticks_left > 0 guard" note, which still stands.
+    // Both go behind ONE gate because the original has one covering both
+    // (docs/re/enclosure.md §8). A DIFFERENT question from TimeUp: the clock
+    // hitting zero does NOT stop the spiral — sub_410578 clamps at 0, so the
+    // predicate stays true (see §2's "NO ticks_left > 0 guard" note).
     if (!round_frozen) {
         tile_regen.update();
         enclosure.update();
     }
 
     // 9. The head checks: flames kill players, floor powerups get picked up —
-    // the original's NEXT player pass's turn-head pair (sub_41F29B
-    // 22915-22926) at this rotation's cut point.
+    // the original's NEXT player pass's turn-head pair (sub_41F29B 22915-22926)
+    // at this rotation's cut point.
     field_vs_players(s, powerups, diseases);
 
-    // 10. Diseases: spread on contact, age the freshness gate, and expire.
-    // The original runs these right after the head checks inside each
-    // player's turn (sub_41F29B 22927-22975).
+    // 10. Diseases: spread on contact, age the freshness gate, expire. The
+    // original runs these right after the head checks inside each player's turn
+    // (sub_41F29B 22927-22975).
     diseases.spread_and_age();
 
     // 11. Compact dead bombs (stable order — deterministic).
@@ -953,12 +625,10 @@ void run_tick(State& s, const TickInputs& inputs, Cadence cad = {},
         std::remove_if(s.bombs.begin(), s.bombs.end(), [](const Bomb& b) { return !b.active; }),
         s.bombs.end());
 
-    // 12. Pin every player's LAST sub-frame sample to the tick's true
-    // endpoint: post-loop relocations (trampoline apex teleport, warp
-    // midpoint, head-hit scatter) move a player after its own sub-frame loop
-    // finished, and the trace playback's final segment must land exactly on
-    // the position the next tick starts from (the renderer's per-segment
-    // snap threshold then renders such a relocation as a clean snap).
+    // 12. Pin every player's LAST sub-frame sample to the tick's true endpoint:
+    // post-loop relocations (trampoline apex, warp midpoint, head-hit scatter)
+    // move a player after its own sub-frame loop finished, and the trace
+    // playback's final segment must land exactly where the next tick starts.
     for (int i = 0; i < kMaxPlayers; ++i) {
         const Player& pp = s.players[i];
         s.sub_trace[i][kSubFrames - 1] = {pp.x, pp.y, pp.facing};
@@ -976,31 +646,26 @@ void Simulation::tick(const TickInputs& inputs) {
 }
 
 void Simulation::frame(const TickInputs& inputs, std::int32_t delta_ms) {
-    // F9 native-cadence path (game_app.cpp run_match): run the movement/AI pass
-    // ONCE for this displayed frame with the measured wall-clock delta (a single
-    // sub-frame of delta_ms), then advance the 50 ms-quantized systems pass off
-    // a real-time accumulator. Mirrors the original's per-frame gameplay driver
-    // (sub_42A191): movement/AI at the true frame rate (low latency, fps-scaled
-    // granularity), fuse/flame/hurry timers on their native 50 ms grid. This
-    // whole path is NON-DETERMINISTIC (delta is real wall-clock) — a live-feel
-    // lever only; tick() stays the deterministic entry the tests/oracle use.
+    // F9 native-cadence path (ADR-0007): the movement/AI pass runs ONCE for this
+    // displayed frame with the measured wall-clock delta, then the 50 ms-
+    // quantized systems pass advances off a real-time accumulator — mirroring the
+    // original's per-frame gameplay driver sub_42A191. This whole path is
+    // NON-DETERMINISTIC (delta is real wall-clock) and is a live-feel lever only;
+    // tick() stays the deterministic entry the tests and the oracle use.
     if (delta_ms < 1) delta_ms = 1;  // never a zero-advance frame
     const std::int32_t sched[1] = {delta_ms};
     // Does this displayed frame cross a 50 ms tick boundary? If so the once-per-
-    // tick duration counters in player_turn (pickup_pause / bounce / warp) may
-    // advance this frame; otherwise they hold, keeping those durations 20 Hz-
-    // paced under the per-frame movement (matches the deterministic path).
+    // tick duration counters in player_turn may advance; otherwise they hold,
+    // keeping those durations 20 Hz-paced under per-frame movement.
     const bool crosses_tick = (systems_accum_ms_ + delta_ms) >= kMsPerTick;
     run_tick(state_, inputs, {sched, 1, crosses_tick}, TickPhase::Players);
     systems_accum_ms_ += delta_ms;
-    // Spiral-of-death guard: a long stall (window drag, breakpoint, alt-tab)
-    // must not fire a hundred systems passes in one frame — cap the queued
-    // real time at a few ticks, exactly like run_match's kMaxCatchupTicks.
+    // Spiral-of-death guard: a long stall (window drag, breakpoint, alt-tab) must
+    // not fire a hundred systems passes in one frame — cap the queued real time,
+    // exactly like run_match's kMaxCatchupTicks.
     if (systems_accum_ms_ > 4 * kMsPerTick) systems_accum_ms_ = 4 * kMsPerTick;
     while (systems_accum_ms_ >= kMsPerTick) {
         systems_accum_ms_ -= kMsPerTick;
-        // Cadence irrelevant on the Systems phase (no player pass); the default
-        // {kSubFrameMs, kSubFrames, true} matches the old explicit arguments.
         run_tick(state_, inputs, {}, TickPhase::Systems);
     }
 }

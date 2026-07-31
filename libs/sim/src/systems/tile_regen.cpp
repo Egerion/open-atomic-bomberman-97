@@ -9,28 +9,24 @@
 namespace bomber::sim {
 namespace {
 
-// Manhattan distance, tiles. sub_422351(radius)'s own decompile only shows
-// the radius as an explicit call argument — the candidate tile reaches it
-// via a register the Watcom-convention caller left live from the immediately
-// preceding occupancy checks (sub_425FB9/sub_42542D/sub_422E48 also take
-// (x,y) with no fresh reload before the sub_422351 call). The formula itself
-// (sum of two independent per-axis abs() calls, matching id 695's own
-// comment "clear cell radius... nobody can be within this radius") is high
-// confidence; the exact register mechanism is not literally visible in the
-// text decompile. See docs/re/facts.md "Per-level tile regeneration".
 int manhattan(int ax, int ay, int bx, int by) {
     return std::abs(ax - bx) + std::abs(ay - by);
 }
 
-// sub_422351(radius): are all live players MORE than `radius` tiles (in the
-// Manhattan sense) away from (cx,cy)? A player at exactly `radius` fails the
-// test — the comparison below is `<= radius`. Gated on present+alive, matching the
-// codebase's own player-iteration convention (grid::player_at, drop_wall) —
-// the original's raw 10-slot struct scan has no visible active check, but
-// iterating unconditionally would have unused array slots (which our
-// zero-initialised Player defaults to tile (0,0)) permanently block regen
-// near the board's top-left corner in any match with fewer than 10 players,
-// which cannot be the intended behaviour.
+// sub_422351(radius): are all live players MORE than `radius` tiles away from
+// (cx,cy)? A player at exactly `radius` FAILS the test — the comparison is
+// `<= radius`, matching id 695's own comment "clear cell radius... nobody can be
+// within this radius".
+//
+// Two caveats, both documented in facts.md "Per-level tile regeneration". The
+// candidate tile reaches sub_422351 through a register the Watcom-convention
+// caller left live from the preceding occupancy checks, so only the radius is
+// visible as an explicit argument in the text decompile — the formula is high
+// confidence, the register mechanism is inferred. And the present+alive gate is
+// OURS: the original's raw 10-slot scan has no visible active check, but
+// iterating unconditionally would let unused slots, which default to tile (0,0),
+// permanently block regen near the board's top-left corner in any match with
+// fewer than 10 players.
 bool clear_of_players(const State& s, int cx, int cy, int radius) {
     for (const auto& p : s.players) {
         if (!p.present || !p.alive) continue;

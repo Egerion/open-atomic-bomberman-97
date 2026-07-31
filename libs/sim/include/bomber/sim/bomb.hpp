@@ -17,17 +17,14 @@ struct Bomb {
     // "Chain-reaction timing".
     std::uint32_t id = 0;
     std::uint8_t owner = 0;
-    // Render colour, a SEPARATE field from `owner`: the original packs both
-    // into the dword at bomb +60 — low byte = the placer's colour, written
-    // once at creation by sub_422EDE; high word (+62) = the owner
-    // id. A flame-arm chain hit copies ONLY the +62 owner word from the
-    // detonating bomb into the bomb it ignites (sub_42331C, pseudo.c 25644), so kill
-    // credit moves to the chainer while the bomb — and every flame it casts
-    // (sub_426FCC takes colour from bomb +60 and owner from +62 separately)
-    // — keeps wearing the original placer's colour. Stored as the placer's
-    // SLOT here and resolved to a palette via render_colour at draw time
-    // (identical, since a player's colour never changes mid-match).
-    // docs/re/facts.md "Bomb/flame colour is not the owner".
+    // Render colour, a SEPARATE field from `owner`: the original packs both into
+    // the dword at bomb +60 — low byte the placer's colour, written once at
+    // creation by sub_422EDE; high word (+62) the owner id. A flame-arm chain hit
+    // copies ONLY the +62 word into the bomb it ignites (pseudo.c 25644), so kill
+    // credit moves to the chainer while the bomb, and every flame it casts, keeps
+    // wearing the original placer's colour. Stored as the placer's SLOT and
+    // resolved to a palette at draw time. facts.md "Bomb/flame colour is not the
+    // owner".
     std::uint8_t colour = 0;
     Fixed x = 0, y = 0;           // center, aligned to tile unless moving
     std::int32_t fuse = 0;        // ticks until detonation (<0: waits for trigger)
@@ -39,12 +36,11 @@ struct Bomb {
     // trigger bomb downgraded by a Trigger EVICTION relights with it
     // (sub_424C47 sets kind 0, elapsed 0). facts.md "Core-feel audit" §2/§5.
     std::int32_t fuse_init = 0;
-    // Creation-tick stamp (the original's bomb +64, set to dword_464994 at
-    // placement, sub_422EDE pseudo.c 25113). Used ONLY by trigger detonation:
-    // sub_424B41 (pseudo.c 26036) requires a candidate's stamp be STRICTLY
-    // earlier than the current tick, so a trigger bomb placed the SAME tick as
-    // the trigger-detonate press cannot fire yet. facts.md-adjacent bombs.md
-    // finding 4. Hashed (gameplay state per determinism rule 4).
+    // Creation-tick stamp (+64, set to dword_464994 at placement, sub_422EDE
+    // pseudo.c 25113). Used ONLY by trigger detonation: sub_424B41 (26036)
+    // requires a candidate's stamp be STRICTLY earlier than the current tick, so
+    // a trigger bomb placed the SAME tick as the press cannot fire yet
+    // (docs/re/audit/bombs.md finding 4).
     std::uint64_t created_tick = 0;
     std::int32_t dud_left = 0;    // fizzle ticks remaining (dud state; fuse frozen)
     std::int32_t flame = 2;

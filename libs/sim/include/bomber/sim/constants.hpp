@@ -5,12 +5,10 @@
 #include "bomber/core/geometry.hpp"
 #include "bomber/core/limits.hpp"
 
-// Timing/cadence constants confirmed against BM95.EXE (docs/re/facts.md).
-// The field geometry, the fixed-point pixel unit, and the slot/rate limits now
-// live in bomber::core (ADR-0008) and are re-exported here, so every existing
-// `sim::Fixed` / `sim::kScale` / `sim::kGridWidth` … call site keeps resolving
-// unchanged — a using-decl names the SAME constexpr objects, so values (and the
-// golden) are byte-identical.
+// Timing/cadence constants confirmed against BM95.EXE (docs/re/facts.md). The
+// field geometry, the fixed-point pixel unit and the slot/rate limits live in
+// bomber::core (ADR-0008) and are re-exported here by using-decls, which name
+// the SAME constexpr objects.
 
 namespace bomber::sim {
 
@@ -30,28 +28,23 @@ using core::kTileWF;
 // ms-accumulator.
 inline constexpr std::int32_t kMsPerTick = 1000 / kTicksPerSecond;  // 50
 
-// Canonical frame cadence inside one 20 Hz tick (docs/re/facts.md "Canonical
-// frame cadence", ADR-0006). The original's gameplay driver (sub_42A191) runs
-// once per DISPLAYED frame with the measured integer-ms delta [0x464958]:
-// timers/anims quantize back to 50 ms through per-entity accumulators, but
-// input acquisition, AI decisions and the movement-budget accruals genuinely
-// run at display rate. A deterministic sim cannot consume measured deltas, so
-// we pin a CANONICAL display rate and run those per-frame mechanics as a fixed
-// number of sub-frames per tick.
+// Canonical frame cadence inside one 20 Hz tick (facts.md "Canonical frame
+// cadence", ADR-0006). The original's gameplay driver sub_42A191 runs once per
+// DISPLAYED frame with the measured integer-ms delta [0x464958]: timers and anims
+// quantize back to 50 ms through per-entity accumulators, but input acquisition,
+// AI decisions and the movement-budget accruals genuinely run at display rate. A
+// deterministic sim cannot consume measured deltas, so we pin a CANONICAL display
+// rate and run those mechanics as a fixed number of sub-frames per tick.
 //
-// Rate = ~180 fps (nine sub-frames per 50 ms tick). The original is NOT vsync-
-// limited on modern hardware: DirectDraw's windowed present does not block on
-// vblank under DWM, so BM95.EXE free-runs at whatever the GPU delivers. On the
-// reference Win11 box (NVIDIA TITAN X, 60 Hz panel) a full 180 s draw round
-// rendered 33146 frames (bmstats "Last Run"), i.e. ~180 fps of gameplay-driver
-// callbacks — so the AI brain, input sampling and movement budget genuinely ran
-// ~9x per tick, not 3x. The earlier 60 fps / 3-sub-frame choice (ADR-0006,
-// pre-measurement) left the AI ~3x too calm and the head-stun ~3x too long
-// versus what the user actually sees. Nine sub-frames restores that: at ~180 fps
-// a 16-frame head stun is ~89 ms (was 267 ms at 3 sub-frames), the 30-slot ice
-// buffer spans ~167 ms, and the AI re-decides nine times per tick. The {6,5,...}
-// pattern sums to the 50 ms tick. (kSubFrames is the single tuning lever for the
-// AI/movement "temperature"; drop it toward 3 for a calmer, period-hardware feel.)
+// Nine is MEASURED, not extracted — there is no rate in the binary to extract,
+// because it free-runs unlocked: DirectDraw's windowed present does not block on
+// vblank under DWM. On the reference Win11 box (NVIDIA TITAN X, 60 Hz panel) a
+// full 180 s draw round rendered 33146 frames (bmstats "Last Run") — ~184
+// gameplay-driver callbacks a second, so those mechanics really do run ~9x per
+// tick. The earlier 60 fps / 3-sub-frame choice left the AI ~3x too calm and the
+// head-stun ~3x too long: at ~180 fps a 16-frame head stun is ~89 ms, not 267 ms.
+// The {6,5,...} pattern sums to the 50 ms tick. Treat this as a calibration
+// rather than a citation — it is the single lever for AI/movement "temperature".
 inline constexpr int kSubFrames = 9;
 inline constexpr std::int32_t kSubFrameMs[kSubFrames] = {6, 5, 6, 5, 6, 5, 6, 5, 6};
 

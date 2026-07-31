@@ -13,53 +13,42 @@ class RoverSystem {
 public:
     explicit RoverSystem(State& s) : s_(s) {}
 
-    // Spawns `count` rovers/ghosts at random walkable tiles MORE than 3 tiles
-    // (Manhattan) from every player — a candidate at exactly 3 is rejected —
-    // speed `speed` (the .CAM rover_speed/
-    // ghost_speed field). Mirrors sub_401AAE/sub_401B05 -> sub_4019C2: up to
-    // 200 placement attempts PER actor (2 RNG draws per attempt), silently
-    // spawning fewer than `count` if the board has no room (the original
-    // doesn't check sub_4019C2's return either). Called once per campaign
-    // stage from the campaign layer (libs/game), never mid-round. No-op
-    // (zero RNG draws) when count <= 0, so a non-campaign MatchConfig (the
-    // default: campaign_rovers/campaign_ghosts both 0) never calls this at
-    // all — see setup.cpp.
+    // Spawns `count` actors at random tiles MORE than 3 tiles (Manhattan) from
+    // every player — a candidate at exactly 3 is rejected. Called once per
+    // campaign stage from libs/game, never mid-round, and draws ZERO RNG when
+    // count <= 0, which is every non-campaign match.
     void spawn(RoverKind kind, int count, std::int32_t speed);
 
-    // Tick step: drive every live rover/ghost's mover one tick (sub_401F76 ->
-    // sub_401B5C), then update the campaign "all hazards dead" grace timer
-    // (Round pacing clause 3) and reap dead entries. See simulation.cpp for
-    // the exact placement in the tick order and why.
-    //
-    // No RNG, no player kills, no events, no grace-timer accumulation for
-    // every non-campaign scenario — gated on State::campaign_hazards_active
-    // (set only by build_state, only when MatchConfig::campaign_rovers/
-    // campaign_ghosts > 0), NOT on `s.rovers.empty()`, because a campaign
-    // match's grace timer must keep counting even after the last hazard
-    // dies and the vector empties (see the .cpp). The flag is tested before
-    // anything observable happens — only the unhashed `hazards_just_cleared_`
-    // scratch flag is reset above it — so this is provably a no-op for the
-    // entire existing golden suite (every scenario leaves it false).
+    // Tick step: drive every live actor's mover one tick, update the "all hazards
+    // dead" grace timer, reap dead entries. Gated on
+    // State::campaign_hazards_active and NOT on s.rovers.empty(), because a
+    // campaign match's grace timer must keep counting after the last hazard dies
+    // and the vector empties.
     void tick();
 
-    // True on the exact tick every rover/ghost has been dead for
-    // kHazardClearTicks ticks (docs/re/campaign.md "Round pacing" clause 3).
-    // The campaign layer (not this system — libs/sim has no concept of
-    // "campaign stage") uses this to flag "stage clear, pending" exactly
-    // once per clear, mirroring dword_464894 = 1's edge.
+    // True on the exact tick every actor has been dead for kHazardClearTicks
+    // (campaign.md "Round pacing" clause 3). The campaign layer — not this
+    // system, which has no concept of a "stage" — uses it to flag "stage clear"
+    // exactly once, mirroring dword_464894 = 1's edge.
     bool hazards_just_cleared() const { return hazards_just_cleared_; }
 
 private:
-    // One live rover/ghost's mover, one tick (sub_401B5C). rover_index is
-    // its slot in State::rovers (for event attribution). Returns false if
-    // the actor died this tick (flame) so tick() can reap it.
+    // One 200-attempt placement search (sub_4019C2), 2 draws per attempt.
+    void place_one(RoverKind kind, std::int32_t speed);
+
+    // One live actor's mover, one tick (sub_401B5C). `rover_index` is its slot in
+    // State::rovers, for event attribution. False if it died this tick.
     bool step(Rover& r, int rover_index);
 
-    // sub_4017FA: walkability test for a rover/ghost's tile, TYPE-DEPENDENT
-    // (docs/re/campaign.md mover clause 1) — a ghost passes through bricks
-    // (blocked only by solid, collision code 1); a rover is blocked by
-    // solid AND brick (collision code != 0), same as grid::tile_open. Both
-    // are always blocked by a grounded bomb.
+    // The turn taken when a step lands exactly on a tile centre. Draws RNG — see
+    // the definition for the per-branch draw counts.
+    void turn_at_centre(Rover& r, int cand_tx, int cand_ty);
+
+    // sub_421CB5 + sub_41DE63: kill every eligible player on the tile just entered.
+    void kill_players_on(int tx, int ty, int rover_index);
+
+    // sub_4017FA, TYPE-DEPENDENT (campaign.md mover clause 1): a ghost passes
+    // through bricks and is blocked only by solid; a rover is blocked by both.
     bool passable(RoverKind kind, int tx, int ty) const;
 
     State& s_;

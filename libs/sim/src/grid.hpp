@@ -12,17 +12,21 @@ namespace bomber::sim::grid {
 // The original's godir unit vectors, exactly dword_45BECC = {0,1,0,-1} (cos)
 // and dword_45BEDC = {-1,0,1,0} (sin), GODIR-indexed 0=Up,1=Right,2=Down,3=Left
 // and confirmed against the .data dump (docs/re/ai.md §3.3). The (g±1)&3 corner
-// rotations every caller performs depend on this exact ordering.
-//
-// ONE definition, and the only one in libs/sim. This table used to be written
-// out five times — in ai_internal.hpp (whose sole contents these were, so it is
-// gone), enclosure.cpp, movement.cpp, rovers.cpp and inside simulation.cpp's
-// player_turn — under three different spellings (kDX, kDx, DX). Five copies of a
-// constant the whole library indexes the same way is five chances for one of
-// them to be edited alone, and the ordering is load-bearing for the rotations,
-// so the divergence would have been silent.
+// rotations every caller performs depend on this exact ordering, and this is the
+// ONE definition in libs/sim — a second copy edited alone would diverge silently.
 inline constexpr std::array<int, 4> kDx = {0, 1, 0, -1};
 inline constexpr std::array<int, 4> kDy = {-1, 0, 1, 0};
+
+// Every full-field sweep in libs/sim goes through here, so they all agree on
+// ROW-MAJOR order (y outer, x inner). That is not cosmetic: state_hash mixes the
+// field in this order, so a sweep that transposed it would silently change the
+// digest, and the flame/regen sweeps rely on it to visit a row before the one
+// below. `fn(x, y)`.
+template <typename Fn>
+inline void for_each_cell(Fn&& fn) {
+    for (int y = 0; y < kGridHeight; ++y)
+        for (int x = 0; x < kGridWidth; ++x) fn(x, y);
+}
 
 inline Fixed tile_center_x(int tx) { return tx * kTileWF + kTileWF / 2; }
 inline Fixed tile_center_y(int ty) { return ty * kTileHF + kTileHF / 2; }
@@ -75,11 +79,18 @@ inline const Bomb* bomb_at(const State& s, int tx, int ty) {
     return bomb_at(const_cast<State&>(s), tx, ty);
 }
 
-// A live, present player standing on (tx,ty), if any (sub_421CB5).
+// The live, present player standing on (tx,ty), in slot order, or -1
+// (sub_421CB5 — "active +0, not dead +8"; the +58 stun does NOT disqualify).
+inline int player_index_at(const State& s, int tx, int ty) {
+    for (int i = 0; i < kMaxPlayers; ++i) {
+        const Player& pl = s.players[i];
+        if (pl.present && pl.alive && pl.tile_x() == tx && pl.tile_y() == ty) return i;
+    }
+    return -1;
+}
+
 inline bool player_at(const State& s, int tx, int ty) {
-    for (const auto& pl : s.players)
-        if (pl.present && pl.alive && pl.tile_x() == tx && pl.tile_y() == ty) return true;
-    return false;
+    return player_index_at(s, tx, ty) >= 0;
 }
 
 }  // namespace bomber::sim::grid

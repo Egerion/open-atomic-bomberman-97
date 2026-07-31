@@ -3,23 +3,21 @@
 #include <cstdint>
 
 // Per-player computer-AI state (ADR-0005 §3, mirroring the original's 68-byte
-// brain in docs/re/ai.md §1.1). A plain aggregate like Player/Bomb: every
-// field is deterministic gameplay state and MUST be covered by state_hash().
-// A Brain on a non-AI (or absent) player stays zero-initialised and hashes to
-// a constant, so adding it is a one-time hash-layout growth that leaves non-AI
-// scenarios (all golden) byte-stable apart from the new zero words.
+// brain in docs/re/ai.md §1.1). A plain aggregate like Player/Bomb: every field
+// is deterministic gameplay state and MUST be covered by state_hash().
 //
-// Design deltas from the binary, all determinism-neutral (ADR-0005 §3):
-//  - Pointers -> indices. The original keeps raw actor/cell pointers (+16/+32);
-//    we store the player SLOT or the TILE (snapshot-safe, hashable). Behaviours
-//    only ever read the target's tile + liveness, both recoverable each tick.
-//  - Timers in integer MILLISECONDS, counting UP, exactly as the original does
-//    (each frame adds the frame delta held in dword_464958 to the timer) and
-//    timing out at 10*msPerFrame = 10 ticks' worth. The ms come from the sim's
-//    own canonical sub-frame schedule (constants.hpp kSubFrameMs), never from a
-//    wall clock, so ADR-0003 holds. They are NOT tick counts and NOT countdowns.
-//  - Tile granularity. The original packs 16.16 coords (tile in the high word);
-//    the AI only ever uses the tile (>>16), so we keep plain tile ints.
+// Three deliberate deltas from the binary, all determinism-neutral:
+//  - Pointers -> INDICES. The original keeps raw actor/cell pointers (+16/+32);
+//    storing the player SLOT or the TILE is snapshot-safe and hashable, and
+//    behaviours only ever read the target's tile plus liveness, both recoverable
+//    each tick.
+//  - Timers in integer MILLISECONDS counting UP, exactly as the original does
+//    (each frame adds the delta held in dword_464958) and timing out at
+//    10 * msPerFrame. The ms come from the sim's own canonical sub-frame
+//    schedule, never from a wall clock, so ADR-0003 holds. They are NOT tick
+//    counts and NOT countdowns.
+//  - Tile granularity. The original packs 16.16 coords with the tile in the high
+//    word; the AI only ever uses the tile, so plain tile ints suffice.
 
 namespace bomber::sim {
 
@@ -30,8 +28,7 @@ struct Brain {
     std::uint8_t personality = 0;
 
     // +52: AI action state. 9 == "committed to a brick-blast drop" (set by
-    // sub_40AD8D, cleared to 0 when the situation clears / in sub_40A76E).
-    // Written by Stage 4's blast-bricks behaviour; hashed from Stage 2 on.
+    // sub_40AD8D, cleared when the situation clears or in sub_40A76E).
     std::uint8_t state_flag = 0;
 
     // The directed-path goal (docs/re/ai.md §9.1, RESOLVED brain +2/+4/+6/+8):
@@ -49,10 +46,8 @@ struct Brain {
     // fallback) reads/writes this.
     std::int8_t wander_dir = 0;
 
-    // The ranged-powerup pursuit (+24/+28/+32/+36; sub_40BAF5). Filled by
-    // Stage 3; present now so the hashed layout is stable across stages. Target
-    // stored as a TILE (the powerup cell); timer in wall-clock ms, exactly the
-    // original's `+28 += frameDelta` per displayed frame.
+    // The ranged-powerup pursuit (+24/+28/+32/+36; sub_40BAF5). Target stored as
+    // a TILE; timer in ms, exactly the original's `+28 += frameDelta` per frame.
     struct PowerSeek {
         bool active = false;
         std::int32_t timer = 0;    // ms elapsed on the pursuit (times out at 10*50)
@@ -61,9 +56,8 @@ struct Brain {
         std::int8_t step_dir = 0;  // godir of the next step toward it
     } pow_seek;
 
-    // The enemy pursuit (+10/+12/+16/+20; sub_40B8C2). Filled by Stage 5. Target
-    // stored as a player SLOT index (not a pointer); timer in wall-clock ms
-    // (`+12 += frameDelta`), same scheme as pow_seek above.
+    // The enemy pursuit (+10/+12/+16/+20; sub_40B8C2). Target stored as a player
+    // SLOT index rather than a pointer; timer as in pow_seek above.
     struct EnemySeek {
         bool active = false;
         std::int32_t timer = 0;       // ms elapsed (times out at 10*50)
