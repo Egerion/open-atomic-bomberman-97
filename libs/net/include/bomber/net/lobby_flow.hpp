@@ -162,9 +162,15 @@ private:
     // it is not already up), pump it, and act on its verdict.
     void step_verify(std::int64_t now_ms);
     // Does this match have a relay fallback at all? RelayedTransport addresses
-    // exactly ONE destination seat, so only a 2-seat match can escalate — and
-    // only a match that can escalate is worth verifying, since a star has
-    // nowhere to converge TO (begin_relay_fallback says so explicitly).
+    // exactly ONE destination seat, so only a 2-seat match can escalate.
+    //
+    // IT DOES NOT DECIDE WHETHER TO VERIFY, and it used to: "only a match that
+    // can escalate is worth verifying" reads plausibly and is wrong, because a
+    // star guest punches with the 2-PEER Rendezvous — the single-sided latch
+    // LinkProbe exists to remove — and skipping the probe let it start a match
+    // its hub had already abandoned. EVERY topology verifies (step()); what this
+    // decides is only what happens when verification EXPIRES: escalate to the
+    // relay, or fail, because a star has nowhere to converge TO.
     bool can_relay() const;
     // Every peer derives every seat's punch nonce identically from the shared
     // seed, so an inbound ping's nonce names its sender's seat.

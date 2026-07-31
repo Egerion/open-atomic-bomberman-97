@@ -319,6 +319,17 @@ void LobbyFlow::step_verify(std::int64_t now_ms) {
         fail("NO PATH TO THE OTHER PLAYER");
         return;
     }
+    if (!can_relay()) {
+        // A STAR, where there is no relay to escalate to (begin_relay_fallback
+        // refuses one) — so this is the end of the line, and it deserves its own
+        // sentence. Our OWN punch very likely worked; what did not is the hub's,
+        // with some other guest, and the hub has already given up. Blaming the
+        // path this peer is standing on ("NO DIRECT PATH") would be a lie, and
+        // "RELAY NEEDS 2 PLAYERS" would be advice about a fallback that was never
+        // this peer's problem.
+        fail("A PLAYER COULD NOT BE REACHED");
+        return;
+    }
     // The direct path did not carry both ways. The relay is where both peers
     // converge, because it is the one path neither of them ever leaves.
     begin_relay_fallback();
@@ -540,13 +551,37 @@ void LobbyFlow::step(std::int64_t now_ms) {
                     guests.push_back({w.addr.host, w.addr.port});
                 star_ = std::make_unique<StarHubTransport>(transport_, std::move(guests));
             }
-            // A punch proves the path to whoever received the PONG and nothing
-            // about what the OTHER end concluded, so a 2-seat match verifies
-            // before it plays. A star does not: it has no relay to converge on
-            // (begin_relay_fallback refuses one), and its punch already required
-            // both halves per guest — the single-sided latch is the 2-peer
-            // form's alone.
-            phase_ = can_relay() ? Phase::Verifying : Phase::Ready;
+            // A punch proves the path to whoever received the PONG and says
+            // nothing about what the OTHER end concluded, so NOBODY plays until
+            // the peer has proved it is on the same path (link_probe.hpp). Every
+            // topology, including the star — which used to be excluded here.
+            //
+            // WHY THE STAR EXCLUSION WAS WRONG. Its justification was that a
+            // star's punch "already required both halves per guest". That is true
+            // of the HUB, which runs the multi-peer Rendezvous; it is false of a
+            // GUEST, which punches the hub with the 2-PEER form (begin_rendezvous
+            // above) — precisely the single-sided latch this probe exists to
+            // eliminate — and then skipped verification entirely. The hub needs
+            // EVERY guest confirmed, so one unreachable guest fails it, and a star
+            // cannot fall back to the relay (begin_relay_fallback refuses one,
+            // correctly). Meanwhile a reachable guest had already latched Ready
+            // and started a match its hub had abandoned.
+            //
+            // WHAT VERIFYING BUYS A STAR GUEST, exactly. A Probe can only reach it
+            // once the hub is pumping one over its StarHubTransport, and the hub
+            // only builds that once its multi-peer punch confirmed EVERY guest. So
+            // "a probe arrived" IS "the hub completed", which is the one fact a
+            // guest's own round trip cannot contain. (A probe REFLECTED from
+            // another guest carries it just as well, and for the same reason: the
+            // hub reflects only from inside the star.)
+            //
+            // HONEST LIMIT. The hub's own LinkProbe is single-peer, so it latches
+            // on the FIRST guest to answer and lingers only kProbeLingerMs beyond
+            // that. It is not a per-guest proof and does not need to be — the
+            // punch it has just finished already is one — but a guest that loses
+            // every probe of that linger still fails, exactly as either peer of a
+            // 2-seat match does.
+            phase_ = Phase::Verifying;
         } else if (punch_->failed()) {
             begin_relay_fallback();  // no direct path — go through the server
         }
