@@ -31,10 +31,16 @@
 // DETACHED IS A REAL STATE, NOT AN ERROR. Between the old hub's death and the
 // new star being punched there is genuinely nowhere to send: a guest's socket
 // still points at a corpse. Rather than let those datagrams leave for an address
-// that will never answer, a detached transport DROPS them and polls empty, and
-// counts what it dropped so the caller can say how long the outage really was.
-// The session above is expected to be held (RollbackSession::set_migration_hold)
-// for exactly this window.
+// that will never answer, a detached transport DROPS them and polls empty. The
+// session above is expected to be held (RollbackSession::set_migration_hold) for
+// exactly this window.
+//
+// It used to COUNT those drops as well, "so the caller can say how long the
+// outage really was". Nothing ever read the counter — the caller that would have
+// is the unbuilt re-anchoring half (design §8.3) — so it went on 2026-07-31. A
+// future driver wanting the outage length should measure it where the decision
+// lives (RollbackSession::host_lost_seats + the hold it drives), not out of a
+// side effect of send().
 namespace bomber::net {
 
 class MigratingTransport : public Transport {
@@ -51,8 +57,7 @@ public:
     // rather than this wrapper (net_stats.hpp). It is asked once, in the
     // RollbackSession ctor, so what it reports is the path the round STARTED on
     // — after a migration the overlay's label is stale by design. Recording the
-    // pre-migration path is the honest answer for a per-round statistic; the
-    // migration itself is reported separately (dropped_sends()).
+    // pre-migration path is the honest answer for a per-round statistic.
     NetPath path() const override { return target_ != nullptr ? target_->path() : NetPath::Unknown; }
 
     // The far end moved: from here on everything goes through `t`. Idempotent —
@@ -63,14 +68,8 @@ public:
     void detach() { target_ = nullptr; }
     bool attached() const { return target_ != nullptr; }
 
-    // Datagrams thrown away because there was nowhere to send them. The caller
-    // reports it rather than guessing at the length of the outage — the point is
-    // that a silent migration and a failed one look identical without a number.
-    std::uint64_t dropped_sends() const { return dropped_sends_; }
-
 private:
     Transport* target_;  // BORROWED; null = detached
-    std::uint64_t dropped_sends_ = 0;
 };
 
 }  // namespace bomber::net

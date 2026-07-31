@@ -3,10 +3,9 @@
 namespace bomber::net {
 
 void MigratingTransport::send(const std::uint8_t* data, std::size_t size) {
-    if (target_ == nullptr) {
-        ++dropped_sends_;  // no path: the old hub is a corpse and the new one is not punched yet
-        return;
-    }
+    // No path: the old hub is a corpse and the new one is not punched yet. The
+    // datagram is dropped rather than aimed at an address that cannot answer.
+    if (target_ == nullptr) return;
     target_->send(data, size);
 }
 
