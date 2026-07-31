@@ -1,35 +1,37 @@
-# Audio-module suites. The sound SELECTION engine (sound_bank.cpp) is SDL-free
-# by design — the mixing half lives in AudioEngine — so it compiles straight
-# into its own test binary rather than linking bomber_audio (which pulls in
-# SDL3), keeping the suite buildable under the headless preset.
-add_executable(bomber_sound_bank_tests test_sound_bank.cpp
-  ${CMAKE_SOURCE_DIR}/libs/audio/src/sound_bank.cpp)
+# Audio-module suites. They link bomber::audio_core — the SDL-FREE half of the
+# module (sound_bank.cpp + sound_director.cpp; AudioEngine, the mixing half, is
+# the only file that includes SDL). That target is built by every preset,
+# `headless` included, so these suites exercise the SHIPPED objects.
+#
+# They used to compile sound_bank.cpp/sound_director.cpp straight into each test
+# binary instead, because libs/audio was added only under BOMBER_BUILD_VIEWER and
+# so did not exist headlessly at all. The trick kept the suites green under the
+# pre-push gate while the library itself sat outside it — a gate that skips
+# shipped code. libs/audio now declares its SDL-free half unconditionally, so the
+# workaround is unnecessary and suite and library can no longer drift apart
+# (same source, but a separate TU built with different flags).
+
+# The sound SELECTION engine (sub_427961 & friends).
+add_executable(bomber_sound_bank_tests test_sound_bank.cpp)
 target_link_libraries(bomber_sound_bank_tests
-  PRIVATE bomber::assets doctest::doctest bomber::warnings)
-target_include_directories(bomber_sound_bank_tests
-  PRIVATE ${CMAKE_SOURCE_DIR}/libs/audio/include)
+  PRIVATE bomber::audio_core doctest::doctest bomber::warnings)
 add_test(NAME sound_bank COMMAND bomber_sound_bank_tests)
 
-# SoundDirector's event -> SOUNDLST-group mapping. Also SDL-free: the director
-# talks to SoundSink, so the suite substitutes a recorder for AudioEngine and
-# compiles sound_director.cpp directly, same trick as the bank suite above. It
-# pins the cues the original does NOT have (head hit, spooger string, throw,
-# a punch that launches nothing) so a removed one cannot quietly come back.
-add_executable(bomber_sound_director_tests test_sound_director.cpp
-  ${CMAKE_SOURCE_DIR}/libs/audio/src/sound_director.cpp)
+# SoundDirector's event -> SOUNDLST-group mapping. The director talks to
+# SoundSink, so the suite substitutes a recorder for AudioEngine. It pins the
+# cues the original does NOT have (head hit, spooger string, throw, a punch that
+# launches nothing) so a removed one cannot quietly come back.
+add_executable(bomber_sound_director_tests test_sound_director.cpp)
 target_link_libraries(bomber_sound_director_tests
-  PRIVATE bomber::sim doctest::doctest bomber::warnings)
-target_include_directories(bomber_sound_director_tests
-  PRIVATE ${CMAKE_SOURCE_DIR}/libs/audio/include)
+  PRIVATE bomber::audio_core doctest::doctest bomber::warnings)
 add_test(NAME sound_director COMMAND bomber_sound_director_tests)
 
 # The round-init music decision (round_music.hpp). Header-only and SDL-free, so
-# the suite needs no sources beyond itself. It pins the guard the LOCAL and the
-# NETPLAY round loops now share — they used to keep separate copies and the
-# netplay one had dropped the "Disable music during gameplay" option.
+# the suite needs no sources beyond itself; it links audio_core purely for the
+# include path. It pins the guard the LOCAL and the NETPLAY round loops now
+# share — they used to keep separate copies and the netplay one had dropped the
+# "Disable music during gameplay" option.
 add_executable(bomber_round_music_tests test_round_music.cpp)
 target_link_libraries(bomber_round_music_tests
-  PRIVATE doctest::doctest bomber::warnings)
-target_include_directories(bomber_round_music_tests
-  PRIVATE ${CMAKE_SOURCE_DIR}/libs/audio/include)
+  PRIVATE bomber::audio_core doctest::doctest bomber::warnings)
 add_test(NAME round_music COMMAND bomber_round_music_tests)
