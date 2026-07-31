@@ -407,7 +407,7 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
             p.prev_action1 = tick_in.action1;
             p.prev_action2 = tick_in.action2;
         }
-        if (advance_timers) stage.tick_bounce(p, i);
+        if (advance_timers) stage.tick_bounce(p);
         return;
     }
 
@@ -696,7 +696,7 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
     // predicate").
     if (advance_timers) {
         if (p.bounce > 0)
-            stage.tick_bounce(p, i);
+            stage.tick_bounce(p);
         else if (p.warp > 0)
             stage.tick_warp(p);
     }

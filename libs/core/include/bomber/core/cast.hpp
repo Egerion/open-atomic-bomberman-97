@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>  // std::size_t (idx below) — this header depends on NOTHING else
 #include <type_traits>
 
 // Scoped-enum conversion helpers (ADR-0008 libs/core) — a C++20 shim for

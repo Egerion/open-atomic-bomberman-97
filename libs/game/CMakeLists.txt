@@ -64,9 +64,21 @@ target_compile_features(bomber_game_core PUBLIC cxx_std_20)
 target_link_libraries(bomber_game_core
   PUBLIC bomber::assets bomber::sim bomber::match bomber::audio SDL3::SDL3
   # bomber::net: the netplay engine (libs/net) for GameApp::run_netplay +
-  # MatchRunner's lockstep drive. SDL-free, already headless-built; PRIVATE
-  # because no public bomber::game header exposes a net type by value (the
-  # MatchRunnerState seam holds only a forward-declared LockstepSession*). On a
-  # static lib the dep still propagates to apps/game's link line (incl. ws2_32).
+  # MatchRunner's lockstep drive. SDL-free, already headless-built.
+  #
+  # PRIVATE is NOT the "no public header knows about net" claim it used to say —
+  # two public headers do: net_tally.hpp includes bomber/net/rollback_session.hpp
+  # and takes a net::RollbackSession&, net_setup_roster.hpp includes
+  # bomber/net/protocol.hpp. Both are header-only, SDL-free seams kept public on
+  # purpose so tests/game and tests/net can drive the real wiring, and both name
+  # net types only BY REFERENCE, so nothing net-shaped crosses an ABI here. What
+  # PRIVATE does cost is the include PATH: a consumer that links bomber::game and
+  # includes either header gets no bomber::net interface directories from us. It
+  # holds today only because this is a STATIC library (the link dep still reaches
+  # apps/game's and apps/viewer's lines, incl. ws2_32) and because the two suites
+  # that include these headers — tests/game's net_setup_roster, tests/net's
+  # kill_tally — reach them through a raw include dir and link bomber::net
+  # themselves. Make this PUBLIC (or move the headers into src/) if either
+  # stops being true.
   PRIVATE bomber::warnings bomber::platform bomber::net
 )
