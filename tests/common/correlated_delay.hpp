@@ -35,8 +35,13 @@ public:
     // `seed` picks WHICH realisation of the delay process a run gets, which
     // matters more than it looks — see the chaos note above.
     explicit CorrelatedDelay(std::size_t lanes, int jitter, int persist_pct, unsigned seed)
-        : last_(lanes, 0), seen_(lanes, false), sum_(lanes, 0), n_(lanes, 0),
-          jitter_(jitter), persist_pct_(persist_pct), rng_(seed) {}
+        : last_(lanes, 0),
+          seen_(lanes, false),
+          sum_(lanes, 0),
+          n_(lanes, 0),
+          jitter_(jitter),
+          persist_pct_(persist_pct),
+          rng_(seed) {}
 
     // Turn the variance on or off part-way through a run. A path does not stay
     // jittery for a whole round — a queue fills, drains and fills again — and a
