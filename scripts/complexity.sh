@@ -85,10 +85,17 @@ CURRENT="$(mktemp)"
 RAW="$(mktemp)"
 trap 'rm -f "$CURRENT" "$RAW"' EXIT
 
+# --header-filter is what makes this cover the HEADER-ONLY components at all.
+# clang-tidy suppresses diagnostics outside the main file by default, so the
+# first version measured .cpp bodies only — and libs/core, libs/match and
+# libs/platform have no .cpp at all, which left three whole components
+# unmeasured while the gate reported a number that looked complete. A header
+# included by many translation units is reported many times; the awk below keeps
+# the maximum per (file, function), so the duplication costs time, not accuracy.
 mapfile -t FILES < <(find libs apps -name "*.cpp" | grep -v "/build/")
 echo "complexity: measuring ${#FILES[@]} files (threshold $THRESHOLD)..."
 printf '%s\n' "${FILES[@]}" |
-  xargs -P 8 -I{} bash -c '"$1" --quiet --config="$2" "$3" -- -std=c++20 "${@:4}" 2>/dev/null' \
+  xargs -P 8 -I{} bash -c '"$1" --quiet --header-filter="(libs|apps)/" --config="$2" "$3" -- -std=c++20 "${@:4}" 2>/dev/null' \
     _ "$CT" "$CFG" {} "${INCLUDES[@]}" > "$RAW"
 
 # "<path>:<line>:<col>: warning: function 'NAME' has cognitive complexity of N"
@@ -99,10 +106,29 @@ printf '%s\n' "${FILES[@]}" |
 # overload".
 sed -n "s#^\(.*\):[0-9]\+:[0-9]\+: warning: function '\([^']*\)' has cognitive complexity of \([0-9]\+\).*#\3\t\1\t\2#p" "$RAW" |
   sed 's#\\#/#g' |
-  sed 's#^\([0-9]*\)\t.*/open-atomic-bomberman-97/#\1\t#' |
+  sed 's#^\([0-9]*\)\t.*/\(libs\|apps\)/#\1\t\2/#' |
   awk -F'\t' '$2 ~ /^(libs|apps)\// { k=$2"\t"$3; if ($1+0 > m[k]) m[k]=$1+0 }
               END { for (k in m) print m[k]"\t"k }' |
   sort -k2 > "$CURRENT"
+
+# Anchoring on the LAST /libs/ or /apps/ rather than on the repo's own name is
+# load-bearing, and the first version got it wrong in a way that failed OPEN.
+# It stripped up to the first "open-atomic-bomberman-97/", which is correct in
+# the main checkout and wrong in a git worktree — those live UNDER the repo, at
+# .claude/worktrees/agent-X/, so the surviving path began ".claude/..." and fell
+# straight through the libs|apps filter. Every warning was discarded, the gate
+# printed "OK - 0 known offender(s)" against a 66-entry baseline, and --update
+# would have rewritten that baseline to nothing. A gate that reports success
+# having measured zero files is the same failure this repo has already been
+# bitten by three times (ENABLE_LOBBY, LOBBY_TLS, libs/audio) and it is why the
+# self-check below exists: a run that finds no measurable file now says so and
+# fails, instead of congratulating itself.
+if [ ! -s "$CURRENT" ] && [ -s "$RAW" ]; then
+  echo "complexity: ERROR: clang-tidy produced output but no path resolved under" >&2
+  echo "            libs/ or apps/. The path normalisation is broken for this" >&2
+  echo "            checkout layout; the gate would pass having measured nothing." >&2
+  exit 1
+fi
 
 if [ "$MODE" = "--update" ]; then
   cp "$CURRENT" "$BASELINE"
