@@ -14,6 +14,7 @@ add_library(bomber_net STATIC
   src/handshake.cpp
   src/lockstep_session.cpp
   src/rollback_session.cpp
+  src/time_sync.cpp
   src/net_stats.cpp
   src/udp_transport.cpp
   src/build_hash.cpp

@@ -30,6 +30,15 @@ target_link_libraries(bomber_net_rollback_tests PRIVATE bomber::net)
 bomber_add_test(bomber_net_pacing_tests net_pacing test_rollback_pacing.cpp)
 target_link_libraries(bomber_net_pacing_tests PRIVATE bomber::net)
 
+# The PACING DECISION on its own (time_sync.hpp), extracted from RollbackSession
+# so it can be pinned as a pure function of injected readings instead of only as
+# the aggregate of a two-peer run. The two suites above measure whether a modelled
+# path came out better; this one measures WHICH RULE fired and where its boundary
+# is — the stall, the re-phase and the lead bound — which neither of them can say.
+# No clock, no transport, no Simulation.
+bomber_add_test(bomber_net_time_sync_tests net_time_sync test_time_sync.cpp)
+target_link_libraries(bomber_net_time_sync_tests PRIVATE bomber::net)
+
 # ARRIVAL VARIANCE (jitter), the second live report. 13 real Turkey<->Lithuania
 # sessions separated the silky ones from the badly laggy ones on exactly one
 # variable — jitter went from <=6 ms to 85-99 ms while base RTT barely moved — so

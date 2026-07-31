@@ -1,6 +1,5 @@
 #include "bomber/net/rollback_session.hpp"
 
-#include <algorithm>
 #include <iterator>
 #include <vector>
 
@@ -23,16 +22,6 @@ constexpr std::uint32_t kHashWindow = 256;
 // slack, and incidentally give the abandon a fraction of a second of visible
 // follow-through instead of a hard freeze on the keypress.
 constexpr std::uint32_t kEndRoundSlackTicks = 12;
-
-// How much CLOCK SKEW (in ticks) this peer tolerates before it starts giving it
-// back. Our lag minus the peer's own lag is twice the skew — the path delay is in
-// both and cancels — so this is a threshold on 2x the skew, i.e. it engages once
-// this peer is a full tick (50 ms) ahead of its partner. Small on purpose: the
-// whole failure being cured is skew ACCUMULATING unnoticed until the prediction
-// cap is the only thing left holding it, so it must be shed while there is still
-// budget to spare. Too small and ordinary arrival noise would trip it: at 2 the
-// margin is a factor of two over the +/-1 tick a pump-boundary can contribute.
-constexpr int kRephaseAdvantageTicks = 2;
 
 // How far BELOW the confirmed frontier snapshots are retained while host
 // migration is enabled — the depth from which rewind_for_migration() can still
@@ -183,23 +172,17 @@ void RollbackSession::receive() {
             // The sender's OWN prediction depth, for free: an InputRange spans
             // [its confirmed, its head), so its length IS that distance. This is
             // the remote half of the frame-advantage comparison (see the
-            // re-phasing note in the header) and the only reason it costs no wire
-            // message.
+            // re-phasing note in time_sync.hpp) and the only reason it costs no
+            // wire message.
             //
             // ONLY FROM A FRAME THAT IS NOT STALE. A sender's confirmed frontier
             // is monotonic, so a datagram whose `first_tick` sits below one we
             // have already seen from that seat overtook a newer one in flight —
             // and adopting its window would report a depth the peer left behind
-            // some time ago. See peer_frontier_ in the header.
-            for (int s = 0; s < sim::kMaxPlayers; ++s) {
-                if ((remote & static_cast<std::uint16_t>(1U << s)) == 0) continue;
-                const std::size_t si = static_cast<std::size_t>(s);
-                if (peer_frontier_any_[si] && m.range.first_tick < peer_frontier_[si]) continue;
-                peer_frontier_[si] = m.range.first_tick;
-                peer_frontier_any_[si] = true;
-                peer_depth_[si] = static_cast<int>(m.range.per_tick.size());
-            }
-            peer_heard_ = true;
+            // some time ago. See peer_frontier_ in time_sync.hpp — the guard is
+            // the controller's, because the reading it protects is.
+            sync_.note_peer_range(remote, m.range.first_tick,
+                                  static_cast<int>(m.range.per_tick.size()));
             // THE ACK-RTT SAMPLE, and the reason this diagnostic needs no new
             // wire message: an InputRange normally begins at the SENDER'S
             // confirmed frontier (send_local(resend_from())), and that frontier
@@ -762,22 +745,11 @@ void RollbackSession::prune() {
         it = (it->first < keep) ? peer_hash_.erase(it) : std::next(it);
 }
 
-int RollbackSession::peer_lag() const {
-    const std::uint16_t awaited = static_cast<std::uint16_t>(remote_seats_ & seats_awaited(tick_));
-    int worst = 0;
-    for (int s = 0; s < sim::kMaxPlayers; ++s) {
-        if ((awaited & static_cast<std::uint16_t>(1U << s)) == 0) continue;
-        const int d = peer_depth_[static_cast<std::size_t>(s)];
-        if (d > worst) worst = d;
-    }
-    return worst;
-}
-
 bool RollbackSession::rephase_eligible() const {
     // Nothing to compare against until a peer has actually spoken; and a session
     // whose partner is gone (handed to the AI, or the match already ending) has
     // no clock to align with.
-    if (!peer_heard_ || aborted_ || end_tick_ != kNoEndRound) return false;
+    if (!sync_.peer_heard() || aborted_ || end_tick_ != kNoEndRound) return false;
     if ((remote_seats_ & seats_awaited(tick_)) == 0) return false;
     // NOT WHILE A MIGRATION IS HEALING, and this is a genuine interaction rather
     // than caution. Both of the numbers this gates are meaningless there: our own
@@ -798,66 +770,16 @@ bool RollbackSession::rephase_eligible() const {
     return true;
 }
 
-int RollbackSession::frame_advantage() const {
-    // LIKE FOR LIKE: the window we put on the wire against the window the peer put
-    // on theirs. Both are (that peer's filing head - its confirmed frontier), so
-    // when both carry a local lead the leads cancel and the comparison stays the
-    // frame advantage it always was. At a lead of 0, `local_next_ - confirmed_` is
-    // exactly how far the worst still-awaited remote seat trails our own head —
-    // our own seats are filed up to that head, so the confirmed frontier can only
-    // ever be held back by a remote one — which is the reading this line shipped
-    // with before the lead existed.
-    return static_cast<int>(local_next_ - confirmed_) - peer_lag();
-}
-
-void RollbackSession::note_advantage(bool eligible, int raw) {
-    if (!eligible) {
-        // Throw the window away rather than pad it (see the header). Both readings
-        // are stale by however long the hub was gone, and the step back to live
-        // values would read as arrival variance — buying a lead for a peer whose
-        // actual problem is that it is behind and needs to catch up.
-        advantage_count_ = 0;
-        advantage_next_ = 0;
-        return;
-    }
-    advantage_[advantage_next_] = raw;
-    peer_window_[advantage_next_] = peer_lag();
-    advantage_next_ = (advantage_next_ + 1) % advantage_.size();
-    if (advantage_count_ < static_cast<int>(advantage_.size())) ++advantage_count_;
-}
-
-int RollbackSession::peer_depth_spread() const {
-    // ARRIVAL VARIANCE AS THE PEER EXPERIENCES IT, for free, off the wire. The
-    // LEVEL of the peer's prediction depth is the path's delay and is none of our
-    // business — a slow link is still a perfectly playable one. Its SPREAD is the
-    // part a lead can remove, and a steady path has none however slow it is.
-    if (advantage_count_ < static_cast<int>(peer_window_.size())) return 0;
-    const auto [lo, hi] = std::minmax_element(peer_window_.begin(), peer_window_.end());
-    return *hi - *lo;
-}
-
-int RollbackSession::lead_target() const {
-    if (!rephase_eligible()) return 0;  // no peer to help, or the round is ending
-    const int want = peer_depth_spread() - kLeadDeadbandTicks;
-    return std::clamp(want, 0, kMaxLocalLeadTicks);
-}
-
-void RollbackSession::update_lead() {
-    const int target = lead_target();
-    if (target > lead_) ++lead_;
-    else if (target < lead_) --lead_;
-}
-
 void RollbackSession::file_local(const sim::TickInputs& local_input) {
     // Fill forward to the lead's head. `local_next_` never moves backwards and an
     // already-filed tick is never re-decided, which is what lets the lead change
     // in a live match: the peer may already have confirmed and hashed a tick we
-    // filed, and re-deciding it would be a real desync (see the header note).
+    // filed, and re-deciding it would be a real desync (see time_sync.hpp's note).
     //
     // Merged INTO the slot rather than assigned over it, because the slot may
     // already hold remote input that arrived before we reached this tick. A local
     // seat the host handed to the AI is skipped: the sim drives it from here.
-    const std::uint32_t head = tick_ + static_cast<std::uint32_t>(lead_) + 1;
+    const std::uint32_t head = tick_ + static_cast<std::uint32_t>(sync_.lead()) + 1;
     while (local_next_ < head) {
         const std::uint16_t bits =
             static_cast<std::uint16_t>(local_seats_ & seats_awaited(local_next_));
@@ -879,14 +801,6 @@ void RollbackSession::file_local(const sim::TickInputs& local_input) {
         stats_.on_local_tick(local_next_);
         ++local_next_;
     }
-}
-
-int RollbackSession::sustained_advantage() const {
-    // Not enough history to tell a skew from a burst yet, so claim no advantage
-    // rather than guess at one. Costs the first second of a round, where the two
-    // peers have not settled into a phase relationship worth correcting anyway.
-    if (advantage_count_ < static_cast<int>(advantage_.size())) return 0;
-    return *std::min_element(advantage_.begin(), advantage_.end());
 }
 
 void RollbackSession::advance(const sim::TickInputs& local_input, std::int64_t now_ms) {
@@ -959,35 +873,30 @@ void RollbackSession::advance_impl(const sim::TickInputs& local_input) {
     // symptom.
     //
     // The advantage is SAMPLED on every pump (including one we are about to hold,
-    // and one where nothing is eligible) so the window below spans a fixed stretch
-    // of time rather than a variable one; the DECISION is taken on the window's
-    // minimum, which is what makes arrival variance unable to trigger it.
+    // and one where nothing is eligible) so the controller's window spans a fixed
+    // stretch of time rather than a variable one; the DECISION is taken on the
+    // window's minimum, which is what makes arrival variance unable to trigger it.
+    //
+    // OUR HALF of the comparison stays on this side of the seam, because both its
+    // terms are the session's own bookkeeping —
+    // LIKE FOR LIKE: the window we put on the wire against the window the peer put
+    // on theirs. Both are (that peer's filing head - its confirmed frontier), so
+    // when both carry a local lead the leads cancel and the comparison stays the
+    // frame advantage it always was. At a lead of 0, `local_next_ - confirmed_` is
+    // exactly how far the worst still-awaited remote seat trails our own head —
+    // our own seats are filed up to that head, so the confirmed frontier can only
+    // ever be held back by a remote one — which is the reading this line shipped
+    // with before the lead existed.
     const bool eligible = rephase_eligible();
-    const int raw = eligible ? frame_advantage() : 0;
-    note_advantage(eligible, raw);
-    const int sustained = eligible ? sustained_advantage() : 0;
-    // The decision is the window's MINIMUM, or — for an advantage larger than the
-    // measured variance can explain — the current sample on its own, so that a
-    // frozen peer's several ticks of skew are not left to spend the whole
-    // prediction budget while the window fills. Both arms imply
-    // `raw >= kRephaseAdvantageTicks`, which is what keeps this a subset of the
-    // unfiltered controller's holds. See the header's jitter note for why each
-    // half is shaped the way it is, and what was measured with and without them.
-    const int spread = peer_depth_spread();
-    const bool raw_asks = eligible && raw >= kRephaseAdvantageTicks;
-    const bool sustained_asks = eligible && (sustained >= kRephaseAdvantageTicks ||
-                                             raw >= spread + kRephaseAdvantageTicks);
-    // "The raw reading wanted this tick and the filter kept it" — the absorber's
-    // own meter, and the only way to see from the outside that it is doing
-    // anything (net_stats.hpp). Not a decision input: nothing below reads it.
-    stats_.on_timing(raw, sustained, !rephase_held_ && raw_asks && !sustained_asks, lead_, spread);
-    if (!rephase_held_ && sustained_asks) {
-        rephase_held_ = true;
+    const TimeSyncController::Decision timing =
+        sync_.pump(eligible, static_cast<int>(local_next_ - confirmed_),
+                   static_cast<std::uint16_t>(remote_seats_ & seats_awaited(tick_)));
+    stats_.on_timing(timing.raw, timing.sustained, timing.suppressed, sync_.lead(), timing.spread);
+    if (timing.hold) {
         stats_.on_rephase_hold();
         send_local(resend_from());  // the peer still needs our window to catch up
         return;
     }
-    rephase_held_ = false;
 
     // Hold at the prediction cap so the display never runs unboundedly ahead of
     // the peer (bounded memory + bounded re-sim on a correction). Keep re-sending
@@ -1003,11 +912,11 @@ void RollbackSession::advance_impl(const sim::TickInputs& local_input) {
 
     // File the local sample. At a lead of 0 this is exactly "merge it into
     // slots_[tick_]", which is what this line was; with a lead it also fills the
-    // ticks ahead of the head that the peer is about to need (the header's jitter
-    // note). Ordered after the hold and cap checks on purpose: a pump that does
-    // not simulate must not consume a sample either, or the lead would grow by one
-    // for every stalled pump.
-    update_lead();
+    // ticks ahead of the head that the peer is about to need (time_sync.hpp's
+    // jitter note). Ordered after the hold and cap checks on purpose: a pump that
+    // does not simulate must not consume a sample either, or the lead would grow
+    // by one for every stalled pump.
+    sync_.update_lead(eligible);
     file_local(local_input);
 
     snapshots_[tick_] = sim_->state();
