@@ -190,8 +190,8 @@ int MovementSystem::ice_delay(Player& p, int want_godir) const {
 
     // Resolve (sub_41F29B ~23071-23077): walk from the freshest sample toward
     // the oldest, using the first whose age has reached delay_ms — i.e. the
-    // smallest k with k*(50/3) >= delay_ms (the original's measured ages
-    // jitter ±1 ms around the same 60 fps train), clamped to the buffer's own
+    // smallest k with k*(kMsPerTick/kSubFrames) >= delay_ms — the sub-frame
+    // quantum this function is called on — clamped to the buffer's own
     // capacity (the original's behaviour when a delay exceeds its 30-slot
     // history: the loop runs out and the LAST (oldest) sample it read stays
     // in effect).

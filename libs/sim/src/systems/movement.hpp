@@ -65,9 +65,10 @@ public:
     // desired direction (`want_godir`: -1 = none, 0..3 = Up/Right/Down/Left)
     // into `p.ice_history` and returns the EFFECTIVE direction to actually
     // move with: the oldest-needed sample whose age has reached the level's
-    // ice_delay_ms (ages advance one sub-frame ≈ 16.7 ms per call — the
-    // original pushes once per displayed frame, so the 30-slot buffer spans
-    // ~500 ms at the canonical 60 fps, exactly its original capacity). Safe
+    // ice_delay_ms. The original pushes once per DISPLAYED frame; we push once
+    // per canonical sub-frame, so a slot ages by kMsPerTick/kSubFrames ≈ 5.6 ms
+    // and the 30-slot buffer spans only ~167 ms — deliberately short of the
+    // nominal 250 ms, for the reasons the .cpp gives in full. Safe
     // to call unconditionally every sub-frame for every player: AI players
     // are exempt in the original (gated on the player-type byte +16 != 1) and
     // are returned unchanged with the buffer untouched; on every level but

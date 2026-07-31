@@ -57,9 +57,11 @@ public:
     // reaches getvalue(680)/2 == 15) the original RELOCATES the player to a
     // random nearby open tile. That relocation draws the sim RNG (two rand()%5
     // per attempt, up to 100 attempts), so it must run through State::rng here.
-    // player_index is needed for the position update / to identify the player.
+    // Takes no player index: the relocation is written straight to `p`, and the
+    // accept test looks only at the board (solid / bomb), never at another
+    // player — so, like tick_warp, there is nothing here a slot number answers.
     // Non-const: it decrements the countdown, may draw RNG, and moves the player.
-    void tick_bounce(Player& p, int player_index);
+    void tick_bounce(Player& p);
 
     // True while the player is mid-warp (warp-out or warp-in). Like a bounce the
     // caller pauses movement/input for the whole warp; the player is invulnerable
