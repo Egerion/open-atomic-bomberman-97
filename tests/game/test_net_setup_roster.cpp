@@ -24,6 +24,33 @@ int slot_type(const std::array<int, sim::kMaxPlayers>& a, int i) {
     return a[static_cast<std::size_t>(i)];
 }
 
+// A machine's ten local slots: the three parallel arrays every helper here
+// reads or writes together, so a case names one thing instead of three.
+struct Roster {
+    std::array<int, sim::kMaxPlayers> type{};
+    std::array<int, sim::kMaxPlayers> sub{};
+    std::array<int, sim::kMaxPlayers> team{};
+};
+
+// The host's roster as it stands once the wire seats are seeded and the shared
+// AI slots are filled in: seat 0 its own human, seat 1 the peer, 2-3 AI.
+Roster seeded_host_roster() {
+    Roster r;
+    game::seed_net_host_roster(kHostSeat, kGuestSeat, r.type, r.sub);
+    r.type[2] = static_cast<int>(SlotInputType::Computer);
+    r.type[3] = static_cast<int>(SlotInputType::Computer);
+    return r;
+}
+
+// A preview frame taken through the REAL codec, because a frame the decoder
+// rejects is a dead guest — an in-memory hand-off would not notice.
+net::SetupPreviewFrame round_tripped(const net::SetupPreviewFrame& sent) {
+    net::Message decoded;
+    const std::vector<std::uint8_t> bytes = net::encode_setup_preview(sent);
+    REQUIRE(net::decode(bytes.data(), bytes.size(), &decoded));
+    return decoded.setup_preview;
+}
+
 }  // namespace
 
 TEST_CASE("host roster seeding pins the two wire seats") {
@@ -49,70 +76,58 @@ TEST_CASE("host roster seeding pins the two wire seats") {
     CHECK(slot_type(type, 3) == static_cast<int>(SlotInputType::Computer));
 }
 
-TEST_CASE("preview round-trip re-points the seats for the guest") {
-    // HOST side: seat 0 is its own human, seat 1 the peer, slots 2-3 AI.
-    std::array<int, sim::kMaxPlayers> htype{};
-    std::array<int, sim::kMaxPlayers> hsub{};
-    game::seed_net_host_roster(kHostSeat, kGuestSeat, htype, hsub);
-    htype[2] = static_cast<int>(SlotInputType::Computer);
-    htype[3] = static_cast<int>(SlotInputType::Computer);
-    std::array<int, sim::kMaxPlayers> hteam{};
-
+TEST_CASE("the host's preview frame names each seat's kind") {
+    const Roster host = seeded_host_roster();
     net::SetupPreviewFrame p;
-    game::fill_preview_roster(htype, hteam, /*team_play=*/false, p);
+    game::fill_preview_roster(host.type, host.team, /*team_play=*/false, p);
     CHECK(p.slots[0] == net::SetupSlotKind::Human);
     CHECK(p.slots[1] == net::SetupSlotKind::Remote);
     CHECK(p.slots[2] == net::SetupSlotKind::Ai);
     CHECK(p.slots[4] == net::SetupSlotKind::Off);
+}
 
-    // It must survive the real codec — a rejected preview is a dead guest.
-    net::Message decoded;
-    const std::vector<std::uint8_t> bytes = net::encode_setup_preview(p);
-    REQUIRE(net::decode(bytes.data(), bytes.size(), &decoded));
+TEST_CASE("preview round-trip re-points the seats for the guest") {
+    const Roster host = seeded_host_roster();
+    net::SetupPreviewFrame p;
+    game::fill_preview_roster(host.type, host.team, /*team_play=*/false, p);
 
     // GUEST side: the SAME frame, seen from seat 1. The host's own human must
     // read as OTHER here and OUR seat as a local controller — the flip is the
     // whole point (sub_40D372's "someone else's player").
-    std::array<int, sim::kMaxPlayers> gtype{};
-    std::array<int, sim::kMaxPlayers> gsub{};
-    std::array<int, sim::kMaxPlayers> gteam{};
+    Roster guest;
     bool gteam_play = true;  // must be cleared: no team byte is set
-    game::apply_preview_roster(decoded.setup_preview, kGuestSeat, gtype, gsub, gteam, gteam_play);
+    game::apply_preview_roster(round_tripped(p), kGuestSeat, guest.type, guest.sub, guest.team,
+                               gteam_play);
 
-    CHECK(slot_type(gtype, 0) == static_cast<int>(SlotInputType::Other));
-    CHECK(slot_type(gtype, 1) == static_cast<int>(SlotInputType::Keyboard));
-    CHECK(gsub[1] == 0);
-    CHECK(slot_type(gtype, 2) == static_cast<int>(SlotInputType::Computer));
-    CHECK(slot_type(gtype, 4) == static_cast<int>(SlotInputType::Off));
+    CHECK(slot_type(guest.type, 0) == static_cast<int>(SlotInputType::Other));
+    CHECK(slot_type(guest.type, 1) == static_cast<int>(SlotInputType::Keyboard));
+    CHECK(guest.sub[1] == 0);
+    CHECK(slot_type(guest.type, 2) == static_cast<int>(SlotInputType::Computer));
+    CHECK(slot_type(guest.type, 4) == static_cast<int>(SlotInputType::Off));
     CHECK(gteam_play == false);
 }
 
 TEST_CASE("team play off zeroes every team byte; on survives the trip") {
-    std::array<int, sim::kMaxPlayers> type{};
-    std::array<int, sim::kMaxPlayers> sub{};
-    game::seed_net_host_roster(kHostSeat, kGuestSeat, type, sub);
-    std::array<int, sim::kMaxPlayers> team{};
-    team[1] = 1;  // the alternating sub_4049C0 default
+    Roster host = seeded_host_roster();
+    host.team[1] = 1;  // the alternating sub_4049C0 default
 
     net::SetupPreviewFrame off;
-    game::fill_preview_roster(type, team, /*team_play=*/false, off);
+    game::fill_preview_roster(host.type, host.team, /*team_play=*/false, off);
     CHECK(off.team[1] == 0);
 
     net::SetupPreviewFrame on;
-    game::fill_preview_roster(type, team, /*team_play=*/true, on);
+    game::fill_preview_roster(host.type, host.team, /*team_play=*/true, on);
     CHECK(on.team[0] == 0);
     CHECK(on.team[1] == 1);
 
-    std::array<int, sim::kMaxPlayers> gtype{};
-    std::array<int, sim::kMaxPlayers> gsub{};
-    std::array<int, sim::kMaxPlayers> gteam{};
+    Roster guest;
     bool gteam_play = false;
-    game::apply_preview_roster(on, kGuestSeat, gtype, gsub, gteam, gteam_play);
+    game::apply_preview_roster(on, kGuestSeat, guest.type, guest.sub, guest.team, gteam_play);
     CHECK(gteam_play == true);
-    CHECK(gteam[1] == 1);
+    CHECK(guest.team[1] == 1);
 
     gteam_play = true;
-    game::apply_preview_roster(off, kGuestSeat, gtype, gsub, gteam, gteam_play);
+    game::apply_preview_roster(off, kGuestSeat, guest.type, guest.sub, guest.team, gteam_play);
     CHECK(gteam_play == false);
 }
 

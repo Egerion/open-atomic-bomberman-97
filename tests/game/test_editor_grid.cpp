@@ -12,6 +12,49 @@
 
 using namespace bomber::game;
 
+namespace {
+
+// A scheme with every field the round trip has to carry set to something the
+// defaults would not produce: a named board, a non-default density, one spawn
+// per start slot at a distinct x, and a powerup rule per kind with both flags in
+// play. Built once here so the two halves of the round trip read as assertions
+// rather than as fixture.
+bomber::assets::sch::Scheme round_trip_scheme() {
+    bomber::assets::sch::Scheme s;
+    s.version = 2;
+    s.name = "ROUND TRIP";
+    s.brick_density = 77;
+    s.rows = {
+        "###############", "#.............#", "#.###.#.#.###.#", "#.............#",
+        "#.#.#.#.#.#.#.#", "#.............#", "#.#.#.#.#.#.#.#", "#.............#",
+        "#.###.#.#.###.#", "#.............#", "###############",
+    };
+    for (int i = 0; i < kEditorMaxStarts; ++i) {
+        bomber::assets::sch::Spawn sp;
+        sp.player = i;
+        sp.x = i;
+        sp.y = 2;
+        sp.team = i % 2;
+        s.spawns.push_back(sp);
+    }
+    for (int i = 0; i < kEditorPowerupKinds; ++i) {
+        bomber::assets::sch::PowerupRule pr;
+        pr.id = i;
+        pr.born_with = i % 2;
+        pr.forbidden = (i == 5);
+        s.powerups.push_back(pr);
+    }
+    return s;
+}
+
+EditorGrid loaded_round_trip_grid() {
+    EditorGrid g;
+    g.load_from_scheme(round_trip_scheme());
+    return g;
+}
+
+}  // namespace
+
 TEST_CASE("reset gives sub_4049C0's classic new-scheme board, 15x11") {
     EditorGrid g;
     CHECK(g.width() == 15);
@@ -123,13 +166,21 @@ TEST_CASE("move_start clamps to the board and toggle_start_team flips the flag")
 }
 
 TEST_CASE("move_start / toggle_start_team ignore out-of-range slots") {
+    // An index that clamped instead of bailing would land on slot 0 or the last
+    // one, so both ends are snapshotted and compared rather than spot-checked.
     EditorGrid g;
+    const EditorStart first = g.start(0);
+    const EditorStart last = g.start(kEditorMaxStarts - 1);
     g.move_start(-1, 1, 1);
     g.move_start(kEditorMaxStarts, 1, 1);
     g.toggle_start_team(-1);
     g.toggle_start_team(kEditorMaxStarts);
-    // No crash is the assertion; nothing else observable changed.
-    CHECK(g.start(0).x != 1);
+    CHECK(g.start(0).x == first.x);
+    CHECK(g.start(0).y == first.y);
+    CHECK(g.start(0).team == first.team);
+    CHECK(g.start(kEditorMaxStarts - 1).x == last.x);
+    CHECK(g.start(kEditorMaxStarts - 1).y == last.y);
+    CHECK(g.start(kEditorMaxStarts - 1).team == last.team);
 }
 
 TEST_CASE(
@@ -157,34 +208,9 @@ TEST_CASE("new grid seeds exactly kEditorPowerupKinds default rows") {
         CHECK(g.powerups()[static_cast<std::size_t>(i)].id == i);
 }
 
-TEST_CASE("Scheme -> EditorGrid -> Scheme round-trips every field") {
-    bomber::assets::sch::Scheme s;
-    s.version = 2;
-    s.name = "ROUND TRIP";
-    s.brick_density = 77;
-    s.rows = {
-        "###############", "#.............#", "#.###.#.#.###.#", "#.............#",
-        "#.#.#.#.#.#.#.#", "#.............#", "#.#.#.#.#.#.#.#", "#.............#",
-        "#.###.#.#.###.#", "#.............#", "###############",
-    };
-    for (int i = 0; i < kEditorMaxStarts; ++i) {
-        bomber::assets::sch::Spawn sp;
-        sp.player = i;
-        sp.x = i;
-        sp.y = 2;
-        sp.team = i % 2;
-        s.spawns.push_back(sp);
-    }
-    for (int i = 0; i < kEditorPowerupKinds; ++i) {
-        bomber::assets::sch::PowerupRule pr;
-        pr.id = i;
-        pr.born_with = i % 2;
-        pr.forbidden = (i == 5);
-        s.powerups.push_back(pr);
-    }
-
-    EditorGrid g;
-    g.load_from_scheme(s);
+TEST_CASE("Scheme -> EditorGrid carries the board, the density, the name and the starts") {
+    const bomber::assets::sch::Scheme s = round_trip_scheme();
+    const EditorGrid g = loaded_round_trip_grid();
     CHECK(g.width() == s.width());
     CHECK(g.height() == s.height());
     CHECK(g.density() == s.brick_density);
@@ -194,11 +220,24 @@ TEST_CASE("Scheme -> EditorGrid -> Scheme round-trips every field") {
         CHECK(g.start(i).y == 2);
         CHECK(g.start(i).team == (i % 2 != 0));
     }
+}
+
+TEST_CASE("Scheme -> EditorGrid maps '#' to Solid and '.' to Blank, cell for cell") {
+    const bomber::assets::sch::Scheme s = round_trip_scheme();
+    const EditorGrid g = loaded_round_trip_grid();
+    // Two literal corners first: the sweep below runs both sides through
+    // cell_char_to_brush, so on its own it would pass even if that mapping were
+    // inverted for every cell at once.
+    CHECK(g.cell(0, 0) == EditorBrush::Solid);  // the border '#'
+    CHECK(g.cell(1, 1) == EditorBrush::Blank);  // the open '.' behind it
     for (int y = 0; y < g.height(); ++y)
         for (int x = 0; x < g.width(); ++x)
             CHECK(g.cell(x, y) == cell_char_to_brush(static_cast<char>(s.at(x, y))));
+}
 
-    bomber::assets::sch::Scheme back = g.to_scheme();
+TEST_CASE("EditorGrid -> Scheme writes back every field it read") {
+    const bomber::assets::sch::Scheme s = round_trip_scheme();
+    const bomber::assets::sch::Scheme back = loaded_round_trip_grid().to_scheme();
     CHECK(back.name == s.name);
     CHECK(back.brick_density == s.brick_density);
     CHECK(back.rows == s.rows);

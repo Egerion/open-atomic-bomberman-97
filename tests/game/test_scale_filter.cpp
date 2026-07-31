@@ -41,9 +41,10 @@ TEST_CASE("classic art follows the toggle; DATA_HD art is linear either way") {
     CHECK(art_filter(TextureArt::HighRes, ScaleFilter::Soft) == ScaleFilter::Soft);
 }
 
-TEST_CASE("the decisions are constexpr (usable in a static context)") {
-    static_assert(scale_filter_for(true, false) == ScaleFilter::Soft);
-    static_assert(scale_filter_for(true, true) == ScaleFilter::Crisp);
-    static_assert(art_filter(TextureArt::HighRes, ScaleFilter::Crisp) == ScaleFilter::Soft);
-    CHECK(true);
-}
+// Both decisions are constexpr, so a caller may resolve them in a static
+// context. THE COMPILER IS THE ASSERTION here — these belong at file scope
+// rather than wrapped in a TEST_CASE, where the runtime CHECK keeping the case
+// non-empty could only ever have been `CHECK(true)`.
+static_assert(scale_filter_for(true, false) == ScaleFilter::Soft);
+static_assert(scale_filter_for(true, true) == ScaleFilter::Crisp);
+static_assert(art_filter(TextureArt::HighRes, ScaleFilter::Crisp) == ScaleFilter::Soft);

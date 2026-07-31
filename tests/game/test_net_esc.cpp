@@ -69,11 +69,17 @@ TEST_CASE("esc: a GUEST gets the same way out, on the same two presses") {
 }
 
 TEST_CASE("esc: leaving does not need the round to be stoppable, or stopped") {
-    // Every combination reaches Leave on the second press. Whatever the session
-    // is doing — or refusing to do — the second press is the player's own.
-    for (const bool outstanding : {false, true}) {
-        NetEscState e;
-        REQUIRE(e.press(0, outstanding) == (outstanding ? EscPress::Leave : EscPress::Arm));
-        CHECK(e.press(100, outstanding) == EscPress::Leave);
-    }
+    // Whatever the session is doing — or refusing to do — a press with the way
+    // out already open LEAVES. Spelled out per case rather than through a
+    // ternary expectation, because the two branches say different things.
+    NetEscState quiet;
+    REQUIRE(quiet.press(0, /*stop_outstanding=*/false) == EscPress::Arm);
+    CHECK(quiet.press(100, /*stop_outstanding=*/false) == EscPress::Leave);
+
+    // An outstanding stop arms the state on its own (armed() is the same
+    // predicate for both), so the FIRST press already leaves — a player whose
+    // stop request is hanging never has to press twice.
+    NetEscState hung;
+    CHECK(hung.press(0, /*stop_outstanding=*/true) == EscPress::Leave);
+    CHECK(hung.press(100, /*stop_outstanding=*/true) == EscPress::Leave);
 }

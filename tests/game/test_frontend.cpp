@@ -285,6 +285,12 @@ TEST_CASE("default_setup_team alternates 0/1 by slot parity") {
     CHECK(default_setup_team(9) == 1);
 }
 
+// MatchRunner shifts this byte up by one on the way to the sim (`cfg.team[i] =
+// setup_team[i] + 1`), because sim team 0 means "no team" — so the alternating
+// default is what makes two players two DISTINCT non-zero sides. That shift, and
+// the setup screen's own `team ? 0 : 1` toggle, are statements in SDL-linked
+// screens: a headless case can only re-type them and then check its own
+// arithmetic, so what is pinned here is the one half that lives in game_util.
 TEST_CASE(
     "reset_setup_teams fills every slot with the alternating default, "
     "clobbering any earlier value") {
@@ -293,43 +299,10 @@ TEST_CASE(
     reset_setup_teams(team);
     for (int i = 0; i < kMaxPlayers; ++i) CHECK(team[i] == (i & 1));
     // In particular: two active players in the default two-player layout
-    // (slots 0 and 1) land on DIFFERENT sides, not the same one.
+    // (slots 0 and 1) land on DIFFERENT sides, not the same one. With the OLD
+    // all-0 default they collapsed onto one sim side and the round ended on
+    // tick 0.
     CHECK(team[0] != team[1]);
-}
-
-TEST_CASE(
-    "the setup-byte -> sim-team mapping (setup_team_[i] + 1, "
-    "game_app.cpp start_match) turns the alternating default into two "
-    "real, distinct sim sides") {
-    // Mirrors GameApp::start_match's `cfg.team[i] =
-    // static_cast<uint8_t>(setup_team_[i] + 1)` shift documented at that call
-    // site: the sim reserves team 0 for "no team", so team play shifts the
-    // raw 0/1 setup byte up by one. With the OLD all-0 default this collapsed
-    // every player onto sim team 1 (one side, instant round-over); with the
-    // alternating default it produces two distinct, non-zero sim sides.
-    std::array<int, kMaxPlayers> team{};
-    reset_setup_teams(team);
-    std::array<std::uint8_t, kMaxPlayers> sim_team{};
-    for (int i = 0; i < kMaxPlayers; ++i) sim_team[i] = static_cast<std::uint8_t>(team[i] + 1);
-    CHECK(sim_team[0] == 1);
-    CHECK(sim_team[1] == 2);
-    CHECK(sim_team[0] != sim_team[1]);      // two players, two different sides
-    for (auto t : sim_team) CHECK(t != 0);  // never collapses to "no team"
-}
-
-TEST_CASE(
-    "the 'T' toggle (present_setup's SDLK_T handler: team ? 0 : 1) "
-    "still flips a slot away from its alternating default") {
-    std::array<int, kMaxPlayers> team{};
-    reset_setup_teams(team);
-    CHECK(team[0] == 0);
-    // Mirrors game_app.cpp's `setup_team_[cursor] = setup_team_[cursor] ? 0 : 1;`.
-    team[0] = team[0] ? 0 : 1;
-    CHECK(team[0] == 1);
-    team[0] = team[0] ? 0 : 1;
-    CHECK(team[0] == 0);  // toggles back
-    // Untouched slots keep the alternating default.
-    CHECK(team[1] == 1);
 }
 
 // Locks the key-remap UI's data shape (docs/re/results-and-options.md §2,
@@ -681,56 +654,13 @@ TEST_CASE("attract_stage_pick wraps into [0, level_count) regardless of enable f
     }
 }
 
-// Attract-mode selection save/restore roundtrip (docs/re/frontend-flow.md
-// "Attract mode" point 3, sub_4224E2/sub_422552): this doctest exercises the
-// SAME snapshot/overwrite/restore shape GameApp::roll_attract_match /
-// restore_from_attract implement (game_app.hpp's AttractSaved struct), using
-// a local stand-in so the roundtrip is testable without SDL/GameApp. Locks
-// the CONTRACT — save before overwrite, restore puts every touched field
-// back byte-for-byte — independent of the SDL-linked call sites.
-TEST_CASE("attract selection save/restore roundtrips every touched field") {
-    struct AttractSaved {
-        std::array<int, kMaxPlayers> type{};
-        std::array<int, kMaxPlayers> sub{};
-        std::array<int, kMaxPlayers> team{};
-        int level = -1;
-        bool team_play = false;
-    };
-
-    // The player's own pre-attract configuration.
-    std::array<int, kMaxPlayers> type{2, 1, 3, 0, 0, 0, 0, 0, 0, 0};
-    std::array<int, kMaxPlayers> sub{0, 0, 1, 0, 0, 0, 0, 0, 0, 0};
-    std::array<int, kMaxPlayers> team{0, 1, 1, 0, 0, 0, 0, 0, 0, 0};
-    int level = 4;
-    bool team_play = true;
-
-    // Save (sub_4224E2).
-    AttractSaved saved;
-    saved.type = type;
-    saved.sub = sub;
-    saved.team = team;
-    saved.level = level;
-    saved.team_play = team_play;
-
-    // Overwrite with a demo roster (mirrors roll_attract_match()).
-    fill_attract_roster(attract_computer_count(7), type, sub, team);
-    level = attract_stage_pick(3, 11);
-    team_play = false;
-    CHECK(type != saved.type);  // sanity: the overwrite actually changed something
-
-    // Restore (sub_422552) — every field lands back exactly where it started.
-    type = saved.type;
-    sub = saved.sub;
-    team = saved.team;
-    level = saved.level;
-    team_play = saved.team_play;
-
-    CHECK(type == std::array<int, kMaxPlayers>{2, 1, 3, 0, 0, 0, 0, 0, 0, 0});
-    CHECK(sub == std::array<int, kMaxPlayers>{0, 0, 1, 0, 0, 0, 0, 0, 0, 0});
-    CHECK(team == std::array<int, kMaxPlayers>{0, 1, 1, 0, 0, 0, 0, 0, 0, 0});
-    CHECK(level == 4);
-    CHECK(team_play == true);
-}
+// NOT COVERED HERE: the attract save/restore roundtrip (sub_4224E2/sub_422552,
+// docs/re/frontend-flow.md "Attract mode" point 3). Its snapshot type,
+// AttractSaved, lives in libs/frontend's menu_state.hpp, which the headless
+// preset does not build — so a case here can only declare a local stand-in,
+// assign to it and assign back, which asserts std::array's copy semantics and
+// nothing about the port. Pinning it needs AttractSaved (and the save/restore
+// pair over it) in bomber::game_util, where a headless suite can reach them.
 
 // The DOS scancode display rule (docs/re/results-and-options.md §2,
 // sub_407B9D pseudo.c 8743-8744 + the off_45B914 table read straight from
@@ -767,65 +697,104 @@ TEST_CASE("dos_scancode_name follows the original's &0x7F / <0x59 rule") {
 // ---------------------------------------------------------------------------
 // The best-of-N MATCH loop (sub_42A3F6's round-end shell, docs/re/
 // in-match-shell.md): a round that ends without a clinch must start ANOTHER
-// round, not return to the menu. This pins the exact decision run_app's Results
-// handler makes — tally the round win, then ask match_clinch() whether the MATCH
-// is over — because a "2-round match quits after round 1" report is precisely
-// this predicate answering wrong.
+// round, not return to the menu. These cases pin the exact decision run_app's
+// Results handler makes — tally the round win, then ask match_clinch() whether
+// the MATCH is over — because a "2-round match quits after round 1" report is
+// precisely this predicate answering wrong.
+
+namespace {
+
+// The round-end bookkeeping the RESULTS tier keeps, bundled so a case reads as
+// the sequence of rounds it is describing instead of as its own setup.
+struct MatchTally {
+    bomber::sim::State state;
+    std::array<int, kMaxPlayers> win_count{};
+    std::array<int, kMaxPlayers> kill_count{};
+    std::array<int, kMaxPlayers> setup_team{};
+    int win_target = 2;
+    bool team_play = false;
+
+    // A free-for-all slot: sim team 0 is "no team", so nothing else is set.
+    void seat(int slot) { state.players[slot].present = true; }
+
+    // MatchRunner's `cfg.team[i] = setup_team[i] + 1` — the sim reserves team 0
+    // for "no team", so the frontend's raw +84 byte shifts up by one.
+    void seat_on_team(int slot, int team) {
+        seat(slot);
+        setup_team[slot] = team;
+        state.players[slot].team = static_cast<std::uint8_t>(team + 1);
+    }
+
+    // One round decided by its sole survivor, tallied the way the handler does.
+    // Returns round_winner()'s verdict so a case can assert it.
+    int survive(int survivor) {
+        for (auto& p : state.players) p.alive = false;
+        state.players[survivor].alive = true;
+        const int winner = bomber::game::round_winner(state);
+        bomber::game::award_round_win(win_count, winner, team_play, state, setup_team);
+        return winner;
+    }
+
+    int clinch() const {
+        return bomber::game::match_clinch(state, team_play, setup_team, /*win_by_kills=*/false,
+                                          kill_count, win_count, win_target);
+    }
+};
+
+}  // namespace
+
 TEST_CASE("best-of-N: an undecided round continues the match; the target ends it") {
-    using bomber::game::match_clinch;
-    using bomber::game::reset_match_scores;
-
-    bomber::sim::State s;
-    s.players[0].present = true;
-    s.players[1].present = true;
-    std::array<int, bomber::sim::kMaxPlayers> win_count{};
-    std::array<int, bomber::sim::kMaxPlayers> kill_count{};
-    std::array<int, bomber::sim::kMaxPlayers> setup_team{};
-    int win_target = 0;
-
-    // The default target comes from VALUELST id 310 ("how many wins to win a
-    // match?"), which this install ships as 2 — so the shipped default match is
-    // best-of-2 and CANNOT be over after one round.
-    bomber::assets::res::ValueList values;
-    values.values[310] = 2;
-    reset_match_scores(win_count, kill_count, win_target, values, std::nullopt);
-    CHECK(win_target == 2);
-    CHECK(win_count[0] == 0);
-
-    auto clinch = [&] {
-        return match_clinch(s, /*team_play=*/false, setup_team, /*win_by_kills=*/false, kill_count,
-                            win_count, win_target);
-    };
+    MatchTally m;
+    m.seat(0);
+    m.seat(1);
 
     // Round 1: player 0 survives. Tally the win — the match is NOT decided, so
     // the flow feeds RoundContinue and next() routes Results -> Match.
-    ++win_count[0];
-    CHECK(clinch() == -1);
+    CHECK(m.survive(0) == 0);
+    CHECK(m.clinch() == -1);
     CHECK(next(AppState::Results, AppInput::RoundContinue) == AppState::Match);
 
     // Round 2: player 0 survives again and reaches the target — NOW the match is
     // over, VICTORY shows, and a plain Advance routes Results -> Menu.
-    ++win_count[0];
-    CHECK(clinch() == 0);
+    CHECK(m.survive(0) == 0);
+    CHECK(m.clinch() == 0);
     CHECK(next(AppState::Results, AppInput::Advance) == AppState::Menu);
 
-    // A DRAW scores nobody (round_winner() is -1 when the clock expired, so the
-    // handler never increments) — an untallied round still continues the match.
-    std::array<int, bomber::sim::kMaxPlayers> fresh{};
-    win_count = fresh;
-    s.ticks_left = 0;  // time up
-    CHECK(bomber::game::round_winner(s) == -1);
-    CHECK(clinch() == -1);
+    // A DRAW scores nobody, so an untallied round still continues the match. It
+    // is the ABSENCE OF A SURVIVOR that draws, not the clock: match_outcome.hpp
+    // records that testing the clock first is what used to steal a win earned in
+    // the round's last second.
+    m.win_count.fill(0);
+    for (auto& p : m.state.players) p.alive = false;  // mutual wipe-out
+    m.state.ticks_left = 0;
+    CHECK(bomber::game::round_winner(m.state) == -1);
+    CHECK(m.clinch() == -1);
+}
 
-    // With no VALUELST entry the target falls back to options.ini's
-    // num_to_win_match=, and to 2 when that is absent too; a hand-edited 0 is
-    // clamped up to 1 rather than ending the match before it starts.
-    bomber::assets::res::ValueList empty;
-    reset_match_scores(win_count, kill_count, win_target, empty, 5);
-    CHECK(win_target == 5);
-    reset_match_scores(win_count, kill_count, win_target, empty, std::nullopt);
+TEST_CASE("best-of-N: the win target comes from VALUELST 310, then options.ini, then 2") {
+    using bomber::game::reset_match_scores;
+    MatchTally m;
+    m.win_count[3] = 7;  // stale counters from the previous match, to be cleared
+    int win_target = 0;
+
+    // getvalue(310) "how many wins to win a match?", which this install ships as
+    // 2 — so the shipped default match is best-of-2 and CANNOT end after one
+    // round. It wins over options.ini's num_to_win_match= when both are present.
+    bomber::assets::res::ValueList values;
+    values.values[310] = 2;
+    reset_match_scores(m.win_count, m.kill_count, win_target, values, 5);
     CHECK(win_target == 2);
-    reset_match_scores(win_count, kill_count, win_target, empty, 0);
+    CHECK(m.win_count[3] == 0);
+
+    // With no VALUELST entry the target falls back to num_to_win_match=, and to
+    // 2 when that is absent too; a hand-edited 0 is clamped up to 1 rather than
+    // ending the match before it starts.
+    bomber::assets::res::ValueList empty;
+    reset_match_scores(m.win_count, m.kill_count, win_target, empty, 5);
+    CHECK(win_target == 5);
+    reset_match_scores(m.win_count, m.kill_count, win_target, empty, std::nullopt);
+    CHECK(win_target == 2);
+    reset_match_scores(m.win_count, m.kill_count, win_target, empty, 0);
     CHECK(win_target == 1);
 }
 
@@ -836,61 +805,37 @@ TEST_CASE("best-of-N: an undecided round continues the match; the target ends it
 // the original's clinch) shows a team that keeps winning stuck near zero, and
 // the clinch lands rounds late.
 TEST_CASE("team play: a round win is mirrored to the whole team, so the clinch is on time") {
-    using bomber::game::award_round_win;
-    using bomber::game::match_clinch;
-    using bomber::game::round_winner;
-
-    // 2v2: slots 0+1 are team 0, slots 2+3 are team 1 (the frontend's raw +84
-    // byte). The sim's Player::team is that byte + 1 (match_runner.cpp's
-    // cfg.team[i] = setup_team[i] + 1), because sim team 0 means "no team".
-    bomber::sim::State s;
-    const std::array<int, bomber::sim::kMaxPlayers> setup_team{0, 0, 1, 1};
-    for (int i = 0; i < 4; ++i) {
-        s.players[i].present = true;
-        s.players[i].team = static_cast<std::uint8_t>(setup_team[i] + 1);
-    }
-    std::array<int, bomber::sim::kMaxPlayers> win_count{};
-    std::array<int, bomber::sim::kMaxPlayers> kill_count{};
-    const int win_target = 2;
-
-    auto round = [&](int survivor) {
-        for (int i = 0; i < 4; ++i) s.players[i].alive = (i == survivor);
-        const int w = round_winner(s);
-        CHECK(w == survivor);  // the sole survivor is the round winner
-        award_round_win(win_count, w, /*team_play=*/true, s, setup_team);
-    };
-    auto clinch = [&] {
-        return match_clinch(s, /*team_play=*/true, setup_team, /*win_by_kills=*/false, kill_count,
-                            win_count, win_target);
-    };
+    MatchTally m;  // 2v2: slots 0+1 are team 0, slots 2+3 are team 1
+    m.team_play = true;
+    for (int i = 0; i < 4; ++i) m.seat_on_team(i, i / 2);
 
     // Round 1: team 0 wins with slot 1 — slot 0 died, so an unmirrored tally
     // would leave it on 0 forever if it keeps dying.
-    round(1);
-    CHECK(win_count[0] == 1);  // the DEAD teammate is credited too (+0x10 is
-    CHECK(win_count[1] == 1);  // "present", not "alive")
-    CHECK(win_count[2] == 0);
-    CHECK(win_count[3] == 0);
-    CHECK(clinch() == -1);  // one win of two: not decided
+    CHECK(m.survive(1) == 1);
+    CHECK(m.win_count[0] == 1);  // the DEAD teammate is credited too (+0x10 is
+    CHECK(m.win_count[1] == 1);  // "present", not "alive")
+    CHECK(m.win_count[2] == 0);
+    CHECK(m.win_count[3] == 0);
+    CHECK(m.clinch() == -1);  // one win of two: not decided
 
     // Round 2: team 0 wins again, this time with the OTHER member. The mirror is
     // a COPY, not a second increment, so the team reads 2 — not 1 and 1 — and
     // the match clinches on round 2, exactly at win_target. Pre-fix this said
     // 1/1 and the match dragged on to a third round.
-    round(0);
-    CHECK(win_count[0] == 2);
-    CHECK(win_count[1] == 2);
-    CHECK(clinch() == 0);  // the first present member of the clinching team
+    CHECK(m.survive(0) == 0);
+    CHECK(m.win_count[0] == 2);
+    CHECK(m.win_count[1] == 2);
+    CHECK(m.clinch() == 0);      // the first present member of the clinching team
+    CHECK(m.win_count[2] == 0);  // the losing team picks up nothing from the mirror
+    CHECK(m.win_count[3] == 0);
+}
 
-    // The losing team never picks up a point from the mirror.
-    CHECK(win_count[2] == 0);
-    CHECK(win_count[3] == 0);
-
-    // Same roster with Team Play OFF: no mirror at all (the original gates the
-    // copy loop on dword_464964), so each survivor keeps only its own win.
-    win_count.fill(0);
-    for (int i = 0; i < 4; ++i) s.players[i].alive = (i == 1);
-    award_round_win(win_count, 1, /*team_play=*/false, s, setup_team);
-    CHECK(win_count[0] == 0);
-    CHECK(win_count[1] == 1);
+TEST_CASE("team play OFF: the same 2v2 round credits only the survivor") {
+    // The original gates the copy loop on dword_464964, so with Team Play off a
+    // teammate's win is not shared however the roster is arranged.
+    MatchTally m;
+    for (int i = 0; i < 4; ++i) m.seat_on_team(i, i / 2);
+    CHECK(m.survive(1) == 1);
+    CHECK(m.win_count[0] == 0);
+    CHECK(m.win_count[1] == 1);
 }

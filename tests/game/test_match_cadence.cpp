@@ -66,10 +66,12 @@ TEST_CASE("cadence: the accumulator left over by a netplay stall cannot extrapol
     // A stall (or a re-phase hold) leaves the accumulator at or past a whole tick
     // with the sim frozen. Un-clamped that pushes alpha above 1 and runs entities
     // FORWARD through the pause, which reads as a rubber-band.
-    const MatchCadence c = match_cadence(false, true, 0, kMsPerTick, /*acc_ns=*/3 * kTickNs,
-                                         kTickNs);
-    CHECK(c.interp_alpha == 1.0f);
-    CHECK(c.interp_alpha <= 1.0f);
+    // Both ends of the clamp, so it is the CLAMP being pinned and not one lucky
+    // quotient: a whole tick and three whole ticks land on the same 1.0.
+    CHECK(match_cadence(false, true, 0, kMsPerTick, /*acc_ns=*/kTickNs, kTickNs).interp_alpha ==
+          1.0f);
+    CHECK(match_cadence(false, true, 0, kMsPerTick, /*acc_ns=*/3 * kTickNs, kTickNs).interp_alpha ==
+          1.0f);
 }
 
 TEST_CASE("cadence: degenerate divisors do not produce a NaN alpha") {

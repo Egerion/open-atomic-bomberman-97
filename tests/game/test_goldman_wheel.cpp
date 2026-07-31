@@ -19,11 +19,7 @@ TEST_CASE("spin_setup draws exactly 5 values in the doc's fixed order") {
     // A hand-rolled deterministic sequence lets us hand-verify each field
     // against the doc's formulas (doc §3 "Setup — exactly 5 rand() draws").
     WheelRng rng{1};
-    std::uint32_t r1 = rng.state * 1664525u + 1013904223u;  // == the 1st draw's raw state
-    (void)r1;
-
-    WheelRng rng2{1};
-    WheelState w = spin_setup(rng2, wheel_circle_steps());
+    WheelState w = spin_setup(rng, wheel_circle_steps());
 
     // Independently replay the same 5 draws to cross-check every field.
     WheelRng check{1};
@@ -67,15 +63,19 @@ TEST_CASE("free-spin phase never consumes budget, only WindingDown does") {
     CHECK(w.wheel.budget == wheel_budget_before);
     CHECK(w.ring.budget == ring_budget_before);
 
+    // ...and WindingDown really does spend it. A single frame may or may not
+    // cross a boundary (it moves max(budget, 6) steps of a 70-step segment), so
+    // the pin is that the spend HAPPENS within a bounded number of frames — a
+    // `<=` on one frame would be satisfied by a phase that never consumed
+    // anything at all, which is precisely the bug this case is here to catch.
     w.phase = WheelPhase::WindingDown;
-    step_mover(w.ring, w.phase, w.direction, wheel_circle_steps());
-    step_mover(w.wheel, w.phase, -w.direction, wheel_circle_steps());
-    // At least one budget should now have moved (a boundary was crossed within
-    // max(budget,6) steps almost always for a 70-step segment and a >=20
-    // budget) OR stayed the same if no boundary happened to fall in this
-    // particular frame — but it can never have INCREASED.
-    CHECK(w.wheel.budget <= wheel_budget_before);
-    CHECK(w.ring.budget <= ring_budget_before);
+    int frames = 0;
+    while (frames < 20 && w.wheel.budget == wheel_budget_before) {
+        step_mover(w.wheel, w.phase, -w.direction, wheel_circle_steps());
+        ++frames;
+    }
+    CHECK(w.wheel.budget < wheel_budget_before);
+    CHECK(w.ring.budget == ring_budget_before);  // untouched: only the stepped mover pays
 }
 
 TEST_CASE("winding-down deceleration always halts a mover exactly on a segment boundary") {

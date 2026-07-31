@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <string>
+#include <vector>
 
 #include "bomber/game_util/credits_addendum.hpp"
 
@@ -40,6 +41,26 @@ bool has_image(const BmLine& line) {
     for (const auto& s : line)
         if (s.is_image()) return true;
     return false;
+}
+
+std::string row_text(const BmLine& line) {
+    std::string text;
+    for (const auto& s : line)
+        if (s.is_text()) text += s.value;
+    return text;
+}
+
+// The unbroken run of rows starting at "Directed by" — a blank row (a BmLine
+// with no segments) ends it, which is how the source separates its sections.
+std::vector<std::string> author_block(const BmDocument& doc) {
+    std::vector<std::string> block;
+    for (const auto& line : doc.lines) {
+        const std::string text = row_text(line);
+        if (block.empty() && text.find("Directed by") == std::string::npos) continue;
+        if (!block.empty() && text.empty()) break;
+        block.push_back(text);
+    }
+    return block;
 }
 
 }  // namespace
@@ -119,14 +140,13 @@ TEST_CASE("appending leaves the loaded document's own rows untouched") {
 TEST_CASE("the author block is exactly the three items the owner asked for") {
     // A credits page that goes public must not carry invented biography. The
     // owner scoped this section himself: his name, his email address, and that
-    // he directed the project. Nothing else about him belongs here, so the three
-    // are pinned — a future edit that adds a fourth has to come through this
-    // test rather than drift in.
-    std::string all;
-    for (const auto& line : credits_addendum().lines)
-        for (const auto& s : line)
-            if (s.is_text()) all += s.value + "\n";
-    CHECK(all.find("Ege Demirbas") != std::string::npos);
-    CHECK(all.find("egedemirbas@gmail.com") != std::string::npos);
-    CHECK(all.find("Directed by") != std::string::npos);
+    // he directed the project. Nothing else about him belongs here — so the pin
+    // is on the SIZE of the unbroken run of rows as well as its contents.
+    // Checking only that the three strings appear would pass a fourth line added
+    // beside them, which is the drift this case exists to stop.
+    const std::vector<std::string> block = author_block(credits_addendum());
+    REQUIRE(block.size() == 3);
+    CHECK(block[0].find("Directed by") != std::string::npos);
+    CHECK(block[1].find("Ege Demirbas") != std::string::npos);
+    CHECK(block[2].find("egedemirbas@gmail.com") != std::string::npos);
 }

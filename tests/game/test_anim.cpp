@@ -39,20 +39,24 @@ TEST_CASE("an empty animation is safe (no modulo-by-zero)") {
     CHECK(anim_step_index(12345, 0) == 0);
 }
 
-TEST_CASE("the STAT HEAD timing field cannot affect frame selection") {
-    // Model a sequence whose per-step head0 values are the two the field ever
-    // takes (0x001E / 0xFFFF), interleaved. The frame shown must depend only on
-    // (counter, statecnt); head0 is not even reachable from the selector. This
-    // is the whole CONFIRMED-INERT finding, encoded as a regression guard.
-    const std::vector<std::uint16_t> head0 = {0x001E, 0xFFFF, 0x001E, 0xFFFF, 0x001E};
-    const std::size_t n = head0.size();
-    for (std::size_t counter = 0; counter < 5 * n; ++counter) {
-        const std::size_t shown = anim_step_index(counter, n);
-        CHECK(shown == counter % n);          // pure wrap
-        CHECK(shown < n);                     // always in range
-        // Flipping any step's timing value would change nothing: the selector
-        // never consults head0, so the mapping above is total and stable.
-        (void)head0[shown];
+TEST_CASE("an inert timing field means every step is shown for exactly one counter") {
+    // The observable consequence of the CONFIRMED-INERT finding. head0 is not a
+    // parameter of the selector, so no assertion can name it; what a LIVE timing
+    // field would do is hold one step for two counters and skip another, so that
+    // is what this pins — one lap of `n` counters visits each step exactly once.
+    // A hold-frames feature added to the pacer fails here and nowhere else.
+    for (std::size_t n = 1; n <= 8; ++n) {
+        CAPTURE(n);
+        std::vector<int> shown_count(n, 0);
+        for (std::size_t counter = 0; counter < n; ++counter) {
+            const std::size_t shown = anim_step_index(counter, n);
+            REQUIRE(shown < n);
+            ++shown_count[shown];
+        }
+        for (std::size_t step = 0; step < n; ++step) {
+            CAPTURE(step);
+            CHECK(shown_count[step] == 1);
+        }
     }
 }
 
@@ -115,8 +119,9 @@ TEST_CASE("warp and the boxed-in fidget sit at the ends of the precedence") {
 TEST_CASE("the pickup curve index lags the grab by one frame and saturates") {
     // k = clamp(+80 - 1, 0, 3) and nothing else: the CARRIED half of
     // sub_42331C (the a1=1 call, sub_42459A) runs AFTER sub_420F07, so the +80
-    // it reads has already been advanced this frame. An earlier pass had the
-    // two passes the other way round and paid for it with a second -1.
+    // it reads has already been advanced this frame. Reading the two passes in
+    // the other order needs a SECOND -1, and the sprite it lands on is a
+    // plausible one — so nothing but this case says which order is right.
     CHECK(carry_arc_index(0) == 0);
     CHECK(carry_arc_index(1) == 0);
     CHECK(carry_arc_index(2) == 1);
@@ -214,23 +219,12 @@ TEST_CASE("the stun spin turns CLOCKWISE, in the original's godir order") {
     // north, south, west, east — a spin the original never shows. This case is
     // the adapter's reason to exist; if it fails, the bomberman is spinning
     // wrong, not merely differently.
+    // Walked over the whole confirmed 16-frame stun (sub_421F7E's literal), so
+    // the four laps the player sees are all checked rather than just the first.
     const int expected[4] = {kUp, kRight, kDown, kLeft};  // N, E, S, W
-    int visits[4] = {0, 0, 0, 0};
     for (int elapsed = 0; elapsed < 16; ++elapsed) {
         CAPTURE(elapsed);
-        const int got = stunned_stand_facing(kDown, 16 - elapsed, 16);
-        CHECK(got == expected[elapsed % 4]);
-        for (int i = 0; i < 4; ++i)
-            if (got == expected[i]) ++visits[i];
-    }
-    // Four full turns over the confirmed 16-frame stun (sub_421F7E's literal).
-    // This used to read `CHECK(16 / 4 == 4)`, which is a statement about
-    // arithmetic and not about the port — it could not fail. The claim the
-    // comment actually makes is that the 16-frame window shows each of the four
-    // sprites exactly four times, so assert that instead.
-    for (int i = 0; i < 4; ++i) {
-        CAPTURE(i);
-        CHECK(visits[i] == 4);
+        CHECK(stunned_stand_facing(kDown, 16 - elapsed, 16) == expected[elapsed % 4]);
     }
 }
 
