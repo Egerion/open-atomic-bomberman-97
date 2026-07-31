@@ -4,56 +4,72 @@
 #include <string>
 
 // Pure, SDL-free helpers for the in-round clock HUD (docs/re/in-match-shell.md
-// §3, sub_4105D2): the MM:SS format and the <=30s warning-colour threshold.
-// Kept out of renderer.cpp so both are unit-testable without linking SDL3
-// (mirrors results.hpp/app_flow.hpp — see tests/test_frontend.cpp,
-// bomber_frontend_tests links no SDL3).
+// §3, sub_4105D2) and the MESSAGES.TXT splices every screen shares.
+//
+// Every format string here is the PLAYER'S OWN FILE. A hand-edited row reaches
+// these functions, so "leave a specifier of the wrong kind literal rather than
+// guess" is a contract, not an implementation detail: a wrong-type sprintf on
+// user data is a crash.
 
 namespace bomber::game {
+namespace detail {
 
-// sub_4105D2's MM:SS split: the whole seconds remaining divided by 60 and the
-// same value modulo 60 (truncating integer division), formatted through
-// MESSAGES.TXT id 281 = "%u:%02u".
-// `seconds_left` is already whole seconds (the caller ceil-divides ticks_left
-// by the tick rate); this function only does the minutes/seconds split and
-// substitutes the two %u specifiers of `fmt` (the getstring(281) result, or
-// its "%u:%02u" fallback when MESSAGES.TXT lacks the id) — never risking a
-// wrong-type sprintf on the user's own MESSAGES.TXT text, matching game_app.
-// cpp's fmt_u/fmt_s convention (single-specifier only; this one substitutes
-// exactly two, in order, and leaves anything else in the string untouched).
+// One clock conversion — "%u", "%0u", "%2u" or "%02u" — starting at `i`.
+// Zero padding applies ONLY to the two-digit form: "%0u" is width-less and
+// prints bare.
+struct ClockConv {
+    bool found = false;
+    bool pad2 = false;
+    std::size_t end = 0;  // index just past the conversion
+};
+
+inline ClockConv clock_conv_at(const std::string& fmt, std::size_t i) {
+    if (fmt[i] != '%' || i + 1 >= fmt.size()) return ClockConv{};
+    std::size_t j = i + 1;
+    const bool zero = fmt[j] == '0';
+    if (zero) ++j;
+    if (j + 1 < fmt.size() && fmt[j] == '2' && fmt[j + 1] == 'u')
+        return ClockConv{true, zero, j + 2};
+    if (j < fmt.size() && fmt[j] == 'u') return ClockConv{true, false, j + 1};
+    return ClockConv{};
+}
+
+inline std::string clock_field(int v, bool pad2) {
+    if (!pad2) return std::to_string(v);
+    char buf[8];
+    std::snprintf(buf, sizeof(buf), "%02d", v);
+    return buf;
+}
+
+// The index just past the first %u/%d/%i/%s/%% in `f`, starting at `p`+1.
+inline std::size_t specifier_end(const std::string& f, std::size_t p) {
+    std::size_t q = p + 1;
+    while (q < f.size() && f[q] != 'u' && f[q] != 'd' && f[q] != 'i' && f[q] != 's' && f[q] != '%')
+        ++q;
+    return q;
+}
+
+}  // namespace detail
+
+// sub_4105D2's MM:SS split, substituted into getstring(281) = "%u:%02u" (or
+// that literal when MESSAGES.TXT lacks the id). `seconds_left` is already whole
+// seconds; exactly two conversions are substituted, in order, and anything else
+// in the string is left untouched.
 inline std::string format_clock(const std::string& fmt, int seconds_left) {
     if (seconds_left < 0) seconds_left = 0;
-    int minutes = seconds_left / 60;
-    int secs = seconds_left % 60;
+    const int field[2] = {seconds_left / 60, seconds_left % 60};
     std::string out;
     out.reserve(fmt.size() + 4);
-    int subs_done = 0;
-    for (std::size_t i = 0; i < fmt.size(); ++i) {
-        if (fmt[i] == '%' && i + 1 < fmt.size() && subs_done < 2) {
-            std::size_t j = i + 1;
-            bool zero_pad = false;
-            if (j < fmt.size() && fmt[j] == '0') { zero_pad = true; ++j; }
-            if (j + 1 < fmt.size() && fmt[j] == '2' && fmt[j + 1] == 'u') {
-                int v = subs_done == 0 ? minutes : secs;
-                if (zero_pad) {
-                    char buf[8];
-                    std::snprintf(buf, sizeof(buf), "%02d", v);
-                    out += buf;
-                } else {
-                    out += std::to_string(v);  // "%2u" (no zero flag): no padding applied
-                }
-                ++subs_done;
-                i = j + 1;
-                continue;
-            }
-            if (j < fmt.size() && fmt[j] == 'u') {
-                out += std::to_string(subs_done == 0 ? minutes : secs);
-                ++subs_done;
-                i = j;
-                continue;
-            }
+    int done = 0;
+    for (std::size_t i = 0; i < fmt.size();) {
+        const detail::ClockConv c = done < 2 ? detail::clock_conv_at(fmt, i) : detail::ClockConv{};
+        if (!c.found) {
+            out += fmt[i++];
+            continue;
         }
-        out += fmt[i];
+        out += detail::clock_field(field[done], c.pad2);
+        ++done;
+        i = c.end;
     }
     return out;
 }
@@ -63,18 +79,11 @@ inline std::string format_clock(const std::string& fmt, int seconds_left) {
 inline constexpr int kClockWarningSeconds = 30;
 inline bool clock_warning(int seconds_left) { return seconds_left <= kClockWarningSeconds; }
 
-// Crash-proof MESSAGES.TXT single-specifier splices. The format string is the
-// user's own file, so ignore any %s/%% (leave literal) rather than risk a
-// wrong-type sprintf. Shared by the setup/results/debug screens and game_app;
-// previously duplicated file-locally (game_app.cpp, keyremap_screen.cpp).
-
 // Substitute the first %u/%d/%i with `v`, leaving any other specifier literal.
 inline std::string fmt_u(const std::string& f, int v) {
-    auto p = f.find('%');
+    const auto p = f.find('%');
     if (p == std::string::npos) return f;
-    std::size_t q = p + 1;
-    while (q < f.size() && f[q] != 'u' && f[q] != 'd' && f[q] != 'i' && f[q] != 's' && f[q] != '%')
-        ++q;
+    const std::size_t q = detail::specifier_end(f, p);
     if (q < f.size() && (f[q] == 'u' || f[q] == 'd' || f[q] == 'i'))
         return f.substr(0, p) + std::to_string(v) + f.substr(q + 1);
     return f;
@@ -82,17 +91,15 @@ inline std::string fmt_u(const std::string& f, int v) {
 
 // Substitute the first %s with `v`, leaving any other specifier literal.
 inline std::string fmt_s(const std::string& f, const std::string& v) {
-    auto p = f.find('%');
+    const auto p = f.find('%');
     if (p == std::string::npos) return f;
-    std::size_t q = p + 1;
-    while (q < f.size() && f[q] != 'u' && f[q] != 'd' && f[q] != 'i' && f[q] != 's' && f[q] != '%')
-        ++q;
+    const std::size_t q = detail::specifier_end(f, p);
     if (q < f.size() && f[q] == 's') return f.substr(0, p) + v + f.substr(q + 1);
     return f;
 }
 
-// Both-args splice for two-specifier rows ("Player %u: %s"): the leading
-// numeric first, then the %s; a reordered MESSAGES.TXT degrades gracefully.
+// Both-args splice for two-specifier rows ("Player %u: %s"): the leading numeric
+// first, then the %s; a reordered MESSAGES.TXT degrades gracefully.
 inline std::string fmt_us(const std::string& f, int v, const std::string& s) {
     return fmt_s(fmt_u(f, v), s);
 }

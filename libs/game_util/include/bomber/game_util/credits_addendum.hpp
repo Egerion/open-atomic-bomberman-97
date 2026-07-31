@@ -5,41 +5,29 @@
 
 #include "bomber/assets/bmtext.hpp"
 
-// THE PORT'S OWN CREDITS ADDENDUM — appended to the ORIGINAL CREDITS.BM when
-// the .BM viewer opens it, never written to disk.
+// THE PORT'S OWN CREDITS ADDENDUM — appended to the ORIGINAL CREDITS.BM when the
+// .BM viewer opens it, NEVER written to disk. CREDITS.BM belongs to the user's
+// install: it is 1997 game data, it is never committed, and writing our own
+// credits into someone's installation directory would be indefensible. The file
+// is opened read-only and left byte-identical.
 //
-// CREDITS.BM belongs to the user's install: it is 1997 game data, it is never
-// committed, and writing into someone's installation directory to add our own
-// credits would be indefensible. So the addendum is synthesized here and pushed
-// onto the parsed BmDocument in BmScreen::enter — the file on disk is opened
-// read-only and left byte-identical.
+// The text is authored in `.BM` SYNTAX and run through the same bmtext::parse
+// the install's own files go through, so there is no second layout path to keep
+// in step. It uses literal spaces rather than tabs, so the drifting tab stop
+// (bmtext::expand_tabs) does not enter into it.
 //
-// It is appended to the SAME document rather than given a page of its own for
-// two reasons: the viewer's scroll, paging, clipping and inline-image blit
-// already work and a second screen would duplicate all of it (plus invent a key
-// binding sub_41302D does not have); and a reader who reaches the end of the
-// original credits is exactly the reader this belongs in front of.
-//
-// The text is authored in `.BM` SYNTAX and run through the same
-// bmtext::parse the install's own files go through, so it obeys the same tab
-// rule, the same `<IMGname>` markup and the same line model — there is no second
-// layout path to keep in step. It uses literal spaces rather than tabs, so the
-// drifting tab stop (bmtext::expand_tabs) does not enter into it.
-//
-// LAYOUT BUDGET (measured against the install's FONT6.FON — 16 px cell, 12 px
-// space, proportional glyphs): 65 rows, the widest measuring 349 px of the
-// viewer's 532 px per-line clip, none longer than 38 characters. The headless
-// test bounds the character count, which is the install-free proxy for that
-// measurement; the pixel figures come from the real font and are re-checkable
+// LAYOUT BUDGET, measured against the install's FONT6.FON (16 px cell, 12 px
+// space, proportional glyphs): 65 rows, the widest 349 px of the viewer's 532 px
+// per-line clip, none longer than 38 characters. The headless test bounds the
+// CHARACTER count, which is the install-free proxy; re-check the pixel figures
 // by rendering the page (`--bm-shot CREDITS <out.bmp> <scroll>`).
 //
-// The photograph is 100x100 and, like every other inline image, is CENTRED on
-// its row (bmscreen.cpp) — so it reaches three rows above and below its own.
-// The blank rows around it are what keep the heading and the following
-// paragraph out from under it; the test pins that clearance too. Its column,
-// 293 px from the text inset, is the one the original's own QALOGO sits in, so
-// the addendum reads as part of the same page. The widest row that shares the
-// photograph's band is the email address at 211 px, i.e. 82 px clear of it.
+// The photograph is 100x100 and, like every inline image, is CENTRED on its row
+// (bmscreen.cpp), so it reaches three rows above and below its own. The blank
+// rows around it are what keep the heading and the following paragraph out from
+// under it, and the test pins that clearance. Its column, 293 px from the text
+// inset, is the one the original's own QALOGO sits in; the widest row sharing
+// the photograph's band is the email address at 211 px, 82 px clear of it.
 
 namespace bomber::game {
 

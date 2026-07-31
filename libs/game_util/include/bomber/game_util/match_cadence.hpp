@@ -5,27 +5,18 @@
 // THE F9 CADENCE LEVER, RESOLVED IN ONE PLACE.
 //
 // Native cadence (F9, ADR-0007) advances the sim once per DISPLAYED FRAME on the
-// measured wall-clock delta (Simulation::frame), which is the original's own
-// gameplay driver and was validated 1:1 against it. It is also NON-DETERMINISTIC
-// by construction: the delta differs on every machine, so two netplay peers
-// running it would desync immediately. Netplay is therefore fixed-tick 20 Hz
-// whatever the key says.
+// measured wall-clock delta (Simulation::frame) — the original's own gameplay
+// driver, validated 1:1 against it, and NON-DETERMINISTIC by construction: the
+// delta differs on every machine, so two netplay peers running it desync
+// immediately. Netplay is fixed-tick 20 Hz whatever the key says.
 //
-// WHY THIS IS A FUNCTION AND NOT A BOOL AT FOUR CALL SITES. That rule used to be
-// written at exactly ONE of the four places that consume the lever — the sim
-// advance. The animation clock, the entity glide and the interpolation alpha all
-// read the raw flag. So a netplay match with F9 on ran the sim correctly at a
-// fixed 20 Hz while the renderer was told native cadence was active and pinned
-// `interp_alpha` to 1.0, which switches inter-tick interpolation OFF entirely.
-// F9 online was pure loss: it could not make the sim advance faster (the one
-// guard that existed prevented that, correctly), it only removed the smoothing
-// that makes a 20 Hz sim look fluid — which is exactly what "netplay quality
-// visibly drops with F9 on, and 20 Hz feels silky" reported from the field.
-//
-// Deriving all of them together is what makes them unable to drift apart again,
-// and it is why this is SDL-free and header-only: the rule is then pinned by a
-// headless test (tests/game/test_match_cadence.cpp) rather than by eyeballing a
-// window, and nothing today notices when one of four call sites disagrees.
+// FOUR call sites consume the lever — the sim advance, the animation clock, the
+// entity glide and the interpolation alpha — and the netplay rule used to be
+// written at only the first. The other three read the raw flag, so an online
+// match with F9 on ran the sim correctly at 20 Hz while the renderer pinned
+// `interp_alpha` to 1.0, switching inter-tick interpolation OFF: pure loss, and
+// nothing in the game notices when one of four disagrees. Deriving them together
+// is what stops that recurring.
 
 namespace bomber::game {
 
@@ -40,11 +31,8 @@ struct MatchCadence {
     float interp_alpha = 0.0f;
 };
 
-// `lever` is the live F9 flag; `netplay` is "a RollbackSession is driving the
-// sim". `systems_accum_ms` is Simulation::systems_accum_ms(), which is only
-// meaningful on the Simulation::frame path — netplay never takes it, so a netplay
-// frame must not read it. `acc_ns` is the fixed-tick accumulator and `tick_ns`
-// one tick's worth of it.
+// `systems_accum_ms` is only meaningful on the Simulation::frame path — netplay
+// never takes it, so a netplay frame must not read it.
 inline MatchCadence match_cadence(bool lever, bool netplay, int systems_accum_ms, int ms_per_tick,
                                   std::uint64_t acc_ns, std::uint64_t tick_ns) {
     MatchCadence c;

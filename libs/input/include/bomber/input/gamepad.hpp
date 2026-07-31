@@ -13,17 +13,10 @@ struct SDL_Gamepad;
 // type==3, "sub_429628(i) present" joystick pane). Mirrors KeyboardMapper's
 // shape: read() -> one PlayerInput per tick for a bound stick index.
 //
-//   D-pad or left stick -> the 4 directions (either source, whichever is
-//   pressed; sub_429628-era controllers were digital-or-analog interchangeably
-//   and the original has no facility to prefer one over the other).
-//   South face button (A/Cross) -> action1 (bomb), East face button (B/Circle)
-//   -> action2 (throw/grab/trigger/punch) — the two action buttons the
-//   keyboard mapper exposes.
-//
-// Hotplug (SDL_EVENT_GAMEPAD_ADDED/REMOVED) keeps the enumeration live so the
-// setup screen's joystick pane and type-cycle reflect what's plugged in right
-// now; a mid-match disconnect degrades to neutral input rather than crashing
-// (docs task: "handle a pad disconnect mid-match gracefully").
+// D-pad OR left stick drive the 4 directions, whichever is pressed:
+// sub_429628-era controllers were digital-or-analog interchangeably and the
+// original has no facility to prefer one over the other. South (A/Cross) is
+// action1, East (B/Circle) action2.
 
 namespace bomber::game {
 
@@ -34,24 +27,22 @@ public:
     GamepadMapper(const GamepadMapper&) = delete;
     GamepadMapper& operator=(const GamepadMapper&) = delete;
 
-    // Rescans the connected pads. Call once after SDL_INIT_GAMEPAD and again
-    // on every SDL_EVENT_GAMEPAD_ADDED/REMOVED — SDL_GetGamepads() is cheap
-    // (an id list), so a full rescan on hotplug is simpler than incremental
-    // open/close bookkeeping and just as correct.
+    // Rescans the connected pads. MUST be called after SDL_INIT_GAMEPAD and on
+    // every SDL_EVENT_GAMEPAD_ADDED/REMOVED, or count() goes stale and the
+    // setup screen offers sticks that are no longer there.
     void refresh();
 
-    // How many gamepads are currently open, i.e. how many JOYSTICK <n> slots
-    // the setup screen's type-cycle should offer (docs/re/setup-screens.md
-    // sub_421E80 "joystick advances through present sticks then wraps").
+    // How many JOYSTICK <n> slots the setup screen's type-cycle should offer
+    // (sub_421E80 "joystick advances through present sticks then wraps").
     int count() const { return static_cast<int>(pads_.size()); }
 
-    // The stick's display name (SDL_GetGamepadName), or a generic fallback —
-    // feeds the joystick pane's per-stick line (msg 41, getstring(41)+i).
+    // SDL_GetGamepadName, or a generic fallback — feeds the joystick pane's
+    // per-stick line (msg 41, getstring(41)+i).
     const char* name(int index) const;
 
-    // One tick's input for JOYSTICK <index>. Out-of-range (unplugged mid-
-    // match, or an index the pane never had) returns neutral input rather
-    // than throwing — a disconnect must never crash the match loop.
+    // One tick's input for JOYSTICK <index>. Out of range (unplugged mid-match,
+    // or an index the pane never had) is NEUTRAL input, never a throw: a
+    // disconnect must not crash the match loop.
     sim::PlayerInput read(int index) const;
 
 private:
