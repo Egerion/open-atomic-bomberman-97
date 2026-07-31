@@ -59,3 +59,26 @@ add_test(NAME install_locate COMMAND bomber_install_locate_tests)
 add_executable(bomber_sch_malformed_tests test_sch_malformed.cpp)
 target_link_libraries(bomber_sch_malformed_tests PRIVATE bomber::assets doctest::doctest bomber::warnings)
 add_test(NAME sch_malformed COMMAND bomber_sch_malformed_tests)
+
+# CHFILEANI container + CIMG/RLE decoder. Synthetic files only; covers the
+# valid decode of both pixel formats AND the malformed-input contract, which
+# for this parser includes header fields sized to exhaust the allocator.
+add_executable(bomber_ani_tests test_ani.cpp)
+target_link_libraries(bomber_ani_tests PRIVATE bomber::assets doctest::doctest bomber::warnings)
+add_test(NAME ani COMMAND bomber_ani_tests)
+
+# PCX decoder: 8-bit indexed (the original assets) and 24-bit (DATA_HD), plus
+# the same untrusted-header contract as the .ANI suite above.
+add_executable(bomber_pcx_tests test_pcx.cpp)
+target_link_libraries(bomber_pcx_tests PRIVATE bomber::assets doctest::doctest bomber::warnings)
+add_test(NAME pcx COMMAND bomber_pcx_tests)
+
+# EXTRA<N>.RES stage-actor placement. The coordinate-normalisation cases in
+# here regress as a HANG rather than a failure (a file-driven loop count, and
+# a zero-extent board that never terminates at all), so the suite is capped:
+# the timeout is what turns either into a red test instead of a stuck gate.
+# The whole suite runs in milliseconds when the closed form is intact.
+add_executable(bomber_extra_tests test_extra.cpp)
+target_link_libraries(bomber_extra_tests PRIVATE bomber::assets doctest::doctest bomber::warnings)
+add_test(NAME extra COMMAND bomber_extra_tests)
+set_tests_properties(extra PROPERTIES TIMEOUT 30)

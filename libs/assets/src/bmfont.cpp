@@ -1,10 +1,40 @@
 #include "bomber/assets/bmfont.hpp"
 
+#include <cstddef>
 #include <stdexcept>
+#include <vector>
 
 #include "bomber/assets/binary_reader.hpp"
 
 namespace bomber::assets::bmfont {
+namespace {
+
+// glyph_count * { u32 width, u32 bitmap_offset }. Offsets are measured from the
+// START OF THE BITMAP BLOCK, which begins right after the table (sub_431BBC
+// computes the block size from the LAST entry the same way).
+struct Entry {
+    std::uint32_t width = 0;
+    std::uint32_t offset = 0;
+};
+
+// `height` rows of `(width+7)/8` bytes, 1 bit/pixel, MSB-first. A set bit is
+// inked (255), clear is transparent (0). The caller has already bounds-checked
+// `start + stride * height` against the buffer, so a lying offset or width
+// throws rather than reading OOB (the shipped fonts are self-consistent).
+void rasterize(std::span<const std::uint8_t> bitmap, int width, Glyph& g) {
+    const std::size_t w = static_cast<std::size_t>(width);
+    const std::size_t stride = (w + 7) / 8;
+    const std::size_t rows = bitmap.size() / stride;
+    g.pixels.assign(w * rows, 0);
+    for (std::size_t row = 0; row < rows; ++row) {
+        for (std::size_t x = 0; x < w; ++x) {
+            const std::uint8_t byte = bitmap[row * stride + (x >> 3)];
+            if ((byte >> (7 - (x & 7))) & 1) g.pixels[row * w + x] = 255;
+        }
+    }
+}
+
+}  // namespace
 
 Font parse(std::span<const std::uint8_t> data) {
     BinaryReader r(data);
@@ -29,25 +59,14 @@ Font parse(std::span<const std::uint8_t> data) {
     font.spacing = static_cast<int>(spacing);
     font.glyphs.resize(glyph_count);
 
-    // Glyph table: glyph_count * { u32 width, u32 bitmap_offset }. Offsets are
-    // measured from the START OF THE BITMAP BLOCK, which begins right after the
-    // table (sub_431BBC computes the block size from the LAST entry the same
-    // way). BinaryReader validates every table read.
-    struct Entry {
-        std::uint32_t width;
-        std::uint32_t offset;
-    };
+    // BinaryReader validates every table read.
     std::vector<Entry> table(glyph_count);
-    for (auto& e : table) {
+    for (Entry& e : table) {
         e.width = r.u32();
         e.offset = r.u32();
     }
     const std::size_t bitmap_base = r.pos();  // 20 + 8*count
 
-    // Rasterize each glyph: `height` rows of `(width+7)/8` bytes, 1 bit/pixel,
-    // MSB-first. A set bit is inked (255), clear is transparent (0). Bounds are
-    // checked against the buffer so a lying offset/width throws rather than
-    // reading OOB (the shipped fonts are self-consistent).
     for (std::size_t c = 0; c < glyph_count; ++c) {
         const int w = static_cast<int>(table[c].width);
         Glyph& g = font.glyphs[c];
@@ -56,17 +75,11 @@ Font parse(std::span<const std::uint8_t> data) {
         const std::size_t stride = (static_cast<std::size_t>(w) + 7) / 8;
         const std::size_t need = stride * glyph_height;
         const std::size_t start = bitmap_base + table[c].offset;
-        if (start + need > data.size())
+        // `start` cannot wrap: bitmap_base is a validated file offset and
+        // `offset` is a u32, both widened to size_t.
+        if (start > data.size() || need > data.size() - start)
             throw std::runtime_error("bmfont: glyph bitmap past end");
-        g.pixels.assign(static_cast<std::size_t>(w) * glyph_height, 0);
-        for (std::size_t row = 0; row < glyph_height; ++row) {
-            const std::uint8_t* rowp = data.data() + start + row * stride;
-            for (int x = 0; x < w; ++x) {
-                const std::uint8_t byte = rowp[static_cast<std::size_t>(x) >> 3];
-                const bool set = (byte >> (7 - (x & 7))) & 1;
-                if (set) g.pixels[row * static_cast<std::size_t>(w) + x] = 255;
-            }
-        }
+        rasterize(data.subspan(start, need), w, g);
     }
     return font;
 }

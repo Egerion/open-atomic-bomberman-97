@@ -1,17 +1,18 @@
 #include "bomber/assets/sch.hpp"
 
+#include <cstddef>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
+#include <string>
+#include <vector>
+
+#include "text_util.hpp"
 
 namespace bomber::assets::sch {
 namespace {
 
-std::string trim(const std::string& s) {
-    auto b = s.find_first_not_of(" \t\r\x1a");
-    auto e = s.find_last_not_of(" \t\r\x1a");
-    return b == std::string::npos ? std::string() : s.substr(b, e - b + 1);
-}
+using text::trim;
 
 std::vector<std::string> split(const std::string& s, char sep, int max_parts = -1) {
     std::vector<std::string> out;
@@ -32,6 +33,65 @@ std::vector<std::string> split(const std::string& s, char sep, int max_parts = -
     return out;
 }
 
+// Where a directive came from — every numeric field's error text needs both.
+struct LineCtx {
+    const std::filesystem::path& path;
+    int lineno = 0;
+};
+
+// std::stoi throws std::invalid_argument / std::out_of_range on a
+// non-numeric or oversized field — both are std::logic_error, which
+// violates this module's contract. Every sibling text parser (and this
+// parser's own -R/-S/-P checks below) reports malformed input as
+// std::runtime_error, and that is what callers catch. Re-tag each numeric
+// field to a path/line-tagged std::runtime_error; valid fields are
+// forwarded unchanged, so well-formed files parse byte-identically.
+int to_int(const LineCtx& ctx, const std::string& field) {
+    try {
+        return std::stoi(field);
+    } catch (const std::exception&) {
+        throw std::runtime_error("scheme: bad numeric field '" + field + "' on line " +
+                                 std::to_string(ctx.lineno) + ": " + ctx.path.string());
+    }
+}
+
+void parse_row(const std::string& rest, const LineCtx& ctx, Scheme& sch) {
+    const auto parts = split(rest, ',', 2);
+    if (parts.size() != 2) throw std::runtime_error("bad -R line: " + ctx.path.string());
+    sch.rows.push_back(trim(parts[1]));
+}
+
+void parse_spawn(const std::string& rest, const LineCtx& ctx, Scheme& sch) {
+    const auto parts = split(rest, ',');
+    if (parts.size() < 3) throw std::runtime_error("bad -S line: " + ctx.path.string());
+    Spawn sp;
+    sp.player = to_int(ctx, parts[0]);
+    sp.x = to_int(ctx, parts[1]);
+    sp.y = to_int(ctx, parts[2]);
+    // 4th field = TEAM, stored as a boolean exactly like sub_403EEE's own
+    // `sub_4516C1(fields[3]) != 0` — and only when the row actually carries it
+    // (the original's `j == 4` arm; a three-field row leaves the slot's record
+    // alone).
+    if (parts.size() > 3) {
+        sp.team = to_int(ctx, parts[3]) != 0 ? 1 : 0;
+        sp.has_team = true;
+    }
+    sch.spawns.push_back(sp);
+}
+
+void parse_powerup(const std::string& rest, const LineCtx& ctx, Scheme& sch) {
+    const auto parts = split(rest, ',', 6);
+    if (parts.size() < 5) throw std::runtime_error("bad -P line: " + ctx.path.string());
+    PowerupRule pr;
+    pr.id = to_int(ctx, parts[0]);
+    pr.born_with = to_int(ctx, parts[1]);
+    pr.has_override = to_int(ctx, parts[2]);
+    pr.override_value = to_int(ctx, parts[3]);
+    pr.forbidden = to_int(ctx, parts[4]);
+    if (parts.size() > 5) pr.comment = trim(parts[5]);
+    sch.powerups.push_back(pr);
+}
+
 }  // namespace
 
 Scheme load(const std::filesystem::path& path) {
@@ -39,80 +99,28 @@ Scheme load(const std::filesystem::path& path) {
     if (!f) throw std::runtime_error("cannot open scheme: " + path.string());
 
     Scheme sch;
+    LineCtx ctx{path, 0};
     std::string raw;
-    int lineno = 0;
-
-    // std::stoi throws std::invalid_argument / std::out_of_range on a
-    // non-numeric or oversized field — both are std::logic_error, which
-    // violates this module's contract. Every sibling text parser (and this
-    // parser's own -R/-S/-P checks below) reports malformed input as
-    // std::runtime_error, and that is what callers catch. Re-tag each numeric
-    // field to a path/line-tagged std::runtime_error; valid fields are
-    // forwarded unchanged, so well-formed files parse byte-identically.
-    auto to_int = [&](const std::string& field) -> int {
-        try {
-            return std::stoi(field);
-        } catch (const std::exception&) {
-            throw std::runtime_error("scheme: bad numeric field '" + field + "' on line " +
-                                     std::to_string(lineno) + ": " + path.string());
-        }
-    };
-
     while (std::getline(f, raw)) {
-        ++lineno;
-        std::string line = trim(raw);
+        ++ctx.lineno;
+        const std::string line = trim(raw);
         if (line.empty() || line[0] == ';') continue;
         if (line[0] != '-' || line.size() < 2) continue;
 
-        char cmd = line[1];
-        std::string rest = line.size() > 3 ? line.substr(3) : std::string();  // after "-X,"
-        switch (cmd) {
-            case 'V': sch.version = to_int(rest); break;
+        const std::string rest = line.size() > 3 ? line.substr(3) : std::string();  // after "-X,"
+        switch (line[1]) {
+            case 'V': sch.version = to_int(ctx, rest); break;
             case 'N': sch.name = trim(rest); break;
-            case 'B': sch.brick_density = to_int(rest); break;
-            case 'R': {
-                auto parts = split(rest, ',', 2);
-                if (parts.size() != 2) throw std::runtime_error("bad -R line: " + path.string());
-                sch.rows.push_back(trim(parts[1]));
-                break;
-            }
-            case 'S': {
-                auto parts = split(rest, ',');
-                if (parts.size() < 3) throw std::runtime_error("bad -S line: " + path.string());
-                Spawn sp;
-                sp.player = to_int(parts[0]);
-                sp.x = to_int(parts[1]);
-                sp.y = to_int(parts[2]);
-                // 4th field = TEAM, stored as a boolean exactly like
-                // sub_403EEE's own `sub_4516C1(fields[3]) != 0` — and only
-                // when the row actually carries it (the original's `j == 4`
-                // arm; a three-field row leaves the slot's record alone).
-                if (parts.size() > 3) {
-                    sp.team = to_int(parts[3]) != 0 ? 1 : 0;
-                    sp.has_team = true;
-                }
-                sch.spawns.push_back(sp);
-                break;
-            }
-            case 'P': {
-                auto parts = split(rest, ',', 6);
-                if (parts.size() < 5) throw std::runtime_error("bad -P line: " + path.string());
-                PowerupRule pr;
-                pr.id = to_int(parts[0]);
-                pr.born_with = to_int(parts[1]);
-                pr.has_override = to_int(parts[2]);
-                pr.override_value = to_int(parts[3]);
-                pr.forbidden = to_int(parts[4]);
-                if (parts.size() > 5) pr.comment = trim(parts[5]);
-                sch.powerups.push_back(pr);
-                break;
-            }
+            case 'B': sch.brick_density = to_int(ctx, rest); break;
+            case 'R': parse_row(rest, ctx, sch); break;
+            case 'S': parse_spawn(rest, ctx, sch); break;
+            case 'P': parse_powerup(rest, ctx, sch); break;
             default: break;  // unknown directive: ignore, format is versioned
         }
     }
 
     if (sch.rows.empty()) throw std::runtime_error("scheme has no rows: " + path.string());
-    for (auto& row : sch.rows)
+    for (const auto& row : sch.rows)
         if (row.size() != sch.rows[0].size())
             throw std::runtime_error("scheme rows differ in width: " + path.string());
     return sch;
@@ -163,7 +171,7 @@ std::string to_text(const Scheme& scheme) {
 void write(const Scheme& scheme, const std::filesystem::path& path) {
     std::ofstream f(path, std::ios::binary);
     if (!f) throw std::runtime_error("cannot write scheme: " + path.string());
-    std::string text = to_text(scheme);
+    const std::string text = to_text(scheme);
     f.write(text.data(), static_cast<std::streamsize>(text.size()));
     if (!f) throw std::runtime_error("failed writing scheme: " + path.string());
 }

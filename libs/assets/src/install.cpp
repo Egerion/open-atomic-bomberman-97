@@ -49,9 +49,70 @@ bool iequals(const std::string& a, const char* b) {
     return i == a.size() && b[i] == '\0';
 }
 
-}  // namespace
+// One keyboard binding slot, so the keydef writer's helpers stay at three
+// arguments instead of carrying (set, action) around separately.
+struct KeySlot {
+    int set = 0;
+    int action = 0;
+};
 
-namespace {
+// "keydef=<set>,<action>,<scancode>" — three comma-separated ints. An
+// out-of-range set/action drops the WHOLE line, matching the original's clamp
+// (docs/re/results-and-options.md §3).
+void apply_keydef(const std::string& val, Options& opts) {
+    int set = 0, action = 0, scancode = 0;
+    if (std::sscanf(val.c_str(), "%d,%d,%d", &set, &action, &scancode) != 3) return;
+    if (set < 0 || set >= KeyDef::kSets || action < 0 || action >= KeyDef::kActionsPerSet) return;
+    if (!opts.keydef) opts.keydef = KeyDef{};
+    opts.keydef->scancode[set][action] = scancode;
+}
+
+// Find the line owning `key` (same "first '=' splits key/value" rule as the
+// reader) and rewrite its value; append when the key is absent.
+void set_key(std::vector<std::string>& lines, const char* key, const std::string& value) {
+    for (std::string& line : lines) {
+        const auto eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        if (!iequals(trim(line.substr(0, eq)), key)) continue;
+        line = std::string(key) + "=" + value;
+        return;
+    }
+    lines.push_back(std::string(key) + "=" + value);
+}
+
+void set_bool(std::vector<std::string>& lines, const char* key, bool v) {
+    set_key(lines, key, v ? "1" : "0");
+}
+
+// keydef= is the one key with MANY lines (the file's real shape: 20 distinct
+// lines sharing a key), so it needs its own find/replace-or-append pass per
+// (set,action) triple rather than the single-line set_key above.
+void set_keydef_line(std::vector<std::string>& lines, KeySlot slot, int scancode) {
+    const std::string prefix = std::to_string(slot.set) + "," + std::to_string(slot.action) + ",";
+    const std::string value = prefix + std::to_string(scancode);
+    for (std::string& line : lines) {
+        const auto eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        if (!iequals(trim(line.substr(0, eq)), "keydef")) continue;
+        if (trim(line.substr(eq + 1)).rfind(prefix, 0) != 0) continue;  // different (set,action)
+        line = "keydef=" + value;
+        return;
+    }
+    lines.push_back("keydef=" + value);
+}
+
+// The writer (sub_405DE3) always emits all 20 triples in a fixed (set, action)
+// order; we do the same but skip a triple whose scancode is still -1 (never
+// bound), so a partially-populated KeyDef (e.g. only the 6 UI-exposed actions)
+// does not fabricate slots 6-9.
+void write_keydefs(std::vector<std::string>& lines, const KeyDef& keydef) {
+    for (int set = 0; set < KeyDef::kSets; ++set) {
+        for (int action = 0; action < KeyDef::kActionsPerSet; ++action) {
+            const int sc = keydef.scancode[set][action];
+            if (sc >= 0) set_keydef_line(lines, KeySlot{set, action}, sc);
+        }
+    }
+}
 
 // One gamedir.txt: first line, trimmed, accepted only if it names a directory.
 // A UTF-8 BOM is stripped — PowerShell's `-Encoding utf8` writes one, and it
@@ -113,6 +174,92 @@ fs::path default_game_dir(const fs::path& exe_dir) {
     return {};
 }
 
+namespace {
+
+// The three post-read clamps from docs/re/results-and-options.md §3's table,
+// named so the dispatch chain below is one statement per key. Keeping the
+// arithmetic here rather than inline is what lets the chain stay a flat,
+// checkable list.
+int clamp_low(int v, int lo) {
+    return v < lo ? lo : v;
+}
+
+// 1001 is the "unlimited" sentinel and is never clamped.
+int clamp_playtime(int v) {
+    return (v != 1001 && v < 60) ? 60 : v;
+}
+
+int clamp_netprotocol(int v) {
+    return v < 0 ? 0 : (v > 3 ? 3 : v);
+}
+
+// The 22 keys sub_406238's stricmp chain actually has, in ITS order.
+// DELIBERATELY a long if/else chain: the RE workflow requires a ported
+// mechanic to mirror the binary rather than paraphrase it, and this chain IS
+// the binary's shape (docs/coding-standards.md §8 — replacing a faithful-port
+// dispatch with a table destroys the property that makes the port checkable
+// against the exe). Answers whether the key was one of them.
+bool apply_original_option(const std::string& key, const std::string& val, Options& opts) {
+    const auto as_int = [&val] { return std::atoi(val.c_str()); };
+    const auto as_bool = [&as_int] { return as_int() != 0; };
+    // One line per key is the whole point: this block is meant to be read next
+    // to sub_406238's stricmp chain and checked against it arm by arm, which is
+    // CLAUDE.md's stated reason for holding a mirrored block off the formatter.
+    // The upper clamp on levelno needs getvalue(35) and is left to the consumer.
+    // clang-format off
+    if (iequals(key, "levelno")) opts.levelno = clamp_low(as_int(), -1);
+    else if (iequals(key, "num_to_win_match")) opts.num_to_win_match = clamp_low(as_int(), 1);
+    else if (iequals(key, "enclosement_depth")) opts.enclosement_depth = clamp_low(as_int(), 0);
+    else if (iequals(key, "conveyor_speed")) opts.conveyor_speed = as_int();
+    else if (iequals(key, "team_play")) opts.team_play = as_bool();
+    else if (iequals(key, "random_start")) opts.random_start = as_bool();
+    else if (iequals(key, "stomped_bombs_detonate")) opts.stomped_bombs_detonate = as_bool();
+    else if (iequals(key, "win_by_kills")) opts.win_by_kills = as_bool();
+    else if (iequals(key, "goldman")) opts.goldman = as_bool();
+    else if (iequals(key, "schemefilename")) opts.schemefilename = val;
+    else if (iequals(key, "playtime")) opts.playtime = clamp_playtime(as_int());
+    else if (iequals(key, "assign_keyboards")) opts.assign_keyboards = as_bool();
+    else if (iequals(key, "diseases_destroyable")) opts.diseases_destroyable = as_bool();
+    else if (iequals(key, "lost_net_revert_ai")) opts.lost_net_revert_ai = as_bool();
+    else if (iequals(key, "disable_game_music")) opts.disable_game_music = as_bool();
+    else if (iequals(key, "modemport")) opts.modemport = as_int();
+    else if (iequals(key, "modembaud")) opts.modembaud = as_int();
+    else if (iequals(key, "modemirq")) opts.modemirq = as_int();
+    else if (iequals(key, "modemdial")) opts.modemdial = val;
+    else if (iequals(key, "netprotocol")) opts.netprotocol = clamp_netprotocol(as_int());
+    else if (iequals(key, "smallmemory")) opts.smallmemory = as_bool();
+    else if (iequals(key, "keydef")) apply_keydef(val, opts);
+    else return false;
+    // clang-format on
+    return true;
+}
+
+// The port's OWN keys — none of these exist in the 1997 binary, so none of them
+// is in the chain above and none ever reached the original's stricmp list
+// (install.hpp documents each). They are parsed the same normalized-bool way.
+// This is the seam the chain is split on: it separates our additions from the
+// faithful port rather than cutting the ported dispatch in an arbitrary place.
+void apply_port_option(const std::string& key, const std::string& val, Options& opts) {
+    const auto as_bool = [&val] { return std::atoi(val.c_str()) != 0; };
+    // clang-format off
+    if (iequals(key, "fullscreen")) opts.fullscreen = as_bool();
+    else if (iequals(key, "vsync")) opts.vsync = as_bool();
+    else if (iequals(key, "native_cadence")) opts.native_cadence = as_bool();
+    else if (iequals(key, "show_fps")) opts.show_fps = as_bool();
+    else if (iequals(key, "soft_scaling")) opts.soft_scaling = as_bool();
+    // clang-format on
+    // Anything else hits the original's final `else` (a debug log line, not a
+    // user-facing effect) and is intentionally ignored — still preserved
+    // verbatim by save_options' read-modify-write.
+}
+
+void apply_option(const std::string& key, const std::string& val, Options& opts) {
+    if (apply_original_option(key, val, opts)) return;
+    apply_port_option(key, val, opts);
+}
+
+}  // namespace
+
 Options load_options(const fs::path& path) {
     Options opts;
     std::ifstream f(path);
@@ -121,185 +268,90 @@ Options load_options(const fs::path& path) {
     // Mirror sub_406238: for each line, split on the FIRST '=' into key/value,
     // trim both, and match the key case-insensitively. ';'-comment and blank
     // lines have no '=' in the key position we care about and are skipped.
-    // Clamps mirror docs/re/results-and-options.md §3's table exactly.
     std::string line;
     while (std::getline(f, line)) {
-        auto eq = line.find('=');
+        const auto eq = line.find('=');
         if (eq == std::string::npos) continue;
-        std::string key = trim(line.substr(0, eq));
-        std::string val = trim(line.substr(eq + 1));
+        const std::string key = trim(line.substr(0, eq));
+        const std::string val = trim(line.substr(eq + 1));
         if (key.empty() || val.empty()) continue;
-        auto as_int = [&] { return std::atoi(val.c_str()); };
-        auto as_bool = [&] { return as_int() != 0; };
-        if (iequals(key, "levelno")) {
-            int v = as_int();
-            opts.levelno = v < -1 ? -1 : v;  // upper clamp needs getvalue(35), left to the consumer
-        } else if (iequals(key, "num_to_win_match")) {
-            int v = as_int();
-            opts.num_to_win_match = v < 1 ? 1 : v;
-        } else if (iequals(key, "enclosement_depth")) {
-            int v = as_int();
-            opts.enclosement_depth = v < 0 ? 0 : v;
-        } else if (iequals(key, "conveyor_speed")) {
-            opts.conveyor_speed = as_int();
-        } else if (iequals(key, "team_play")) {
-            opts.team_play = as_bool();
-        } else if (iequals(key, "random_start")) {
-            opts.random_start = as_bool();
-        } else if (iequals(key, "stomped_bombs_detonate")) {
-            opts.stomped_bombs_detonate = as_bool();
-        } else if (iequals(key, "win_by_kills")) {
-            opts.win_by_kills = as_bool();
-        } else if (iequals(key, "goldman")) {
-            opts.goldman = as_bool();
-        } else if (iequals(key, "schemefilename")) {
-            opts.schemefilename = val;
-        } else if (iequals(key, "playtime")) {
-            int v = as_int();
-            if (v != 1001 && v < 60) v = 60;  // 1001 = the "unlimited" sentinel, never clamped
-            opts.playtime = v;
-        } else if (iequals(key, "assign_keyboards")) {
-            opts.assign_keyboards = as_bool();
-        } else if (iequals(key, "diseases_destroyable")) {
-            opts.diseases_destroyable = as_bool();
-        } else if (iequals(key, "lost_net_revert_ai")) {
-            opts.lost_net_revert_ai = as_bool();
-        } else if (iequals(key, "disable_game_music")) {
-            opts.disable_game_music = as_bool();
-        } else if (iequals(key, "modemport")) {
-            opts.modemport = as_int();
-        } else if (iequals(key, "modembaud")) {
-            opts.modembaud = as_int();
-        } else if (iequals(key, "modemirq")) {
-            opts.modemirq = as_int();
-        } else if (iequals(key, "modemdial")) {
-            opts.modemdial = val;
-        } else if (iequals(key, "netprotocol")) {
-            int v = as_int();
-            if (v < 0) v = 0;
-            if (v > 3) v = 3;
-            opts.netprotocol = v;
-        } else if (iequals(key, "smallmemory")) {
-            opts.smallmemory = as_bool();
-        } else if (iequals(key, "keydef")) {
-            // "keydef=<set>,<action>,<scancode>" — three comma-separated ints.
-            // Out-of-range set/action drops the WHOLE line (§3's clamp note).
-            int set = 0, action = 0, scancode = 0;
-            if (std::sscanf(val.c_str(), "%d,%d,%d", &set, &action, &scancode) == 3 && set >= 0 &&
-                set < KeyDef::kSets && action >= 0 && action < KeyDef::kActionsPerSet) {
-                if (!opts.keydef) opts.keydef = KeyDef{};
-                opts.keydef->scancode[set][action] = scancode;
-            }
-        } else if (iequals(key, "fullscreen")) {
-            // PORT-ONLY key (install.hpp's Options::fullscreen doc) — not one
-            // of the original's 22 keys, so it never hits the original's own
-            // stricmp chain; still parsed the same normalized-bool way.
-            opts.fullscreen = as_bool();
-        } else if (iequals(key, "vsync")) {
-            opts.vsync = as_bool();  // PORT-ONLY (Video Settings) — see install.hpp
-        } else if (iequals(key, "native_cadence")) {
-            opts.native_cadence = as_bool();  // PORT-ONLY (Video Settings)
-        } else if (iequals(key, "show_fps")) {
-            opts.show_fps = as_bool();  // PORT-ONLY (Video Settings)
-        } else if (iequals(key, "soft_scaling")) {
-            opts.soft_scaling = as_bool();  // PORT-ONLY (Video Settings)
-        }
-        // Any other key hits the original's final `else` (a debug log line,
-        // not a user-facing effect) and is intentionally ignored here — still
-        // preserved verbatim by save_options' read-modify-write.
+        apply_option(key, val, opts);
     }
     return opts;
 }
 
-void save_options(const fs::path& path, const Options& opts) {
-    // Read every existing line verbatim (read-modify-write), so a hand-edited
-    // file keeps its comments/ordering/unknown keys. Missing file -> start
-    // from an empty line set (still yields a valid options.ini).
+namespace {
+
+// Read every existing line verbatim, so a hand-edited file keeps its
+// comments/ordering/unknown keys. A missing file yields an empty line set,
+// which still writes back as a valid options.ini.
+std::vector<std::string> read_lines(const fs::path& path) {
     std::vector<std::string> lines;
-    if (std::ifstream in(path); in) {
-        std::string line;
-        while (std::getline(in, line)) {
-            if (!line.empty() && line.back() == '\r') line.pop_back();
-            lines.push_back(line);
-        }
+    std::ifstream in(path);
+    if (!in) return lines;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        lines.push_back(line);
     }
+    return lines;
+}
 
-    // For each key we own, find its line (same "first '=' splits key/value"
-    // rule as the reader) and rewrite the value; otherwise remember to append.
-    auto set_key = [&](const char* key, const std::string& value) {
-        for (std::string& line : lines) {
-            auto eq = line.find('=');
-            if (eq == std::string::npos) continue;
-            if (!iequals(trim(line.substr(0, eq)), key)) continue;
-            line = std::string(key) + "=" + value;
-            return;
-        }
-        lines.push_back(std::string(key) + "=" + value);
-    };
-    auto set_bool = [&](const char* key, bool v) { set_key(key, v ? "1" : "0"); };
-
-    if (opts.levelno) set_key("levelno", std::to_string(*opts.levelno));
-    if (opts.num_to_win_match) set_key("num_to_win_match", std::to_string(*opts.num_to_win_match));
+// The 21 single-line keys sub_405DE3 emits, in ITS fixed fprintf order — the
+// mirror of apply_original_option's read chain, and split from the port's own
+// keys on the same seam. Deliberately a flat list rather than a table: the
+// fields are of three different types, so a variant-driven table would add a
+// layer a reader has to decode before reaching logic that is already one line
+// per key (docs/coding-standards.md §8 — a pattern nobody needs is a defect).
+void write_original_keys(std::vector<std::string>& lines, const Options& opts) {
+    if (opts.levelno) set_key(lines, "levelno", std::to_string(*opts.levelno));
+    if (opts.num_to_win_match)
+        set_key(lines, "num_to_win_match", std::to_string(*opts.num_to_win_match));
     if (opts.enclosement_depth)
-        set_key("enclosement_depth", std::to_string(*opts.enclosement_depth));
-    if (opts.conveyor_speed) set_key("conveyor_speed", std::to_string(*opts.conveyor_speed));
-    if (opts.team_play) set_bool("team_play", *opts.team_play);
-    if (opts.random_start) set_bool("random_start", *opts.random_start);
+        set_key(lines, "enclosement_depth", std::to_string(*opts.enclosement_depth));
+    if (opts.conveyor_speed) set_key(lines, "conveyor_speed", std::to_string(*opts.conveyor_speed));
+    if (opts.team_play) set_bool(lines, "team_play", *opts.team_play);
+    if (opts.random_start) set_bool(lines, "random_start", *opts.random_start);
     if (opts.stomped_bombs_detonate)
-        set_bool("stomped_bombs_detonate", *opts.stomped_bombs_detonate);
-    if (opts.win_by_kills) set_bool("win_by_kills", *opts.win_by_kills);
-    if (opts.goldman) set_bool("goldman", *opts.goldman);
-    if (opts.schemefilename) set_key("schemefilename", *opts.schemefilename);
-    if (opts.playtime) set_key("playtime", std::to_string(*opts.playtime));
-    if (opts.assign_keyboards) set_bool("assign_keyboards", *opts.assign_keyboards);
-    if (opts.diseases_destroyable) set_bool("diseases_destroyable", *opts.diseases_destroyable);
-    if (opts.lost_net_revert_ai) set_bool("lost_net_revert_ai", *opts.lost_net_revert_ai);
-    if (opts.disable_game_music) set_bool("disable_game_music", *opts.disable_game_music);
-    if (opts.modemport) set_key("modemport", std::to_string(*opts.modemport));
-    if (opts.modembaud) set_key("modembaud", std::to_string(*opts.modembaud));
-    if (opts.modemirq) set_key("modemirq", std::to_string(*opts.modemirq));
-    if (opts.modemdial) set_key("modemdial", *opts.modemdial);
-    if (opts.netprotocol) set_key("netprotocol", std::to_string(*opts.netprotocol));
-    if (opts.smallmemory) set_bool("smallmemory", *opts.smallmemory);
-    // "fullscreen=" — PORT-ONLY key (install.hpp's Options::fullscreen doc),
-    // same read-modify-write shape as every RE'd key above.
-    if (opts.fullscreen) set_bool("fullscreen", *opts.fullscreen);
-    // PORT-ONLY "Video Settings" keys (install.hpp), same round-trip.
-    if (opts.vsync) set_bool("vsync", *opts.vsync);
-    if (opts.native_cadence) set_bool("native_cadence", *opts.native_cadence);
-    if (opts.show_fps) set_bool("show_fps", *opts.show_fps);
-    if (opts.soft_scaling) set_bool("soft_scaling", *opts.soft_scaling);
-    if (opts.keydef) {
-        // The writer (sub_405DE3) always emits all 20 triples in a fixed
-        // (set, action) order; we do the same but skip a triple whose
-        // scancode is still -1 (never bound), so a partially-populated KeyDef
-        // (e.g. only the 6 UI-exposed actions) does not fabricate slots 6-9.
-        // Multiple keydef= lines are ADDED (matching the file's real shape —
-        // 20 distinct lines with the same key), so this key needs its own
-        // find/replace-or-append pass per (set,action) triple rather than the
-        // single-line set_key above.
-        for (int set = 0; set < KeyDef::kSets; ++set) {
-            for (int action = 0; action < KeyDef::kActionsPerSet; ++action) {
-                int sc = opts.keydef->scancode[set][action];
-                if (sc < 0) continue;
-                std::string value =
-                    std::to_string(set) + "," + std::to_string(action) + "," + std::to_string(sc);
-                std::string prefix = std::to_string(set) + "," + std::to_string(action) + ",";
-                bool replaced = false;
-                for (std::string& line : lines) {
-                    auto eq = line.find('=');
-                    if (eq == std::string::npos) continue;
-                    if (!iequals(trim(line.substr(0, eq)), "keydef")) continue;
-                    std::string existing = trim(line.substr(eq + 1));
-                    if (existing.rfind(prefix, 0) != 0) continue;  // different (set,action)
-                    line = "keydef=" + value;
-                    replaced = true;
-                    break;
-                }
-                if (!replaced) lines.push_back("keydef=" + value);
-            }
-        }
-    }
+        set_bool(lines, "stomped_bombs_detonate", *opts.stomped_bombs_detonate);
+    if (opts.win_by_kills) set_bool(lines, "win_by_kills", *opts.win_by_kills);
+    if (opts.goldman) set_bool(lines, "goldman", *opts.goldman);
+    if (opts.schemefilename) set_key(lines, "schemefilename", *opts.schemefilename);
+    if (opts.playtime) set_key(lines, "playtime", std::to_string(*opts.playtime));
+    if (opts.assign_keyboards) set_bool(lines, "assign_keyboards", *opts.assign_keyboards);
+    if (opts.diseases_destroyable)
+        set_bool(lines, "diseases_destroyable", *opts.diseases_destroyable);
+    if (opts.lost_net_revert_ai) set_bool(lines, "lost_net_revert_ai", *opts.lost_net_revert_ai);
+    if (opts.disable_game_music) set_bool(lines, "disable_game_music", *opts.disable_game_music);
+    if (opts.modemport) set_key(lines, "modemport", std::to_string(*opts.modemport));
+    if (opts.modembaud) set_key(lines, "modembaud", std::to_string(*opts.modembaud));
+    if (opts.modemirq) set_key(lines, "modemirq", std::to_string(*opts.modemirq));
+    if (opts.modemdial) set_key(lines, "modemdial", *opts.modemdial);
+    if (opts.netprotocol) set_key(lines, "netprotocol", std::to_string(*opts.netprotocol));
+    if (opts.smallmemory) set_bool(lines, "smallmemory", *opts.smallmemory);
+}
+
+// PORT-ONLY keys — none of these is one of the original's 22 (install.hpp
+// documents each), persisted through the SAME read-modify-write file so they
+// round-trip like every RE'd toggle above.
+void write_port_keys(std::vector<std::string>& lines, const Options& opts) {
+    if (opts.fullscreen) set_bool(lines, "fullscreen", *opts.fullscreen);
+    if (opts.vsync) set_bool(lines, "vsync", *opts.vsync);
+    if (opts.native_cadence) set_bool(lines, "native_cadence", *opts.native_cadence);
+    if (opts.show_fps) set_bool(lines, "show_fps", *opts.show_fps);
+    if (opts.soft_scaling) set_bool(lines, "soft_scaling", *opts.soft_scaling);
+}
+
+}  // namespace
+
+void save_options(const fs::path& path, const Options& opts) {
+    // Read-modify-write: only the keys named in `opts` change, every other line
+    // survives verbatim. The three calls below are in sub_405DE3's emit order,
+    // which decides where a key ABSENT from the file gets appended.
+    std::vector<std::string> lines = read_lines(path);
+    write_original_keys(lines, opts);
+    write_port_keys(lines, opts);
+    if (opts.keydef) write_keydefs(lines, *opts.keydef);
 
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     if (!out) throw std::runtime_error("save_options: cannot write " + path.string());

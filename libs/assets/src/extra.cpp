@@ -1,17 +1,18 @@
 #include "bomber/assets/extra.hpp"
 
 #include <cctype>
+#include <cstddef>
 #include <fstream>
+#include <optional>
 #include <string>
+#include <vector>
+
+#include "text_util.hpp"
 
 namespace bomber::assets::extra {
 namespace {
 
-std::string trim(const std::string& s) {
-    auto b = s.find_first_not_of(" \t\r\x1a");
-    auto e = s.find_last_not_of(" \t\r\x1a");
-    return b == std::string::npos ? std::string() : s.substr(b, e - b + 1);
-}
+using text::trim;
 
 std::vector<std::string> split(const std::string& s, char sep) {
     std::vector<std::string> out;
@@ -50,12 +51,85 @@ int to_int(const std::string& tok) {
     }
 }
 
+// The board a line's coordinates are normalized against, so the per-kind
+// parsers below take one argument for it instead of a (w, h) pair.
+struct Board {
+    int w = 0;
+    int h = 0;
+};
+
 // Coordinate normalization from sub_404E99: wrap negatives up from the far
 // edge, clamp over-large ones to the last tile.
+//
+// The original writes the wrap as `while (v < 0) v += extent`, and transcribing
+// that literally made the iteration count a FUNCTION OF THE FILE: `-A,n,
+// -2147483648,0` spins ~143 million times on a 15-wide board, and a file of
+// such rows hangs the loader before it ever returns. The closed form below is
+// the same function on every input — repeated addition of a positive `extent`
+// to a negative `v` lands exactly on the Euclidean remainder in [0, extent),
+// which the clamp then cannot trip — in constant time. `extent <= 0` had no
+// terminating case at all; a board with no tiles has no position to normalise
+// to, so it collapses to 0.
 int norm(int v, int extent) {
-    while (v < 0) v += extent;
-    if (v >= extent) v = extent - 1;
-    return v;
+    if (extent <= 0) return 0;
+    if (v < 0) return (v % extent + extent) % extent;
+    return v >= extent ? extent - 1 : v;
+}
+
+// '-A' / '-C': type,dir,x,y. An unrecognised direction letter drops the line,
+// matching the original's godir lookup returning -1.
+std::optional<Actor> parse_arrow(const std::vector<std::string>& parts, char cmd, Board board) {
+    if (parts.size() < 4) return std::nullopt;
+    const int d = dir_letter(parts[1]);
+    if (d < 0) return std::nullopt;
+    Actor a;
+    a.kind = (cmd == 'C') ? Kind::Conveyor : Kind::DirArrow;
+    a.dir = d;
+    a.x = norm(to_int(parts[2]), board.w);
+    a.y = norm(to_int(parts[3]), board.h);
+    return a;
+}
+
+// '-T': type,x,y — or '-T,H,H', which asks for a random odd-parity placement
+// the caller resolves with a setup-only RNG (stage-actors.md §8).
+std::optional<Actor> parse_trampoline(const std::vector<std::string>& parts, Board board) {
+    if (parts.size() < 3) return std::nullopt;
+    Actor a;
+    a.kind = Kind::Trampoline;
+    if (!parts[1].empty() && std::toupper(static_cast<unsigned char>(parts[1][0])) == 'H') {
+        a.random = true;
+        return a;
+    }
+    a.x = norm(to_int(parts[1]), board.w);
+    a.y = norm(to_int(parts[2]), board.h);
+    return a;
+}
+
+// '-W': type,type,idno,x,y,linkto.
+std::optional<Actor> parse_warphole(const std::vector<std::string>& parts, Board board) {
+    if (parts.size() < 6) return std::nullopt;
+    Actor a;
+    a.kind = Kind::Warphole;
+    a.idno = to_int(parts[2]);
+    a.x = norm(to_int(parts[3]), board.w);
+    a.y = norm(to_int(parts[4]), board.h);
+    a.linkto = to_int(parts[5]);
+    return a;
+}
+
+std::optional<Actor> parse_line(const std::string& line, Board board) {
+    if (line.empty() || line[0] == ';') return std::nullopt;
+    if (line[0] != '-' || line.size() < 2) return std::nullopt;
+
+    const char cmd = static_cast<char>(std::toupper(static_cast<unsigned char>(line[1])));
+    // Fields after the leading dash, split on commas and individually trimmed
+    // (the files pad numbers with spaces: "-A,S, 2, 2"). parts[0] == the letter.
+    const std::vector<std::string> parts = split(line.substr(1), ',');
+    if (cmd == 'A' || cmd == 'C') return parse_arrow(parts, cmd, board);
+    if (cmd == 'T') return parse_trampoline(parts, board);
+    if (cmd == 'W') return parse_warphole(parts, board);
+    // Unknown type letters are skipped (the original aborts; we keep going).
+    return std::nullopt;
 }
 
 }  // namespace
@@ -65,49 +139,10 @@ std::vector<Actor> parse(const std::filesystem::path& path, int board_w, int boa
     std::ifstream f(path);
     if (!f) return actors;  // no EXTRA<N>.RES for this board => no actors
 
+    const Board board{board_w, board_h};
     std::string raw;
     while (std::getline(f, raw)) {
-        std::string line = trim(raw);
-        if (line.empty() || line[0] == ';') continue;
-        if (line[0] != '-' || line.size() < 2) continue;
-
-        const char cmd = static_cast<char>(std::toupper(static_cast<unsigned char>(line[1])));
-        // Fields after the leading dash, split on commas and individually
-        // trimmed (the files pad numbers with spaces: "-A,S, 2, 2").
-        auto parts = split(line.substr(1), ',');  // parts[0] == type letter
-        Actor a;
-
-        if (cmd == 'A' || cmd == 'C') {
-            if (parts.size() < 4) continue;  // needs type,dir,x,y
-            int d = dir_letter(parts[1]);
-            if (d < 0) continue;
-            a.kind = (cmd == 'C') ? Kind::Conveyor : Kind::DirArrow;
-            a.dir = d;
-            a.x = norm(to_int(parts[2]), board_w);
-            a.y = norm(to_int(parts[3]), board_h);
-            actors.push_back(a);
-        } else if (cmd == 'T') {
-            if (parts.size() < 3) continue;  // needs type,x,y
-            a.kind = Kind::Trampoline;
-            // '-T,H,H' => random odd-parity placement, resolved by the caller.
-            if (!parts[1].empty() &&
-                std::toupper(static_cast<unsigned char>(parts[1][0])) == 'H') {
-                a.random = true;
-            } else {
-                a.x = norm(to_int(parts[1]), board_w);
-                a.y = norm(to_int(parts[2]), board_h);
-            }
-            actors.push_back(a);
-        } else if (cmd == 'W') {
-            if (parts.size() < 6) continue;  // type,type,idno,x,y,linkto
-            a.kind = Kind::Warphole;
-            a.idno = to_int(parts[2]);
-            a.x = norm(to_int(parts[3]), board_w);
-            a.y = norm(to_int(parts[4]), board_h);
-            a.linkto = to_int(parts[5]);
-            actors.push_back(a);
-        }
-        // Unknown type letters are skipped (the original aborts; we keep going).
+        if (std::optional<Actor> a = parse_line(trim(raw), board)) actors.push_back(*a);
     }
     return actors;
 }
