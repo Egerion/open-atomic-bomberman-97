@@ -209,6 +209,11 @@
 
 namespace bomber::net {
 
+// One decoded datagram (protocol.hpp). Forward-declared rather than included:
+// this header names it only by reference, and pulling the whole message layer in
+// would put the wire codec on the include path of every consumer of the session.
+struct Message;
+
 // kRephaseWindowPumps, kMaxLocalLeadTicks, kLeadDeadbandTicks and
 // kRephaseAdvantageTicks — the four numbers the pacing half is tuned by — moved
 // to time_sync.hpp with the controller they belong to, and reach every consumer
@@ -468,6 +473,11 @@ private:
     void note_input_seats(std::uint16_t seats, std::uint32_t first_tick);
 
     void receive();  // drain transport -> input slots + peer hashes, flag rollbacks
+    // ONE decoded datagram, dispatched. Split out of receive()'s drain loop so
+    // the dispatch sits at the top of a function rather than one level inside a
+    // `while`, where every arm paid a nesting penalty for a decision that has
+    // nothing to do with the loop. The drain and the dispatch are two jobs.
+    void on_message(const Message& m);
     void apply_remote(std::uint32_t tick, std::uint16_t seats, const sim::TickInputs& in);
     sim::TickInputs assemble(std::uint32_t tick);   // confirmed seats + predicted (last-known) remote seats
     void resimulate(std::uint32_t from);            // restore snapshot[from], replay to tick_

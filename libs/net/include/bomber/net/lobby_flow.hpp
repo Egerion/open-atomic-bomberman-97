@@ -156,6 +156,18 @@ private:
     void fail(const std::string& why);
     void begin_candidate_gathering(std::int64_t now_ms);
     void publish_candidates();
+    // Keep the STUN probe turning and re-publish once it resolves. Runs in BOTH
+    // InLobby and Rendezvous — the host does not wait for us, so START can land
+    // with our reflexive candidate still in flight — which is why it is one
+    // function rather than the same four lines written twice.
+    void pump_stun(std::int64_t now_ms);
+    // Send the queued create/join/list once the control socket is actually open.
+    void flush_pending();
+    // Presence keep-alive for every phase that still HOLDS a seat.
+    void send_heartbeat(std::int64_t now_ms);
+    // The Rendezvous phase's own pump: punch, then wrap the socket in the star if
+    // this machine is the hub of one, then hand over to verification.
+    void step_rendezvous(std::int64_t now_ms);
     void begin_rendezvous(std::int64_t now_ms);
     void begin_relay_fallback();  // no verified path → ask the server for an allocation
     // Enter Verifying on whatever transport() currently is: build the probe (if
@@ -179,6 +191,25 @@ private:
     // The seat this peer exchanges datagrams with: the star hub, or (as the hub
     // itself, or in a 2P lobby) the other occupied seat.
     int peer_seat() const;
+
+    // --- the arms of handle_server_message() ---------------------------------
+    //
+    // That function is a FLAT dispatch over LobbyMsgType and stays one, which is
+    // the shape a reader can walk (coding-standards §8). What did not belong
+    // inside it is the tangle a handful of arms carried — a four-way reason→
+    // message table, a five-way error table, and StartMatch's three-pass seat-mask
+    // derivation — all of which read as nesting under a case label and read as
+    // ordinary functions here. Named for what they decide, not for the message
+    // that triggers them.
+    void adopt_roster(const std::vector<RosterEntry>& roster);
+    void fail_join_rejected(const std::string& reason);
+    void adopt_match_start(const LobbyServerMessage& msg);
+    // THE seat topology for everything downstream (session masks, setup acks),
+    // taken from the server's authoritative seat_assign rather than assumed.
+    std::uint16_t derive_all_seats_mask() const;
+    void report_server_error(const LobbyServerMessage& msg);
+    void adopt_relay_allocation(const LobbyServerMessage& msg);
+    void append_chat_line(const LobbyServerMessage& msg);
 
     // Members are grouped by ALIGNMENT, not by topic (the topics are called out
     // in the comments instead): pointer-sized first, then 4-byte, then the

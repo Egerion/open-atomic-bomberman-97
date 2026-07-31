@@ -164,97 +164,102 @@ void RollbackSession::receive() {
         Message m;
         const bool decoded = decode(pkt.data(), pkt.size(), &m);
         stats_.on_datagram(decoded);
-        if (!decoded) continue;  // drop malformed (untrusted)
-        if (m.type == MsgType::InputRange) {
-            const std::uint16_t remote = static_cast<std::uint16_t>(m.range.seat_mask & remote_seats_);
-            if (remote == 0) continue;
-            heard(remote);
-            // The sender's OWN prediction depth, for free: an InputRange spans
-            // [its confirmed, its head), so its length IS that distance. This is
-            // the remote half of the frame-advantage comparison (see the
-            // re-phasing note in time_sync.hpp) and the only reason it costs no
-            // wire message.
-            //
-            // ONLY FROM A FRAME THAT IS NOT STALE. A sender's confirmed frontier
-            // is monotonic, so a datagram whose `first_tick` sits below one we
-            // have already seen from that seat overtook a newer one in flight —
-            // and adopting its window would report a depth the peer left behind
-            // some time ago. See peer_frontier_ in time_sync.hpp — the guard is
-            // the controller's, because the reading it protects is.
-            sync_.note_peer_range(remote, m.range.first_tick,
-                                  static_cast<int>(m.range.per_tick.size()));
-            // THE ACK-RTT SAMPLE, and the reason this diagnostic needs no new
-            // wire message: an InputRange normally begins at the SENDER'S
-            // confirmed frontier (send_local(resend_from())), and that frontier
-            // cannot pass a tick our input has not reached. So `first_tick` is an
-            // acknowledgement of our own tick first_tick-1.
-            //
-            // ONE EXCEPTION, and it is deliberately left uncorrected: while a
-            // HOST MIGRATION heals, resend_from() widens the window below the
-            // sender's frontier (see there), so first_tick UNDERSTATES what the
-            // sender has acknowledged and the RTT it yields reads high for those
-            // few ticks. Diagnostics only — nothing here feeds a correctness
-            // decision — and a migration is exactly when an inflated RTT is the
-            // honest thing to show anyway, so it is not worth a wire field to fix.
-            note_input_seats(remote, m.range.first_tick);
-            for (std::size_t i = 0; i < m.range.per_tick.size(); ++i)
-                apply_remote(m.range.first_tick + static_cast<std::uint32_t>(i), remote,
-                             m.range.per_tick[i]);
-        } else if (m.type == MsgType::Input) {
-            const std::uint16_t remote = static_cast<std::uint16_t>(m.input.seat_mask & remote_seats_);
-            if (remote == 0) continue;
-            heard(remote);
-            // A single-tick Input carries no frontier (only LockstepSession sends
-            // these), so it counts as traffic but yields no RTT sample: passing
-            // its tick would read as an acknowledgement it is not.
-            note_input_seats(remote, 0);
-            apply_remote(m.input.tick_index, remote, m.input.inputs);
-        } else if (m.type == MsgType::Drop) {
-            // Obeyed by EVERY peer including the host's own echo — idempotent, so
-            // the redundant re-sends and any out-of-order copy are all no-ops.
-            const int seat = static_cast<int>(m.drop.seat);  // decode() bounds-checked it
-            if ((all_seats_ & static_cast<std::uint16_t>(1U << seat)) != 0)
-                schedule_handoff(seat, m.drop.at_tick);
-        } else if (m.type == MsgType::HostLost) {
-            // The hub is gone, announced by a survivor (design §8.1). Ignored
-            // entirely when migration is off, so a session that never opted in
-            // behaves exactly as it did before wire v9 — and ignored unless
-            // Options row 12 is ON, because without it a lost peer is a
-            // match-ending condition that detect_drops() already handles
-            // locally on every peer, with no seat to hand to anyone.
-            //
-            // Accepted from ANY peer, unlike a Drop: there is no authority left
-            // to check it against. What keeps that safe is that it may only name
-            // the seat we currently believe is the hub — so it can never be used
-            // to hand an ordinary guest's seat to the AI, which is the decree
-            // MsgType::Drop still reserves to the elected hub.
-            const int seat = static_cast<int>(m.host_lost.seat);  // decode() bounds-checked it
-            if (migration_enabled() && drop_.revert_to_ai && seat == hub_ &&
-                (all_seats_ & static_cast<std::uint16_t>(1U << seat)) != 0)
-                adopt_host_lost(seat, m.host_lost.at_tick);
-        } else if (m.type == MsgType::Hash) {
-            note_peer_hash(m.hash.tick_index, m.hash.hash);
-        } else if (m.type == MsgType::MatchCtl) {
-            if (m.match_ctl.kind == MatchCtlKind::EndRound) {
-                // Obeyed by EVERY peer including the host's own echo over a star
-                // — idempotent, so re-sends and reordering are all no-ops. Only a
-                // host ever sends one; a guest that somehow does is not obeyed,
-                // because a guest's EndRound is not addressed to anyone (its own
-                // Esc never reaches this class at all).
-                // hosting(), not drop_.is_host: after a migration the machine
-                // that must ignore an inbound EndRound is the ELECTED hub, which
-                // may be this one. A promoted peer that still deferred to the
-                // flag would obey an echo of its own announcement.
-                if (!hosting()) schedule_end_round(m.match_ctl.at_tick);
-            }
-            // EndRoundRequest is DELIBERATELY IGNORED — see the authority note at
-            // the top of rollback_session.hpp. It used to let any guest force-end
-            // any round; the message is still decoded (wire v8 is unchanged, so a
-            // peer on the previous build still connects) and simply does nothing.
-            // RematchWait/Rematch belong to the post-match shell (rematch_session
-            // .hpp), which runs after this session is done — not ours to read.
-        }
-        // Hello/Punch: pre-match traffic on the shared socket, not ours to read.
+        if (decoded) on_message(m);  // malformed is dropped (untrusted)
+    }
+}
+
+void RollbackSession::on_message(const Message& m) {
+    // Hello/Punch/Probe/Setup*: pre-match traffic on the shared socket, not ours
+    // to read, and reaching the bottom of this chain is how they are ignored.
+    if (m.type == MsgType::InputRange) {
+        const std::uint16_t remote = static_cast<std::uint16_t>(m.range.seat_mask & remote_seats_);
+        if (remote == 0) return;
+        heard(remote);
+        // The sender's OWN prediction depth, for free: an InputRange spans
+        // [its confirmed, its head), so its length IS that distance. This is
+        // the remote half of the frame-advantage comparison (see the
+        // re-phasing note in time_sync.hpp) and the only reason it costs no
+        // wire message.
+        //
+        // ONLY FROM A FRAME THAT IS NOT STALE. A sender's confirmed frontier
+        // is monotonic, so a datagram whose `first_tick` sits below one we
+        // have already seen from that seat overtook a newer one in flight —
+        // and adopting its window would report a depth the peer left behind
+        // some time ago. See peer_frontier_ in time_sync.hpp — the guard is
+        // the controller's, because the reading it protects is.
+        sync_.note_peer_range(remote, m.range.first_tick,
+                              static_cast<int>(m.range.per_tick.size()));
+        // THE ACK-RTT SAMPLE, and the reason this diagnostic needs no new
+        // wire message: an InputRange normally begins at the SENDER'S
+        // confirmed frontier (send_local(resend_from())), and that frontier
+        // cannot pass a tick our input has not reached. So `first_tick` is an
+        // acknowledgement of our own tick first_tick-1.
+        //
+        // ONE EXCEPTION, and it is deliberately left uncorrected: while a
+        // HOST MIGRATION heals, resend_from() widens the window below the
+        // sender's frontier (see there), so first_tick UNDERSTATES what the
+        // sender has acknowledged and the RTT it yields reads high for those
+        // few ticks. Diagnostics only — nothing here feeds a correctness
+        // decision — and a migration is exactly when an inflated RTT is the
+        // honest thing to show anyway, so it is not worth a wire field to fix.
+        note_input_seats(remote, m.range.first_tick);
+        for (std::size_t i = 0; i < m.range.per_tick.size(); ++i)
+            apply_remote(m.range.first_tick + static_cast<std::uint32_t>(i), remote,
+                         m.range.per_tick[i]);
+    } else if (m.type == MsgType::Input) {
+        const std::uint16_t remote = static_cast<std::uint16_t>(m.input.seat_mask & remote_seats_);
+        if (remote == 0) return;
+        heard(remote);
+        // A single-tick Input carries no frontier (only LockstepSession sends
+        // these), so it counts as traffic but yields no RTT sample: passing
+        // its tick would read as an acknowledgement it is not.
+        note_input_seats(remote, 0);
+        apply_remote(m.input.tick_index, remote, m.input.inputs);
+    } else if (m.type == MsgType::Drop) {
+        // Obeyed by EVERY peer including the host's own echo — idempotent, so
+        // the redundant re-sends and any out-of-order copy are all no-ops.
+        const int seat = static_cast<int>(m.drop.seat);  // decode() bounds-checked it
+        if ((all_seats_ & static_cast<std::uint16_t>(1U << seat)) != 0)
+            schedule_handoff(seat, m.drop.at_tick);
+    } else if (m.type == MsgType::HostLost) {
+        // The hub is gone, announced by a survivor (design §8.1). Ignored
+        // entirely when migration is off, so a session that never opted in
+        // behaves exactly as it did before wire v9 — and ignored unless
+        // Options row 12 is ON, because without it a lost peer is a
+        // match-ending condition that detect_drops() already handles
+        // locally on every peer, with no seat to hand to anyone.
+        //
+        // Accepted from ANY peer, unlike a Drop: there is no authority left
+        // to check it against. What keeps that safe is that it may only name
+        // the seat we currently believe is the hub — so it can never be used
+        // to hand an ordinary guest's seat to the AI, which is the decree
+        // MsgType::Drop still reserves to the elected hub.
+        const int seat = static_cast<int>(m.host_lost.seat);  // decode() bounds-checked it
+        if (migration_enabled() && drop_.revert_to_ai && seat == hub_ &&
+            (all_seats_ & static_cast<std::uint16_t>(1U << seat)) != 0)
+            adopt_host_lost(seat, m.host_lost.at_tick);
+    } else if (m.type == MsgType::Hash) {
+        note_peer_hash(m.hash.tick_index, m.hash.hash);
+    } else if (m.type == MsgType::MatchCtl && m.match_ctl.kind == MatchCtlKind::EndRound) {
+        // Obeyed by EVERY peer including the host's own echo over a star —
+        // idempotent, so re-sends and reordering are all no-ops. Only a host ever
+        // sends one; a guest that somehow does is not obeyed, because a guest's
+        // EndRound is not addressed to anyone (its own Esc never reaches this
+        // class at all).
+        // hosting(), not drop_.is_host: after a migration the machine that must
+        // ignore an inbound EndRound is the ELECTED hub, which may be this one. A
+        // promoted peer that still deferred to the flag would obey an echo of its
+        // own announcement.
+        //
+        // Every OTHER MatchCtlKind falls off the end of this chain, which is
+        // exactly what each of them should do here. EndRoundRequest is
+        // DELIBERATELY IGNORED — see the authority note at the top of
+        // rollback_session.hpp: it used to let any guest force-end any round, and
+        // the message is still decoded (wire v9 is unchanged, so a peer on the
+        // previous build still connects) and simply does nothing.
+        // RematchWait/Rematch belong to the post-match shell (rematch_session
+        // .hpp), which runs after this session is done — not ours to read.
+        if (!hosting()) schedule_end_round(m.match_ctl.at_tick);
     }
 }
 

@@ -335,6 +335,121 @@ void LobbyFlow::step_verify(std::int64_t now_ms) {
     begin_relay_fallback();
 }
 
+void LobbyFlow::adopt_roster(const std::vector<RosterEntry>& roster) {
+    roster_ = roster;
+    for (const RosterEntry& e : roster_)
+        if (e.is_host) host_seat_ = e.seat;
+}
+
+void LobbyFlow::fail_join_rejected(const std::string& reason) {
+    // A closed table, and every arm is fatal to the attempt — the room we asked
+    // for is not one we can enter. The reasons are the server's (PROTOCOL.md §2
+    // JoinRejected); an unrecognised one is treated as "no such lobby", which is
+    // the only thing a client can honestly say about a code the server refused
+    // for a reason this build has never heard of.
+    if (reason == "build_mismatch") {
+        fail("VERSION MISMATCH - UPDATE THE GAME");
+    } else if (reason == "full") {
+        fail("LOBBY IS FULL");
+    } else if (reason == "in_progress") {
+        fail("MATCH ALREADY STARTED");
+    } else {
+        fail("LOBBY NOT FOUND");
+    }
+}
+
+std::uint16_t LobbyFlow::derive_all_seats_mask() const {
+    // Falling back to the roster covers an older server that omits seat_assign;
+    // our own seat is folded in last so this peer is never missing from the mask
+    // it plays in.
+    std::uint16_t mask = 0;
+    for (const int seat : match_start_.seat_assign) {
+        if (seat >= 0 && seat < sim::kMaxPlayers) mask |= static_cast<std::uint16_t>(1U << seat);
+    }
+    if (mask == 0) {
+        for (const RosterEntry& e : roster_) {
+            if (e.seat >= 0 && e.seat < sim::kMaxPlayers)
+                mask |= static_cast<std::uint16_t>(1U << e.seat);
+        }
+    }
+    return static_cast<std::uint16_t>(mask | match_start_.local_seats_mask);
+}
+
+void LobbyFlow::adopt_match_start(const LobbyServerMessage& msg) {
+    match_start_.seed = msg.seed;
+    match_start_.input_delay = msg.input_delay > 0 ? msg.input_delay : 2;
+    match_start_.local_seats_mask = msg.local_seats_mask;
+    match_start_.hub_seat = msg.hub_seat;
+    match_start_.seat_assign = msg.seat_assign;
+    match_start_.all_seats_mask = derive_all_seats_mask();
+    // begin_rendezvous needs a clock; step() picks this up next pump via the
+    // Rendezvous-pending flag below.
+    phase_ = Phase::Rendezvous;
+    punch_.reset();  // built on the next step(), which has now_ms
+}
+
+void LobbyFlow::report_server_error(const LobbyServerMessage& msg) {
+    // Control-plane rejections that are not fatal to the lobby itself (e.g.
+    // not_all_ready when the host jumps the gun) surface as text without tearing
+    // the room down.
+    //
+    // The relay was our last resort (the punch already failed), so a rejection
+    // while Relaying — an older server without Phase 2, or an allocation failure
+    // — ends the attempt rather than hanging. It is checked on the PHASE and so
+    // comes first; the rest are a table over the server's error code.
+    if (phase_ == Phase::Relaying) {
+        fail("RELAY UNAVAILABLE - CANNOT CONNECT");
+        return;
+    }
+    if (msg.error_code == "build_mismatch") {
+        fail("VERSION MISMATCH - UPDATE THE GAME");
+        return;
+    }
+    if (msg.error_code == "not_all_ready") {
+        error_ = "ALL PLAYERS MUST BE READY";
+    } else if (msg.error_code == "not_enough_players") {
+        error_ = "NEED AT LEAST TWO PLAYERS";
+    } else {
+        error_ = msg.error_message.empty() ? msg.error_code : msg.error_message;
+    }
+}
+
+void LobbyFlow::adopt_relay_allocation(const LobbyServerMessage& msg) {
+    std::string host;
+    std::uint16_t port = 0;
+    std::array<std::uint8_t, kRelayAllocIdBytes> alloc{};
+    const int dst = peer_seat();
+    if (!split_host_port(msg.relay_addr, &host, &port) || !parse_alloc_id(msg.alloc_id, &alloc) ||
+        dst < 0) {
+        fail("RELAY UNAVAILABLE - CANNOT CONNECT");
+        return;
+    }
+    relay_ = std::make_unique<RelayedTransport>(transport_, host, port, alloc, dst);
+    // NOT Ready yet. An allocation is a handle, not a path: the relay drops
+    // everything aimed at a seat that has not allocated its own
+    // (drop_unknown_dst), and the peer only allocates when ITS punch gives up —
+    // which may be seconds away or may never happen. Verify before handing this
+    // to the match layer.
+    probe_.reset();  // a new path: the old verdict is about the old one
+    phase_ = Phase::Verifying;
+}
+
+void LobbyFlow::append_chat_line(const LobbyServerMessage& msg) {
+    // Another player's typing, arriving over a socket: untrusted input, handled
+    // like every other frame in this codebase. Both halves are re-reduced HERE
+    // rather than taken on the server's word — a client must never render bytes
+    // merely because something relayed them.
+    ChatLine line;
+    line.seat = msg.chat_seat;
+    line.name = sanitize_chat_name(msg.chat_name);
+    line.text = sanitize_chat_text(msg.chat_text);
+    if (line.text.empty()) return;  // nothing drawable survived: not a message
+    if (line.name.empty()) line.name = "?";
+    chat_log_.push_back(std::move(line));
+    if (chat_log_.size() > kChatLogLines) chat_log_.erase(chat_log_.begin());
+    ++chat_revision_;
+}
+
 void LobbyFlow::handle_server_message(const LobbyServerMessage& msg) {
     switch (msg.type) {
         case LobbyMsgType::LobbyCreated:
@@ -351,28 +466,13 @@ void LobbyFlow::handle_server_message(const LobbyServerMessage& msg) {
         case LobbyMsgType::JoinAccepted:
             lobby_id_ = msg.lobby_id;
             my_seat_ = msg.your_seat;
-            roster_ = msg.roster;
-            for (const RosterEntry& e : roster_)
-                if (e.is_host) host_seat_ = e.seat;
+            adopt_roster(msg.roster);
             phase_ = Phase::InLobby;
             break;
 
-        case LobbyMsgType::JoinRejected:
-            if (msg.reason == "build_mismatch")
-                fail("VERSION MISMATCH - UPDATE THE GAME");
-            else if (msg.reason == "full")
-                fail("LOBBY IS FULL");
-            else if (msg.reason == "in_progress")
-                fail("MATCH ALREADY STARTED");
-            else
-                fail("LOBBY NOT FOUND");
-            break;
+        case LobbyMsgType::JoinRejected: fail_join_rejected(msg.reason); break;
 
-        case LobbyMsgType::RosterUpdate:
-            roster_ = msg.roster;
-            for (const RosterEntry& e : roster_)
-                if (e.is_host) host_seat_ = e.seat;
-            break;
+        case LobbyMsgType::RosterUpdate: adopt_roster(msg.roster); break;
 
         case LobbyMsgType::PeerCandidates:
             if (msg.candidates_seat >= 0) {
@@ -382,71 +482,11 @@ void LobbyFlow::handle_server_message(const LobbyServerMessage& msg) {
             }
             break;
 
-        case LobbyMsgType::StartMatch:
-            match_start_.seed = msg.seed;
-            match_start_.input_delay = msg.input_delay > 0 ? msg.input_delay : 2;
-            match_start_.local_seats_mask = msg.local_seats_mask;
-            match_start_.hub_seat = msg.hub_seat;
-            match_start_.seat_assign = msg.seat_assign;
-            // THE seat topology for everything downstream (session masks, setup
-            // acks), taken from the server's authoritative seat_assign rather
-            // than assumed. Falling back to the roster covers an older server
-            // that omits the field; our own seat is folded in last so this peer
-            // is never missing from the mask it plays in.
-            match_start_.all_seats_mask = 0;
-            for (const int seat : match_start_.seat_assign)
-                if (seat >= 0 && seat < sim::kMaxPlayers)
-                    match_start_.all_seats_mask |= static_cast<std::uint16_t>(1U << seat);
-            if (match_start_.all_seats_mask == 0)
-                for (const RosterEntry& e : roster_)
-                    if (e.seat >= 0 && e.seat < sim::kMaxPlayers)
-                        match_start_.all_seats_mask |= static_cast<std::uint16_t>(1U << e.seat);
-            match_start_.all_seats_mask |= match_start_.local_seats_mask;
-            // begin_rendezvous needs a clock; step() picks this up next pump via
-            // the Rendezvous-pending flag below.
-            phase_ = Phase::Rendezvous;
-            punch_.reset();  // built on the next step(), which has now_ms
-            break;
+        case LobbyMsgType::StartMatch: adopt_match_start(msg); break;
 
-        case LobbyMsgType::Error:
-            // Control-plane rejections that are not fatal to the lobby itself
-            // (e.g. not_all_ready when the host jumps the gun) surface as text
-            // without tearing the room down.
-            if (phase_ == Phase::Relaying)
-                // The relay was our last resort (the punch already failed), so a
-                // rejection here — an older server without Phase 2, or an
-                // allocation failure — ends the attempt rather than hanging.
-                fail("RELAY UNAVAILABLE - CANNOT CONNECT");
-            else if (msg.error_code == "not_all_ready")
-                error_ = "ALL PLAYERS MUST BE READY";
-            else if (msg.error_code == "not_enough_players")
-                error_ = "NEED AT LEAST TWO PLAYERS";
-            else if (msg.error_code == "build_mismatch")
-                fail("VERSION MISMATCH - UPDATE THE GAME");
-            else
-                error_ = msg.error_message.empty() ? msg.error_code : msg.error_message;
-            break;
+        case LobbyMsgType::Error: report_server_error(msg); break;
 
-        case LobbyMsgType::RelayAllocated: {
-            std::string host;
-            std::uint16_t port = 0;
-            std::array<std::uint8_t, kRelayAllocIdBytes> alloc{};
-            const int dst = peer_seat();
-            if (!split_host_port(msg.relay_addr, &host, &port) ||
-                !parse_alloc_id(msg.alloc_id, &alloc) || dst < 0) {
-                fail("RELAY UNAVAILABLE - CANNOT CONNECT");
-                break;
-            }
-            relay_ = std::make_unique<RelayedTransport>(transport_, host, port, alloc, dst);
-            // NOT Ready yet. An allocation is a handle, not a path: the relay
-            // drops everything aimed at a seat that has not allocated its own
-            // (drop_unknown_dst), and the peer only allocates when ITS punch
-            // gives up — which may be seconds away or may never happen. Verify
-            // before handing this to the match layer.
-            probe_.reset();  // a new path: the old verdict is about the old one
-            phase_ = Phase::Verifying;
-            break;
-        }
+        case LobbyMsgType::RelayAllocated: adopt_relay_allocation(msg); break;
 
         case LobbyMsgType::ReanchorAccepted:
             code_ = msg.code;
@@ -463,22 +503,7 @@ void LobbyFlow::handle_server_message(const LobbyServerMessage& msg) {
             if (phase_ == Phase::Connecting) phase_ = Phase::Idle;
             break;
 
-        case LobbyMsgType::Chat: {
-            // Another player's typing, arriving over a socket: untrusted input,
-            // handled like every other frame in this codebase. Both halves are
-            // re-reduced HERE rather than taken on the server's word — a client
-            // must never render bytes merely because something relayed them.
-            ChatLine line;
-            line.seat = msg.chat_seat;
-            line.name = sanitize_chat_name(msg.chat_name);
-            line.text = sanitize_chat_text(msg.chat_text);
-            if (line.text.empty()) break;  // nothing drawable survived: not a message
-            if (line.name.empty()) line.name = "?";
-            chat_log_.push_back(std::move(line));
-            if (chat_log_.size() > kChatLogLines) chat_log_.erase(chat_log_.begin());
-            ++chat_revision_;
-            break;
-        }
+        case LobbyMsgType::Chat: append_chat_line(msg); break;
 
         case LobbyMsgType::HeartbeatAck:
         case LobbyMsgType::Unknown:
@@ -486,105 +511,114 @@ void LobbyFlow::handle_server_message(const LobbyServerMessage& msg) {
     }
 }
 
-void LobbyFlow::step(std::int64_t now_ms) {
-    if (phase_ == Phase::Idle || phase_ == Phase::Failed) return;
+void LobbyFlow::flush_pending() {
+    if (pending_ == Pending::None || !client_.is_open()) return;
+    if (pending_ == Pending::Create)
+        client_.create_lobby(pending_public_ ? "public" : "private", pending_name_,
+                             pending_max_seats_, cfg_.build_hash, cfg_.player_name);
+    else if (pending_ == Pending::Join)
+        client_.join_by_code(pending_code_, cfg_.build_hash, cfg_.player_name);
+    else  // Pending::List — the server flags each row build_ok against ours
+        client_.list_public(cfg_.build_hash);
+    pending_ = Pending::None;
+}
 
-    // Flush the queued create/join once the socket is actually up.
-    if (pending_ != Pending::None && client_.is_open()) {
-        if (pending_ == Pending::Create)
-            client_.create_lobby(pending_public_ ? "public" : "private", pending_name_,
-                                 pending_max_seats_, cfg_.build_hash, cfg_.player_name);
-        else if (pending_ == Pending::Join)
-            client_.join_by_code(pending_code_, cfg_.build_hash, cfg_.player_name);
-        else  // Pending::List — the server flags each row build_ok against ours
-            client_.list_public(cfg_.build_hash);
-        pending_ = Pending::None;
-    }
-
-    client_.poll_messages([this](const LobbyServerMessage& m) { handle_server_message(m); });
-
-    // Presence keep-alive, for every phase that still HOLDS a seat rather than
-    // the waiting room alone. The control link now outlives the punch — the
-    // online setup screens keep pumping this flow so lobby chat stays live
-    // there — and a member that stops speaking is reaped (PROTOCOL.md §3).
+void LobbyFlow::send_heartbeat(std::int64_t now_ms) {
+    // For every phase that still HOLDS a seat rather than the waiting room alone.
+    // The control link now outlives the punch — the online setup screens keep
+    // pumping this flow so lobby chat stays live there — and a member that stops
+    // speaking is reaped (PROTOCOL.md §3).
     //
     // The connect phases are included, not skipped: a reaped member loses its
     // RELAY ALLOCATION too (the manager Releases it), so going quiet while
     // punching or while waiting for the peer to allocate would destroy the very
     // handle the wait is for.
-    if (my_seat_ >= 0 && phase_ != Phase::Idle && phase_ != Phase::Failed &&
-        (last_heartbeat_ms_ < 0 || now_ms - last_heartbeat_ms_ >= kHeartbeatMs)) {
-        client_.heartbeat();
-        last_heartbeat_ms_ = now_ms;
+    //
+    // The Idle/Failed test is NOT redundant with step()'s own early return: the
+    // server poll runs in between, and a frame handled there can fail the flow
+    // (JoinRejected, a fatal Error) inside this very pump. Keeping a seatless
+    // corpse on the server's roster is exactly what this must not do.
+    if (my_seat_ < 0 || phase_ == Phase::Idle || phase_ == Phase::Failed) return;
+    if (last_heartbeat_ms_ >= 0 && now_ms - last_heartbeat_ms_ < kHeartbeatMs) return;
+    client_.heartbeat();
+    last_heartbeat_ms_ = now_ms;
+}
+
+void LobbyFlow::pump_stun(std::int64_t now_ms) {
+    if (!stun_ || !stun_pending_) return;
+    stun_->step(now_ms);
+    if (stun_->done()) publish_candidates();
+}
+
+void LobbyFlow::step_rendezvous(std::int64_t now_ms) {
+    // STUN may still be in flight when START lands (the host does not wait for
+    // us). Keep pumping it so our reflexive candidate still reaches the peer.
+    pump_stun(now_ms);
+    if (!punch_) {
+        begin_rendezvous(now_ms);
+        return;  // may still be waiting for candidates, or fail() may have fired
     }
+    punch_->step(now_ms);
+    if (punch_->failed()) {
+        begin_relay_fallback();  // no direct path — go through the server
+        return;
+    }
+    if (!punch_->connected()) return;
+    // The hub of a >2-seat match now knows every guest's punched address, so wrap
+    // the socket in the star (fan-out + guest<->guest reflection). A guest — and
+    // either side of a 2-seat match — needs nothing: its socket is already
+    // set_peer'd to the one peer it talks to.
+    if (punch_->winners().size() > 1) {
+        std::vector<StarHubTransport::Guest> guests;
+        guests.reserve(punch_->winners().size());
+        for (const Rendezvous::Winner& w : punch_->winners())
+            guests.push_back({w.addr.host, w.addr.port});
+        star_ = std::make_unique<StarHubTransport>(transport_, std::move(guests));
+    }
+    // A punch proves the path to whoever received the PONG and says nothing about
+    // what the OTHER end concluded, so NOBODY plays until the peer has proved it
+    // is on the same path (link_probe.hpp). Every topology, including the star —
+    // which used to be excluded here.
+    //
+    // WHY THE STAR EXCLUSION WAS WRONG. Its justification was that a star's punch
+    // "already required both halves per guest". That is true of the HUB, which
+    // runs the multi-peer Rendezvous; it is false of a GUEST, which punches the
+    // hub with the 2-PEER form (begin_rendezvous above) — precisely the
+    // single-sided latch this probe exists to eliminate — and then skipped
+    // verification entirely. The hub needs EVERY guest confirmed, so one
+    // unreachable guest fails it, and a star cannot fall back to the relay
+    // (begin_relay_fallback refuses one, correctly). Meanwhile a reachable guest
+    // had already latched Ready and started a match its hub had abandoned.
+    //
+    // WHAT VERIFYING BUYS A STAR GUEST, exactly. A Probe can only reach it once
+    // the hub is pumping one over its StarHubTransport, and the hub only builds
+    // that once its multi-peer punch confirmed EVERY guest. So "a probe arrived"
+    // IS "the hub completed", which is the one fact a guest's own round trip
+    // cannot contain. (A probe REFLECTED from another guest carries it just as
+    // well, and for the same reason: the hub reflects only from inside the star.)
+    //
+    // HONEST LIMIT. The hub's own LinkProbe is single-peer, so it latches on the
+    // FIRST guest to answer and lingers only kProbeLingerMs beyond that. It is not
+    // a per-guest proof and does not need to be — the punch it has just finished
+    // already is one — but a guest that loses every probe of that linger still
+    // fails, exactly as either peer of a 2-seat match does.
+    phase_ = Phase::Verifying;
+}
+
+void LobbyFlow::step(std::int64_t now_ms) {
+    if (phase_ == Phase::Idle || phase_ == Phase::Failed) return;
+    flush_pending();
+    client_.poll_messages([this](const LobbyServerMessage& m) { handle_server_message(m); });
+    send_heartbeat(now_ms);
 
     if (phase_ == Phase::InLobby) {
         // Candidate gathering starts as soon as we know our seat. The LAN address
         // is posted immediately; STUN keeps running and re-posts with the
         // reflexive one when it resolves (or gives up).
         if (!stun_ && !candidates_sent_ && my_seat_ >= 0) begin_candidate_gathering(now_ms);
-        if (stun_ && stun_pending_) {
-            stun_->step(now_ms);
-            if (stun_->done()) publish_candidates();
-        }
+        pump_stun(now_ms);
     } else if (phase_ == Phase::Rendezvous) {
-        // STUN may still be in flight when START lands (the host does not wait for
-        // us). Keep pumping it so our reflexive candidate still reaches the peer.
-        if (stun_ && stun_pending_) {
-            stun_->step(now_ms);
-            if (stun_->done()) publish_candidates();
-        }
-        if (!punch_) {
-            begin_rendezvous(now_ms);
-            return;  // may still be waiting for candidates, or fail() may have fired
-        }
-        punch_->step(now_ms);
-        if (punch_->connected()) {
-            // The hub of a >2-seat match now knows every guest's punched address,
-            // so wrap the socket in the star (fan-out + guest<->guest reflection).
-            // A guest — and either side of a 2-seat match — needs nothing: its
-            // socket is already set_peer'd to the one peer it talks to.
-            if (punch_->winners().size() > 1) {
-                std::vector<StarHubTransport::Guest> guests;
-                guests.reserve(punch_->winners().size());
-                for (const Rendezvous::Winner& w : punch_->winners())
-                    guests.push_back({w.addr.host, w.addr.port});
-                star_ = std::make_unique<StarHubTransport>(transport_, std::move(guests));
-            }
-            // A punch proves the path to whoever received the PONG and says
-            // nothing about what the OTHER end concluded, so NOBODY plays until
-            // the peer has proved it is on the same path (link_probe.hpp). Every
-            // topology, including the star — which used to be excluded here.
-            //
-            // WHY THE STAR EXCLUSION WAS WRONG. Its justification was that a
-            // star's punch "already required both halves per guest". That is true
-            // of the HUB, which runs the multi-peer Rendezvous; it is false of a
-            // GUEST, which punches the hub with the 2-PEER form (begin_rendezvous
-            // above) — precisely the single-sided latch this probe exists to
-            // eliminate — and then skipped verification entirely. The hub needs
-            // EVERY guest confirmed, so one unreachable guest fails it, and a star
-            // cannot fall back to the relay (begin_relay_fallback refuses one,
-            // correctly). Meanwhile a reachable guest had already latched Ready
-            // and started a match its hub had abandoned.
-            //
-            // WHAT VERIFYING BUYS A STAR GUEST, exactly. A Probe can only reach it
-            // once the hub is pumping one over its StarHubTransport, and the hub
-            // only builds that once its multi-peer punch confirmed EVERY guest. So
-            // "a probe arrived" IS "the hub completed", which is the one fact a
-            // guest's own round trip cannot contain. (A probe REFLECTED from
-            // another guest carries it just as well, and for the same reason: the
-            // hub reflects only from inside the star.)
-            //
-            // HONEST LIMIT. The hub's own LinkProbe is single-peer, so it latches
-            // on the FIRST guest to answer and lingers only kProbeLingerMs beyond
-            // that. It is not a per-guest proof and does not need to be — the
-            // punch it has just finished already is one — but a guest that loses
-            // every probe of that linger still fails, exactly as either peer of a
-            // 2-seat match does.
-            phase_ = Phase::Verifying;
-        } else if (punch_->failed()) {
-            begin_relay_fallback();  // no direct path — go through the server
-        }
+        step_rendezvous(now_ms);
     } else if (phase_ == Phase::Verifying) {
         step_verify(now_ms);
     }

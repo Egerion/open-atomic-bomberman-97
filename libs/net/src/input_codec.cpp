@@ -2,6 +2,8 @@
 
 #include <bit>
 
+#include "byte_order.hpp"
+
 namespace bomber::net {
 
 using sim::kMaxPlayers;
@@ -31,27 +33,6 @@ PlayerInput unpack_input(std::uint8_t bits) {
 }
 
 namespace {
-
-void put_u16_le(std::vector<std::uint8_t>& b, std::uint16_t v) {
-    b.push_back(static_cast<std::uint8_t>(v & 0xFFU));
-    b.push_back(static_cast<std::uint8_t>((v >> 8) & 0xFFU));
-}
-
-void put_u32_le(std::vector<std::uint8_t>& b, std::uint32_t v) {
-    b.push_back(static_cast<std::uint8_t>(v & 0xFFU));
-    b.push_back(static_cast<std::uint8_t>((v >> 8) & 0xFFU));
-    b.push_back(static_cast<std::uint8_t>((v >> 16) & 0xFFU));
-    b.push_back(static_cast<std::uint8_t>((v >> 24) & 0xFFU));
-}
-
-std::uint16_t get_u16_le(const std::uint8_t* d) {
-    return static_cast<std::uint16_t>(static_cast<unsigned>(d[0]) | (static_cast<unsigned>(d[1]) << 8));
-}
-
-std::uint32_t get_u32_le(const std::uint8_t* d) {
-    return static_cast<std::uint32_t>(d[0]) | (static_cast<std::uint32_t>(d[1]) << 8) |
-           (static_cast<std::uint32_t>(d[2]) << 16) | (static_cast<std::uint32_t>(d[3]) << 24);
-}
 
 constexpr std::size_t kHeaderBytes = 6;  // tick_index u32 + seat_mask u16
 
