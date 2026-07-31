@@ -20,6 +20,7 @@
 #include "bomber/game/dos_scancode.hpp"
 #include "bomber/game/frontend_util.hpp"
 #include "bomber/game/hud_format.hpp"
+#include "bomber/game/log.hpp"
 #include "bomber/game/match_outcome.hpp"
 #include "bomber/game/screens/asset_screen.hpp"
 #include "bomber/game/screens/boot_screen.hpp"
@@ -391,7 +392,7 @@ bool GameApp::resolve_install_paths(fs::path& game, fs::path& scheme_path) {
             "  - pass the path as the first argument.\n\n"
             "The folder is the one containing DATA\\, e.g.\n"
             "  C:\\Program Files (x86)\\INTRPLAY\\BOMBRMAN";
-        std::fprintf(stderr, "%s\n", msg.c_str());
+        log_warn("%s", msg.c_str());
         // NEVER on a capture run. A message box is MODAL, and the visual golden
         // harness runs --demo-shots with no install path precisely so it can
         // SKIP on the exit code — with a box in the way it waits for a click
@@ -506,9 +507,9 @@ bool GameApp::load_config(const fs::path& game, const fs::path& scheme_path) {
         if (!opts_.demo && opts_.scheme.empty() && loaded_opts.schemefilename &&
             !loaded_opts.schemefilename->empty()) {
             if (!reload_scheme_from_name(*loaded_opts.schemefilename))
-                std::fprintf(stderr, "schemefilename '%s' not found; keeping %s\n",
-                             loaded_opts.schemefilename->c_str(),
-                             scheme_path.filename().string().c_str());
+                log_warn("schemefilename '%s' not found; keeping %s",
+                         loaded_opts.schemefilename->c_str(),
+                         scheme_path.filename().string().c_str());
         }
         // "keydef=" -> KeyboardMapper's two live key-sets (docs/re/results-and-
         // options.md §2). The file holds the ORIGINAL's DOS/AT set-1
@@ -567,7 +568,7 @@ bool GameApp::load_config(const fs::path& game, const fs::path& scheme_path) {
         // created with the right sampling mode instead of being re-stamped.
         set_scale_filter(scale_filter_for(soft_scaling_, capture));
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "%s\n", e.what());
+        log_warn("%s", e.what());
         return false;
     }
     return true;
@@ -576,7 +577,7 @@ bool GameApp::load_config(const fs::path& game, const fs::path& scheme_path) {
 bool GameApp::init_video(SDL_Renderer*& ren) {
     video_.emplace();
     if (!video_->ok()) {
-        std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
+        log_warn("SDL_Init: %s", SDL_GetError());
         return false;
     }
     // PORT ENHANCEMENT (task: "widescreen/fullscreen support", not an RE
@@ -630,7 +631,7 @@ bool GameApp::init_video(SDL_Renderer*& ren) {
     // Window title matches the original (sub_41095A -> sub_43E5CC(aAtomicBomberma)).
     if (!SDL_CreateWindowAndRenderer("Atomic Bomberman", kScreenW * 2, kScreenH * 2,
                                      SDL_WINDOW_RESIZABLE, &win, &ren)) {
-        std::fprintf(stderr, "SDL_CreateWindowAndRenderer: %s\n", SDL_GetError());
+        log_warn("SDL_CreateWindowAndRenderer: %s", SDL_GetError());
         return false;
     }
     window_.reset(win);
@@ -639,7 +640,7 @@ bool GameApp::init_video(SDL_Renderer*& ren) {
     // first thing worth knowing about any frame-rate report — the D3D11 and GL
     // paths differ by ~15 fps and three orders of magnitude of frame jitter in
     // uncapped windowed mode, so "it drops below 180" is unanswerable without it.
-    if (const char* name = SDL_GetRendererName(ren)) std::fprintf(stderr, "renderer: %s\n", name);
+    if (const char* name = SDL_GetRendererName(ren)) log_info("renderer: %s", name);
     // Window/taskbar icon from the install's own BM95.ICO (matches the native).
     if (SDL_Surface* icon = load_window_icon(opts_.game_dir / "BM95.ICO")) {
         SDL_SetWindowIcon(window_.get(), icon);
@@ -777,7 +778,7 @@ void GameApp::load_sound(const fs::path& game) {
     const std::string cap = assets_.getstring(200, "Loading sound...");
     draw_boot_loading(cap.c_str(), 0.0f);
     if (!audio_.init(game, [this, &cap](float f) { draw_boot_loading(cap.c_str(), f); }))
-        std::fprintf(stderr, "audio unavailable, continuing silent\n");
+        log_warn("audio unavailable, continuing silent");
 }
 
 void GameApp::draw_boot_loading(const char* caption, float fraction) {
@@ -953,9 +954,8 @@ int GameApp::run_demo() {
     // touches rendering or output; opt-in so normal --demo runs stay quiet.
     const bool trace = std::getenv("BOMBER_DEMO_TRACE") != nullptr;
     if (trace)
-        std::fprintf(stderr, "tuning: fuse=%d flame=%d brick_burn=%d\n",
-                    sim_.state().tuning.fuse_frames, sim_.state().tuning.flame_frames,
-                    sim_.state().tuning.brick_burn_frames);
+        log_warn("tuning: fuse=%d flame=%d brick_burn=%d", sim_.state().tuning.fuse_frames,
+                 sim_.state().tuning.flame_frames, sim_.state().tuning.brick_burn_frames);
 
     // Visual golden harness (tests/visual/, --demo-shots): capture a NAMED
     // frame at each requested tick within one scripted run, instead of the
@@ -971,8 +971,8 @@ int GameApp::run_demo() {
             sim_.tick(demo_inputs(t));
             if (trace)
                 for (const auto& e : sim_.state().events)
-                    std::fprintf(stderr, "  t=%d %s player=%d (%d,%d) data=%d\n", t + 1,
-                                event_type_name(e.type), e.player, e.x, e.y, e.data);
+                    log_warn("  t=%d %s player=%d (%d,%d) data=%d", t + 1, event_type_name(e.type),
+                             e.player, e.x, e.y, e.data);
             sounds_.on_tick(sim_.state());
             renderer_->on_events(sim_.state());   // NOLINT(bugprone-unchecked-optional-access)
             renderer_->draw_frame(sim_.state());  // NOLINT(bugprone-unchecked-optional-access) —
@@ -995,8 +995,8 @@ int GameApp::run_demo() {
         sim_.tick(demo_inputs(t));
         if (trace)
             for (const auto& e : sim_.state().events)
-                std::fprintf(stderr, "  t=%d %s player=%d (%d,%d) data=%d\n", t + 1,
-                            event_type_name(e.type), e.player, e.x, e.y, e.data);
+                log_warn("  t=%d %s player=%d (%d,%d) data=%d", t + 1, event_type_name(e.type),
+                         e.player, e.x, e.y, e.data);
         sounds_.on_tick(sim_.state());
         renderer_->on_events(sim_.state());   // NOLINT(bugprone-unchecked-optional-access)
         renderer_->draw_frame(sim_.state());  // NOLINT(bugprone-unchecked-optional-access) — keeps
@@ -1850,8 +1850,8 @@ bool GameApp::handle_global_event(const SDL_Event& ev) {
         // effect on the next frame with no restart.
         uncap_fps_ = !uncap_fps_;
         SDL_SetRenderVSync(sdl_renderer_.get(), uncap_fps_ ? 0 : 1);
-        std::fprintf(stderr, "framerate: %s\n", uncap_fps_ ? "uncapped (~180 fps, native feel)"
-                                                           : "vsync (60 fps, smooth)");
+        log_info("framerate: %s",
+                 uncap_fps_ ? "uncapped (~180 fps, native feel)" : "vsync (60 fps, smooth)");
         return false;  // presentation shortcut; never leak F8 into a screen
     }
     if (ev.key.key == kNetOverlayToggleKey) {
@@ -1861,12 +1861,12 @@ bool GameApp::handle_global_event(const SDL_Event& ev) {
         // only draws it when a netplay session is actually running, so pressing
         // it in a local match is a harmless no-op rather than an empty panel.
         show_netstats_ = !show_netstats_;
-        std::fprintf(stderr, "netplay overlay: %s\n", show_netstats_ ? "on" : "off");
+        log_info("netplay overlay: %s", show_netstats_ ? "on" : "off");
         return false;  // presentation shortcut; never leak F3 into a screen
     }
     if (ev.key.key == SDLK_F7) {
         show_fps_ = !show_fps_;
-        std::fprintf(stderr, "fps indicator: %s\n", show_fps_ ? "on" : "off");
+        log_info("fps indicator: %s", show_fps_ ? "on" : "off");
         return false;  // presentation shortcut; never leak F7 into a screen
     }
     if (ev.key.key == SDLK_F9) {
@@ -1874,9 +1874,8 @@ bool GameApp::handle_global_event(const SDL_Event& ev) {
         // frame on the real wall-clock delta, drawn without interpolation. Takes
         // effect on the next frame in run_match (which reads native_cadence_).
         native_cadence_ = !native_cadence_;
-        std::fprintf(stderr, "cadence: %s\n",
-                     native_cadence_ ? "native per-frame wall-clock (non-deterministic)"
-                                     : "fixed 20 Hz + interpolation (deterministic)");
+        log_info("cadence: %s", native_cadence_ ? "native per-frame wall-clock (non-deterministic)"
+                                                : "fixed 20 Hz + interpolation (deterministic)");
         return false;  // presentation shortcut; never leak F9 into a screen
     }
     bool alt_enter = ev.key.key == SDLK_RETURN && (ev.key.mod & SDL_KMOD_ALT) != 0;
@@ -1913,7 +1912,7 @@ void GameApp::toggle_hd_artwork() {
     assets_.set_hd_enabled(enabling);
     SDL_SetWindowTitle(window_.get(), assets_.hd_enabled() ? "Atomic Bomberman [HD]"
                                                            : "Atomic Bomberman [Classic]");
-    std::fprintf(stderr, "artwork mode: %s\n", assets_.hd_enabled() ? "HD" : "classic");
+    log_info("artwork mode: %s", assets_.hd_enabled() ? "HD" : "classic");
 }
 
 void GameApp::seed_default_node_name() {
@@ -1946,7 +1945,7 @@ void GameApp::flush_node_name() {
         assets::save_node_name(node_name_path_, options_.node_name);
         node_name_loaded_ = options_.node_name;
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "nodename.ini save failed: %s\n", e.what());
+        log_warn("nodename.ini save failed: %s", e.what());
     }
 }
 
@@ -2011,7 +2010,7 @@ void GameApp::flush_options() {
         assets::save_options(options_path_, to_write);
         options_dirty_ = false;
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "options.ini save failed: %s\n", e.what());
+        log_warn("options.ini save failed: %s", e.what());
     }
 }
 

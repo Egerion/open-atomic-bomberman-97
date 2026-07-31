@@ -89,14 +89,29 @@ endif()
 add_subdirectory(libs/audio)
 add_subdirectory(apps/abtool)
 
+# libs/game is now split on the SDL boundary the same way, and for the same
+# reason. It is BOTH halves in one directory: bomber::game_util (SDL-free — the
+# §11 log seam and the scheme editor's pure grid model) is declared
+# unconditionally, and bomber::game itself early-returns unless the viewer is on.
+# So this line must sit here, before tests/, and libs/platform — which only the
+# SDL half needs — must still precede it whenever that half is being built.
+#
+# What this buys: tests/game's editor_grid suite used to RECOMPILE
+# libs/game/src/editor_grid.cpp into its own binary because the only target
+# offering it dragged in SDL3. That is the same shape libs/audio was fixed out of
+# — a suite that rebuilds the code instead of linking it is testing its own copy,
+# and nothing catches the day the two diverge.
+if(BOMBER_BUILD_VIEWER)
+  add_subdirectory(libs/platform)  # engine-base (ADR-0008): must precede libs/game
+endif()
+add_subdirectory(libs/game)
+
 enable_testing()
 add_subdirectory(tests)
 
-# SDL3 presentation layer + apps. (libs/audio's SDL half is declared above,
+# The SDL3 apps. (libs/audio's and libs/game's SDL halves are declared above,
 # under the same BOMBER_BUILD_VIEWER guard.)
 if(BOMBER_BUILD_VIEWER)
-  add_subdirectory(libs/platform)  # engine-base (ADR-0008): must precede libs/game
-  add_subdirectory(libs/game)
   add_subdirectory(apps/game)
   add_subdirectory(apps/viewer)
 endif()

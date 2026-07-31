@@ -5,7 +5,6 @@
 #include <array>
 #include <cctype>    // std::isalnum (the filename sanitizer)
 #include <cstddef>   // std::size_t
-#include <cstdio>    // std::fprintf, stderr
 #include <exception>
 #include <filesystem>
 #include <optional>
@@ -16,6 +15,7 @@
 #include "bomber/game/dialog_chrome.hpp"              // dispatch_list_mouse
 #include "bomber/game/editor_screen.hpp"              // EditorChooserScreen/EditorScreen/SchemeFilePicker
 #include "bomber/game/frontend_util.hpp"              // pick_glue
+#include "bomber/game/log.hpp"                        // log_warn
 #include "bomber/game/screens/help_screens.hpp"       // HelpBrowserScreen
 #include "bomber/game/screens/scheme_filename_prompt.hpp"  // SchemeFilenamePrompt
 
@@ -225,7 +225,7 @@ void EditorRunner::run() {
                 state_.scheme = out;
                 state_.scheme_path = out_path;
             } catch (const std::exception& e) {
-                std::fprintf(stderr, "scheme editor: save failed: %s\n", e.what());
+                log_warn("scheme editor: save failed: %s", e.what());
             }
         }
         // Either way (saved or discarded), fall back to the chooser so

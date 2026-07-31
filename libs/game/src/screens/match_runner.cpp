@@ -553,11 +553,8 @@ AppInput MatchRunner::run() {
         if (over_ticks < 0 && !await_death_fx &&
             (sim::sides_remaining(s) <= 1 || s.ticks_left == 0)) {
             if (s.ticks_left == 0) {
-                std::printf("time up — draw!\n");
                 return true;  // straight into the outcome tier, nothing to wait for
             }
-            for (int i = 0; i < sim::kMaxPlayers; ++i)
-                if (s.players[i].present && s.players[i].alive) std::printf("player %d wins!\n", i);
             // NETPLAY keeps the old fixed linger. The death-sequence pool and
             // each sequence's step count come from the LOCAL install's DATA/ANI
             // files, which build_hash does not cover, so an animation-driven

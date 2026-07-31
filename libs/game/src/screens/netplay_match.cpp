@@ -10,6 +10,7 @@
 
 #include "bomber/audio/round_music.hpp"    // round_music_id (shared with MatchRunner)
 #include "bomber/game/input.hpp"           // SlotInputType
+#include "bomber/game/log.hpp"
 #include "bomber/game/match_outcome.hpp"   // round_winner / award_round_win / match_clinch
 #include "bomber/game/options_screen.hpp"  // is_unlimited_game_seconds
 #include "bomber/game/screens/asset_screen.hpp"
@@ -532,9 +533,8 @@ void MatchLoop::note_walkout(const net::RollbackSession& session, bool stalled) 
 
 bool MatchLoop::stopped_after_round(net::RollbackSession& session, NetLeave left) {
     if (session.desynced()) {
-        std::fprintf(stderr,
-                     "netplay: DESYNC at tick %u — peers diverged (config/seed mismatch?)\n",
-                     session.desync_tick());
+        log_warn("netplay: DESYNC at tick %u — peers diverged (config/seed mismatch?)",
+                 session.desync_tick());
         recorder_.latch(net::SessionEndReason::Desync);
         report_session_end();
         return true;
@@ -542,9 +542,9 @@ bool MatchLoop::stopped_after_round(net::RollbackSession& session, NetLeave left
     if (session.aborted()) {
         // Options row 12 off: a peer went silent and the match ends rather
         // than handing its seat to the AI. Say so — not a normal round end.
-        std::fprintf(stderr,
-                     "netplay: a player dropped; match ended (turn on \"Lost net players "
-                     "revert to AIs\" to play on)\n");
+        log_warn(
+            "netplay: a player dropped; match ended (turn on \"Lost net players "
+            "revert to AIs\" to play on)");
         recorder_.latch(net::SessionEndReason::PeerDropped);
         recorder_.note("silence past the 600-pump timeout with Options row 12 off");
         report_session_end();
@@ -604,8 +604,8 @@ bool MatchLoop::settle_abandon(net::RollbackSession& session) {
     // where it does NOT — an Esc at the DRAW or scoreboard right after —
     // so the log says "somebody abandoned" rather than a bare "left".
     recorder_.latch(net::SessionEndReason::RoundAbandoned);
-    std::printf("netplay: round %d abandoned at tick %u — draw\n", round_,
-                static_cast<unsigned>(session.end_round_tick()));
+    log_info("netplay: round %d abandoned at tick %u — draw", round_,
+             static_cast<unsigned>(session.end_round_tick()));
     return true;
 }
 
@@ -705,7 +705,7 @@ MatchLoop::Rotation MatchLoop::no_next_round(const RoundRotationGate& gate) {
         result_ = AppInput::Advance;
         return Rotation::EndMatch;
     }
-    std::fprintf(stderr, "netplay: lost the peer between rounds; match ended\n");
+    log_warn("netplay: lost the peer between rounds; match ended");
     recorder_.latch(net::SessionEndReason::PeerLostBetweenRounds);
     // The screen the player was looking at gave no hint of this: the
     // scoreboard simply stopped accepting Enter. Say it out loud.
@@ -735,9 +735,9 @@ MatchLoop::Rotation MatchLoop::rotate(int winner, const net::RollbackSession& se
     }
     if (!gate.ready()) return no_next_round(gate);
     round_cfg_ = gate.next_config();
-    std::printf("netplay: round %d over at tick %u; next round seed 0x%08X stage %d\n", round_,
-                static_cast<unsigned>(session.confirmed_tick()),
-                static_cast<unsigned>(round_cfg_.seed), round_cfg_.tuning.level_index);
+    log_info("netplay: round %d over at tick %u; next round seed 0x%08X stage %d", round_,
+             static_cast<unsigned>(session.confirmed_tick()),
+             static_cast<unsigned>(round_cfg_.seed), round_cfg_.tuning.level_index);
     // Cover a lost ack before the match session takes the socket back.
     if (!net_settle(kRoundHandoffSettleMs, [&gate] { gate.pump(); })) return Rotation::WindowClosed;
     return Rotation::NextRound;

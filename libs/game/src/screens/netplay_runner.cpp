@@ -3,13 +3,13 @@
 #include <SDL3/SDL.h>
 
 #include <cstdint>
-#include <cstdio>
 #include <cstdlib>
 #include <string>
 
 #include "bomber/assets/extra.hpp"  // assets::extra::load_for_board
 #include "bomber/game/chat_overlay.hpp"
 #include "bomber/game/frontend_util.hpp"  // pick_glue
+#include "bomber/game/log.hpp"
 #include "bomber/game/screens/campaign_state.hpp"
 #include "bomber/game/screens/map_select_screen.hpp"
 #include "bomber/game/screens/match_runner.hpp"
@@ -147,19 +147,19 @@ int NetplayRunner::run_cli() {
     // discovery-less wire — see main.cpp's --host/--join usage.
     net::UdpTransport transport;
     if (!transport.bind(state_.net_local_port)) {
-        std::fprintf(stderr, "netplay: bind failed (local port %u)\n",
-                     static_cast<unsigned>(state_.net_local_port));
+        log_warn("netplay: bind failed (local port %u)",
+                 static_cast<unsigned>(state_.net_local_port));
         return 1;
     }
     if (!transport.set_peer(state_.net_peer_host, state_.net_peer_port)) {
-        std::fprintf(stderr, "netplay: cannot resolve peer %s:%u\n", state_.net_peer_host.c_str(),
-                     static_cast<unsigned>(state_.net_peer_port));
+        log_warn("netplay: cannot resolve peer %s:%u", state_.net_peer_host.c_str(),
+                 static_cast<unsigned>(state_.net_peer_port));
         return 1;
     }
-    std::printf("netplay: %s  bound_port=%u  peer=%s:%u  seed=0x%08X  seat=%d\n",
-                host ? "HOST" : "GUEST", static_cast<unsigned>(transport.local_port()),
-                state_.net_peer_host.c_str(), static_cast<unsigned>(state_.net_peer_port),
-                static_cast<unsigned>(state_.net_seed), local_seat);
+    log_info("netplay: %s  bound_port=%u  peer=%s:%u  seed=0x%08X  seat=%d",
+             host ? "HOST" : "GUEST", static_cast<unsigned>(transport.local_port()),
+             state_.net_peer_host.c_str(), static_cast<unsigned>(state_.net_peer_port),
+             static_cast<unsigned>(state_.net_seed), local_seat);
 
     run_cli_match(transport, state_.net_role, state_.net_seed);
     return 0;  // CLI always exits 0 after the single match (window-close included)
@@ -249,10 +249,10 @@ bool NetplayRunner::exchange_cli_config(net::UdpTransport& transport, bool is_ho
         if (net_window_closed()) return false;
         session.step(static_cast<std::int64_t>(SDL_GetTicks()));
         if (session.failed()) {
-            std::fprintf(stderr,
-                         "netplay: match-config exchange timed out after %d ms — the peer is gone "
-                         "or is running a build from before the CLI exchanged configs.\n",
-                         kCliSetupTimeoutMs);
+            log_warn(
+                "netplay: match-config exchange timed out after %d ms — the peer is gone "
+                "or is running a build from before the CLI exchanged configs.",
+                kCliSetupTimeoutMs);
             return false;
         }
         SDL_Delay(2);
@@ -268,8 +268,8 @@ bool NetplayRunner::exchange_cli_config(net::UdpTransport& transport, bool is_ho
             session.step(static_cast<std::int64_t>(SDL_GetTicks()));
         }))
         return false;
-    std::printf("netplay: match config agreed (%s), stage %d\n", is_host ? "sent" : "received",
-                out_cfg.tuning.level_index);
+    log_info("netplay: match config agreed (%s), stage %d", is_host ? "sent" : "received",
+             out_cfg.tuning.level_index);
     return true;
 }
 
@@ -621,7 +621,7 @@ NetplayRunner::LobbyChoice NetplayRunner::choose_lobby(LobbyScreen& screen,
     if (browse) {
         net::UdpTransport browse_transport;
         if (!browse_transport.bind(0)) {
-            std::fprintf(stderr, "lobby: cannot open a UDP socket\n");
+            log_warn("lobby: cannot open a UDP socket");
             return {AppInput::Advance};
         }
         if (!screen.run_public_browser(ocfg, browse_transport, out.code, closed))
@@ -665,7 +665,7 @@ AppInput NetplayRunner::present_online(bool host, bool browse, bool is_public) {
     // punched is the one gameplay flows through (lobby_flow.hpp).
     net::UdpTransport transport;
     if (!transport.bind(0)) {
-        std::fprintf(stderr, "lobby: cannot open a UDP socket\n");
+        log_warn("lobby: cannot open a UDP socket");
         return AppInput::Advance;
     }
 
