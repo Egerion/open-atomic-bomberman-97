@@ -112,6 +112,29 @@ target_link_libraries(bomber_credits_addendum_tests
 target_include_directories(bomber_credits_addendum_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
 add_test(NAME credits_addendum COMMAND bomber_credits_addendum_tests)
 
+# The MESSAGES.TXT substitution half of hud_format.hpp (fmt_u/fmt_s/fmt_us). The
+# clock half is covered inside the frontend suite; these three had no coverage at
+# all, and they are the ones that parse the PLAYER'S OWN file — a hand-edited row
+# reaches them, so "leave a wrong-kind specifier literal rather than guess" is a
+# contract and not an implementation detail. Header-only with no dependency, so
+# this target needs nothing but the game include dir.
+add_executable(bomber_message_splice_tests test_message_splice.cpp)
+target_link_libraries(bomber_message_splice_tests PRIVATE doctest::doctest bomber::warnings)
+target_include_directories(bomber_message_splice_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+add_test(NAME message_splice COMMAND bomber_message_splice_tests)
+
+# The cross-screen helpers (frontend_util.hpp): the ONE shared presentation LCG
+# every pre-match screen steps through pick_glue, and the case-insensitive
+# DATA/SCHEMES resolve. Both were untested, and both are what the ADR-0008 screen
+# decomposition was most likely to break — a per-screen copy of pick_glue still
+# returns plausible backdrop names, so nothing but a test notices. Links
+# bomber::assets for ValueList and the .SCH loader/writer the fixtures use.
+add_executable(bomber_frontend_util_tests test_frontend_util.cpp)
+target_link_libraries(bomber_frontend_util_tests
+  PRIVATE bomber::assets doctest::doctest bomber::warnings)
+target_include_directories(bomber_frontend_util_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+add_test(NAME frontend_util COMMAND bomber_frontend_util_tests)
+
 # Scheme editor's pure grid model (editor_grid.hpp/.cpp) is SDL-free despite
 # living under libs/game/src — compiled directly into its own test binary rather
 # than linking bomber_game_core (which pulls in SDL3).

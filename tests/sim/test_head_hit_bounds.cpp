@@ -88,6 +88,18 @@ TEST_CASE("jelly bounce chains never exceed the 1..3-kind loss per head hit") {
     // A flying jelly can re-cross the victim only via veer rolls / wrap; every
     // individual hit still obeys the 670/671 bound. Multi-seed sweep with the
     // victim in a pillar pocket to maximize re-crossings.
+    //
+    // COVERAGE PIN (2026-07-31): both bounds below are satisfied by hits == 0 —
+    // no hit means no drop, so `worst_single_tick_drop <= 3` and
+    // `9 - max_bombs <= 3 * hits` both hold trivially. That made this case green
+    // for the one regression it exists to catch: a change that stops the flying
+    // jelly reaching the victim at all. `total_hits` is therefore accumulated
+    // across the sweep and pinned non-zero at the end, so a scenario that stops
+    // landing hits fails as the loss of coverage it is rather than passing as a
+    // bound that was never tested. It is an AGGREGATE floor deliberately —
+    // whether any individual seed lands a hit is a property of the veer rolls,
+    // not of the ceiling under test.
+    int total_hits = 0;
     for (int seedbump = 0; seedbump < 8; ++seedbump) {
         MatchConfig cfg = open_config();
         cfg.seed = 7 + seedbump * 1000;
@@ -110,5 +122,7 @@ TEST_CASE("jelly bounce chains never exceed the 1..3-kind loss per head hit") {
         }
         CHECK(worst_single_tick_drop <= 3);   // one hit's ceiling
         CHECK(9 - v.max_bombs <= 3 * hits);   // total loss bounded by hits
+        total_hits += hits;
     }
+    CHECK(total_hits > 0);  // the sweep actually head-hit somebody
 }

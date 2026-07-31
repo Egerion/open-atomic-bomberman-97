@@ -215,12 +215,23 @@ TEST_CASE("the stun spin turns CLOCKWISE, in the original's godir order") {
     // the adapter's reason to exist; if it fails, the bomberman is spinning
     // wrong, not merely differently.
     const int expected[4] = {kUp, kRight, kDown, kLeft};  // N, E, S, W
+    int visits[4] = {0, 0, 0, 0};
     for (int elapsed = 0; elapsed < 16; ++elapsed) {
         CAPTURE(elapsed);
-        CHECK(stunned_stand_facing(kDown, 16 - elapsed, 16) == expected[elapsed % 4]);
+        const int got = stunned_stand_facing(kDown, 16 - elapsed, 16);
+        CHECK(got == expected[elapsed % 4]);
+        for (int i = 0; i < 4; ++i)
+            if (got == expected[i]) ++visits[i];
     }
     // Four full turns over the confirmed 16-frame stun (sub_421F7E's literal).
-    CHECK(16 / 4 == 4);
+    // This used to read `CHECK(16 / 4 == 4)`, which is a statement about
+    // arithmetic and not about the port — it could not fail. The claim the
+    // comment actually makes is that the 16-frame window shows each of the four
+    // sprites exactly four times, so assert that instead.
+    for (int i = 0; i < 4; ++i) {
+        CAPTURE(i);
+        CHECK(visits[i] == 4);
+    }
 }
 
 TEST_CASE("a nonsensical stun pair cannot index out of the table") {
