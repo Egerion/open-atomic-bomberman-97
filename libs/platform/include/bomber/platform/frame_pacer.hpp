@@ -78,23 +78,23 @@ public:
     // asks for a spin.
     static constexpr std::uint64_t kSpinTailNs = 1'000'000;
 
-    FramePacer(std::uint64_t period_ns, std::uint64_t now_ns)
+    constexpr FramePacer(std::uint64_t period_ns, std::uint64_t now_ns)
         : period_ns_(period_ns ? period_ns : 1),
           target_ns_(now_ns + period_ns_),
           anchor_ns_(now_ns) {}
 
-    std::uint64_t period_ns() const { return period_ns_; }
-    std::uint64_t target_ns() const { return target_ns_; }
-    std::uint64_t anchor_ns() const { return anchor_ns_; }
+    constexpr std::uint64_t period_ns() const { return period_ns_; }
+    constexpr std::uint64_t target_ns() const { return target_ns_; }
+    constexpr std::uint64_t anchor_ns() const { return anchor_ns_; }
 
     // Live-settable so an F8 toggle takes effect on the very next frame.
-    void set_period(std::uint64_t period_ns) { period_ns_ = period_ns ? period_ns : 1; }
+    constexpr void set_period(std::uint64_t period_ns) { period_ns_ = period_ns ? period_ns : 1; }
 
     // Origin of the SubFrame lattice — for a match loop, the wall instant the
     // current sim tick began. Re-stating it every frame is what keeps the
     // presents welded to the interpolator's own boundaries instead of drifting
     // against them.
-    void set_anchor(std::uint64_t anchor_ns) { anchor_ns_ = anchor_ns; }
+    constexpr void set_anchor(std::uint64_t anchor_ns) { anchor_ns_ = anchor_ns; }
 
     // Which lattice cell `t_ns` falls in. Shared with the callers/tests so
     // "one present per sub-frame index" is checkable against the same rule the
@@ -106,7 +106,7 @@ public:
 
     // Refresh-boundary rule (unchanged behaviour — this is FrameClock's pace()
     // and match_runner's vsync path, verbatim).
-    Wait plan_resync(std::uint64_t after_present_ns) {
+    constexpr Wait plan_resync(std::uint64_t after_present_ns) {
         if (after_present_ns < target_ns_) {
             const std::uint64_t sleep_ns = target_ns_ - after_present_ns;
             target_ns_ += period_ns_;
@@ -122,7 +122,7 @@ public:
     // is the duplicate-present failure this exists to avoid — but it also
     // cannot lose phase, because the next target is read off the lattice rather
     // than off "now".
-    Wait plan_subframe(std::uint64_t after_present_ns) {
+    constexpr Wait plan_subframe(std::uint64_t after_present_ns) {
         target_ns_ = anchor_ns_ +
                      (subframe_index(after_present_ns, anchor_ns_, period_ns_) + 1) * period_ns_;
         // Guard, not a rule: an anchor ahead of the present (only reachable if a

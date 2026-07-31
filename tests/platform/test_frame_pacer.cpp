@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
+#include <cstddef>  // std::size_t — used below, and NOT via <vector> (§7)
 #include <cstdint>
 #include <vector>
 
@@ -30,7 +31,7 @@ struct Loop {
     std::uint64_t work_ns = 110'000;     // measured CPU cost of a frame before present
     std::vector<std::uint64_t> targets;  // every target the pacer handed back
 
-    std::uint64_t present_cost() {
+    std::uint64_t present_cost() const {
         return present_costs.empty() ? 300'000 : present_costs[frame % present_costs.size()];
     }
 
@@ -56,9 +57,24 @@ struct Loop {
 };
 
 // The index renderer.cpp would floor interp_alpha onto for a present at `t`.
-std::uint64_t sub_index(std::uint64_t t, std::uint64_t anchor) {
+constexpr std::uint64_t sub_index(std::uint64_t t, std::uint64_t anchor) {
     return FramePacer::subframe_index(t, anchor, kSubNs);
 }
+
+// The pacing decision is a pure function of integers — no clock, no SDL, no
+// allocation — which is the property that lets it be tested at all. Asserting it
+// at COMPILE time states that property directly rather than inferring it from
+// the runtime cases below: a member that later reached for a clock or a heap
+// would stop compiling here instead of quietly costing the suite its subject.
+// The values mirror "the wait is split sleep-then-spin" exactly.
+static_assert(
+    [] {
+        FramePacer p(kSubNs, 0);
+        p.set_anchor(0);
+        const FramePacer::Wait w = p.plan_subframe(kSubNs);
+        return w.spin_until_ns == 2 * kSubNs && w.sleep_ns == kSubNs - FramePacer::kSpinTailNs;
+    }(),
+    "FramePacer's rule must hold in a constant expression");
 
 }  // namespace
 

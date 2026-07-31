@@ -1,7 +1,14 @@
-# bomber::platform — the engine-base layer (ADR-0008): SDL-backed window,
-# frame clock/pacing, input pump, resource cache. Game-agnostic infrastructure
-# the front-end sits on, so screens never re-implement the main loop, timing, or
-# input drain. Header-only for now (FrameClock); grows a .cpp as classes land.
+# bomber::platform — the engine-base layer (ADR-0008). Game-agnostic
+# infrastructure the front-end sits on, so screens never re-implement timing.
+#
+# What is actually here today is frame pacing, and only that: FramePacer (the
+# SDL-free decision, pinned by tests/platform) and FrameClock (the SDL-backed
+# half). ADR-0008 also scopes a window wrapper, an input pump and a resource
+# cache to this layer; none of them have landed, and screens still drain their
+# own input. Stated as pending rather than listed as present — a build file that
+# advertises components that do not exist sends a reader looking for them.
+#
+# Header-only while that holds; grows a .cpp as those classes land.
 add_library(bomber_platform INTERFACE)
 add_library(bomber::platform ALIAS bomber_platform)
 
