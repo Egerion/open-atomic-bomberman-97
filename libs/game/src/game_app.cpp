@@ -1445,351 +1445,37 @@ int GameApp::run_app() {
                 break;
             case AppState::Menu: {
                 ev = present_menu();  // navigable; resolves the selected row
-                if (ev == AppInput::StartMatch) {
-                    // Campaign-flag reset — PORTED 2026-07-09 (docs/re/
-                    // campaign.md "Campaign-exit key"): `dword_46489C = 0` is
-                    // the LITERAL FIRST statement of sub_42A3F6 (pseudo.c
-                    // 29692), unconditionally, every time "Play" is entered
-                    // fresh from the menu — there is no dedicated exit KEY
-                    // anywhere in the binary (grepped every read/write of
-                    // dword_46489C: exactly two writes total, this entry
-                    // reset and sub_4015C6's own `=1`), but this unconditional
-                    // entry-point reset IS the mechanism that keeps a
-                    // previous campaign run from leaking into a fresh one.
-                    // Without it, aborting mid-campaign (Ctrl+Q/Esc during
-                    // Match -> Results -> Back to Menu, none of which clear
-                    // campaign_active_) would leave a stale campaign_active_/
-                    // campaign_stages_/campaign_stage_index_ armed for the
-                    // NEXT Play, silently skipping present_map_select() and
-                    // resuming the abandoned stage instead of a normal game —
-                    // matching this reset closes that gap. Placed first, same
-                    // as the original's ordering, before the attract/goldman/
-                    // present_setup steps below (present_setup's OWN 'C'x5
-                    // trigger can re-arm it later in this same StartMatch
-                    // pass, exactly like sub_410F81 re-arming dword_46489C
-                    // after sub_42A3F6's entry reset).
-                    campaign_active_ = false;
-                    campaign_stages_.clear();
-                    campaign_stage_index_ = 0;
-                    // The pre-match flow reached from Play (sub_42A3F6): the PLAYER
-                    // INPUT screen (sub_410F81) then the LEVEL & ROUNDS screen
-                    // (sub_406DDE), then the match. CORRECTED: Escape does NOT
-                    // back up one step at a time — sub_406DDE is called from
-                    // sub_410F81's own TAIL (pseudo.c 15504-15517, `if
-                    // (!dword_464A68) { ...; sub_406DDE(); }`) with nothing
-                    // after that call but `sub_401312()` and return, so an Esc
-                    // on EITHER screen aborts the WHOLE Play flow straight back
-                    // to the menu (same shape as the Goldman wheel's own Esc,
-                    // doc §5) — there is no "go back to the player screen"
-                    // path anywhere in the original. reset_match_scores()
-                    // clears the tally; the level screen owns the win target
-                    // so we reset FIRST, then let the level screen adjust
-                    // win_target_.
-                    reset_match_scores();
-                    // The SETUP-SCREENS track (1020), started ONCE for the whole
-                    // Play flow — this line is sub_42A3F6's own 0x42A436, which
-                    // sits between the campaign reset above and the call to
-                    // sub_410F81 below and is the ONLY site in the binary that
-                    // ever names 1020 (exhaustive: six music call sites in the
-                    // whole image, docs/re/sound-engine.md §9).
-                    //
-                    // It lives here, not in the screens, because start_music is
-                    // a genuine restart — sub_42741E frees the handle and
-                    // reloads from sample 0, with no same-id no-op — so the
-                    // goldman wheel and the player-select screen each calling it
-                    // meant WIN.RSS audibly jumped back to the top as the wheel
-                    // handed over. Both of those screens carried a comment
-                    // saying they inherit the track and start no music of their
-                    // own; now they actually do.
-                    audio_.start_music(kWinMusicId);
-                    // ATTRACT short-circuit (docs/re/frontend-flow.md
-                    // "Attract mode" point 1, sub_410F81 pseudo.c 15125-15143):
-                    // present_menu() already rolled the demo roster/stage into
-                    // setup_type_/setup_sub_/setup_team_/selected_level_ (via
-                    // roll_attract_match()) and set attract_ before returning
-                    // StartMatch here, so this path goes STRAIGHT to the
-                    // match — no goldman wheel (doc §2's `!dword_464938`
-                    // gate — a real pending prize is simply left untouched
-                    // for the NEXT non-attract Play entry, not forfeited),
-                    // no present_setup, no present_map_select ("neither the
-                    // player screen nor the LEVEL & ROUNDS screen is shown").
-                    // run_match's own attract_ check aborts back to the menu
-                    // on any input; either way (natural end or abort) run_match
-                    // returns MatchOver and this block calls run_match()
-                    // DIRECTLY (bypassing the normal Match/Results AppState
-                    // walk) so Results never renders — point 2's "Round end
-                    // skips ALL outcome screens" (DRAW/RESULTS/VICTORY).
-                    if (attract_) {
-                        AppInput attractResult = run_match();
-                        if (attractResult == AppInput::Quit) return 0;
-                        // Doc point 2: an attract round NEVER shows DRAW/
-                        // RESULTS/VICTORY — restore immediately and drop
-                        // straight back to the menu, bypassing next()'s
-                        // normal Match->Results->Menu walk entirely (there is
-                        // no scoreboard/outcome state to fold into the flow
-                        // graph for this round).
-                        restore_from_attract();
-                        ev = AppInput::Advance;  // Menu -> (stays) Menu
-                        break;
-                    }
-                    // The Goldman wheel (docs/re/goldman-roulette.md §2): at
-                    // the head of every Play entry, before present_setup —
-                    // gated on not-attract (checked above — this is the
-                    // normal, non-attract path), the goldman option, local-
-                    // only (always true), and a gold player actually pending
-                    // from a previous match's rounds. An Esc abort forfeits
-                    // the whole Play flow (skip straight back to the menu,
-                    // mirroring sub_410F81, which returns right after the call
-                    // whenever dword_464A68 is set).
-                    if (options_.goldman && gold_player_ >= 0) {
-                        AppInput wheelResult = present_goldman_wheel();
-                        if (wheelResult == AppInput::Quit) return 0;
-                        if (wheelResult == AppInput::Back) {
-                            ev = AppInput::Advance;
-                            break;
-                        }
-                    }
-                    bool started = false;
-                    while (!started) {
-                        AppInput setup = present_setup();
-                        if (setup == AppInput::Quit) return 0;
-                        if (setup == AppInput::Back) {
-                            ev = AppInput::Advance;
-                            break;
-                        }
-                        // Campaign mode SKIPS the LEVEL & ROUNDS screen
-                        // entirely (docs/re/campaign.md "Skips the normal
-                        // LEVEL & ROUNDS screen", sub_406DDE's `if
-                        // (!dword_46489C)` gate): present_setup's own 'C'x5
-                        // trigger already picked a stage and seeded the
-                        // roster (present_campaign_picker), so a confirmed
-                        // setup screen goes STRAIGHT to the match.
-                        if (campaign_active_) {
-                            started = true;
-                            break;
-                        }
-                        // Player screen accepted -> the LEVEL screen. Esc here
-                        // aborts the WHOLE flow (see the comment above this
-                        // loop) -- NOT a loop back to present_setup — so this
-                        // mirrors the wheel-abort and player-screen-Esc
-                        // branches above, not the campaign short-circuit.
-                        AppInput lvl = present_map_select();
-                        if (lvl == AppInput::Quit) return 0;
-                        if (lvl == AppInput::Back) {
-                            ev = AppInput::Advance;
-                            break;
-                        }
-                        started = true;  // both screens confirmed -> start the match
-                    }
-                    if (!started) ev = AppInput::Advance;  // cancelled all the way out
-                }
+                if (ev != AppInput::StartMatch) break;
+                // PLAY: the pre-match flow decides whether a match actually
+                // starts (StartMatch) or the player backed out of it (Advance,
+                // Menu -> Menu). No value = the window closed under it.
+                const std::optional<AppInput> played = run_play_flow();
+                if (!played) return 0;
+                ev = *played;
                 break;
             }
             case AppState::Match: ev = run_match(); break;
             case AppState::Results: {
-                // The three-tier sub_42A3F6 results tail (docs/re/frontend-flow.md
-                // "results flow"): a round win bumps that player's tally; the
-                // match is decided (VICTORY<n>) once the tally reaches
-                // win_target_ (the LEVEL & ROUNDS screen's WINS row); otherwise
-                // a survivor shows the RESULTS cumulative scoreboard, a draw
-                // (round_winner() folds no-survivor and time-up) shows DRAW —
-                // and both replay the next round. The winner voice group (2000)
-                // fires here, as soon as v73 (the round winner / match-over
-                // check) is computed (§1) — i.e. under BOTH the scoreboard and
-                // the VICTORY screen, not only the latter. On a DRAW we fire the
-                // tie-game sting instead (sub_427BFB(1700)) — a one-shot group
-                // pick, not looped music.
-                //
-                // Results MUSIC (sub_42A3F6) — CORRECTED per docs/re/
-                // in-match-shell.md §2: sub_42741E(0x46A)=1130 ("draw") starts
-                // UNCONDITIONALLY on round-loop exit, BEFORE the survivor
-                // test — so DRAW, the RESULTS tally, AND VICTORY/TEAM all
-                // play under 1130; 1020 ("win") is the SETUP-SCREENS track
-                // (present_setup/present_goldman_wheel), never restarted
-                // anywhere in this outcome tier. This file previously read
-                // 1020 as VICTORY's own track (frontend-flow.md's original,
-                // now-corrected "Results MUSIC" paragraph) — fixed here to
-                // kDrawMusicId in every branch below. start_music replaces
-                // the leftover stage/menu track, so the results screen
-                // carries its own backdrop music — previously our DRAW/
-                // RESULTS/VICTORY screens played under whatever music was
-                // left running, a silent-vs-original gap now closed.
-                //
-                // ---------------------------------------------------------------
-                // THE CAMPAIGN ARM (docs/re/campaign.md "Round end"). sub_42A3F6's
-                // round loop tests dword_46489C at 0x42A63B and a campaign round
-                // end branches away from EVERYTHING below: no 1130 music (0x42A6DD
-                // sits in the other arm), no DRAW, no RESULTS tally, no VICTORY, no
-                // win award (sub_421B56's only caller is 0x42A919, likewise in the
-                // other arm) and no gold-player write. It does two things instead —
-                // at most ONE modal, and only when the pacing verdict dword_464894
-                // is 2 (0x42A657) — and then the ROUND INIT sub_410B6E at 0x42A68B,
-                // which is where a campaign stage actually advances (sub_410B6E ->
-                // sub_40133F's ++dword_4648B0 at 0x40135F). The loop tail at
-                // 0x42AFF8 then either goes round again for the next stage or, once
-                // sub_40133F has run out of stages and written dword_464A68 = 10,
-                // leaves for the menu.
-                //
-                // Note WHERE the advance sits: after EVERY campaign round, not after
-                // a won best-of-N match. The port used to hang the stage advance off
-                // the VICTORY branch, so a campaign only moved on once someone had
-                // clinched win_target_ rounds — a shape the original does not have,
-                // because a campaign round never reaches the tier that counts wins.
-                //
-                // The decision itself is campaign_round_end.hpp, pinned headlessly;
-                // this block is only its SDL side. Everything past the break is the
-                // ordinary outcome tier, now reachable ONLY with campaign mode off —
-                // which is why the campaign special cases that used to be threaded
-                // through it (a music gate, a round_winner() override, a stage
-                // advance inside the VICTORY branch) are gone rather than bypassed.
+                // WHICH TIER a round end belongs to is one decision, taken here
+                // and taken once: campaign_round_end.hpp (pinned headlessly)
+                // answers it, and the two arms below are its SDL sides. They
+                // share nothing — a campaign round end reaches neither the 1130
+                // music, nor DRAW, nor the tally, nor VICTORY — which is why they
+                // are two functions rather than one with a flag threaded through
+                // it, the shape that used to hide a music gate, a round_winner()
+                // override and a stage advance inside the VICTORY branch.
                 const CampaignRoundEnd plan = campaign_round_end(
                     campaign_active_, campaign_pacing_.verdict, campaign_pacing_.no_human_survivor,
                     campaign_stage_index_, static_cast<int>(campaign_stages_.size()));
-                if (!plan.run_outcome_tier) {
-                    ev = AppInput::Advance;  // Advance -> Menu unless a stage follows
-                    if (plan.show_unsuccessful && present_campaign_unsuccessful() == AppInput::Quit)
-                        return 0;
-                    campaign_stage_index_ = plan.next_stage_index;
-                    // sub_410B6E's tail: load the stage sub_40133F's ++ just
-                    // selected, show its banner and play the next round. A scheme
-                    // the install cannot resolve is treated as "out of stages"
-                    // (port convenience, unpinned) rather than starting a match on
-                    // a stale board.
-                    if (plan.next_stage &&
-                        load_campaign_stage(campaign_stage_index_, campaign_state())) {
-                        reset_match_scores();
-                        if (present_campaign_banner() == AppInput::Quit) return 0;
-                        ev = AppInput::CampaignContinue;
-                        break;
-                    }
-                    if (plan.show_complete || plan.next_stage) {
-                        // sub_40133F's stage-exhausted branch: "Congratulations!" /
-                        // "You made it through the whole campaign!" (1220/1225),
-                        // then dword_464A68 = 10, i.e. out to the menu.
-                        if (present_campaign_complete() == AppInput::Quit) return 0;
-                    }
-                    // Verdict 0 lands here too, with neither modal: the original
-                    // only reaches its round-loop tail with dword_464894 still 0
-                    // after a Ctrl+Q forfeit, which has already written the menu
-                    // sentinel dword_464A68 = 2 at 0x42A579. Our Esc/Ctrl+Q abort is
-                    // the same act, so it leaves the same way — no banner, no stage
-                    // advance. dword_46489C itself is left stale in the original and
-                    // overwritten by sub_42A3F6's entry reset on the next Play; the
-                    // port clears it both here and there (campaign.md
-                    // "Campaign-exit key").
-                    campaign_active_ = false;
-                    campaign_stages_.clear();
-                    campaign_stage_index_ = 0;
+                if (plan.run_outcome_tier) {
+                    ev = run_outcome_tier();
                     break;
                 }
-                const auto start_outcome_music = [this] { audio_.start_music(kDrawMusicId); };
-                int w = round_winner();
-                // Tally the round win — and under Team Play mirror it onto the
-                // winner's teammates (sub_421B56 @ 0x421B56, called from
-                // 0x42A919), so every member of the winning team holds the TEAM
-                // total the scoreboard row and the clinch both read.
-                if (w >= 0) award_round_win(w);
-                // The match-over check (§1 v73): the default win-count target,
-                // or (team mode + win_by_kills) the kill-count clinch —
-                // match_clinch() (game_app.hpp) so this agrees with
-                // present_scoreboard's own clinch/outcome-line render. The
-                // clinching slot can differ from the round winner `w` under
-                // win_by_kills (a team's kill leader need not be this round's
-                // sole survivor), so VICTORY names whoever match_clinch()
-                // returns, not `w`.
-                int clinched = w >= 0 ? match_clinch() : -1;
-                bool match_over = clinched >= 0;
-                // Gold player assignment (docs/re/goldman-roulette.md §2,
-                // pseudo.c 30004-30022, LABEL_102): sub_42A3F6 only reaches
-                // the RESULTS tier (and its unconditional dword_46492C
-                // write) when sub_4219B0 returns anything but -1, i.e. a ROUND SURVIVOR
-                // exists (`w >= 0` below) — a DRAW falls through to the
-                // separate DRAW.PCX branch instead and never touches
-                // dword_46492C at all, so a pending gold player survives a
-                // draw round unchanged. When RESULTS does run, v73 (== our
-                // `clinched` above) is the MATCH-CLINCH winner, never the
-                // per-round winner `w` — so the gold player only changes
-                // when a match is actually decided, and reverts to "none
-                // pending" on every other clinch-less RESULTS pass (v73's
-                // own -1 reset at the top of every RESULTS pass). Team mode
-                // stores the raw team id (setup_team_[]), matching the wheel
-                // award consumer in build_match_config and
-                // present_scoreboard's own clinched_player -> setup_team_[]
-                // lookup.
-                if (w >= 0) {
-                    gold_player_ =
-                        assign_gold_player(options_.goldman, is_team_mode(), clinched, setup_team_);
-                }
-                if (match_over) {
-                    // MATCH win. sub_42A3F6 still renders the RESULTS scoreboard
-                    // on the clinching round (with the "WINS THE MATCH!" outcome
-                    // line) and plays the 2000 "we have a winner" voice UNDER it
-                    // — the ONLY site that voice fires (batch_0x4293E5.cpp:1298,
-                    // inside the branch taken when v73 is not -1) — THEN cuts to VICTORY.
-                    // The port formerly skipped the scoreboard and jumped straight
-                    // to VICTORY (and mis-fired 2000 on every round win too).
-                    start_outcome_music();  // 1130 under RESULTS/VICTORY (doc §2)
-                    // winner voice — clinch only
-                    audio_.play_sting(kWinnerStingLo, kWinnerStingHi);
-                    ev = present_scoreboard();  // the clinch scoreboard (WINS THE MATCH!)
-                    // Then VICTORY<player>.PCX / TEAM<0/1>.PCX (frontend-flow.md
-                    // "VICTORY" §3, aTeamU vs aVictoryU).
-                    if (ev != AppInput::Quit)
-                        ev = present_screen(
-                            victory_screen(is_team_mode(), clinched, setup_team_[clinched]));
-                } else if (w >= 0) {
-                    // Round win, match not over: show the running scores. NO
-                    // winner voice here — sub_42A3F6 fires sub_427BFB(2000) only
-                    // when the clinch index is a real player; a non-clinching
-                    // RESULTS pass (index -1, batch_0x4293E5.cpp:1260-1272) plays no
-                    // "we have a winner" cue. (The port formerly fired it every
-                    // round win.)
-                    start_outcome_music();  // 1130 under RESULTS (doc §2)
-                    ev = present_scoreboard();
-                } else {
-                    // DRAW (no survivor / time-up): nobody scores; replay a round.
-                    start_outcome_music();  // 1130 under DRAW (doc §2)
-                    audio_.play_sting(kDrawStingLo, kDrawStingHi);
-                    // sub_42A3F6's DRAW loop only auto-advances (6 s) for an
-                    // all-AI/attract roster; a human match waits for Enter. A
-                    // 0 dwell means "no auto-advance" in the Screen model
-                    // (screen.cpp:47), so zero it out when a human is playing.
-                    ScreenDef ds = draw_screen();
-                    if (!auto_advance_results()) ds.dwell_ms = 0;
-                    ev = present_screen(ds);
-                    // DRAW FALLS THROUGH INTO THE RESULTS TALLY — it is a PREFIX,
-                    // not an alternative (docs/re/in-match-shell.md "DRAW is a
-                    // prefix to RESULTS", raw 0x42A875-0x42A88B: the DRAW wait
-                    // loop ends with NO jump and execution lands in LABEL_102,
-                    // which loads RESULTS.PCX; the RESULTS-only path is the
-                    // jump to LABEL_102 taken when a survivor EXISTS). So a drawn
-                    // round shows both screens and dismisses both wait loops.
-                    // The port showed DRAW alone until this was pinned.
-                    if (ev != AppInput::Quit && ev != AppInput::Back) ev = present_scoreboard();
-                }
-                // Fold the screen's dismissal into the flow-graph event: an
-                // undecided round's Advance becomes RoundContinue, so
-                // next(Results, RoundContinue) loops straight back into Match
-                // (sub_42A3F6's round loop) — the next round reuses the SAME
-                // roster/level/win-target members the pre-match screens set;
-                // only run_match's start_match reruns (fresh sim, next seed).
-                // Back (Escape) abandons the match to the menu; a decided
-                // match's Advance ends it there too. next() stays the single
-                // authority over the state walk — no side-channel override.
-                if (!match_over && ev == AppInput::Advance) ev = AppInput::RoundContinue;
+                const std::optional<AppInput> staged = run_campaign_round_end(plan);
+                if (!staged) return 0;
+                ev = *staged;
                 break;
             }
-            // The .BM-backed leaves render their real help/credits text
-            // (sub_41302D via BmScreen). Network/Controllers show the raw
-            // NETWORK.BM/INPUT.BM text (Controllers is unreachable from any
-            // menu row — docs/re/frontend-flow.md's INPUT.BM confirmed
-            // negative, above); Credits shows CREDITS.BM with its inline
-            // CREDBAR/JERM/KURT images. Options is now the fully-interactive
-            // Team Play / Conveyor Speed screen (present_options_screen),
-            // whose "Define keyboard layouts" row reaches the REAL interactive
-            // key-remap UI (`sub_407B9D`, `KeyRemapScreen` — already ported,
-            // NOT the same thing as the INPUT.BM text screen above); Options's
-            // own F1 key still reaches the original OPTIONS.BM help text.
             case AppState::Options: ev = present_options_screen(); break;
             case AppState::Controllers: ev = present_bm_screen("INPUT"); break;
             case AppState::Network: ev = present_bm_screen("NETWORK"); break;
@@ -1819,6 +1505,330 @@ int GameApp::run_app() {
         state = next(state, ev);
     }
     return 0;
+}
+
+// THE CAMPAIGN ARM of a round end (docs/re/campaign.md "Round end").
+// sub_42A3F6's round loop tests dword_46489C at 0x42A63B and a campaign round
+// end branches away from the ordinary outcome tier ENTIRELY: no 1130 music
+// (0x42A6DD sits in the other arm), no DRAW, no RESULTS tally, no VICTORY, no
+// win award (sub_421B56's only caller is 0x42A919, likewise in the other arm)
+// and no gold-player write. It does two things instead — at most ONE modal, and
+// only when the pacing verdict dword_464894 is 2 (0x42A657) — and then the ROUND
+// INIT sub_410B6E at 0x42A68B, which is where a campaign stage actually advances
+// (sub_410B6E -> sub_40133F's ++dword_4648B0 at 0x40135F). The loop tail at
+// 0x42AFF8 then either goes round again for the next stage or, once sub_40133F
+// has run out of stages and written dword_464A68 = 10, leaves for the menu.
+//
+// Note WHERE the advance sits: after EVERY campaign round, not after a won
+// best-of-N match. The port used to hang the stage advance off the VICTORY
+// branch, so a campaign only moved on once someone had clinched win_target_
+// rounds — a shape the original does not have, because a campaign round never
+// reaches the tier that counts wins.
+//
+// Returns CampaignContinue to play the next stage, Advance to leave for the
+// menu, or no value if the window closed under one of the modals.
+std::optional<AppInput> GameApp::run_campaign_round_end(const CampaignRoundEnd& plan) {
+    if (plan.show_unsuccessful && present_campaign_unsuccessful() == AppInput::Quit)
+        return std::nullopt;
+    campaign_stage_index_ = plan.next_stage_index;
+    // sub_410B6E's tail: load the stage sub_40133F's ++ just
+    // selected, show its banner and play the next round. A scheme
+    // the install cannot resolve is treated as "out of stages"
+    // (port convenience, unpinned) rather than starting a match on
+    // a stale board.
+    if (plan.next_stage && load_campaign_stage(campaign_stage_index_, campaign_state())) {
+        reset_match_scores();
+        if (present_campaign_banner() == AppInput::Quit) return std::nullopt;
+        return AppInput::CampaignContinue;
+    }
+    if (plan.show_complete || plan.next_stage) {
+        // sub_40133F's stage-exhausted branch: "Congratulations!" /
+        // "You made it through the whole campaign!" (1220/1225),
+        // then dword_464A68 = 10, i.e. out to the menu.
+        if (present_campaign_complete() == AppInput::Quit) return std::nullopt;
+    }
+    // Verdict 0 lands here too, with neither modal: the original
+    // only reaches its round-loop tail with dword_464894 still 0
+    // after a Ctrl+Q forfeit, which has already written the menu
+    // sentinel dword_464A68 = 2 at 0x42A579. Our Esc/Ctrl+Q abort is
+    // the same act, so it leaves the same way — no banner, no stage
+    // advance. dword_46489C itself is left stale in the original and
+    // overwritten by sub_42A3F6's entry reset on the next Play; the
+    // port clears it both here and there (campaign.md
+    // "Campaign-exit key").
+    campaign_active_ = false;
+    campaign_stages_.clear();
+    campaign_stage_index_ = 0;
+    return AppInput::Advance;  // Advance -> Menu unless a stage follows
+}
+
+// The three-tier sub_42A3F6 results tail (docs/re/frontend-flow.md
+// "results flow"): a round win bumps that player's tally; the
+// match is decided (VICTORY<n>) once the tally reaches
+// win_target_ (the LEVEL & ROUNDS screen's WINS row); otherwise
+// a survivor shows the RESULTS cumulative scoreboard, a draw
+// (round_winner() folds no-survivor and time-up) shows DRAW —
+// and both replay the next round. The winner voice group (2000)
+// fires here, as soon as v73 (the round winner / match-over
+// check) is computed (§1) — i.e. under BOTH the scoreboard and
+// the VICTORY screen, not only the latter. On a DRAW we fire the
+// tie-game sting instead (sub_427BFB(1700)) — a one-shot group
+// pick, not looped music.
+//
+// Results MUSIC (sub_42A3F6) — CORRECTED per docs/re/
+// in-match-shell.md §2: sub_42741E(0x46A)=1130 ("draw") starts
+// UNCONDITIONALLY on round-loop exit, BEFORE the survivor
+// test — so DRAW, the RESULTS tally, AND VICTORY/TEAM all
+// play under 1130; 1020 ("win") is the SETUP-SCREENS track
+// (present_setup/present_goldman_wheel), never restarted
+// anywhere in this outcome tier. This file previously read
+// 1020 as VICTORY's own track (frontend-flow.md's original,
+// now-corrected "Results MUSIC" paragraph) — fixed here to
+// kDrawMusicId in every branch below. start_music replaces
+// the leftover stage/menu track, so the results screen
+// carries its own backdrop music — previously our DRAW/
+// RESULTS/VICTORY screens played under whatever music was
+// left running, a silent-vs-original gap now closed.
+//
+// Reachable ONLY with campaign mode off (run_campaign_round_end above is the
+// other arm), which is why the campaign special cases that used to be threaded
+// through it — a music gate, a round_winner() override, a stage advance inside
+// the VICTORY branch — are gone rather than bypassed. Returns the flow-graph
+// event, INCLUDING Quit: a window close here walks next(Results, Quit) to the
+// terminal state like any other, rather than short-circuiting run_app.
+AppInput GameApp::run_outcome_tier() {
+    AppInput ev = AppInput::Advance;
+    const auto start_outcome_music = [this] { audio_.start_music(kDrawMusicId); };
+    int w = round_winner();
+    // Tally the round win — and under Team Play mirror it onto the
+    // winner's teammates (sub_421B56 @ 0x421B56, called from
+    // 0x42A919), so every member of the winning team holds the TEAM
+    // total the scoreboard row and the clinch both read.
+    if (w >= 0) award_round_win(w);
+    // The match-over check (§1 v73): the default win-count target,
+    // or (team mode + win_by_kills) the kill-count clinch —
+    // match_clinch() (game_app.hpp) so this agrees with
+    // present_scoreboard's own clinch/outcome-line render. The
+    // clinching slot can differ from the round winner `w` under
+    // win_by_kills (a team's kill leader need not be this round's
+    // sole survivor), so VICTORY names whoever match_clinch()
+    // returns, not `w`.
+    int clinched = w >= 0 ? match_clinch() : -1;
+    bool match_over = clinched >= 0;
+    // Gold player assignment (docs/re/goldman-roulette.md §2,
+    // pseudo.c 30004-30022, LABEL_102): sub_42A3F6 only reaches
+    // the RESULTS tier (and its unconditional dword_46492C
+    // write) when sub_4219B0 returns anything but -1, i.e. a ROUND SURVIVOR
+    // exists (`w >= 0` below) — a DRAW falls through to the
+    // separate DRAW.PCX branch instead and never touches
+    // dword_46492C at all, so a pending gold player survives a
+    // draw round unchanged. When RESULTS does run, v73 (== our
+    // `clinched` above) is the MATCH-CLINCH winner, never the
+    // per-round winner `w` — so the gold player only changes
+    // when a match is actually decided, and reverts to "none
+    // pending" on every other clinch-less RESULTS pass (v73's
+    // own -1 reset at the top of every RESULTS pass). Team mode
+    // stores the raw team id (setup_team_[]), matching the wheel
+    // award consumer in build_match_config and
+    // present_scoreboard's own clinched_player -> setup_team_[]
+    // lookup.
+    if (w >= 0) {
+        gold_player_ = assign_gold_player(options_.goldman, is_team_mode(), clinched, setup_team_);
+    }
+    if (match_over) {
+        // MATCH win. sub_42A3F6 still renders the RESULTS scoreboard
+        // on the clinching round (with the "WINS THE MATCH!" outcome
+        // line) and plays the 2000 "we have a winner" voice UNDER it
+        // — the ONLY site that voice fires (batch_0x4293E5.cpp:1298,
+        // inside the branch taken when v73 is not -1) — THEN cuts to VICTORY.
+        // The port formerly skipped the scoreboard and jumped straight
+        // to VICTORY (and mis-fired 2000 on every round win too).
+        start_outcome_music();  // 1130 under RESULTS/VICTORY (doc §2)
+        // winner voice — clinch only
+        audio_.play_sting(kWinnerStingLo, kWinnerStingHi);
+        ev = present_scoreboard();  // the clinch scoreboard (WINS THE MATCH!)
+        // Then VICTORY<player>.PCX / TEAM<0/1>.PCX (frontend-flow.md
+        // "VICTORY" §3, aTeamU vs aVictoryU).
+        if (ev != AppInput::Quit)
+            ev = present_screen(victory_screen(is_team_mode(), clinched, setup_team_[clinched]));
+    } else if (w >= 0) {
+        // Round win, match not over: show the running scores. NO
+        // winner voice here — sub_42A3F6 fires sub_427BFB(2000) only
+        // when the clinch index is a real player; a non-clinching
+        // RESULTS pass (index -1, batch_0x4293E5.cpp:1260-1272) plays no
+        // "we have a winner" cue. (The port formerly fired it every
+        // round win.)
+        start_outcome_music();  // 1130 under RESULTS (doc §2)
+        ev = present_scoreboard();
+    } else {
+        // DRAW (no survivor / time-up): nobody scores; replay a round.
+        start_outcome_music();  // 1130 under DRAW (doc §2)
+        audio_.play_sting(kDrawStingLo, kDrawStingHi);
+        // sub_42A3F6's DRAW loop only auto-advances (6 s) for an
+        // all-AI/attract roster; a human match waits for Enter. A
+        // 0 dwell means "no auto-advance" in the Screen model
+        // (screen.cpp:47), so zero it out when a human is playing.
+        ScreenDef ds = draw_screen();
+        if (!auto_advance_results()) ds.dwell_ms = 0;
+        ev = present_screen(ds);
+        // DRAW FALLS THROUGH INTO THE RESULTS TALLY — it is a PREFIX,
+        // not an alternative (docs/re/in-match-shell.md "DRAW is a
+        // prefix to RESULTS", raw 0x42A875-0x42A88B: the DRAW wait
+        // loop ends with NO jump and execution lands in LABEL_102,
+        // which loads RESULTS.PCX; the RESULTS-only path is the
+        // jump to LABEL_102 taken when a survivor EXISTS). So a drawn
+        // round shows both screens and dismisses both wait loops.
+        // The port showed DRAW alone until this was pinned.
+        if (ev != AppInput::Quit && ev != AppInput::Back) ev = present_scoreboard();
+    }
+    // Fold the screen's dismissal into the flow-graph event: an
+    // undecided round's Advance becomes RoundContinue, so
+    // next(Results, RoundContinue) loops straight back into Match
+    // (sub_42A3F6's round loop) — the next round reuses the SAME
+    // roster/level/win-target members the pre-match screens set;
+    // only run_match's start_match reruns (fresh sim, next seed).
+    // Back (Escape) abandons the match to the menu; a decided
+    // match's Advance ends it there too. next() stays the single
+    // authority over the state walk — no side-channel override.
+    if (!match_over && ev == AppInput::Advance) ev = AppInput::RoundContinue;
+    return ev;
+}
+
+// THE PRE-MATCH FLOW reached from Play (sub_42A3F6's head): the campaign-flag
+// reset, the setup-screens track, the attract short-circuit, the Goldman wheel,
+// then the PLAYER INPUT screen (sub_410F81) and the LEVEL & ROUNDS screen
+// (sub_406DDE).
+//
+// CORRECTED: Escape does NOT back up one step at a time — sub_406DDE is called
+// from sub_410F81's own TAIL (pseudo.c 15504-15517, `if (!dword_464A68) { ...;
+// sub_406DDE(); }`) with nothing after that call but `sub_401312()` and return,
+// so an Esc on EITHER screen aborts the WHOLE Play flow straight back to the
+// menu (same shape as the Goldman wheel's own Esc, doc §5) — there is no "go
+// back to the player screen" path anywhere in the original.
+//
+// Returns StartMatch when the match should start, Advance when the player
+// backed out at any point (Menu -> Menu), or no value if the window closed.
+std::optional<AppInput> GameApp::run_play_flow() {
+    // Campaign-flag reset — PORTED 2026-07-09 (docs/re/
+    // campaign.md "Campaign-exit key"): `dword_46489C = 0` is
+    // the LITERAL FIRST statement of sub_42A3F6 (pseudo.c
+    // 29692), unconditionally, every time "Play" is entered
+    // fresh from the menu — there is no dedicated exit KEY
+    // anywhere in the binary (grepped every read/write of
+    // dword_46489C: exactly two writes total, this entry
+    // reset and sub_4015C6's own `=1`), but this unconditional
+    // entry-point reset IS the mechanism that keeps a
+    // previous campaign run from leaking into a fresh one.
+    // Without it, aborting mid-campaign (Ctrl+Q/Esc during
+    // Match -> Results -> Back to Menu, none of which clear
+    // campaign_active_) would leave a stale campaign_active_/
+    // campaign_stages_/campaign_stage_index_ armed for the
+    // NEXT Play, silently skipping present_map_select() and
+    // resuming the abandoned stage instead of a normal game —
+    // matching this reset closes that gap. Placed first, same
+    // as the original's ordering, before the attract/goldman/
+    // present_setup steps below (present_setup's OWN 'C'x5
+    // trigger can re-arm it later in this same StartMatch
+    // pass, exactly like sub_410F81 re-arming dword_46489C
+    // after sub_42A3F6's entry reset).
+    campaign_active_ = false;
+    campaign_stages_.clear();
+    campaign_stage_index_ = 0;
+    // reset_match_scores() clears the tally; the level screen owns the win
+    // target so we reset FIRST, then let the level screen adjust win_target_.
+    reset_match_scores();
+    // The SETUP-SCREENS track (1020), started ONCE for the whole
+    // Play flow — this line is sub_42A3F6's own 0x42A436, which
+    // sits between the campaign reset above and the call to
+    // sub_410F81 below and is the ONLY site in the binary that
+    // ever names 1020 (exhaustive: six music call sites in the
+    // whole image, docs/re/sound-engine.md §9).
+    //
+    // It lives here, not in the screens, because start_music is
+    // a genuine restart — sub_42741E frees the handle and
+    // reloads from sample 0, with no same-id no-op — so the
+    // goldman wheel and the player-select screen each calling it
+    // meant WIN.RSS audibly jumped back to the top as the wheel
+    // handed over. Both of those screens carried a comment
+    // saying they inherit the track and start no music of their
+    // own; now they actually do.
+    audio_.start_music(kWinMusicId);
+    // ATTRACT short-circuit (docs/re/frontend-flow.md
+    // "Attract mode" point 1, sub_410F81 pseudo.c 15125-15143):
+    // present_menu() already rolled the demo roster/stage into
+    // setup_type_/setup_sub_/setup_team_/selected_level_ (via
+    // roll_attract_match()) and set attract_ before returning
+    // StartMatch here, so this path goes STRAIGHT to the
+    // match — no goldman wheel (doc §2's `!dword_464938`
+    // gate — a real pending prize is simply left untouched
+    // for the NEXT non-attract Play entry, not forfeited),
+    // no present_setup, no present_map_select ("neither the
+    // player screen nor the LEVEL & ROUNDS screen is shown").
+    // run_match's own attract_ check aborts back to the menu
+    // on any input; either way (natural end or abort) run_match
+    // returns MatchOver and this block calls run_match()
+    // DIRECTLY (bypassing the normal Match/Results AppState
+    // walk) so Results never renders — point 2's "Round end
+    // skips ALL outcome screens" (DRAW/RESULTS/VICTORY).
+    if (attract_) {
+        AppInput attractResult = run_match();
+        if (attractResult == AppInput::Quit) return std::nullopt;
+        // Doc point 2: an attract round NEVER shows DRAW/
+        // RESULTS/VICTORY — restore immediately and drop
+        // straight back to the menu, bypassing next()'s
+        // normal Match->Results->Menu walk entirely (there is
+        // no scoreboard/outcome state to fold into the flow
+        // graph for this round).
+        restore_from_attract();
+        return AppInput::Advance;  // Menu -> (stays) Menu
+    }
+    // The Goldman wheel (docs/re/goldman-roulette.md §2): at
+    // the head of every Play entry, before present_setup —
+    // gated on not-attract (checked above — this is the
+    // normal, non-attract path), the goldman option, local-
+    // only (always true), and a gold player actually pending
+    // from a previous match's rounds. An Esc abort forfeits
+    // the whole Play flow (skip straight back to the menu,
+    // mirroring sub_410F81, which returns right after the call
+    // whenever dword_464A68 is set).
+    if (options_.goldman && gold_player_ >= 0) {
+        AppInput wheelResult = present_goldman_wheel();
+        if (wheelResult == AppInput::Quit) return std::nullopt;
+        if (wheelResult == AppInput::Back) return AppInput::Advance;
+    }
+    const std::optional<bool> confirmed = run_prematch_screens();
+    if (!confirmed) return std::nullopt;
+    // The caller's `ev` was still StartMatch when the original fell out of this
+    // block with `started`; a cancel anywhere above left it Advance.
+    return *confirmed ? AppInput::StartMatch : AppInput::Advance;
+}
+
+// The two pre-match screens: PLAYER INPUT (sub_410F81) and then LEVEL & ROUNDS
+// (sub_406DDE), the second called from the first's own tail. True = both
+// confirmed and the match should start; false = the player pressed Esc on one
+// of them, which aborts the WHOLE Play flow rather than backing up a step (see
+// run_play_flow); no value = the window closed.
+std::optional<bool> GameApp::run_prematch_screens() {
+    AppInput setup = present_setup();
+    if (setup == AppInput::Quit) return std::nullopt;
+    if (setup == AppInput::Back) return false;
+    // Campaign mode SKIPS the LEVEL & ROUNDS screen
+    // entirely (docs/re/campaign.md "Skips the normal
+    // LEVEL & ROUNDS screen", sub_406DDE's `if
+    // (!dword_46489C)` gate): present_setup's own 'C'x5
+    // trigger already picked a stage and seeded the
+    // roster (present_campaign_picker), so a confirmed
+    // setup screen goes STRAIGHT to the match.
+    if (campaign_active_) return true;
+    // Player screen accepted -> the LEVEL screen. Esc here
+    // aborts the WHOLE flow (see the comment above
+    // run_play_flow) -- NOT a loop back to present_setup — so this
+    // mirrors the wheel-abort and player-screen-Esc
+    // branches above, not the campaign short-circuit.
+    AppInput lvl = present_map_select();
+    if (lvl == AppInput::Quit) return std::nullopt;
+    if (lvl == AppInput::Back) return false;
+    return true;  // both screens confirmed -> start the match
 }
 
 // PORT ENHANCEMENT (task item 1, see init()'s window-creation comment): the

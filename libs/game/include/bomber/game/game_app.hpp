@@ -253,7 +253,32 @@ private:
     // Boot -> Logo -> Title -> Menu -> Match -> Results -> Menu around the
     // existing match loop. The pure transition graph lives in app_flow.hpp; the
     // methods below are the thin SDL side (render, audio, input) per state.
+    //
+    // The DISPATCH only. Two of its states used to own a hundred-plus-line
+    // handler inline — the Play flow under Menu and the outcome tail under
+    // Results — which is what made a switch over eight states 408 lines long.
+    // Both are their own methods below; the loop is now one arm each.
     int run_app();
+    // The pre-match flow reached from Play (sub_42A3F6's head): campaign reset,
+    // the 1020 track, the attract short-circuit, the Goldman wheel, then the
+    // PLAYER INPUT and LEVEL & ROUNDS screens. Returns StartMatch to play,
+    // Advance if the player backed out (Menu -> Menu), or no value if the
+    // window closed — run_app's only two outcomes for that arm, said in the
+    // return type rather than through the shared `ev`.
+    std::optional<AppInput> run_play_flow();
+    // The two pre-match screens under it (sub_410F81 then sub_406DDE). True =
+    // both confirmed, false = Esc aborted the whole flow, no value = the window
+    // closed. It was written as a `while (!started)` loop that could never run
+    // twice — every path either sets `started` or breaks — so it is straight
+    // line here, which is also what the RE comment says it is.
+    std::optional<bool> run_prematch_screens();
+    // A CAMPAIGN round end (docs/re/campaign.md "Round end"): the arm that
+    // shows at most one modal and then advances or replays the stage. Returns
+    // CampaignContinue, Advance, or no value on a window close.
+    std::optional<AppInput> run_campaign_round_end(const CampaignRoundEnd& plan);
+    // The ORDINARY three-tier outcome tail (sub_42A3F6): tally, clinch, then
+    // DRAW / RESULTS / VICTORY. Returns the flow-graph event, Quit included.
+    AppInput run_outcome_tier();
     // Builds a fresh ScreenContext (the shared-services bundle) from this app's
     // stable members, so an extracted screen class can run without threading
     // GameApp's whole member set (ADR-0008 god-object decomposition). Cheap —
