@@ -61,14 +61,23 @@ services/matchmaker (Go, separate build) ◄── libs/net's lobby layer, over 
     build the deterministic core with no WS/JSON/TLS deps — but every preset
     including `headless` pins it ON, so that is not a configuration this repo
     builds or gates on (see "Build & test").
-- **libs/audio** (`bomber::audio`) — the audio module, extracted from
-  `libs/game` (ADR-0008 stage 2): `AudioEngine` (SDL PCM stream pool, music +
-  SFX), `SoundBank` (the SDL-FREE selection engine — group picks, least-played
-  ordering, the load-time cull; a faithful port of `sub_427961` & friends), and
-  `SoundDirector` (sim `Event`s → SOUNDLST id ranges). Depends on assets, sim
-  and SDL3; nothing depends on it but `libs/game`. Its cosmetic RNG is its own
-  and never touches `State::rng` (determinism rule 6). Note the namespace is
-  still `bomber::game` pending a mechanical rename.
+- **libs/audio** — the audio module, extracted from `libs/game` (ADR-0008 stage
+  2), and TWO targets split on the one header that includes SDL:
+  `bomber::audio_core` is `SoundBank` (the SDL-FREE selection engine — group
+  picks, least-played ordering, the load-time cull; a faithful port of
+  `sub_427961` & friends) plus `SoundDirector` (sim `Event`s → SOUNDLST id
+  ranges), and `bomber::audio` adds `AudioEngine` (SDL PCM stream pool, music +
+  SFX) on top. The split is what puts the SDL-free half inside the pre-push gate
+  (see "Build & test"); `tests/audio` links `audio_core` rather than recompiling
+  its sources. Depends on assets and sim; nothing depends on it but `libs/game`.
+  Its cosmetic RNG is its own and never touches `State::rng` (determinism rule
+  6). Note the namespace is still `bomber::game` pending a mechanical rename.
+  `AudioEngine` exposes the binary's three play primitives — `play`
+  (`sub_427961`, group pick, counted), `play_exact` (`sub_4278F2`) and
+  `play_sting` (`sub_427BFB`, the UNCOUNTED voice the concurrency cap cannot
+  refuse). All four screen stings — title 2800, menu-quit 2600, draw 1700,
+  winner 2000 — go through `play_sting`; two of them used to go through the
+  counted pool, where a busy results transition could drop them.
 - **libs/platform** (`bomber::platform`) — the engine-base layer (ADR-0008):
   frame clock and pacing, game-agnostic, so screens never re-implement the main
   loop. Header-only: `FrameClock` (SDL-backed) over `FramePacer`, which is
@@ -204,7 +213,15 @@ OFF put the whole lobby half of `tests/net` inside a skipped
 suite reached `main`. `LOBBY_TLS` OFF is worse: `test_lobby_tls.cpp` compiles
 to its "this build has no TLS support" variant, the certificate- and
 hostname-rejection cases are preprocessed away, and the suite PASSES — green,
-having verified nothing. Runtime verification against
+having verified nothing. `libs/audio` was the third case of the same shape: it
+was declared only inside the root `CMakeLists.txt`'s `BOMBER_BUILD_VIEWER`
+block, so `headless` compiled none of it, and `tests/audio` papered over half of
+that by recompiling `sound_bank.cpp`/`sound_director.cpp` into its own binaries.
+Its SDL-free half is now the always-built `bomber::audio_core` and the suites
+link it. What the gate still CANNOT cover is anything that includes SDL —
+`audio_engine.cpp`, `libs/game`, `libs/platform`, `apps/game|viewer`; those are
+compiled by CI's linux/macos/windows-fetch matrix and parsed (with clang, not
+MSVC) by `scripts/lint.sh`. Runtime verification against
 a real install: `abtool survey <game_dir>` and `bomber_viewer <game_dir>
 --selftest`. The game auto-detects the install via `BOMBER_GAME_DIR`,
 `gamedir.txt`, or the standard paths (`libs/assets/src/install.cpp`).
@@ -212,12 +229,21 @@ Renderer output is pinned the same way `test_golden.cpp` pins the sim —
 `tests/visual/` (`ctest -R visual_golden`, SKIPs without an install).
 
 A `lefthook` pre-push hook (`lefthook.yml`, `scripts/test.sh`,
-`scripts/lint.sh`) runs the `headless` build+ctest and a repo-wide
-`clang-tidy` pass (`.clang-tidy`) before every push; see README "Git hooks"
+`scripts/lint.sh`, `scripts/format.sh`) runs the `headless` build+ctest, a
+repo-wide `clang-tidy` pass (`.clang-tidy`) and a `clang-format` check before
+every push; see README "Git hooks"
 to enable it per clone. `.clang-tidy`'s check list is curated to this
 codebase's terse, faithful-port style (bugprone/performance/clang-analyzer,
 not broad readability/cppcoreguidelines) — extend it there, not by adding
 NOLINTs, unless a specific line is a deliberate one-off.
+
+`scripts/format.sh` checks only the LINES a push changes, not whole files:
+nothing ran `clang-format` until it was added and 170 of 333 `.cpp`/`.hpp` files
+had drifted (~3.5k lines), so a whole-repo pass would bury every real change and
+would reflow faithful-port layouts nobody asked it to touch. Pre-existing
+violations in a file you edit therefore do not block you; the lines you write
+do. For a block that deliberately mirrors the binary's structure, wrap it in
+`// clang-format off` / `// clang-format on` rather than skipping the gate.
 
 ## Claude working notes
 
