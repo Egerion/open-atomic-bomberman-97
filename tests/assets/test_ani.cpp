@@ -36,7 +36,9 @@ void put_u32(Bytes& b, std::uint32_t v) {
     for (int i = 0; i < 4; ++i) b.push_back(static_cast<std::uint8_t>((v >> (8 * i)) & 0xFF));
 }
 
-void put_bytes(Bytes& b, const Bytes& more) { b.insert(b.end(), more.begin(), more.end()); }
+void put_bytes(Bytes& b, const Bytes& more) {
+    b.insert(b.end(), more.begin(), more.end());
+}
 
 // One container item: 4-byte tag, u32 payload length, u16 id, then the payload.
 // `length` counts the payload ONLY -- the loader takes body = pos-after-header
@@ -84,18 +86,18 @@ Bytes rle_literal16(const std::vector<std::uint16_t>& values) {
 Bytes cimg16(unsigned w, unsigned h, std::uint16_t key, const Bytes& rle,
              std::uint32_t uncompressed_override = 0) {
     Bytes p;
-    put_u16(p, 4);                              // cimg_type
-    put_u16(p, 0);                              // unknown
-    put_u32(p, 24);                             // additional_size: no palette block
-    put_u32(p, 0);                              // unknown
+    put_u16(p, 4);   // cimg_type
+    put_u16(p, 0);   // unknown
+    put_u32(p, 24);  // additional_size: no palette block
+    put_u32(p, 0);   // unknown
     put_u16(p, w);
     put_u16(p, h);
-    put_u16(p, 0);                              // hotspot x
-    put_u16(p, 0);                              // hotspot y
+    put_u16(p, 0);  // hotspot x
+    put_u16(p, 0);  // hotspot y
     put_u16(p, key);
-    put_u16(p, 0);                              // unknown
-    put_u16(p, 0);                              // unknown
-    put_u16(p, 0);                              // unknown
+    put_u16(p, 0);                                            // unknown
+    put_u16(p, 0);                                            // unknown
+    put_u16(p, 0);                                            // unknown
     put_u32(p, static_cast<std::uint32_t>(12 + rle.size()));  // compressed_size
     put_u32(p, uncompressed_override != 0 ? uncompressed_override
                                           : static_cast<std::uint32_t>(w * h * 2));

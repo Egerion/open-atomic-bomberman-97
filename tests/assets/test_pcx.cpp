@@ -72,7 +72,9 @@ Bytes rle_run(unsigned count, std::uint8_t value) {
     return {static_cast<std::uint8_t>(0xC0 | (count & 0x3F)), value};
 }
 
-void append(Bytes& into, const Bytes& more) { into.insert(into.end(), more.begin(), more.end()); }
+void append(Bytes& into, const Bytes& more) {
+    into.insert(into.end(), more.begin(), more.end());
+}
 
 Image parse(const Bytes& file) {
     return pcx::parse(std::span<const std::uint8_t>(file.data(), file.size()), "test.pcx");
@@ -145,8 +147,8 @@ TEST_CASE("stride padding beyond the image width is decoded and discarded") {
 TEST_CASE("a 24-bit PCX de-interleaves its three planes and carries no palette") {
     // 2x2, three planes, stride 2: each row is R,R,G,G,B,B.
     Bytes f = header({.xmax = 1, .ymax = 1, .planes = 3, .bytes_per_line = 2});
-    append(f, Bytes{10, 20, 30, 40, 50, 60});      // row 0
-    append(f, Bytes{11, 21, 31, 41, 51, 61});      // row 1
+    append(f, Bytes{10, 20, 30, 40, 50, 60});  // row 0
+    append(f, Bytes{11, 21, 31, 41, 51, 61});  // row 1
     // No trailing palette: truecolour PCX has none, and the decoder must not
     // go looking for one.
 

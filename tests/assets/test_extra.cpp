@@ -113,11 +113,11 @@ TEST_CASE("malformed and unknown lines are skipped rather than aborting the file
                                    "\n"
                                    "; comment\n"
                                    "-\n"
-                                   "-A,q,1,1\n"   // unrecognised direction letter
-                                   "-A,n,1\n"     // too few fields
-                                   "-T,1\n"       // too few fields
-                                   "-W,W,1,1,1\n" // too few fields
-                                   "-Z,1,2,3\n"   // unknown type letter
+                                   "-A,q,1,1\n"    // unrecognised direction letter
+                                   "-A,n,1\n"      // too few fields
+                                   "-T,1\n"        // too few fields
+                                   "-W,W,1,1,1\n"  // too few fields
+                                   "-Z,1,2,3\n"    // unknown type letter
                                    "not a directive\n"
                                    "-A,n,1,2\n");
     REQUIRE(actors.size() == 1);
