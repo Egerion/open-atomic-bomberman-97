@@ -176,6 +176,15 @@ The sim is deterministic lockstep (`docs/adr/0003`). Rules:
 
 ## Code standards
 
+**`docs/coding-standards.md` is the long form** — adopted 2026-07-31 and
+reconciled with this repo's two hard contracts. Read it before a refactor. Its
+load-bearing amendments, because a general C++ guideline gets them wrong here:
+OO and dependency inversion apply at the BOUNDARIES and `libs/sim` must stay a
+plain virtual-free aggregate (§4); "replace a large switch with a strategy" does
+NOT apply to a switch that mirrors `sub_XXXX`'s dispatch (§8); value semantics
+are preferred over `unique_ptr`-by-default (§6); and the naming convention below
+is deliberately kept rather than modernised (§2). What follows is the summary.
+
 - C++20, warnings clean under MSVC `/W4` and GCC/Clang `-Wall -Wextra`
   (`bomber::warnings` target). Format with the repo `.clang-format`.
 - Naming: `lower_snake` functions/variables, `PascalCase` types,
@@ -187,9 +196,12 @@ The sim is deterministic lockstep (`docs/adr/0003`). Rules:
 - Systems take `State&` (and other systems) by reference in the constructor —
   cheap stack objects, explicit dependencies, no globals/singletons.
 - Comments explain WHY (and cite RE facts); no redundant WHAT comments.
-- Size and shape: class ≤200 lines, function ≤20 lines, ≤4 parameters, guard
-  clauses over nesting, no `else` after a `return`/`continue`/`break`, nesting
-  ≤3. These are targets a reviewer measures, not compiler errors.
+- Size and shape: class ≤200 lines, function 5–20 lines (40 hard ceiling),
+  **≤3 parameters** (4 hard ceiling — past that, pass a parameter object the way
+  `MatchConfig`/`TurnContext`/`ScreenContext` already do), guard clauses over
+  nesting, no `else` after a `return`/`continue`/`break`, nesting ≤3,
+  inheritance depth ≤3. These are targets a reviewer measures, not compiler
+  errors.
 - **Complexity is gated** (`scripts/complexity.sh`, in the pre-push hook), and
   the metric is clang-tidy's *cognitive* complexity rather than raw McCabe
   cyclomatic, threshold **25** (≈ cyclomatic 15). The difference is deliberate:
