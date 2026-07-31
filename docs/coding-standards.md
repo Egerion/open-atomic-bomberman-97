@@ -81,7 +81,20 @@ Past 3 parameters, pass a **parameter object** instead of a longer list —
 This codebase already has the pattern (`MatchConfig`, `TurnContext`,
 `ScreenContext`); reach for it rather than growing a signature.
 
-Guard clauses over nesting. No `else` after a `return`/`continue`/`break`.
+**Guard clauses over nesting, and this is the weakest axis in the repo.**
+Measured 2026-07-31: 111 places nested past 3, 89 nested `for` loops, 263 `else`
+branches. Almost none are `else`-after-`return` (that check is nearly clean) —
+they are `if/else` and `else if` chains that would read as a sequence of guards.
+The order to prefer:
+
+1. Invert the condition and `return`/`continue` early. Most `else` blocks vanish.
+2. Give a compound condition a name. `if (a && b && !c)` becomes
+   `if (can_place_bomb(...))`, and the reader stops parsing booleans.
+3. Two nested `for`s over a grid want a named iterator or a helper that takes
+   one cell — three nested `for`s always want one.
+
+A 15-line function nested four deep is still a failure. Depth is the thing being
+measured, not length.
 
 **Complexity is gated in the pre-push hook** (`scripts/complexity.sh`), on
 clang-tidy's *cognitive* complexity rather than McCabe cyclomatic — it charges
@@ -231,15 +244,51 @@ seam fell where the dependency did.
 
 Explain **why**, the constraints, and the algorithm. Never restate the code.
 
-This codebase holds comments to a higher standard than the general rule, because
-here they carry the reverse-engineering citations, the measured evidence and the
-retracted conclusions — **they are the specification**. A comment that lies is
-worse than no comment: it is indistinguishable in tone from the ones that are
-right, which teaches a reader to trust none of them. Six such comments were
-found and fixed in a single pass on 2026-07-31.
+Comments here carry the reverse-engineering citations, the measured evidence and
+the retracted conclusions, so a comment that lies is worse than no comment: it is
+indistinguishable in tone from the ones that are right, which teaches a reader to
+trust none of them. Six such comments were found and fixed in a single pass on
+2026-07-31.
+
+### But there are far too many of them, and that is also a defect
+
+Measured 2026-07-31: **45% of `libs/` + `apps/` is comment** — 20,110 comment
+lines against 24,539 of code. `libs/sim` is 56%. `time_sync.hpp` is **86%**
+(288 comment lines to 45 of code); `rollback_session.hpp` 80%; `game_app.hpp`
+74%. That is not a well-documented codebase, it is a codebase that needed a
+manual, and a reader who must clear three paragraphs to reach five lines of code
+is not being helped. **A junior engineer should be able to follow this code**;
+volume is the enemy of that as surely as absence is.
+
+The tension with the paragraph above is real, and it resolves by *kind*, not by
+line count:
+
+**KEEP — this is the specification, and losing it costs real work:**
+- `sub_XXXX` citations and what was extracted from them.
+- A measured number together with how it was measured (`kSubFrames = 9` and the
+  33146-frames-over-180-seconds that produced it).
+- A **retraction** — "this was believed X; it is Y, and here is why the old
+  reasoning was wrong". These are the most valuable comments in the repo.
+- A rule whose violation is silent: an ordering that is load-bearing, a branch
+  that must precede another, an invariant nothing enforces.
+
+**CUT — none of this survives contact with the code it describes:**
+- Narration of what the next lines do. The code says it better.
+- A restated parameter list, or a doc comment that repeats the signature.
+- The *history of the change*: which agent wrote it, what it looked like before,
+  which audit found it. That belongs in the commit message, which is where this
+  repo already keeps it and where `git log`/`git blame` will find it.
+- Essays. If a rationale needs more than ~10 lines, it is a `docs/` page with a
+  one-line pointer from the code.
+
+**Rules of thumb**, not laws: no file above **~25% comment** unless it is a table
+of RE citations; `libs/sim` may sit higher because it genuinely is the spec, but
+cap it around **35%**. A comment block longer than the function it introduces is
+a design smell in either direction — either the comment is narration, or the
+function is doing too much.
 
 "Prefer expressive names over comments" applies to the *what*. It does not
-license deleting a *why*.
+license deleting a *why* — and it does not excuse keeping a *what*.
 
 ---
 
