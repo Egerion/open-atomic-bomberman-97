@@ -39,15 +39,12 @@ public:
     bool ok() const { return ok_; }
 
     // Snap one 8-bit RGB in place to its master-palette colour: the exact
-    // sub_41C837:21309 chain (RGB555 truncate -> LUT -> master*4).
+    // sub_41C837:21309 chain (RGB555 truncate -> LUT -> master*4). That chain
+    // IS index_of followed by master_rgb, so it is spelled that way rather than
+    // carrying a third copy of the LUT offset and the master lookup — the two
+    // halves are the ones the faithful recolour splits between.
     void snap(std::uint8_t& r, std::uint8_t& g, std::uint8_t& b) const {
-        const std::size_t off = (static_cast<std::size_t>(r >> 3) << 10) |
-                                (static_cast<std::size_t>(g >> 3) << 5) |
-                                static_cast<std::size_t>(b >> 3);
-        const std::uint8_t idx = lut_[off];
-        r = master_[static_cast<std::size_t>(idx) * 3 + 0];
-        g = master_[static_cast<std::size_t>(idx) * 3 + 1];
-        b = master_[static_cast<std::size_t>(idx) * 3 + 2];
+        master_rgb(index_of(r, g, b), r, g, b);
     }
 
     // The master-palette INDEX a raw 8-bit RGB snaps to — the RGB555->index LUT

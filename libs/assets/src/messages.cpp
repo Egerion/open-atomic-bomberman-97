@@ -3,18 +3,14 @@
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
+#include <string>
+
+#include "text_util.hpp"
 
 namespace bomber::assets::res {
 namespace {
 
-// Trim leading/trailing ASCII whitespace, trailing CR, and the DOS EOF marker
-// (0x1a) — mirroring how the id,x resource files are read (see reslist.cpp).
-std::string trim(const std::string& s) {
-    auto b = s.find_first_not_of(" \t\r\x1a");
-    if (b == std::string::npos) return {};
-    auto e = s.find_last_not_of(" \t\r\x1a");
-    return s.substr(b, e - b + 1);
-}
+using text::trim;
 
 void parse_stream(std::istream& in, Messages& m) {
     std::string raw;
@@ -22,7 +18,7 @@ void parse_stream(std::istream& in, Messages& m) {
     while (std::getline(in, raw)) {
         ++lineno;
         // Skip blanks and full-line ';' comments (leading whitespace allowed).
-        auto b = raw.find_first_not_of(" \t\r\x1a");
+        const auto b = raw.find_first_not_of(text::kTrimmed);
         if (b == std::string::npos || raw[b] == ';') continue;
         auto comma = raw.find(',', b);
         if (comma == std::string::npos) {

@@ -76,7 +76,15 @@ inline std::vector<std::uint8_t> read_file(const std::filesystem::path& path) {
     std::ifstream f(path, std::ios::binary);
     if (!f) throw std::runtime_error("cannot open file: " + path.string());
     f.seekg(0, std::ios::end);
-    std::vector<std::uint8_t> buf(static_cast<std::size_t>(f.tellg()));
+    // tellg() answers -1 for a stream it cannot size — a directory opened as a
+    // file does exactly that on libstdc++. Casting that straight to size_t
+    // asked the vector for SIZE_MAX bytes, which surfaces as std::length_error:
+    // a std::logic_error, outside the runtime_error/out_of_range contract this
+    // module promises its callers (docs/coding-standards.md §6), so a caller's
+    // catch would let it through.
+    const std::streamoff len = f.tellg();
+    if (len < 0) throw std::runtime_error("cannot determine size of file: " + path.string());
+    std::vector<std::uint8_t> buf(static_cast<std::size_t>(len));
     f.seekg(0);
     f.read(reinterpret_cast<char*>(buf.data()), static_cast<std::streamsize>(buf.size()));
     if (!f) throw std::runtime_error("short read: " + path.string());

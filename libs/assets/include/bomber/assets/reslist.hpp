@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>  // column_or's std::size_t; do not rely on a transitive include (§7)
 #include <cstdint>
 #include <filesystem>
 #include <map>
