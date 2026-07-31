@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -71,8 +72,11 @@ private:
     // int fd and a Windows SOCKET; -1 means closed (INVALID_SOCKET maps to -1).
     std::int64_t fd_ = -1;
     // Resolved peer address, stored opaquely (sockaddr_storage-sized, aligned) so
-    // this header pulls in no OS socket headers.
-    alignas(8) unsigned char peer_[128] = {};
+    // this header pulls in no OS socket headers. The alignment is what makes the
+    // reinterpret_cast to sockaddr in the .cpp well-defined; the size is a
+    // sockaddr_storage upper bound, checked against the real type where it is
+    // filled.
+    alignas(8) std::array<unsigned char, 128> peer_{};
     unsigned peer_len_ = 0;
 };
 

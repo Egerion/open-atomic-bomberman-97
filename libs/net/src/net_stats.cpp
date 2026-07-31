@@ -1,6 +1,7 @@
 #include "bomber/net/net_stats.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstdlib>  // std::abs(int)
 
@@ -281,12 +282,15 @@ namespace {
 
 // snprintf into a stack buffer and append — no iostreams, and a bounded write
 // whatever the values are. Session-end only, so the allocation in `out` is fine.
+// NOT console output (coding-standards §11): this formats into the caller's
+// string, which the caller then writes to netdiag.log or draws on the overlay.
 template <typename... Args>
 void appendf(std::string& out, const char* fmt, Args... args) {
-    char buf[256];
-    const int n = std::snprintf(buf, sizeof(buf), fmt, args...);
+    std::array<char, 256> buf{};
+    const int n = std::snprintf(buf.data(), buf.size(), fmt, args...);
     if (n > 0)
-        out.append(buf, static_cast<std::size_t>(std::min(n, static_cast<int>(sizeof(buf)) - 1)));
+        out.append(buf.data(),
+                   static_cast<std::size_t>(std::min(n, static_cast<int>(buf.size()) - 1)));
 }
 
 }  // namespace

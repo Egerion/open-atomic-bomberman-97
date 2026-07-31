@@ -1,5 +1,6 @@
 #include "bomber/net/lobby_messages.hpp"
 
+#include <array>
 #include <cstdio>
 
 #include <nlohmann/json.hpp>
@@ -40,6 +41,38 @@ std::vector<LobbyCandidate> parse_candidates(const json& arr) {
     return out;
 }
 
+std::vector<PublicLobby> parse_public_lobbies(const json& j) {
+    std::vector<PublicLobby> out;
+    if (!j.contains("lobbies") || !j["lobbies"].is_array()) return out;
+    for (const auto& e : j["lobbies"]) {
+        if (!e.is_object()) continue;
+        PublicLobby p;
+        p.code = e.value("code", std::string());
+        p.name = e.value("name", std::string());
+        p.players = e.value("players", 0);
+        p.max = e.value("max", 0);
+        p.build_ok = e.value("build_ok", true);
+        out.push_back(std::move(p));
+    }
+    return out;
+}
+
+// StartMatch carries the two fields that decide the whole match topology
+// (PROTOCOL.md §4): `topology.hub_seat` and the seat→player binding. Both are
+// OPTIONAL on the wire — an older server omits them — so each is read only when
+// present and otherwise left at the message's default.
+void parse_start_match(const json& j, LobbyServerMessage* m) {
+    m->seed = j.value("seed", std::uint32_t{0});
+    m->match_config_digest = j.value("match_config_digest", std::string());
+    m->input_delay = j.value("input_delay", 0);
+    m->local_seats_mask = static_cast<std::uint16_t>(j.value("local_seats_mask", 0));
+    if (j.contains("topology") && j["topology"].is_object())
+        m->hub_seat = j["topology"].value("hub_seat", 0);
+    if (!j.contains("seat_assign") || !j["seat_assign"].is_array()) return;
+    for (const auto& s : j["seat_assign"])
+        if (s.is_number_integer()) m->seat_assign.push_back(s.get<int>());
+}
+
 // The shared reduction behind sanitize_chat_text / sanitize_chat_name: keep the
 // codes the front-end FON can draw, drop everything else, trim the blanks that
 // would only pad the panel, and clamp to `max_bytes`.
@@ -66,9 +99,11 @@ std::string sanitize_chat_name(const std::string& raw) {
 }
 
 std::string hex_hash(std::uint32_t v) {
-    char buf[11];
-    std::snprintf(buf, sizeof(buf), "0x%08X", v);
-    return std::string(buf);
+    // "0x" + 8 hex digits + NUL. NOT console output (coding-standards §11) — this
+    // formats the build_hash into the JSON field PROTOCOL.md §2 expects.
+    std::array<char, 11> buf{};
+    std::snprintf(buf.data(), buf.size(), "0x%08X", v);
+    return std::string(buf.data());
 }
 
 LobbyServerMessage parse_server_message(const std::string& text) {
@@ -99,18 +134,7 @@ LobbyServerMessage parse_server_message(const std::string& text) {
         m.reason = j.value("reason", std::string());
     } else if (type == "PublicList") {
         m.type = LobbyMsgType::PublicList;
-        if (j.contains("lobbies") && j["lobbies"].is_array()) {
-            for (const auto& e : j["lobbies"]) {
-                if (!e.is_object()) continue;
-                PublicLobby p;
-                p.code = e.value("code", std::string());
-                p.name = e.value("name", std::string());
-                p.players = e.value("players", 0);
-                p.max = e.value("max", 0);
-                p.build_ok = e.value("build_ok", true);
-                m.lobbies.push_back(std::move(p));
-            }
-        }
+        m.lobbies = parse_public_lobbies(j);
     } else if (type == "RosterUpdate") {
         m.type = LobbyMsgType::RosterUpdate;
         if (j.contains("roster")) m.roster = parse_roster(j["roster"]);
@@ -122,15 +146,7 @@ LobbyServerMessage parse_server_message(const std::string& text) {
         if (j.contains("list")) m.candidates = parse_candidates(j["list"]);
     } else if (type == "StartMatch") {
         m.type = LobbyMsgType::StartMatch;
-        m.seed = j.value("seed", std::uint32_t{0});
-        m.match_config_digest = j.value("match_config_digest", std::string());
-        m.input_delay = j.value("input_delay", 0);
-        m.local_seats_mask = static_cast<std::uint16_t>(j.value("local_seats_mask", 0));
-        if (j.contains("topology") && j["topology"].is_object())
-            m.hub_seat = j["topology"].value("hub_seat", 0);
-        if (j.contains("seat_assign") && j["seat_assign"].is_array())
-            for (const auto& s : j["seat_assign"])
-                if (s.is_number_integer()) m.seat_assign.push_back(s.get<int>());
+        parse_start_match(j, &m);
     } else if (type == "ReanchorAccepted") {
         m.type = LobbyMsgType::ReanchorAccepted;
         m.lobby_id = j.value("lobby_id", std::string());
