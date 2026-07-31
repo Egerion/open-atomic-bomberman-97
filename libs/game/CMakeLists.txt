@@ -1,6 +1,39 @@
 # bomber::game — the SDL3 presentation layer: asset store (textures), the
 # renderer, audio, input mapping, and the application shell. Reads the sim
 # state and events; never mutates them.
+#
+# TWO targets, split on SDL exactly like libs/audio (ADR-0008 stage 2, and
+# CLAUDE.md calls that split "the model — the seam fell where the dependency
+# did"):
+#
+#   bomber::game_util  the SDL-FREE pieces. Built by EVERY preset including
+#                      headless, so they sit inside the pre-push gate, and
+#                      tests/game LINKS them rather than recompiling their
+#                      sources into its own binaries.
+#   bomber::game       everything that includes SDL3. Gated below on
+#                      BOMBER_BUILD_VIEWER.
+#
+# Only genuinely SDL-free sources belong in the first list. Adding one that
+# includes SDL breaks the headless preset immediately, which is the intended
+# feedback.
+add_library(bomber_game_util STATIC
+  # The package's diagnostic seam (log.hpp, docs/coding-standards.md §11).
+  src/log.cpp
+  # The scheme editor's pure grid model — SDL-free despite living under src/.
+  src/editor_grid.cpp
+)
+add_library(bomber::game_util ALIAS bomber_game_util)
+target_include_directories(bomber_game_util PUBLIC include)
+target_compile_features(bomber_game_util PUBLIC cxx_std_20)
+target_link_libraries(bomber_game_util
+  PUBLIC bomber::assets bomber::sim
+  PRIVATE bomber::warnings
+)
+
+# Everything past this point needs SDL3.
+if(NOT BOMBER_BUILD_VIEWER)
+  return()
+endif()
 
 # The credits addendum's author photograph, compiled in rather than shipped
 # beside the exe — the whole point of the single-file build is that the user
@@ -32,7 +65,6 @@ add_library(bomber_game_core STATIC
   src/options_screen.cpp
   src/keyremap_screen.cpp
   src/goldman_screen.cpp
-  src/editor_grid.cpp
   src/editor_screen.cpp
   src/campaign_screen.cpp
   src/screens/asset_screen.cpp
@@ -68,7 +100,7 @@ add_library(bomber::game ALIAS bomber_game_core)
 target_include_directories(bomber_game_core PUBLIC include)
 target_compile_features(bomber_game_core PUBLIC cxx_std_20)
 target_link_libraries(bomber_game_core
-  PUBLIC bomber::assets bomber::sim bomber::match bomber::audio SDL3::SDL3
+  PUBLIC bomber::assets bomber::sim bomber::match bomber::audio bomber::game_util SDL3::SDL3
   # bomber::net: the netplay engine (libs/net) for GameApp::run_netplay +
   # MatchRunner's lockstep drive. SDL-free, already headless-built.
   #

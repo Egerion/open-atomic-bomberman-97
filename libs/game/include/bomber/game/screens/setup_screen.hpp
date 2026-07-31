@@ -58,11 +58,12 @@ public:
     AppInput run();
 
 private:
-    // Advance a slot's input type one step in the setup cycle (sub_421E80).
-    // Called only by run()'s Right-key handler; delegates to the pure
-    // cycle_slot_input_type (input.hpp) so the wrap order stays unit-tested.
-    void cycle_input_type(int slot);
-
+    // run() is a thin entry point: it applies the two-stage TEAM seeding the
+    // original does on load, then hands the six members below to the SetupLoop in
+    // the .cpp's anonymous namespace, which owns the frame loop and every key.
+    // The Right-key cycle (sub_421E80) is the free, unit-tested
+    // cycle_slot_input_type (input.hpp) called straight from that loop; the
+    // one-line forwarder that used to sit here had no other caller.
     ScreenContext ctx_;
     SetupState state_;
     CampaignState campaign_;

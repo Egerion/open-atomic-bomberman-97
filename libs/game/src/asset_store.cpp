@@ -2,7 +2,6 @@
 
 #include <algorithm>  // std::min (boot-loading progress clamp)
 #include <cstdint>
-#include <cstdio>
 #include <exception>
 #include <span>
 #include <string>
@@ -12,6 +11,7 @@
 #include "bomber/assets/pcx.hpp"
 #include "bomber/assets/rmp.hpp"
 #include "bomber/game/key_color.hpp"
+#include "bomber/game/log.hpp"
 
 namespace bomber::game {
 
@@ -28,7 +28,7 @@ void AssetStore::load_frontend_font(const fs::path& game_dir) {
         auto p = game_dir / "FONT6.FON";
         if (fs::exists(p)) frontend_font_ = assets::bmfont::load(p);
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "FONT6.FON load failed: %s\n", e.what());
+        log_warn("FONT6.FON load failed: %s", e.what());
     }
 }
 
@@ -69,8 +69,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir,
     try {
         colorpal_ = assets::colorpal::Palette::load(game_dir / "COLOR.PAL");
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "COLOR.PAL unavailable (%s); classic colour snap disabled\n",
-                     e.what());
+        log_warn("COLOR.PAL unavailable (%s); classic colour snap disabled", e.what());
     }
     tick();  // colorpal
     try {
@@ -104,7 +103,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir,
             auto p = ani_dir / "POWERS.ANI";
             if (fs::exists(p)) powers_.load(ren, p, snap);
         } catch (const std::exception& e) {
-            std::fprintf(stderr, "POWERS.ANI load failed: %s\n", e.what());
+            log_warn("POWERS.ANI load failed: %s", e.what());
         }
         tick();  // POWERS.ANI
 
@@ -116,14 +115,14 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir,
             auto p = ani_dir / "CONVEYOR.ANI";
             if (fs::exists(p)) conveyor_.load(ren, p, snap);
         } catch (const std::exception& e) {
-            std::fprintf(stderr, "CONVEYOR.ANI load failed: %s\n", e.what());
+            log_warn("CONVEYOR.ANI load failed: %s", e.what());
         }
         tick();  // CONVEYOR.ANI
         try {
             auto p = ani_dir / "EXTRAS.ANI";
             if (fs::exists(p)) extras_.load(ren, p, snap);
         } catch (const std::exception& e) {
-            std::fprintf(stderr, "EXTRAS.ANI load failed: %s\n", e.what());
+            log_warn("EXTRAS.ANI load failed: %s", e.what());
         }
         tick();  // EXTRAS.ANI
 
@@ -136,7 +135,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir,
             auto p = ani_dir / "ALIENS1.ANI";
             if (fs::exists(p)) aliens1_.load(ren, p, snap);
         } catch (const std::exception& e) {
-            std::fprintf(stderr, "ALIENS1.ANI load failed: %s\n", e.what());
+            log_warn("ALIENS1.ANI load failed: %s", e.what());
         }
         tick();  // ALIENS1.ANI
 
@@ -148,7 +147,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir,
             auto p = ani_dir / "TRIGANIM.ANI";
             if (fs::exists(p)) trigbomb_.load(ren, p, snap);
         } catch (const std::exception& e) {
-            std::fprintf(stderr, "TRIGANIM.ANI load failed: %s\n", e.what());
+            log_warn("TRIGANIM.ANI load failed: %s", e.what());
         }
         tick();  // TRIGANIM.ANI
 
@@ -166,7 +165,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir,
             auto p = ani_dir / "MISC.ANI";
             if (fs::exists(p)) misc_.load(ren, p);
         } catch (const std::exception& e) {
-            std::fprintf(stderr, "MISC.ANI load failed: %s\n", e.what());
+            log_warn("MISC.ANI load failed: %s", e.what());
         }
         tick();  // MISC.ANI
 
@@ -178,7 +177,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir,
             auto p = ani_dir / "EDIT.ANI";
             if (fs::exists(p)) edit_.load(ren, p);
         } catch (const std::exception& e) {
-            std::fprintf(stderr, "EDIT.ANI load failed: %s\n", e.what());
+            log_warn("EDIT.ANI load failed: %s", e.what());
         }
         tick();  // EDIT.ANI
 
@@ -202,7 +201,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir,
                         }
                     }
                 } catch (const std::exception& e) {
-                    std::fprintf(stderr, "%s load failed (ring probe): %s\n", name, e.what());
+                    log_warn("%s load failed (ring probe): %s", name, e.what());
                 }
             }
         }
@@ -225,7 +224,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir,
             auto p = game_dir / "MESSAGES.TXT";
             if (fs::exists(p)) messages_ = assets::res::load_messages(p);
         } catch (const std::exception& e) {
-            std::fprintf(stderr, "MESSAGES.TXT load failed: %s\n", e.what());
+            log_warn("MESSAGES.TXT load failed: %s", e.what());
         }
         tick();  // MESSAGES.TXT
 
@@ -245,11 +244,10 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir,
                     rmp_rgb_[i] = rt.rgb;  // authoritative slot colour (setup screen)
                     rmp_ok_[i] = true;
                 } else {
-                    std::fprintf(stderr, "%d.RMP missing; using fallback recolour\n", i);
+                    log_warn("%d.RMP missing; using fallback recolour", i);
                 }
             } catch (const std::exception& e) {
-                std::fprintf(stderr, "%d.RMP load failed (%s); using fallback recolour\n", i,
-                             e.what());
+                log_warn("%d.RMP load failed (%s); using fallback recolour", i, e.what());
             }
             tick();  // i.RMP
         }
@@ -262,8 +260,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir,
             try {
                 if (fs::exists(p)) corner_[i].load(ren, p, snap);
             } catch (const std::exception& e) {
-                std::fprintf(stderr, "cornerhead load failed (%s): %s\n", p.string().c_str(),
-                             e.what());
+                log_warn("cornerhead load failed (%s): %s", p.string().c_str(), e.what());
             }
             tick();  // CORNER<i>.ANI
         }
@@ -277,8 +274,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir,
             try {
                 if (fs::exists(p)) bwalk_[i].load(ren, p, snap);
             } catch (const std::exception& e) {
-                std::fprintf(stderr, "carry-bomb load failed (%s): %s\n", p.string().c_str(),
-                             e.what());
+                log_warn("carry-bomb load failed (%s): %s", p.string().c_str(), e.what());
             }
             tick();  // BWALK<i>.ANI
         }
@@ -293,8 +289,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir,
             try {
                 if (fs::exists(p)) punch_[i].load(ren, p, snap);
             } catch (const std::exception& e) {
-                std::fprintf(stderr, "punch-pose load failed (%s): %s\n", p.string().c_str(),
-                             e.what());
+                log_warn("punch-pose load failed (%s): %s", p.string().c_str(), e.what());
             }
             tick();  // PUNBOMB<i>.ANI
         }
@@ -308,8 +303,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir,
             try {
                 if (fs::exists(p)) pickup_[i].load(ren, p, snap);
             } catch (const std::exception& e) {
-                std::fprintf(stderr, "pickup-pose load failed (%s): %s\n", p.string().c_str(),
-                             e.what());
+                log_warn("pickup-pose load failed (%s): %s", p.string().c_str(), e.what());
             }
             tick();  // PUP<i>.ANI
         }
@@ -335,8 +329,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir,
                         powerup_textures_.push_back(std::move(htex));
                     }
                 } catch (const std::exception& e) {
-                    std::fprintf(stderr, "HD powerup icon '%s' skipped: %s\n", kPowFiles[i],
-                                 e.what());
+                    log_warn("HD powerup icon '%s' skipped: %s", kPowFiles[i], e.what());
                 }
             }
             tick();  // POW<i> icon (+ optional HD)
@@ -356,7 +349,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir,
                 try {
                     ani.load_hd_overlay(ren, hp);
                 } catch (const std::exception& e) {
-                    std::fprintf(stderr, "HD XPLODE%d skipped: %s\n", i, e.what());
+                    log_warn("HD XPLODE%d skipped: %s", i, e.what());
                 }
             }
             collect_death_anims(ani, deaths_);
@@ -377,7 +370,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir,
             try {
                 t.load_hd_overlay(ren, p);
             } catch (const std::exception& e) {
-                std::fprintf(stderr, "HD ANI '%s' skipped: %s\n", file.c_str(), e.what());
+                log_warn("HD ANI '%s' skipped: %s", file.c_str(), e.what());
             }
         };
         hd_ov(bombs_, "BOMBS.ANI");
@@ -414,7 +407,7 @@ bool AssetStore::load(SDL_Renderer* ren, const fs::path& game_dir,
             t->drop_hd_cpu();
         }
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "asset load failed: %s\n", e.what());
+        log_warn("asset load failed: %s", e.what());
         return false;
     }
     if (progress) progress(1.0f);  // snap to full regardless of which optional files were absent
@@ -601,7 +594,7 @@ bool AssetStore::load_stage(int stage) {
                 field_hd_.reset(
                     make_texture(ren_, assets::pcx::load(hd_field), TextureArt::HighRes));
             } catch (const std::exception& e) {
-                std::fprintf(stderr, "HD stage %d field load failed: %s\n", stage, e.what());
+                log_warn("HD stage %d field load failed: %s", stage, e.what());
             }
         }
         // Tiles + crumbling bricks: type-4 RGB555 cels, snapped to the master
@@ -618,7 +611,7 @@ bool AssetStore::load_stage(int stage) {
                 try {
                     tiles_.load_hd_overlay(ren_, tp);
                 } catch (const std::exception& e) {
-                    std::fprintf(stderr, "HD TILES%d skipped: %s\n", stage, e.what());
+                    log_warn("HD TILES%d skipped: %s", stage, e.what());
                 }
             }
             auto xp = game_dir_ / "DATA_HD" / "ANI" / (xbrick_base + ".ANI");
@@ -626,7 +619,7 @@ bool AssetStore::load_stage(int stage) {
                 try {
                     xbrick_.load_hd_overlay(ren_, xp);
                 } catch (const std::exception& e) {
-                    std::fprintf(stderr, "HD XBRICK%d skipped: %s\n", stage, e.what());
+                    log_warn("HD XBRICK%d skipped: %s", stage, e.what());
                 }
             }
         }
@@ -638,7 +631,7 @@ bool AssetStore::load_stage(int stage) {
         xbrick_.drop_classic_cpu();
         xbrick_.drop_hd_cpu();
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "stage %d load failed: %s\n", stage, e.what());
+        log_warn("stage %d load failed: %s", stage, e.what());
         return false;
     }
     return field_ != nullptr;
@@ -673,7 +666,7 @@ const AssetStore::StagePreview& AssetStore::stage_preview(int stage) const {
         tiles.drop_classic_cpu();  // sequences resolved; only w/h + textures needed now
         stage_preview_tiles_.emplace(stage, std::move(tiles));
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "stage %d preview tiles load failed: %s\n", stage, e.what());
+        log_warn("stage %d preview tiles load failed: %s", stage, e.what());
     }
     try {
         auto img = assets::pcx::load(game_dir_ / "DATA" / "RES" / (field_base + ".PCX"));
@@ -681,7 +674,7 @@ const AssetStore::StagePreview& AssetStore::stage_preview(int stage) const {
         sp.field = tex.get();
         stage_preview_field_.emplace(stage, std::move(tex));
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "stage %d preview field load failed: %s\n", stage, e.what());
+        log_warn("stage %d preview field load failed: %s", stage, e.what());
     }
     return stage_preview_.emplace(stage, std::move(sp)).first->second;
 }
@@ -716,7 +709,7 @@ const Sprite& AssetStore::frontend_pcx(const std::string& name) const {
             sp = {tex.get(), img.width, img.height, 0, 0};
             front_textures_.push_back(std::move(tex));
         } catch (const std::exception& e) {
-            std::fprintf(stderr, "front-end PCX '%s' load failed: %s\n", name.c_str(), e.what());
+            log_warn("front-end PCX '%s' load failed: %s", name.c_str(), e.what());
         }
         classic = front_pcx_.emplace(name, sp).first;
     }
@@ -739,7 +732,7 @@ const Sprite& AssetStore::frontend_pcx(const std::string& name) const {
                 front_textures_hd_.push_back(std::move(tex));
             }
         } catch (const std::exception& e) {
-            std::fprintf(stderr, "HD front-end PCX '%s' load failed: %s\n", name.c_str(), e.what());
+            log_warn("HD front-end PCX '%s' load failed: %s", name.c_str(), e.what());
         }
     }
     return front_pcx_hd_.emplace(name, hd).first->second;
@@ -763,7 +756,7 @@ const Sprite& AssetStore::bm_inline_pcx(const std::string& name) const {
             sp = {tex.get(), img.width, img.height, 0, 0};
             bm_textures_.push_back(std::move(tex));
         } catch (const std::exception& e) {
-            std::fprintf(stderr, "BM inline PCX '%s' load failed: %s\n", name.c_str(), e.what());
+            log_warn("BM inline PCX '%s' load failed: %s", name.c_str(), e.what());
         }
         classic = bm_pcx_.emplace(name, sp).first;
     }
@@ -787,7 +780,7 @@ const Sprite& AssetStore::bm_inline_pcx(const std::string& name) const {
                 bm_textures_.push_back(std::move(tex));
             }
         } catch (const std::exception& e) {
-            std::fprintf(stderr, "HD BM inline PCX '%s' skipped: %s\n", name.c_str(), e.what());
+            log_warn("HD BM inline PCX '%s' skipped: %s", name.c_str(), e.what());
         }
     }
     return bm_pcx_hd_.emplace(name, hd).first->second;
@@ -810,7 +803,7 @@ const Sprite& AssetStore::author_photo() const {
         author_photo_tex_.reset(make_texture(ren_, img, TextureArt::HighRes));
         author_photo_ = {author_photo_tex_.get(), img.width, img.height, 0, 0};
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "embedded author photo failed: %s\n", e.what());
+        log_warn("embedded author photo failed: %s", e.what());
     }
     return author_photo_;
 }

@@ -136,10 +136,22 @@ target_include_directories(bomber_frontend_util_tests PRIVATE ${CMAKE_SOURCE_DIR
 add_test(NAME frontend_util COMMAND bomber_frontend_util_tests)
 
 # Scheme editor's pure grid model (editor_grid.hpp/.cpp) is SDL-free despite
-# living under libs/game/src — compiled directly into its own test binary rather
-# than linking bomber_game_core (which pulls in SDL3).
-add_executable(bomber_editor_grid_tests test_editor_grid.cpp
-  ${CMAKE_SOURCE_DIR}/libs/game/src/editor_grid.cpp)
-target_link_libraries(bomber_editor_grid_tests PRIVATE bomber::assets bomber::sim doctest::doctest bomber::warnings)
-target_include_directories(bomber_editor_grid_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game/include)
+# living under libs/game/src. It now LINKS bomber::game_util — libs/game's
+# SDL-free half — instead of recompiling editor_grid.cpp into this binary, which
+# is what it did while the only target offering that source also dragged in SDL3.
+# A suite that rebuilds the code under test is testing its own copy of it: the
+# same shape libs/audio was fixed out of, where tests/audio recompiled
+# sound_bank.cpp and so covered a file the headless build never linked.
+add_executable(bomber_editor_grid_tests test_editor_grid.cpp)
+target_link_libraries(bomber_editor_grid_tests
+  PRIVATE bomber::game_util doctest::doctest bomber::warnings)
 add_test(NAME editor_grid COMMAND bomber_editor_grid_tests)
+
+# The package's diagnostic seam (log.hpp/.cpp, docs/coding-standards.md §11).
+# Worth a suite precisely because the seam's VALUE is that output can be
+# redirected: the 53 call sites it replaced could not be captured or silenced at
+# all, and "the sink receives what the call site formatted" is the one property
+# every one of them now depends on. Links bomber::game_util like the suite above.
+add_executable(bomber_log_tests test_log.cpp)
+target_link_libraries(bomber_log_tests PRIVATE bomber::game_util doctest::doctest bomber::warnings)
+add_test(NAME log COMMAND bomber_log_tests)

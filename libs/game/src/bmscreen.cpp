@@ -5,12 +5,12 @@
 #include <algorithm>
 #include <cctype>
 #include <cstddef>
-#include <cstdio>
 #include <exception>
 #include <system_error>
 
 #include "bomber/assets/image.hpp"
 #include "bomber/game/credits_addendum.hpp"
+#include "bomber/game/log.hpp"
 #include "bomber/game/sprites.hpp"
 
 namespace bomber::game {
@@ -201,7 +201,7 @@ void BmScreen::enter(const std::string& bm_name) {
     try {
         doc_ = assets::bmtext::load(assets_->game_dir() / (bm_name + ".BM"));
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "BM screen '%s' load failed: %s\n", bm_name.c_str(), e.what());
+        log_warn("BM screen '%s' load failed: %s", bm_name.c_str(), e.what());
     }
     // The port's own credits addendum, appended in memory only — the install's
     // CREDITS.BM is 1997 game data and is opened read-only (credits_addendum.hpp
