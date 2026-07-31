@@ -906,11 +906,11 @@ ScreenDef draw_screen() {
     // random member of the contiguous "tie game/draw game" SOUNDLST run at 1700),
     // fired once by run_app on entering Results via audio_.play_random_in_range —
     // NOT looped: a screen carries no music id, so nothing restarts the sting.
-    // round_end = true: DRAW is NOT presented by sub_42A088's own wait loop.
+    // WaitLoop::RoundEnd: DRAW is NOT presented by sub_42A088's own wait loop.
     // sub_42A3F6 calls sub_42A088("draw", 0) — argument ZERO, i.e. show the
     // picture and return immediately (0x42A710) — and then runs its OWN loop at
     // 0x42A73A. That loop gives Escape no accept sting and gives the 6 s
-    // auto-advance no nav blip. See ScreenDef::round_end.
+    // auto-advance no nav blip. See ScreenDef::wait / the WaitLoop enum.
     return ScreenDef{"DRAW", {}, kResultsDwellMs, /*skippable*/ true, WaitLoop::RoundEnd};
 }
 // The SOUNDLST "tie game/draw game" voice group begins at 1700 (the file's own

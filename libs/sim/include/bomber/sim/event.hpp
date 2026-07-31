@@ -31,7 +31,9 @@ struct Event {
         // Stage actors (docs/re/stage-actors.md). SoundDirector maps these:
         // TrampolineBounce -> SOUNDLST 350, WarpUsed -> SOUNDLST 1330.
         TrampolineBounce,  // player stepped onto a trampoline and launched a hop
-        WarpUsed,          // player entered a warphole (reserved; warphole deferred)
+        // player entered a warphole; x,y = the EXIT tile the warp will drop them
+        // on (StageActorSystem::start_warp)
+        WarpUsed,
         // Campaign rover/ghost hazards (docs/re/campaign.md "Per-tick mover").
         // `player` is the rover's INDEX into State::rovers for all three (not
         // a player slot) unless noted otherwise.

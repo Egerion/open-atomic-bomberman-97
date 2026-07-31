@@ -33,7 +33,7 @@ bool tramp_bomb(const State& s, int tx, int ty) { return grid::bomb_at(s, tx, ty
 
 }  // namespace
 
-void StageActorSystem::tick_bounce(Player& p, int /*player_index*/) {
+void StageActorSystem::tick_bounce(Player& p) {
     if (p.bounce <= 0) return;
 
     // Mirror sub_41F29B state 5 (raw disasm 0x420280..0x42053f). The original

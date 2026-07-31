@@ -293,8 +293,10 @@ bool AISystem::behave_blast_bricks(int i, PlayerInput& out) {
 // Faithful quirk (docs/re/ai.md §3.5, verified in the decompile): the acquire
 // resets the ENEMY-seek timer (+12) rather than the powerup-seek timer (+28) —
 // an original field mix-up. We reproduce it (enemy_seek.timer = 0) for exact
-// field parity; it is a no-op here since behaviour 6 (enemy-seek) is a Stage-5
-// stub that never advances +12. The powerup timer (+28) is NOT reset on acquire.
+// field parity, and it is NOT inert: behaviour 6 landed in Stage 5 and accrues
+// +12 every frame (behave_seek_enemy below), so this write really does postpone
+// an already-active enemy pursuit's give-up roll — which is exactly the coupling
+// the original has. The powerup timer (+28) is NOT reset on acquire.
 // ---------------------------------------------------------------------------
 bool AISystem::behave_seek_powerup(int i, PlayerInput& out) {
     Player& p = s_.players[i];

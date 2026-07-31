@@ -180,6 +180,14 @@ always belongs to the sender's own seat. See §6 for the full contract.
            {"seat":1,"name":"Ada","ready":false,"is_host":false}],
  "host_candidates":[]}
 ```
+**`host_candidates` may arrive as `null` rather than `[]`**, and does whenever
+the host has not published a candidate list yet — which is the ordinary case for
+a guest that joins early, since the host's list is sent asynchronously (a LAN
+address first, a STUN-resolved one later). Both spellings mean exactly "no
+candidates yet — wait for `PeerCandidates`"; a client MUST treat them
+identically and MUST NOT read `null` as an error. (Same for
+`PeerCandidates.list`, below. `roster` and `PublicList.lobbies` are always real
+arrays.)
 
 ### JoinRejected
 ```json
@@ -213,7 +221,9 @@ optional `rtt_to_host_ms`(int). Roster is always sorted by ascending seat.
 ```json
 {"type":"PeerCandidates","seat":0,"list":[{"kind":"host","addr":"192.168.1.9:41234"}]}
 ```
-`seat` is the seat these candidates belong to.
+`seat` is the seat these candidates belong to. `list` is forwarded exactly as the
+publishing client sent it, so it too may arrive as `null` rather than `[]` — see
+the note under `JoinAccepted`.
 
 ### StartMatch (broadcast)
 ```json
@@ -496,9 +506,17 @@ A `JoinByCode` that succeeds costs no guess credit. Past the guess budget the
 server sends **nothing at all** — not even a `JoinRejected` — because any reply
 tells a code-searcher what its rate limit is.
 
-The UDP listeners are limited per **source address**: 250 datagrams/s (burst 500)
-on the relay, 20/s (burst 40) on the STUN echo. Loopback, private and link-local
-sources are exempt, so LAN and same-host play are never shaped.
+The failed `JoinByCode` is charged a **second** time, per **source IP**: **2/s
+sustained, burst 30**, over a fixed 4096-slot table (colliding sources share a
+slot). The per-connection budget alone is reset simply by reconnecting, and a
+code search does not care which socket it runs over. It is the same silent drop
+— no `JoinRejected`, no `Error`. Loopback, private and link-local sources are
+exempt, so LAN and same-host play never meet it; players who share one public
+address (CGNAT, several machines behind one NAT) DO share this budget, and 30
+banked failures is the room they have between them.
+
+The UDP listeners are limited per **source address** too: 250 datagrams/s (burst
+500) on the relay, 20/s (burst 40) on the STUN echo. Same exemption.
 
 ### 8.3 Capacity
 
@@ -509,9 +527,22 @@ sources are exempt, so LAN and same-host play are never shaped.
 | live lobbies | 5000 | `-max-lobbies` |
 | rows in one `PublicList` | 200 (sorted by `code`, so the cut is stable) | — |
 | a connection holding **no seat** and sending nothing is closed after | 120 s | `-conn-idle-timeout` |
+| concurrent relay allocations (2 per relayed match) | 256 | `-max-relay-allocs` |
+| total relay egress **this process** may forward, resets on restart | 50 GiB | `-relay-budget-gb` |
 
 A connection refused by a cap gets HTTP **503** *before* the WebSocket upgrade.
 A `CreateLobby` past the lobby cap gets `Error{code:"server_full"}`.
+
+The two relay caps are **cost** ceilings, and they are client-observable: an
+`AllocateRelay` past either is answered `Error{code:"internal"}` with the reason
+in `message`. There is no distinct "relay full" code and there will not be —
+§6.1 is frozen at `not_in_lobby` / `bad_message` / `internal` for this request,
+and the stock client turns any `Error` during relay setup into "RELAY
+UNAVAILABLE". So a third-party client must accept that an allocation can be
+refused for **cost** rather than fault, and that the refusal is
+indistinguishable from a server-side error. Only NEW allocations are refused: a
+match already forwarding is untouched, and a seat re-allocating its own existing
+handle still succeeds. A negative value on either flag disables that cap.
 
 A client that idles seatless (browsing, or sitting in a menu) may simply
 reconnect; it may also hold the socket open indefinitely by sending `Heartbeat`,
