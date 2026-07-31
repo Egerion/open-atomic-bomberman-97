@@ -82,10 +82,11 @@ TEST_SUITE("list dialog geometry (sub_42DBCC)") {
             CHECK(g.done_y + font_h + 6 <= g.win_h);  // button height is fh + 6
             CHECK(g.item_bottom <= g.done_y);
         }
-        // ...and it would NOT fit at thirteen.
-        const int font_h = 12;
-        const int thirteen_row_bottom = font_h + 16 + 13 * font_h;
-        CHECK(thirteen_row_bottom > 13 * font_h + 22);
+        // ...and it would NOT fit at thirteen. Asked against the SHIPPED
+        // geometry rather than against two locally computed constants, which
+        // would be a statement about arithmetic and could not fail.
+        const ListDialogGeometry g = picker(200, 120, 12);
+        CHECK(g.item_y0 + 13 * g.item_h > g.win_h);
     }
 
     TEST_CASE("title strip and title placement") {
@@ -197,7 +198,11 @@ TEST_SUITE("list dialog geometry (sub_42DBCC)") {
             CHECK(here - prev < fh);      // strictly finer than a row
             if (here != prev) ++moved;
         }
-        CHECK(moved > 0);  // it really does move
+        // Exactly the travel, because the offset climbs 0.65 px per row and can
+        // therefore never skip a pixel: 65 of the 100 steps move the thumb and
+        // 35 do not. A thumb that never moved satisfies both bounds above, so
+        // this is the assertion the case turns on.
+        CHECK(moved == 65);
         // ...and the extremes are still exact.
         CHECK(scrolled(total, 0, fh).sb_thumb_y0 == 47);
         CHECK(scrolled(total, 100, fh).sb_thumb_y0 == 47 + 65);
@@ -333,6 +338,17 @@ ListDialogHit hit_at(const ListDialogGeometry& g, int x, int y) {
 // Screen-space centre of visible row `i` in the default picker geometry.
 int row_x() { return 100 + 8 + 4; }
 int row_y(const ListDialogGeometry& g, int i) { return 100 + g.item_y0 + i * g.item_h + 1; }
+
+// A screen-space x inside the scrollbar track.
+int track_x(const ListDialogGeometry& g) {
+    return 100 + g.sb_track_x + 2;
+}
+
+// One press on the track at screen y `sy`, which the widget needs twice — once
+// to resolve the hotspot and once to place the click within the thumb band.
+ListDialogAction press_track(ListDialogNav& nav, const ListDialogGeometry& g, int sx, int sy) {
+    return list_dialog_mouse_down(nav, g, hit_at(g, sx, sy), kRows, 40, sy);
+}
 
 }  // namespace
 
@@ -496,27 +512,30 @@ TEST_SUITE("list dialog input model (sub_42DBCC)") {
 
     // --- item 1: THE MOUSE --------------------------------------------------
 
-    TEST_CASE("the hit test finds every hotspot sub_42DBCC registers") {
+    TEST_CASE("the hit test finds one row hotspot per visible row, and stops at the band") {
         const ListDialogGeometry g = scrolled(40, 0);
         REQUIRE(g.win_x == 100);
         REQUIRE(g.item_x == 8);
         REQUIRE(g.item_y0 == 28);
 
-        // Rows: one hotspot per VISIBLE row, over exactly the drawn band.
         for (int i = 0; i < kRows; ++i) {
+            CAPTURE(i);
             const ListDialogHit h = hit_at(g, row_x(), row_y(g, i));
             CHECK(h.widget == ListDialogWidget::Row);
             CHECK(h.row == i);
         }
-        // ...and the band's own edges: item_x .. item_x + item_w, item_y0 ..
-        // item_y0 + visible*font_h.
+        // The band's own edges: item_x .. item_x + item_w, item_y0 .. item_y0 +
+        // visible*font_h.
         CHECK(hit_at(g, 100 + g.item_x, 100 + g.item_y0).widget == ListDialogWidget::Row);
         CHECK(hit_at(g, 100 + g.item_x - 1, 100 + g.item_y0).widget == ListDialogWidget::None);
         CHECK(hit_at(g, 100 + g.item_x + g.item_w, 100 + g.item_y0).widget ==
               ListDialogWidget::None);
         CHECK(hit_at(g, row_x(), 100 + g.item_y0 - 1).widget == ListDialogWidget::None);
         CHECK(hit_at(g, row_x(), 100 + g.item_bottom).widget == ListDialogWidget::None);
+    }
 
+    TEST_CASE("the hit test finds the scrollbar and Done, and nothing outside the window") {
+        const ListDialogGeometry g = scrolled(40, 0);
         CHECK(hit_at(g, 100 + g.sb_button_x + 2, 100 + g.sb_up_y + 2).widget ==
               ListDialogWidget::ScrollUp);
         CHECK(hit_at(g, 100 + g.sb_button_x + 2, 100 + g.sb_down_y + 2).widget ==
@@ -525,7 +544,6 @@ TEST_SUITE("list dialog input model (sub_42DBCC)") {
               ListDialogWidget::Track);
         CHECK(hit_at(g, 100 + g.done_x + 2, 100 + g.done_y + 2).widget == ListDialogWidget::Done);
 
-        // Outside the window is nothing at all.
         CHECK(hit_at(g, 99, 150).widget == ListDialogWidget::None);
         CHECK(hit_at(g, 150, 99).widget == ListDialogWidget::None);
         CHECK(hit_at(g, 100 + g.win_w, 150).widget == ListDialogWidget::None);
@@ -597,42 +615,47 @@ TEST_SUITE("list dialog input model (sub_42DBCC)") {
         CHECK(at_top.highlight == 0);
     }
 
-    TEST_CASE("a track click pages, and a click ON THE THUMB does nothing — no drag") {
-        // @0x42E3D3-@0x42E415: above the thumb -> 0x149 (PageUp), below ->
-        // 0x151 (PageDown), inside the 15-px thumb band -> the loop, with no
-        // handler at all. sub_42DBCC has no drag code anywhere.
+    // @0x42E3D3-@0x42E415: above the thumb -> 0x149 (PageUp), below -> 0x151
+    // (PageDown), inside the 15-px thumb band -> the loop, with no handler at
+    // all. sub_42DBCC has no drag code anywhere. The two cases below share the
+    // 40-item list scrolled to row 15, whose thumb sits at 79 (47 + 15*65/30).
+    TEST_CASE("a track click above or below the thumb pages the view") {
         const ListDialogGeometry g = scrolled(40, 15);
-        REQUIRE(g.sb_thumb_y0 == 79);  // 47 + 15*65/30
-        const int tx = 100 + g.sb_track_x + 2;
-        const int thumb_top = 100 + g.sb_thumb_y0;  // 179
+        const int tx = track_x(g);
+        const int thumb_top = 100 + g.sb_thumb_y0;
+        REQUIRE(g.sb_thumb_y0 == 79);
 
         ListDialogNav above{15, 3};
-        CHECK(list_dialog_mouse_down(above, g, hit_at(g, tx, thumb_top - 9), kRows, 40,
-                                     thumb_top - 9) == ListDialogAction::None);
+        CHECK(press_track(above, g, tx, thumb_top - 9) == ListDialogAction::None);
         CHECK(above.top_row == 5);   // one page up
         CHECK(above.highlight == 3);  // the bar did not move
 
         ListDialogNav below{15, 3};
-        list_dialog_mouse_down(below, g, hit_at(g, tx, thumb_top + 21), kRows, 40, thumb_top + 21);
+        press_track(below, g, tx, thumb_top + 21);
         CHECK(below.top_row == 25);
         CHECK(below.highlight == 3);
+    }
 
-        // The thumb band itself is [thumb_y, thumb_y + 14] INCLUSIVE.
+    TEST_CASE("a click ON THE THUMB does nothing — there is no drag") {
+        const ListDialogGeometry g = scrolled(40, 15);
+        const int tx = track_x(g);
+        const int thumb_top = 100 + g.sb_thumb_y0;
+
+        // The thumb band is [thumb_y, thumb_y + 14] INCLUSIVE.
         for (const int dy : {0, 7, 14}) {
+            CAPTURE(dy);
             ListDialogNav on{15, 3};
-            CHECK(list_dialog_mouse_down(on, g, hit_at(g, tx, thumb_top + dy), kRows, 40,
-                                         thumb_top + dy) == ListDialogAction::None);
+            CHECK(press_track(on, g, tx, thumb_top + dy) == ListDialogAction::None);
             CHECK(on.top_row == 15);
             CHECK(on.highlight == 3);
         }
-        // ...and one pixel past it on either side pages again.
+        // ...and one pixel past it on either side pages again, which is what
+        // makes the three no-ops above a BAND and not a dead scrollbar.
         ListDialogNav just_above{15, 3};
-        list_dialog_mouse_down(just_above, g, hit_at(g, tx, thumb_top - 1), kRows, 40,
-                               thumb_top - 1);
+        press_track(just_above, g, tx, thumb_top - 1);
         CHECK(just_above.top_row == 5);
         ListDialogNav just_below{15, 3};
-        list_dialog_mouse_down(just_below, g, hit_at(g, tx, thumb_top + 15), kRows, 40,
-                               thumb_top + 15);
+        press_track(just_below, g, tx, thumb_top + 15);
         CHECK(just_below.top_row == 25);
     }
 

@@ -1,6 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
+#include <vector>
+
 #include "bomber/game_util/campaign_round_end.hpp"
 
 // The CAMPAIGN round end (docs/re/campaign.md "Round end", sub_42A3F6 @0x42A63B
@@ -21,6 +23,29 @@ constexpr int kStages = 3;
 
 CampaignRoundEnd plan_at(CampaignVerdict verdict, bool no_human, int stage) {
     return campaign_round_end(true, verdict, no_human, stage, kStages);
+}
+
+// One row of campaign_verdict's input space, so its truth table sweeps flat
+// instead of through three nested loops.
+struct VerdictInputs {
+    int seconds;
+    bool board_cleared;
+    bool no_human;
+};
+
+// sub_410578 returns REMAINING WHOLE SECONDS, or the 1001 "no limit" sentinel;
+// `cmp eax,1 / jg` @0x4016F2 makes the clock-out threshold <= 1.
+bool has_time_left(int seconds) {
+    return seconds > 1;
+}
+
+std::vector<VerdictInputs> all_verdict_inputs() {
+    std::vector<VerdictInputs> rows;
+    for (const int seconds : {0, 1, 2, 90, 1001})
+        for (const bool cleared : {false, true})
+            for (const bool no_human : {false, true})
+                rows.push_back(VerdictInputs{seconds, cleared, no_human});
+    return rows;
 }
 
 }  // namespace
@@ -130,8 +155,26 @@ TEST_CASE("an empty stage list cannot produce a next stage") {
     CHECK_FALSE(plan.next_stage);
 }
 
-TEST_CASE("campaign_verdict: a running round with time left has no verdict") {
+// There is NO survivor clause in sub_4016DA, and the round loop's own
+// player-count guard is unreachable while dword_46489C is set (sub_421969
+// @0x421977 returns a constant 2) — so "I am the only side left" says nothing
+// about whether the stage is over, and campaign_verdict has no input that could
+// say it. Eight of the seventeen shipped stages have ai_count 0, which under the
+// old survivor rule made a lone human the only side before the first tick and
+// ended the stage instantly. The absent parameter is the fix; what a case can
+// assert is the rest of the truth table, which leaves no room for one.
+TEST_CASE("campaign_verdict: only the clock, the clear and the wipe-out decide a round") {
     CHECK(campaign_verdict(90, false, false) == CampaignVerdict::Running);
+    // The full three-input table: Running is reachable ONLY with time left, an
+    // uncleared board and a live human, so no fourth condition is hiding in it.
+    for (const VerdictInputs in : all_verdict_inputs()) {
+        CAPTURE(in.seconds);
+        CAPTURE(in.board_cleared);
+        CAPTURE(in.no_human);
+        const bool still_running =
+            campaign_verdict(in.seconds, in.board_cleared, in.no_human) == CampaignVerdict::Running;
+        CHECK(still_running == (has_time_left(in.seconds) && !in.board_cleared && !in.no_human));
+    }
 }
 
 TEST_CASE("campaign_verdict: clause 2 is the CLOCK, at one whole second or less") {
@@ -184,14 +227,4 @@ TEST_CASE("a default-constructed pacing is 'still running' — the per-stage cle
     const CampaignPacing fresh;
     CHECK(fresh.verdict == CampaignVerdict::Running);
     CHECK_FALSE(fresh.no_human_survivor);
-}
-
-TEST_CASE("campaign_verdict: killing every opponent is NOT a round end") {
-    // The regression this file exists for. There is no survivor-count clause in
-    // sub_4016DA and the round loop's own player-count guard is unreachable
-    // while dword_46489C is set (sub_421969 @0x421977 returns a constant 2), so
-    // "I am the only side left" says nothing about whether the stage is over.
-    // Eight of the seventeen shipped stages have ai_count 0, which under the old
-    // survivor rule made a lone human the only side before the first tick.
-    CHECK(campaign_verdict(90, false, false) == CampaignVerdict::Running);
 }

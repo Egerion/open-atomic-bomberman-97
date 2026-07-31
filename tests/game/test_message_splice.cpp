@@ -63,8 +63,8 @@ TEST_CASE("fmt_u leaves a WRONG-KIND specifier completely alone") {
 }
 
 TEST_CASE("fmt_u survives hostile and degenerate format strings") {
-    // Each of these is a row a hand-edited MESSAGES.TXT can contain, and each
-    // one used to be unpinned. None may read past the end.
+    // Each of these is a row a hand-edited MESSAGES.TXT can contain, and none
+    // may read past the end.
     CHECK(fmt_u("", 1).empty());
     CHECK(fmt_u("no specifier here", 1) == "no specifier here");
     CHECK(fmt_u("trailing percent %", 1) == "trailing percent %");  // '%' is the last byte
