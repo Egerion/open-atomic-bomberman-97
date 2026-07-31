@@ -61,15 +61,17 @@ TEST_CASE("the option wins over the fallback, not the other way round") {
 
 TEST_CASE("the decision does not depend on anything but stage and option") {
     // There is no network arm and no stage-art arm in the original's guard —
-    // both were port inventions. This is a shape assertion: the function simply
-    // has nowhere to put such a condition, and these two calls must agree
-    // because a netplay round and a local round on the same level and the same
-    // options.ini are the same decision.
+    // both were port inventions, and a netplay round and a local round on the
+    // same level with the same options.ini must be the same decision. The only
+    // way to state that from outside is to pin the WHOLE domain: for every
+    // stage the shipped table covers, the id is a pure function of (stage,
+    // option) with the values below and no third input to hide in.
     for (int stage = 0; stage <= 10; ++stage) {
         CAPTURE(stage);
-        CHECK(round_music_id(stage, false, all_present) ==
-              round_music_id(stage, false, all_present));
+        CHECK(round_music_id(stage, false, all_present) == 1100 + stage);
+        CHECK(round_music_id(stage, false, none_present) == kStageMusicFallback);
         CHECK(round_music_id(stage, true, all_present) == kRoundMusicSilent);
+        CHECK(round_music_id(stage, true, none_present) == kRoundMusicSilent);
     }
 }
 

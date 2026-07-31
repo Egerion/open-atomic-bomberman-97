@@ -18,6 +18,14 @@ constexpr std::uint64_t kTickNs = 1'000'000'000ull / 20;
 constexpr int kSubFrames = 9;
 constexpr std::uint64_t kSubNs = kTickNs / kSubFrames;  // 5'555'555 ns, ~180 Hz
 
+// kSubNs is an INTEGER division and 50'000'000 is not divisible by 9, so nine
+// cells fall 5 ns short of a tick. That remainder drives the boundary case at
+// the bottom of this suite. It is arithmetic on the three constants directly
+// above, NOT a property of FramePacer, so it is stated where it cannot
+// masquerade as a test: a runtime CHECK here would pass no matter what the
+// pacer did.
+static_assert(kSubFrames * kSubNs == kTickNs - 5, "the lattice is 5 ns short of a tick");
+
 // A virtual front-end loop: a fake clock the pacer never sees, a sleep that
 // OVERSHOOTS the way Win11's does, and a scripted per-frame present cost.
 // Everything the real MatchRunner tail does, minus SDL.
@@ -246,9 +254,11 @@ TEST_SUITE("frame_pacer") {
         pacer.set_period(kSubNs);
         pacer.set_anchor(0);
         const FramePacer::Wait w = pacer.plan_subframe(20'000'000);
-        CHECK(w.spin_until_ns == 4 * kSubNs);  // 20 ms is inside cell 3
-        CHECK(w.spin_until_ns > 20'000'000);
-        CHECK(w.spin_until_ns - 20'000'000 <= kSubNs);
+        // 20 ms is inside cell 3, so the next boundary is cell 4's. The two
+        // looser bounds this case used to also assert (target in the future, at
+        // most one period away) are implied by that exact value and could not
+        // fail on their own.
+        CHECK(w.spin_until_ns == 4 * kSubNs);
     }
 
     TEST_CASE("subframe_index partitions the tick the way the renderer does") {
@@ -270,16 +280,15 @@ TEST_SUITE("frame_pacer") {
             CHECK(static_cast<int>(alpha * static_cast<float>(kSubFrames)) == f);
             CHECK(sub_index(acc, 0) == static_cast<std::uint64_t>(f));
         }
-        // The same remainder leaves a 5 ns sliver at the end of the tick that
-        // the lattice calls cell kSubFrames — a 10th cell the renderer has no
-        // position for. Pinned rather than papered over: it is harmless because
-        // the match loop re-anchors the lattice on every frame (anchor = the
-        // instant the CURRENT tick began), so the sliver is re-based away long
-        // before anything could present into it, and a present that did land in
-        // it would simply target the next boundary 5.556 ms later like any
-        // other. It is a 1-in-10-million window on a wait that already jitters
-        // by hundreds of microseconds.
-        CHECK(kSubFrames * kSubNs == kTickNs - 5);
+        // The same remainder (see the static_assert at the top) leaves a 5 ns
+        // sliver at the end of the tick that the lattice calls cell kSubFrames
+        // — a 10th cell the renderer has no position for. Pinned rather than
+        // papered over: it is harmless because the match loop re-anchors the
+        // lattice on every frame (anchor = the instant the CURRENT tick began),
+        // so the sliver is re-based away long before anything could present
+        // into it, and a present that did land in it would simply target the
+        // next boundary 5.556 ms later like any other. It is a 1-in-10-million
+        // window on a wait that already jitters by hundreds of microseconds.
         CHECK(sub_index(kSubFrames * kSubNs - 1, 0) == static_cast<std::uint64_t>(kSubFrames - 1));
         CHECK(sub_index(kTickNs - 1, 0) == static_cast<std::uint64_t>(kSubFrames));
     }

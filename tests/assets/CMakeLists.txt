@@ -63,15 +63,27 @@ add_test(NAME sch_malformed COMMAND bomber_sch_malformed_tests)
 # CHFILEANI container + CIMG/RLE decoder. Synthetic files only; covers the
 # valid decode of both pixel formats AND the malformed-input contract, which
 # for this parser includes header fields sized to exhaust the allocator.
+#
+# TIMEOUT for the same reason `extra` below has one, and it is not belt-and-
+# braces: measured 2026-08-01, removing the allocator bound does NOT change the
+# exception type on a box whose page file can absorb a 17 GB reserve. The two
+# SECURITY cases still throw std::runtime_error and still PASS -- at 11.7 s and
+# 11.1 s against 0.004 s healthy. Whole suite: 0.07 s intact, 26.7 s regressed.
+# 10 s sits ~140x above the healthy run and well below either regression.
 add_executable(bomber_ani_tests test_ani.cpp)
 target_link_libraries(bomber_ani_tests PRIVATE bomber::assets doctest::doctest bomber::warnings)
 add_test(NAME ani COMMAND bomber_ani_tests)
+set_tests_properties(ani PROPERTIES TIMEOUT 10)
 
 # PCX decoder: 8-bit indexed (the original assets) and 24-bit (DATA_HD), plus
-# the same untrusted-header contract as the .ANI suite above.
+# the same untrusted-header contract as the .ANI suite above -- including the
+# same timing-not-type regression shape: 0.03 s intact, 17.5 s with
+# check_decodable disabled (8.1 s + 7.0 s in the two SECURITY cases), both of
+# which stay green without the timeout.
 add_executable(bomber_pcx_tests test_pcx.cpp)
 target_link_libraries(bomber_pcx_tests PRIVATE bomber::assets doctest::doctest bomber::warnings)
 add_test(NAME pcx COMMAND bomber_pcx_tests)
+set_tests_properties(pcx PROPERTIES TIMEOUT 10)
 
 # EXTRA<N>.RES stage-actor placement. The coordinate-normalisation cases in
 # here regress as a HANG rather than a failure (a file-driven loop count, and

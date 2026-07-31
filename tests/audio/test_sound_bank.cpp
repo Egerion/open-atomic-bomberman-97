@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
+#include <cstddef>
 #include <filesystem>
 #include <set>
 #include <string>
@@ -55,11 +56,14 @@ TEST_CASE("the pick is least-played-first, not uniform") {
     for (int i = 0; i < 4; ++i) cycle.insert(bank.pick(100));
     CHECK(cycle == std::set<int>{100, 101, 102, 103});
 
-    // ...and it keeps doing that, cycle after cycle.
+    // ...and it keeps doing that, cycle after cycle. Compared against the whole
+    // set rather than just its size: four DISTINCT picks that had drifted out
+    // of the group would still count four.
     for (int c = 0; c < 5; ++c) {
+        CAPTURE(c);
         std::set<int> next;
         for (int i = 0; i < 4; ++i) next.insert(bank.pick(100));
-        CHECK(next.size() == 4);
+        CHECK(next == std::set<int>{100, 101, 102, 103});
     }
 }
 
@@ -202,20 +206,25 @@ TEST_CASE("a stamped slot is retired from its group's rotation") {
     CHECK(all == std::set<int>{350, 351, 352, 353});
 }
 
-TEST_CASE("a fully retired group degrades to uniform rather than going silent") {
-    // The 200-draw ceiling is a fallback, not a policy: when NO member sits at
-    // the minimum the last draw is used anyway, so a group every one of whose
-    // members has been stamped still plays something.
+TEST_CASE("a group whose every member is stamped still plays, and still rotates") {
+    // A group can end up with EVERY member stamped by an exact play (four
+    // deaths whose anim index lands in 10-13). The minimum is then a stamp
+    // rather than a real play count, but it is still a minimum, so the
+    // least-played walk keeps working and the whole group stays reachable.
+    //
+    // The bounds alone (350 <= got <= 353) are the weaker half of this: they
+    // catch the group going silent, because pick() answers -1 for an empty
+    // group and -1 fails the lower bound. They do NOT catch the group
+    // collapsing onto one member, which is the other way "retired" could go
+    // wrong — so the rotation is asserted as a set, not as a range.
     bomber::assets::res::SoundList list;
     add_run(list, 350, 4, "trampo");
     SoundBank bank = loaded(list);
     for (int i = 0; i < 4; ++i) bank.pick_exact(350 + i, 9000 + i);
 
-    for (int i = 0; i < 20; ++i) {
-        const int got = bank.pick(350);
-        CHECK(got >= 350);
-        CHECK(got <= 353);
-    }
+    std::set<int> heard;
+    for (int i = 0; i < 20; ++i) heard.insert(bank.pick(350));
+    CHECK(heard == std::set<int>{350, 351, 352, 353});
 }
 
 TEST_CASE("the jelly debounce swallows re-triggers within three frames") {
@@ -233,38 +242,60 @@ TEST_CASE("the jelly debounce swallows re-triggers within three frames") {
     CHECK(bank.pick_debounced(135, 5) >= 0);
 }
 
+// The group sizes the shipped SOUNDLST actually produces. A table rather than
+// twenty CHECK lines, because the `what` column is the part worth reading and a
+// trailing comment on an assertion is not carried into its failure message.
+// Uncalled blocks keep every take; culled ones land on their keep count
+// (docs/re/sound-engine.md §3).
+struct GroupSize {
+    int base;
+    std::size_t size;
+    const char* what;
+};
+
+constexpr GroupSize kShippedGroups[] = {
+    {2800, 11, "title intro sting - uncalled, all eleven takes survive"},
+    {20, 2, "nav blip: letter1 / letter2"},
+    {40, 2, "drop refused: enrt1 / enrt2"},
+    {10, 1, "accept sting: menuexit alone"},
+    {170, 6, "grab + the four 'dead' bmbthrw clips"},
+    {360, 4, "bombhit1..4 - the old range missed one"},
+    {130, 3, "bomb bounce"},
+    {135, 3, "jelly bounce"},
+    {350, 4, "trampoline"},
+    {1330, 3, "powerup reveal"},
+    {160, 1, "bmdrop3 really is alone"},
+    {200, 3, "culled: exploding bombs"},
+    {400, 7, "culled: powerup pickup voices"},
+    {700, 7, "culled: taunts - and 700 exists only thanks to the compaction"},
+    {1200, 2, "culled: 'huge string of bombs'"},
+    {1400, 7, "culled: AWESOME milestone voices"},
+    {2300, 8, "culled: generic disease voices"},
+    {2700, 5, "culled: 'hurry up!' callouts"},
+};
+
 TEST_CASE("against the real SOUNDLST.RES") {
-    // Pins the group sizes the shipped data actually produces. SKIPs without an
-    // install, the same way tests/visual does.
+    // The only case here that a missing install can defeat, and the only early
+    // return in the file. Read the skip honestly: doctest has no runtime skip,
+    // so without an install this reports PASSED having asserted nothing. The
+    // marker is the only thing distinguishing it from real coverage; the
+    // synthetic cases above are what actually gate the cull table.
     const std::filesystem::path dir = bomber::assets::default_game_dir();
     if (dir.empty() || !std::filesystem::exists(dir / "DATA" / "RES" / "SOUNDLST.RES")) {
-        MESSAGE("no original install found - skipping");
+        MESSAGE("SOUND_BANK_SKIP: no original install found - this case asserted nothing");
         return;
     }
     const auto list = bomber::assets::res::load_sounds(dir / "DATA" / "RES" / "SOUNDLST.RES");
     SoundBank bank = loaded(list, 12345);
 
-    // Uncalled blocks keep every take (docs/re/sound-engine.md §3).
-    CHECK(bank.group(2800).size() == 11);  // the title intro sting
-    CHECK(bank.group(20).size() == 2);     // nav blip: letter1 / letter2
-    CHECK(bank.group(40).size() == 2);     // drop refused: enrt1 / enrt2
-    CHECK(bank.group(10).size() == 1);     // accept sting: menuexit alone
-    CHECK(bank.group(170).size() == 6);    // grab + the four "dead" bmbthrw clips
-    CHECK(bank.group(360).size() == 4);    // bombhit1..4 - the old range missed one
-    CHECK(bank.group(130).size() == 3);
-    CHECK(bank.group(135).size() == 3);
-    CHECK(bank.group(350).size() == 4);
-    CHECK(bank.group(1330).size() == 3);
-    CHECK(bank.group(160).size() == 1);  // bmdrop3 really is alone
-
-    // Culled blocks land exactly on their keep counts.
-    CHECK(bank.group(200).size() == 3);
-    CHECK(bank.group(400).size() == 7);
-    CHECK(bank.group(700).size() == 7);  // and 700 exists only thanks to the compaction
-    CHECK(bank.group(1200).size() == 2);
-    CHECK(bank.group(1400).size() == 7);
-    CHECK(bank.group(2300).size() == 8);
-    CHECK(bank.group(2700).size() == 5);
+    for (const GroupSize& g : kShippedGroups) {
+        // std::string, not the bare `const char*`: doctest stringifies a char
+        // POINTER as its address (a string literal is an array and survives),
+        // so `<< g.what` would log `00007FF7B53489E0` and the table's whole
+        // point — saying which group failed — would be lost.
+        INFO("group " << g.base << ": " << std::string(g.what));
+        CHECK(bank.group(g.base).size() == g.size);
+    }
 
     // Music ids must survive untouched - the cull may not move a track.
     CHECK(bank.name(1000) != nullptr);  // TITLE.RSS

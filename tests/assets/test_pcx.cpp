@@ -17,12 +17,13 @@
 #include <vector>
 
 #include "bomber/assets/pcx.hpp"
+#include "fixture.hpp"
 
 using namespace bomber::assets;
+using bomber::test::append;
+using bomber::test::Bytes;
 
 namespace {
-
-using Bytes = std::vector<std::uint8_t>;
 
 // The fixed 128-byte PCX header, laid out at the offsets pcx::parse reads:
 // 0 manufacturer, 2 encoding, 3 bpp, 4..11 the window, 65 planes, 66 stride.
@@ -35,22 +36,25 @@ struct HeaderSpec {
     unsigned bytes_per_line = 2;
 };
 
+// The header is fixed-width with fields at known offsets, so it is patched in
+// place rather than appended -- put_u16 (which grows) is the wrong tool here.
+void patch_u16(Bytes& b, std::size_t at, unsigned v) {
+    b[at] = static_cast<std::uint8_t>(v & 0xFF);
+    b[at + 1] = static_cast<std::uint8_t>((v >> 8) & 0xFF);
+}
+
 Bytes header(const HeaderSpec& h) {
     Bytes b(128, 0);
-    auto put16 = [&b](std::size_t at, unsigned v) {
-        b[at] = static_cast<std::uint8_t>(v & 0xFF);
-        b[at + 1] = static_cast<std::uint8_t>((v >> 8) & 0xFF);
-    };
     b[0] = h.manufacturer;
     b[1] = 5;  // version
     b[2] = h.encoding;
     b[3] = h.bpp;
-    put16(4, h.xmin);
-    put16(6, h.ymin);
-    put16(8, h.xmax);
-    put16(10, h.ymax);
+    patch_u16(b, 4, h.xmin);
+    patch_u16(b, 6, h.ymin);
+    patch_u16(b, 8, h.xmax);
+    patch_u16(b, 10, h.ymax);
     b[65] = h.planes;
-    put16(66, h.bytes_per_line);
+    patch_u16(b, 66, h.bytes_per_line);
     return b;
 }
 
@@ -70,10 +74,6 @@ Bytes vga_palette() {
 // literal. Fixtures below stay under 0xC0 wherever a literal is intended.
 Bytes rle_run(unsigned count, std::uint8_t value) {
     return {static_cast<std::uint8_t>(0xC0 | (count & 0x3F)), value};
-}
-
-void append(Bytes& into, const Bytes& more) {
-    into.insert(into.end(), more.begin(), more.end());
 }
 
 Image parse(const Bytes& file) {
@@ -237,15 +237,20 @@ TEST_CASE("a run header at the very end of the data with no value byte is reject
 // SECURITY. width and height come from four u16s in the header and their
 // product used to reach `rgba.resize(px * 4)` BEFORE anything checked that the
 // file could possibly hold that many decoded bytes. A 900-byte file declaring
-// 65535x65536 therefore asked the allocator for 17 GB. That fails -- but as
-// std::bad_alloc / std::length_error, which is neither std::runtime_error nor
-// std::out_of_range and so escapes the contract every caller of this module
-// catches on (docs/coding-standards.md §6); on a box with generous overcommit
-// it does not fail at all, it thrashes.
+// 65535x65536 therefore asked the allocator for 17 GB. A PCX run packet is two
+// input bytes for at most 63 output bytes, so the remaining data section is a
+// hard cap on the decoded size, and check_decodable is that cap.
 //
-// A PCX run packet is two input bytes for at most 63 output bytes, so the
-// remaining data section is a hard cap on the decoded size. Reverting that
-// bound turns this case red (bad_alloc, not runtime_error).
+// HOW THIS CASE FAILS, measured 2026-08-01 by disabling check_decodable -- the
+// same finding as the .ANI suite's twin case, and this comment carried the same
+// wrong claim ("turns this case red -- bad_alloc, not runtime_error"). On the
+// reference Win11 box the allocation SUCCEEDS against the page file, the row
+// decoder then runs out of input and throws the same std::runtime_error, and
+// the case stays GREEN at 8.1 s instead of 0.0003 s. The ctest TIMEOUT
+// (tests/assets/CMakeLists.txt) is what makes it red. A machine that refuses
+// the allocation instead throws std::bad_alloc, which escapes the module's
+// error contract (docs/coding-standards.md §6) and fails on type. Both paths
+// are covered; neither alone is.
 TEST_CASE("SECURITY: header dimensions are rejected against the size of the data section") {
     Bytes f = header({.xmax = 0xFFFE, .ymax = 0xFFFF, .bytes_per_line = 0xFFFF});
     append(f, Bytes{1, 2, 3, 4});
@@ -260,6 +265,8 @@ TEST_CASE("SECURITY: a 24-bit PCX cannot claim more rows than its data section c
 }
 
 TEST_CASE("a missing file throws rather than yielding an empty image") {
-    CHECK_THROWS_AS(pcx::load(std::filesystem::temp_directory_path() / "obm_pcx_absent.pcx"),
-                    std::runtime_error);
+    // absent_path, not a bare temp name: a leftover from an earlier run would
+    // still throw (it is not a PCX), and the case would pass for the wrong
+    // reason while covering nothing.
+    CHECK_THROWS_AS(pcx::load(bomber::test::absent_path("obm_pcx_absent.pcx")), std::runtime_error);
 }
