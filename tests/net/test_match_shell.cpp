@@ -27,7 +27,8 @@
 #include "bomber/net/rollback_session.hpp"
 #include "bomber/net/round_rotation.hpp"
 #include "bomber/net/transport.hpp"
-#include "helpers.hpp"  // bomber::sim::test::open_config
+#include "fanout_bus.hpp"  // bomber::test::StarBus — the 3-seat migration case
+#include "helpers.hpp"     // bomber::sim::test::open_config
 
 using namespace bomber;  // NOLINT(google-build-using-namespace) — test-local
 using bomber::sim::test::open_config;
@@ -386,6 +387,138 @@ TEST_CASE("abandon: an announcement is idempotent and order-free") {
     p.link.step();
     p.guest.advance(seat_input(1, scripted(1, p.guest.predicted_tick())));
     CHECK(p.guest.end_round_tick() == first - 2);
+}
+
+// --- transition 1b: the abandon authority after a HOST MIGRATION ------------
+
+namespace {
+
+sim::MatchConfig three_config() {
+    sim::MatchConfig cfg = open_config();
+    cfg.spawns = {{0, 0}, {14, 10}, {14, 0}};
+    cfg.player_count = 3;
+    return cfg;
+}
+
+constexpr std::uint16_t kAll3 = 0x7;
+constexpr int kStarTimeout = 40;  // pumps of silence before a seat is declared dropped
+
+// One seat of a 3-seat star: its own sim, its own session, its own endpoint on
+// the bus. Nothing is scripted or injected — anything these peers agree on they
+// agreed on by exchanging real datagrams, which is the only way "the authority
+// moved" means anything.
+struct StarPeer {
+    StarPeer(bomber::test::StarBus& bus, std::size_t endpoint, int seat, int host_seat)
+        : sim(three_config()),
+          link(bus, endpoint),
+          session(sim, static_cast<std::uint16_t>(1U << seat), kAll3, /*max_prediction=*/8, link,
+                  net::DropPolicy{/*revert_to_ai=*/true, /*is_host=*/seat == host_seat,
+                                  kStarTimeout, /*host_seat=*/host_seat}),
+          seat_index(seat) {}
+
+    void pump(std::uint32_t tick) {
+        session.advance(seat_input(seat_index, scripted(seat_index, tick)));
+    }
+
+    sim::Simulation sim;
+    bomber::test::StarTransport link;
+    net::RollbackSession session;
+    int seat_index;
+};
+
+}  // namespace
+
+TEST_CASE("abandon: after a host migration the ELECTED hub can stop the round") {
+    // THE INTERACTION BETWEEN THE TWO HOST-AUTHORITATIVE HALVES OF THIS CLASS.
+    // Host migration recomputes the role every pump and every drop decision asks
+    // hosting() for it — but the wire-v8 abandon read the raw DropPolicy::is_host
+    // flag, which cannot move. So after a migration the old host was a corpse, the
+    // elected hub was gated out by a flag that still said "guest", and the
+    // survivors were guests as they always had been: NO MACHINE ANYWHERE could
+    // abandon a round, and the first Esc silently did nothing on all of them.
+    //
+    // Every DropPolicy in the rest of this suite is built with the three-field
+    // positional form, so `host_seat` stays -1, migration never arms, and
+    // hosting() is identical to the flag — which is why nothing here could have
+    // caught it. This case sets the fourth field.
+    //
+    // It discriminates against BOTH call sites. Reverting request_end_round() to
+    // the flag fails the REQUIRE below (the promoted hub decides nothing);
+    // reverting only broadcast_end_round() leaves the hub having scheduled an end
+    // tick it never announced, so it stops alone and the g2 assertions fail.
+    bomber::test::StarBus bus(3, /*latency=*/1);
+    StarPeer host(bus, 0, 0, /*host_seat=*/0);
+    StarPeer g1(bus, 1, 1, /*host_seat=*/0);
+    StarPeer g2(bus, 2, 2, /*host_seat=*/0);
+
+    std::uint32_t t = 0;
+    for (; t < 40; ++t) {
+        host.pump(t);
+        g1.pump(t);
+        g2.pump(t);
+        bus.step();
+    }
+    REQUIRE(host.session.confirmed_tick() > 20);  // a healthy star first
+    REQUIRE(host.session.hosting());
+    REQUIRE_FALSE(g1.session.hosting());
+
+    // THE HUB DIES — killed, not politely absent, so the reflection that carried
+    // g1<->g2 dies with it and the survivors have to conclude it together.
+    bus.kill(0);
+    for (int i = 0; i < kStarTimeout + 30; ++i, ++t) {
+        g1.pump(t);
+        g2.pump(t);
+        bus.step();
+    }
+    bus.set_hub(1);
+    for (int i = 0; i < 120; ++i, ++t) {
+        g1.pump(t);
+        g2.pump(t);
+        bus.step();
+    }
+    // The election landed and the star is carrying traffic again — otherwise the
+    // abandon below would be tested against a wedged match rather than a live one.
+    REQUIRE(g1.session.current_hub() == 1);
+    REQUIRE(g2.session.current_hub() == 1);
+    REQUIRE(g1.session.hosting());
+    REQUIRE_FALSE(g2.session.hosting());
+    const std::uint32_t running = g1.session.confirmed_tick();
+
+    // The authority moved to exactly ONE machine, not to everybody: the other
+    // survivor's Esc is still nothing at all.
+    g2.session.request_end_round();
+    CHECK_FALSE(g2.session.end_round_scheduled());
+
+    // THE PIN. The promoted hub decides, and the decision is a future tick above
+    // anything any survivor can already have reached.
+    const std::uint32_t at_press = g1.session.predicted_tick();
+    g1.session.request_end_round();
+    REQUIRE(g1.session.end_round_scheduled());
+    CHECK(g1.session.end_round_tick() >= at_press + 8);
+    CHECK(g2.session.predicted_tick() < g1.session.end_round_tick());
+
+    for (int i = 0; i < 300 && !(g1.session.round_ended() && g2.session.round_ended()); ++i, ++t) {
+        g1.pump(t);
+        g2.pump(t);
+        bus.step();
+    }
+
+    // ...and it reached the OTHER survivor, which stopped at the same tick. A
+    // decision nobody announces stops one machine and strands the rest.
+    CHECK(g1.session.round_ended());
+    CHECK(g2.session.round_ended());
+    CHECK(g2.session.end_round_tick() == g1.session.end_round_tick());
+    CHECK(g1.session.predicted_tick() == g1.session.end_round_tick());
+    CHECK(g2.session.predicted_tick() == g1.session.end_round_tick());
+    // The round really was RUNNING when it was stopped, and both peers agreed
+    // about it the whole way.
+    CHECK(g1.session.end_round_tick() > running);
+    CHECK_FALSE(g1.session.desynced());
+    CHECK_FALSE(g2.session.desynced());
+    CHECK_FALSE(g1.session.aborted());
+    CHECK_FALSE(g2.session.aborted());
+    CHECK(g1.session.dropped_seats() == kSeat0);  // only the dead hub, no cascade
+    CHECK(g2.session.dropped_seats() == kSeat0);
 }
 
 TEST_CASE("abandon: a round that is NOT abandoned reports nothing") {
