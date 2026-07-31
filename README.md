@@ -220,14 +220,16 @@ For play across machines, replace `127.0.0.1` with the other machine's LAN IP (s
 
 ## Git hooks
 
-`lefthook.yml` wires a pre-push gate: full `headless` build + `ctest`, plus a repo-wide `clang-tidy` pass (config in `.clang-tidy`). Each clone/worktree must enable it once:
+`lefthook.yml` wires a pre-push gate: full `headless` build + `ctest`, a repo-wide `clang-tidy` pass (config in `.clang-tidy`), and a `clang-format` check (config in `.clang-format`) over the lines the push changes. Each clone/worktree must enable it once:
 
 ```
 winget install evilmartians.lefthook   # if not already installed
 lefthook install
 ```
 
-Run either check by hand with `bash scripts/test.sh` / `bash scripts/lint.sh`, or the whole gate with `lefthook run pre-push --force`.
+Run any check by hand with `bash scripts/test.sh` / `bash scripts/lint.sh` / `bash scripts/format.sh`, or the whole gate with `lefthook run pre-push --force`.
+
+The format check is deliberately line-scoped, not file-scoped: most of the tree predates it and a whole-repo reformat would bury real changes, so only what you touch has to match. `scripts/format.sh [base]` defaults to the merge-base with `origin/main`.
 
 ## Roadmap
 

@@ -9,10 +9,14 @@
 #include <doctest/doctest.h>
 
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <limits>
 #include <string>
 #include <vector>
 
 #include "bomber/assets/extra.hpp"
+#include "bomber/assets/sch.hpp"
 #include "bomber/match/match_factory.hpp"
 
 using namespace bomber;
@@ -337,4 +341,79 @@ TEST_CASE("stage actors: a random '-T,H' trampoline still needs an already-blank
         for (int x = 0; x < sim::kGridWidth; ++x)
             if (cfg.actor_type[y][x] != sim::ActorType::None) ++placed;
     CHECK(placed == 0);
+}
+
+// A MALFORMED scheme's "-S" slot index must not escape the spawn array.
+// build_match_config takes `sp.player` straight from the .SCH text (sch.cpp's
+// to_int on the row's 1st field) and used to index `cfg.spawns` with it
+// unchecked: a negative slot failed the SIGNED `>= size()` resize test, skipped
+// the grow, and wrote at size_t(-1); a huge one resized toward 16 GB. Schemes
+// are user-supplied — the game ships a scheme picker AND a scheme editor — so
+// these rows are reachable input, not a thought experiment. Every case below
+// goes through the REAL loader so the whole file -> config path is pinned, and
+// SYNTHETIC text only (a shipped .SCH is never committed).
+namespace {
+
+// Minimal well-formed scheme text plus whatever extra rows the caller wants.
+std::string scheme_text(const std::string& extra_rows) {
+    return "-V,3\n-N,bounds\n-B,0\n-R,0,#####\n-R,1,#...#\n-R,2,#####\n" + extra_rows;
+}
+
+assets::sch::Scheme load_text(const char* file_name, const std::string& text) {
+    auto path = std::filesystem::temp_directory_path() / file_name;
+    std::ofstream f(path, std::ios::binary);
+    f.write(text.data(), static_cast<std::streamsize>(text.size()));
+    f.close();
+    assets::sch::Scheme s = assets::sch::load(path);
+    std::filesystem::remove(path);
+    return s;
+}
+
+}  // namespace
+
+// (Commas are avoided in these names: doctest's `-tc` filter splits on them.)
+TEST_CASE("malformed scheme: a negative -S slot is dropped rather than written out of bounds") {
+    auto s = load_text("obm_spawn_negative.sch", scheme_text("-S,-1,1,1\n-S,0,2,1\n"));
+    REQUIRE(s.spawns.size() == 2);  // the loader itself keeps the row verbatim
+    REQUIRE(s.spawns[0].player == -1);
+
+    auto cfg = match::build_match_config(s, 2, 0x1234u);
+    // Only the valid row landed, and it landed in ITS slot — the -1 row neither
+    // grew the vector nor displaced slot 0.
+    CHECK(cfg.spawns.size() == 1);
+    CHECK(cfg.spawns[0].x == 2);
+    CHECK(cfg.spawns[0].y == 1);
+}
+
+TEST_CASE("malformed scheme: an -S slot past the 10 start records cannot grow the array") {
+    // sub_4049C0 seeds exactly kMaxPlayers start records, so anything at or past
+    // that has nowhere to land. Unguarded this resized to 100001 entries.
+    auto s = load_text(
+        "obm_spawn_huge.sch",
+        scheme_text("-S,0,1,1\n-S," + std::to_string(sim::kMaxPlayers) + ",2,1\n-S,100000,3,1\n"));
+    auto cfg = match::build_match_config(s, 2, 0x1234u);
+    CHECK(cfg.spawns.size() == 1);  // slot 0 only
+    CHECK(cfg.spawns[0].x == 1);
+}
+
+TEST_CASE("malformed scheme: an INT_MAX -S slot attempts no allocation") {
+    // The 16 GB case. With the bound in place this is a plain skip, so the
+    // assertion that matters is simply that we get here with a sane vector.
+    auto s = load_text(
+        "obm_spawn_intmax.sch",
+        scheme_text("-S," + std::to_string(std::numeric_limits<int>::max()) + ",1,1\n-S,3,4,1\n"));
+    auto cfg = match::build_match_config(s, 4, 0x1234u);
+    CHECK(cfg.spawns.size() == 4);  // grown for slot 3, and no further
+    CHECK(cfg.spawns[3].x == 4);
+}
+
+TEST_CASE("malformed scheme: the last in-range slot still works") {
+    // The bound is half-open, so kMaxPlayers-1 must still be accepted — a guard
+    // that is one off would pass every case above and break real 10-player
+    // schemes.
+    auto s = load_text("obm_spawn_last.sch",
+                       scheme_text("-S," + std::to_string(sim::kMaxPlayers - 1) + ",3,1\n"));
+    auto cfg = match::build_match_config(s, 10, 0x1234u);
+    REQUIRE(cfg.spawns.size() == static_cast<std::size_t>(sim::kMaxPlayers));
+    CHECK(cfg.spawns[sim::kMaxPlayers - 1].x == 3);
 }

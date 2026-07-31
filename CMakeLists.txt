@@ -74,16 +74,28 @@ if(BOMBER_ENABLE_LOBBY)
   include(cmake/BomberIXWebSocket.cmake)
 endif()
 add_subdirectory(libs/net)   # netplay: deterministic-lockstep input codec + UDP transport (ADR-0010) + online lobby client (ADR-0011); SDL-free, depends on sim
+# SDL3 (SDL3::SDL3), hoisted above libs/audio because that directory declares
+# BOTH halves of the audio module: an SDL-free bomber::audio_core built
+# everywhere, and the SDL-linked bomber::audio built only when the viewer is on.
+if(BOMBER_BUILD_VIEWER)
+  include(cmake/BomberSDL3.cmake)
+endif()
+# libs/audio used to sit entirely inside the BOMBER_BUILD_VIEWER block below,
+# which meant the `headless` preset — the one scripts/test.sh builds for the
+# pre-push hook — compiled NONE of it, so a break anywhere in the module only
+# surfaced on a windows-fetch/CI build. Adding it here puts its SDL-free half
+# back inside the gate. It must precede add_subdirectory(tests): the audio
+# suites link bomber::audio_core instead of recompiling its sources.
+add_subdirectory(libs/audio)
 add_subdirectory(apps/abtool)
 
 enable_testing()
 add_subdirectory(tests)
 
-# SDL3 presentation layer + apps.
+# SDL3 presentation layer + apps. (libs/audio's SDL half is declared above,
+# under the same BOMBER_BUILD_VIEWER guard.)
 if(BOMBER_BUILD_VIEWER)
-  include(cmake/BomberSDL3.cmake)
   add_subdirectory(libs/platform)  # engine-base (ADR-0008): must precede libs/game
-  add_subdirectory(libs/audio)     # audio module (ADR-0008 stage 2): precedes game
   add_subdirectory(libs/game)
   add_subdirectory(apps/game)
   add_subdirectory(apps/viewer)

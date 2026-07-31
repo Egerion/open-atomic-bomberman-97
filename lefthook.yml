@@ -8,3 +8,8 @@ pre-push:
       run: bash scripts/test.sh
     lint:
       run: bash scripts/lint.sh
+    # .clang-format was advisory until this was added — nothing ran it, and 170
+    # of 333 files had drifted. It checks only the LINES a push changes (see
+    # scripts/format.sh), so it does not demand a repo-wide reformat commit.
+    format:
+      run: bash scripts/format.sh

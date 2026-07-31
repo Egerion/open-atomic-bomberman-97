@@ -174,21 +174,21 @@ void AudioEngine::play_debounced(int id, std::uint64_t frame) {
     start_voice(bank_.pick_debounced(id, frame), true);
 }
 
-void AudioEngine::play_sting(int id) {
+void AudioEngine::play_sting(int lo, int hi) {
     if (!ok_) return;
-    // sub_427BFB: same group pick, but the binary builds its own sound object
-    // outside the counted pool, so the cap can neither refuse it nor be
-    // charged for it. One dedicated stream mirrors that (and one sting at a
-    // time is all the four call sites can ever produce).
-    start_voice(bank_.pick(id), false);
-}
-
-void AudioEngine::play_random_in_range(int lo, int hi) {
-    if (!ok_) return;
+    // sub_427BFB: the same group pick play() makes, but the binary builds its
+    // own sound object outside the counted pool, so the cap can neither refuse
+    // it nor be charged for it. One dedicated stream mirrors that (and one sting
+    // at a time is all the four call sites can ever produce).
     const int slot = bank_.pick(lo);
-    // The contiguous run never spills past the authored block in practice; the
-    // clamp keeps the caller's stated bound honest anyway.
-    if (slot >= lo && slot <= hi) start_voice(slot, true);
+    // `hi` is the caller's authored-block end. A group is the contiguous run of
+    // occupied slots from `lo` and knows nothing about where the block stops, so
+    // a block with no hole before the next one's base would let this land among
+    // the NEXT block's takes. Dropped rather than played as the wrong voice; the
+    // pick is charged either way, exactly as the counted path this replaced
+    // charged it.
+    if (hi >= 0 && (slot < lo || slot > hi)) return;
+    start_voice(slot, false);
 }
 
 void AudioEngine::start_voice(int slot, bool counted) {

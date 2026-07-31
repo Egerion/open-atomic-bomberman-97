@@ -904,7 +904,7 @@ constexpr std::uint32_t kResultsDwellMs = 6000;  // sub_42A3F6 attract auto-adva
 ScreenDef draw_screen() {
     // DRAW.PCX. The draw sting is a ONE-SHOT group play (sub_427BFB(1700) picks a
     // random member of the contiguous "tie game/draw game" SOUNDLST run at 1700),
-    // fired once by run_app on entering Results via audio_.play_random_in_range —
+    // fired once by run_app on entering Results via audio_.play_sting —
     // NOT looped: a screen carries no music id, so nothing restarts the sting.
     // WaitLoop::RoundEnd: DRAW is NOT presented by sub_42A088's own wait loop.
     // sub_42A3F6 calls sub_42A088("draw", 0) — argument ZERO, i.e. show the
@@ -916,10 +916,17 @@ ScreenDef draw_screen() {
 // The SOUNDLST "tie game/draw game" voice group begins at 1700 (the file's own
 // "; tie game/draw game" comment) and runs contiguously to its "1999 is the last
 // tie game/draw game sound" bound; sub_427BFB(1700) plays a random member once.
-// We span the full 1700..1999 group so play_random_in_range can pick any loaded
-// take (GUMP1/GEN11*/ZAA*/…), matching the original's variety.
+// We span the full 1700..1999 group so play_sting can pick any loaded take
+// (GUMP1/GEN11*/ZAA*/…), matching the original's variety.
 constexpr int kDrawStingLo = 1700;
 constexpr int kDrawStingHi = 1999;
+// The "we have a winner" group, same shape: base 2000, SOUNDLST's own "2299 is
+// the last we-have-a-winner sound" bound. sub_42A3F6 plays it with sub_427BFB
+// too — so, like the draw sting, it goes through the UNCOUNTED voice. Both used
+// to go through the counted 5-voice pool, where a busy results transition could
+// drop the sting outright; the original's sting path cannot be refused.
+constexpr int kWinnerStingLo = 2000;
+constexpr int kWinnerStingHi = 2299;
 // VICTORY<player>.PCX / TEAM<0/1>.PCX — the original resolves "victory%u"/
 // "team%u" against the winner index / clinching team (sub_42A3F6 aVictoryU/
 // aTeamU); see results.hpp's victory_background_name for the full RE
@@ -1760,7 +1767,7 @@ AppInput GameApp::run_netplay_match_seats(net::Transport& transport, std::uint16
             net::RematchSession rematch_session(transport, is_host);
             RematchGate gate(rematch_session);
             audio_.start_music(kDrawMusicId);        // 1130 under RESULTS/VICTORY (doc §2)
-            audio_.play_random_in_range(2000, 2299);  // winner voice — clinch only
+            audio_.play_sting(kWinnerStingLo, kWinnerStingHi);  // winner voice — clinch only
             ScoreboardState csbs = scoreboard_state();
             // Phase A: pump only — each peer still dismisses its own board.
             if (rematch != nullptr) csbs.net_gate = &gate;
@@ -1806,7 +1813,7 @@ AppInput GameApp::run_netplay_match_seats(net::Transport& transport, std::uint16
             // instead. (The original instead broadcasts a second advance for
             // this screen — kind 32 payload 904 — which our wire has no need of
             // once the config exchange is the barrier.)
-            audio_.play_random_in_range(kDrawStingLo, kDrawStingHi);
+            audio_.play_sting(kDrawStingLo, kDrawStingHi);
             ScreenDef ds = draw_screen();
             // ADVANCING IS THE HOST'S. The host waits for its own Enter (dwell 0);
             // a GUEST is never asked to press anything and simply auto-advances on
@@ -3026,7 +3033,8 @@ int GameApp::run_app() {
                     // The port formerly skipped the scoreboard and jumped straight
                     // to VICTORY (and mis-fired 2000 on every round win too).
                     start_outcome_music();  // 1130 under RESULTS/VICTORY (doc §2)
-                    audio_.play_random_in_range(2000, 2299);  // winner voice — clinch only
+                    // winner voice — clinch only
+                    audio_.play_sting(kWinnerStingLo, kWinnerStingHi);
                     ev = present_scoreboard();  // the clinch scoreboard (WINS THE MATCH!)
                     // Then VICTORY<player>.PCX / TEAM<0/1>.PCX (frontend-flow.md
                     // "VICTORY" §3, aTeamU vs aVictoryU).
@@ -3045,7 +3053,7 @@ int GameApp::run_app() {
                 } else {
                     // DRAW (no survivor / time-up): nobody scores; replay a round.
                     start_outcome_music();  // 1130 under DRAW (doc §2)
-                    audio_.play_random_in_range(kDrawStingLo, kDrawStingHi);
+                    audio_.play_sting(kDrawStingLo, kDrawStingHi);
                     // sub_42A3F6's DRAW loop only auto-advances (6 s) for an
                     // all-AI/attract roster; a human match waits for Enter. A
                     // 0 dwell means "no auto-advance" in the Screen model
