@@ -507,8 +507,8 @@ TEST_CASE("a star guest does NOT start a match when the hub could not reach ever
 
     const std::string addr_h = "127.0.0.1:" + std::to_string(th.local_port());
     hub.handle_server_message(peer_candidates(1, "127.0.0.1:" + std::to_string(t1.local_port())));
-    hub.handle_server_message(peer_candidates(
-        2, "127.0.0.1:" + std::to_string(black_hole.local_port())));
+    hub.handle_server_message(
+        peer_candidates(2, "127.0.0.1:" + std::to_string(black_hole.local_port())));
     g1.handle_server_message(peer_candidates(0, addr_h));
 
     const std::vector<int> seats = {0, 1, 2};
@@ -527,8 +527,8 @@ TEST_CASE("a star guest does NOT start a match when the hub could not reach ever
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
-    INFO("hub=" << static_cast<int>(hub.phase()) << " '" << hub.error() << "' g1="
-                << static_cast<int>(g1.phase()) << " '" << g1.error() << "'");
+    INFO("hub=" << static_cast<int>(hub.phase()) << " '" << hub.error()
+                << "' g1=" << static_cast<int>(g1.phase()) << " '" << g1.error() << "'");
     // The hub gave up, as it always did: one unreachable guest fails a multi-peer
     // punch and there is no relayed star to fall back to.
     CHECK(hub.phase() == LobbyFlow::Phase::Failed);
