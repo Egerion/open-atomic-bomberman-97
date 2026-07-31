@@ -10,7 +10,7 @@ void SoundDirector::reset() {
     wall_slam_id_ = -1;
 }
 
-void SoundDirector::on_tick(const sim::State& s) {
+void SoundDirector::drain_pending(const sim::State& s) {
     for (auto it = pending_.begin(); it != pending_.end();) {
         if (s.tick >= it->first) {
             audio_.play(it->second);
@@ -19,85 +19,168 @@ void SoundDirector::on_tick(const sim::State& s) {
             ++it;
         }
     }
+}
+
+void SoundDirector::on_bomb_placed(const sim::State& s, const sim::Event& ev) {
+    // THE SPOOGER RUN IS SILENT — everything below belongs to the PLAIN drop
+    // only. sub_41F29B's spooge loop (0x420AAE-0x420B6E) walks one tile at a
+    // time in the facing direction and its ONLY call is the bomb constructor
+    // sub_41EB13 (@0x420B69); every one of its four exits (occupied tile /
+    // powerup / blocked / allotment spent) jumps to 0x420B73, which jumps to
+    // 0x420CEC — PAST the entire sound block at 0x420C26-0x420CC1 (the 40 buzz,
+    // the 1200 taunt, the 550 splat and the 100 drop). So a spooged string of
+    // bombs makes no noise at all, however long it is. The port used to fire a
+    // drop SFX per bomb in the string, which under the 5-voice cap also
+    // swallowed everything else in that frame.
+    //
+    // Telling the two apart WITHOUT a sim change: the original's own arithmetic
+    // separates them. The plain drop places at the player's OWN tile
+    // (sub_41F29B's drop branch reads the player's cell); the spooge loop
+    // advances `cx += dx` BEFORE its first placement, so it can never target the
+    // tile the player stands on. Compare the event's tile against the player's
+    // and take the run as silent.
+    if (ev.player >= 0 && ev.player < sim::kMaxPlayers) {
+        const sim::Player& layer = s.players[ev.player];
+        if (layer.tile_x() != ev.x || layer.tile_y() != ev.y) return;
+    }
+    // "Fire In The Hole" taunt (docs/re/id-audit.md item 1; VALUELST
+    // 650/651, SOUNDLST 1200 group; sub_41F29B pseudo.c ~23360-23368,
+    // the plain single-bomb-drop path — the file's own comment reads
+    // "after laying out a HUGE string of bombs"). The original's
+    // shape: it loads the "many bombs" threshold from getvalue(651),
+    // requires an unnamed register value to be >= that threshold AND
+    // the player's bomb count minus one to equal the number of bombs
+    // already placed, and only then rolls 1-in-max(1, getvalue(650))
+    // before playing SOUNDLST 1200 via sub_427961.
+    // The register holding the left-hand side of the threshold test
+    // has no visible assignment anywhere in sub_41F29B, so its
+    // provenance can't be pinned from the recovered source alone. The
+    // best-supported reading, matching the VALUELST author's own
+    // comment ("what constitutes 'many' dropped bombs") and the
+    // adjacent code (which already holds player+86 = max_bombs in a
+    // register a few lines up for the drop-eligibility gate), is that
+    // it is that same cached max_bombs read. Ported on that basis: a
+    // player whose bomb-count
+    // powerup level is >= id 651 ("many") who has just placed the
+    // LAST bomb of their current allotment (bombs_placed, already
+    // incremented by BombSystem::place before this event, equals
+    // max_bombs) rolls a 1-in-id-650 chance. Layering: the counter
+    // reads straight off the already-hashed sim state the event
+    // carries (no new State field), and the roll uses the sink's
+    // RNG, never State::rng (determinism contract rule 6) — purely
+    // cosmetic, no golden impact. The spooge run can no longer reach
+    // it: the plain-drop gate above returns first, matching the
+    // original's jump PAST this whole block (0x420B73 -> 0x420CEC).
+    //
+    // SOUNDLST correction: id-audit.md described 1200-1203 ("clear/
+    // fireinh/lookout/litemup") as the taunt and 1204+ as an
+    // unrelated "runaway/DMB/ZAE/JMB" pool. The raw SOUNDLST.RES
+    // shows NO gap or comment between 1203 and 1204 — the block
+    // is contiguous through id 1279, and the file's own closing
+    // comment reads `;1299 is last "huge string of bombs" sound
+    // value`. So the whole 1200-1299 span is this ONE taunt group
+    // (mirroring the 700-999 death-taunt range fix already in this
+    // file), not just the first four slots.
+    if (ev.player >= 0 && ev.player < sim::kMaxPlayers) {
+        const sim::Player& pl = s.players[ev.player];
+        if (pl.max_bombs >= s.tuning.taunt_many_bombs && pl.bombs_placed == pl.max_bombs &&
+            audio_.chance(s.tuning.taunt_many_chance))
+            audio_.play(1200);
+    }
+    // Diarrhea/super drop = random "poops" splat (SOUNDLST 550-554,
+    // sub_41F29B's forced-drop branch); a normal drop is 100/101.
+    if (ev.data)
+        audio_.play(550);
+    else
+        audio_.play(100);
+}
+
+void SoundDirector::on_powerup_picked(const sim::Event& ev) {
+    // sub_41E21E (batch_0x41DAA7.cpp:495-503): the sound id it will
+    // play defaults to the pickup voice (400, or 135 for jelly,
+    // case 0xA), but the "You are now AWESOME" MILESTONE OVERWRITES
+    // it with 1400 — then there is a SINGLE sub_427961 call on that
+    // one id. So on a milestone the pickup voice is
+    // REPLACED by 1400, not layered, and plays immediately. The port
+    // used to play BOTH (pickup voice now + 1400 on an invented
+    // +8-tick delay) — two sounds where the original plays one.
+    const int n = ++pickups_[ev.player];
+    // 7th powerup, then every 5th after; the counter wraps to 7 past
+    // 50 (sub_41E21E tail).
+    const bool milestone = (n == 7 || (n > 7 && (n - 7) % 5 == 0));
+    if (n > 50) pickups_[ev.player] = 7;
+    if (milestone)
+        audio_.play(1400);  // replaces the pickup voice
+    else if (ev.data == static_cast<std::int8_t>(sim::PowerupType::Jelly))
+        audio_.play(135);  // jelly boing
+    else
+        // 400 (woohoo1) starts the pickup block (was 401, dropping it).
+        audio_.play(400);
+}
+
+void SoundDirector::on_player_died(const sim::State& s, const sim::Event& ev) {
+    audio_.play(300);
+    // The death-ANIM overlay, PINNED 2026-07-28 (docs/re/
+    // sound-engine.md §10 — task #22, previously open because the
+    // field could not be identified). The death handler sub_41DCB2
+    // follows its scream group with `sub_4278F2(340 + actor[+4])` at
+    // 0x41DDE4, an EXACT-slot play with no group walk. `actor[+4]`
+    // is the DEATH ANIMATION INDEX: its caller sub_41DE63 rolls
+    // `rand() % getvalue(105) + 1` and stores it at 0x41DF04, and
+    // VALUELST id 105 is authored 24 with the comment "how many
+    // different death animations do we have? (die 1 through die
+    // 24)". Two further locks on the reading: sub_41F29B special-
+    // cases `actor[+4] == 9` to float the body upwards by
+    // getvalue(106) ("death anim #9 ... the angel"), and the index is
+    // replicated to peers as its own network field.
+    //
+    // WHY MOST DEATHS ARE STILL SILENT, and why some of them are not
+    // silent in the way you would expect: 340+v spans 341..364, and
+    // SOUNDLST only occupies NINE of those slots. 341 is `burnedup`,
+    // the clip the overlay was written for. But 350-353 and 360-363
+    // are the `trampo`/`bombhit` blocks, authored for entirely
+    // different cues INSIDE the range this overlay reserved — and
+    // because sub_4278F2 addresses a slot directly, a death that
+    // lands on anim 10-13 or 20-23 plays one of those. That is the
+    // ORIGINAL's data collision, reproduced here deliberately; see
+    // the doc before "fixing" it. The other 15 values hit empty slots
+    // and sub_4278F2 returns without a sound, which SoundBank's own
+    // null-name early-out already reproduces.
+    //
+    // WHICH anim is NOT rolled here. It used to be — an
+    // `audio_.roll(24)` of the director's own, independent of the
+    // one the renderer had already made — so the overlay described
+    // the corpse it was played over about one time in 24, and the
+    // burnedup clip was as likely to accompany any of the other 23
+    // sprites as its own. `death_anim_index` is the shared
+    // derivation both sides now call, on the two values they
+    // already agree on (this tick, this victim's slot); see
+    // bomber/audio/death_anim.hpp for why that cannot drift.
+    //
+    // `s.tick` is also what sub_4278F2 stamps into the slot's play
+    // counter (SoundBank::pick_exact) — so a death that lands on
+    // 350-353 narrows the trampoline group for the rest of the
+    // session, as it does in the original.
+    const int anim = death_anim_index(s.tick, ev.player);
+    audio_.play_exact(death_overlay_sound(anim), s.tick);
+    // Post-death taunt from a survivor (VALUELST id 95: 1-in-N,
+    // sub_427961(700) call site). FIXED (docs/re/id-audit.md):
+    // the taunt group is SOUNDLST 700..999 ("after a player
+    // death", the file's own comment block starts at 701 and
+    // ends "999 is the last possible death taunt"), NOT
+    // 500..999 — the old range wrongly overlapped the unrelated
+    // "ploppy poop" splat group at 550-554 (the diarrhea-bomb
+    // drop sound, played elsewhere via BombPlaced), so a dying
+    // player had a small chance of "taunting" with a fart splat.
+    if (audio_.chance(s.tuning.taunt_chance)) pending_.push_back({s.tick + 25, 700});
+}
+
+void SoundDirector::on_tick(const sim::State& s) {
+    drain_pending(s);
 
     for (const auto& ev : s.events) {
         switch (ev.type) {
-            case sim::Event::Type::BombPlaced: {
-                // THE SPOOGER RUN IS SILENT — the whole block below belongs to
-                // the PLAIN drop only. sub_41F29B's spooge loop (0x420AAE-
-                // 0x420B6E) walks one tile at a time in the facing direction and
-                // its ONLY call is the bomb constructor sub_41EB13 (@0x420B69);
-                // every one of its four exits (occupied tile / powerup / blocked /
-                // allotment spent) jumps to 0x420B73, which jumps to 0x420CEC —
-                // PAST the entire sound block at 0x420C26-0x420CC1 (the 40 buzz,
-                // the 1200 taunt, the 550 splat and the 100 drop). So a spooged
-                // string of bombs makes no noise at all, however long it is. The
-                // port used to fire a drop SFX per bomb in the string, which under
-                // the 5-voice cap also swallowed everything else in that frame.
-                //
-                // Telling the two apart WITHOUT a sim change: the original's own
-                // arithmetic separates them. The plain drop places at the player's
-                // OWN tile (sub_41F29B's drop branch reads the player's cell);
-                // the spooge loop advances `cx += dx` BEFORE its first placement,
-                // so it can never target the tile the player stands on. Compare
-                // the event's tile against the player's and take the run as silent.
-                if (ev.player >= 0 && ev.player < sim::kMaxPlayers) {
-                    const sim::Player& layer = s.players[ev.player];
-                    if (layer.tile_x() != ev.x || layer.tile_y() != ev.y) break;
-                }
-                // "Fire In The Hole" taunt (docs/re/id-audit.md item 1; VALUELST
-                // 650/651, SOUNDLST 1200 group; sub_41F29B pseudo.c ~23360-23368,
-                // the plain single-bomb-drop path — the file's own comment reads
-                // "after laying out a HUGE string of bombs"). The original's
-                // shape: it loads the "many bombs" threshold from getvalue(651),
-                // requires an unnamed register value to be >= that threshold AND
-                // the player's bomb count minus one to equal the number of bombs
-                // already placed, and only then rolls 1-in-max(1, getvalue(650))
-                // before playing SOUNDLST 1200 via sub_427961.
-                // The register holding the left-hand side of the threshold test
-                // has no visible assignment anywhere in sub_41F29B, so its
-                // provenance can't be pinned from the recovered source alone. The
-                // best-supported reading, matching the VALUELST author's own
-                // comment ("what constitutes 'many' dropped bombs") and the
-                // adjacent code (which already holds player+86 = max_bombs in a
-                // register a few lines up for the drop-eligibility gate), is that
-                // it is that same cached max_bombs read. Ported on that basis: a
-                // player whose bomb-count
-                // powerup level is >= id 651 ("many") who has just placed the
-                // LAST bomb of their current allotment (bombs_placed, already
-                // incremented by BombSystem::place before this event, equals
-                // max_bombs) rolls a 1-in-id-650 chance. Layering: the counter
-                // reads straight off the already-hashed sim state the event
-                // carries (no new State field), and the roll uses the sink's
-                // RNG, never State::rng (determinism contract rule 6) — purely
-                // cosmetic, no golden impact. The spooge run can no longer reach
-                // it: the plain-drop gate above returns first, matching the
-                // original's jump PAST this whole block (0x420B73 -> 0x420CEC).
-                //
-                // SOUNDLST correction: id-audit.md described 1200-1203 ("clear/
-                // fireinh/lookout/litemup") as the taunt and 1204+ as an
-                // unrelated "runaway/DMB/ZAE/JMB" pool. The raw SOUNDLST.RES
-                // shows NO gap or comment between 1203 and 1204 — the block
-                // is contiguous through id 1279, and the file's own closing
-                // comment reads `;1299 is last "huge string of bombs" sound
-                // value`. So the whole 1200-1299 span is this ONE taunt group
-                // (mirroring the 700-999 death-taunt range fix already in this
-                // file), not just the first four slots.
-                if (ev.player >= 0 && ev.player < sim::kMaxPlayers) {
-                    const sim::Player& pl = s.players[ev.player];
-                    if (pl.max_bombs >= s.tuning.taunt_many_bombs &&
-                        pl.bombs_placed == pl.max_bombs &&
-                        audio_.chance(s.tuning.taunt_many_chance))
-                        audio_.play(1200);
-                }
-                // Diarrhea/super drop = random "poops" splat (SOUNDLST 550-554,
-                // sub_41F29B's forced-drop branch); a normal drop is 100/101.
-                if (ev.data)
-                    audio_.play(550);
-                else
-                    audio_.play(100);
-                break;
-            }
+            case sim::Event::Type::BombPlaced: on_bomb_placed(s, ev); break;
             case sim::Event::Type::BombKicked: audio_.play(120); break;
             case sim::Event::Type::Explosion: audio_.play(200); break;
             // No sound at clock-zero: the original plays the tie/draw voice
@@ -220,94 +303,15 @@ void SoundDirector::on_tick(const sim::State& s) {
             case sim::Event::Type::Infected: {
                 // Skull voice: 1-in-3 the per-disease line (the 3000+50*idx
                 // block), else the generic "oh no" (2300) — as sub_41DFB6.
-                int base = 3000 + 50 * ev.data;
+                const int base = 3000 + 50 * ev.data;
                 if (audio_.chance(3))
                     audio_.play(base);
                 else
                     audio_.play(2300);
                 break;
             }
-            case sim::Event::Type::PowerupPicked: {
-                // sub_41E21E (batch_0x41DAA7.cpp:495-503): the sound id it will
-                // play defaults to the pickup voice (400, or 135 for jelly,
-                // case 0xA), but the "You are now AWESOME" MILESTONE OVERWRITES
-                // it with 1400 — then there is a SINGLE sub_427961 call on that
-                // one id. So on a milestone the pickup voice is
-                // REPLACED by 1400, not layered, and plays immediately. The port
-                // used to play BOTH (pickup voice now + 1400 on an invented
-                // +8-tick delay) — two sounds where the original plays one.
-                const int n = ++pickups_[ev.player];
-                // 7th powerup, then every 5th after; the counter wraps to 7 past
-                // 50 (sub_41E21E tail).
-                const bool milestone = (n == 7 || (n > 7 && (n - 7) % 5 == 0));
-                if (n > 50) pickups_[ev.player] = 7;
-                if (milestone)
-                    audio_.play(1400);  // replaces the pickup voice
-                else if (ev.data == static_cast<std::int8_t>(sim::PowerupType::Jelly))
-                    audio_.play(135);  // jelly boing
-                else
-                    // 400 (woohoo1) starts the pickup block (was 401, dropping it).
-                    audio_.play(400);
-                break;
-            }
-            case sim::Event::Type::PlayerDied: {
-                audio_.play(300);
-                // The death-ANIM overlay, PINNED 2026-07-28 (docs/re/
-                // sound-engine.md §10 — task #22, previously open because the
-                // field could not be identified). The death handler sub_41DCB2
-                // follows its scream group with `sub_4278F2(340 + actor[+4])` at
-                // 0x41DDE4, an EXACT-slot play with no group walk. `actor[+4]`
-                // is the DEATH ANIMATION INDEX: its caller sub_41DE63 rolls
-                // `rand() % getvalue(105) + 1` and stores it at 0x41DF04, and
-                // VALUELST id 105 is authored 24 with the comment "how many
-                // different death animations do we have? (die 1 through die
-                // 24)". Two further locks on the reading: sub_41F29B special-
-                // cases `actor[+4] == 9` to float the body upwards by
-                // getvalue(106) ("death anim #9 ... the angel"), and the index is
-                // replicated to peers as its own network field.
-                //
-                // WHY MOST DEATHS ARE STILL SILENT, and why some of them are not
-                // silent in the way you would expect: 340+v spans 341..364, and
-                // SOUNDLST only occupies NINE of those slots. 341 is `burnedup`,
-                // the clip the overlay was written for. But 350-353 and 360-363
-                // are the `trampo`/`bombhit` blocks, authored for entirely
-                // different cues INSIDE the range this overlay reserved — and
-                // because sub_4278F2 addresses a slot directly, a death that
-                // lands on anim 10-13 or 20-23 plays one of those. That is the
-                // ORIGINAL's data collision, reproduced here deliberately; see
-                // the doc before "fixing" it. The other 15 values hit empty slots
-                // and sub_4278F2 returns without a sound, which SoundBank's own
-                // null-name early-out already reproduces.
-                //
-                // WHICH anim is NOT rolled here. It used to be — an
-                // `audio_.roll(24)` of the director's own, independent of the
-                // one the renderer had already made — so the overlay described
-                // the corpse it was played over about one time in 24, and the
-                // burnedup clip was as likely to accompany any of the other 23
-                // sprites as its own. `death_anim_index` is the shared
-                // derivation both sides now call, on the two values they
-                // already agree on (this tick, this victim's slot); see
-                // bomber/audio/death_anim.hpp for why that cannot drift.
-                //
-                // `s.tick` is also what sub_4278F2 stamps into the slot's play
-                // counter (SoundBank::pick_exact) — so a death that lands on
-                // 350-353 narrows the trampoline group for the rest of the
-                // session, as it does in the original.
-                const int anim = death_anim_index(s.tick, ev.player);
-                audio_.play_exact(death_overlay_sound(anim), s.tick);
-                // Post-death taunt from a survivor (VALUELST id 95: 1-in-N,
-                // sub_427961(700) call site). FIXED (docs/re/id-audit.md):
-                // the taunt group is SOUNDLST 700..999 ("after a player
-                // death", the file's own comment block starts at 701 and
-                // ends "999 is the last possible death taunt"), NOT
-                // 500..999 — the old range wrongly overlapped the unrelated
-                // "ploppy poop" splat group at 550-554 (the diarrhea-bomb
-                // drop sound, played elsewhere via BombPlaced), so a dying
-                // player had a small chance of "taunting" with a fart splat.
-                if (audio_.chance(s.tuning.taunt_chance))
-                    pending_.push_back({s.tick + 25, 700});
-                break;
-            }
+            case sim::Event::Type::PowerupPicked: on_powerup_picked(ev); break;
+            case sim::Event::Type::PlayerDied: on_player_died(s, ev); break;
             default: break;
         }
     }
