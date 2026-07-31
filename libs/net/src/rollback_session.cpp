@@ -697,10 +697,19 @@ void RollbackSession::broadcast_handoffs() {
 }
 
 void RollbackSession::request_end_round() {
-    // HOST ONLY. A guest asking is not "a request that may be granted" — it is
-    // nothing at all, so that the authority lives in one place instead of in the
-    // caller's discipline. See the note at the top of the header.
-    if (!drop_.is_host) return;
+    // THE MACHINE CURRENTLY HOSTING, which is not the same question as "did this
+    // user press Host". A guest asking is not "a request that may be granted" —
+    // it is nothing at all, so that the authority lives in one place instead of
+    // in the caller's discipline. See the note at the top of the header.
+    //
+    // hosting(), not drop_.is_host, and that was a live defect until 2026-07-31:
+    // after a host migration the old host is a corpse and the ELECTED hub carries
+    // is_host == false, so gating on the raw flag left no machine anywhere able
+    // to abandon a round. The first Esc silently did nothing on every survivor.
+    // (Only a lost feature, not a hang — MatchRunner's double-Esc bail-out is
+    // local and never needed this.) The flag is the SEED of the role; hosting()
+    // is the role, and it is identical to the flag whenever migration is off.
+    if (!hosting()) return;
     if (aborted_ || end_tick_ != kNoEndRound) return;  // already ending: nothing to decide
     schedule_end_round(tick_ + static_cast<std::uint32_t>(max_prediction_) + kEndRoundSlackTicks);
     broadcast_end_round();  // don't wait a pump to say so
@@ -715,7 +724,15 @@ void RollbackSession::broadcast_end_round() {
     // The same redundancy broadcast_handoffs() uses, and for the same reason: a
     // peer that misses this keeps simulating a round the host has already left,
     // and there is no other channel that would ever tell it.
-    if (!drop_.is_host || end_tick_ == kNoEndRound) return;
+    //
+    // hosting() for request_end_round()'s reason, and it is the half that
+    // actually carries the decision: fixing only the decision would leave a
+    // promoted hub having scheduled an end tick it never announced, so it would
+    // stop at that tick alone while the other survivors ran on. Reads the hub_
+    // computed by the PREVIOUS pump, exactly as broadcast_handoffs() and
+    // detect_drops() above it do — one pump (50 ms) of staleness in a decision
+    // that is idempotent and re-sent every pump.
+    if (!hosting() || end_tick_ == kNoEndRound) return;
     const std::vector<std::uint8_t> pkt = encode_match_ctl(MatchCtlKind::EndRound, end_tick_);
     transport_->send(pkt.data(), pkt.size());
 }
@@ -745,18 +762,6 @@ void RollbackSession::prune() {
         it = (it->first < keep) ? peer_hash_.erase(it) : std::next(it);
 }
 
-int RollbackSession::local_lag() const {
-    const std::uint16_t awaited = static_cast<std::uint16_t>(remote_seats_ & seats_awaited(tick_));
-    int worst = 0;
-    for (int s = 0; s < sim::kMaxPlayers; ++s) {
-        if ((awaited & static_cast<std::uint16_t>(1U << s)) == 0) continue;
-        const std::uint32_t next = remote_next_[static_cast<std::size_t>(s)];
-        const int lag = static_cast<int>(tick_ > next ? tick_ - next : 0);
-        if (lag > worst) worst = lag;
-    }
-    return worst;
-}
-
 int RollbackSession::peer_lag() const {
     const std::uint16_t awaited = static_cast<std::uint16_t>(remote_seats_ & seats_awaited(tick_));
     int worst = 0;
@@ -775,13 +780,14 @@ bool RollbackSession::rephase_eligible() const {
     if (!peer_heard_ || aborted_ || end_tick_ != kNoEndRound) return false;
     if ((remote_seats_ & seats_awaited(tick_)) == 0) return false;
     // NOT WHILE A MIGRATION IS HEALING, and this is a genuine interaction rather
-    // than caution. Both of the numbers this gates are meaningless there:
-    // local_lag() is enormous because the frontier was pinned for the whole
-    // outage while tick_ ran on, and peer_lag() is read from InputRange lengths
-    // last received BEFORE the hub died, so it is stale by the length of the
-    // outage. The difference would clear the threshold on every pump and hold a
-    // tick each time — throttling precisely the peer that most needs to catch up
-    // to the survivors it has just been reconnected to.
+    // than caution. Both of the numbers this gates are meaningless there: our own
+    // half of the comparison (`local_next_ - confirmed_`) is enormous because the
+    // frontier was pinned for the whole outage while tick_ ran on, and peer_lag()
+    // is read from InputRange lengths last received BEFORE the hub died, so it is
+    // stale by the length of the outage. The difference would clear the threshold
+    // on every pump and hold a tick each time — throttling precisely the peer
+    // that most needs to catch up to the survivors it has just been reconnected
+    // to.
     //
     // Written as an ELIGIBILITY test rather than inside the advantage comparison
     // so that the arrival-variance absorber inherits it: `lead_target()` asks the
@@ -796,10 +802,11 @@ int RollbackSession::frame_advantage() const {
     // LIKE FOR LIKE: the window we put on the wire against the window the peer put
     // on theirs. Both are (that peer's filing head - its confirmed frontier), so
     // when both carry a local lead the leads cancel and the comparison stays the
-    // frame advantage it always was. At a lead of 0, `local_next_ - confirmed_` IS
-    // local_lag() — our own seats are filed up to the head, so the confirmed
-    // frontier can only be held back by a remote seat — and this line is the one
-    // that shipped this morning.
+    // frame advantage it always was. At a lead of 0, `local_next_ - confirmed_` is
+    // exactly how far the worst still-awaited remote seat trails our own head —
+    // our own seats are filed up to that head, so the confirmed frontier can only
+    // ever be held back by a remote one — which is the reading this line shipped
+    // with before the lead existed.
     return static_cast<int>(local_next_ - confirmed_) - peer_lag();
 }
 

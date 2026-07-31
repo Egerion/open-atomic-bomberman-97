@@ -51,8 +51,14 @@ public:
     // direct match, the server IS in the path and its health is a live suspect.
     NetPath path() const override { return NetPath::Relayed; }
 
-    // The seat that sent the datagram most recently returned by poll() — the
-    // N-player star reads this to attribute inputs. -1 before any datagram.
+    // The sender seat off the header of the datagram most recently returned by
+    // poll(); -1 before any. DIAGNOSTIC ONLY — it never had the caller this
+    // comment used to claim ("the N-player star reads this to attribute
+    // inputs"). A relay is TWO SEATS by construction: this class addresses
+    // exactly one destination seat, so LobbyFlow::can_relay() refuses the
+    // fallback for a star, and a 2-seat peer already knows who the sender is.
+    // Kept because the field costs nothing and naming the far seat is worth
+    // having when a relayed match is being read out of a log.
     int last_src_seat() const { return last_src_seat_; }
 
 private:

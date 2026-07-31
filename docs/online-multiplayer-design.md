@@ -253,6 +253,20 @@ layer. Three properties make it converge rather than merely usually work:
    makes the other's direct verification fail, which sends it to the relay too.
    The relay's own verification just waits for the other seat to allocate.
 
+**Every topology verifies, including the star** (corrected 2026-07-31). It
+shipped gated on `can_relay()` — "only a match that can escalate is worth
+verifying" — on the reasoning that a star's punch already required both halves
+per guest. That is true of the **hub**, which runs the multi-peer `Rendezvous`,
+and false of a **guest**, which punches the hub with the 2-peer form: exactly the
+single-sided latch above, with the probe skipped. The failure it allowed: the
+hub's punch needs *every* guest confirmed, so one unreachable guest fails it and
+a star cannot escalate — while a reachable guest had already latched Ready and
+started a match its hub had abandoned. For a star guest the probe carries the one
+fact its own round trip cannot: a `Probe` can only arrive once the hub is pumping
+over its `StarHubTransport`, which it builds only after confirming every guest.
+When it expires with no relay to escalate to, the flow fails with `A PLAYER COULD
+NOT BE REACHED`. Pinned in `tests/net/test_lobby_flow.cpp`.
+
 `Transport` is the seam that makes this invisible: which one delivers changes,
 the session above never sees it (determinism rule 1).
 
@@ -629,14 +643,21 @@ used to be **local** decisions, and both ended the connection:
 Both are now carried by one new message, `MsgType::MatchCtl` — a `kind` byte and
 a `u32` tick, 6 bytes. The polarity is the original's (`docs/re/network-screens.md`
 §7): the machine driving the game decides and broadcasts, a `sub_40C06A() == 1`
-client may only ask.
+client may only ask — and this port went one step further and removed even the
+asking (see the `EndRoundRequest` row).
+
+"The machine driving the game" is `RollbackSession::hosting()` — the **elected**
+hub, not whoever pressed Host. In a star the role moves when the hub dies (§8.2),
+and every one of the decisions below asks that function rather than the
+`DropPolicy::is_host` seed. Two of them did not until 2026-07-31, which left a
+migrated star with no machine anywhere able to abandon a round.
 
 | direction | kind | meaning |
 |---|---|---|
-| host → all | `EndRound` | "this round stops at `at_tick`; it is a DRAW". Re-sent every pump; earliest tick wins, so duplicates and reordering are no-ops. |
-| guest → host | `EndRoundRequest` | "the player here pressed Esc". A request, never an act. Re-sent until answered. |
-| host → all | `RematchWait` | liveness while the host reads the post-match RESULTS/VICTORY screens. |
-| host → all | `Rematch` | "I am walking back to the setup screens now." |
+| hub → all | `EndRound` | "this round stops at `at_tick`; it is a DRAW". Re-sent every pump; earliest tick wins, so duplicates and reordering are no-ops. |
+| — (retired) | `EndRoundRequest` | Was "the player here pressed Esc", a guest's request the host granted — i.e. a lever letting any guest force-end any round with no host confirmation. **Removed 2026-07-30 on both sides**: nothing sends it, and a hub ignores an inbound one. The value and its `decode()` stay because `kWireProtocolVersion` did not move — a peer on the previous build is turned away rather than disconnected on an unknown kind. |
+| hub → all | `RematchWait` | liveness while the host reads the post-match RESULTS/VICTORY screens. |
+| hub → all | `Rematch` | "I am walking back to the setup screens now." |
 
 **Why the end tick is in the FUTURE**, unlike `MsgType::Drop`'s deliberately
 retroactive one. A drop tick must be reachable when a seat's input will never

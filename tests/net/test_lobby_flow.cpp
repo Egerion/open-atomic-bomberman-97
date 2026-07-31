@@ -471,6 +471,77 @@ TEST_CASE("three LobbyFlows form the star: hub punches both guests, frames refle
     CHECK(at_g2);
 }
 
+TEST_CASE("a star guest does NOT start a match when the hub could not reach everyone") {
+    // THE STAR'S OWN ASYMMETRIC OUTCOME, which the case below never reaches
+    // because it is a 2-seat pair. Until 2026-07-31 a >2-seat match skipped
+    // verification entirely — `phase_ = can_relay() ? Verifying : Ready` — on the
+    // reasoning that a star's punch "already required both halves per guest".
+    // That holds for the HUB, which runs the multi-peer Rendezvous. It does not
+    // hold for a GUEST: begin_rendezvous gives a star guest the 2-PEER form, the
+    // single-sided latch LinkProbe exists to remove, and then the probe was
+    // skipped on top.
+    //
+    // Here seat 2's address is a black hole, so the hub's punch can never confirm
+    // every guest and correctly fails (a star has no relay to escalate to). Guest
+    // 1's own punch succeeds — the hub echoes its PING while it is still
+    // punching — so g1 holds a genuine round-trip proof of a path the hub has
+    // already given up on. It must NOT play.
+    //
+    // The discrimination is direct: restore the `can_relay()` ternary and g1
+    // reaches Ready here while its hub is in Failed.
+    UdpTransport th;
+    UdpTransport t1;
+    UdpTransport black_hole;  // "seat 2": bound and silent, so reachable but mute
+    UdpTransport sink;
+    if (!th.bind(0) || !t1.bind(0) || !black_hole.bind(0) || !sink.bind(0)) {
+        MESSAGE("UDP sockets unavailable in this environment; skipping");
+        return;
+    }
+    LobbyClient ch;
+    LobbyClient c1;
+    LobbyFlow hub(test_config("HUB", sink.local_port()), th, ch);
+    LobbyFlow g1(test_config("G1", sink.local_port()), t1, c1);
+
+    hub.handle_server_message(lobby_created("K7Q2MP", 0));
+    g1.handle_server_message(join_accepted(1));
+
+    const std::string addr_h = "127.0.0.1:" + std::to_string(th.local_port());
+    hub.handle_server_message(peer_candidates(1, "127.0.0.1:" + std::to_string(t1.local_port())));
+    hub.handle_server_message(peer_candidates(
+        2, "127.0.0.1:" + std::to_string(black_hole.local_port())));
+    g1.handle_server_message(peer_candidates(0, addr_h));
+
+    const std::vector<int> seats = {0, 1, 2};
+    hub.handle_server_message(start_match(0xABCDEFu, 0b001, seats));
+    g1.handle_server_message(start_match(0xABCDEFu, 0b010, seats));
+
+    // Long enough to outlast the hub's 5 s punch window AND g1's own verification
+    // deadline (kDirectVerifyMs, measured from the punch's start), so a peer that
+    // is going to give up has given up.
+    std::int64_t now = 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (now <= 12000 && std::chrono::steady_clock::now() < deadline) {
+        hub.step(now);
+        g1.step(now);
+        now += 20;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    INFO("hub=" << static_cast<int>(hub.phase()) << " '" << hub.error() << "' g1="
+                << static_cast<int>(g1.phase()) << " '" << g1.error() << "'");
+    // The hub gave up, as it always did: one unreachable guest fails a multi-peer
+    // punch and there is no relayed star to fall back to.
+    CHECK(hub.phase() == LobbyFlow::Phase::Failed);
+    // THE PIN. The reachable guest must not be Ready — a match whose hub has left
+    // is the half-connected state this whole phase exists to prevent.
+    CHECK(g1.phase() != LobbyFlow::Phase::Ready);
+    CHECK(g1.phase() == LobbyFlow::Phase::Failed);
+    // And it says what actually happened rather than blaming its own path or
+    // offering advice about a relay that was never its problem.
+    CHECK(g1.error().find("COULD NOT BE REACHED") != std::string::npos);
+    CHECK_FALSE(g1.is_relayed());
+}
+
 TEST_CASE("an ASYMMETRIC punch outcome still converges on a path that carries") {
     // THE PRODUCTION BUG (match 9V9BHE, Turkey <-> Lithuania). The punch decision
     // is per-peer and unsynchronised: one side can hold a genuine round-trip

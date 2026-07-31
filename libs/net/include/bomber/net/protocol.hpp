@@ -44,8 +44,12 @@ enum class MsgType : std::uint8_t {
 //
 // HOST-AUTHORITATIVE, exactly like the original's network screens
 // (docs/re/network-screens.md §7): the machine driving the game decides and
-// broadcasts; a client (`sub_40C06A() == 1`) may only ask. That is what the four
-// kinds encode — see MatchCtlKind.
+// broadcasts; a client (`sub_40C06A() == 1`) may only ask. This port went one
+// step FURTHER than the original on 2026-07-30 and removed even the asking —
+// see EndRoundRequest, which is now a value with no sender and no reader.
+//
+// "The machine driving the game" is RollbackSession::hosting(), the elected
+// hub, not whoever pressed Host: in a star the role can move mid-match.
 enum class MatchCtlKind : std::uint8_t {
     // HOST -> everyone. "Stop this round; `at_tick` is the first tick NOBODY
     // simulates." The outcome is a DRAW by DECREE, not by inspecting the frozen
@@ -62,11 +66,19 @@ enum class MatchCtlKind : std::uint8_t {
     // future, because a peer that has already speculated past it would stop
     // having simulated (and tallied) more ticks than the host did.
     EndRound = 0,
-    // GUEST -> host. "The player at this machine pressed Esc." A REQUEST, never
-    // an act: a guest that ended its own round would be simulating a different
-    // number of ticks than the host, which is the whole class of bug this
-    // message exists to remove. Carries no tick (the host owns that). Re-sent
-    // every pump until the host's EndRound comes back.
+    // RETIRED 2026-07-30, AND DELIBERATELY STILL HERE. It used to mean "the
+    // player at this machine pressed Esc" — a guest's request that the host
+    // converted into an EndRound — which made any guest able to force-end any
+    // round with no host confirmation. BOTH halves are gone: nothing encodes
+    // this any more (RollbackSession::request_end_round returns immediately
+    // unless the session is hosting()) and nothing acts on an inbound one
+    // (receive() reads the tag and does nothing with it).
+    //
+    // The ENUMERATOR stays and decode() still accepts it, because
+    // kWireProtocolVersion did not move: a peer on the previous build still
+    // connects and still sends this, and the point is to turn that peer away
+    // rather than disconnect it on an unknown kind. Removing the value would
+    // also renumber RematchWait/Rematch, which is a wire break for no gain.
     EndRoundRequest = 1,
     // HOST -> everyone. Pure LIVENESS while the host is reading the post-match
     // RESULTS/VICTORY screens. Without it a guest waiting on the host cannot

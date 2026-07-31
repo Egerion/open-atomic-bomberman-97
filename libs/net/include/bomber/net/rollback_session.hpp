@@ -211,6 +211,16 @@
 // The kind stays in the enum and decode() still accepts it precisely so that
 // older peer is turned away rather than disconnected.
 //
+// AND "THE HOST" MEANS hosting(), NOT DropPolicy::is_host. The distinction is
+// the whole of a host migration: afterwards the old host is a corpse and the
+// ELECTED hub carries is_host == false, so all three sites — the decision
+// (request_end_round), its broadcast, and the refusal to obey an inbound echo —
+// have to ask the same question or the authority lands nowhere. Two of them
+// asked the raw flag until 2026-07-31, and the effect was that NO MACHINE in a
+// migrated star could abandon a round: the hub was gated out by a flag that
+// still said "guest", and the guests were guests as they always had been. The
+// first Esc silently did nothing everywhere.
+//
 // LEAVING is a different act and is NOT host-only — it is not in this class at
 // all. Stopping changes what BOTH machines simulate and so needs one authority;
 // leaving only removes yourself, must never depend on a peer answering, and is
@@ -305,10 +315,22 @@
 //     decides nothing hashed — only which peer emits Drop frames. The tick-keyed
 //     seats_awaited()/apply_handoffs() pair the sim reads is untouched.
 //
-//   RE-ANCHORING is NOT here. Rebuilding the star, re-punching to the new hub
-//   and moving the lobby anchor are the caller's (MigratingTransport +
-//   LobbyFlow::begin_migration + HostMigrationDriver). This class only decides
-//   WHEN the role moves and holds the sim still while it does.
+//   RE-ANCHORING is NOT here — AND IT IS NOT ANYWHERE ELSE EITHER. Rebuilding
+//   the star, re-punching to the new hub and moving the lobby anchor
+//   (ReanchorLobby) belong to a caller above this class, and NO SUCH CALLER IS
+//   BUILT: nothing in this repository sets DropPolicy::host_seat, so the
+//   shipping front-end never arms migration at all. This paragraph used to name
+//   `LobbyFlow::begin_migration` and a `HostMigrationDriver` as if they were the
+//   callers; neither has ever existed. In a codebase whose comments carry the RE
+//   citations, a comment naming code that is not there is what teaches a reader
+//   to stop trusting the ones that are — so name the seam, not an imaginary
+//   driver. The seam is `MigratingTransport`, which a future caller re-points.
+//   docs/online-multiplayer-design.md §8.3's "What is implemented, and what is
+//   not" is the authority, and it says the same thing.
+//
+//   What this class does own — the detection, the election, the un-confirm and
+//   the stall — is proven against a MODELLED rewire (StarBus::set_hub in
+//   tests/net/test_host_migration.cpp), never a real one.
 //
 // Two consequences that are easy to miss and were both measured:
 //   * a migration un-confirms (rewind_for_migration) — the only place the
@@ -371,10 +393,19 @@ inline constexpr int kLeadDeadbandTicks = 2;
 // own authority, it only obeys the host's Drop message.
 struct DropPolicy {
     bool revert_to_ai = false;  // Options row 12; see above
-    // Only the hub/host schedules + broadcasts a handoff — and, since wire v8,
-    // the round-end abandon (request_end_round). It is the session's one bit of
-    // "am I the machine driving the game", so both host-authoritative decisions
-    // read it rather than carrying two copies of the same flag.
+    // "This user pressed Host." The SEED of "am I the machine driving the game",
+    // and — since `host_seat` below exists — never the answer to it. Both
+    // host-authoritative decisions (the drop handoff's schedule + broadcast, and
+    // since wire v8 the round-end abandon) ask hosting() instead, which returns
+    // exactly this flag while migration is off and the ELECTION's answer once it
+    // is armed.
+    //
+    // READING THIS FIELD DIRECTLY FOR AN AUTHORITY DECISION IS A BUG, and it was
+    // one until 2026-07-31: request_end_round() and broadcast_end_round() still
+    // tested it, so after a migration the elected hub was gated out of the very
+    // decision it had just been elected to make and no machine could abandon a
+    // round. It is kept as a separate field precisely because it cannot move —
+    // it records what the user asked for, not what is true now.
     bool is_host = false;
     // Pumps of TOTAL SILENCE from a seat before it is declared dropped. 0 (the
     // default) disables drop detection entirely, so existing callers and every
@@ -404,6 +435,11 @@ struct DropPolicy {
     // because they answer different questions — `is_host` is "did the user press
     // Host", `host_seat` is "which seat is the hub right now" — and only the
     // second can change.
+    //
+    // That is true of EVERY host-authoritative decision in this class as of
+    // 2026-07-31, and it was not before: the wire-v8 abandon still read the raw
+    // flag, which made the promotion above cosmetic for the one decision a
+    // player can actually reach with a keypress. See `is_host` for the failure.
     //
     // LAST IN THE STRUCT DELIBERATELY. Every existing caller and test builds a
     // DropPolicy by POSITIONAL aggregate init (`{revert_to_ai, is_host,
@@ -510,11 +546,16 @@ public:
 
     // --- round abandon (Esc), wire v8 ----------------------------------------
 
-    // "Stop this round." HOST ONLY — see the authority note at the top of this
-    // file. On the host an end tick is scheduled and broadcast at once; on a
-    // guest this is a NO-OP, because a guest has no say in what both machines
-    // simulate. Idempotent: a second call while an end is already scheduled does
-    // nothing.
+    // "Stop this round." Only on the machine that is hosting() — see the
+    // authority note at the top of this file. There an end tick is scheduled and
+    // broadcast at once; on every other machine this is a NO-OP, because a guest
+    // has no say in what both machines simulate. Idempotent: a second call while
+    // an end is already scheduled does nothing.
+    //
+    // "Hosting" is the ELECTED role, so in a star that has migrated this is the
+    // promoted survivor rather than whoever pressed Host. A caller may therefore
+    // offer Esc unconditionally and let the session decide, which is what
+    // MatchRunner does.
     void request_end_round();
 
     // An end tick is agreed (on either peer). The match shell reads this to tell
@@ -538,8 +579,10 @@ public:
     // when migration is off; recomputed from the election when it is on.
     bool hosting() const;
     // Seats this session has recorded as a LOST HUB, as opposed to an ordinary
-    // dropped guest. Non-zero means a migration has been decided locally; the
-    // caller (HostMigrationDriver) polls it to start rewiring the star.
+    // dropped guest. Non-zero means a migration has been decided locally, and it
+    // is the signal a caller would poll to start rewiring the star. No such
+    // caller is built — see the re-anchoring note above — so today this is read
+    // only by tests/net/test_host_migration.cpp.
     std::uint16_t host_lost_seats() const { return host_lost_; }
 
     // THE MIGRATION STALL. While held, advance() receives and re-sends but
@@ -600,9 +643,6 @@ private:
     // ties the two together.
     const std::vector<sim::Event>* events_of(std::uint32_t tick) const;
 
-    // How far the newest input we hold from any still-awaited remote seat trails
-    // our own speculative head — the same quantity the overlay calls `lag`.
-    int local_lag() const;
     // The worst of the peers' OWN lags, read off the length of the InputRanges
     // they send (see the re-phasing note at the top of this file).
     int peer_lag() const;
@@ -671,8 +711,9 @@ private:
     // schedule_handoff is: the EARLIEST tick wins, so a duplicate, a re-send and
     // an out-of-order copy all reduce to a no-op and every peer converges.
     void schedule_end_round(std::uint32_t at_tick);
-    // HOST-only redundant re-send of a scheduled EndRound. A guest owes the
-    // shell nothing here: it has no say in when a round stops.
+    // Redundant re-send of a scheduled EndRound, from whichever machine is
+    // hosting(). A guest owes the shell nothing here: it has no say in when a
+    // round stops.
     void broadcast_end_round();
 
     // --- host migration internals (design §8.1/§8.2) --------------------------
