@@ -83,8 +83,16 @@ echo "lint: checking ${#FILES[@]} files with $(basename "$CT")..."
 # fails once, at the end, with the full failing-file list.
 FAILLOG="$(mktemp)"
 trap 'rm -f "$FAILLOG"' EXIT
+# --header-filter is what makes this see the HEADER-ONLY components at all.
+# clang-tidy suppresses diagnostics outside the main file by default, and
+# libs/core, libs/match and libs/platform have no .cpp between them, so the
+# "all N files clean" line was true and misleading in the same breath: three
+# whole components were never read. That blind spot is the concrete reason
+# libs/match scored lowest in the 2026-07-31 audit — nothing was failing because
+# nothing was being measured. The same fix went into scripts/complexity.sh,
+# where it immediately surfaced two over-threshold functions in match_factory.hpp.
 printf '%s\n' "${FILES[@]}" |
-  xargs -P 8 -I{} bash -c '"$1" "$2" -- -std=c++20 "${@:3}" || echo "$2" >> "$0"' \
+  xargs -P 8 -I{} bash -c '"$1" --header-filter="(libs|apps)/" "$2" -- -std=c++20 "${@:3}" || echo "$2" >> "$0"' \
     "$FAILLOG" "$CT" {} "${INCLUDES[@]}"
 if [ -s "$FAILLOG" ]; then
   echo "lint: FAILED files:" >&2
