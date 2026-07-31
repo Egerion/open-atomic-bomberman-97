@@ -28,6 +28,24 @@ namespace bomber::match {
 // (ids 1150..1160). It was a bare `11` at each of those sites.
 inline constexpr int kBuiltinLevelCount = 11;
 
+// The 11 generic fallback names (previously map_select_screen.cpp's
+// level_fallback array). The real names live in the user's MESSAGES.TXT and load
+// at runtime via getstring(150+i); these are never committed exe/asset material,
+// just readable placeholders. At namespace scope rather than inside
+// with_builtins() because it is a constant table, not a step of that factory.
+inline constexpr std::array<std::string_view, kBuiltinLevelCount> kBuiltinLevelNames{
+    "NEW TRADITIONALIST",
+    "CLASSIC GREEN ACRES",
+    "HOCKEY RINK",
+    "ANCIENT EGYPT",
+    "COAL MINE",
+    "BEACH",
+    "ALIENS",
+    "HAUNTED HOUSE",
+    "UNDER THE OCEAN",
+    "DEEP FOREST GREEN",
+    "INNER CITY TRASH"};
+
 // One playable level. `index` is the stage number used EVERYWHERE today (0..10
 // for the 11 built-ins, 11+ for custom maps); it keys the per-level sim gates
 // (Tuning::level_index — regen/ice), the EXTRA<index>.RES actor overlay, and the
@@ -63,27 +81,11 @@ public:
     // asset base names, and the rotation this feeds MUST reproduce exactly what
     // the old hardcoded sites produced — see enabled_stages().
     static LevelRegistry with_builtins() {
-        // The 11 generic fallbacks (previously map_select_screen.cpp's
-        // level_fallback array). The real names live in the user's MESSAGES.TXT
-        // and load at runtime via getstring(150+i); these are never committed
-        // exe/asset material, just readable placeholders.
-        static constexpr std::array<std::string_view, kBuiltinLevelCount> kNames{
-            "NEW TRADITIONALIST",
-            "CLASSIC GREEN ACRES",
-            "HOCKEY RINK",
-            "ANCIENT EGYPT",
-            "COAL MINE",
-            "BEACH",
-            "ALIENS",
-            "HAUNTED HOUSE",
-            "UNDER THE OCEAN",
-            "DEEP FOREST GREEN",
-            "INNER CITY TRASH"};
         LevelRegistry reg;
         for (int i = 0; i < kBuiltinLevelCount; ++i) {
             LevelDef d;
             d.index = i;
-            d.name_fallback = kNames[static_cast<std::size_t>(i)];
+            d.name_fallback = kBuiltinLevelNames[static_cast<std::size_t>(i)];
             d.field_asset = "FIELD" + std::to_string(i);
             d.tiles_asset = "TILES" + std::to_string(i);
             d.xbrick_asset = "XBRICK" + std::to_string(i);
