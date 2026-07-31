@@ -85,14 +85,15 @@ public:
     // started once for the whole boot chain, not per screen (see header note).
     void enter(const ScreenDef& def, std::uint64_t now_ms);
 
-    // A key was pressed while this screen is up. ANY real key plays the nav blip
-    // (SOUNDLST 20, sub_427961(20)) — both wait loops agree on that. Enter and
-    // Space additionally play the accept sting (SOUNDLST 10) and, on a skippable
-    // screen, finish it. Escape finishes either way but only stings on a
-    // NON-round-end screen (see ScreenDef::round_end). Music is never stopped by
-    // a skip — only the screen changes. Returns true iff this key was an accept
-    // (Enter/Space/Escape), so the caller can distinguish an Escape "back" from
-    // an Enter/Space "advance".
+    // A key was pressed while this screen is up. What it sounds like depends on
+    // ScreenDef::wait (see WaitLoop): under AssetScreen and RoundEnd ANY real key
+    // plays the nav blip (SOUNDLST 20, sub_427961(20)) and Enter/Space additionally
+    // play the accept sting (SOUNDLST 10); Escape accepts too, but stings only
+    // OUTSIDE a RoundEnd loop. Under TimedCut no key is read at all in the
+    // original, so nothing here makes a sound. An accept finishes a skippable
+    // screen. Music is never stopped by a skip — only the screen changes. Returns
+    // true iff this key was an accept (Enter/Space/Escape), so the caller can
+    // distinguish an Escape "back" from an Enter/Space "advance".
     bool on_key(SDL_Keycode key);
 
     // Advance the frame counter (call once per rendered frame) and re-evaluate
