@@ -18,10 +18,7 @@
 104	libs/game/src/editor_screen.cpp	draw
 48	libs/game/src/editor_screen.cpp	on_key
 43	libs/game/src/game_app.cpp	load_window_icon
-74	libs/game/src/game_app.cpp	present_net_setup
-123	libs/game/src/game_app.cpp	run_app
 29	libs/game/src/game_app.cpp	run_demo
-120	libs/game/src/game_app.cpp	run_netplay_match_seats
 32	libs/game/src/keyremap_screen.cpp	draw
 39	libs/game/src/renderer.cpp	draw_actors
 95	libs/game/src/renderer.cpp	draw_world

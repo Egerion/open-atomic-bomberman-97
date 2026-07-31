@@ -142,11 +142,25 @@ if [ ! -f "$BASELINE" ]; then
   exit 1
 fi
 
+# .gitattributes normalises this file to CRLF in the working copy, and the two
+# readers below disagree about that: awk (the Git Bash build) strips the CR,
+# bash's `read` keeps it. That mismatch is invisible in the pass/fail loop, which
+# reads the LF-only CURRENT, and it silently broke the `gone` counter, which
+# reads the baseline — every entry failed to match, so a Windows run reported
+# "65 offenders, 70 now under threshold", two numbers that cannot both be true.
+# Cosmetic in isolation, except that the summary then appends "re-baseline with
+# --update" to EVERY run, training the operator toward the one command this
+# script's own header calls the way the ratchet fails open. Read one normalised
+# copy instead of trusting two tools to agree about a line ending.
+BASE_LF="$(mktemp)"
+trap 'rm -f "$CURRENT" "$RAW" "$BASE_LF"' EXIT
+tr -d '\r' < "$BASELINE" > "$BASE_LF"
+
 fail=0
 improved=0
 while IFS=$'\t' read -r val file fn; do
   [ -z "${file:-}" ] && continue
-  base="$(awk -F'\t' -v f="$file" -v n="$fn" '$2==f && $3==n { print $1 }' "$BASELINE")"
+  base="$(awk -F'\t' -v f="$file" -v n="$fn" '$2==f && $3==n { print $1 }' "$BASE_LF")"
   if [ -z "$base" ]; then
     echo "complexity: NEW over-threshold function: $fn ($val) in $file" >&2
     fail=1
@@ -166,7 +180,7 @@ while IFS=$'\t' read -r val file fn; do
   if ! awk -F'\t' -v f="$file" -v n="$fn" '$2==f && $3==n { found=1 } END { exit !found }' "$CURRENT"; then
     gone=$((gone + 1))
   fi
-done < "$BASELINE"
+done < "$BASE_LF"
 
 if [ "$fail" -ne 0 ]; then
   echo "complexity: FAILED. Flatten it (guard clauses, early return, a named" >&2
