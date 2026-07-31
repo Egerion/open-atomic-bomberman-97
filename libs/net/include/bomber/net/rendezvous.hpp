@@ -99,6 +99,8 @@ private:
     };
 
     void send_pings(std::int64_t now_ms);
+    void ping_candidates(const std::vector<Candidate>& targets,
+                         const std::vector<std::uint8_t>& ping);
     void handle_ping(std::uint32_t nonce, const std::string& ip, std::uint16_t port);
     void handle_pong(std::uint32_t nonce, const std::string& ip, std::uint16_t port,
                      std::int64_t now_ms);

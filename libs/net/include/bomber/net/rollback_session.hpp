@@ -16,329 +16,108 @@
 #include "bomber/sim/state.hpp"
 
 // GGPO-style ROLLBACK netcode over an abstract Transport (ADR-0010 §3.3 step 4).
-// Where LockstepSession STALLS until every seat's input for a tick has arrived,
-// RollbackSession never stalls the display: it PREDICTS an absent remote input
-// (repeat the peer's last known input), simulates ahead speculatively, and when
-// the real input arrives and disagrees, RESTORES a snapshot and RE-SIMULATES the
-// affected ticks with the corrected input. This hides latency — the local player
-// sees no input delay — at the cost of an occasional visible correction.
+// Where LockstepSession STALLS until every seat's input has arrived, this never
+// stalls the display: it PREDICTS an absent remote input (repeat the peer's last
+// known one), simulates ahead speculatively, and when the real input disagrees,
+// RESTORES a snapshot and RE-SIMULATES the affected ticks. Only CONFIRMED ticks
+// are hashed and exchanged, so a genuine divergence is still caught loudly even
+// though speculative frames legitimately differ moment to moment.
 //
-// The port has exactly the two things rollback usually makes hard, for free:
-//   * cheap full-state snapshots — `State` is a plain value type, so save is
-//     `State s = sim.state()` and restore is `sim.state() = s`; and
-//   * a fast pure re-sim — `Simulation::tick(inputs)` is a deterministic pure
-//     function of (State, inputs).
-// `state_hash` still guards correctness: CONFIRMED ticks (no prediction) are
-// exchanged and compared, so a genuine divergence is caught loudly even though
-// speculative frames legitimately differ between peers moment to moment.
+// Separate from LockstepSession on purpose: input-delay lockstep is the simpler
+// shipped strategy, rollback the low-latency upgrade, selectable per match. Both
+// share the wire codec (protocol.hpp) and the Transport seam.
 //
-// This is a SEPARATE class from LockstepSession on purpose: input-delay lockstep
-// is the simpler, already-shipped strategy; rollback is the low-latency upgrade,
-// selectable per match without disturbing the other. Both share the wire codec
-// (protocol.hpp) and the Transport seam.
+// The evidence behind the parts that are not obvious from the code:
+//   * pacing (re-phase, jitter filter, local input lead) — time_sync.hpp and
+//     docs/net-rollback.md §1; `sync_` owns that half;
+//   * the confirmed event stream — docs/net-rollback.md §2;
+//   * host migration, and what is NOT built — design §8;
+//   * the round-abandon authority model — design §10.
 //
-// PEER DROP -> AI HANDOFF (ADR-0011 Risks, "Dropped/late peers"). Prediction
-// covers a briefly late peer and the `max_prediction` cap covers a very late
-// one, but a peer that never comes back would stall everyone forever. Past a
-// hard silence timeout the host announces MsgType::Drop and every peer, at the
-// SAME tick, sets `Player::ai` for that seat: the deterministic AISystem then
-// derives its input from the shared `State`, identically everywhere, and the
-// confirmed-hash exchange keeps agreeing. See DropPolicy below (gated on the
-// RE'd Options row 12) and the `handoff_` schedule at the bottom of the class
-// (the rollback-safe part).
-//
-// PACING IS A SEPARATE CLASS (time_sync.hpp, extracted 2026-07-31). This one is
-// about hashed state and must stay bit-exact; deciding WHEN to simulate — the
-// frame-advantage re-phase and the local input lead — touches none of it, reads
-// no clock, and is a pure function of numbers measured here. `sync_` below owns
-// that half, and the whole of the RE-PHASING / ARRIVAL VARIANCE / LOCAL LEAD
-// evidence now lives at the top of that header. What stays on this side is
-// rephase_eligible(), because only a session knows whether a peer is present,
-// whether the round is ending and whether a host migration is making both
-// readings lie — and the FILING of local input, because that writes input slots.
-
-// ROUND ABANDON -> DRAW (wire v8, MatchCtlKind::EndRound). Esc during an online
-// round is a LOCAL keypress and therefore must not be a local ACT: a peer that
-// stopped its own sim would have simulated — and tallied — a different number of
-// ticks than its partner, which is the same divergence class the drop handoff
-// exists to avoid. So it routes through request_end_round(): an end tick is
-// scheduled and broadcast, every peer stops at exactly that tick, and the round
-// is a DRAW BY DECREE (nobody inspects the frozen state for a winner), so the
-// match shell above can replay a round instead of tearing the connection down.
-//
-// STOPPING THE MATCH IS THE HOST'S ALONE, and this NARROWED on 2026-07-30.
-// request_end_round() used to have a guest branch: a guest sent
-// MatchCtlKind::EndRoundRequest and the host converted it into the decision. That
-// made any guest able to force-end any round at will with no host confirmation —
-// a griefing lever, and the owner independently asked for the authority model
-// that removes it. So a guest's request_end_round() is now a no-op, and a host
-// IGNORES an inbound EndRoundRequest. The second half is the one that matters:
-// kWireProtocolVersion is unchanged at 8, so a peer running the previous build
-// still connects, and refusing the message is what stops it still driving us.
-// The kind stays in the enum and decode() still accepts it precisely so that
-// older peer is turned away rather than disconnected.
-//
-// AND "THE HOST" MEANS hosting(), NOT DropPolicy::is_host. The distinction is
-// the whole of a host migration: afterwards the old host is a corpse and the
-// ELECTED hub carries is_host == false, so all three sites — the decision
-// (request_end_round), its broadcast, and the refusal to obey an inbound echo —
-// have to ask the same question or the authority lands nowhere. Two of them
-// asked the raw flag until 2026-07-31, and the effect was that NO MACHINE in a
-// migrated star could abandon a round: the hub was gated out by a flag that
-// still said "guest", and the guests were guests as they always had been. The
-// first Esc silently did nothing everywhere.
-//
-// LEAVING is a different act and is NOT host-only — it is not in this class at
-// all. Stopping changes what BOTH machines simulate and so needs one authority;
-// leaving only removes yourself, must never depend on a peer answering, and is
-// the match shell's own business (MatchRunner's double-Esc bail-out, which tears
-// the transport down locally and never sends anything).
-//
-// THE CONFIRMED EVENT STREAM (drain_confirmed_events, added 2026-07-30). Rollback
-// makes `State::events` a stream that REPLAYS: a tick simulated speculatively and
-// then corrected produces its events twice, and the two passes need not agree.
-// Anything that ACCUMULATES those events across ticks therefore accumulates a
-// per-machine number — and because events are excluded from state_hash by design
-// (determinism rule 4), the per-tick desync check, the goldens and `build_hash`
-// are all blind to it. That is not hypothetical: the front-end's per-match kill
-// tally (libs/game's results.hpp `tally_kills`) was fed straight from
-// `sim.state().events` once per pump, so two peers with different rollback
-// histories reached different kill totals from an IDENTICAL, agreed simulation —
-// and with Team Play + "win by kills" that is a different match VERDICT on the
-// two machines.
-//
-// The cure is to hand such a consumer only the events of CONFIRMED ticks. A
-// confirmed tick's inputs can never change again, so it is simulated exactly once
-// more than the goldens are: whatever the speculative passes did, the events
-// emitted here are the ones the final, agreed history produced. They need no
-// storage of their own — `snapshots_[t+1]` is the State AFTER tick t and carries
-// its `events`, which is the SAME lookup advance_confirmed() already does for the
-// hash. So the stream a consumer sums is, tick for tick, the stream whose hash
-// both peers have compared and agreed on: an accumulator fed from it is guarded
-// by the desync check that could not see the old one.
-//
-// HOST MIGRATION ADDS A SECOND RESIDUAL of the same shape and the same bound.
-// A migration can move `confirmed_` BACKWARDS (rewind_for_migration), which is
-// the only thing in this class that does. The stream is therefore emitted at
-// most once per tick (`events_through_`) — without that guard the rewound window
-// would be drained twice and every kill in it double-counted, which is the exact
-// failure above, reintroduced.
-//
-// COVERAGE, HONESTLY: the un-confirm branch itself is NOT reached by
-// tests/net/test_host_migration.cpp — measured, and pinned there as a negative so
-// the gap cannot rot silently. Confirming a tick needs every awaited seat, so no
-// peer gets far above the tick the hub's input stops at, and the adopted tick is
-// the lowest such tick across peers. So `events_through_` and the un-confirm are
-// both DEFENSIVE here, not proven. The hash purge beside them IS proven, because
-// it runs on every adoption whether or not the frontier moves.
-//
-// What the guard CANNOT recover is agreement across that window. A survivor that
-// had already confirmed past the adopted tick drained those ticks' events as
-// computed WITH the dead hub's input; a survivor that never got that far drains
-// them as re-simulated with the seat on AI. The two disagree, and the earlier
-// peer cannot retract what the shell already consumed. The window is bounded by
-// `max_prediction` (≤ 400 ms at the default cap of 8) and sits around the instant
-// a host died, so it is the same "taken on trust" class as the speculative tail
-// rather than a new one — but it is a real divergence, not a covered case, and a
-// tally that must agree exactly across a host migration does not yet exist.
-//
-// The residual is the SPECULATIVE TAIL — the at-most-`max_prediction` ticks
-// between confirmed_ and the head at the moment the round stops. Both peers stop
-// at the same TICK, so drain_remaining_events() lets the shell close the range on
-// both machines identically; the CONTENT of those last few ticks is the one part
-// still taken on trust. It is bounded (400 ms at the default cap of 8) and, on
-// the ordinary round-end path, empty of kills — the shell lingers 3 s (60 ticks)
-// after the last side falls before it reads the tally, which is far longer than
-// the confirmation frontier ever trails.
-
-// HOST MIGRATION (wire v9, ADR-0011 decision 5, design §8). Everything above
-// assumes the hub is alive: the drop->AI handoff is scheduled by the host, and
-// detect_drops() below used to carry a LIMITATION saying so — if the seat that
-// went silent was the HOST's, nobody scheduled and the guests stalled forever.
-// This is the cure, and it has three parts that must be read together.
-//
-//   DETECTION (§8.1). MsgType::HostLost, announced by EVERY survivor rather
-//   than by one designated peer, because the machine that would normally decree
-//   it is the one that died. Survivors DISAGREE about the tick — it is a local
-//   quantity, differing by however many of the hub's last datagrams each lost —
-//   and the LOWEST proposal wins everywhere. Monotone, so no agreement protocol.
-//
-//   ELECTION (§8.2). A pure function of the drop schedule: the starting hub
-//   keeps the role while live, else the lowest surviving seat, chaining if the
-//   successor dies too. No vote is exchanged and none is needed, because every
-//   peer computes it from state they already agree on.
-//
-//     THE ELECTION READS THE SCHEDULE, NOT THE CONFIRMED FRONTIER, and that is a
-//     RETRACTION of the obvious design rather than an oversight. Evaluating the
-//     role at the frontier — so a peer takes it only once the migration is
-//     agreed history — is unimplementable over the very topology the role exists
-//     for, and it DEADLOCKS: the frontier cannot cross the migration tick until
-//     the survivors exchange input; their input only ever reached each other
-//     through the dead hub's reflection; and it will not flow again until
-//     somebody WITH THE ROLE rewires the star. The frontier gate gates the
-//     migration on itself. Reading the schedule is safe for the reason the
-//     schedule exists: an entry only ever comes from an announcement or a
-//     hard-timeout detection, it is idempotent and earliest-wins, and the role
-//     decides nothing hashed — only which peer emits Drop frames. The tick-keyed
-//     seats_awaited()/apply_handoffs() pair the sim reads is untouched.
-//
-//   RE-ANCHORING is NOT here — AND IT IS NOT ANYWHERE ELSE EITHER. Rebuilding
-//   the star, re-punching to the new hub and moving the lobby anchor
-//   (ReanchorLobby) belong to a caller above this class, and NO SUCH CALLER IS
-//   BUILT: nothing in this repository sets DropPolicy::host_seat, so the
-//   shipping front-end never arms migration at all. This paragraph used to name
-//   `LobbyFlow::begin_migration` and a `HostMigrationDriver` as if they were the
-//   callers; neither has ever existed. In a codebase whose comments carry the RE
-//   citations, a comment naming code that is not there is what teaches a reader
-//   to stop trusting the ones that are — so name the seam, not an imaginary
-//   driver. The seam is `MigratingTransport`, which a future caller re-points.
-//   docs/online-multiplayer-design.md §8.3's "What is implemented, and what is
-//   not" is the authority, and it says the same thing.
-//
-//   What this class does own — the detection, the election, the un-confirm and
-//   the stall — is proven against a MODELLED rewire (StarBus::set_hub in
-//   tests/net/test_host_migration.cpp), never a real one.
-//
-// Two consequences that are easy to miss and were both measured:
-//   * a migration un-confirms (rewind_for_migration) — the only place the
-//     frontier moves backwards — so snapshots are retained BELOW confirmed_
-//     while migration is enabled; and
-//   * send_local's start tick widens while a migration heals (resend_from),
-//     because a severed star breaks the invariant that a peer missing an old
-//     input is still stalled at it.
+// AUTHORITY, in one line, because getting it wrong is SILENT: every
+// host-authoritative decision asks hosting(), never DropPolicy::is_host. After a
+// migration the old host is a corpse and the ELECTED hub carries is_host ==
+// false, so a decision, its broadcast and the refusal to obey an inbound echo
+// must all ask the same question or the authority lands nowhere.
 
 namespace bomber::net {
 
-// One decoded datagram (protocol.hpp). Forward-declared rather than included:
-// this header names it only by reference, and pulling the whole message layer in
-// would put the wire codec on the include path of every consumer of the session.
+// One decoded datagram (protocol.hpp). Forward-declared so the wire codec stays
+// off the include path of every consumer of the session.
 struct Message;
 
-// kRephaseWindowPumps, kMaxLocalLeadTicks, kLeadDeadbandTicks and
-// kRephaseAdvantageTicks — the four numbers the pacing half is tuned by — moved
-// to time_sync.hpp with the controller they belong to, and reach every consumer
-// of this header through the include above.
-
-// What the session does when a remote seat goes SILENT for a hard window
-// (ADR-0011 Risks, "Dropped/late peers"). Within `max_prediction` the seat is
-// merely predicted; past the cap the session stalls; past this timeout it is
-// declared DROPPED and one of two things happens, decided by the RE'd Options
-// row 12 "Lost net players revert to AI" (`dword_464928`,
-// docs/re/results-and-options.md §row 12) that `revert_to_ai` carries:
+// What the session does when a remote seat goes SILENT for a hard window. Within
+// `max_prediction` the seat is merely predicted; past the cap the session stalls;
+// past this timeout it is DROPPED, and the RE'd Options row 12 "Lost net players
+// revert to AI" (`dword_464928`, docs/re/results-and-options.md §row 12) decides
+// which way: ON, the host broadcasts MsgType::Drop and every peer hands the seat
+// to the deterministic AISystem at the same tick; OFF, `aborted()` latches and
+// the caller ends the match. Never a hang.
 //
-//   ON  — the host broadcasts MsgType::Drop and EVERY peer hands the seat to
-//         the deterministic AISystem at the same tick; the match plays on.
-//   OFF — the drop is a match-ending condition: `aborted()` latches, advance()
-//         becomes a no-op, and the caller ends the match. Never a hang.
-//
-// The option lives in CFG.INI (`assets::Options::lost_net_revert_ai`) and
-// on the Options screen; libs/net cannot see either (it depends on bomber::sim
-// only), so the CALLER copies it in here. Detection is local to every peer, but
-// SCHEDULING is host-only: a guest must never mutate the hashed `State` on its
-// own authority, it only obeys the host's Drop message.
+// libs/net cannot see CFG.INI or the Options screen, so the CALLER copies the
+// option in. Detection is local to every peer, but SCHEDULING is host-only: a
+// guest never mutates hashed `State` on its own authority.
 struct DropPolicy {
     bool revert_to_ai = false;  // Options row 12; see above
-    // "This user pressed Host." The SEED of "am I the machine driving the game",
-    // and — since `host_seat` below exists — never the answer to it. Both
-    // host-authoritative decisions (the drop handoff's schedule + broadcast, and
-    // since wire v8 the round-end abandon) ask hosting() instead, which returns
-    // exactly this flag while migration is off and the ELECTION's answer once it
-    // is armed.
-    //
-    // READING THIS FIELD DIRECTLY FOR AN AUTHORITY DECISION IS A BUG, and it was
-    // one until 2026-07-31: request_end_round() and broadcast_end_round() still
-    // tested it, so after a migration the elected hub was gated out of the very
-    // decision it had just been elected to make and no machine could abandon a
-    // round. It is kept as a separate field precisely because it cannot move —
-    // it records what the user asked for, not what is true now.
+
+    // "This user pressed Host" — the SEED of the role, never the answer to "am I
+    // driving the game". READING THIS FIELD FOR AN AUTHORITY DECISION IS A BUG:
+    // ask hosting(). Kept separate precisely because it cannot move — it records
+    // what the user asked for, not what is true now.
     bool is_host = false;
-    // Pumps of TOTAL SILENCE from a seat before it is declared dropped. 0 (the
-    // default) disables drop detection entirely, so existing callers and every
-    // pre-existing scenario behave exactly as before. At 20 Hz a pump is 50 ms.
+
+    // Pumps of TOTAL SILENCE before a seat is declared dropped; 0 (the default)
+    // disables detection entirely. At 20 Hz a pump is 50 ms.
     //
-    // Size this GENEROUSLY. The counter resets the moment any input from the
-    // seat arrives, so a peer that comes back inside the window costs nothing —
-    // but crossing it is IRREVERSIBLE with Options row 12 off (`aborted_`
-    // latches and the match is over). An early value of 50 (2.5 s) killed
-    // matches whenever a player merely dragged their window: Windows blocks the
-    // message pump for the whole drag, the peer sees silence, and the match died
-    // with no way back. Alt-tab, a stalled disk, a laptop sleeping for a moment
-    // and ordinary network hiccups all blow past a few seconds too, so the
-    // threshold must mean "genuinely gone", not "briefly busy".
+    // SIZE THIS GENEROUSLY. The counter resets on any input from the seat, so a
+    // peer that comes back inside the window costs nothing — but crossing it is
+    // IRREVERSIBLE with row 12 off. An early value of 50 (2.5 s) killed matches
+    // whenever a player merely dragged their window, because Windows blocks the
+    // message pump for the whole drag. Alt-tab, a stalled disk and a laptop
+    // sleeping all blow past a few seconds too: the threshold must mean
+    // "genuinely gone", not "briefly busy".
     int timeout_ticks = 0;
 
-    // HOST MIGRATION (wire v9, design §8). The seat that is the HUB, or -1 (the
-    // default) to disable migration entirely — which is what every pre-existing
-    // caller and test gets, so their behaviour is byte-identical to before: the
-    // role stays whatever `is_host` said, MsgType::HostLost is ignored on
-    // arrival, and prune() keeps its old window.
+    // The seat that is the HUB, or -1 to disable migration entirely — what every
+    // pre-existing caller gets, so their behaviour is byte-identical.
     //
-    // With it set, `is_host` stops being the answer to "am I driving the game"
-    // and becomes only the SEED of it: the role is recomputed every pump from
-    // the drop schedule (hosting()), so it can move to this machine mid-round
-    // when the hub dies. The two are kept as separate fields rather than one
-    // because they answer different questions — `is_host` is "did the user press
-    // Host", `host_seat` is "which seat is the hub right now" — and only the
-    // second can change.
-    //
-    // That is true of EVERY host-authoritative decision in this class as of
-    // 2026-07-31, and it was not before: the wire-v8 abandon still read the raw
-    // flag, which made the promotion above cosmetic for the one decision a
-    // player can actually reach with a keypress. See `is_host` for the failure.
-    //
-    // LAST IN THE STRUCT DELIBERATELY. Every existing caller and test builds a
-    // DropPolicy by POSITIONAL aggregate init (`{revert_to_ai, is_host,
-    // timeout}`), so a field inserted above `timeout_ticks` silently rebinds
-    // that third argument and turns drop detection off everywhere. That is not
-    // hypothetical — it is exactly what happened when this field was first added
-    // in the middle, and tests/net/test_peer_drop.cpp caught it. Append here.
+    // LAST IN THE STRUCT DELIBERATELY. Callers build a DropPolicy by POSITIONAL
+    // aggregate init (`{revert_to_ai, is_host, timeout}`), so a field inserted
+    // above `timeout_ticks` silently rebinds that third argument and turns drop
+    // detection off everywhere. That is what happened when this field was first
+    // added in the middle. Append here.
     int host_seat = -1;
 };
 
 class RollbackSession {
 public:
     // `sim` is BORROWED and seeded identically on both peers (ADR-0010 parity).
-    // `local_seats` / `all_seats` as in LockstepSession (AI seats are simulated,
-    // not exchanged). `max_prediction` bounds how many un-confirmed ticks the
-    // display may run ahead before it must wait (a safety cap; typical GGPO
-    // values are ~8): past it advance() stalls rather than predict unboundedly.
-    // `drop` defaults to "detection off" — additive, so nothing changes for a
-    // caller that does not opt in.
+    // `max_prediction` bounds how far the display may run ahead of the confirmed
+    // frontier before advance() stalls (typical GGPO values are ~8).
     //
-    // `start_tick` is the session's FIRST tick number, 0 for a single-round match
-    // (every pre-existing caller and test). A MULTI-ROUND match builds one session
-    // per round over the SAME socket, and the wire carries no round id: a
-    // straggling INPUT/HASH datagram from round N would land inside round N+1's
-    // tick space and be filed as a future input (apply_remote only rejects ticks
-    // BELOW confirmed_) or compared as a peer hash — a stale-input bug or a
-    // phantom desync. Giving each round a base above anything the previous one
-    // could have used (round_rotation.hpp's round_tick_base) makes those stale
-    // ticks unconditionally < confirmed_, so the existing guards drop them.
-    // Purely a numbering offset: every tick comparison in this class is relative.
+    // `start_tick` is the session's FIRST tick, 0 for a single-round match. A
+    // MULTI-ROUND match builds one session per round over the SAME socket and the
+    // wire carries no round id, so basing each round above anything the previous
+    // one could have used (round_rotation.hpp) is what makes a straggling
+    // datagram land below confirmed_, where the existing guards drop it.
     RollbackSession(sim::Simulation& sim, std::uint16_t local_seats, std::uint16_t all_seats,
                     int max_prediction, Transport& transport, const DropPolicy& drop = {},
                     std::uint32_t start_tick = 0);
 
-    // Feed the local player's input for the next frame and advance the DISPLAYED
-    // (speculative) state by one tick, unless the prediction cap is reached and
-    // the peer has not caught up (then it holds). Applies any pending rollback
-    // first, so on return sim() reflects the best current estimate. Never blocks.
+    // Feed the local player's input and advance the DISPLAYED (speculative) state
+    // by one tick, unless the cap is reached and the peer has not caught up.
+    // Applies any pending rollback first. Never blocks.
     //
-    // `now_ms` is a MONOTONIC WALL CLOCK, and it exists only to timestamp the
-    // diagnostics (net_stats.hpp): RTT, jitter and the per-second rates cannot be
-    // derived from tick numbers alone. It NEVER reaches the sim — no branch below
-    // reads it, `Simulation::tick` is not handed it, and nothing hashed depends
-    // on it (determinism rule 1). The default of -1 means "no clock": every
-    // tick-derived statistic still works exactly and the time-derived ones stay
-    // at their unavailable values, which is what keeps every existing headless
-    // caller and test byte-identical.
+    // `now_ms` is a MONOTONIC WALL CLOCK that timestamps the diagnostics and
+    // NEVER reaches the sim (determinism rule 1). -1 means "no clock": the
+    // tick-derived statistics still work exactly, the time-derived ones do not.
     void advance(const sim::TickInputs& local_input, std::int64_t now_ms = -1);
 
-    // The cap this session was built with. The match shell reads it to size its
-    // own wall-clock catch-up allowance against the same bound.
+    // The cap this session was built with; the match shell sizes its own
+    // wall-clock catch-up allowance against the same bound.
     int max_prediction() const { return max_prediction_; }
 
-    std::uint32_t predicted_tick() const { return tick_; }   // next tick to simulate speculatively
+    std::uint32_t predicted_tick() const { return tick_; }       // next speculative tick
     std::uint32_t confirmed_tick() const { return confirmed_; }  // highest all-inputs-known tick
     const sim::Simulation& sim() const { return *sim_; }
     std::uint64_t hash() const { return sim_->hash(); }
@@ -346,110 +125,75 @@ public:
     bool desynced() const { return desynced_; }
     std::uint32_t desync_tick() const { return desync_tick_; }
 
-    // --- the confirmed event stream (see the note at the top of this file) ----
+    // --- the confirmed event stream (docs/net-rollback.md §2) -----------------
 
     // APPEND, in tick order, the `State::events` of every tick that has become
-    // CONFIRMED since the last drain, and forget them. This is the ONLY safe
-    // input for anything that sums per-tick events across a match: a confirmed
-    // tick is never re-simulated, so each tick's events are handed out exactly
-    // once and are the ones the agreed history produced.
+    // CONFIRMED since the last drain, and forget them. THE ONLY SAFE INPUT for
+    // anything that sums per-tick events across a match: a confirmed tick is
+    // never re-simulated, so each tick's events are handed out exactly once.
     //
-    // The caller is expected to drain every pump — the buffer is otherwise
-    // unbounded (it is a few events per tick, so a whole round is on the order of
-    // a hundred kilobytes even if nobody ever reads it, but it is not free).
+    // Drain every pump — the buffer is otherwise unbounded.
     void drain_confirmed_events(std::vector<sim::Event>& out);
 
-    // drain_confirmed_events() PLUS the events of every tick simulated but not
-    // yet confirmed, i.e. the whole range [.., predicted_tick()). Call it ONCE,
-    // at the moment the round stops, so that two peers whose confirmation
-    // frontiers sit at different ticks still close the round having covered the
-    // IDENTICAL tick range — the tail's content is the documented residual, its
-    // extent is not. Advancing the session after this would double-count the
-    // tail, so don't.
+    // drain_confirmed_events() PLUS every tick simulated but not yet confirmed.
+    // Call it ONCE, at the moment the round stops, so two peers whose frontiers
+    // sit at different ticks still close the round having covered the IDENTICAL
+    // tick range. Advancing the session after this would double-count the tail.
     void drain_remaining_events(std::vector<sim::Event>& out);
 
-    // THE LIVE DIAGNOSTIC SNAPSHOT (net_stats.hpp). Everything the in-match
-    // overlay draws and the end-of-session log line records — path, per-peer
-    // RTT/lag, prediction depth, re-sim rate, stalls — derived entirely from
-    // traffic this session already exchanges. Read-only and side-effect free;
-    // the session behaves identically whether anyone calls it or not.
+    // The live diagnostic snapshot (net_stats.hpp). Read-only and side-effect
+    // free; the session behaves identically whether anyone calls it or not.
     const NetStats& stats() const { return stats_.stats(); }
 
-    // Seats declared dropped so far (0 while everyone is live). With
-    // DropPolicy::revert_to_ai these are the seats now driven by the AI; without
-    // it, the seats whose loss ended the match.
+    // Seats declared dropped so far (0 while everyone is live).
     std::uint16_t dropped_seats() const { return dropped_; }
-    // The agreed handoff tick for a dropped seat, or kNoHandoff if that seat is
-    // still a live network peer. Every peer holds the same value.
+    // The agreed handoff tick, or kNoHandoff for a still-live peer. Every peer
+    // holds the same value.
     std::uint32_t handoff_tick(int seat) const {
         return handoff_[static_cast<std::size_t>(seat)];
     }
     // LOUD match-ending state: a peer dropped while Options row 12 was OFF, so
     // there is no legal way to keep simulating. advance() is a no-op from here
-    // on — the caller polls this and ends the match (it never hangs).
+    // on and the caller polls this — it never hangs.
     bool aborted() const { return aborted_; }
 
     // --- round abandon (Esc), wire v8 ----------------------------------------
 
-    // "Stop this round." Only on the machine that is hosting() — see the
-    // authority note at the top of this file. There an end tick is scheduled and
-    // broadcast at once; on every other machine this is a NO-OP, because a guest
-    // has no say in what both machines simulate. Idempotent: a second call while
-    // an end is already scheduled does nothing.
-    //
-    // "Hosting" is the ELECTED role, so in a star that has migrated this is the
-    // promoted survivor rather than whoever pressed Host. A caller may therefore
-    // offer Esc unconditionally and let the session decide, which is what
-    // MatchRunner does.
+    // "Stop this round." Only on the machine that is hosting(); a NO-OP anywhere
+    // else, because a guest has no say in what both machines simulate.
+    // Idempotent, so a caller may offer Esc unconditionally and let the session
+    // decide — which is what MatchRunner does.
     void request_end_round();
 
-    // An end tick is agreed (on either peer). The match shell reads this to tell
-    // an ABANDONED round — which is a DRAW by decree and tallies nothing — from
-    // a round that ended on its own terms.
+    // An end tick is agreed (on either peer). The shell reads this to tell an
+    // ABANDONED round — a DRAW by decree, tallying nothing — from one that ended
+    // on its own terms.
     bool end_round_scheduled() const { return end_tick_ != kNoEndRound; }
-    // The agreed first tick NOBODY simulates, or kNoEndRound. Equal on every
-    // peer once the announcement has propagated.
-    std::uint32_t end_round_tick() const { return end_tick_; }
-    // The sim has reached the agreed end: stop the round loop. advance() still
-    // receives, re-announces and re-sends local input from here on, so a peer
-    // that has not caught up yet still can.
+    std::uint32_t end_round_tick() const { return end_tick_; }  // first tick NOBODY simulates
+    // Stop the round loop. advance() still receives and re-sends from here on, so
+    // a peer that has not caught up still can.
     bool round_ended() const { return end_tick_ != kNoEndRound && tick_ >= end_tick_; }
 
     // --- host migration (wire v9, design §8) ---------------------------------
 
-    // The seat currently holding the HUB role, or -1 when migration is off. A
-    // pure function of (drop schedule, DropPolicy::host_seat) — see hosting().
-    int current_hub() const { return hub_; }
-    // "This machine is the one driving the game." Equal to DropPolicy::is_host
-    // when migration is off; recomputed from the election when it is on.
+    int current_hub() const { return hub_; }  // the elected hub, or -1 when off
+    // "This machine is driving the game." Equal to DropPolicy::is_host while
+    // migration is off; recomputed from the election once it is on.
     bool hosting() const;
-    // Seats this session has recorded as a LOST HUB, as opposed to an ordinary
-    // dropped guest. Non-zero means a migration has been decided locally, and it
-    // is the signal a caller would poll to start rewiring the star. No such
-    // caller is built — see the re-anchoring note above — so today this is read
-    // only by tests/net/test_host_migration.cpp.
+    // Seats recorded as a LOST HUB rather than an ordinary dropped guest —
+    // the signal a caller would poll to start rewiring the star. No such caller
+    // is built (design §8.3), so today only the tests read it.
     std::uint16_t host_lost_seats() const { return host_lost_; }
 
     // THE MIGRATION STALL. While held, advance() receives and re-sends but
     // simulates nothing and runs no drop detection, so the confirmed frontier —
-    // and with it the floor of the retained rewind window — stays exactly where
-    // the hub's death left it. The caller holds this for the rewire window and
-    // releases it once a path exists again.
+    // and the floor of the retained rewind window with it — stays where the hub's
+    // death left it.
     //
-    // Releasing also re-arms every silence counter, because by the time a
-    // migration starts every remote seat has been silent for longer than the drop
-    // timeout — that is HOW the hub's loss was detected — so a naive release
-    // would declare the whole surviving table dropped one pump later.
-    //
-    // HONEST COVERAGE NOTE: that re-arm is belt-and-braces, NOT the mechanism the
-    // suite actually proves. Reverting it alone leaves tests/net/
-    // test_host_migration.cpp green, because two other things already cover the
-    // window: detect_drops() declares nothing at all while migration_healing(),
-    // and heard() zeroes the counter the moment the rewired star delivers
-    // anything. The cascade test discriminates against the HEALING GUARD — revert
-    // that and it fails loudly. The re-arm is kept because it is free and makes
-    // the property hold even if the guard's window is later narrowed, but do not
-    // read the passing test as evidence for it.
+    // Releasing also re-arms every silence counter: by then every remote seat is
+    // past the drop timeout, because that silence is HOW the loss was detected,
+    // so a naive release would declare the whole surviving table dropped one pump
+    // later. (Belt-and-braces rather than the mechanism the suite proves; §3.)
     void set_migration_hold(bool held);
     bool migration_held() const { return migration_hold_; }
 
@@ -458,136 +202,114 @@ public:
 
 private:
     struct Slot {
-        sim::TickInputs inputs;         // seat inputs used to simulate this tick (confirmed or predicted)
-        std::uint16_t confirmed = 0;    // which seats are CONFIRMED (rest are predicted)
+        sim::TickInputs inputs;       // seat inputs used to simulate this tick
+        std::uint16_t confirmed = 0;  // which seats are CONFIRMED (rest are predicted)
     };
 
-    // The whole of advance() except the diagnostics bracket around it. Split so
-    // the tracker's begin/end pair is written ONCE and cannot be missed on any of
-    // advance()'s several early-return paths (aborted, round ended, at the cap).
+    // The whole of advance() except the diagnostics bracket, so the tracker's
+    // begin/end pair is written ONCE and cannot be missed on an early return.
     void advance_impl(const sim::TickInputs& local_input);
-
-    // Attribute one arriving input datagram to every seat it carries, for the
-    // diagnostics only. `first_tick` is the sender's confirmed frontier (the
+    // Diagnostics only. `first_tick` is the sender's confirmed frontier (the
     // ack-RTT's basis), or 0 for a frame that carries none.
     void note_input_seats(std::uint16_t seats, std::uint32_t first_tick);
 
-    void receive();  // drain transport -> input slots + peer hashes, flag rollbacks
-    // ONE decoded datagram, dispatched. Split out of receive()'s drain loop so
-    // the dispatch sits at the top of a function rather than one level inside a
-    // `while`, where every arm paid a nesting penalty for a decision that has
-    // nothing to do with the loop. The drain and the dispatch are two jobs.
-    void on_message(const Message& m);
+    void receive();                     // drain transport -> slots + peer hashes
+    void on_message(const Message& m);  // ONE decoded datagram, dispatched
+    void on_input_range(const Message& m);
+    void on_single_input(const Message& m);
+    void on_drop(const Message& m);
+    void on_host_lost(const Message& m);
+    void on_match_ctl(const Message& m);
+
     void apply_remote(std::uint32_t tick, std::uint16_t seats, const sim::TickInputs& in);
-    sim::TickInputs assemble(std::uint32_t tick);   // confirmed seats + predicted (last-known) remote seats
-    void resimulate(std::uint32_t from);            // restore snapshot[from], replay to tick_
-    void advance_confirmed();                       // raise confirmed_ over the contiguous all-known prefix
-    void send_local(std::uint32_t from);            // redundant range of recent local inputs [from, tick_)
+    void count_duplicate_input(std::uint16_t seats);
+    // The EARLIEST tick wins, so several corrections in one pump collapse into
+    // one replay.
+    void request_rollback(std::uint32_t tick);
+    sim::TickInputs assemble(std::uint32_t tick);  // confirmed seats + predicted remote seats
+    void resimulate(std::uint32_t from);           // restore snapshot[from], replay to tick_
+    void advance_confirmed();                      // raise confirmed_ over the all-known prefix
+    std::uint64_t hash_after(std::uint32_t tick) const;
+    void emit_confirmed_events(std::uint32_t tick);
+    void exchange_confirmed_hash(std::uint32_t tick, std::uint64_t h);
+    void send_local(std::uint32_t from);  // redundant range of recent local inputs
     void note_peer_hash(std::uint32_t tick, std::uint64_t peer_hash);
     void prune();
 
-    // The events produced BY simulating `tick`, or nullptr if that tick has not
-    // been simulated (or its snapshot has already been pruned). Reads them off
-    // the snapshot taken BEFORE `tick + 1` — the same place, and the same
-    // lookup, advance_confirmed() takes the confirmed hash from, which is what
-    // ties the two together.
+    // May this pump advance the simulation? Asks, strongest first: the migration
+    // stall, the agreed round end, the re-phase hold, the prediction cap. Takes
+    // the pacing decision on the way, which is why it is not const.
+    bool simulation_allowed(bool eligible);
+    void simulate_one_tick(const sim::TickInputs& local_input);
+
+    // The events produced BY simulating `tick`, or nullptr if it is unsimulated
+    // or pruned. Read off the snapshot taken before `tick + 1` — the same lookup
+    // advance_confirmed() takes the hash from, which is what ties the two.
     const std::vector<sim::Event>* events_of(std::uint32_t tick) const;
 
-    // Is a re-phase decision even meaningful right now — a peer is present, the
-    // match is still running, and no host migration is currently making both
-    // readings lie? Separated from the advantage test so the raw and filtered
-    // readings are compared against exactly the same preconditions, so the
-    // diagnostic can say honestly which of the two refused, and so the local lead
-    // (lead_target) inherits every one of those preconditions rather than
-    // re-stating them.
+    // Is a re-phase decision even meaningful right now? Separated from the
+    // advantage test so raw and filtered readings meet the same preconditions,
+    // and so the local lead inherits every one of them.
     bool rephase_eligible() const;
-    // File the local sample against every still-unfiled tick up to the lead's
-    // head. NEVER rewrites a filed tick — see time_sync.hpp's "one rule".
+    // File the local sample up to the lead's head, NEVER rewriting a filed tick
+    // (docs/net-rollback.md §1.4).
     void file_local(const sim::TickInputs& local_input);
 
-    // Seats whose input is still EXCHANGED at `tick`: all_seats_ minus every
-    // seat already handed to the AI by then. The single tick-keyed predicate
-    // behind both "what does the sim get fed" (assemble) and "whose input must
-    // still arrive" (advance_confirmed / apply_remote / drop detection).
+    // Seats whose input is still EXCHANGED at `tick`: the single tick-keyed
+    // predicate behind both "what does the sim get fed" and "whose input must
+    // still arrive".
     std::uint16_t seats_awaited(std::uint32_t tick) const;
-    // Re-assert the schedule on the hashed State at the START of simulating
-    // `tick`. IDEMPOTENT (`ai = true` twice is `ai = true`), and called on the
-    // first pass AND on every re-simulation of that tick — that is what makes
-    // the handoff survive a rollback to a snapshot taken before it.
+    std::uint16_t awaited_remote_seats() const;  // ...of those, the remote ones, at tick_
+    // Re-assert the drop schedule on the hashed State before simulating `tick`.
+    // IDEMPOTENT, and run on the first pass AND every re-simulation — that is
+    // what makes a handoff survive a rollback to an earlier snapshot.
     void apply_handoffs(std::uint32_t tick);
-    void heard(std::uint16_t seats);  // a packet carrying these seats arrived: they are alive
+    void heard(std::uint16_t seats);  // a packet carrying these seats arrived
+    // Order-free and idempotent: the EARLIEST tick wins, so a duplicate, a
+    // re-send and an out-of-order copy all reduce to a no-op.
     void schedule_handoff(int seat, std::uint32_t at_tick);
-    void detect_drops();        // hard-timeout scan; host schedules, everyone can abort
-    void broadcast_handoffs();  // host-side redundant re-send, like send_local's
-    // Adopt an announced end tick. Order-free and idempotent exactly as
-    // schedule_handoff is: the EARLIEST tick wins, so a duplicate, a re-send and
-    // an out-of-order copy all reduce to a no-op and every peer converges.
-    void schedule_end_round(std::uint32_t at_tick);
-    // Redundant re-send of a scheduled EndRound, from whichever machine is
-    // hosting(). A guest owes the shell nothing here: it has no say in when a
-    // round stops.
+    // Hard-timeout scan: the host schedules, but any peer can abort.
+    void detect_drops();
+    // ADVANCES the seat's silence counter, so it runs once per seat per pump.
+    bool silence_exceeded(int seat);
+    // The three outcomes detect_drops() can reach for one silent seat.
+    void abort_on_drop(int seat);       // Options row 12 OFF: the match is over
+    void announce_host_lost(int seat);  // the HUB's own seat went silent
+    void announce_drop(int seat);       // an ordinary guest drop, by the elected hub
+
+    // Host-side redundant re-sends, on send_local()'s reasoning.
+    void broadcast_handoffs();
     void broadcast_end_round();
+    // Earliest tick wins, exactly as schedule_handoff does.
+    void schedule_end_round(std::uint32_t at_tick);
 
     // --- host migration internals (design §8.1/§8.2) --------------------------
 
-    // Migration arms ONLY for a star — a match of more than two seats. The seat
-    // count is the match's, not the survivors', so a 4-seat match that has
-    // already lost two players keeps the machinery it started with.
-    //
-    // THE TWO-SEAT CASE IS DELIBERATELY EXCLUDED, and it is a safety gate rather
-    // than a missing feature. With two seats the data plane cannot tell a DEAD
-    // PEER from a DEAD PATH — the peer that stopped arriving may be gone, or may
-    // be alive, still playing, and merely unreachable (design §4.2, observed
-    // live: RX 0/s, ~100% LOSS, BAD 0 on a direct match deep into a session) —
-    // and with nobody else at the table there is no third party whose view could
-    // settle it. Electing on that guess makes each side hand the OTHER's seat to
-    // the AI and play on inside a private, divergent game that neither player
-    // can distinguish from a real one. A freeze is worse gameplay and better
-    // information, so until §4.2's oracle exists the two-seat case is left
-    // exactly as it was. Pinned by "a TWO-PEER path death must NOT trigger an
-    // election" in tests/net/test_host_migration.cpp.
-    //
-    // A star is different in the one way that matters: the survivors can still
-    // hear EACH OTHER once rewired, so "the hub is unreachable from everyone"
-    // is a conclusion the remaining peers reach together rather than a guess one
-    // peer makes alone.
+    // Migration arms ONLY for a star, and the two-seat exclusion is a SAFETY GATE
+    // rather than a missing feature: with two seats the data plane cannot tell a
+    // dead peer from a dead path, so electing on that guess makes each side hand
+    // the OTHER's seat to the AI and play on inside a private divergent game
+    // (design §8.1). Pinned in tests/net/test_host_migration.cpp.
     bool migration_enabled() const {
         return drop_.host_seat >= 0 && std::popcount(all_seats_) > 2;
     }
-    // A migration is decided but not yet paid off: the frontier has not climbed
-    // clear of the tick the hub died at. Gates the WIDE re-send, the re-phase
-    // suppression, and — the one that is a correctness matter rather than a
-    // tuning one — the refusal to declare a SECOND host loss (see detect_drops).
+    // Decided but not yet paid off. Gates the wide re-send, the re-phase
+    // suppression, and — correctness rather than tuning — the refusal to declare
+    // a SECOND host loss (detect_drops).
     bool migration_healing() const { return host_lost_ != 0 && confirmed_ < heal_until_; }
-    // THE ELECTION, and it is a pure function — no vote, no message, no
-    // coordinator (design §8.2). The seat that STARTED as the hub keeps the role
-    // while it is live (whoever pressed Host need not be seat 0); once it is
-    // gone the LOWEST surviving seat takes over, and the rule CHAINS — if the
-    // elected hub dies too, the next-lowest succeeds it by the same rule.
-    int hub_of(std::uint16_t live) const;
-    // The survivor set the election runs over: all_seats_ minus every seat with
-    // a scheduled handoff. Deliberately derived from the SCHEDULE and not from
-    // the hashed State — a player who has been blown up still runs a machine and
-    // can still be the hub — which is also what makes it recomputable after any
-    // rollback and identical on every peer.
+    int hub_of(std::uint16_t live) const;  // THE ELECTION: pure, no vote, no coordinator
+    // The survivor set the election runs over, derived from the SCHEDULE and not
+    // from hashed State — a player who has been blown up still runs a machine —
+    // which is what keeps it identical on every peer and rollback-proof.
     std::uint16_t live_seats() const;
-    // Where the redundant local-input re-send starts. Normally confirmed_; while
-    // a migration heals, widened down to the oldest retained tick. See the .cpp
-    // for why the usual invariant does not hold across a severed star.
-    std::uint32_t resend_from() const;
-    // Un-confirm back to `at_tick` so ticks simulated with the dead hub's real
-    // input can be redone with the seat on AI, and purge every hash at or above
-    // it on BOTH sides. Returns false if `at_tick` is older than the retained
-    // window, in which case the caller reports a desync rather than guessing.
-    // THE ONE PLACE THIS CLASS MOVES ITS FRONTIER BACKWARDS.
+    std::uint32_t resend_from() const;  // normally confirmed_; widened while healing
+    // Un-confirm back to `at_tick` and purge every hash at or above it on BOTH
+    // sides. False if `at_tick` is older than the retained window. THE ONE PLACE
+    // THIS CLASS MOVES ITS FRONTIER BACKWARDS.
     bool rewind_for_migration(std::uint32_t at_tick);
-    // Adopt an announced (or locally detected) host loss. Lowest tick wins, so
-    // concurrent announcements from survivors that disagree converge with no
-    // agreement protocol.
-    void adopt_host_lost(int seat, std::uint32_t at_tick);
-    // Re-send of every recorded host loss. NOT hub-only, unlike every other
-    // broadcast here: the announcement is ABOUT the hub, so the machine the
-    // redundancy discipline normally leans on is the one that is gone.
+    void adopt_host_lost(int seat, std::uint32_t at_tick);  // lowest tick wins
+    // NOT hub-only, unlike every other broadcast here: the announcement is ABOUT
+    // the hub, so the machine the redundancy discipline leans on is the dead one.
     void broadcast_host_lost();
 
     sim::Simulation* sim_;  // BORROWED
@@ -598,95 +320,72 @@ private:
     int max_prediction_;
     DropPolicy drop_;
 
-    std::uint32_t tick_ = 0;        // next speculative tick to simulate (starts at start_tick)
-    std::uint32_t confirmed_ = 0;   // highest tick whose inputs are ALL confirmed (+1 = next unconfirmed)
+    std::uint32_t tick_ = 0;       // next speculative tick (starts at start_tick)
+    std::uint32_t confirmed_ = 0;  // highest tick whose inputs are ALL confirmed
     std::uint32_t rollback_to_ = 0;
     bool rollback_pending_ = false;
 
-    std::unordered_map<std::uint32_t, Slot> slots_;            // per-tick inputs (confirmed/predicted)
-    std::unordered_map<std::uint32_t, sim::State> snapshots_;  // State BEFORE simulating that tick
-    // Prediction source: the most recent CONFIRMED input for each seat, and the
-    // tick it came from (so a later confirmation wins). Predicting a remote
-    // seat's next input = "repeat its last confirmed input".
-    sim::TickInputs last_remote_input_;  // neutral until a seat is first confirmed
+    std::unordered_map<std::uint32_t, Slot> slots_;            // per-tick inputs
+    std::unordered_map<std::uint32_t, sim::State> snapshots_;  // State BEFORE that tick
+    // Prediction source: each seat's most recent CONFIRMED input and the tick it
+    // came from, so a later confirmation wins.
+    sim::TickInputs last_remote_input_;
     std::array<std::uint32_t, sim::kMaxPlayers> last_remote_tick_{};
-    std::unordered_map<std::uint32_t, std::uint64_t> hash_;  // our hash after each CONFIRMED tick
+    std::unordered_map<std::uint32_t, std::uint64_t> hash_;  // ours, per CONFIRMED tick
     std::unordered_map<std::uint32_t, std::uint64_t> peer_hash_;
-    // Events of confirmed-but-not-yet-drained ticks, in tick order. Filled ONLY
-    // by advance_confirmed(), which is also the only place the confirmed hash is
-    // taken — so the two can never disagree about which ticks are final.
+    // Confirmed-but-not-yet-drained events, in tick order. Filled ONLY by
+    // advance_confirmed(), the same place the confirmed hash is taken, so the two
+    // can never disagree about which ticks are final.
     std::vector<sim::Event> confirmed_events_;
-    // High-water mark of ticks whose events have ALREADY entered the stream, so
-    // no tick can enter it twice. `confirmed_` alone cannot serve, because host
-    // migration moves that backwards; this only ever rises. See the emit site in
-    // advance_confirmed() for why the distinction is a correctness matter and
-    // not bookkeeping.
+    // High-water mark of ticks already in that stream. `confirmed_` cannot serve,
+    // because migration moves it backwards; this only rises (§2.2).
     std::uint32_t events_through_ = 0;
 
-    // The peer-drop SCHEDULE — the durable, tick-keyed record that survives
-    // rollback. Deliberately NOT a one-shot mutation of State: `Player::ai` is
-    // hashed, so restoring a pre-handoff snapshot would silently erase a flag
-    // set once. Kept here (outside State, like the input slots) and re-applied
-    // by apply_handoffs() at the head of EVERY simulation of a tick >= at_tick,
-    // first pass or re-sim alike, so the flag is a pure function of the tick.
+    // The peer-drop SCHEDULE: durable, tick-keyed, rollback-proof. Deliberately
+    // NOT a one-shot mutation of State — `Player::ai` is hashed, so restoring a
+    // pre-handoff snapshot would silently erase a flag set once.
     std::array<std::uint32_t, sim::kMaxPlayers> handoff_;  // kNoHandoff = live peer
     // Pumps since anything at all was heard carrying that seat. LIVENESS, not
     // input progress: a peer stalled behind a THIRD peer's silence still sends
-    // its redundant window every pump, and must not be accused of dropping.
+    // its window every pump and must not be accused of dropping.
     std::array<int, sim::kMaxPlayers> silence_{};
-    // First tick for which we hold NO input from a seat (0 = never heard from
-    // it). The host uses it as the handoff tick — see DropFrame on why that is
-    // retroactive rather than in the future.
+    // First tick we hold NO input for from a seat; the host uses it as the
+    // handoff tick (see DropFrame on why that is retroactive).
     std::array<std::uint32_t, sim::kMaxPlayers> remote_next_{};
     std::uint16_t dropped_ = 0;
     bool aborted_ = false;
 
-    // The agreed round-abandon tick (kNoEndRound = the round runs to its own
-    // end). Deliberately OUTSIDE sim::State — like the handoff schedule, it is
-    // shell bookkeeping and must survive a rollback untouched; unlike it, it
-    // never reaches the sim at all, so no golden hash can move because of it.
+    // The agreed round-abandon tick. OUTSIDE sim::State, like the handoff
+    // schedule, because it must survive a rollback untouched — and unlike it,
+    // never reaching the sim at all.
     std::uint32_t end_tick_ = kNoEndRound;
 
     // --- host migration state (all outside sim::State; none of it is hashed) --
 
-    // The seat currently elected hub, recomputed every pump from live_seats().
-    // -1 while migration is off.
-    int hub_ = -1;
-    // Seats recorded as a LOST HUB rather than an ordinary dropped guest. Drives
-    // broadcast_host_lost() (every holder re-sends) and the wide re-send window.
-    std::uint16_t host_lost_ = 0;
-    // The tick above which the WIDE redundant re-send may stop (resend_from()):
-    // a full rewind window past the migration tick, i.e. once no survivor can
-    // still be waiting on an input either side has already finalised. Raised,
-    // never lowered, so a second host loss extends it.
+    int hub_ = -1;                 // the elected hub; -1 while migration is off
+    std::uint16_t host_lost_ = 0;  // seats recorded as a LOST HUB
+    // Where the WIDE re-send may stop: a full rewind window past the migration
+    // tick. Raised, never lowered, so a second host loss extends it.
     std::uint32_t heal_until_ = 0;
-    // The oldest tick still retained. prune() keeps a fixed window BELOW
-    // confirmed_ while migration is enabled, because rewind_for_migration() has
-    // to be able to un-confirm into it; this is that floor, and it only rises.
+    // The oldest tick still retained, and it only ever RISES — prune() keeps a
+    // window below confirmed_ so rewind_for_migration() can un-confirm into it.
     std::uint32_t oldest_slot_ = 0;
-    // The caller-driven stall across the rewire. See set_migration_hold().
-    bool migration_hold_ = false;
+    bool migration_hold_ = false;  // the caller-driven stall across the rewire
 
-    // THE PACING HALF (time_sync.hpp). Owns every peer-timing reading and both
-    // decisions taken from them — hold this pump, and how far ahead to file. A
-    // private COLLABORATOR rather than a base class: it is asked questions and
-    // never asks any, so nothing in it can reach the hashed state above it.
+    // THE PACING HALF (time_sync.hpp). A private COLLABORATOR rather than a base
+    // class: it is asked questions and never asks any, so nothing in it can reach
+    // the hashed state above it.
     TimeSyncController sync_;
 
-    // THE LOCAL INPUT LEAD. `local_next_` is the tick our next local sample will
-    // be filed against and is MONOTONE — the single invariant that makes moving
-    // the lead mid-match safe (see time_sync.hpp). At a lead of 0 it equals `tick_`
-    // at every point either is read, which is what makes a clean path byte-for-
-    // byte the session it was before this existed.
+    // The tick our next local sample will be filed against. MONOTONE — the one
+    // invariant that makes moving the lead mid-match safe.
     std::uint32_t local_next_ = 0;
 
     bool desynced_ = false;
     std::uint32_t desync_tick_ = 0;
 
-    // INSTRUMENTATION ONLY. Deliberately last, deliberately not consulted by any
-    // decision in this class: nothing below reads stats_, so a build that never
-    // looks at it plays exactly the same match. Owns no heap and allocates on no
-    // packet path (net_stats.hpp), so counting cannot perturb what it counts.
+    // INSTRUMENTATION ONLY, consulted by no decision here: a build that never
+    // looks at it plays exactly the same match.
     NetStatsTracker stats_;
 };
 

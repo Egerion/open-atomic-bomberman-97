@@ -64,6 +64,35 @@ void SetupSession::confirm(const sim::MatchConfig& cfg) {
     confirm_ms_ = -1;  // armed by the next step(), which knows `now`
 }
 
+bool SetupSession::resend_due(std::int64_t now_ms, int interval_ms) const {
+    return last_send_ms_ < 0 || now_ms - last_send_ms_ >= interval_ms;  // -1 = nothing sent yet
+}
+
+void SetupSession::step_host(std::int64_t now_ms) {
+    if (!have_final_) {
+        // Still editing: the preview goes out lazily and nothing can time out.
+        if (have_preview_ && resend_due(now_ms, kSetupPreviewResendMs)) {
+            send_preview();
+            last_send_ms_ = now_ms;
+        }
+        return;
+    }
+    if (all_acked()) return;  // every guest holds it — nothing left to send
+    if (resend_due(now_ms, kSetupConfigResendMs)) {
+        send_config_chunks();
+        last_send_ms_ = now_ms;
+    }
+    if (confirm_ms_ >= 0 && now_ms - confirm_ms_ >= timeout_ms_) phase_ = Phase::Failed;
+}
+
+void SetupSession::step_guest(std::int64_t now_ms) {
+    // Purely reactive. Silence while still waiting for (or watching) the host's
+    // setup means the host is gone; a guest already in Final never expires,
+    // because it has everything it needs.
+    if (phase_ != Phase::Waiting && phase_ != Phase::Live) return;
+    if (now_ms - last_rx_ms_ >= timeout_ms_) phase_ = Phase::Failed;
+}
+
 void SetupSession::step(std::int64_t now_ms) {
     if (phase_ == Phase::Failed) return;
     if (last_rx_ms_ < 0) last_rx_ms_ = now_ms;  // first pump seeds the liveness clock
@@ -71,48 +100,36 @@ void SetupSession::step(std::int64_t now_ms) {
 
     drain(now_ms);
     if (phase_ == Phase::Failed) return;
-
     if (is_host_) {
-        if (have_final_) {
-            if (all_acked()) return;  // every guest holds it — nothing left to send
-            if (last_send_ms_ < 0 || now_ms - last_send_ms_ >= kSetupConfigResendMs) {
-                send_config_chunks();
-                last_send_ms_ = now_ms;
-            }
-            if (confirm_ms_ >= 0 && now_ms - confirm_ms_ >= timeout_ms_) phase_ = Phase::Failed;
-        } else if (have_preview_) {
-            if (last_send_ms_ < 0 || now_ms - last_send_ms_ >= kSetupPreviewResendMs) {
-                send_preview();
-                last_send_ms_ = now_ms;
-            }
-        }
+        step_host(now_ms);
         return;
     }
+    step_guest(now_ms);
+}
 
-    // Guest: purely reactive. Silence while still waiting for (or watching) the
-    // host's setup means the host is gone; a guest already in Final never
-    // expires, because it has everything it needs.
-    if ((phase_ == Phase::Waiting || phase_ == Phase::Live) && now_ms - last_rx_ms_ >= timeout_ms_)
-        phase_ = Phase::Failed;
+void SetupSession::on_message(const Message& m, std::int64_t now_ms) {
+    // Each role reads only the other's frames; its own, reflected back off a star
+    // hub, falls through. Anything else on the shared socket (a trailing
+    // hole-punch PONG, say) does too.
+    switch (m.type) {
+        case MsgType::SetupPreview:
+            if (!is_host_) on_preview(m.setup_preview, now_ms);
+            break;
+        case MsgType::SetupChunk:
+            if (!is_host_) on_chunk(m.setup_chunk, now_ms);
+            break;
+        case MsgType::SetupAck:
+            if (is_host_) on_ack(m.setup_ack);
+            break;
+        default: break;
+    }
 }
 
 void SetupSession::drain(std::int64_t now_ms) {
     std::vector<std::uint8_t> buf;
     while (transport_->poll(&buf)) {
         Message m;
-        if (!decode(buf.data(), buf.size(), &m)) continue;  // untrusted: drop silently
-        switch (m.type) {
-            case MsgType::SetupPreview:
-                if (!is_host_) on_preview(m.setup_preview, now_ms);
-                break;
-            case MsgType::SetupChunk:
-                if (!is_host_) on_chunk(m.setup_chunk, now_ms);
-                break;
-            case MsgType::SetupAck:
-                if (is_host_) on_ack(m.setup_ack);
-                break;
-            default: break;  // e.g. a trailing hole-punch PONG on the shared socket
-        }
+        if (decode(buf.data(), buf.size(), &m)) on_message(m, now_ms);  // untrusted: drop silently
     }
 }
 

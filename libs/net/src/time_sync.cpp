@@ -96,11 +96,12 @@ int TimeSyncController::lead_target(bool eligible) const {
 }
 
 void TimeSyncController::update_lead(bool eligible) {
+    // One tick per pump toward the target, in either direction: raising the lead
+    // holds the local sample for one extra tick and lowering it re-uses the
+    // previous one, and neither is visible at 50 ms where a jump would be.
     const int target = lead_target(eligible);
-    if (target > lead_)
-        ++lead_;
-    else if (target < lead_)
-        --lead_;
+    if (target == lead_) return;
+    lead_ += (target > lead_) ? 1 : -1;
 }
 
 }  // namespace bomber::net

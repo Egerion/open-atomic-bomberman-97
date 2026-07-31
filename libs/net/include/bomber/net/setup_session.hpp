@@ -7,70 +7,49 @@
 #include "bomber/net/transport.hpp"
 #include "bomber/sim/match_config.hpp"
 
-// The HOST-AUTHORITATIVE match-setup layer: the live sync that runs between the
-// hole-punch and the match itself, so an online game finally gets a real map
-// choice, AI slots and roster instead of the hard-coded canonical config
-// netplay used to fall back on.
+// The HOST-AUTHORITATIVE match-setup layer, run between the hole-punch and the
+// match itself so an online game gets a real map choice, AI slots and roster
+// (docs/online-multiplayer-design.md §9).
 //
-// SHAPE, FROM THE ORIGINAL (docs/re/network-screens.md §7). Both 1997 network
-// screens hand off to sub_42A3F6 — the SAME handler the local PLAY row uses —
-// so map selection and AI/CPU slot assignment for a net game come from the
-// ORDINARY roster (sub_410F81) and level (sub_406DDE) screens. There, the host
-// makes every change and broadcasts it (roster slot kind 40, team kind 58,
-// level index kind 43, round count kind 44) while guests are strictly
-// read-only: every edit path is guarded by `sub_40C06A() != 1` and a guest that
-// presses an edit key just gets SFX 40. We reproduce that shape over our own
-// P2P transport, AFTER the punch, so the matchmaker stays config-agnostic
-// (ADR-0011: the server never sees a MatchConfig).
+// SHAPE, FROM THE ORIGINAL (docs/re/network-screens.md §7): both 1997 network
+// screens hand off to sub_42A3F6, the SAME handler the local PLAY row uses, so
+// the host makes every change and broadcasts it while guests are strictly
+// read-only (every edit path is guarded by `sub_40C06A() != 1`). Reproduced over
+// our own P2P transport AFTER the punch, so the matchmaker stays
+// config-agnostic — the server never sees a MatchConfig.
 //
 // TWO PAYLOADS, AND THE DIFFERENCE IS LOAD-BEARING:
 //
-//   * The LIVE PREVIEW (SetupPreviewFrame) is a compact subset — per-slot kind,
-//     level index + name, round count, team flags. It exists only to feed the
-//     guest's READ-ONLY display while the host is still editing, so it is
-//     allowed to be lossy and is re-sent on an interval to ride out UDP loss.
+//   * the LIVE PREVIEW (SetupPreviewFrame) is a compact subset feeding the
+//     guest's read-only display while the host edits. Allowed to be lossy;
+//     re-sent on an interval to ride out UDP loss.
+//   * the FINAL payload is the WHOLE serialized sim::MatchConfig, chunked, and
+//     it is what Simulation is built from. Do NOT "optimise" it into a level
+//     index, a digest or a delta: a guest whose .SCH, EXTRA<n>.RES, VALUELST or
+//     custom-map list differs would build a different board from the same index
+//     and desync on tick 0 (match_config_codec.hpp).
 //
-//   * The FINAL payload is the WHOLE serialized sim::MatchConfig
-//     (match_config_codec.hpp), chunked. It is what Simulation is built from.
-//     Do NOT "optimise" it into a level index, a digest, or a delta: every peer
-//     must feed Simulation byte-identical input, and a guest whose .SCH,
-//     EXTRA<n>.RES, VALUELST or custom-map list differs would otherwise build a
-//     different board from the same index and desync on tick 0. The preview may
-//     be approximate; the final may not.
+// Pump-based and clock-injected; all I/O happens inside step(), while publish()
+// and confirm() only record intent. Rides the SAME Transport the punch produced;
+// datagrams of other kinds are decoded and ignored.
 //
-// Pump-based and CLOCK-INJECTED like Rendezvous / StunClient / LobbyFlow:
-// step(now_ms) takes the caller's monotonic clock, so libs/net stays clock-free
-// and the whole flow is deterministically testable. All I/O happens inside
-// step(); publish() and confirm() only record intent. It rides the SAME
-// Transport the punch produced (connected by then) and the match session takes
-// over afterwards — datagrams of other kinds (a trailing hole-punch PONG, say)
-// are decoded and ignored.
+// N PEERS, NOT TWO. The host tracks which of the GUEST seats it expects have
+// acknowledged the CURRENT revision, so Phase::Final means every one of them
+// holds the exact bytes rather than that somebody does — which is what makes it
+// usable over a StarHubTransport. A guest stamps each ack with its own seat
+// (wire v5), one per seat it owns, so the host never has to know the
+// machine-to-seat grouping.
 //
-// N PEERS, NOT TWO (the former "obligation 2", discharged). The host is handed
-// the mask of every GUEST seat it expects and tracks which of them have
-// acknowledged the CURRENT revision; Phase::Final means EVERY one of them holds
-// the exact bytes, not merely that somebody does. That is what makes this usable
-// over a StarHubTransport (>2 seats, ADR-0011 decisions 2+4), where the host's
-// send() fans out to every guest and each guest answers independently. A guest
-// stamps its ack with its own seat (SetupAckFrame::seat, wire v5) — one ack per
-// seat it owns, so a machine holding several seats needs no special case and the
-// host never has to know the machine↔seat grouping.
+// ONE CALLER OBLIGATION, AND IT IS A SHARP EDGE: **one pump at a time.** This
+// session and the match session both drain the same Transport, and whichever
+// polls first CONSUMES the datagram. Stop pumping this one before starting the
+// match one. That holds with a hub in the middle too: the hub's
+// StarHubTransport reflects a guest's datagram INSIDE poll(), so whichever
+// session is pumping is also the one keeping the star alive.
 //
-// ONE CALLER OBLIGATION, and it is a sharp edge:
-//
-//   ONE PUMP AT A TIME. This session and the match session (Lockstep/Rollback)
-//   both drain the same Transport, and whichever polls first CONSUMES the
-//   datagram. Stop pumping this one before you start the match one; do not
-//   overlap them. This holds unchanged with a hub in the middle: the hub's
-//   StarHubTransport reflects a guest's datagram to the other guests INSIDE
-//   poll(), so whichever session is pumping is also the one keeping the star
-//   alive — which is exactly why only one of them may be running.
-//
-// NOT IMPLEMENTED, DELIBERATELY: the original's guest->host slot upload (kind
-// 40 from sub_410F81's tail, "how a machine contributes its local humans/AI to
-// the shared roster"). This layer is host-drives-everything only; a guest
-// contributes nothing to the roster. Adding it later is a new MsgType plus a
-// host-side merge, and needs another kWireProtocolVersion bump.
+// NOT IMPLEMENTED, DELIBERATELY: the original's guest->host slot upload (kind 40
+// from sub_410F81's tail). A guest contributes nothing to the roster. Adding it
+// is a new MsgType plus a host-side merge and another wire-version bump.
 
 namespace bomber::net {
 
@@ -164,7 +143,13 @@ public:
     }
 
 private:
+    // The two roles' halves of step(): the host owes re-sends and can time out
+    // waiting for acks, the guest is purely reactive.
+    void step_host(std::int64_t now_ms);
+    void step_guest(std::int64_t now_ms);
+    bool resend_due(std::int64_t now_ms, int interval_ms) const;
     void drain(std::int64_t now_ms);
+    void on_message(const Message& m, std::int64_t now_ms);
     void on_preview(const SetupPreviewFrame& p, std::int64_t now_ms);
     void on_chunk(const SetupChunkFrame& c, std::int64_t now_ms);
     void on_ack(const SetupAckFrame& a);
