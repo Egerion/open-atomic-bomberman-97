@@ -37,6 +37,20 @@ Item read_item(BinaryReader& r) {
     throw std::runtime_error("ANI '" + p.string() + "': " + msg);
 }
 
+// Walk the sub-items of a container, handing each to `visit` and then seeking
+// past it however much of the payload `visit` consumed. The 10 is the item
+// header (4-byte tag + u32 length + u16 id): a tail shorter than one header
+// cannot name another item, and stopping there is what keeps a truncated 1997
+// file from being read as an endless run of zero-length items.
+template <typename Visit>
+void for_each_item(BinaryReader& r, std::size_t container_end, Visit&& visit) {
+    while (r.pos() + 10 <= container_end) {
+        const Item sub = read_item(r);
+        visit(sub);
+        r.seek(sub.end);
+    }
+}
+
 // The `else` is load-bearing rather than redundant: `if constexpr` only discards
 // the branch it is attached to, and without it both reads would be instantiated
 // for both pixel widths.
@@ -112,7 +126,11 @@ CimgData read_cimg_header(BinaryReader& r, const CimgContext& ctx, Frame& f) {
     f.key_color = r.u16();
     r.u16();  // unknown
 
+    // Exactly two shapes exist: 24 means no palette, >= 32 means a palette
+    // follows two unknown dwords. Reject anything else before reading further.
     CimgData d;
+    if (additional_size != 24 && additional_size < 32)
+        fail(ctx.path, "CIMG unexpected additional_size " + std::to_string(additional_size));
     if (additional_size >= 32) {
         d.palette_size = additional_size - 32;
         r.u32();  // unknown
@@ -120,8 +138,6 @@ CimgData read_cimg_header(BinaryReader& r, const CimgContext& ctx, Frame& f) {
         if (d.palette_size > d.palette.size()) fail(ctx.path, "CIMG palette too large");
         const auto pal = r.bytes(d.palette_size);
         std::memcpy(d.palette.data(), pal.data(), d.palette_size);
-    } else if (additional_size != 24) {
-        fail(ctx.path, "CIMG unexpected additional_size " + std::to_string(additional_size));
     }
 
     r.u16();  // unknown
@@ -134,14 +150,12 @@ CimgData read_cimg_header(BinaryReader& r, const CimgContext& ctx, Frame& f) {
     return d;
 }
 
-// SECURITY. width and height are two u16s read straight out of the file, so
-// their product alone asks the allocator for 17 GB — and both the rgba resize
-// and decode_rle's reserve used to happen before anything compared them against
-// how much compressed data actually follows. The failure then escaped as
-// std::bad_alloc, which is neither std::runtime_error nor std::out_of_range and
-// so slips through the contract every caller of this module catches on
-// (docs/coding-standards.md §6); with generous overcommit it does not fail at
-// all, it thrashes.
+// SECURITY, and it must run BEFORE any allocation sized from the header. width
+// and height are two u16s read straight out of the file, so their product alone
+// asks the allocator for 17 GB; the failure then escapes as std::bad_alloc,
+// which is neither std::runtime_error nor std::out_of_range and so slips through
+// the contract every caller of this module catches on (§6). Under generous
+// overcommit it does not fail at all — it thrashes.
 //
 // An RLE packet is one header byte plus at least one pixel and yields at most
 // 128 pixels, so the compressed span is a hard cap on how many pixels can
@@ -174,9 +188,8 @@ void decode_paletted(BinaryReader& r, const CimgDecode& d, Frame& f) {
         f.image.rgba[i * 4 + 3] = (idx == (f.key_color & 0xFF)) ? 0 : 255;
     }
     // Retain the source indices + palette so player recolour can apply a .RMP
-    // remap at index level, exactly like the original blit (sub_415A1C,
-    // docs/re/player-colour.md). rgba's alpha already encodes the key-colour
-    // transparency; the recolour preserves it.
+    // remap at INDEX level, as the original blit does (sub_415A1C,
+    // docs/re/player-colour.md).
     f.image.indices.assign(px.begin(), px.end());
     f.image.palette.assign(d.palette.begin(), d.palette.end());
 }
@@ -197,11 +210,9 @@ Frame parse_cimg(BinaryReader& r, const CimgContext& ctx) {
     f.image.rgba.resize(pixel_count * 4);
     const CimgDecode dec{ctx.path, d.data_end, pixel_count, d.uncompressed_size,
                          std::span<const std::uint8_t>(d.palette.data(), d.palette_size)};
-    if (f.cimg_type == 4) {
-        decode_true_colour(r, dec, f);
-    } else {
-        decode_paletted(r, dec, f);
-    }
+    // Exactly one of these runs — the type was validated to 4 or 11 above.
+    if (f.cimg_type == 4) decode_true_colour(r, dec, f);
+    if (f.cimg_type == 11) decode_paletted(r, dec, f);
 
     r.seek(ctx.item.end);  // skip optional terminator/padding
     return f;
@@ -211,49 +222,55 @@ Frame parse_cimg(BinaryReader& r, const CimgContext& ctx) {
 // builds a fresh Frame, so the name is carried across it.
 Frame parse_frame(BinaryReader& r, const Item& fram, const std::filesystem::path& path) {
     Frame frame;
-    while (r.pos() + 10 <= fram.end) {
-        const Item sub = read_item(r);
+    for_each_item(r, fram.end, [&](const Item& sub) {
         if (sub.is("FNAM")) {
             frame.name = r.cstr_field(sub.length);
-        } else if (sub.is("CIMG")) {
-            auto name = std::move(frame.name);
-            frame = parse_cimg(r, CimgContext{path, sub});
-            frame.name = std::move(name);
+            return;
         }
-        r.seek(sub.end);
-    }
+        if (!sub.is("CIMG")) return;
+        auto name = std::move(frame.name);
+        frame = parse_cimg(r, CimgContext{path, sub});
+        frame.name = std::move(name);
+    });
     return frame;
 }
 
 SeqStep parse_stat(BinaryReader& r, const Item& stat) {
     SeqStep step;
-    while (r.pos() + 10 <= stat.end) {
-        const Item leaf = read_item(r);
+    for_each_item(r, stat.end, [&](const Item& leaf) {
         if (leaf.is("HEAD") && leaf.length >= 2) {
             step.head0 = r.u16();
-        } else if (leaf.is("FRAM") && leaf.length >= 8) {
-            r.u16();  // unknown, always 1
-            step.frame = r.u16();
-            step.dx = r.i16();
-            step.dy = r.i16();
+            return;
         }
-        r.seek(leaf.end);
-    }
+        if (!leaf.is("FRAM") || leaf.length < 8) return;
+        r.u16();  // unknown, always 1
+        step.frame = r.u16();
+        step.dx = r.i16();
+        step.dy = r.i16();
+    });
     return step;
 }
 
 Sequence parse_sequence(BinaryReader& r, const Item& seq_item) {
     Sequence seq;
-    while (r.pos() + 10 <= seq_item.end) {
-        const Item sub = read_item(r);
+    for_each_item(r, seq_item.end, [&](const Item& sub) {
         if (sub.is("HEAD")) {
             seq.name = r.cstr_field(sub.length);
-        } else if (sub.is("STAT")) {
-            seq.steps.push_back(parse_stat(r, sub));
+            return;
         }
-        r.seek(sub.end);
-    }
+        if (sub.is("STAT")) seq.steps.push_back(parse_stat(r, sub));
+    });
     return seq;
+}
+
+void drop_dangling_steps(Sequence& seq, int frame_count, std::vector<std::string>& warnings) {
+    for (SeqStep& st : seq.steps) {
+        if (st.frame >= -1 && st.frame < frame_count) continue;
+        warnings.push_back("sequence '" + seq.name + "' references frame " +
+                           std::to_string(st.frame) + " (only " + std::to_string(frame_count) +
+                           " exist), dropped");
+        st.frame = -1;
+    }
 }
 
 // POWERS1.ANI/POWERZ.ANI ship a 'power jelly' sequence naming a frame that does
@@ -261,15 +278,7 @@ Sequence parse_sequence(BinaryReader& r, const Item& seq_item) {
 // the dangling step is reset to -1 with a warning rather than throwing.
 void drop_dangling_frame_refs(AniFile& ani) {
     const int frame_count = static_cast<int>(ani.frames.size());
-    for (auto& seq : ani.sequences) {
-        for (auto& st : seq.steps) {
-            if (st.frame >= -1 && st.frame < frame_count) continue;
-            ani.warnings.push_back("sequence '" + seq.name + "' references frame " +
-                                   std::to_string(st.frame) + " (only " +
-                                   std::to_string(frame_count) + " exist), dropped");
-            st.frame = -1;
-        }
-    }
+    for (Sequence& seq : ani.sequences) drop_dangling_steps(seq, frame_count, ani.warnings);
 }
 
 }  // namespace
@@ -287,18 +296,18 @@ AniFile load(const std::filesystem::path& path) {
     if (file_end > buf.size()) fail(path, "declared length overruns file");
 
     AniFile ani;
-    while (r.pos() + 10 <= file_end) {
-        const Item item = read_item(r);
+    for_each_item(r, file_end, [&](const Item& item) {
         if (item.is("CBOX")) {
             ani.cell_width = r.u16();
             ani.cell_height = r.u16();
-        } else if (item.is("FRAM")) {
-            ani.frames.push_back(parse_frame(r, item, path));
-        } else if (item.is("SEQ ")) {
-            ani.sequences.push_back(parse_sequence(r, item));
+            return;
         }
-        r.seek(item.end);
-    }
+        if (item.is("FRAM")) {
+            ani.frames.push_back(parse_frame(r, item, path));
+            return;
+        }
+        if (item.is("SEQ ")) ani.sequences.push_back(parse_sequence(r, item));
+    });
 
     drop_dangling_frame_refs(ani);
     return ani;

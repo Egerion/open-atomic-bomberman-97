@@ -6,11 +6,10 @@
 namespace bomber::game {
 namespace {
 
-// `sub_427F1B`'s first pass: squeeze the holes out of [lo, hi] so the surviving
-// names sit consecutively from `lo`. This is what lets a call site name a base
-// the author never used — SOUNDLST has no id 700 at all, yet `sub_427961(700)`
-// is the death taunt, because the compaction has moved 701 down into 700 by
-// then. Stable (a swap-based two-cursor walk in the binary, order preserved).
+// `sub_427F1B`'s first pass: squeeze the holes out of [lo, hi] so survivors sit
+// consecutively from `lo`. This is what lets a call site name a base the author
+// never used — SOUNDLST has no id 700, yet `sub_427961(700)` is the death taunt,
+// because compaction has moved 701 down into it. Stable, as the binary is.
 void compact(std::vector<std::string>& slots, int lo, int hi) {
     const int end = std::min(hi, static_cast<int>(slots.size()) - 1);
     int write = lo;
@@ -53,13 +52,9 @@ void SoundBank::load(const assets::res::SoundList& list, std::uint32_t seed) {
     for (const auto& [id, name] : list.names)
         if (id >= 0) slots_[static_cast<std::size_t>(id)] = name;
 
-    // The load-time cull. `sub_42814B` runs this once per SOUNDLST load, and
-    // SOUNDLST is reloaded whenever the sound cache is voluntarily cleared
-    // (VALUELST id 7, "how many seconds between voluntary clearings ... and
-    // RE-CHOOSING/re-loading of the soundlst.res file", 1800 s) — so a long
-    // session can even re-roll its subsets mid-play. The port only culls at
-    // load; the 30-minute re-roll is deliberately not ported (see
-    // docs/re/sound-engine.md).
+    // The load-time cull (`sub_42814B`). The original also re-rolls these
+    // subsets every 30 minutes (VALUELST id 7's SOUNDLST re-load); the port
+    // culls at load only, deliberately (docs/re/sound-engine.md).
     for (const CullRange& r : cull_table()) {
         if (r.lo >= static_cast<int>(slots_.size())) continue;
         compact(slots_, r.lo, r.hi);
@@ -104,13 +99,10 @@ int SoundBank::pick(int id) {
     const int n = group_size(id);
     if (n == 0) return -1;
 
-    // Least-played-first. `sub_427961` takes the minimum play count over the
-    // group, then draws uniformly until it hits a member sitting at that
-    // minimum — an equal-use shuffle, NOT a plain uniform pick: within a cycle
-    // every member is heard exactly once, and the order is re-randomised each
-    // cycle. The 200-draw ceiling is the binary's; on exhaustion it plays
-    // whatever the last draw was, so a large group degrades to uniform rather
-    // than hanging.
+    // Least-played-first: take the group minimum, then draw uniformly until a
+    // member sitting at it comes up. An equal-use shuffle, NOT a uniform pick.
+    // The 200-draw ceiling is the binary's — on exhaustion it plays the last
+    // draw, so a large group degrades to uniform rather than hanging.
     const std::size_t base = static_cast<std::size_t>(id);
     int least = plays_[base];
     for (std::size_t j = 1; j < static_cast<std::size_t>(n); ++j)
@@ -140,11 +132,10 @@ int SoundBank::pick_debounced(int id, std::uint64_t frame) {
 
 int SoundBank::pick_exact(int id, std::uint64_t frame) {
     if (name(id) == nullptr) return -1;
-    // `counts[id] = dword_464994` (0x427950). An ASSIGNMENT of the frame
-    // counter, not an increment — see the header for what that costs the group.
-    // The clamp is the port's only addition: `plays_` is `int` and the caller
-    // hands us a 64-bit tick, and a saturated counter is indistinguishable from
-    // any other very large one as far as the least-played test is concerned.
+    // `counts[id] = dword_464994` (0x427950) — an ASSIGNMENT, not an increment;
+    // the header explains what that costs the group. The clamp is the port's
+    // only addition: `plays_` is int and the caller hands us a 64-bit tick, and
+    // a saturated counter is indistinguishable from any other very large one.
     constexpr std::uint64_t kMax = static_cast<std::uint64_t>(std::numeric_limits<int>::max());
     plays_[static_cast<std::size_t>(id)] = static_cast<int>(frame < kMax ? frame : kMax);
     return id;

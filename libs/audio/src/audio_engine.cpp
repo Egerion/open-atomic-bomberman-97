@@ -16,29 +16,23 @@ std::string to_upper(std::string s) {
 }  // namespace
 
 AudioEngine::~AudioEngine() {
-    // RAII teardown for the raw SDL handles init() opened. Destroying a stream
-    // created by SDL_OpenAudioDeviceStream also closes the logical device opened
-    // alongside it (SDL_audio.h), so no separate SDL_CloseAudioDevice is needed.
-    // A partial init leaves the not-yet-opened slots null (streams_ is value-
-    // initialized, music_stream_ starts null), so skipping nulls destroys
-    // exactly what was created before any mid-init failure — each stream once.
+    // Destroying a stream from SDL_OpenAudioDeviceStream also closes the logical
+    // device opened alongside it, so no separate SDL_CloseAudioDevice. Skipping
+    // nulls is what makes a PARTIAL init safe: the slots init() never reached are
+    // still value-initialized, so each stream is destroyed exactly once.
     for (SDL_AudioStream* stream : streams_)
         if (stream) SDL_DestroyAudioStream(stream);
     if (music_stream_) SDL_DestroyAudioStream(music_stream_);
     if (sting_stream_) SDL_DestroyAudioStream(sting_stream_);
-    // Balance init()'s SDL_InitSubSystem. It is refcounted, so audio only truly
-    // shuts down once every owner has quit; guard on audio_inited_ so we undo
-    // solely a bring-up this instance performed.
+    // SDL_InitSubSystem is refcounted, so only undo a bring-up this instance did.
     if (audio_inited_) SDL_QuitSubSystem(SDL_INIT_AUDIO);
 }
 
 bool AudioEngine::init(const std::filesystem::path& game_dir,
                        const std::function<void(float)>& progress) {
-    // Coarse boot "Loading sound..." percents (mirrors sub_4287B9's fixed
-    // 5/20/40/60/80/100 steps). The port loads .RSS clips lazily rather than
-    // preloading SOUNDLST groups, so the real work here is the device/stream
-    // bring-up + the SOUNDLST index read — still reported in the same shape so
-    // the second boot flash animates instead of snapping to a full bar.
+    // sub_4287B9's fixed 5/20/40/60/80/100 steps. The port loads .RSS lazily, so
+    // the real work is the device bring-up plus the SOUNDLST read — reported in
+    // the same shape so the boot bar animates instead of snapping to full.
     auto step = [&](float f) {
         if (progress) progress(f);
     };
@@ -74,36 +68,25 @@ bool AudioEngine::init(const std::filesystem::path& game_dir,
         voice_cap_ = kDefaultVoiceCap;  // unreadable VALUELST: keep the authored 5
     }
 
-    // Seed the cosmetic generator from the clock and build the slot table —
-    // this is the moment the original picks the session's random SUBSET of each
-    // large voice group (sub_42814B's cull pass) and zeroes the play counters
-    // (0x428480/0x42849F allocate both arrays here). A FIXED seed was the whole
-    // reason the title sting never varied between launches: the pick was random
-    // but the sequence was identical every boot.
+    // The moment the original picks this session's random SUBSET of each large
+    // voice group (sub_42814B's cull). The clock seed is load-bearing: a FIXED
+    // one made the title sting identical every launch.
     //
-    // DETERMINISM: this is the presentation-side generator (root CLAUDE.md rule
-    // 6). The original draws its sound picks from the SAME libc rand() that the
-    // gameplay code uses — worth recording, but the port deliberately keeps the
-    // two apart: a wall-clock seed anywhere near sim::State::rng would desync
-    // every online match and move every golden hash.
+    // DETERMINISM: presentation-side generator only (CLAUDE.md rule 6). The
+    // original draws sound picks from the SAME libc rand() as gameplay; the port
+    // deliberately does not, because a wall-clock seed anywhere near
+    // sim::State::rng would desync every online match and move every golden.
     bank_.load(names, static_cast<std::uint32_t>(SDL_GetPerformanceCounter()));
 
     step(0.80f);
     music_stream_ =
         SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
     if (music_stream_) {
-        // NO music duck. The original attenuates NOTHING: the master volume is
-        // set exactly once, at sound-system bring-up (0x4194F0), to 0x7FFF =
-        // maximum, and every sound object — music and SFX alike — is born at
-        // 0x7FFF too (the constructor's own store at 0x4197A9). The per-object
-        // SetVolume wrapper sub_41A50D has five callers and ALL five live inside
-        // the sound library, replaying an object's already-stored level; no game
-        // code ever asks for a level. So music and effects share one bus at full
-        // scale and their relative loudness is whatever the authored .RSS files
-        // carry. (docs/re/sound-engine.md §9. This line used to apply a 0.55
-        // gain "to sit under the effects" — an invented constant with no
-        // citation, and audibly wrong: it made every music track two thirds the
-        // level the 1997 mix intended.)
+        // NO music duck, deliberately. The original attenuates nothing: master
+        // volume is set once at bring-up to maximum and every sound object is
+        // born there, so music and effects share one bus at full scale
+        // (docs/re/sound-engine.md §9). This line once applied a 0.55 gain "to
+        // sit under the effects" — an invented constant, and audibly wrong.
         SDL_ResumeAudioStreamDevice(music_stream_);
     }
     sting_stream_ =
@@ -134,9 +117,8 @@ void AudioEngine::start_music(int id) {
 }
 
 void AudioEngine::stop_music() {
-    // The analogue of the original's sub_427342 "free the music handle": the
-    // current track stops and nothing loops until the next start_music().
-    // Clearing music_ makes update_music() a no-op (its empty() guard).
+    // sub_427342's "free the music handle". Clearing music_ is what makes
+    // update_music() a no-op, so nothing loops until the next start_music().
     music_.samples.clear();
     if (ok_ && music_stream_) SDL_ClearAudioStream(music_stream_);
 }
@@ -176,17 +158,13 @@ void AudioEngine::play_debounced(int id, std::uint64_t frame) {
 
 void AudioEngine::play_sting(int lo, int hi) {
     if (!ok_) return;
-    // sub_427BFB: the same group pick play() makes, but the binary builds its
-    // own sound object outside the counted pool, so the cap can neither refuse
-    // it nor be charged for it. One dedicated stream mirrors that (and one sting
-    // at a time is all the four call sites can ever produce).
+    // sub_427BFB: play()'s group pick onto a sound object outside the counted
+    // pool, so the cap can neither refuse it nor be charged for it.
     const int slot = bank_.pick(lo);
-    // `hi` is the caller's authored-block end. A group is the contiguous run of
-    // occupied slots from `lo` and knows nothing about where the block stops, so
-    // a block with no hole before the next one's base would let this land among
-    // the NEXT block's takes. Dropped rather than played as the wrong voice; the
-    // pick is charged either way, exactly as the counted path this replaced
-    // charged it.
+    // A group is the contiguous run from `lo` and knows nothing about where the
+    // authored block stops, so without `hi` this could land among the NEXT
+    // block's takes. Dropped rather than played wrong; the pick is charged
+    // either way.
     if (hi >= 0 && (slot < lo || slot > hi)) return;
     start_voice(slot, false);
 }
@@ -219,19 +197,17 @@ void AudioEngine::start_voice(int slot, bool counted) {
 
     SDL_PutAudioStreamData(stream, snd->samples.data(),
                            static_cast<int>(snd->samples.size() * 2));
-    // One-shot clip: flushing lets the resampler drain completely, so the
-    // stream's queue really reaches zero when playback ends. Without this
-    // every stream stays "busy" forever and sound dies after a few clips.
+    // REQUIRED: without the flush the resampler never drains, every stream stays
+    // "busy" forever, and sound dies after a few clips.
     SDL_FlushAudioStream(stream);
 }
 
 std::uint32_t AudioEngine::next_rand() { return bank_.next_rand(); }
 
 const assets::rss::Sound* AudioEngine::get(int slot) {
-    // Names come from the BANK, not raw SOUNDLST: the load-time cull compacts
-    // each culled block, so after load a slot holds whichever survivor landed
-    // there, not the id SOUNDLST authored. The cache is keyed by clip name for
-    // the same reason — several slots can legitimately name the same file.
+    // Names come from the BANK, not raw SOUNDLST: the cull compacts each block,
+    // so a slot holds whichever survivor landed there. The cache is keyed by
+    // NAME for the same reason — several slots can name the same file.
     const std::string* name = bank_.name(slot);
     if (!name) return nullptr;
     if (auto it = cache_.find(*name); it != cache_.end()) return &it->second;

@@ -30,16 +30,15 @@ struct Actor {
     bool random = false;      // trampoline placed with -T,H (resolved by caller RNG)
 };
 
-// Parses the text into actors. Numeric coordinates are normalized against
-// (board_w, board_h) exactly as sub_404E99 does (wrap negatives, clamp overs).
-// A '-T,H,H' line yields an Actor with random==true and x/y unset — the CALLER
-// resolves those with a setup-only RNG so the sim's per-tick RNG stream is
-// untouched (docs/re/stage-actors.md §8). Missing file => empty vector (a board
-// with no EXTRA<N>.RES simply has no actors). Malformed lines are skipped
-// (the format is lenient; the original aborts, but we prefer to keep playing).
+// Coordinates are normalized against the board exactly as sub_404E99 does. A
+// '-T,H,H' line yields random==true with x/y unset: the CALLER resolves those
+// with a setup-only RNG, so the sim's per-tick stream stays untouched
+// (docs/re/stage-actors.md §8).
+//
+// A missing file is an empty vector, and a malformed line is skipped — the
+// original aborts there, but a board is still playable without one actor.
 std::vector<Actor> parse(const std::filesystem::path& path, int board_w, int board_h);
 
-// Convenience: build the EXTRA<board>.RES path under a game dir and parse it.
 std::vector<Actor> load_for_board(const std::filesystem::path& game_dir, int board, int board_w,
                                   int board_h);
 
