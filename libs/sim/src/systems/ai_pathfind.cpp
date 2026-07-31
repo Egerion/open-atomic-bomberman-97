@@ -5,9 +5,10 @@
 
 #include "systems/ai.hpp"
 
+#include <array>
+
 #include "bomber/sim/rng.hpp"
 #include "grid.hpp"
-#include "systems/ai_internal.hpp"  // kDX / kDY godir vectors
 
 namespace bomber::sim {
 
@@ -33,10 +34,11 @@ int AISystem::flee_bfs(int sx, int sy, int& best_x, int& best_y) {
     struct Node {
         int x, y, first, depth;
     };
-    Node open[100];
+    std::array<Node, 100> open{};
     int open_n = 0;
 
-    static thread_local std::uint64_t visited_epoch[kGridHeight][kGridWidth] = {};
+    static thread_local std::array<std::array<std::uint64_t, kGridWidth>, kGridHeight>
+        visited_epoch{};
     static thread_local std::uint64_t epoch = 0;
     ++epoch;
 
@@ -44,10 +46,13 @@ int AISystem::flee_bfs(int sx, int sy, int& best_x, int& best_y) {
     best_y = sy;
     // The best-tracker inits at 10000 (sub_40970B 9936), NOT at the start
     // tile's own danger — so with ANY open neighbour the BFS returns a step,
-    // even when nothing beats the danger the AI is standing in; -1 means
-    // "fully boxed in", nothing else (CORRECTED 2026-07-12, facts.md "AI
-    // danger map" item 4 — the old start-danger init returned -1 whenever no
-    // strictly-safer tile existed, sending the caller down the chain).
+    // even when nothing beats the danger the AI is standing in; -1 essentially
+    // means "fully boxed in" (CORRECTED 2026-07-12, facts.md "AI danger map"
+    // item 4 — the old start-danger init returned -1 whenever no strictly-safer
+    // tile existed, sending the caller down the chain). One other path reaches
+    // -1: the frontier cap below (`open_n < 100`) drops pushes once the queue is
+    // full, and best_x/best_y are written BEFORE that guard, so on a very open
+    // board a tile can win the best-tracker without ever being enqueued.
     std::int32_t best_danger = 10000;
 
     // Seed with the (up to 4) open, in-bounds neighbours of the start, each
@@ -71,7 +76,7 @@ int AISystem::flee_bfs(int sx, int sy, int& best_x, int& best_y) {
         }
     };
     visited_epoch[sy][sx] = epoch;
-    for (int g = 0; g < 4; ++g) consider(sx + kDX[g], sy + kDY[g], g);
+    for (int g = 0; g < 4; ++g) consider(sx + grid::kDx[g], sy + grid::kDy[g], g);
     if (best_danger == 0) {
         // A neighbour is already safe — return the first step toward it.
         for (int k = 0; k < open_n; ++k)
@@ -90,7 +95,7 @@ int AISystem::flee_bfs(int sx, int sy, int& best_x, int& best_y) {
         if (cur.depth >= 20) continue;
         for (int s2 = 0; s2 < 4; ++s2) {
             const int g = tie > 0 ? s2 : (3 - s2);
-            const int nx = cur.x + kDX[g], ny = cur.y + kDY[g];
+            const int nx = cur.x + grid::kDx[g], ny = cur.y + grid::kDy[g];
             if (obstacle_at(nx, ny)) continue;
             if (visited_epoch[ny][nx] == epoch) continue;
             visited_epoch[ny][nx] = epoch;
@@ -140,10 +145,11 @@ int AISystem::directed_bfs(int sx, int sy, int tx, int ty, int max_depth, int& o
     struct Node {
         int x, y, first;
     };
-    Node open[100];
+    std::array<Node, 100> open{};
     int open_n = 0;
 
-    static thread_local std::uint64_t visited_epoch[kGridHeight][kGridWidth] = {};
+    static thread_local std::array<std::array<std::uint64_t, kGridWidth>, kGridHeight>
+        visited_epoch{};
     static thread_local std::uint64_t epoch = 0;
     ++epoch;
 
@@ -164,7 +170,7 @@ int AISystem::directed_bfs(int sx, int sy, int tx, int ty, int max_depth, int& o
     };
     visited_epoch[sy][sx] = epoch;
     for (int g = 0; g < 4; ++g) {
-        const int hit = seed(sx + kDX[g], sy + kDY[g], g);
+        const int hit = seed(sx + grid::kDx[g], sy + grid::kDy[g], g);
         if (hit) {
             // A neighbour IS the goal: found in "pass 0", so out_iters == 0 — this
             // matches the original's ring counter, which is not yet
@@ -191,7 +197,7 @@ int AISystem::directed_bfs(int sx, int sy, int tx, int ty, int max_depth, int& o
         const Node cur = open[head++];
         for (int s2 = 0; s2 < 4; ++s2) {
             const int g = tie > 0 ? s2 : (3 - s2);
-            const int nx = cur.x + kDX[g], ny = cur.y + kDY[g];
+            const int nx = cur.x + grid::kDx[g], ny = cur.y + grid::kDy[g];
             if (obstacle_at(nx, ny)) continue;
             if (nx == tx && ny == ty) {
                 return cur.first;  // reached the goal: first step of this path
@@ -205,8 +211,9 @@ int AISystem::directed_bfs(int sx, int sy, int tx, int ty, int max_depth, int& o
     // while loop above never ran and out_iters is still its initial 0): the
     // original's do..while ALWAYS completes one pass before testing its loop
     // condition, so its ring counter (our iters) becomes 1 even when nothing was found
-    // (pseudo.c 9705-9821) -- it is never left at 0 once the function is
-    // actually invoked. Behaviours 5/6 gate their unreachable-target give-up
+    // (pseudo.c 9705-9821). NOTE this normalisation is only reached on the
+    // exhaustion path: the coincident start/goal early-out above returns before
+    // it and DOES leave out_iters at 0. Behaviours 5/6 gate their unreachable-target give-up
     // draw on `iters == 0`, so leaving this at 0 draws a spurious extra
     // rand()%2 in the boxed-in case (RESOLVED, docs/re/ai.md §5.1/§9). This is
     // a no-op whenever any neighbour WAS seeded: the ring-drain above already
@@ -237,10 +244,11 @@ int AISystem::powerup_scan_bfs(int sx, int sy, int max_depth, int& out_iters, in
     struct Node {
         int x, y, first;
     };
-    Node open[100];
+    std::array<Node, 100> open{};
     int open_n = 0;
 
-    static thread_local std::uint64_t visited_epoch[kGridHeight][kGridWidth] = {};
+    static thread_local std::array<std::array<std::uint64_t, kGridWidth>, kGridHeight>
+        visited_epoch{};
     static thread_local std::uint64_t epoch = 0;
     ++epoch;
 
@@ -264,7 +272,7 @@ int AISystem::powerup_scan_bfs(int sx, int sy, int max_depth, int& out_iters, in
     // Fixed 0..3 seed order, same as directed_bfs above (sub_4092A1's plain
     // seed loop; the tie draw only steers the expansion below).
     for (int g = 0; g < 4; ++g) {
-        const int hit = seed(sx + kDX[g], sy + kDY[g], g);
+        const int hit = seed(sx + grid::kDx[g], sy + grid::kDy[g], g);
         if (hit) {
             out_iters = 0;  // "pass 0" hit — matches the original's ring counter
             return hit - 1;
@@ -281,7 +289,7 @@ int AISystem::powerup_scan_bfs(int sx, int sy, int max_depth, int& out_iters, in
         const Node cur = open[head++];
         for (int s2 = 0; s2 < 4; ++s2) {
             const int g = tie > 0 ? s2 : (3 - s2);
-            const int nx = cur.x + kDX[g], ny = cur.y + kDY[g];
+            const int nx = cur.x + grid::kDx[g], ny = cur.y + grid::kDy[g];
             if (obstacle_at(nx, ny)) continue;
             if (is_powerup(nx, ny)) {
                 found_x = nx;
@@ -308,7 +316,7 @@ int AISystem::powerup_scan_bfs(int sx, int sy, int max_depth, int& out_iters, in
 // so the AI never voluntarily walks into flame even when the flee said to.
 int AISystem::flame_veto(int i, int tx, int ty, int g) {
     if (g < 0) return g;
-    const int nx = tx + kDX[g], ny = ty + kDY[g];
+    const int nx = tx + grid::kDx[g], ny = ty + grid::kDy[g];
     if (grid::in_grid(nx, ny) && s_.flame[ny][nx] > 0) {
         s_.brains[i].state_flag = 0;
         return -1;

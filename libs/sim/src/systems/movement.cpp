@@ -46,26 +46,16 @@ void MovementSystem::move(Player& p, Direction d, std::int32_t extra_budget, Ste
     State& s = s_;
     p.facing = d;
 
-    // Unit vectors in the original's godir order: 0=Up, 1=Right, 2=Down, 3=Left.
-    // (Our Direction enum orders differently, so map through godir explicitly —
-    // the (dir±1)&3 rotations below depend on this specific ordering.)
-    static constexpr int DX[4] = {0, 1, 0, -1};
-    static constexpr int DY[4] = {-1, 0, 1, 0};
-    auto godir = [](Direction dd) -> int {
-        switch (dd) {
-            case Direction::Up: return 0;
-            case Direction::Right: return 1;
-            case Direction::Down: return 2;
-            case Direction::Left: return 3;
-        }
-        return 1;
-    };
-    auto passable = [&](int tx, int ty) {
+    // Unit vectors in the original's godir order: 0=Up, 1=Right, 2=Down, 3=Left
+    // (grid::kDx / grid::kDy — one definition for the whole library). Our
+    // Direction enum orders differently, so map through grid::to_godir
+    // explicitly; the (dir±1)&3 rotations below depend on this exact ordering.
+    const auto passable = [&](int tx, int ty) {
         return grid::tile_open(s, tx, ty) && !grid::bomb_at(s, tx, ty);
     };
 
-    const int g = godir(d);
-    const int dxg = DX[g], dyg = DY[g];
+    const int g = grid::to_godir(d);
+    const int dxg = grid::kDx[g], dyg = grid::kDy[g];
 
     // Per-frame budget accrual (sub_41F29B 23432-23440): the disease factors
     // scale the SPEED first — molasses divides by 3, then hyper/super
@@ -121,30 +111,27 @@ void MovementSystem::move(Player& p, Direction d, std::int32_t extra_budget, Ste
             mdx = dxg;
             mdy = dyg;
             if (perp != 0) {
-                const int pd = perp < 0 ? (g + 1) & 3 : (g + 3) & 3;
-                mdx += DX[pd];
-                mdy += DY[pd];
+                const int pd = (g + (perp < 0 ? 1 : 3)) & 3;
+                mdx += grid::kDx[pd];
+                mdy += grid::kDy[pd];
             }
-        } else if (perp < 0) {
-            // Blocked ahead, leaning one way: round the corner if the L is clear.
-            const int pd = (g + 3) & 3;
-            if (passable(tx + DX[pd], ty + DY[pd]) &&
-                passable(tx + DX[pd] + dxg, ty + DY[pd] + dyg)) {
-                mdx = DX[pd];
-                mdy = DY[pd];
-            }
-        } else if (perp > 0) {
-            const int pd = (g + 1) & 3;
-            if (passable(tx + DX[pd], ty + DY[pd]) &&
-                passable(tx + DX[pd] + dxg, ty + DY[pd] + dyg)) {
-                mdx = DX[pd];
-                mdy = DY[pd];
+        } else if (perp != 0) {
+            // Blocked ahead, leaning one way: round the corner if the L is
+            // clear. The rotation is the MIRROR of the glide above (3 where the
+            // glide takes 1), which is why the two cannot share one expression;
+            // the perp<0 and perp>0 arms were otherwise byte-identical and are
+            // now one branch.
+            const int pd = (g + (perp < 0 ? 3 : 1)) & 3;
+            if (passable(tx + grid::kDx[pd], ty + grid::kDy[pd]) &&
+                passable(tx + grid::kDx[pd] + dxg, ty + grid::kDy[pd] + dyg)) {
+                mdx = grid::kDx[pd];
+                mdy = grid::kDy[pd];
             }
         } else if (along > 0) {
             // Blocked, centred on the lane, past the tile centre: settle back to it.
             const int opp = (g + 2) & 3;
-            mdx = DX[opp] * along;
-            mdy = DY[opp] * along;
+            mdx = grid::kDx[opp] * along;
+            mdy = grid::kDy[opp] * along;
         }
 
         p.x = (px + mdx) * kScale;

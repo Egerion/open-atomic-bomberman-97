@@ -17,8 +17,8 @@ namespace bomber::sim {
 // Determinism (ADR-0003 / CLAUDE.md): integer only; all randomness through
 // State::rng in the RE'd order/count (docs/re/ai.md §8). The danger grid and
 // obstacle grid are per-tick scratch (rebuilt each tick from hashed State, like
-// State::events) and are NEVER hashed. The only hashed AI state is Player::ai
-// and State::brains.
+// State::events) and are NEVER hashed. The hashed state the AI reads or writes
+// is Player::ai, Player::team (see same_team below) and State::brains.
 //
 // STAGE 2 SCOPE: the dispatcher (draws A/B), the danger + obstacle grids, the
 // flee branch of behaviour 2 (sub_40B20F) with its flee BFS (sub_40970B) and
@@ -67,8 +67,12 @@ public:
     // draw A, the fired behaviour's draws, the trailing scratch draw B (A/B
     // are heap-debug residue kept for exact RNG parity — docs/re/ai.md
     // §2/§8). The danger and obstacle grids are (re)built lazily on the first
-    // decide() of the TICK — the original rebuilds them per frame, but bombs/
-    // flames are static between our sub-frames, so one build is identical.
+    // decide() of the TICK, where the original rebuilds them every FRAME. That
+    // is a documented approximation, not an equivalence: flames are indeed
+    // static across a tick's sub-frames, but bombs are NOT — the bomb-action
+    // tail runs per sub-frame, so a bomb dropped on sub-frame k is invisible to
+    // danger_/obstacle_ for the rest of that tick, and the carried-bomb stamp is
+    // taken from a carrier position that moves every sub-frame.
     void decide(int i, PlayerInput& out, std::int32_t delta_ms);
 
 private:

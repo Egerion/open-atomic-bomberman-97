@@ -7,10 +7,10 @@
 #include "systems/ai.hpp"
 
 #include <algorithm>  // std::max for the blast-bricks getvalue(915) clamp
+#include <array>
 
 #include "bomber/sim/rng.hpp"
 #include "grid.hpp"
-#include "systems/ai_internal.hpp"  // kDX / kDY godir vectors
 
 namespace bomber::sim {
 
@@ -28,8 +28,8 @@ namespace {
 // of the OOB read, not a crash — it never faults in practice). Index 2 is the
 // AI's own tile; the original excludes self by zeroing its actor +0 across the
 // sub_421CB5 probe, which our scan mirrors by skipping the self slot.
-constexpr int kEnemyScanX[5] = {-1, 0, 0, 0, 1};  // dword_45BAB0[0..4] (OOB tail)
-constexpr int kEnemyScanY[5] = {0, -1, 0, 1, 0};  // dword_45BA9C[5]
+constexpr std::array<int, 5> kEnemyScanX = {-1, 0, 0, 0, 1};  // dword_45BAB0[0..4] (OOB tail)
+constexpr std::array<int, 5> kEnemyScanY = {0, -1, 0, 1, 0};  // dword_45BA9C[5]
 
 }  // namespace
 
@@ -50,7 +50,7 @@ constexpr int kEnemyScanY[5] = {0, -1, 0, 1, 0};  // dword_45BA9C[5]
 // (bomb.owner==self) — the same reduction player_turn's own grab block uses.
 // ---------------------------------------------------------------------------
 bool AISystem::behave_grab_drop(int i, PlayerInput& out) {
-    Player& p = s_.players[i];
+    const Player& p = s_.players[i];
     if (!p.grab) return false;  // sub_40BD44: !+92 -> not our behaviour
 
     if (p.carrying) {
@@ -92,7 +92,7 @@ bool AISystem::behave_grab_drop(int i, PlayerInput& out) {
 // branch passes down unless boxed in. Returns true if it acted.
 // ---------------------------------------------------------------------------
 bool AISystem::behave_walk_path(int i, PlayerInput& out) {
-    Player& p = s_.players[i];
+    const Player& p = s_.players[i];
     Brain& br = s_.brains[i];
     const int px = p.tile_x(), py = p.tile_y();
 
@@ -207,7 +207,8 @@ bool AISystem::behave_walk_path(int i, PlayerInput& out) {
     if (p.trigger && !p.punch && random_below(s_, 10) == 0) press_action_sustained(out);
     br.has_path_target = false;
     for (int g = 0; g < 4; ++g)
-        if (safe_tile(px + kDX[g], py + kDY[g])) return false;  // a way out exists: pass down
+        // a way out exists: pass down
+        if (safe_tile(px + grid::kDx[g], py + grid::kDy[g])) return false;
     // Boxed in and nowhere safe to step: stall in place and stop the chain.
     write_move(out, -1);
     return true;
@@ -232,7 +233,7 @@ bool AISystem::behave_walk_path(int i, PlayerInput& out) {
 // clearance gates all pass; otherwise this behaviour draws nothing.
 // ---------------------------------------------------------------------------
 bool AISystem::behave_blast_bricks(int i, PlayerInput& out) {
-    Player& p = s_.players[i];
+    const Player& p = s_.players[i];
     Brain& br = s_.brains[i];
     const int px = p.tile_x(), py = p.tile_y();
 
@@ -253,7 +254,7 @@ bool AISystem::behave_blast_bricks(int i, PlayerInput& out) {
     // (3) Count orthogonally-adjacent BRICK tiles (sub_425FB9 == 2 -> Cell::Brick).
     int bricks = 0;
     for (int d = 0; d < 4; ++d) {
-        const int nx = px + kDX[d], ny = py + kDY[d];
+        const int nx = px + grid::kDx[d], ny = py + grid::kDy[d];
         if (grid::in_grid(nx, ny) && s_.cells[ny][nx] == Cell::Brick) ++bricks;
     }
 
@@ -299,7 +300,7 @@ bool AISystem::behave_blast_bricks(int i, PlayerInput& out) {
 // the original has. The powerup timer (+28) is NOT reset on acquire.
 // ---------------------------------------------------------------------------
 bool AISystem::behave_seek_powerup(int i, PlayerInput& out) {
-    Player& p = s_.players[i];
+    const Player& p = s_.players[i];
     Brain& br = s_.brains[i];
     const int px = p.tile_x(), py = p.tile_y();
     const int range = s_.tuning.ai_powerup_range;  // getvalue(920) = 4
@@ -326,8 +327,8 @@ bool AISystem::behave_seek_powerup(int i, PlayerInput& out) {
     // Timeout after 500 ms of pursuit (original: `timer(+28) += frameDelta`
     // per frame; give up at `10 * [0x46494C]` = 10 × 50 ms. NO rand draw on
     // this timeout, unlike enemy-seek). The timer is wall-clock ms, accrued
-    // per sub-frame — at the canonical 60 fps that is ~30 decides, exactly
-    // the original's own count.
+    // per sub-frame — at the canonical ~180 fps (kSubFrames = 9) that is
+    // 10 ticks x 9 = ~90 decides over the window.
     br.pow_seek.timer += delta_ms_;
     if (br.pow_seek.timer >= 10 * kMsPerTick) {
         br.pow_seek.active = false;
@@ -360,7 +361,7 @@ bool AISystem::behave_seek_powerup(int i, PlayerInput& out) {
     // Take the step, but only if the next tile is safe to stand on (sub_40A59D);
     // otherwise hold (godir -1). The original records the step dir at +36 first.
     br.pow_seek.step_dir = static_cast<std::int8_t>(first);
-    const int nx = px + kDX[first & 3], ny = py + kDY[first & 3];
+    const int nx = px + grid::kDx[first & 3], ny = py + grid::kDy[first & 3];
     write_move(out, safe_tile(nx, ny) ? first : -1);
     return true;  // acted
 }
@@ -382,14 +383,14 @@ bool AISystem::behave_seek_powerup(int i, PlayerInput& out) {
 // here (we only set action2), so the swing is not suppressed.
 // ---------------------------------------------------------------------------
 bool AISystem::behave_punch(int i, PlayerInput& out) {
-    Player& p = s_.players[i];
+    const Player& p = s_.players[i];
     if (!p.punch) return false;                  // sub_40BE02: !+91 -> not our behaviour
     if (random_below(s_, 4) != 0) return false;  // rand()%4 != 0 -> consider it only 1-in-4
 
     const int px = p.tile_x(), py = p.tile_y();
     int face = -1;
     for (int g = 0; g < 4; ++g) {  // the 4-element godir cross (dword_45BECC/45BEDC)
-        if (grid::bomb_at(s_, px + kDX[g], py + kDY[g]) != nullptr) {
+        if (grid::bomb_at(s_, px + grid::kDx[g], py + grid::kDy[g]) != nullptr) {
             face = g;
             break;  // first bomb found, in godir order (Up,Right,Down,Left)
         }
@@ -431,7 +432,7 @@ bool AISystem::behave_punch(int i, PlayerInput& out) {
 // is found on the cross AND the clearance gate passes; otherwise no draw.
 // ---------------------------------------------------------------------------
 bool AISystem::behave_bomb_enemy(int i, PlayerInput& out) {
-    Player& p = s_.players[i];
+    const Player& p = s_.players[i];
     const int px = p.tile_x(), py = p.tile_y();
 
     // (1) Capacity guard (sub_4245DA(me) >= maxBombs(+86) -> return 0; §9.3
@@ -574,7 +575,7 @@ int AISystem::pick_live_enemy(int self) {
 // tie-break -> [%2 give-up if unreachable]. Returns true if it acted.
 // ---------------------------------------------------------------------------
 bool AISystem::behave_seek_enemy(int i, PlayerInput& out) {
-    Player& p = s_.players[i];
+    const Player& p = s_.players[i];
     Brain& br = s_.brains[i];
     const int px = p.tile_x(), py = p.tile_y();
 
@@ -639,7 +640,7 @@ bool AISystem::behave_seek_enemy(int i, PlayerInput& out) {
     // Take the step, but only if the next tile is safe to stand on (sub_40A59D);
     // otherwise hold (godir -1). The original records the step dir at +20 first.
     br.enemy_seek.step_dir = static_cast<std::int8_t>(first);
-    const int nx = px + kDX[first & 3], ny = py + kDY[first & 3];
+    const int nx = px + grid::kDx[first & 3], ny = py + grid::kDy[first & 3];
     write_move(out, safe_tile(nx, ny) ? first : -1);
     return true;  // acted
 }
@@ -650,7 +651,7 @@ bool AISystem::behave_seek_enemy(int i, PlayerInput& out) {
 // rand()%4 (re-roll when blocked). Returns true if it acted (stepped).
 // ---------------------------------------------------------------------------
 bool AISystem::behave_wander(int i, PlayerInput& out) {
-    Player& p = s_.players[i];
+    const Player& p = s_.players[i];
     Brain& br = s_.brains[i];
     const int px = p.tile_x(), py = p.tile_y();
 
@@ -665,12 +666,12 @@ bool AISystem::behave_wander(int i, PlayerInput& out) {
         const int turn = (br.wander_dir + 2 * static_cast<int>(random_below(s_, 2)) - 1) & 3;
         // Adopt the new turn only if the CURRENT wander dir is itself safe to
         // step (mirrors the original's guard before overwriting wander_dir).
-        if (safe_tile(px + kDX[br.wander_dir & 3], py + kDY[br.wander_dir & 3]))
+        if (safe_tile(px + grid::kDx[br.wander_dir & 3], py + grid::kDy[br.wander_dir & 3]))
             br.wander_dir = static_cast<std::int8_t>(turn);
     }
 
     const int wg = br.wander_dir & 3;
-    if (safe_tile(px + kDX[wg], py + kDY[wg])) {
+    if (safe_tile(px + grid::kDx[wg], py + grid::kDy[wg])) {
         write_move(out, wg);
         return true;  // step that way
     }

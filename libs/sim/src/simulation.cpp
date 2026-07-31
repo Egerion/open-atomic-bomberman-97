@@ -166,6 +166,73 @@ bool on_move_pixel(void* ctx, Player& /*p*/) {
     return resolve_player_field(*c->s, c->index, *c->powerups, *c->diseases);
 }
 
+// Input decode -> godir (0=Up, 1=Right, 2=Down, 3=Left; -1 = no direction).
+//
+// Faithful to the original input decoder sub_41E61E's multi-key resolution
+// block: collect the four direction flags in GODIR order; if more than one is
+// pressed and at least one leads to an open tile, drop the pressed dirs that are
+// blocked; then the LAST surviving index wins. That last-index bias (Left beats
+// Right, Down beats Up) plus the per-pixel mover makes a player held against a
+// wall with two opposite keys vibrate in place — flip facing every frame — which
+// is the original's beloved "crazy back-and-forth" (only vs a left wall for L+R
+// or a bottom wall for U+D; the other side just slides off).
+//
+// The reversed-controls disease (sub_41F29B ~23049) is applied to the RESOLVED
+// godir — `(g + 2) & 3` — AFTER the opposite-key filter ran on the RAW pressed
+// dirs, and BEFORE the ice buffer (the delayed samples store the reversed
+// value). Humans only: the `+16 != 1` gate exempts computer players, whose
+// chosen direction reaches the mover unflipped. The old port swapped the input
+// flags pre-resolution, which fed the passability filter the flipped dirs —
+// divergent under multi-key input.
+//
+// PURE: reads State/Player, mutates nothing, draws NO RNG. That is what makes it
+// safe to lift out of player_turn's sub-frame loop — the call sits at the exact
+// point the inline block did, so the draw order is untouched by construction.
+int decode_godir(const State& s, const Player& p, const PlayerInput& in) {
+    std::array<bool, 4> dir = {in.up, in.right, in.down, in.left};
+    if (dir[0] + dir[1] + dir[2] + dir[3] > 1) {
+        const int ptx = p.tile_x(), pty = p.tile_y();
+        auto passable = [&](int g) {
+            return grid::tile_open(s, ptx + grid::kDx[g], pty + grid::kDy[g]) &&
+                   !grid::bomb_at(s, ptx + grid::kDx[g], pty + grid::kDy[g]);
+        };
+        int open = 0;
+        for (int g = 0; g < 4; ++g)
+            if (dir[g] && passable(g)) ++open;
+        if (open > 0)
+            for (int g = 0; g < 4; ++g)
+                if (dir[g] && !passable(g)) dir[g] = false;
+    }
+    int want_godir = -1;
+    for (int g = 0; g < 4; ++g)
+        if (dir[g]) want_godir = g;
+
+    if (want_godir >= 0 && p.sick(Disease::Reversed) && !p.ai) want_godir = (want_godir + 2) & 3;
+    return want_godir;
+}
+
+// The kick probe's direction: the travel axis while walking, else the belt
+// direction under a standing player — the original's mover runs identically on a
+// conveyor with +46 set to the belt dir, so a belt-forced kick probes along the
+// belt. -1 when neither applies.
+int kick_probe_dir(const State& s, const Player& p, int eff_godir) {
+    if (eff_godir >= 0) return eff_godir;
+    const int ptx = p.tile_x(), pty = p.tile_y();
+    if (grid::in_grid(ptx, pty) && s.actor_type[pty][ptx] == ActorType::Conveyor)
+        return s.actor_dir[pty][ptx];
+    return -1;
+}
+
+// "Sitting EXACTLY on the tile centre along the travel axis" — the branch
+// sub_41EC84 takes when its offset-to-tile-centre temporary for that axis is
+// zero, which is what dispatches sub_424708. Pure, no RNG.
+bool centred_on_axis(const Player& p, int godir) {
+    const int px = static_cast<int>(p.x / kScale), py = static_cast<int>(p.y / kScale);
+    const int sx = ((px % kTileW) + kTileW) % kTileW - kTileW / 2;
+    const int sy = ((py % kTileH) + kTileH) % kTileH - kTileH / 2;
+    return sx * grid::kDx[godir] + sy * grid::kDy[godir] == 0;
+}
+
 // Step 1: one player's turn — stun, movement (with the reversed-controls
 // disease and the per-pixel flame-death/pickup checks), bomb dropping
 // (edge-gated, spooger, auto-drop diseases), and the action2 priority chain:
@@ -209,14 +276,6 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
     int n_sub = ctx.cad.n_sub;
     bool advance_timers = ctx.cad.advance_timers;
 
-    // Unit vectors in godir order (0=Up,1=Right,2=Down,3=Left). Hoisted to the
-    // top so BOTH the input decode and the kick probe below share them; the
-    // (g±1)&3 corner rotations depend on this exact ordering.
-    static constexpr int DX[4] = {0, 1, 0, -1};
-    static constexpr int DY[4] = {-1, 0, 1, 0};
-    static constexpr Direction kGodir[4] = {Direction::Up, Direction::Right, Direction::Down,
-                                            Direction::Left};
-
     // Head-hit stun (Player::stun == the original's WORD +58, sub_421F7E) and
     // grab pickup-pause (Player::pickup_pause == the original's state +78==4
     // window, gated by getvalue(665)/our tuning.pickup_pause) are TWO
@@ -247,7 +306,7 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
     // original (22982-22984 runs at the top of every sub_41F29B call, before
     // the state dispatch) — so it lives in the sub-frame loop below (and in
     // the bounce/warp branches, whose frames still execute 22982): a 16-frame
-    // stun lasts ~267 ms at the canonical 60 fps, not 800 ms. pickup_pause
+    // stun lasts ~89 ms at the canonical ~180 fps, not 800 ms. pickup_pause
     // mirrors the state-4 +80 window, which advances on the 50 ms
     // ms-accumulator like every anim counter — per tick, and (like the old
     // shared-stun code) it blocks the WHOLE tick it is decremented on: gate
@@ -388,18 +447,22 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
     // preserve the pre-existing narrow release-on-entry fix (main's illegal-
     // combo guard) for exactly that case so a carried bomb still doesn't ride
     // through the flight untouched.
-    if (stage.bouncing(p)) {
-        // 22982 (--+58) and the ice block (23058-23078) both sit ABOVE the
-        // state dispatch, so a flight frame still burns stun AND pushes this
-        // frame's -1 godir into the ice buffer — landing on an icy level then
-        // replays neutral input, not a stale pre-flight direction burst
-        // (facts.md "Ice / input-lag", flight-push fix 2026-07-12).
+    // Both flights run the IDENTICAL frame body — the two state branches differ
+    // only in which per-phase timer they tick down at the end — so they share one
+    // body here rather than the two byte-identical copies this used to carry.
+    //
+    // 22982 (--+58) and the ice block (23058-23078) both sit ABOVE the state
+    // dispatch, so a flight frame still burns stun AND pushes this frame's -1
+    // godir into the ice buffer — landing on an icy level then replays neutral
+    // input, not a stale pre-flight direction burst (facts.md "Ice / input-lag",
+    // flight-push fix 2026-07-12).
+    auto flight_turn = [&](bool bouncing) {
         for (int f = 0; f < n_sub; ++f) {
             if (p.stun > 0) --p.stun;
             (void)movement.ice_delay(p, -1);
-            // One tail per FRAME, not per tick: state 5 jumps straight into the
-            // tail on every frame of the flight, so an auto-drop disease cycles
-            // at frame density here exactly as it does on the ground.
+            // One tail per FRAME, not per tick: states 5/6/7 jump straight into
+            // the tail on every frame of the flight, so an auto-drop disease
+            // cycles at frame density here exactly as it does on the ground.
             if (!paused_now()) bomb_actions(/*blocked=*/true, tick_in);
         }
         if (paused_entering) {
@@ -407,7 +470,15 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
             p.prev_action1 = tick_in.action1;
             p.prev_action2 = tick_in.action2;
         }
-        if (advance_timers) stage.tick_bounce(p);
+        if (!advance_timers) return;
+        if (bouncing)
+            stage.tick_bounce(p);
+        else
+            stage.tick_warp(p);
+    };
+
+    if (stage.bouncing(p)) {
+        flight_turn(/*bouncing=*/true);
         return;
     }
 
@@ -421,19 +492,7 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
     // above (the same bomb-action-tail fall-through argument, incl. the
     // pickup-pause carve-out, applies to states 6/7).
     if (stage.warping(p)) {
-        // Same per-frame +58 + ice-buffer note as the bounce branch above.
-        for (int f = 0; f < n_sub; ++f) {
-            if (p.stun > 0) --p.stun;
-            (void)movement.ice_delay(p, -1);
-            if (!paused_now())
-                bomb_actions(/*blocked=*/true, tick_in);  // per FRAME; see the bounce branch
-        }
-        if (paused_entering) {
-            if (p.carrying) bombs.throw_carried(p, i);
-            p.prev_action1 = tick_in.action1;
-            p.prev_action2 = tick_in.action2;
-        }
-        if (advance_timers) stage.tick_warp(p);
+        flight_turn(/*bouncing=*/false);
         return;
     }
 
@@ -441,7 +500,7 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
     // facts.md "Canonical frame cadence"): the original runs input
     // acquisition, the AI brain and the movement-budget accrual once per
     // DISPLAYED frame, not per 50 ms tick. Each iteration below is one
-    // canonical 60 fps frame: acquire (the AI re-decides — its whims and
+    // canonical ~180 fps frame: acquire (the AI re-decides — its whims and
     // timers run at frame rate), decode, push the ice buffer, accrue
     // frame_budget(speed, delta) and step the per-pixel mover — and then the
     // bomb-action TAIL, in the same frame, after the mover, exactly where
@@ -507,70 +566,25 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
         PlayerInput sub_in = tick_in;
         if (ai_sys && !sub_stunned && !frozen) ai_sys->decide(i, sub_in, sched[sub]);
 
-        // Input decode -> want_godir (0=Up,1=Right,2=Down,3=Left, -1 = none).
-        // A stunned player acquires NO new direction: the new-input gate skips
-        // sub_41E61E, so its input direction is not updated this frame. Force
-        // want_godir = -1 and skip the whole opposite-key / reversed-disease
-        // decode for it — the mover then takes the idle branch (stage actors
-        // still drive it), never a keyed one.
-        // Rebuilding want_godir = -1 fresh each sub-frame IS faithful: sub_41F29B
-        // resets the native input direction to -1 UNCONDITIONALLY at the top of
-        // every per-frame pass (batch_0x41F29B.cpp:329) — the write is indexed
-        // as word 23 of the player record, i.e. byte offset +46 — BEFORE the
-        // input gate re-writes it, so a
-        // human who holds no key, or an AI whose behaviour chain commits no
-        // direction, is left at -1 and STOPS (the movement gate at :394 requires
-        // +46 != -1 and so fails). The W3-A audit's "+46 is sticky / never reset"
-        // claim was a FALSE POSITIVE (2026-07-22): its grep for a byte-offset
-        // write to +46 missed this
-        // index-notation reset. So the port's stop-when-the-chain-writes-nothing
-        // is exact, not a divergence — verified, no change.
-        int want_godir = -1;
-        if (!sub_stunned && !frozen) {
-            const bool up = sub_in.up, down = sub_in.down, left = sub_in.left,
-                       right = sub_in.right;
-
-            // Opposite-key resolution, faithful to the original input decoder
-            // (sub_41E61E, its multi-key resolution block): collect the four
-            // direction flags in GODIR
-            // order (0=Up,1=Right,2=Down,3=Left); if more than one is pressed and
-            // at least one leads to an open tile, drop the pressed dirs that are
-            // blocked; then the LAST surviving index wins. That last-index bias
-            // (Left beats Right, Down beats Up) plus the per-pixel mover makes a
-            // player held against a wall with two opposite keys vibrate in place —
-            // flip facing every frame — which is the original's beloved "crazy
-            // back-and-forth" (only vs a left wall for L+R or a bottom wall for
-            // U+D; the other side just slides off). No RNG, no new hashed field,
-            // but trajectories change → golden must be recaptured.
-            const bool godir_pressed[4] = {up, right, down, left};
-            bool dir[4] = {up, right, down, left};
-            if (godir_pressed[0] + godir_pressed[1] + godir_pressed[2] + godir_pressed[3] > 1) {
-                const int ptx = p.tile_x(), pty = p.tile_y();
-                auto passable = [&](int g) {
-                    return grid::tile_open(s, ptx + DX[g], pty + DY[g]) &&
-                           !grid::bomb_at(s, ptx + DX[g], pty + DY[g]);
-                };
-                int open = 0;
-                for (int g = 0; g < 4; ++g)
-                    if (dir[g] && passable(g)) ++open;
-                if (open > 0)
-                    for (int g = 0; g < 4; ++g)
-                        if (dir[g] && !passable(g)) dir[g] = false;
-            }
-            for (int g = 0; g < 4; ++g)
-                if (dir[g]) want_godir = g;
-
-            // Reversed-controls disease (sub_41F29B ~23049): applied to the
-            // RESOLVED godir — `(g + 2) & 3` — AFTER the opposite-key filter ran
-            // on the RAW pressed dirs, and BEFORE the ice buffer (the delayed
-            // samples store the reversed value). Humans only: the `+16 != 1` gate
-            // exempts computer players, whose chosen direction reaches the mover
-            // unflipped. The old port swapped the input flags pre-resolution,
-            // which fed the passability filter the flipped dirs — divergent under
-            // multi-key input.
-            if (want_godir >= 0 && p.sick(Disease::Reversed) && !p.ai)
-                want_godir = (want_godir + 2) & 3;
-        }
+        // Input decode -> want_godir (see decode_godir above for the opposite-key
+        // resolution and the reversed-controls disease; pure, no RNG).
+        //
+        // A stunned or input-frozen player acquires NO new direction: the
+        // new-input gate skips sub_41E61E, so its input direction is not updated
+        // this frame — it stays at -1 and the mover takes the idle branch (stage
+        // actors still drive it), never a keyed one.
+        //
+        // Rebuilding it as -1 fresh each sub-frame IS faithful: sub_41F29B resets
+        // the native input direction to -1 UNCONDITIONALLY at the top of every
+        // per-frame pass (batch_0x41F29B.cpp:329 — the write is indexed as word
+        // 23 of the player record, i.e. byte offset +46) BEFORE the input gate
+        // re-writes it, so a human who holds no key, or an AI whose behaviour
+        // chain commits no direction, is left at -1 and STOPS (the movement gate
+        // at :394 requires +46 != -1 and so fails). The W3-A audit's "+46 is
+        // sticky / never reset" claim was a FALSE POSITIVE (2026-07-22): its grep
+        // for a byte-offset write to +46 missed this index-notation reset. So the
+        // port's stop-when-the-chain-writes-nothing is exact, not a divergence.
+        const int want_godir = (sub_stunned || frozen) ? -1 : decode_godir(s, p, sub_in);
 
         // Ice / input-lag (Hockey Rink, VALUELST ids 450-460; docs/re/facts.md
         // "Ice / input-lag", sub_41F29B ~23058-23078): replaces this frame's
@@ -625,18 +639,8 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
         // forced case (no input) probes along the belt — the original's mover
         // runs identically there with +46 = the belt dir. facts.md
         // "Core-feel audit" §1.
-        int probe = moving ? eff_godir : -1;
-        if (!moving) {
-            const int ptx = p.tile_x(), pty = p.tile_y();
-            if (grid::in_grid(ptx, pty) && s.actor_type[pty][ptx] == ActorType::Conveyor)
-                probe = s.actor_dir[pty][ptx];
-        }
-        if (probe >= 0) {
-            const int px = static_cast<int>(p.x / kScale), py = static_cast<int>(p.y / kScale);
-            const int sx = ((px % kTileW) + kTileW) % kTileW - kTileW / 2;
-            const int sy = ((py % kTileH) + kTileH) % kTileH - kTileH / 2;
-            if (sx * DX[probe] + sy * DY[probe] == 0) bombs.try_kick(p, kGodir[probe], i);
-        }
+        const int probe = kick_probe_dir(s, p, eff_godir);
+        if (probe >= 0 && centred_on_axis(p, probe)) bombs.try_kick(p, grid::from_godir(probe), i);
 
         // The bomb-action tail, in the frame that decided — see the loop's head
         // comment. It sits after the mover and its kick probe because the
@@ -718,6 +722,32 @@ void player_turn(State& s, int i, const PlayerInput& tick_in, TurnContext& ctx) 
     }
 }
 
+// Tick step 1's body: every present, alive player takes its turn, in SLOT ORDER.
+//
+// A computer player resolves its own input INSIDE its player_turn (ADR-0005 §5,
+// updated by the canonical-frame-cadence port): the brain re-decides once per
+// sub-frame in the movement loop — the exact slot where the original calls
+// sub_40A1C6 instead of reading DirectInput (sub_41F29B, gated on the +16==1
+// tag), once per displayed frame. This keeps the AI's RNG draws interleaved with
+// movement in slot order, as the original interleaves the brain and the mover
+// per player, so the loop order here is part of the determinism contract.
+//
+// The original gates the dispatch (including draws A/B) on its new-input flag
+// being set AND dword_4621E0 being zero (sub_41F29B ~23028) — head-hit stun,
+// pickup-pause, and the flight states 5/6/7 all clear that flag (see
+// player_turn's sub-frame loop, which re-evaluates that gate per frame; a
+// blocked AI draws NOTHING that frame, the same as the original skipping the
+// call outright — RESOLVED, docs/re/ai.md §2/§7; facts.md "Player state machine
+// (+78) — COMPLETE"). The present/alive test below covers the entering/dying/
+// dead modes.
+void players_pass(State& s, const TickInputs& inputs, TurnContext& ctx) {
+    for (int i = 0; i < kMaxPlayers; ++i) {
+        const Player& p = s.players[i];
+        if (!p.present || !p.alive) continue;
+        player_turn(s, i, inputs.players[i], ctx);
+    }
+}
+
 // The head checks: flames kill players; floor powerups get picked up (with
 // the pre-pickup cure roll and the skull dispatch). This is the original's
 // NEXT-turn head pair (sub_41F29B 22915-22926) at our rotation's cut point —
@@ -763,7 +793,7 @@ void run_tick(State& s, const TickInputs& inputs, Cadence cad = {},
     BombSystem bombs{s, flames, powerups};
     MovementSystem movement{s};
     StageActorSystem stage{s, movement};
-    EnclosureSystem enclosure{s, flames};
+    EnclosureSystem enclosure{s};
     TileRegenSystem tile_regen{s};
     AISystem ai{s};
     RoverSystem rovers{s};
@@ -781,31 +811,7 @@ void run_tick(State& s, const TickInputs& inputs, Cadence cad = {},
     //    the player turn (mirroring sub_41F29B, which does movement + the actor
     //    branches in one pass). No new tick step: the actor effects are folded
     //    into step 1 exactly where the original applies them.
-    if (phase != TickPhase::Systems) {
-    for (int i = 0; i < kMaxPlayers; ++i) {
-        Player& p = s.players[i];
-        if (!p.present || !p.alive) continue;
-        // A computer player resolves its own input INSIDE its player_turn
-        // (ADR-0005 §5, updated by the canonical-frame-cadence port): the
-        // brain re-decides once per sub-frame in the movement loop — the
-        // exact slot where the original calls sub_40A1C6 instead of reading
-        // DirectInput (sub_41F29B, gated on the +16==1 tag), once per
-        // displayed frame. This keeps the AI's RNG draws interleaved with
-        // movement in slot order, as the original interleaves the brain and
-        // the mover per player.
-        //
-        // The original gates the dispatch (including draws A/B) on its new-input
-        // flag being set AND dword_4621E0 being zero (sub_41F29B ~23028) —
-        // head-hit stun, pickup-pause,
-        // and the flight states 5/6/7 all clear that flag (see player_turn's
-        // sub-frame loop, which re-evaluates that gate per frame; a blocked
-        // AI draws NOTHING that frame, the same as the original skipping the
-        // call outright — RESOLVED, docs/re/ai.md §2/§7; facts.md "Player
-        // state machine (+78) — COMPLETE"). present/alive above covers the
-        // entering/dying/dead modes.
-        player_turn(s, i, inputs.players[i], ctx);
-    }
-    }  // end (phase != Systems): the per-frame movement/AI pass
+    if (phase != TickPhase::Systems) players_pass(s, inputs, ctx);
     // Players-only (F9 per-frame call): stop here — the 50 ms systems pass below
     // is driven separately off the real-time accumulator in Simulation::frame.
     if (phase == TickPhase::Players) return;

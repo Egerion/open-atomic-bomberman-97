@@ -7,7 +7,6 @@
 
 #include "bomber/sim/simulation.hpp"  // enclose_pos / enclose_total for the wall look-ahead
 #include "grid.hpp"
-#include "systems/ai_internal.hpp"  // kDX / kDY godir vectors
 
 namespace bomber::sim {
 
@@ -72,7 +71,7 @@ void AISystem::ensure_grids() {
         raise(bx, by, v);
         for (int d = 0; d < 4; ++d) {
             for (int i = 1; i <= reach; ++i) {
-                const int rx = bx + kDX[d] * i, ry = by + kDY[d] * i;
+                const int rx = bx + grid::kDx[d] * i, ry = by + grid::kDy[d] * i;
                 if (!grid::in_grid(rx, ry)) break;
                 // Stop AT a wall/brick without marking it (flame won't reach a
                 // solid; a brick blocks propagation). Matches sub_425FB9 != 0.

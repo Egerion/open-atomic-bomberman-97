@@ -13,14 +13,10 @@
 
 namespace bomber::sim {
 
-namespace {
-
-// Unit vectors in the original's godir order (0=Up,1=Right,2=Down,3=Left),
-// matching MovementSystem's own table and grid::dir_dx/dir_dy.
-constexpr int kDx[4] = {0, 1, 0, -1};
-constexpr int kDy[4] = {-1, 0, 1, 0};
-
-}  // namespace
+// The godir unit vectors live in grid.hpp (grid::kDx / grid::kDy) — see the
+// one-definition note there.
+using grid::kDx;
+using grid::kDy;
 
 bool RoverSystem::passable(RoverKind kind, int tx, int ty) const {
     const State& s = s_;
@@ -96,17 +92,18 @@ bool RoverSystem::step(Rover& r, int rover_index) {
     State& s = s_;
     // sub_401B5C: budget += speed * frameDelta/frameRef + 100, once per
     // DISPLAYED frame (docs/re/facts.md "Canonical frame cadence"). At the
-    // canonical 60 fps that is THREE accruals per 50 ms tick — and the flat
-    // +100/frame term (which the player's own budget never gets, a genuine
-    // confirmed asymmetry: a rover/ghost always advances at least one pixel
-    // per frame even at speed 0) triples to +300/tick, which is why the
+    // canonical ~180 fps that is kSubFrames = NINE accruals per 50 ms tick — and
+    // the flat +100/frame term (which the player's own budget never gets, a
+    // genuine confirmed asymmetry: a rover/ghost always advances at least one
+    // pixel per frame even at speed 0) multiplies to +900/tick, which is why the
     // original's rovers visibly outpace a same-speed walker. Folding the
-    // three frames into one accrual is EXACT here, not an approximation: the
+    // nine frames into one accrual is EXACT here, not an approximation: the
     // field is static during the rover pass and the per-pixel turn logic
     // (with its RNG draws at tile centres) is a pure function of the pixels
-    // crossed, so three small budget instalments and one summed instalment
+    // crossed, so nine small budget instalments and one summed instalment
     // walk the identical pixel sequence.
-    for (int f = 0; f < kSubFrames; ++f) r.move_budget += frame_budget(r.speed, kSubFrameMs[f]) + 100;
+    for (int f = 0; f < kSubFrames; ++f)
+        r.move_budget += frame_budget(r.speed, kSubFrameMs[f]) + 100;
 
     while (r.move_budget > 0) {
         r.move_budget -= 100;

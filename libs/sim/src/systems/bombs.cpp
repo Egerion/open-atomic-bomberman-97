@@ -436,8 +436,26 @@ void BombSystem::slide(std::size_t index, std::int32_t budget) {
     State& s = s_;
     Bomb& b = s.bombs[index];
     Fixed dist = budget;
+
+    // The SHARED "stop" block (sub_42331C): a jelly bomb REVERSES and keeps
+    // sliding, exactly like bouncing off a wall; only a non-jelly bomb actually
+    // halts. A flame entry, a blocked cell and a kick-stop all fall into it, so
+    // it is written once here rather than transcribed at each of those sites —
+    // the flame and blocked arms carried byte-identical copies.
+    const auto halt_or_bounce = [&](int tx, int ty) {
+        if (b.jelly) {
+            b.dir = grid::from_godir(grid::to_godir(b.dir) + 2);
+            s.events.push_back({Event::Type::JellyBounced, -1, static_cast<std::int8_t>(tx),
+                                static_cast<std::int8_t>(ty), 0});
+            return;
+        }
+        b.moving = false;
+        s.events.push_back({Event::Type::BombStopped, -1, static_cast<std::int8_t>(tx),
+                            static_cast<std::int8_t>(ty), 0});
+    };
+
     while (dist > 0 && b.moving) {
-        int tx = b.tile_x(), ty = b.tile_y();
+        const int tx = b.tile_x(), ty = b.tile_y();
         // Sliding into a flame QUEUES the bomb for forced detonation next
         // tick, not an immediate explosion (sub_42331C checks sub_42708D
         // per pixel-step; pseudo.c 25545-25554 hands the bomb to the chain
@@ -453,23 +471,20 @@ void BombSystem::slide(std::size_t index, std::int32_t budget) {
         // previously the bomb just kept sliding through flame.
         if (grid::in_grid(tx, ty) && s.flame[ty][tx] > 0) {
             flames_.queue_chain(b.id);
-            if (b.jelly) {
-                b.dir = grid::from_godir(grid::to_godir(b.dir) + 2);
-                s.events.push_back({Event::Type::JellyBounced, -1, static_cast<std::int8_t>(tx),
-                                    static_cast<std::int8_t>(ty), 0});
-            } else {
-                b.moving = false;
-                s.events.push_back({Event::Type::BombStopped, -1, static_cast<std::int8_t>(tx),
-                                    static_cast<std::int8_t>(ty), 0});
-            }
+            halt_or_bounce(tx, ty);
             return;
         }
-        Fixed cx = grid::tile_center_x(tx), cy = grid::tile_center_y(ty);
+        const Fixed cx = grid::tile_center_x(tx), cy = grid::tile_center_y(ty);
         Fixed axis = (grid::dir_dx(b.dir) != 0) ? b.x : b.y;
         Fixed center = (grid::dir_dx(b.dir) != 0) ? cx : cy;
         int sign = grid::dir_dx(b.dir) + grid::dir_dy(b.dir);
 
-        Fixed to_center = (center - axis) * sign;
+        // How far this step may travel: a bomb short of the tile centre stops AT
+        // it; one at/past the centre runs on to the next tile boundary. Only the
+        // limit differs — the commit below is shared, where it used to be written
+        // out once per arm.
+        const Fixed to_center = (center - axis) * sign;
+        Fixed limit = to_center;
         if (to_center <= 0) {
             // Stage-actor reactions fire ONLY when the bomb is EXACTLY on the
             // tile centre (both axes) — the original's gate requiring BOTH of
@@ -489,19 +504,17 @@ void BombSystem::slide(std::size_t index, std::int32_t budget) {
             // taught a sliding bomb to teleport here; that was unfaithful and
             // has been removed. See facts.md "Bomb/warphole reconciliation
             // 2026-07-10" for the full truth table and evidence.
-            const bool at_centre = (b.x == cx && b.y == cy);
-            if (at_centre && grid::in_grid(tx, ty)) {
-                const ActorType at = s.actor_type[ty][tx];
-                if (at == ActorType::DirArrow) {
-                    b.dir = grid::from_godir(s.actor_dir[ty][tx]);
-                    // A dirarrow overrides a pending kick-stop (sub_42331C
-                    // ~25535 clears +57 in the same branch that re-steers).
-                    b.stop_pending = false;
-                    // recompute the axis/centre/sign for the new direction
-                    axis = (grid::dir_dx(b.dir) != 0) ? b.x : b.y;
-                    center = (grid::dir_dx(b.dir) != 0) ? cx : cy;
-                    sign = grid::dir_dx(b.dir) + grid::dir_dy(b.dir);
-                }
+            const bool on_dirarrow = b.x == cx && b.y == cy && grid::in_grid(tx, ty) &&
+                                     s.actor_type[ty][tx] == ActorType::DirArrow;
+            if (on_dirarrow) {
+                b.dir = grid::from_godir(s.actor_dir[ty][tx]);
+                // A dirarrow overrides a pending kick-stop (sub_42331C ~25535
+                // clears +57 in the same branch that re-steers).
+                b.stop_pending = false;
+                // recompute the axis/centre/sign for the new direction
+                axis = (grid::dir_dx(b.dir) != 0) ? b.x : b.y;
+                center = (grid::dir_dx(b.dir) != 0) ? cx : cy;
+                sign = grid::dir_dx(b.dir) + grid::dir_dy(b.dir);
             }
             // Kick+action2 stop (sub_42331C fires it when the +57 stop flag is
             // set AND its signed centre-offset temporary for the move axis has
@@ -521,7 +534,7 @@ void BombSystem::slide(std::size_t index, std::int32_t budget) {
                                     static_cast<std::int8_t>(ty), 0});
                 return;
             }
-            int nx = tx + grid::dir_dx(b.dir), ny = ty + grid::dir_dy(b.dir);
+            const int nx = tx + grid::dir_dx(b.dir), ny = ty + grid::dir_dy(b.dir);
             // The cell-entry probe mirrors sub_4230A5's order: a bomb or a
             // player on the probed cell blocks FIRST (and shields anything
             // else there); only then a visible floor powerup on the cell is
@@ -560,32 +573,20 @@ void BombSystem::slide(std::size_t index, std::int32_t budget) {
                 b.x = cx;
                 b.y = cy;
                 b.stop_pending = false;  // the shared stop block clears +57 on any stop
-                if (b.jelly) {
-                    // Jelly (sub_42331C slide block): reverse and KEEP the
-                    // moving state — it ping-pongs off obstacles instead of
-                    // stopping. Remaining budget is dropped this tick.
-                    b.dir = grid::from_godir(grid::to_godir(b.dir) + 2);
-                    s.events.push_back({Event::Type::JellyBounced, -1,
-                                        static_cast<std::int8_t>(tx),
-                                        static_cast<std::int8_t>(ty), 0});
-                } else {
-                    b.moving = false;
-                    s.events.push_back({Event::Type::BombStopped, -1,
-                                        static_cast<std::int8_t>(tx),
-                                        static_cast<std::int8_t>(ty), 0});
-                }
+                // Jelly reverses and KEEPS the moving state — it ping-pongs off
+                // obstacles instead of stopping; the remaining budget is dropped
+                // this tick either way.
+                halt_or_bounce(tx, ty);
                 return;
             }
-            Fixed boundary =
-                (center - axis) * sign + ((grid::dir_dx(b.dir) != 0) ? kTileWF : kTileHF);
-            Fixed step = std::min(dist, boundary);
-            if (grid::dir_dx(b.dir) != 0) b.x += step * sign; else b.y += step * sign;
-            dist -= step;
-        } else {
-            Fixed step = std::min(dist, to_center);
-            if (grid::dir_dx(b.dir) != 0) b.x += step * sign; else b.y += step * sign;
-            dist -= step;
+            limit = (center - axis) * sign + ((grid::dir_dx(b.dir) != 0) ? kTileWF : kTileHF);
         }
+        const Fixed step = std::min(dist, limit);
+        if (grid::dir_dx(b.dir) != 0)
+            b.x += step * sign;
+        else
+            b.y += step * sign;
+        dist -= step;
     }
 }
 

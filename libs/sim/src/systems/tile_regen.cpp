@@ -1,6 +1,7 @@
 #include "systems/tile_regen.hpp"
 
 #include <algorithm>
+#include <cstdlib>  // std::abs in manhattan(); do not rely on a transitive include
 
 #include "bomber/sim/rng.hpp"
 #include "grid.hpp"
@@ -21,8 +22,9 @@ int manhattan(int ax, int ay, int bx, int by) {
     return std::abs(ax - bx) + std::abs(ay - by);
 }
 
-// sub_422351(radius): are all live players at least `radius` tiles (in the
-// Manhattan sense) away from (cx,cy)? Gated on present+alive, matching the
+// sub_422351(radius): are all live players MORE than `radius` tiles (in the
+// Manhattan sense) away from (cx,cy)? A player at exactly `radius` fails the
+// test — the comparison below is `<= radius`. Gated on present+alive, matching the
 // codebase's own player-iteration convention (grid::player_at, drop_wall) —
 // the original's raw 10-slot struct scan has no visible active check, but
 // iterating unconditionally would have unused array slots (which our
