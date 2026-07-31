@@ -101,10 +101,23 @@ inline sim::MatchConfig build_match_config(const assets::sch::Scheme& scheme, in
         }
     }
 
+    // Slot bound, BOTH ways. `sp.player` is the "-S" row's 1st field exactly as
+    // sch.cpp's to_int() read it, and a scheme is untrusted input like every
+    // other 1997 file the loaders take — more so here, since the game ships a
+    // scheme PICKER and a scheme EDITOR, so a hand-edited .SCH reaches this line
+    // by design rather than by accident. Unbounded it was an out-of-bounds
+    // vector write: "-S,-1,0,0" makes the `>=` resize test false (it is a SIGNED
+    // comparison), skips the grow, and then indexes `spawns` at size_t(-1);
+    // "-S,2000000000,0,0" resizes toward 16 GB instead. The upper bound is the
+    // original's own: sub_4049C0 seeds exactly 10 start records, so a row naming
+    // a slot outside [0, kMaxPlayers) has nowhere to land and is dropped — the
+    // same rule scheme_setup_teams above already applies to the SAME field.
     for (const auto& sp : scheme.spawns) {
-        if (sp.player >= static_cast<int>(cfg.spawns.size())) cfg.spawns.resize(sp.player + 1);
-        cfg.spawns[sp.player] = {std::clamp(sp.x, 0, sim::kGridWidth - 1),
-                                 std::clamp(sp.y, 0, sim::kGridHeight - 1)};
+        if (sp.player < 0 || sp.player >= sim::kMaxPlayers) continue;
+        const auto slot = static_cast<std::size_t>(sp.player);
+        if (slot >= cfg.spawns.size()) cfg.spawns.resize(slot + 1);
+        cfg.spawns[slot] = {std::clamp(sp.x, 0, sim::kGridWidth - 1),
+                            std::clamp(sp.y, 0, sim::kGridHeight - 1)};
     }
 
     // "Random Start" (options.ini `random_start=`, dword_464AE8, Options
