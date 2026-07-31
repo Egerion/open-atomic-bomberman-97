@@ -3,21 +3,29 @@
 #include <algorithm>
 
 namespace bomber::game {
+namespace {
+
+// sub_4049C0's own wrap: repeated +=/-= rather than a modulo, so a coordinate
+// far outside the board still lands inside it.
+int wrap_into(int v, int extent) {
+    while (v < 0) v += extent;
+    while (v >= extent) v -= extent;
+    return v;
+}
+
+}  // namespace
 
 void EditorGrid::reset(int width, int height,
                        const std::array<std::array<int, 2>, kEditorMaxStarts>* start_xy) {
-    // Guard against a non-positive size: every caller today passes the fixed
-    // 15x11 board, but this is a public, independently-testable entry point
-    // (class doc: "unit-testable without a renderer"), and the start_xy wrap
-    // loops below (`while (x < 0) x += width_` etc.) spin forever on
-    // width_/height_ <= 0. Same fallback idiom as load_from_scheme's own
-    // `scheme.width() > 0 ? ... : kEditorGridWidth` clamp.
+    // Guard a non-positive size: every caller today passes the fixed 15x11
+    // board, but this is a public entry point and wrap_into spins forever on a
+    // zero extent. Same fallback idiom as load_from_scheme's clamp.
     width_ = width > 0 ? width : kEditorGridWidth;
     height_ = height > 0 ? height : kEditorGridHeight;
-    // sub_4049C0 (PINNED): even rows are memcpy'd from ":::::::::::::::"
-    // (all brick), odd rows from ":#:#:#:#:#:#:#:" (brick/solid alternating)
-    // — the classic pillar field, fully bricked. Generalised per-cell for a
-    // non-15-wide board (ours is always 15): solid iff both x and y are odd.
+    // sub_4049C0 memcpy's even rows from ":::::::::::::::" and odd rows from
+    // ":#:#:#:#:#:#:#:" — the classic pillar field, fully bricked. Generalised
+    // per cell for a non-15-wide board (ours is always 15): solid iff both x and
+    // y are odd.
     rows_.assign(static_cast<std::size_t>(height_),
                  std::string(static_cast<std::size_t>(width_), ' '));
     for (int y = 0; y < height_; ++y)
@@ -27,20 +35,22 @@ void EditorGrid::reset(int width, int height,
                                                : brush_to_cell_char(EditorBrush::Brick);
     density_ = 90;  // sub_4049C0: dword_4647A0 = 90
     name_.clear();
+    reset_starts(start_xy);
+    reset_powerups();
+}
+
+void EditorGrid::reset_starts(const std::array<std::array<int, 2>, kEditorMaxStarts>* start_xy) {
     for (int j = 0; j < kEditorMaxStarts; ++j) {
-        // Start positions: VALUELST getvalue(600+2j)/getvalue(601+2j) via the
-        // caller (start_xy), wrapped into the board with the original's
-        // repeated +=/-= loops; team flag = j & 1 (sub_4049C0 writes the slot
-        // index's low bit into the team field at dword_46481C, stride 12,
-        // offset +8).
-        int x = start_xy ? (*start_xy)[static_cast<std::size_t>(j)][0] : 0;
-        int y = start_xy ? (*start_xy)[static_cast<std::size_t>(j)][1] : 0;
-        while (x < 0) x += width_;
-        while (x >= width_) x -= width_;
-        while (y < 0) y += height_;
-        while (y >= height_) y -= height_;
-        starts_[static_cast<std::size_t>(j)] = EditorStart{x, y, (j & 1) != 0};
+        const std::size_t s = static_cast<std::size_t>(j);
+        const int x = start_xy ? (*start_xy)[s][0] : 0;
+        const int y = start_xy ? (*start_xy)[s][1] : 0;
+        // Team flag = the slot index's low bit: sub_4049C0 writes it at
+        // dword_46481C, stride 12, offset +8.
+        starts_[s] = EditorStart{wrap_into(x, width_), wrap_into(y, height_), (j & 1) != 0};
     }
+}
+
+void EditorGrid::reset_powerups() {
     powerups_.clear();
     for (int i = 0; i < kEditorPowerupKinds; ++i) {
         assets::sch::PowerupRule pr;
@@ -104,8 +114,6 @@ void EditorGrid::paint(int x, int y, EditorBrush brush) {
 }
 
 void EditorGrid::flood_fill(EditorBrush brush) {
-    // §5, CONFIRMED: "flood-fill the WHOLE grid with the brush" — not a
-    // connected-region flood fill, so this is a plain full-board stamp.
     for (int y = 0; y < height_; ++y)
         for (int x = 0; x < width_; ++x) paint(x, y, brush);
 }

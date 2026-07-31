@@ -3,32 +3,21 @@
 #include <cstdint>
 
 // The glove (grab) sequence: which player pose the original picks, and where a
-// carried bomb rides while it is held.
+// carried bomb rides while it is held. Pure integer logic lifted from two RE'd
+// functions, so it lives here rather than inside Renderer::draw_world.
 //
-// Both decisions are pure integer logic lifted from two RE'd functions, so they
-// live here (SDL-free, header-only) instead of inside Renderer::draw_world —
-// the headless suite can then pin them (tests/game/test_anim.cpp).
-//
-//  * Pose choice: `sub_41F29B`'s name-build block (LABEL_155 onwards). It first
+//  * Pose choice: `sub_41F29B`'s name-build block (LABEL_155 onwards). It
 //    formats the BASE name from the walk/idle flag and the carried-bomb pointer
-//    (+148) — "stand %s"/"walk %s", or "standbomb %s"/"walkbomb %s" while
-//    carrying — and THEN lets the action-state word (+78) overwrite that whole
-//    buffer with "kick %s" (state 1), "punch %s" (state 2) or "pickup %s"
-//    (state 4). So an action pose BEATS the carry pose, not the other way
-//    round, and the pickup pose is chosen by the state word ALONE: it keeps
-//    playing after the held bomb has been thrown (the release in the
-//    bomb-action block clears +148 but never touches +78). See
-//    docs/re/facts.md "Player state machine (+78) — COMPLETE".
-//
-//  * Carried-bomb offset: `sub_42331C`'s bomb motion-state 3 ("carried")
-//    branch. It reads the CARRIER's +78 and, only while that is 4 (the pickup
-//    animation), walks the 4-point VALUELST pickup curve; in every other state
-//    the bomb rides at a FIXED offset — 10 px along the facing direction and
-//    40 px up, i.e. straight above the head.
-//
-//  * Body animation phase: the SAME state-3 branch also writes the carrier's
-//    +48 (the body anim counter whose /3 is the displayed step) back to 0 —
-//    every frame, for as long as the bomb is held. See `body_phase_next`.
+//    (+148) — "stand %s"/"walk %s", or "standbomb %s"/"walkbomb %s" — and THEN
+//    lets the action-state word (+78) OVERWRITE that whole buffer with "kick %s"
+//    (state 1), "punch %s" (2) or "pickup %s" (4). So an action pose BEATS the
+//    carry pose, and the pickup pose is chosen by the state word ALONE: it keeps
+//    playing after the held bomb has been thrown, because the release clears
+//    +148 but never touches +78. See facts.md "Player state machine (+78)".
+//  * Carried-bomb offset: `sub_42331C`'s motion-state 3 branch. It reads the
+//    CARRIER's +78 and walks the 4-point VALUELST pickup curve only while that
+//    is 4; in every other state the bomb rides at a FIXED 10 px along the facing
+//    direction and 40 px up.
 
 namespace bomber::game {
 
@@ -46,8 +35,8 @@ enum class PlayerPose : std::uint8_t {
     Spin,        // "spin"             — states 6/7 (warp)
 };
 
-// The per-frame flags the pose choice depends on. `moving` is the original's
-// godir != -1 (a direction reached the mover this frame, displacement or not).
+// `moving` is the original's godir != -1 (a direction reached the mover this
+// frame, displacement or not).
 struct PoseFlags {
     bool moving = false;
     bool carrying = false;    // +148, the carried-bomb pointer
@@ -84,19 +73,13 @@ struct CarryOffset {
 // The 4-point pickup curve is indexed by the carrier's +80 (frames elapsed in
 // state 4) MINUS ONE, clamped to 0..3 — `v60 = (+80 >> 16) - 1`.
 //
-// `frames_since_grab` counts our own ticks with 0 on the grab tick, and +80 is
-// zeroed by the grab itself, so this is a straight `-1` and NOT the `-2` a
-// previous pass used. That extra -1 was derived from the claim that the bomb
-// pass runs BEFORE the player pass, which is inverted: `sub_42331C` is called
-// TWICE per frame off the +148 (carry-link) filter in its own first `if`, and
-// the CARRIED half is the second call —
-//
-//     sub_4245B9 -> sub_42331C(0, ..)   // +148 == 0: every un-carried bomb
-//     sub_420F07 -> sub_41F29B          // the players: move, then draw
-//     sub_42459A -> sub_42331C(1, ..)   // +148 != 0: the carried bombs
-//
-// (the frame loop at pseudo.c ~29522-29527). So a carried bomb reads a +80 the
-// player pass has ALREADY advanced this frame, not last frame's value.
+// A straight `-1`, NOT the `-2` a previous pass used. That extra -1 came from
+// the claim that the bomb pass runs BEFORE the player pass, which is inverted:
+// `sub_42331C` is called TWICE per frame off the +148 filter in its own first
+// `if`, and the CARRIED half is the SECOND (the frame loop at pseudo.c
+// ~29522-29527 runs sub_4245B9 -> sub_42331C(0), then sub_420F07 -> sub_41F29B,
+// then sub_42459A -> sub_42331C(1)). A carried bomb therefore reads a +80 the
+// player pass has ALREADY advanced this frame.
 constexpr int carry_arc_index(int frames_since_grab) {
     int k = frames_since_grab - 1;
     if (k < 0) k = 0;
@@ -104,50 +87,38 @@ constexpr int carry_arc_index(int frames_since_grab) {
     return k;
 }
 
-// While a bomb is held, the carrier's BODY IS A STILL IMAGE.
+// WHILE A BOMB IS HELD, THE CARRIER'S BODY IS A STILL IMAGE. The displayed step
+// of every pose reaching `sub_41F29B`'s shared draw tail — stand, walk,
+// standbomb, walkbomb AND pickup — is +48 divided by 3 (`sub_41DAA7(seq, (u16)
+// player[+48] / 3)`, pseudo.c 23410; kick and punch escape via `goto
+// LABEL_239`), and the carried-bomb pass writes +48 straight back to zero every
+// frame the link holds (`*(_WORD *)(carrier + 48) = 0`, ~25488). Because that
+// pass runs AFTER the player pass, the next draw sees only that frame's own
+// increments: at ~180 fps a walker manages well under one pixel and the idle
+// branch adds exactly 1, so `/3` is 0 either way.
 //
-// The displayed step of every body pose that reaches `sub_41F29B`'s shared draw
-// tail — stand, walk, standbomb, walkbomb AND pickup — is the player's +48
-// counter divided by 3 (`sub_41DAA7(seq, (u16)player[+48] / 3)`, pseudo.c
-// 23410; kick and punch escape it by `goto LABEL_239` with their own +80 frame).
-// +48 advances once per PIXEL stepped inside the mover (`sub_41EC84`, 22718) and
-// once per FRAME in the idle branch (23084).
-//
-// The carried-bomb pass then writes it straight back to zero — `*(_WORD *)
-// (carrier + 48) = 0`, the first statement of `sub_42331C`'s state-3 branch
-// (~25488) — every frame, for as long as +148 links the two. Because that pass
-// runs after the player pass (see above), the value the next frame's draw sees
-// is only what THAT frame added: at the original's ~180 fps a walker manages
-// well under one pixel and the idle branch adds exactly 1, so `/3` is 0 either
-// way. The carry therefore holds "walkbomb <dir>" step 0 / "standbomb <dir>"
-// (a 1-step sequence anyway) and, while state 4 lasts, "pickup <dir>" step 0.
-//
-// The release is what starts the animation: it clears +148, the zeroing stops,
-// +48 accumulates from 0 again, and any state-4 remainder plays PUP*.ANI out
-// from its first step — arms sweeping up and away. That playout is the closest
-// thing the original has to a throw animation, and it is invisible in a port
-// that lets the carry pose animate instead.
+// The RELEASE is what starts the animation: +148 clears, the zeroing stops, +48
+// accumulates from 0, and any state-4 remainder plays PUP*.ANI from its first
+// step — the closest thing the original has to a throw animation, and invisible
+// in a port that lets the carry pose animate.
 
-// One tick's worth of +48. `walk_px` is the mover's per-tick pixel budget (0
-// when idle, the same number `Event::PlayerWalking` carries); `frames_per_tick`
-// is how many DISPLAYED frames a tick covers, because the idle branch adds one
-// per frame and not per tick.
+// One tick's worth of +48, which advances once per PIXEL stepped inside the
+// mover (sub_41EC84, 22718) and once per FRAME idle (23084) — hence
+// `frames_per_tick`, since a tick covers several displayed frames.
 constexpr std::uint32_t body_phase_step(int walk_px, int frames_per_tick) {
     if (walk_px > 0) return static_cast<std::uint32_t>(walk_px);
     return frames_per_tick > 0 ? static_cast<std::uint32_t>(frames_per_tick) : 0u;
 }
 
 // +48 after this tick. Pinned to 0 for the whole carry AND for the release tick
-// itself: the original's release frame is drawn before anything clears the
-// link, so it still shows only that one frame's own increments — step 0.
+// itself: the original's release frame is drawn before anything clears the link.
 constexpr std::uint32_t body_phase_next(std::uint32_t phase, bool carrying, bool carried_last,
                                         int walk_px, int frames_per_tick) {
     if (carrying || carried_last) return 0;
     return phase + body_phase_step(walk_px, frames_per_tick);
 }
 
-// The displayed step, before the caller's `% statecnt`: the original's
-// `(u16)player[+48] / 3`.
+// The displayed step, before the caller's `% statecnt`.
 constexpr std::uint32_t body_anim_step(std::uint32_t phase) {
     return phase / 3u;
 }
@@ -160,35 +131,24 @@ constexpr CarryOffset carried_bomb_offset(bool in_pickup_state, int arc_x, int a
     return CarryOffset{10 + arc_x, arc_y};
 }
 
-// THE HEAD-STUNNED IDLE POSE SPINS.
+// THE HEAD-STUNNED IDLE POSE SPINS. `sub_41F29B`'s idle branch normally builds
+// `stand %s` from the player's own facing; while the head-stun word +58 is
+// non-zero it formats the state's elapsed-frame counter masked to two bits,
+// `+80 & 3` (facts.md's "Stun does NOT gate flame-death or pickup" noted this at
+// ~23086 without unpacking it). A bonked bomberman turns on the spot for the
+// whole 16-frame stun — the visual tell that a hit landed, which the port lacked.
 //
-// `sub_41F29B`'s idle branch normally builds `stand %s` from the player's own
-// facing. While the head-stun word +58 is still non-zero it does not: the
-// direction it formats is the state's own elapsed-frame counter masked to two
-// bits, `+80 & 3` (the cosmetic standing-animation pick facts.md's "Stun does
-// NOT gate flame-death or pickup" already noted at ~23086 without unpacking).
-// `sub_421F7E` zeroes +80 at the moment of the bonk and it counts up one per
-// displayed frame, so a bonked bomberman's sprite turns on the spot for the
-// whole 16-frame stun instead of holding the way it was facing — the visual
-// tell that a hit landed. The port drew the plain facing and had no tell at all.
-//
-// THE MASKED VALUE IS A `godir`, NOT ONE OF OUR `Direction`s, and the two orders
-// differ. The original formats through `off_45BCC4[godir & 3] =
-// {"north","east","south","west"}` (`sub_413AED`, docs/re/sequence-map.md), so
-// the cycle is compass-CLOCKWISE: N, E, S, W. Our `sim::Direction` is
-// {Up, Down, Left, Right} and `sequences.cpp`'s own table maps those to
-// {north, south, west, east}. Feeding `& 3` straight into our index would spin
-// N, S, W, E — the same four frames, in an order the original never shows.
-// `kGodirToDirection` is that adapter, and it is the whole reason this is a
-// named function with a test rather than two characters at the draw site.
+// THE MASKED VALUE IS A `godir`, NOT ONE OF OUR `Direction`s. The original
+// formats through `off_45BCC4[godir & 3] = {north, east, south, west}`
+// (sub_413AED, docs/re/sequence-map.md), i.e. compass-CLOCKWISE, while
+// sequences.cpp maps our {Up, Down, Left, Right} to {north, south, west, east}.
+// Feeding `& 3` straight in would spin N, S, W, E — the same four frames in an
+// order the original never shows.
 inline constexpr int kGodirToDirection[4] = {0, 3, 1, 2};  // N, E, S, W -> Up, Right, Down, Left
 
-// The direction index the idle `stand <dir>` pose is drawn with.
-// `stun_remaining` is `Player::stun`, the port's +58 (a countdown, where the
-// original's +80 counts up); `stun_total` is `Tuning::head_stun_frames`, what
-// `sub_421F7E` overwrote +58 with, so `total - remaining` is the elapsed frame
-// count +80 holds. Returns `facing` unchanged when no stun is running, which is
-// every frame of a normal match — nothing else in the port can set +58.
+// `stun_remaining` is `Player::stun`, the port's +58 — a COUNTDOWN, where the
+// original's +80 counts UP from the zeroing `sub_421F7E` does at the bonk. So
+// `stun_total - remaining` is the elapsed count +80 holds.
 constexpr int stunned_stand_facing(int facing, int stun_remaining, int stun_total) {
     if (stun_remaining <= 0) return facing;
     const int elapsed = stun_total - stun_remaining;

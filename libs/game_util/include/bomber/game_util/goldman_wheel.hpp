@@ -6,11 +6,10 @@
 #include "bomber/sim/types.hpp"
 
 // The Goldman Roulette wheel's PURE math — geometry, spin setup, per-frame
-// stepping, and prize resolution — mirrored from `sub_4034BC` @0x4034BC
-// (docs/re/goldman-roulette.md §3). SDL-free and deterministic given a seed,
-// so it is unit-testable without a renderer. Everything here is PRESENTATION
-// randomness (a private LCG, never bomber::sim::State::rng) — the wheel has
-// no bearing on the sim's determinism contract (ADR-0003).
+// stepping, prize resolution — mirrored from `sub_4034BC` @0x4034BC
+// (docs/re/goldman-roulette.md §3). Everything here is PRESENTATION randomness
+// (a private LCG, never bomber::sim::State::rng), so the wheel has no bearing on
+// the determinism contract (ADR-0003).
 
 namespace bomber::game {
 
@@ -28,14 +27,11 @@ inline constexpr int wheel_circle_steps(int segment_steps = kWheelSegmentSteps) 
 inline constexpr int kClogsPrizeId = 13;
 inline constexpr std::array<int, kWheelSegments> kWheelPrizeIds = {0, 1, 3, 8, 4, 13};
 
-// Maps a wheel prize id (0/1/3/4/8) onto our sim::PowerupType. Returns
-// sim::PowerupType::None for 13 (clogs) PERMANENTLY — clogs is not, and
-// never will be, a sim::PowerupType (it is not a scheme/-P/spawn/forbid
-// kind, doc §8/§9.2); it is ported instead as MatchConfig::born_with_clogs
-// feeding Player::clogs directly (doc §9.4). Callers must route prize id ==
-// kClogsPrizeId to that separate path BEFORE calling this (see
-// game_app.cpp's build_match_config award site) — None here is not "not yet
-// ported", it is "not a PowerupType by design".
+// Maps a wheel prize id (0/1/3/4/8) onto our sim::PowerupType. None for 13
+// (clogs) PERMANENTLY: clogs is not a scheme/-P/spawn/forbid kind (doc §8/§9.2)
+// and is ported as MatchConfig::born_with_clogs feeding Player::clogs directly
+// (doc §9.4). Callers must route kClogsPrizeId to that path BEFORE calling this
+// — None here is "not a PowerupType by design", not "not yet ported".
 constexpr bomber::sim::PowerupType wheel_prize_to_powerup(int prize_id) {
     switch (prize_id) {
         case 0: return bomber::sim::PowerupType::ExtraBomb;
