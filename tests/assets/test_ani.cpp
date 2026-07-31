@@ -14,53 +14,58 @@
 
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "bomber/assets/ani.hpp"
+#include "fixture.hpp"
 
 using namespace bomber::assets;
+using bomber::test::append;
+using bomber::test::append_chars;
+using bomber::test::Bytes;
+using bomber::test::put_u16;
+using bomber::test::put_u32;
+using bomber::test::TempFile;
 
 namespace {
-
-using Bytes = std::vector<std::uint8_t>;
-
-void put_u16(Bytes& b, unsigned v) {
-    b.push_back(static_cast<std::uint8_t>(v & 0xFF));
-    b.push_back(static_cast<std::uint8_t>((v >> 8) & 0xFF));
-}
-
-void put_u32(Bytes& b, std::uint32_t v) {
-    for (int i = 0; i < 4; ++i) b.push_back(static_cast<std::uint8_t>((v >> (8 * i)) & 0xFF));
-}
-
-void put_bytes(Bytes& b, const Bytes& more) {
-    b.insert(b.end(), more.begin(), more.end());
-}
 
 // One container item: 4-byte tag, u32 payload length, u16 id, then the payload.
 // `length` counts the payload ONLY -- the loader takes body = pos-after-header
 // and end = body + length.
 Bytes item(const char* tag, const Bytes& payload) {
     Bytes out;
-    for (int i = 0; i < 4; ++i) out.push_back(static_cast<std::uint8_t>(tag[i]));
+    append_chars(out, tag, 4);
     put_u32(out, static_cast<std::uint32_t>(payload.size()));
     put_u16(out, 0);
-    put_bytes(out, payload);
+    append(out, payload);
     return out;
 }
 
 // "CHFILEANI " + u32 payload length + u16 file id, then the item stream.
 Bytes ani_file(const Bytes& items) {
     Bytes out;
-    const char magic[] = "CHFILEANI ";
-    for (int i = 0; i < 10; ++i) out.push_back(static_cast<std::uint8_t>(magic[i]));
+    append_chars(out, "CHFILEANI ", 10);
     put_u32(out, static_cast<std::uint32_t>(items.size()));
     put_u16(out, 0);
-    put_bytes(out, items);
+    append(out, items);
     return out;
+}
+
+// A NUL-terminated string payload: what FNAM and a SEQ's HEAD both carry.
+Bytes text_item(const char* tag, const char* text) {
+    Bytes p;
+    append_chars(p, text, std::char_traits<char>::length(text) + 1);
+    return item(tag, p);
+}
+
+// CBOX: the animation's cell box, the only two fields the loader reads from it.
+Bytes cbox(unsigned w, unsigned h) {
+    Bytes b;
+    put_u16(b, w);
+    put_u16(b, h);
+    return item("CBOX", b);
 }
 
 // TGA type-10 run packet: high bit set, count-1 in the low seven bits, then one
@@ -82,6 +87,21 @@ Bytes rle_literal16(const std::vector<std::uint16_t>& values) {
     return b;
 }
 
+// One SEQ step: a STAT wrapping a HEAD (the first u16 the loader keeps) and a
+// FRAM triple of {frame index, blit dx, blit dy}.
+Bytes seq_step(unsigned frame, int dx, int dy, unsigned head0 = 0x001E) {
+    Bytes head;
+    put_u16(head, head0);
+    Bytes fr;
+    put_u16(fr, 1);  // unknown, always 1
+    put_u16(fr, frame);
+    put_u16(fr, static_cast<unsigned>(dx) & 0xFFFF);
+    put_u16(fr, static_cast<unsigned>(dy) & 0xFFFF);
+    Bytes payload = item("HEAD", head);
+    append(payload, item("FRAM", fr));
+    return item("STAT", payload);
+}
+
 // CIMG payload, 16bpp (type 4): no palette, so additional_size is the bare 24.
 Bytes cimg16(unsigned w, unsigned h, std::uint16_t key, const Bytes& rle,
              std::uint32_t uncompressed_override = 0) {
@@ -101,7 +121,7 @@ Bytes cimg16(unsigned w, unsigned h, std::uint16_t key, const Bytes& rle,
     put_u32(p, static_cast<std::uint32_t>(12 + rle.size()));  // compressed_size
     put_u32(p, uncompressed_override != 0 ? uncompressed_override
                                           : static_cast<std::uint32_t>(w * h * 2));
-    put_bytes(p, rle);
+    append(p, rle);
     return p;
 }
 
@@ -121,12 +141,12 @@ Bytes cimg8(unsigned w, unsigned h, std::uint16_t key, const Bytes& palette, con
     put_u16(p, 0);
     put_u32(p, 0);  // unknown (only present when additional_size >= 32)
     put_u32(p, 0);  // unknown
-    put_bytes(p, palette);
+    append(p, palette);
     put_u16(p, 0);
     put_u16(p, 0);
     put_u32(p, static_cast<std::uint32_t>(12 + rle.size()));
     put_u32(p, static_cast<std::uint32_t>(w * h));
-    put_bytes(p, rle);
+    append(p, rle);
     return p;
 }
 
@@ -142,23 +162,6 @@ Bytes ramp_palette() {
     return pal;
 }
 
-struct TempFile {
-    std::filesystem::path path;
-
-    explicit TempFile(const char* name, const Bytes& data)
-        : path(std::filesystem::temp_directory_path() / name) {
-        std::ofstream f(path, std::ios::binary);
-        f.write(reinterpret_cast<const char*>(data.data()),
-                static_cast<std::streamsize>(data.size()));
-    }
-    ~TempFile() {
-        std::error_code ec;
-        std::filesystem::remove(path, ec);
-    }
-    TempFile(const TempFile&) = delete;
-    TempFile& operator=(const TempFile&) = delete;
-};
-
 // RGB555 pure red: expand5(31) == 255, expand5(0) == 0.
 constexpr std::uint16_t kRed555 = 31u << 10;
 constexpr std::uint16_t kBlue555 = 31u;
@@ -166,28 +169,17 @@ constexpr std::uint16_t kBlue555 = 31u;
 }  // namespace
 
 TEST_CASE("a 16bpp (type 4) frame decodes to RGBA with the key colour punched out") {
-    Bytes items;
-    put_bytes(items, item("CBOX", [] {
-                  Bytes b;
-                  put_u16(b, 24);
-                  put_u16(b, 32);
-                  return b;
-              }()));
     // 2x2: three red pixels then one blue, with blue as the key colour.
     Bytes rle = rle_run16(3, kRed555);
-    put_bytes(rle, rle_literal16({kBlue555}));
-    Bytes fram;
-    put_bytes(fram, item("FNAM", [] {
-                  Bytes b;
-                  const char n[] = "WLKN0000.TGA";
-                  for (char c : n) b.push_back(static_cast<std::uint8_t>(c));
-                  return b;
-              }()));
-    put_bytes(fram, item("CIMG", cimg16(2, 2, kBlue555, rle)));
-    put_bytes(items, item("FRAM", fram));
+    append(rle, rle_literal16({kBlue555}));
+    Bytes fram = text_item("FNAM", "WLKN0000.TGA");
+    append(fram, item("CIMG", cimg16(2, 2, kBlue555, rle)));
+
+    Bytes items = cbox(24, 32);
+    append(items, item("FRAM", fram));
 
     TempFile tf("obm_ani_type4.ani", ani_file(items));
-    ani::AniFile a = ani::load(tf.path);
+    ani::AniFile a = ani::load(tf.path());
 
     CHECK(a.cell_width == 24);
     CHECK(a.cell_height == 32);
@@ -214,11 +206,11 @@ TEST_CASE("a 16bpp (type 4) frame decodes to RGBA with the key colour punched ou
 TEST_CASE("an 8bpp (type 11) frame keeps its indices and palette for .RMP recolour") {
     // Four pixels: index 5 three times, then index 200 (the key).
     Bytes rle = rle_run8(3, 5);
-    put_bytes(rle, rle_run8(1, 200));
+    append(rle, rle_run8(1, 200));
     Bytes fram = item("CIMG", cimg8(2, 2, 200, ramp_palette(), rle));
     TempFile tf("obm_ani_type11.ani", ani_file(item("FRAM", fram)));
 
-    ani::AniFile a = ani::load(tf.path);
+    ani::AniFile a = ani::load(tf.path());
     REQUIRE(a.frames.size() == 1);
     const ani::Frame& f = a.frames[0];
     CHECK(f.cimg_type == 11);
@@ -239,32 +231,13 @@ TEST_CASE("an 8bpp (type 11) frame keeps its indices and palette for .RMP recolo
 TEST_CASE("a SEQ item yields ordered steps with their per-step blit offsets") {
     Bytes items = item("FRAM", item("CIMG", cimg16(1, 1, 0, rle_run16(1, kRed555))));
 
-    auto stat = [](unsigned frame, int dx, int dy) {
-        Bytes head;
-        put_u16(head, 0x001E);
-        Bytes fr;
-        put_u16(fr, 1);  // unknown, always 1
-        put_u16(fr, frame);
-        put_u16(fr, static_cast<unsigned>(dx) & 0xFFFF);
-        put_u16(fr, static_cast<unsigned>(dy) & 0xFFFF);
-        Bytes payload = item("HEAD", head);
-        put_bytes(payload, item("FRAM", fr));
-        return item("STAT", payload);
-    };
-
-    Bytes seq;
-    put_bytes(seq, item("HEAD", [] {
-                  Bytes b;
-                  const char n[] = "walk north";
-                  for (char c : n) b.push_back(static_cast<std::uint8_t>(c));
-                  return b;
-              }()));
-    put_bytes(seq, stat(0, 3, -4));
-    put_bytes(seq, stat(0, -1, 2));
-    put_bytes(items, item("SEQ ", seq));
+    Bytes seq = text_item("HEAD", "walk north");
+    append(seq, seq_step(0, 3, -4));
+    append(seq, seq_step(0, -1, 2));
+    append(items, item("SEQ ", seq));
 
     TempFile tf("obm_ani_seq.ani", ani_file(items));
-    ani::AniFile a = ani::load(tf.path);
+    ani::AniFile a = ani::load(tf.path());
 
     REQUIRE(a.sequences.size() == 1);
     CHECK(a.sequences[0].name == "walk north");
@@ -288,11 +261,11 @@ TEST_CASE("a sequence step naming a frame that does not exist is warned and drop
     put_u16(fr, 0);
     put_u16(fr, 0);
     Bytes seq = item("HEAD", Bytes{'p', 'j', 0});
-    put_bytes(seq, item("STAT", item("FRAM", fr)));
-    put_bytes(items, item("SEQ ", seq));
+    append(seq, item("STAT", item("FRAM", fr)));
+    append(items, item("SEQ ", seq));
 
     TempFile tf("obm_ani_badref.ani", ani_file(items));
-    ani::AniFile a = ani::load(tf.path);
+    ani::AniFile a = ani::load(tf.path());
 
     REQUIRE(a.sequences.size() == 1);
     REQUIRE(a.sequences[0].steps.size() == 1);
@@ -303,7 +276,7 @@ TEST_CASE("a sequence step naming a frame that does not exist is warned and drop
 
 TEST_CASE("a file that is not an ANI is rejected") {
     TempFile tf("obm_ani_magic.ani", Bytes(64, 'x'));
-    CHECK_THROWS_AS(ani::load(tf.path), std::runtime_error);
+    CHECK_THROWS_AS(ani::load(tf.path()), std::runtime_error);
 }
 
 TEST_CASE("a declared payload length past the end of the file is rejected") {
@@ -311,7 +284,7 @@ TEST_CASE("a declared payload length past the end of the file is rejected") {
     f[10] = 0xFF;  // payload_len = 0x0000FFFF, far past the real size
     f[11] = 0xFF;
     TempFile tf("obm_ani_longlen.ani", f);
-    CHECK_THROWS_AS(ani::load(tf.path), std::runtime_error);
+    CHECK_THROWS_AS(ani::load(tf.path()), std::runtime_error);
 }
 
 TEST_CASE("an item whose length runs past the end of the file is rejected") {
@@ -323,74 +296,84 @@ TEST_CASE("an item whose length runs past the end of the file is rejected") {
     f[10] = static_cast<std::uint8_t>(it.size() & 0xFF);
     f[11] = static_cast<std::uint8_t>((it.size() >> 8) & 0xFF);
     TempFile tf("obm_ani_longitem.ani", f);
-    CHECK_THROWS_AS(ani::load(tf.path), std::runtime_error);
+    CHECK_THROWS_AS(ani::load(tf.path()), std::runtime_error);
 }
 
 TEST_CASE("a CIMG whose uncompressed size disagrees with its dimensions is rejected") {
     Bytes fram = item("CIMG", cimg16(2, 2, 0, rle_run16(4, kRed555), /*uncompressed=*/99));
     TempFile tf("obm_ani_sizemismatch.ani", ani_file(item("FRAM", fram)));
-    CHECK_THROWS_AS(ani::load(tf.path), std::runtime_error);
+    CHECK_THROWS_AS(ani::load(tf.path()), std::runtime_error);
 }
 
 TEST_CASE("an unknown CIMG type is rejected rather than silently skipped") {
     Bytes p = cimg16(2, 2, 0, rle_run16(4, kRed555));
     p[0] = 7;  // cimg_type: neither 4 nor 11
     TempFile tf("obm_ani_badtype.ani", ani_file(item("FRAM", item("CIMG", p))));
-    CHECK_THROWS_AS(ani::load(tf.path), std::runtime_error);
+    CHECK_THROWS_AS(ani::load(tf.path()), std::runtime_error);
 }
 
 TEST_CASE("an RLE packet that would write past the image is rejected") {
     // 2x2 = 4 pixels, but the packet claims 8.
     Bytes fram = item("CIMG", cimg16(2, 2, 0, rle_run16(8, kRed555)));
     TempFile tf("obm_ani_rleoverrun.ani", ani_file(item("FRAM", fram)));
-    CHECK_THROWS_AS(ani::load(tf.path), std::runtime_error);
+    CHECK_THROWS_AS(ani::load(tf.path()), std::runtime_error);
 }
 
 TEST_CASE("an RLE stream that ends before the image is full is rejected") {
     // 4x4 = 16 pixels; the stream supplies 2.
     Bytes fram = item("CIMG", cimg16(4, 4, 0, rle_run16(2, kRed555)));
     TempFile tf("obm_ani_rleshort.ani", ani_file(item("FRAM", fram)));
-    CHECK_THROWS_AS(ani::load(tf.path), std::runtime_error);
+    CHECK_THROWS_AS(ani::load(tf.path()), std::runtime_error);
 }
 
 // SECURITY. width and height are two u16s read straight out of the file, and
 // their product used to reach `rgba.resize(pixel_count * 4)` BEFORE anything
 // compared them against how much compressed data actually follows. 65535x65535
-// therefore asked the allocator for 17 GB on a 40-byte file. The allocation
-// fails, but it fails as std::bad_alloc / std::length_error -- neither is
-// std::runtime_error nor std::out_of_range, so it escapes the contract every
-// caller of this module catches on (docs/coding-standards.md §6), and on a box
-// with generous overcommit it does not fail at all, it thrashes.
+// therefore asked the allocator for 17 GB on a 40-byte file.
 //
-// Reverting the bound in parse_cimg turns this case red (bad_alloc, not
-// runtime_error), which is what makes it a test rather than a comment.
+// HOW THIS CASE FAILS, measured 2026-08-01 by reverting max_decodable_pixels to
+// an unbounded value. It does NOT reliably fail on the exception type, and this
+// comment used to claim it did ("turns this case red -- bad_alloc, not
+// runtime_error"). On the reference Win11 box the 17 GB reserve SUCCEEDS against
+// the page file, decode_rle then runs out of input and throws the same
+// std::runtime_error the bound would have thrown, and the case stays GREEN --
+// while taking 11.7 s instead of 0.004 s. It is the ctest TIMEOUT on this suite
+// (tests/assets/CMakeLists.txt) that turns the regression red.
+//
+// Both mechanisms are wanted, because which one fires depends on the machine: a
+// box that refuses the allocation throws std::bad_alloc, which is neither
+// std::runtime_error nor std::out_of_range and so escapes the contract every
+// caller of this module catches on (docs/coding-standards.md §6) -- red by
+// exception type. A box that grants it thrashes -- red by timeout.
 TEST_CASE("SECURITY: giant CIMG dimensions are rejected against the compressed span") {
     Bytes fram = item("CIMG", cimg16(0xFFFF, 0xFFFF, 0, rle_run16(4, kRed555)));
     TempFile tf("obm_ani_hugedims.ani", ani_file(item("FRAM", fram)));
-    CHECK_THROWS_AS(ani::load(tf.path), std::runtime_error);
+    CHECK_THROWS_AS(ani::load(tf.path()), std::runtime_error);
 }
 
 TEST_CASE("SECURITY: a type-11 CIMG cannot claim more pixels than its palette-sized stream") {
     Bytes fram = item("CIMG", cimg8(0xFFFF, 0xFFFF, 0, ramp_palette(), rle_run8(4, 1)));
     TempFile tf("obm_ani_hugedims8.ani", ani_file(item("FRAM", fram)));
-    CHECK_THROWS_AS(ani::load(tf.path), std::runtime_error);
+    CHECK_THROWS_AS(ani::load(tf.path()), std::runtime_error);
 }
 
 TEST_CASE("a type-11 CIMG without the full 1024-byte palette is rejected") {
     Bytes pal(512, 0);
     Bytes fram = item("CIMG", cimg8(2, 2, 0, pal, rle_run8(4, 1)));
     TempFile tf("obm_ani_shortpal.ani", ani_file(item("FRAM", fram)));
-    CHECK_THROWS_AS(ani::load(tf.path), std::runtime_error);
+    CHECK_THROWS_AS(ani::load(tf.path()), std::runtime_error);
 }
 
 TEST_CASE("a CIMG palette larger than the loader's buffer is rejected, not truncated") {
     Bytes pal(4096, 0);
     Bytes fram = item("CIMG", cimg8(2, 2, 0, pal, rle_run8(4, 1)));
     TempFile tf("obm_ani_bigpal.ani", ani_file(item("FRAM", fram)));
-    CHECK_THROWS_AS(ani::load(tf.path), std::runtime_error);
+    CHECK_THROWS_AS(ani::load(tf.path()), std::runtime_error);
 }
 
 TEST_CASE("a missing file throws rather than yielding an empty AniFile") {
-    CHECK_THROWS_AS(ani::load(std::filesystem::temp_directory_path() / "obm_ani_absent.ani"),
-                    std::runtime_error);
+    // absent_path, not a bare temp name: a leftover from an earlier run would
+    // still throw (it is not an ANI), and the case would pass for the wrong
+    // reason while covering nothing.
+    CHECK_THROWS_AS(ani::load(bomber::test::absent_path("obm_ani_absent.ani")), std::runtime_error);
 }

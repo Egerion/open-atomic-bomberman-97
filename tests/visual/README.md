@@ -67,7 +67,21 @@ identical:
   Options row, and the original BM95.EXE writes it too. Any value from it
   that reaches the sim or the frame is therefore a per-session variable, and
   a pinned frame must not depend on one. `GameApp::load_config` pins each
-  such key on `capture_run()`:
+  such key:
+
+  > **The property holds today, but it is held by two predicates, not one.**
+  > Re-verified key by key 2026-08-01. `random_start`, `conveyor_speed`,
+  > `soft_scaling`, `show_fps`, `native_cadence` and `vsync` are pinned on
+  > `capture_run()` — the predicate that exists for exactly this. `team_play`
+  > and `playtime` are pinned on `opts_.demo` instead. Those two stay pinned
+  > only because all four capture entry points in `apps/game/main.cpp`
+  > (`--demo`, `--demo-shots`, `--bm-shot`, `--menu-shot`) *also* set
+  > `opts.demo = true`, and two of them set it for an unrelated stated reason
+  > ("reuse the demo path's audio skip / headless intent"). Drop that line from
+  > `--bm-shot`, or add a fifth capture entry point that does not set it, and
+  > `team_play`/`playtime` silently start reading the mutable file again — which
+  > is failure mode #4 of the four this harness has already suffered. Reported,
+  > not fixed: `libs/game` is outside this pass's scope.
 
   | key | pinned to | why it matters |
   |-----|-----------|----------------|

@@ -11,21 +11,19 @@
 //
 // docs/re/results-and-options.md §3 "The full options.ini key list" pins ALL
 // 22 keys (writer sub_405DE3's fixed fprintf order, positionally matching
-// the reader sub_406238's stricmp chain); the cases below cover the newly
-// typed fields (num_to_win_match, keydef=, and the rest of the boolean/int
-// rows) on top of the pre-existing conveyor_speed/team_play coverage.
+// the reader sub_406238's stricmp chain).
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
+#include <cstddef>
 #include <filesystem>
-#include <fstream>
-#include <sstream>
+#include <optional>
 #include <string>
 
 #include "bomber/assets/install.hpp"
+#include "fixture.hpp"
 
-namespace fs = std::filesystem;
 using bomber::assets::KeyDef;
 using bomber::assets::kNodeNameMax;
 using bomber::assets::load_node_name;
@@ -33,106 +31,98 @@ using bomber::assets::load_options;
 using bomber::assets::Options;
 using bomber::assets::save_node_name;
 using bomber::assets::save_options;
+using bomber::test::TempFile;
 
 namespace {
 
-// Writes `body` to a unique temp file and returns its path. doctest runs each
-// case in-process; a per-case counter keeps the names distinct.
-fs::path write_temp(const std::string& body) {
+// A scratch options.ini that deletes itself. doctest runs every case in one
+// process, so the name carries a counter to keep them distinct.
+TempFile options_file(const std::string& body) {
     static int counter = 0;
-    fs::path p = fs::temp_directory_path() / ("bomber_opts_" + std::to_string(counter++) + ".ini");
-    std::ofstream f(p, std::ios::binary);
-    f << body;
-    return p;
+    return TempFile(("bomber_opts_" + std::to_string(counter++) + ".ini").c_str(), body);
 }
 
-// Same, for the install-root nodename.ini (a different file, a different
-// reader/writer pair — see install.hpp's load_node_name doc).
-fs::path write_temp_node(const std::string& body) {
+// The install-root nodename.ini is a different file with its own reader/writer
+// pair (install.hpp's load_node_name doc), so it gets its own scratch name.
+TempFile node_file(const std::string& body) {
     static int counter = 0;
-    fs::path p = fs::temp_directory_path() / ("bomber_node_" + std::to_string(counter++) + ".ini");
-    std::ofstream f(p, std::ios::binary);
-    f << body;
-    return p;
+    return TempFile(("bomber_node_" + std::to_string(counter++) + ".ini").c_str(), body);
 }
 
-std::string read_all(const fs::path& p) {
-    std::ifstream in(p, std::ios::binary);
-    std::ostringstream ss;
-    ss << in.rdbuf();
-    return ss.str();
+// One parsed row: present, and holding `want`. Nine of these written out
+// longhand is a wall a reader has to diff against the fixture by eye. The key
+// is a std::string, NOT a `const char*`: doctest stringifies a char pointer as
+// its ADDRESS, so the failure message said `key: 00007FF6DC7B7B28` and the
+// shared helper cost exactly the context it was supposed to preserve.
+template <typename T, typename U>
+void check_row(const std::string& key, const std::optional<T>& got, const U& want) {
+    INFO("key: " << key);
+    REQUIRE(got.has_value());
+    CHECK(*got == want);
+}
+
+// save_options is a read-modify-write: a key it owns must be REWRITTEN, never
+// appended a second time. Both halves matter — searching for a duplicate
+// without first proving the key is there at all passes on a file that lost it.
+void check_written_once(const std::string& body, const std::string& key) {
+    INFO("key: " << key);
+    const std::size_t first = body.find(key);
+    REQUIRE(first != std::string::npos);
+    CHECK(body.find(key, first + 1) == std::string::npos);
 }
 
 }  // namespace
 
 TEST_CASE("options.ini: conveyor_speed is parsed") {
     // A trimmed copy of the shipped options.ini (this install carries =2).
-    auto p = write_temp(
+    const TempFile p = options_file(
         ";Bomberman Options file.\n"
         "levelno=1\n"
         "enclosement_depth=2\n"
         "conveyor_speed=2\n"
         "team_play=0\n");
-    auto opts = load_options(p);
-    REQUIRE(opts.conveyor_speed.has_value());
-    CHECK(*opts.conveyor_speed == 2);
-    fs::remove(p);
+    check_row("conveyor_speed", load_options(p.path()).conveyor_speed, 2);
 }
 
 TEST_CASE("options.ini: a missing key leaves the field empty (caller keeps default)") {
-    auto p = write_temp("levelno=1\nplaytime=150\n");
-    auto opts = load_options(p);
-    CHECK(!opts.conveyor_speed.has_value());
-    fs::remove(p);
+    const TempFile p = options_file("levelno=1\nplaytime=150\n");
+    CHECK(!load_options(p.path()).conveyor_speed.has_value());
 }
 
 TEST_CASE("options.ini: a missing file yields empty options") {
-    auto opts = load_options(fs::temp_directory_path() / "definitely_not_here_12345.ini");
+    const auto opts = load_options(bomber::test::absent_path("bomber_opts_absent.ini"));
     CHECK(!opts.conveyor_speed.has_value());
 }
 
 TEST_CASE("options.ini: key match is case-insensitive and value is trimmed") {
-    auto p = write_temp("Conveyor_Speed =  0 \r\n");  // CRLF + spaces + mixed case
-    auto opts = load_options(p);
-    REQUIRE(opts.conveyor_speed.has_value());
-    CHECK(*opts.conveyor_speed == 0);
-    fs::remove(p);
+    const TempFile p = options_file("Conveyor_Speed =  0 \r\n");  // CRLF + spaces + mixed case
+    check_row("conveyor_speed", load_options(p.path()).conveyor_speed, 0);
 }
 
 TEST_CASE("options.ini: comment and blank lines are ignored") {
-    auto p = write_temp(
+    const TempFile p = options_file(
         "; conveyor_speed=99 (this is a comment, must be ignored)\n"
         "\n"
         "conveyor_speed=1\n");
-    auto opts = load_options(p);
-    REQUIRE(opts.conveyor_speed.has_value());
-    CHECK(*opts.conveyor_speed == 1);  // the real line, not the commented one
-    fs::remove(p);
+    // The real line, not the commented one.
+    check_row("conveyor_speed", load_options(p.path()).conveyor_speed, 1);
 }
 
 TEST_CASE("options.ini: team_play is parsed as a bool") {
-    auto p = write_temp("team_play=1\n");
-    auto opts = load_options(p);
-    REQUIRE(opts.team_play.has_value());
-    CHECK(*opts.team_play == true);
-    fs::remove(p);
+    const TempFile p = options_file("team_play=1\n");
+    check_row("team_play", load_options(p.path()).team_play, true);
 }
 
 TEST_CASE("options.ini: team_play=0 parses false, missing key stays empty") {
-    auto p = write_temp("levelno=1\nteam_play=0\n");
-    auto opts = load_options(p);
-    REQUIRE(opts.team_play.has_value());
-    CHECK(*opts.team_play == false);
+    const TempFile p = options_file("levelno=1\nteam_play=0\n");
+    check_row("team_play", load_options(p.path()).team_play, false);
 
-    auto p2 = write_temp("levelno=1\n");
-    auto opts2 = load_options(p2);
-    CHECK(!opts2.team_play.has_value());
-    fs::remove(p);
-    fs::remove(p2);
+    const TempFile absent = options_file("levelno=1\n");
+    CHECK(!load_options(absent.path()).team_play.has_value());
 }
 
 TEST_CASE("save_options: read-modify-write preserves unknown lines and comments") {
-    auto p = write_temp(
+    const TempFile p = options_file(
         ";Bomberman Options file.\n"
         "levelno=1\n"
         "enclosement_depth=2\n"
@@ -143,103 +133,73 @@ TEST_CASE("save_options: read-modify-write preserves unknown lines and comments"
     Options opts;
     opts.conveyor_speed = 2;
     opts.team_play = true;
-    save_options(p, opts);
+    save_options(p.path(), opts);
 
-    // The file must still contain every untouched line verbatim... (scoped so
-    // the handle closes before fs::remove — Windows won't delete an open file).
-    std::string body;
-    {
-        std::ifstream in(p);
-        std::ostringstream ss;
-        ss << in.rdbuf();
-        body = ss.str();
-    }
+    // Every untouched line must still be there verbatim...
+    const std::string body = p.text();
     CHECK(body.find(";Bomberman Options file.") != std::string::npos);
     CHECK(body.find("levelno=1") != std::string::npos);
     CHECK(body.find("enclosement_depth=2") != std::string::npos);
     CHECK(body.find("playtime=150") != std::string::npos);
 
-    // ...and the two owned keys must be rewritten in place, not duplicated.
-    auto opts2 = load_options(p);
-    REQUIRE(opts2.conveyor_speed.has_value());
-    CHECK(*opts2.conveyor_speed == 2);
-    REQUIRE(opts2.team_play.has_value());
-    CHECK(*opts2.team_play == true);
-    std::size_t first = body.find("conveyor_speed=");
-    CHECK(body.find("conveyor_speed=", first + 1) == std::string::npos);
-    fs::remove(p);
+    // ...and the two owned keys rewritten in place, not duplicated.
+    const Options reread = load_options(p.path());
+    check_row("conveyor_speed", reread.conveyor_speed, 2);
+    check_row("team_play", reread.team_play, true);
+    check_written_once(body, "conveyor_speed=");
 }
 
 TEST_CASE("save_options: an absent key is appended, a missing file is created") {
-    auto p = fs::temp_directory_path() / "bomber_opts_new.ini";
-    fs::remove(p);  // ensure it does not exist yet
+    const auto path = bomber::test::absent_path("bomber_opts_new.ini");
 
     Options opts;
     opts.team_play = false;
-    save_options(p, opts);
+    save_options(path, opts);
 
-    auto reread = load_options(p);
-    REQUIRE(reread.team_play.has_value());
-    CHECK(*reread.team_play == false);
+    const Options reread = load_options(path);
+    check_row("team_play", reread.team_play, false);
     CHECK(!reread.conveyor_speed.has_value());  // never set, never written
-    fs::remove(p);
+    std::filesystem::remove(path);
 }
 
 TEST_CASE("save_options: only the fields present in Options are touched") {
-    auto p = write_temp("conveyor_speed=0\nteam_play=1\n");
+    const TempFile p = options_file("conveyor_speed=0\nteam_play=1\n");
 
     Options opts;
     opts.conveyor_speed = 2;  // team_play left empty -> must stay untouched
-    save_options(p, opts);
+    save_options(p.path(), opts);
 
-    auto reread = load_options(p);
-    REQUIRE(reread.conveyor_speed.has_value());
-    CHECK(*reread.conveyor_speed == 2);
-    REQUIRE(reread.team_play.has_value());
-    CHECK(*reread.team_play == true);  // unchanged
-    fs::remove(p);
+    const Options reread = load_options(p.path());
+    check_row("conveyor_speed", reread.conveyor_speed, 2);
+    check_row("team_play", reread.team_play, true);  // unchanged
 }
 
 // --- §3's full 22-key table: the newly typed fields --------------------
 
 TEST_CASE("options.ini: num_to_win_match is parsed and clamped to >= 1") {
-    auto p = write_temp("num_to_win_match=5\n");
-    auto opts = load_options(p);
-    REQUIRE(opts.num_to_win_match.has_value());
-    CHECK(*opts.num_to_win_match == 5);
-    fs::remove(p);
+    const TempFile p = options_file("num_to_win_match=5\n");
+    check_row("num_to_win_match", load_options(p.path()).num_to_win_match, 5);
 
-    auto p2 = write_temp("num_to_win_match=0\n");
-    auto opts2 = load_options(p2);
-    REQUIRE(opts2.num_to_win_match.has_value());
-    CHECK(*opts2.num_to_win_match == 1);  // clamp: < 1 -> 1
-    fs::remove(p2);
+    const TempFile low = options_file("num_to_win_match=0\n");
+    check_row("num_to_win_match", load_options(low.path()).num_to_win_match, 1);  // clamp: < 1 -> 1
 }
 
 TEST_CASE("options.ini: enclosement_depth is parsed and clamped to >= 0") {
-    auto p = write_temp("enclosement_depth=-1\n");
-    auto opts = load_options(p);
-    REQUIRE(opts.enclosement_depth.has_value());
-    CHECK(*opts.enclosement_depth == 0);
-    fs::remove(p);
+    const TempFile p = options_file("enclosement_depth=-1\n");
+    check_row("enclosement_depth", load_options(p.path()).enclosement_depth, 0);
 }
 
 TEST_CASE("options.ini: playtime is parsed, clamped to >= 60, and 1001 (unlimited) is exempt") {
-    auto p = write_temp("playtime=10\n");
-    auto opts = load_options(p);
-    REQUIRE(opts.playtime.has_value());
-    CHECK(*opts.playtime == 60);  // clamp: < 60 -> 60
-    fs::remove(p);
+    const TempFile p = options_file("playtime=10\n");
+    check_row("playtime", load_options(p.path()).playtime, 60);  // clamp: < 60 -> 60
 
-    auto p2 = write_temp("playtime=1001\n");
-    auto opts2 = load_options(p2);
-    REQUIRE(opts2.playtime.has_value());
-    CHECK(*opts2.playtime == 1001);  // the "unlimited" sentinel is never clamped
-    fs::remove(p2);
+    // The "unlimited" sentinel is never clamped.
+    const TempFile unlimited = options_file("playtime=1001\n");
+    check_row("playtime", load_options(unlimited.path()).playtime, 1001);
 }
 
 TEST_CASE("options.ini: the boolean rows normalize to 0/1") {
-    auto p = write_temp(
+    const TempFile p = options_file(
         "random_start=1\n"
         "stomped_bombs_detonate=0\n"
         "win_by_kills=1\n"
@@ -249,31 +209,20 @@ TEST_CASE("options.ini: the boolean rows normalize to 0/1") {
         "lost_net_revert_ai=0\n"
         "disable_game_music=1\n"
         "smallmemory=0\n");
-    auto opts = load_options(p);
-    REQUIRE(opts.random_start.has_value());
-    CHECK(*opts.random_start == true);
-    REQUIRE(opts.stomped_bombs_detonate.has_value());
-    CHECK(*opts.stomped_bombs_detonate == false);
-    REQUIRE(opts.win_by_kills.has_value());
-    CHECK(*opts.win_by_kills == true);
-    REQUIRE(opts.goldman.has_value());
-    CHECK(*opts.goldman == true);
-    REQUIRE(opts.assign_keyboards.has_value());
-    CHECK(*opts.assign_keyboards == false);
-    REQUIRE(opts.diseases_destroyable.has_value());
-    CHECK(*opts.diseases_destroyable == true);
-    REQUIRE(opts.lost_net_revert_ai.has_value());
-    CHECK(*opts.lost_net_revert_ai == false);
-    REQUIRE(opts.disable_game_music.has_value());
-    CHECK(*opts.disable_game_music == true);
-    REQUIRE(opts.smallmemory.has_value());
-    CHECK(*opts.smallmemory == false);
-    fs::remove(p);
+    const Options o = load_options(p.path());
+    check_row("random_start", o.random_start, true);
+    check_row("stomped_bombs_detonate", o.stomped_bombs_detonate, false);
+    check_row("win_by_kills", o.win_by_kills, true);
+    check_row("goldman", o.goldman, true);
+    check_row("assign_keyboards", o.assign_keyboards, false);
+    check_row("diseases_destroyable", o.diseases_destroyable, true);
+    check_row("lost_net_revert_ai", o.lost_net_revert_ai, false);
+    check_row("disable_game_music", o.disable_game_music, true);
+    check_row("smallmemory", o.smallmemory, false);
 }
 
-TEST_CASE(
-    "options.ini: string/int passthrough rows (schemefilename, playtime-adjacent modem/net)") {
-    auto p = write_temp(
+TEST_CASE("options.ini: string/int passthrough rows (schemefilename, modem/net)") {
+    const TempFile p = options_file(
         "schemefilename=BASIC.SCH\n"
         "modemdial=555-1234\n"
         "modemport=1\n"
@@ -281,93 +230,59 @@ TEST_CASE(
         "modemirq=3\n"
         "netprotocol=9\n"  // clamp: > 3 -> 3
         "levelno=-5\n");   // clamp: < -1 -> -1
-    auto opts = load_options(p);
-    REQUIRE(opts.schemefilename.has_value());
-    CHECK(*opts.schemefilename == "BASIC.SCH");
-    REQUIRE(opts.modemdial.has_value());
-    CHECK(*opts.modemdial == "555-1234");
-    REQUIRE(opts.modemport.has_value());
-    CHECK(*opts.modemport == 1);
-    REQUIRE(opts.modembaud.has_value());
-    CHECK(*opts.modembaud == 2);
-    REQUIRE(opts.modemirq.has_value());
-    CHECK(*opts.modemirq == 3);
-    REQUIRE(opts.netprotocol.has_value());
-    CHECK(*opts.netprotocol == 3);
-    REQUIRE(opts.levelno.has_value());
-    CHECK(*opts.levelno == -1);
-    fs::remove(p);
+    const Options o = load_options(p.path());
+    check_row("schemefilename", o.schemefilename, "BASIC.SCH");
+    check_row("modemdial", o.modemdial, "555-1234");
+    check_row("modemport", o.modemport, 1);
+    check_row("modembaud", o.modembaud, 2);
+    check_row("modemirq", o.modemirq, 3);
+    check_row("netprotocol", o.netprotocol, 3);
+    check_row("levelno", o.levelno, -1);
 }
 
 TEST_CASE("options.ini: fullscreen is a port-only bool key, round-trips like the RE'd toggles") {
     // Not one of §3's confirmed 22 keys (install.hpp's Options::fullscreen
     // doc) — the 1997 binary has no fullscreen concept — but it must parse,
     // clamp-free, and read-modify-write exactly like every RE'd bool row.
-    auto p = write_temp("levelno=1\nfullscreen=1\n");
-    auto opts = load_options(p);
-    REQUIRE(opts.fullscreen.has_value());
-    CHECK(*opts.fullscreen == true);
-    fs::remove(p);
+    const TempFile p = options_file("levelno=1\nfullscreen=1\n");
+    check_row("fullscreen", load_options(p.path()).fullscreen, true);
 
-    auto p2 = write_temp("levelno=1\n");
-    auto opts2 = load_options(p2);
-    CHECK(!opts2.fullscreen.has_value());  // absent key -> windowed (caller's default)
-    fs::remove(p2);
+    // Absent key -> windowed (the caller's default).
+    const TempFile absent = options_file("levelno=1\n");
+    CHECK(!load_options(absent.path()).fullscreen.has_value());
 }
 
 TEST_CASE("save_options: fullscreen= is appended/rewritten in place, preserving unknown lines") {
-    auto p = write_temp(";Bomberman Options file.\nlevelno=1\n");
+    const TempFile p = options_file(";Bomberman Options file.\nlevelno=1\n");
 
     Options opts;
     opts.fullscreen = true;
-    save_options(p, opts);
-
-    auto reread = load_options(p);
-    REQUIRE(reread.fullscreen.has_value());
-    CHECK(*reread.fullscreen == true);
+    save_options(p.path(), opts);
+    check_row("fullscreen", load_options(p.path()).fullscreen, true);
 
     // Flip it and re-save: must rewrite in place, not duplicate the line.
     opts.fullscreen = false;
-    save_options(p, opts);
-    std::string body;
-    {
-        std::ifstream in(p);
-        std::ostringstream ss;
-        ss << in.rdbuf();
-        body = ss.str();
-    }
+    save_options(p.path(), opts);
+    const std::string body = p.text();
     CHECK(body.find(";Bomberman Options file.") != std::string::npos);  // untouched line survives
-    std::size_t first = body.find("fullscreen=");
-    REQUIRE(first != std::string::npos);
-    CHECK(body.find("fullscreen=", first + 1) == std::string::npos);
-    auto reread2 = load_options(p);
-    REQUIRE(reread2.fullscreen.has_value());
-    CHECK(*reread2.fullscreen == false);
-    fs::remove(p);
+    check_written_once(body, "fullscreen=");
+    check_row("fullscreen", load_options(p.path()).fullscreen, false);
 }
 
 TEST_CASE("options.ini: the four Video Settings keys are port-only bools that round-trip") {
     // vsync/native_cadence/show_fps/soft_scaling (install.hpp) — none of them
     // exist in the 1997 binary, all four persist through the same
     // read-modify-write as the RE'd rows.
-    auto p = write_temp("vsync=0\nnative_cadence=1\nshow_fps=1\nsoft_scaling=1\n");
-    auto opts = load_options(p);
-    REQUIRE(opts.vsync.has_value());
-    CHECK(*opts.vsync == false);
-    REQUIRE(opts.native_cadence.has_value());
-    CHECK(*opts.native_cadence == true);
-    REQUIRE(opts.show_fps.has_value());
-    CHECK(*opts.show_fps == true);
-    REQUIRE(opts.soft_scaling.has_value());
-    CHECK(*opts.soft_scaling == true);
-    fs::remove(p);
+    const TempFile p = options_file("vsync=0\nnative_cadence=1\nshow_fps=1\nsoft_scaling=1\n");
+    const Options o = load_options(p.path());
+    check_row("vsync", o.vsync, false);
+    check_row("native_cadence", o.native_cadence, true);
+    check_row("show_fps", o.show_fps, true);
+    check_row("soft_scaling", o.soft_scaling, true);
 
     // soft_scaling=0 is a real false, not "absent".
-    auto p2 = write_temp("soft_scaling=0\n");
-    auto opts2 = load_options(p2);
-    REQUIRE(opts2.soft_scaling.has_value());
-    CHECK(*opts2.soft_scaling == false);
-    fs::remove(p2);
+    const TempFile off = options_file("soft_scaling=0\n");
+    check_row("soft_scaling", load_options(off.path()).soft_scaling, false);
 }
 
 TEST_CASE("options.ini: an OLDER file (no soft_scaling=) loads fine and defaults to crisp") {
@@ -376,12 +291,10 @@ TEST_CASE("options.ini: an OLDER file (no soft_scaling=) loads fine and defaults
     //    so GameApp falls back to its own default (OFF/crisp);
     //  - and it must not be disturbed by the absence (no throw, no other field
     //    perturbed).
-    auto p = write_temp(";Bomberman Options file.\nlevelno=1\nvsync=1\n");
-    auto opts = load_options(p);
-    CHECK(!opts.soft_scaling.has_value());
-    REQUIRE(opts.vsync.has_value());
-    CHECK(*opts.vsync == true);
-    fs::remove(p);
+    const TempFile p = options_file(";Bomberman Options file.\nlevelno=1\nvsync=1\n");
+    const Options o = load_options(p.path());
+    CHECK(!o.soft_scaling.has_value());
+    check_row("vsync", o.vsync, true);
 }
 
 TEST_CASE("options.ini: an UNKNOWN (newer/hand-added) key never breaks the load or the save") {
@@ -389,70 +302,56 @@ TEST_CASE("options.ini: an UNKNOWN (newer/hand-added) key never breaks the load 
     // build (or hand-edited) carries keys this build has never heard of. They
     // must be ignored on read and survive a write VERBATIM — otherwise saving
     // from an older exe would silently strip a newer build's settings.
-    auto p = write_temp(
+    const TempFile p = options_file(
         ";Bomberman Options file.\n"
         "levelno=1\n"
         "some_future_option=7\n"
         "soft_scaling=1\n");
-    auto opts = load_options(p);
-    REQUIRE(opts.levelno.has_value());
-    REQUIRE(opts.soft_scaling.has_value());
-    CHECK(*opts.soft_scaling == true);
+    const Options o = load_options(p.path());
+    check_row("levelno", o.levelno, 1);
+    check_row("soft_scaling", o.soft_scaling, true);
 
     Options out;
     out.soft_scaling = false;
-    save_options(p, out);
-    std::string body;
-    {
-        std::ifstream in(p);
-        std::ostringstream ss;
-        ss << in.rdbuf();
-        body = ss.str();
-    }
+    save_options(p.path(), out);
+
+    const std::string body = p.text();
     CHECK(body.find("some_future_option=7") != std::string::npos);  // untouched
-    std::size_t first = body.find("soft_scaling=");
-    REQUIRE(first != std::string::npos);
-    CHECK(body.find("soft_scaling=", first + 1) == std::string::npos);  // rewritten in place
-    auto reread = load_options(p);
-    REQUIRE(reread.soft_scaling.has_value());
-    CHECK(*reread.soft_scaling == false);
-    fs::remove(p);
+    check_written_once(body, "soft_scaling=");
+    check_row("soft_scaling", load_options(p.path()).soft_scaling, false);
 }
 
 TEST_CASE("save_options: soft_scaling= is appended to a file that lacks it") {
-    auto p = write_temp("levelno=1\n");
+    const TempFile p = options_file("levelno=1\n");
     Options out;
     out.soft_scaling = true;
-    save_options(p, out);
-    auto reread = load_options(p);
-    REQUIRE(reread.soft_scaling.has_value());
-    CHECK(*reread.soft_scaling == true);
+    save_options(p.path(), out);
+
+    const Options reread = load_options(p.path());
+    check_row("soft_scaling", reread.soft_scaling, true);
     CHECK(reread.levelno.has_value());  // the pre-existing key survived
-    fs::remove(p);
 }
 
 TEST_CASE(
     "options.ini: keydef= triples parse into KeyDef, out-of-range set/action drops the line") {
-    auto p = write_temp(
+    const TempFile p = options_file(
         "keydef=0,0,200\n"
         "keydef=0,4,57\n"
         "keydef=1,5,3\n"
         "keydef=2,0,99\n"    // set out of [0,1] -> dropped
         "keydef=0,10,1\n");  // action out of [0,9] -> dropped
-    auto opts = load_options(p);
-    REQUIRE(opts.keydef.has_value());
-    CHECK(opts.keydef->scancode[0][0] == 200);
-    CHECK(opts.keydef->scancode[0][4] == 57);
-    CHECK(opts.keydef->scancode[1][5] == 3);
+    const Options o = load_options(p.path());
+    REQUIRE(o.keydef.has_value());
+    CHECK(o.keydef->scancode[0][0] == 200);
+    CHECK(o.keydef->scancode[0][4] == 57);
+    CHECK(o.keydef->scancode[1][5] == 3);
     // Untouched slots stay at the "absent" sentinel.
-    CHECK(opts.keydef->scancode[0][1] == -1);
-    CHECK(opts.keydef->scancode[1][0] == -1);
-    fs::remove(p);
+    CHECK(o.keydef->scancode[0][1] == -1);
+    CHECK(o.keydef->scancode[1][0] == -1);
 }
 
 TEST_CASE("save_options: keydef= round-trips all set (set,action) triples and skips absent slots") {
-    auto p = fs::temp_directory_path() / "bomber_opts_keydef.ini";
-    fs::remove(p);
+    const auto path = bomber::test::absent_path("bomber_opts_keydef.ini");
 
     Options opts;
     KeyDef kd;
@@ -461,43 +360,33 @@ TEST_CASE("save_options: keydef= round-trips all set (set,action) triples and sk
     kd.scancode[1][3] = 30;   // Left, set 1
     // Every other slot stays -1 (absent) and must NOT be written.
     opts.keydef = kd;
-    save_options(p, opts);
+    save_options(path, opts);
 
-    auto reread = load_options(p);
+    const Options reread = load_options(path);
     REQUIRE(reread.keydef.has_value());
     CHECK(reread.keydef->scancode[0][0] == 200);
     CHECK(reread.keydef->scancode[0][4] == 57);
     CHECK(reread.keydef->scancode[1][3] == 30);
     CHECK(reread.keydef->scancode[0][1] == -1);  // never written -> absent on reread
-    fs::remove(p);
+    std::filesystem::remove(path);
 }
 
 TEST_CASE(
     "save_options: re-saving keydef= rewrites a (set,action) triple in place, not duplicated") {
-    auto p = write_temp("keydef=0,0,200\nlevelno=1\n");
+    const TempFile p = options_file("keydef=0,0,200\nlevelno=1\n");
 
     Options opts;
     KeyDef kd;
     kd.scancode[0][0] = 205;  // rebind the SAME (set,action) to a new scancode
     opts.keydef = kd;
-    save_options(p, opts);
+    save_options(p.path(), opts);
 
-    std::string body;
-    {
-        std::ifstream in(p);
-        std::ostringstream ss;
-        ss << in.rdbuf();
-        body = ss.str();
-    }
+    const std::string body = p.text();
     CHECK(body.find("levelno=1") != std::string::npos);  // untouched line survives
-    auto reread = load_options(p);
+    const Options reread = load_options(p.path());
     REQUIRE(reread.keydef.has_value());
     CHECK(reread.keydef->scancode[0][0] == 205);
-    // Only ONE "0,0," triple line should exist.
-    std::size_t first = body.find("keydef=0,0,");
-    REQUIRE(first != std::string::npos);
-    CHECK(body.find("keydef=0,0,", first + 1) == std::string::npos);
-    fs::remove(p);
+    check_written_once(body, "keydef=0,0,");
 }
 
 // --- nodename.ini: the net identity's own file (sub_40C08C / sub_40C140) ----
@@ -506,46 +395,40 @@ TEST_CASE(
 // its own reader (boot init) and writer (shutdown hook).
 
 TEST_CASE("nodename.ini: the first line is the name (sub_40C08C's fgets)") {
-    auto p = write_temp_node("Egerion");
-    CHECK(load_node_name(p) == "Egerion");
-    fs::remove(p);
+    const TempFile p = node_file("Egerion");
+    CHECK(load_node_name(p.path()) == "Egerion");
 
     // The shipped file has no trailing newline; one written by a text editor
     // must read identically ('\n' is what sub_40C08C strips), and a second line
     // is not part of the name.
-    auto q = write_temp_node("Neil's House Of Pain\r\nignored second line\n");
-    CHECK(load_node_name(q) == "Neil's House Of Pain");
-    fs::remove(q);
+    const TempFile two_lines = node_file("Neil's House Of Pain\r\nignored second line\n");
+    CHECK(load_node_name(two_lines.path()) == "Neil's House Of Pain");
 }
 
 TEST_CASE("nodename.ini: absent or blank file yields an empty name") {
     // The caller (GameApp) then draws the original's random MESSAGES 500..548
     // default — this loader never invents one.
-    CHECK(load_node_name(fs::temp_directory_path() / "bomber_no_such_nodename.ini").empty());
-    auto p = write_temp_node("   \n");
-    CHECK(load_node_name(p).empty());
-    fs::remove(p);
+    CHECK(load_node_name(bomber::test::absent_path("bomber_node_absent.ini")).empty());
+    const TempFile blank = node_file("   \n");
+    CHECK(load_node_name(blank.path()).empty());
 }
 
 TEST_CASE("nodename.ini: hostile content is sanitised on read AND on write") {
     // The name goes straight into the lobby roster, so a hand-edited file must
     // not be able to smuggle in control bytes or an over-long run.
-    auto p = write_temp_node(std::string("A\x01\x02Z\x7f!"));
-    CHECK(load_node_name(p) == "AZ!");
-    fs::remove(p);
+    const TempFile control_bytes = node_file(std::string("A\x01\x02Z\x7f!"));
+    CHECK(load_node_name(control_bytes.path()) == "AZ!");
 
-    auto q = write_temp_node("");
-    save_node_name(q, std::string(kNodeNameMax + 25, 'X'));
-    CHECK(read_all(q) == std::string(kNodeNameMax, 'X'));
-    CHECK(load_node_name(q).size() == kNodeNameMax);
-    fs::remove(q);
+    const TempFile overlong = node_file("");
+    save_node_name(overlong.path(), std::string(kNodeNameMax + 25, 'X'));
+    CHECK(overlong.text() == std::string(kNodeNameMax, 'X'));
+    CHECK(load_node_name(overlong.path()).size() == kNodeNameMax);
 }
 
 TEST_CASE("nodename.ini: save/load round-trips and rewrites in place") {
-    auto p = write_temp_node("OLD NAME");
-    save_node_name(p, "NEW NAME");
+    const TempFile p = node_file("OLD NAME");
+    save_node_name(p.path(), "NEW NAME");
     // One line, nothing else (sub_40C140 is a single fputs of the buffer).
-    CHECK(read_all(p) == "NEW NAME");
-    CHECK(load_node_name(p) == "NEW NAME");
-    fs::remove(p);
+    CHECK(p.text() == "NEW NAME");
+    CHECK(load_node_name(p.path()) == "NEW NAME");
 }

@@ -8,14 +8,14 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
-#include <filesystem>
-#include <fstream>
 #include <string>
 #include <vector>
 
 #include "bomber/assets/extra.hpp"
+#include "fixture.hpp"
 
 using namespace bomber::assets::extra;
+using bomber::test::TempFile;
 
 namespace {
 
@@ -24,25 +24,9 @@ namespace {
 constexpr int kW = 15;
 constexpr int kH = 11;
 
-struct TempFile {
-    std::filesystem::path path;
-
-    TempFile(const char* name, const std::string& text)
-        : path(std::filesystem::temp_directory_path() / name) {
-        std::ofstream f(path, std::ios::binary);
-        f << text;
-    }
-    ~TempFile() {
-        std::error_code ec;
-        std::filesystem::remove(path, ec);
-    }
-    TempFile(const TempFile&) = delete;
-    TempFile& operator=(const TempFile&) = delete;
-};
-
 std::vector<Actor> parse_text(const char* name, const std::string& text) {
     const TempFile tf(name, text);
-    return parse(tf.path, kW, kH);
+    return parse(tf.path(), kW, kH);
 }
 
 }  // namespace
@@ -126,8 +110,7 @@ TEST_CASE("malformed and unknown lines are skipped rather than aborting the file
 }
 
 TEST_CASE("a board with no EXTRA file simply has no actors") {
-    const auto actors =
-        parse(std::filesystem::temp_directory_path() / "obm_extra_absent.res", kW, kH);
+    const auto actors = parse(bomber::test::absent_path("obm_extra_absent.res"), kW, kH);
     CHECK(actors.empty());
 }
 
@@ -154,8 +137,8 @@ TEST_CASE("SECURITY: an extreme negative coordinate normalises in constant time"
 TEST_CASE("SECURITY: a zero-extent board terminates instead of looping forever") {
     // `while (v < 0) v += 0` has no terminating case at all. A board with no
     // tiles has no position to normalise to, so every coordinate collapses to 0.
-    const TempFile tf("obm_extra_zero.res", "-A,n,-1,-1\n-T,-5,-5\n");
-    const auto actors = parse(tf.path, 0, 0);
+    const TempFile tf("obm_extra_zero.res", std::string("-A,n,-1,-1\n-T,-5,-5\n"));
+    const auto actors = parse(tf.path(), 0, 0);
     REQUIRE(actors.size() == 2);
     CHECK(actors[0].x == 0);
     CHECK(actors[0].y == 0);
