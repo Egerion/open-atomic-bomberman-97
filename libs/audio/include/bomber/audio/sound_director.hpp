@@ -26,6 +26,16 @@ public:
     void reset();
 
 private:
+    // The three event arms with real logic of their own, split out so on_tick
+    // stays a flat switch over Event::Type. Each carries its own RE citation
+    // and its own cosmetic draw; the switch reads as a dispatch table again
+    // rather than as three nested decisions wearing a `case` label.
+    void on_bomb_placed(const sim::State& s, const sim::Event& ev);
+    void on_powerup_picked(const sim::Event& ev);
+    void on_player_died(const sim::State& s, const sim::Event& ev);
+    // Drains voice lines scheduled for this tick or earlier.
+    void drain_pending(const sim::State& s);
+
     SoundSink& audio_;
     // Voice lines scheduled a beat after their trigger: (due tick, group base).
     std::vector<std::pair<std::uint64_t, int>> pending_;

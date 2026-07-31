@@ -11,14 +11,40 @@
 // reads. SDL-free and dependency-free beyond bomber::sim, like the rest of
 // bomber::match.
 
-#include <cstdint>
+#include <array>
+#include <cstddef>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "bomber/sim/tuning.hpp"
 
 namespace bomber::match {
+
+// The 11 stock levels. Named because three separate places need to agree on it:
+// with_builtins() seeds exactly this many, enabled_stages() uses it as the
+// built-in/custom cutoff, and it is the width of the VALUELST level_enabled mask
+// (ids 1150..1160). It was a bare `11` at each of those sites.
+inline constexpr int kBuiltinLevelCount = 11;
+
+// The 11 generic fallback names (previously map_select_screen.cpp's
+// level_fallback array). The real names live in the user's MESSAGES.TXT and load
+// at runtime via getstring(150+i); these are never committed exe/asset material,
+// just readable placeholders. At namespace scope rather than inside
+// with_builtins() because it is a constant table, not a step of that factory.
+inline constexpr std::array<std::string_view, kBuiltinLevelCount> kBuiltinLevelNames{
+    "NEW TRADITIONALIST",
+    "CLASSIC GREEN ACRES",
+    "HOCKEY RINK",
+    "ANCIENT EGYPT",
+    "COAL MINE",
+    "BEACH",
+    "ALIENS",
+    "HAUNTED HOUSE",
+    "UNDER THE OCEAN",
+    "DEEP FOREST GREEN",
+    "INNER CITY TRASH"};
 
 // One playable level. `index` is the stage number used EVERYWHERE today (0..10
 // for the 11 built-ins, 11+ for custom maps); it keys the per-level sim gates
@@ -55,20 +81,11 @@ public:
     // asset base names, and the rotation this feeds MUST reproduce exactly what
     // the old hardcoded sites produced — see enabled_stages().
     static LevelRegistry with_builtins() {
-        // The 11 generic fallbacks (previously map_select_screen.cpp's
-        // level_fallback array). The real names live in the user's MESSAGES.TXT
-        // and load at runtime via getstring(150+i); these are never committed
-        // exe/asset material, just readable placeholders.
-        static const char* const kNames[] = {
-            "NEW TRADITIONALIST", "CLASSIC GREEN ACRES", "HOCKEY RINK",
-            "ANCIENT EGYPT",      "COAL MINE",           "BEACH",
-            "ALIENS",             "HAUNTED HOUSE",       "UNDER THE OCEAN",
-            "DEEP FOREST GREEN",  "INNER CITY TRASH"};
         LevelRegistry reg;
-        for (int i = 0; i < 11; ++i) {
+        for (int i = 0; i < kBuiltinLevelCount; ++i) {
             LevelDef d;
             d.index = i;
-            d.name_fallback = kNames[i];
+            d.name_fallback = kBuiltinLevelNames[static_cast<std::size_t>(i)];
             d.field_asset = "FIELD" + std::to_string(i);
             d.tiles_asset = "TILES" + std::to_string(i);
             d.xbrick_asset = "XBRICK" + std::to_string(i);
@@ -104,7 +121,7 @@ public:
     std::vector<int> enabled_stages(const sim::Tuning& tuning) const {
         std::vector<int> allowed;
         for (const auto& l : levels_) {
-            const bool on = (l.index >= 0 && l.index < 11)
+            const bool on = (l.index >= 0 && l.index < kBuiltinLevelCount)
                                 ? (tuning.level_enabled[l.index] != 0)  // built-in: VALUELST mask
                                 : l.enabled;                            // custom: own flag
             if (on) allowed.push_back(l.index);
