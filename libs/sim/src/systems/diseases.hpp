@@ -38,6 +38,9 @@ public:
     void spread_and_age();
 
 private:
+    void age_and_expire();
+    void spread_from(int i);
+
     State& s_;
 };
 

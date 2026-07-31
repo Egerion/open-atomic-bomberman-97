@@ -209,91 +209,74 @@ void PowerupSystem::reset_to_baseline(Player& p, int kind, int baseline) {
         p.*sp.flag = false;
 }
 
-// A bomb bonks a player on the head (sub_421F7E): a hardcoded 16-tick stun
-// (the +58 countdown), then powers_lost_min + rand % powers_lost_rand
-// upgrades are picked by ROLLING A KIND (rand % 15, up to 200 tries) that
-// the player holds above the VALUELST start-with baseline; each hit kind is
-// removed and its token scattered to a random tile.
+// One dropped upgrade: roll a KIND (rand % 15, up to 200 tries) that the player
+// holds above its VALUELST start-with baseline, then remove it and scatter its
+// token. Every try draws, whether or not it hits.
+void PowerupSystem::scatter_one_rolled_surplus(Player& p) {
+    for (int tries = 0; tries < 200; ++tries) {
+        const int kind = static_cast<int>(random_below(s_, 15));
+        if (kind >= kPowerupKinds || held_count(p, kind) <= s_.tuning.start_with[kind]) continue;
+        const auto t = static_cast<PowerupType>(kind);
+        remove(p, t);
+        scatter(t);
+        return;
+    }
+}
+
+// A bomb bonks a player on the head (sub_421F7E): a hardcoded 16-tick stun (the
+// +58 countdown), then powers_lost_min + rand % powers_lost_rand dropped
+// upgrades.
 void PowerupSystem::head_hit(int victim, int tx, int ty) {
     State& s = s_;
     Player& p = s.players[victim];
     p.stun = s.tuning.head_stun_frames;  // plain overwrite, as the original
     // sub_421F7E also sets the player-state word +78 to 3 and zeroes the anim
-    // counter +80 — an UNCONDITIONAL
-    // overwrite of that state word — and its caller's victim probe
-    // (sub_421CB5, pseudo.c 24207) accepts any active-and-not-dead player with
-    // NO +78 guard. The original therefore cannot hold state 4 (pickup-pause),
-    // 5 (trampoline hop) or 6/7 (warp out/in) past a head hit: the ONE state
-    // word is clobbered to 3, cancelling the pause/flight in place (a warp hit
-    // during warp-out never relocates; during warp-in it stays at the exit,
-    // since the position writes only happen inside the state-6/7 branches the
-    // player no longer takes). Our port keeps these as separate fields, so
-    // mirror the overwrite explicitly — without this, "bouncing/warping while
-    // head-stunned" is a flag combination the original cannot express
-    // (facts.md "Player state machine (+78) — COMPLETE"). A player left
-    // standing on the actor's tile by the cancel does NOT immediately re-trigger
-    // it: the only trigger is the mover's along-axis offset reaching -1, which
-    // needs a fresh walk INTO the centre from outside (facts.md
-    // "Warphole/trampoline entry predicate").
+    // counter +80 — an UNCONDITIONAL overwrite — and its caller's victim probe
+    // (sub_421CB5) accepts any active-and-not-dead player with NO +78 guard. So
+    // the original cannot hold state 4 (pickup-pause), 5 (hop) or 6/7 (warp) past
+    // a head hit: the ONE state word is clobbered to 3, cancelling the
+    // pause/flight in place. This port keeps them as separate fields, so mirror
+    // the overwrite explicitly — otherwise "bouncing while head-stunned" is a
+    // combination the original cannot express (facts.md "Player state machine
+    // (+78) — COMPLETE"). A player left standing on the actor's tile by the
+    // cancel does NOT re-trigger it: the only trigger is the mover's along-axis
+    // offset reaching -1, which needs a fresh walk in from outside.
     p.pickup_pause = 0;
     p.bounce = 0;
     p.warp = 0;
 
-    auto surplus = [&](int kind) -> bool {
-        return kind < kPowerupKinds && held_count(p, kind) > s.tuning.start_with[kind];
-    };
-
-    int n = s.tuning.powers_lost_min +
-            static_cast<int>(random_below(
-                s, static_cast<std::uint32_t>(
-                       std::max<std::int32_t>(1, s.tuning.powers_lost_rand))));
-    for (int i = 0; i < n; ++i) {
-        for (int tries = 0; tries < 200; ++tries) {
-            int kind = static_cast<int>(random_below(s, 15));
-            if (!surplus(kind)) continue;
-            auto t = static_cast<PowerupType>(kind);
-            remove(p, t);
-            scatter(t);
-            break;
-        }
-    }
+    const int n =
+        s.tuning.powers_lost_min +
+        static_cast<int>(random_below(
+            s, static_cast<std::uint32_t>(std::max<std::int32_t>(1, s.tuning.powers_lost_rand))));
+    for (int i = 0; i < n; ++i) scatter_one_rolled_surplus(p);
     s.events.push_back({Event::Type::HeadHit, static_cast<std::int8_t>(victim),
                         static_cast<std::int8_t>(tx), static_cast<std::int8_t>(ty), 0});
 }
 
-// A player dies (sub_41DBFE, invoked from sub_41F29B's death-animation branch
-// when that animation completes). Scatters EVERY powerup the player accumulated ABOVE
-// its VALUELST start-with baseline back onto random floor tiles: iterate the
-// kPowerupKinds real kinds (0..12) in index order and, for each, drop the
-// surplus. (The native's pad slots 13/14 are seeded to their own baseline by
-// sub_4214BC, so they never carry surplus — iterating them would be a no-op.)
+// A player dies (sub_41DBFE): scatter EVERY powerup accumulated ABOVE the
+// VALUELST start-with baseline, in kind index order. NOT the head hit — that
+// drops a rand-limited COUNT of randomly ROLLED kinds; death drops the whole
+// surplus with no kind roll and no count roll, so the only draws are
+// sub_4255B2's per-token tile selection, and THAT sequence is the determinism
+// contract. The original splits flag kinds (sub_425C10: 5/6/7/9/10, scatter one
+// and reset) from counted kinds (scatter one per surplus, decrement); since every
+// real flag kind's count is 0/1, one `surplus = have - baseline` loop reproduces
+// both branches' draw order and board result exactly. The native's pad slots
+// 13/14 are seeded to their own baseline, so they never carry surplus.
 //
-// This is NOT the head hit. The head hit drops a rand-limited COUNT
-// (getvalue(670)+rand%getvalue(671)) of RANDOMLY ROLLED kinds (rand%15); death
-// drops the player's WHOLE surplus with NO kind roll and NO count roll. The
-// only RNG draws are sub_4255B2's per-token tile selection (via scatter()), in
-// kind order — THAT sequence is the determinism contract. The original splits
-// flag kinds (sub_425C10: 5/6/7/9/10 -> scatter one, reset) from counted kinds
-// (scatter one per surplus, decrement); since every real flag kind's count is
-// 0/1, a single `surplus = have - baseline` loop reproduces BOTH branches'
-// draw order and board result exactly.
+// The death-animation VARIANT roll (sub_41DE63's rand % getvalue(105) + 1,
+// choosing which DIE*.ANI plays) is cosmetic and stays presentation-side per
+// determinism rule 6 — it is not drawn on State::rng.
 //
-// The death-animation VARIANT roll (sub_41DE63 draws rand % getvalue(105) and
-// adds 1, deciding which
-// DIE*.ANI plays) is a cosmetic death-sprite pick and stays presentation-side
-// per CLAUDE.md determinism rule 6 — it is NOT drawn on State::rng, so this
-// sim's stream carries only the scatter draws.
-//
-// TIMING — a deliberate, documented divergence: the original defers this
-// scatter to the death animation's final frame (tens of ticks later; the
-// DIE*.ANI length is asset data the SDL-free sim must not know). We scatter on
-// the death TICK, the same animation-delay collapse this sim applies
-// everywhere else (a dead player is immediately inert). The scatter CONTENTS
-// (kinds/counts/tiles) and the RNG arithmetic are identical; only the tick the
-// tokens appear differs. The dead player is already `alive = false` at every
-// call site, so — matching the original, where +8 (dead) is set before the
-// anim-end scatter — sub_4255B2's live-player occupancy check (grid::player_at,
-// which gates on `alive`) lets a token land on the victim's own tile.
+// TIMING — a deliberate, documented divergence: the original defers this scatter
+// to the death animation's final frame, tens of ticks later, and the DIE*.ANI
+// length is asset data the SDL-free sim must not know. We scatter on the death
+// TICK, the same animation-delay collapse this sim applies everywhere. The
+// CONTENTS and the RNG arithmetic are identical; only the tick the tokens appear
+// differs. The player is already `alive = false` at every call site, matching the
+// original where +8 is set before the anim-end scatter, so scatter's live-player
+// occupancy check lets a token land on the victim's own tile.
 void PowerupSystem::death_scatter(Player& p) {
     for (int kind = 0; kind < kPowerupKinds; ++kind) {
         const int baseline = s_.tuning.start_with[kind];

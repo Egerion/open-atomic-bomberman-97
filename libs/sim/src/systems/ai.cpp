@@ -1,20 +1,10 @@
-// The computer-player AI (ADR-0005, docs/re/ai.md). Stage 2: the dispatcher
-// skeleton, the danger + obstacle grids, the flee branch + the wander fallback.
-// Stage 3: the directed BFS (sub_4092A1), behaviour 2's directed branch, the
-// powerup scan (sub_409C1F), and behaviour 5 (seek a nearby powerup, sub_40BAF5).
-// Stage 4: behaviour 0 (grab-glove drop/hold, sub_40BD44) and behaviour 3
-// (blast bricks, sub_40AD8D) — both DROP by setting the bomb-key edge on the
-// produced input so the normal BombSystem path runs in player_turn.
-// Every mechanic mirrors a named original function; comments cite the sub_XXXX.
-// Integer only; RNG only via State::rng in the RE'd order/count (docs/re/ai.md
-// §8). See ai.hpp for the staged scope.
+// The computer-player AI's dispatcher entry and PlayerInput adapters (ADR-0005,
+// docs/re/ai.md). The rest of the subsystem is split across ai_grids.cpp
+// (danger/obstacle grids + the tile predicates), ai_pathfind.cpp (the 3 BFS
+// variants + the flame veto) and ai_behaviours.cpp (the 8 behave_* + the enemy
+// finder); the shared godir tables live in grid.hpp, the API in ai.hpp.
 //
-// This subsystem is split across translation units for readability (a pure
-// file-split, no behaviour change): ai_grids.cpp (danger/obstacle grids + the
-// tile predicates), ai_pathfind.cpp (the 3 BFS variants + the flame veto),
-// ai_behaviours.cpp (the 8 behave_* + the enemy finder), and this file (the
-// dispatcher entry + the PlayerInput adapters). The shared godir tables live in
-// grid.hpp. See ai.hpp for the API and staged scope.
+// Integer only; RNG only via State::rng in the RE'd order/count (ai.md §8).
 
 #include "systems/ai.hpp"
 
@@ -64,23 +54,11 @@ void AISystem::press_action_sustained(PlayerInput& out) {
     out.action2 = true;
 }
 
-// ---------------------------------------------------------------------------
 // Dispatcher — sub_40A1C6 (docs/re/ai.md §2). Draw A (leading scratch), the
-// behaviour chain (first behaviour that acts short-circuits), Draw B (trailing
-// scratch). Draws A/B are heap-debug residue kept for exact RNG parity: a bare
-// rand() advances the stream with the value discarded, which next_random models.
-//
-// DISPATCHER ORDER (ADR-0005 §8): ALL 8 behaviours are now live (Stage 5 landed
-// behaviours 1/4/6 + the safe-branch trigger whim). Draws land in the §8 slots:
-// A (scratch) -> the single fired behaviour's draws -> B (scratch). Because
-// golden has no AI players, no draw stream regresses (ADR-0005 §7). Behaviours:
-// [0] grab-glove (%2 when eligible), [1] punch (%4 when holding punch), [2]
-// walk/flee (BFS tie-break; safe-branch %10 trigger whim), [3] blast bricks
-// (%915 when the gates pass), [4] bomb-near-enemy (%5 when a foe is on the cross
-// and the tile is clear), [5] seek powerup (%50-acquire / scan / path / %2), [6]
-// seek enemy (%50-acquire + the finder's %10 draws / %50-timeout / path / %2),
-// [7] wander. Only ONE behaviour body runs per tick (short-circuit).
-// ---------------------------------------------------------------------------
+// behaviour chain, Draw B (trailing scratch), and the per-frame draw order is
+// exactly that: A -> the SINGLE fired behaviour's draws -> B. Draws A/B are
+// heap-debug residue kept for exact RNG parity — a bare rand() advances the
+// stream with the value discarded, which next_random models.
 void AISystem::decide(int i, PlayerInput& out, std::int32_t delta_ms) {
     delta_ms_ = delta_ms;  // this frame's ms delta — the pursuit timers accrue it
     ensure_grids();
