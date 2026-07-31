@@ -187,6 +187,25 @@ The sim is deterministic lockstep (`docs/adr/0003`). Rules:
 - Systems take `State&` (and other systems) by reference in the constructor —
   cheap stack objects, explicit dependencies, no globals/singletons.
 - Comments explain WHY (and cite RE facts); no redundant WHAT comments.
+- Size and shape: class ≤200 lines, function ≤20 lines, ≤4 parameters, guard
+  clauses over nesting, no `else` after a `return`/`continue`/`break`, nesting
+  ≤3. These are targets a reviewer measures, not compiler errors.
+- **Complexity is gated** (`scripts/complexity.sh`, in the pre-push hook), and
+  the metric is clang-tidy's *cognitive* complexity rather than raw McCabe
+  cyclomatic, threshold **25** (≈ cyclomatic 15). The difference is deliberate:
+  cognitive complexity charges NESTING — the same branch costs more three levels
+  down — and charges nothing for a flat `switch` over an enum. This codebase is
+  full of faithful ports of the original's dispatch tables, which McCabe scores
+  as catastrophic while a reader walks them without effort; what needs pushing
+  down here is tangle, not arm count.
+  It is a **RATCHET, not a wall**: `scripts/complexity-baseline.txt` records the
+  66 functions that were already over when the gate was added (worst: 251), and
+  they may stay — but none may get worse, and anything new must meet the
+  threshold from its first line. The list only shrinks. Regenerate with
+  `scripts/complexity.sh --update` AFTER a refactor lands, never to make a red
+  gate go green; a number going up in that diff is the ratchet failing open.
+  A shape that genuinely mirrors the binary's control flow is an exception —
+  keep it, cite the `sub_XXXX`, and re-baseline deliberately.
 - Tests: doctest, one suite per exe in `tests/`, registered in ctest. New
   gameplay code lands with tests; the full suite must stay green.
 

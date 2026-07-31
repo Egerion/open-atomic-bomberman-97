@@ -13,3 +13,8 @@ pre-push:
     # scripts/format.sh), so it does not demand a repo-wide reformat commit.
     format:
       run: bash scripts/format.sh
+    # A RATCHET, not a wall: 66 functions were already over the threshold when
+    # this landed (worst 251), so it gates against getting WORSE rather than
+    # demanding seventy rewrites in one change. See scripts/complexity.sh.
+    complexity:
+      run: bash scripts/complexity.sh

@@ -220,16 +220,20 @@ For play across machines, replace `127.0.0.1` with the other machine's LAN IP (s
 
 ## Git hooks
 
-`lefthook.yml` wires a pre-push gate: full `headless` build + `ctest`, a repo-wide `clang-tidy` pass (config in `.clang-tidy`), and a `clang-format` check (config in `.clang-format`) over the lines the push changes. Each clone/worktree must enable it once:
+`lefthook.yml` wires a pre-push gate: full `headless` build + `ctest`, a repo-wide `clang-tidy` pass (config in `.clang-tidy`), a `clang-format` check (config in `.clang-format`) over the lines the push changes, and a function-complexity check. Each clone/worktree must enable it once:
 
 ```
 winget install evilmartians.lefthook   # if not already installed
 lefthook install
 ```
 
-Run any check by hand with `bash scripts/test.sh` / `bash scripts/lint.sh` / `bash scripts/format.sh`, or the whole gate with `lefthook run pre-push --force`.
+Run any check by hand with `bash scripts/test.sh` / `bash scripts/lint.sh` / `bash scripts/format.sh` / `bash scripts/complexity.sh`, or the whole gate with `lefthook run pre-push --force`.
 
-The format check is deliberately line-scoped, not file-scoped: most of the tree predates it and a whole-repo reformat would bury real changes, so only what you touch has to match. `scripts/format.sh [base]` defaults to the merge-base with `origin/main`.
+Two of those are deliberately scoped to what a push actually touches, for the same reason: most of the tree predates them, and a repo-wide sweep would bury every real change under mechanical noise.
+
+The **format** check is line-scoped rather than file-scoped — only the lines you write have to match. `scripts/format.sh [base]` defaults to the merge-base with `origin/main`.
+
+The **complexity** check is a ratchet. It measures clang-tidy's *cognitive* complexity (which charges nesting, and charges nothing for a flat `switch` — the right bias for a codebase full of ported dispatch tables) at threshold 25, and compares against `scripts/complexity-baseline.txt`, the 66 functions that were already over when it was added. Those may stay; none may get worse; anything new must meet the threshold. Re-record with `scripts/complexity.sh --update` after a refactor genuinely improves things — not to clear a red gate.
 
 ## Roadmap
 
