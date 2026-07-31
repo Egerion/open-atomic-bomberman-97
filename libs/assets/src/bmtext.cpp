@@ -41,23 +41,31 @@ BmLine parse_line(std::string_view line) {
 
 }  // namespace
 
+namespace {
+
+// One source character's output. A tab emits at least one space and then runs to
+// the next 4-column stop: `do { *dst++ = ' '; ++col; } while (col & 3);`.
+void emit_expanded(std::string& out, int& col, char ch) {
+    if (ch != '\t') {
+        out.push_back(ch);
+        return;
+    }
+    do {
+        out.push_back(' ');
+        ++col;
+    } while (col & 3);
+}
+
+}  // namespace
+
 std::string expand_tabs(std::string_view line) {
     std::string out;
     int col = 0;
     for (char ch : line) {
-        if (ch == '\t') {
-            // At least one space, then on to the next 4-column stop:
-            // `do { *dst++ = ' '; ++col; } while (col & 3);`
-            do {
-                out.push_back(' ');
-                ++col;
-            } while (col & 3);
-        } else {
-            out.push_back(ch);
-        }
+        emit_expanded(out, col, ch);
         // The shared per-source-character increment (see the header): after a
-        // tab it makes `col` one MORE than the number of characters emitted,
-        // which is what the shipped column art is drawn against.
+        // tab it leaves `col` one MORE than the characters emitted, which is
+        // what the shipped column art is drawn against.
         ++col;
         if (col >= 255) break;  // the original's 256-byte scratch buffer
     }

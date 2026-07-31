@@ -8,29 +8,23 @@
 
 namespace bomber::assets {
 
-// Locates the player's original Atomic Bomberman installation. Probes, in
-// order: the BOMBER_GAME_DIR environment variable, a gamedir.txt (working
-// directory first, then `exe_dir`), then the standard install locations
-// (including a BOMBRMAN folder beside the exe). Returns an empty path when
-// nothing is found.
+// Locates the player's original Atomic Bomberman installation, or an empty path.
+// The probe order is the contract and lives with the implementation.
 //
-// `exe_dir` is the directory holding the running binary, passed in rather than
-// discovered here because this library is deliberately SDL-free (the caller
-// has SDL_GetBasePath). Leave it empty and only the CWD-relative probes run —
-// which is what a shortcut with a different "Start in", or a launch from any
-// other directory, used to silently reduce this to.
+// `exe_dir` is passed in rather than discovered here because this library is
+// deliberately SDL-free (the caller has SDL_GetBasePath). Leaving it empty runs
+// only the CWD-relative probes — which is what a shortcut with a different
+// "Start in" used to silently reduce this to.
 std::filesystem::path default_game_dir(const std::filesystem::path& exe_dir = {});
 
-// The key-remap bindings (docs/re/results-and-options.md §2, `keydef=<set>,
-// <action>,<scancode>` triples, dword_4645BC[10*set+action]). Two keyboard
-// sets, 10 action slots each even though the in-game remap UI (sub_407B9D)
-// only exposes the first 6 (Up/Right/Down/Left/Action1/Action2, §2's action
-// name order 1120..1125); slots 6-9 are write-only from options.ini (no UI)
-// and simply round-trip. `scancode` is the RAW value written by the original
-// (its own low-level scancode space, byte_4A2BA0 indexed) — we store it
-// verbatim rather than remapping through SDL_Scancode, so a value this port
-// did not write (e.g. hand-edited, or one of the UI-less slots 6-9) survives
-// a save/load cycle unchanged. -1 = "absent" (key never appeared in the file).
+// The key-remap bindings (docs/re/results-and-options.md §2,
+// dword_4645BC[10*set+action]). Two sets of 10 slots, though the remap UI
+// (sub_407B9D) exposes only the first 6 — slots 6-9 have no UI and just
+// round-trip.
+//
+// `scancode` is the original's RAW value (its own low-level space, byte_4A2BA0
+// indexed) and is stored VERBATIM rather than remapped through SDL_Scancode, so
+// a value this port never wrote survives a save/load cycle. -1 = absent.
 struct KeyDef {
     static constexpr int kSets = 2;
     static constexpr int kActionsPerSet = 10;  // reader's array width (§2)
@@ -41,172 +35,98 @@ struct KeyDef {
     }
 };
 
-// The install-root `options.ini` (parsed by sub_406238): a plain "key=value"
-// text file the original reads at startup. Each field is optional — a key
-// absent from the file leaves the corresponding optional empty so the caller
-// keeps the binary's hardcoded default rather than guessing.
+// The install-root `options.ini` (read by sub_406238, written by sub_405DE3): a
+// plain "key=value" text file. Every field is optional — an absent key leaves
+// its optional empty so the caller keeps the binary's hardcoded default rather
+// than guessing one.
 //
-// docs/re/results-and-options.md §3 "The full options.ini key list" pins ALL
-// 22 keys via the writer's (sub_405DE3) fixed fprintf order, positionally
-// matching the reader's (sub_406238) stricmp chain. Every key gets a typed
-// field here so load/save round-trip losslessly even for keys this port does
-// not yet consume (e.g. modem/netprotocol) — save_options' unknown-line
-// preservation is now a backstop for genuinely foreign keys, not a crutch for
-// ones we simply haven't typed.
+// All 22 original keys are typed here, INCLUDING the ones this port never
+// consumes (modem, netprotocol), so load/save round-trips them losslessly;
+// save_options' unknown-line preservation is a backstop for genuinely foreign
+// keys, not a crutch for ones we simply have not typed. Addresses, row numbers
+// and the full clamp table: docs/re/results-and-options.md §3.
 struct Options {
-    // "levelno=" — dword_464998, the LEVEL & ROUNDS screen's committed stage
-    // index. Clamp (post-read): < -1 -> -1 (RANDOM); >= getvalue(35) ->
-    // getvalue(35)-1.
-    std::optional<int> levelno;
-    // "num_to_win_match=" — dword_464A7c, "how many wins to clinch the match"
-    // (docs/re/results-and-options.md §1's match-clinch check). Clamp: < 1 ->
-    // 1. Consumed here to seed GameApp::win_target_'s default (task item 5);
-    // the LEVEL & ROUNDS screen's WINS row still overrides per-match.
-    std::optional<int> num_to_win_match;
-    // "enclosement_depth=" — dword_464974, Options row 7. Clamp: < 0 -> 0;
-    // >= getvalue(28) -> getvalue(28)-1 (0..3: None/A Little/A Lot/All the way).
-    std::optional<int> enclosement_depth;
-    // "conveyor_speed=" — the Conveyor Speed game-option index (dword_464930):
-    // 0 low, 1 medium, 2 high; addresses VALUELST 190/191/192 via
-    // getvalue(190+idx). The binary defaults it to 1 (medium, pseudo.c 14652)
-    // when no options.ini is present; this file overrides it. Clamped by the
-    // consumer to [0, getvalue(189)-1].
+    std::optional<int> levelno;            // dword_464998; clamp < -1 -> -1 (RANDOM)
+    std::optional<int> num_to_win_match;   // dword_464A7C; clamp < 1 -> 1
+    std::optional<int> enclosement_depth;  // dword_464974; clamp < 0 -> 0
+    // dword_464930: 0 low / 1 medium / 2 high, addressing VALUELST 190+idx. The
+    // binary defaults to medium when no options.ini exists.
     std::optional<int> conveyor_speed;
-    // "team_play=" — the Team Play game-option toggle (0/1), dword_464964
-    // (docs/re/results-and-options.md §3 row 0). Forces win_by_kills off when
-    // set (consumer-side, present_options_screen).
+    // dword_464964. Forces win_by_kills off while set (consumer-side).
     std::optional<bool> team_play;
-    // "random_start=" — dword_464AE8, Options row 1 (§3). Normalized 0/1.
-    std::optional<bool> random_start;
-    // "stomped_bombs_detonate=" — dword_464940, Options row 4. Normalized 0/1.
-    std::optional<bool> stomped_bombs_detonate;
-    // "win_by_kills=" — dword_46497C, Options row 5. Normalized 0/1; forced
-    // off whenever Team Play is on (consumer-side).
-    std::optional<bool> win_by_kills;
-    // "goldman=" — dword_4648BC, Options row 6 ("Gold Bomberman"). Normalized
-    // 0/1; toggling it also resets the pending roulette winner (consumer-side,
-    // presentation-only — no roulette wheel in this port yet).
-    std::optional<bool> goldman;
-    // "schemefilename=" — byte_4648C4[100], Options row 8. Plain strcpy_, no
-    // numeric clamp.
-    std::optional<std::string> schemefilename;
-    // "playtime=" — dword_464948, Options row 9. Clamp: < 60 -> 60; != 1001
-    // (the "unlimited" sentinel) && > 600 -> 600.
+    std::optional<bool> random_start;            // dword_464AE8
+    std::optional<bool> stomped_bombs_detonate;  // dword_464940
+    std::optional<bool> win_by_kills;            // dword_46497C
+    std::optional<bool> goldman;                 // dword_4648BC
+    std::optional<std::string> schemefilename;   // byte_4648C4[100], no clamp
+    // dword_464948; clamp < 60 -> 60, and > 600 -> 600 EXCEPT the 1001
+    // "unlimited" sentinel, which is never clamped.
     std::optional<int> playtime;
-    // "assign_keyboards=" — dword_464968, Options row 10. Normalized 0/1.
-    std::optional<bool> assign_keyboards;
-    // "diseases_destroyable=" — dword_464990, Options row 11. No clamp
-    // observed.
-    std::optional<bool> diseases_destroyable;
-    // "lost_net_revert_ai=" — dword_464928, Options row 12. No clamp observed.
-    // CONSUMED by netplay: the caller copies it into
-    // `net::DropPolicy::revert_to_ai` (peer drop -> AI handoff, ADR-0011 Risks).
+    std::optional<bool> assign_keyboards;      // dword_464968
+    std::optional<bool> diseases_destroyable;  // dword_464990
+    // dword_464928. CONSUMED by netplay: the caller copies it into
+    // net::DropPolicy::revert_to_ai (peer drop -> AI handoff, ADR-0011).
     std::optional<bool> lost_net_revert_ai;
-    // "disable_game_music=" — dword_4648C0, Options row 13. Normalized 0/1.
-    std::optional<bool> disable_game_music;
-    // "modemport=" — dword_464970, part of Options row 14's nested modem
-    // sub-screen. No clamp observed. Not consumed by this port (no modem/net
-    // play); round-tripped typed for completeness per §3.
-    std::optional<int> modemport;
-    // "modembaud=" — dword_46482C. See modemport.
-    std::optional<int> modembaud;
-    // "modemirq=" — dword_4648B8. See modemport.
-    std::optional<int> modemirq;
-    // "modemdial=" — string buffer. Plain strcpy_, no numeric clamp.
-    std::optional<std::string> modemdial;
-    // "netprotocol=" — dword_464828, Options row 16. Clamp: < 0 -> 0; > 3 -> 3.
-    // Not consumed by this port (no network play); round-tripped typed.
-    std::optional<int> netprotocol;
-    // "smallmemory=" — dword_464824, Options row 17 ("Use Enhanced Memory
-    // Model", inverted display). Normalized 0/1. Not consumed by THIS port (no
-    // memory-model concept in a modern build), but it is NOT inert in the
-    // original: sub_42814B's sound cull keeps 1 clip per voice group instead of
-    // the authored 2-8 when it is set (docs/re/sound-engine.md §3).
-    // Round-tripped typed.
+    std::optional<bool> disable_game_music;  // dword_4648C0
+    std::optional<int> modemport;            // dword_464970, round-tripped only
+    std::optional<int> modembaud;            // dword_46482C, round-tripped only
+    std::optional<int> modemirq;             // dword_4648B8, round-tripped only
+    std::optional<std::string> modemdial;    // no clamp, round-tripped only
+    std::optional<int> netprotocol;          // dword_464828; clamp to [0, 3]
+    // dword_464824 ("Use Enhanced Memory Model", displayed inverted). Inert in
+    // THIS port, but NOT in the original: sub_42814B's cull keeps 1 clip per
+    // voice group instead of the authored 2-8 (docs/re/sound-engine.md §3).
     std::optional<bool> smallmemory;
-    // "keydef=<set>,<action>,<scancode>" x20 — dword_4645BC[10*set+action],
-    // Options row 15 ("Define keyboard layouts", sub_407B9D, §2). The reader
-    // clamps set in [0,1] / action in [0,9], dropping the whole line
-    // otherwise; the writer always emits all 20 triples. See KeyDef's doc.
+    // 20 `keydef=<set>,<action>,<scancode>` lines. The reader drops a whole line
+    // whose set/action is out of range; the writer emits all 20.
     std::optional<KeyDef> keydef;
-    // "fullscreen=" — PORT-ONLY key, NOT one of the original's confirmed 22
-    // options.ini keys above (the 1997 binary is a fixed 640x480 window with
-    // no fullscreen/resize concept). A deliberate port enhancement
-    // (GameApp's Alt+Enter/F11 toggle, game_app.cpp/game_app.hpp), persisted
-    // through this SAME read-modify-write file so it round-trips like every
-    // RE'd toggle above. Normalized 0/1; absent key -> windowed (matching the
-    // original's only mode).
+    // PORT-ONLY from here down — none of these exists in the 1997 binary, which
+    // is a fixed 640x480 window. They persist through the SAME read-modify-write
+    // file so they round-trip like every RE'd toggle above, and every absent key
+    // falls back to the faithful behaviour: windowed, vsync on, cadence off, fps
+    // hidden, and nearest-neighbour scaling (the original scales nothing at all,
+    // so smoothing reproduces a modern display scaler, not the game).
     std::optional<bool> fullscreen;
-    // PORT-ONLY keys (same rationale/round-trip as `fullscreen` above), driven
-    // by the port's "Video Settings" screen (game_app.cpp). None exist in the
-    // 1997 binary. `vsync` off = uncapped ~180 fps render; `native_cadence` =
-    // the per-frame wall-clock sim path (non-deterministic live feel);
-    // `show_fps` = draw the fps/cadence readout by the match clock. Absent keys
-    // fall back to the faithful defaults (vsync on, cadence off, fps hidden).
     std::optional<bool> vsync;
     std::optional<bool> native_cadence;
     std::optional<bool> show_fps;
-    // "soft_scaling=" — PORT-ONLY, the same Video Settings panel. Linear instead
-    // of nearest-neighbour sampling when the logical 640x480 frame is scaled up
-    // to the window/monitor (libs/game's scale_filter.hpp). Absent key -> OFF
-    // (crisp), which is the ONLY faithful default: the 1997 build scales nothing
-    // at all, so the smoothing reproduces a modern display scaler, not the
-    // original. Normalized 0/1.
     std::optional<bool> soft_scaling;
 };
 
-// Reads and parses `<path>` (the install-root options.ini). A missing or
-// unreadable file yields a default-constructed Options (all fields empty).
-// Mirrors the original's line parse: split each line on '=', match the key
-// case-insensitively, atoi the value. Every key from docs/re/results-and-
-// options.md §3's full table is recognized and clamped per that doc; a
-// `keydef=` line updates ONE (set,action) triple in the (lazily default-
-// constructed) KeyDef, out-of-range set/action silently dropped (matching the
-// original's "drop the whole line" clamp). Any OTHER key is intentionally
-// ignored here (still preserved verbatim by save_options' read-modify-write).
+// Reads the install-root options.ini; a missing or unreadable file yields an
+// all-empty Options. Mirrors the original's parse — split on the first '=',
+// match the key case-insensitively, atoi the value — and clamps per
+// docs/re/results-and-options.md §3. An unrecognised key is ignored here and
+// still preserved verbatim by save_options.
 Options load_options(const std::filesystem::path& path);
 
-// Read-modify-write: updates only the keys present in `opts` (empty fields are
-// left untouched), preserving every other line in the file VERBATIM (comments,
-// unknown keys, original ordering/casing) so a hand-edited options.ini keeps
-// its shape. Keys named in `opts` that already exist in the file are rewritten
-// in place; keys named in `opts` that are absent are appended. `keydef=` is
-// special: a set `opts.keydef` rewrites/appends all 20 `keydef=<set>,<action>,
-// <scancode>` lines (skipping any (set,action) whose scancode is -1/absent).
-// A missing file is created fresh with just the given keys. Throws
-// std::runtime_error if the file cannot be written (caller decides how to
-// surface that).
+// Read-modify-write: only the keys SET in `opts` change. Every other line
+// survives verbatim — comments, unknown keys, original ordering and casing — so
+// a hand-edited options.ini keeps its shape; named keys are rewritten in place
+// or appended, and a missing file is created fresh. A set `opts.keydef` rewrites
+// all 20 triples, skipping any whose scancode is still -1.
+//
+// Throws std::runtime_error if the file cannot be written.
 void save_options(const std::filesystem::path& path, const Options& opts);
 
-// The longest node name the original can hold: `sub_40C08C` fills the ≤40-char
-// buffer `unk_460140` with `fgets(buf, 40)`, which stores at most 39 characters
-// plus the NUL (docs/re/network-screens.md §3 "Session model", docs/re/
-// results-and-options.md "Net identity"). The Options-row-2 edit field is
-// shorter still (30 chars, `sub_4074DC` -> `sub_40FE55`) — that cap belongs to
-// the UI, this one to the file.
+// The longest node name the original can hold: `sub_40C08C` reads into a 40-byte
+// buffer with `fgets`, so 39 characters plus the NUL. (The Options edit field
+// caps at 30 — that limit belongs to the UI, this one to the file.)
 inline constexpr std::size_t kNodeNameMax = 39;
 
-// The install-root `nodename.ini` — this machine's NET IDENTITY, the string the
-// original shows in every lobby row (`sub_40FE34` returns `&unk_460140`).
-// Deliberately NOT part of `Options`: it is a separate one-line file, not one
-// of options.ini's 22 keys, and it has its own reader/writer in the binary.
+// The install-root `nodename.ini` — this machine's NET IDENTITY, shown in every
+// lobby row. Deliberately NOT part of `Options`: a separate one-line file with
+// its own reader (`sub_40C08C`) and writer (`sub_40C140`) in the binary.
 //
-// Reader — `sub_40C08C`, called from the boot init `sub_40C74C`: the FIRST line
-// only, `fgets(buf, 40)` with the trailing '\n' stripped. A missing/empty file
-// yields an empty string; the caller then draws the original's random default
-// (`getstring(500 + rand() % getvalue(47))`, `getvalue(47) = 49` names) — that
-// pick needs the message table, so it is the CALLER's job, not this loader's.
-// Also strips a '\r' (the original's "rt"-mode read does) and control bytes, and
-// truncates at kNodeNameMax, so a hand-edited file cannot inject a newline or a
-// glyph the FON cannot draw into the lobby roster.
+// Both ends sanitise identically: strip '\r' and control bytes, truncate at
+// kNodeNameMax. That is what stops a hand-edited file from injecting a newline,
+// or a glyph the FON cannot draw, into the lobby roster.
+//
+// A missing or empty file yields an empty string. Picking the original's random
+// default needs the message table, so it is the CALLER's job, not this loader's.
 std::string load_node_name(const std::filesystem::path& path);
 
-// Writer — `sub_40C140`, reached from the shutdown hook `sub_40C4DB`
-// (registered with `sub_410EBF`, the same atexit-style registrar options.ini's
-// `sub_405DE3` uses): `fopen("nodename.ini", "wt")` + `fputs`. So an edited name
-// persists and a randomly-assigned one becomes permanent after the first run.
-// Sanitises and truncates exactly like the reader. Throws std::runtime_error if
-// the file cannot be written.
+// Throws std::runtime_error if the file cannot be written.
 void save_node_name(const std::filesystem::path& path, const std::string& name);
 
 }  // namespace bomber::assets

@@ -1,30 +1,17 @@
 #pragma once
 
 // The ROUND-INIT music decision, isolated from SDL and from the screen classes
-// so it can be pinned by a test and so the local and netplay round loops cannot
-// drift apart (they did: the netplay loop ignored the player's option entirely).
+// so the local and netplay round loops cannot drift apart (they did: netplay
+// ignored the player's option entirely).
 //
-// The original, in the tail of the round init sub_410B6E (docs/re/
-// sound-engine.md §9):
+// Two things the round-init tail of sub_410B6E settles, both of which the port
+// had wrong (docs/re/sound-engine.md §9):
 //
-//     0x410E88   if (dword_4648C0 == 0) goto start          ; the option is OFF
-//     0x410E91       sub_427342()                           ; ON  -> FREE the music
-//     0x410E96       goto after
-//     0x410E98   start: sub_4293E5()                        ; OFF -> the round's tune
-//
-// Two things this shape settles, both of which the port had wrong:
-//
-//   * `dword_4648C0` is options.ini's `disable_game_music=` (the writer at
-//     0x40650D parses that exact key, the reader at 0x405F6F writes it back).
-//     The guard is a bare test of it — there is NO network arm, no campaign arm,
-//     no "only when a stage loaded" arm. The option is the player's, not the
-//     mode's.
-//   * The ON arm SILENCES the round outright rather than leaving the previous
-//     track running, so the setup-screens track (1020) does not bleed into
-//     gameplay.
-//
-// And which track the OFF arm picks is sub_4293E5's own business: SOUNDLST
-// 1100+level, or 1120 ("generic") when the level names no track.
+//   * the guard is a BARE test of options.ini's `disable_game_music=` — no
+//     network arm, no campaign arm, no "only when a stage loaded" arm. The
+//     option is the player's, not the mode's.
+//   * its ON arm SILENCES the round outright rather than leaving the previous
+//     track running, so the setup-screens track does not bleed into gameplay.
 
 namespace bomber::game {
 

@@ -9,24 +9,17 @@
 
 namespace bomber::assets::colorpal {
 
-// The in-match shared-palette SNAP — a faithful port of the original's
-// load-time colour quantization (docs/re/facts.md "In-match colour
-// quantization", sub_41BBBD / sub_41C837:21309). During a match the whole
-// screen runs on ONE 8-bit hardware palette = COLOR.PAL's 256 master colours;
-// every decoded asset pixel is snapped to the nearest master entry through the
-// file's RGB555->index reverse LUT, then displayed as the 6-bit master value
-// times 4 (sub_443608's `4 * value` DirectDraw upload — so the brightest
-// channel is 63*4 = 252, never 255).
+// The in-match shared-palette SNAP — a faithful port of the original's load-time
+// colour quantization (docs/re/facts.md "In-match colour quantization",
+// sub_41BBBD / sub_41C837:21309). A match runs on ONE 8-bit hardware palette, so
+// every decoded pixel is snapped to the nearest COLOR.PAL master entry through
+// the file's RGB555->index reverse LUT and displayed as the 6-bit value times 4
+// — which is why the brightest channel is 252, never 255.
 //
-// Most fields and tiles are AUTHORED in this master palette, so the snap is
-// an exact identity for them (FIELD0/2..10, and the tile/brick art to within
-// ~2%). The visible exception is FIELD1 ("Classic Green Acres"), whose floor
-// is a vivid blue/green dither NOT in the master palette: the original snaps
-// its (23,27,139)/(19,143,19) pair to (20,40,108)/(4,132,0) — the muted look
-// the user compared against, which a raw per-asset decode misses. Verified
-// pixel-exact against a live capture (2026-07-13).
-//
-// SDL-free and clean-room: COLOR.PAL is shipped data, not exe-derived.
+// Most art is AUTHORED in that palette, making the snap an identity for it. The
+// visible exception is FIELD1 ("Classic Green Acres"), whose vivid blue/green
+// dither is not in the master palette and snaps to a muted pair a raw per-asset
+// decode misses. Verified pixel-exact against a live capture (2026-07-13).
 class Palette {
 public:
     // Loads COLOR.PAL (install ROOT, 33536 bytes = 768 master + 32768 LUT).
@@ -38,21 +31,16 @@ public:
     Palette() = default;
     bool ok() const { return ok_; }
 
-    // Snap one 8-bit RGB in place to its master-palette colour: the exact
-    // sub_41C837:21309 chain (RGB555 truncate -> LUT -> master*4). That chain
-    // IS index_of followed by master_rgb, so it is spelled that way rather than
-    // carrying a third copy of the LUT offset and the master lookup — the two
-    // halves are the ones the faithful recolour splits between.
+    // sub_41C837:21309's chain (RGB555 truncate -> LUT -> master*4), spelled as
+    // its two halves because the faithful recolour splits between them.
     void snap(std::uint8_t& r, std::uint8_t& g, std::uint8_t& b) const {
         master_rgb(index_of(r, g, b), r, g, b);
     }
 
-    // The master-palette INDEX a raw 8-bit RGB snaps to — the RGB555->index LUT
-    // lookup alone (sub_41C837's `byte_495390[rgb555]`), without the master-RGB
-    // write-back that snap() does. The faithful player recolour needs the bare
-    // index so it can rewrite it through the colour's .RMP table before the
-    // final master lookup (master_rgb below). `r>>3` inverts the loader's
-    // expand5, so index_of(expand5(rgb555)) == byte_495390[rgb555] exactly.
+    // The LUT lookup alone, without snap()'s master-RGB write-back: the recolour
+    // needs the bare index so it can rewrite it through the colour's .RMP table
+    // first. `r>>3` inverts the loader's expand5, so index_of(expand5(rgb555))
+    // is exactly `byte_495390[rgb555]`.
     std::uint8_t index_of(std::uint8_t r, std::uint8_t g, std::uint8_t b) const {
         const std::size_t off = (static_cast<std::size_t>(r >> 3) << 10) |
                                 (static_cast<std::size_t>(g >> 3) << 5) |
@@ -60,27 +48,27 @@ public:
         return lut_[off];
     }
 
-    // The 8-bit RGB of master-palette entry `idx` (already *4-scaled at load).
-    // The other half of the faithful recolour: after remapping an index through
-    // a .RMP table, look the result up here for the displayed colour.
+    // The 8-bit RGB of master entry `idx` (already *4-scaled at load) — the
+    // other half of the recolour, applied after the .RMP remap.
     void master_rgb(std::uint8_t idx, std::uint8_t& r, std::uint8_t& g, std::uint8_t& b) const {
         r = master_[static_cast<std::size_t>(idx) * 3 + 0];
         g = master_[static_cast<std::size_t>(idx) * 3 + 1];
         b = master_[static_cast<std::size_t>(idx) * 3 + 2];
     }
 
-    // Remap every OPAQUE pixel of a decoded match image in place. Transparent
-    // pixels (alpha 0, the key colour) are left untouched so their transparency
-    // survives. A no-op when !ok(). Apply to CLASSIC match art only (field
-    // PCX, tile/brick ANI cels) — never the DATA_HD truecolour overrides or the
-    // front-end screens, which the original loads through the non-snapping path.
+    // Remap every OPAQUE pixel of a decoded match image in place; transparent
+    // (key-colour) pixels are left alone so their transparency survives. No-op
+    // when !ok().
+    //
+    // CLASSIC match art ONLY — field PCX and tile/brick ANI cels. Never the
+    // DATA_HD truecolour overrides or the front-end screens, which the original
+    // loads through the non-snapping path.
     void remap(Image& img) const;
 
 private:
     bool ok_ = false;
-    // 256 master colours, 6-bit VGA values already scaled *4 to 8-bit; entry 0
-    // is a white sentinel in the file, forced to black at load (the original's
-    // load-time fixup).
+    // 256 master colours, already *4-scaled to 8-bit. Entry 0 is a white
+    // sentinel in the file, forced to black at load as the original does.
     std::array<std::uint8_t, std::size_t{256} * 3> master_{};
     std::array<std::uint8_t, 32768> lut_{};  // RGB555 -> master index
 };
