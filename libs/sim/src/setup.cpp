@@ -1,6 +1,8 @@
 // Initial match state construction (Simulation constructor backend).
 
 #include <algorithm>
+#include <array>
+#include <cstddef>
 
 #include "bomber/sim/rng.hpp"
 #include "bomber/sim/simulation.hpp"
@@ -101,10 +103,10 @@ State build_state(const MatchConfig& config) {
         // recapture goldens B/C). The shape below is the smallest that keeps
         // the AI alive meanwhile: a radius-2 cross so a flame-2 spawn bomb
         // cannot seal every reachable cell (radius-1 did, hence the suicides).
-        static constexpr int ndx[] = {0, 1, -1, 0, 0, 2, -2, 0, 0};
-        static constexpr int ndy[] = {0, 0, 0, 1, -1, 0, 0, 2, -2};
-        for (int n = 0; n < 9; ++n) {
-            int cx2 = tx + ndx[n], cy2 = ty + ndy[n];
+        static constexpr std::array<int, 9> ndx = {0, 1, -1, 0, 0, 2, -2, 0, 0};
+        static constexpr std::array<int, 9> ndy = {0, 0, 0, 1, -1, 0, 0, 2, -2};
+        for (std::size_t n = 0; n < ndx.size(); ++n) {
+            const int cx2 = tx + ndx[n], cy2 = ty + ndy[n];
             if (cx2 >= 0 && cx2 < kGridWidth && cy2 >= 0 && cy2 < kGridHeight &&
                 s.cells[cy2][cx2] == Cell::Brick)
                 s.cells[cy2][cx2] = Cell::Blank;

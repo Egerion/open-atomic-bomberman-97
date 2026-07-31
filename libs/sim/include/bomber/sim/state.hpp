@@ -135,7 +135,7 @@ struct State {
     std::vector<Bomb> bombs;
     // Campaign-mode autonomous hazard actors (docs/re/campaign.md "Rover/
     // ghost/AI roster", "Per-tick mover"). Empty on every non-campaign match
-    // (MatchConfig::rovers/ghosts default to 0), so this vector stays empty
+    // (MatchConfig::campaign_rovers/campaign_ghosts default to 0), so it stays empty
     // and RoverSystem::tick draws zero RNG for every existing scenario — a
     // ONE-TIME hash-layout growth (CLAUDE.md determinism contract rule 5),
     // not a behaviour change, on every scenario with no rovers/ghosts.

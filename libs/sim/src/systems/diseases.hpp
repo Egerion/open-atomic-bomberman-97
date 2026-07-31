@@ -30,8 +30,11 @@ public:
     // (sub_41E21E top): 1-in-N chance when curable and currently sick.
     void maybe_cure_on_pickup(Player& p);
 
-    // Tick step: contagion on overlap, then age freshness gates and expire
-    // finished diseases.
+    // Tick step, in THIS order: age the freshness gates and expire finished
+    // diseases FIRST, then contagion on overlap. The order is load-bearing —
+    // the original cures an expiring disease (zeroing +120) before the contagion
+    // check runs, so a player on its last sick tick does not spread. (The name
+    // reads the other way round; the .cpp is the authority.)
     void spread_and_age();
 
 private:

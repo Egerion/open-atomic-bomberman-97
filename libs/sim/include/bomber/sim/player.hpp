@@ -26,9 +26,11 @@ struct Player {
     // gates AI targeting (docs/re/ai.md §3.4/§5.3) and round-end (a gameplay
     // decision), so it is deterministic state, not just presentation config.
     // Convention (our semantics — not RE'd beyond the +84 byte's existence):
-    // team is only meaningful when at least two ACTIVE players share the same
-    // nonzero-or-zero value; a fully-distinct/all-zero roster (every existing
-    // scenario) behaves exactly as before this field existed.
+    // two players are on the same side only when they share the same NONZERO
+    // value. Team 0 means "no team" and never merges — two team-0 players are
+    // always distinct sides (see AISystem::same_team and sides_remaining). So a
+    // fully-distinct or all-zero roster (every existing scenario) behaves
+    // exactly as before this field existed.
     std::uint8_t team = 0;
     Fixed x = 0, y = 0;  // center position in field pixels * 100
     Direction facing = Direction::Down;
@@ -144,11 +146,14 @@ struct Player {
     // Ice / input-lag ring buffer (VALUELST ids 450-460, Hockey Rink;
     // docs/re/facts.md "Ice / input-lag"). The original keeps a 30-slot
     // per-player history of the desired movement direction (dword_4621C8)
-    // and, for HUMAN players only, feeds the mover the OLDEST sample whose
-    // age has reached the level's ice-delay threshold instead of the fresh
-    // one — a fixed input-response lag, not a physics/friction change.
-    // index 0 = most recent tick's want_godir (-1 = no direction, 0..3 =
-    // Up/Right/Down/Left); index k = k ticks ago. Only ever written/read by
+    // and, for HUMAN players only, feeds the mover the FRESHEST sample that is
+    // already old enough to meet the level's ice-delay threshold (the smallest
+    // qualifying index, walking from newest toward oldest) instead of the
+    // current one — a fixed input-response lag, not a physics/friction change.
+    // index 0 = the most recent SUB-FRAME's want_godir (-1 = no direction, 0..3
+    // = Up/Right/Down/Left); index k = k sub-frames ago, NOT k ticks — the
+    // buffer is pushed once per sub-frame, so its 30 slots span ~167 ms at
+    // kSubFrames = 9, not 1500 ms. Only ever written/read by
     // MovementSystem::ice_delay, and only when the current level's
     // ice_delay_ms > 0 (every other level leaves this all-zero, so it hashes
     // as mix(0) there — see hash.cpp). Hashed: it is live gameplay state

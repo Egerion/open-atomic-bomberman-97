@@ -4,17 +4,11 @@
 #include <utility>
 #include <vector>
 
-#include "systems/flames.hpp"
+#include "grid.hpp"
 #include "systems/powerups.hpp"
 
 namespace bomber::sim {
 namespace {
-
-// Direction table (dword_45BECC = cos = DX, dword_45BEDC = sin = DY; both
-// confirmed against the .data dump: {0,1,0,-1} / {-1,0,1,0}), GODIR-indexed
-// (0=Up,1=Right,2=Down,3=Left).
-constexpr int kDX[4] = {0, 1, 0, -1};
-constexpr int kDY[4] = {-1, 0, 1, 0};
 
 // The full drop-EVENT sequence (not just the unique tiles) for every ring the
 // grid geometrically supports, plus the event-count after each ring closes.
@@ -59,12 +53,12 @@ const SpiralData& spiral() {
         // the cap never actually binds in practice; it exists purely so a
         // malformed/custom depth value degrades gracefully instead of
         // spinning on an inverted ring box.
-        int max_rings = std::min(kGridWidth, kGridHeight) / 2 + 1;
+        const int max_rings = std::min(kGridWidth, kGridHeight) / 2 + 1;
         for (int guard = 0; guard < 100000; ++guard) {
             d.events.emplace_back(x, y);
-            int nx = x + kDX[dir], ny = y + kDY[dir];
-            bool ok = (kGridWidth - depth > nx) && (kGridHeight - depth > ny) && (nx >= depth) &&
-                      (ny >= depth);
+            const int nx = x + grid::kDx[dir], ny = y + grid::kDy[dir];
+            const bool ok = (kGridWidth - depth > nx) && (kGridHeight - depth > ny) &&
+                            (nx >= depth) && (ny >= depth);
             if (ok) {
                 x = nx;
                 y = ny;
@@ -190,62 +184,62 @@ void EnclosureSystem::drop_wall(int wx, int wy) {
         // Airborne bombs are exempt: sub_422E48 skips motion states 2/3
         // (flying/carried), so a bomb arcing over the tile sails on.
         if (!b.active || b.flying || b.tile_x() != wx || b.tile_y() != wy) continue;
-        if (s.tuning.wall_detonates) {
-            // sub_423209(bomb, -1) does NOT explode synchronously — it only
-            // APPENDS to a 100-slot pending-detonation queue (dword_4621F8/
-            // FC/462200). The queue is drained by sub_42331C (force-sets the
-            // bomb's elapsed-fuse word +68 to its own threshold +74, so the
-            // SAME call's normal fuse check detonates it), and that drain
-            // only runs once per frame, gated on a frame-stamp
-            // (dword_462210 != dword_464994). Per sub_42A191's per-frame
-            // order, sub_4245B9 (which drains) runs BEFORE sub_426818
-            // (enclosure); sub_42459A, the ONLY other sub_42331C call this
-            // frame, runs AFTER enclosure but does not drain (the frame-
-            // stamp gate already fired). So a bomb queued by THIS frame's
-            // wall drop is not drained/detonated until the FOLLOWING frame's
-            // sub_4245B9 — a confirmed one-tick defer, not an instant
-            // explosion. Force our own fuse to fire on the NEXT tick_fuses()
-            // pass (which runs before enclosure.update() in our own tick
-            // order) instead of exploding here — the faithful equivalent.
-            b.fuse = 1;
-            // A FIZZLING DUD is crushed exactly like a live bomb. The dud
-            // marker lives in the bomb record's state dword (sub_422EDE
-            // writes 2 there), not in the motion word, so the grounded-bomb
-            // finder sub_422E48 — which rejects only a zero state or motion
-            // 2/3 — finds a dud just like an armed bomb, and sub_426818's
-            // crush loop has no dud branch at all. On the drain side
-            // (sub_42331C) only the elapsed-fuse INCREMENT is gated on
-            // "state != 2"; the "elapsed >= duration" detonation test right
-            // after it is UNGATED, so the queue's forced elapsed = duration
-            // write detonates a dud on the next frame's pass, same as a live
-            // bomb. Our tick_fuses() gates on dud_left FIRST (correctly — an
-            // ordinary fuse must stay frozen while the bomb fizzles), so the
-            // forced fuse would otherwise be swallowed for the rest of the
-            // fizzle window (up to dud_frames = 120 ticks = 6 s) and erupt
-            // from under an already-solid wall. Clear the fizzle here, on the
-            // forced path only. facts.md "Enclosure wall crushes a fizzling
-            // dud".
-            b.dud_left = 0;
-            // FIX (enclosure F1, docs/re/audit/enclosure.md Finding 1):
-            // sub_426818's bomb-crush loop (native/src/game/batch_0x42583B.cpp
-            // lines 769-820; at pseudo.c 27262 it hands the bomb it found to the
-            // pending-detonation queue sub_423209 with mode -1, and at 27263 it
-            // jumps unconditionally out to the loop's exit) queues only the
-            // FIRST grounded bomb it finds on the crushed tile per drop event
-            // -- there is no path back to the top of that while(1) loop on
-            // the ON branch, so the search runs at most once. A second
-            // grounded bomb sharing the exact same tile (structurally
-            // possible: sub_422E48 is a linear scan by cell coordinate, not
-            // a 1:1 per-cell grid) is left untouched by this event. Break
-            // after the first match to match; the OFF branch below
-            // deliberately keeps looping to exhaustion (matches
-            // sub_424841's fall-through re-search, which takes no such jump out
-            // of the loop).
-            break;
-        } else {
+        if (!s.tuning.wall_detonates) {
+            // The OFF branch deliberately keeps looping to exhaustion (matching
+            // sub_424841's fall-through re-search, which takes no jump out of
+            // the loop) — unlike the ON branch below, which breaks after one.
             b.active = false;
             if (s.players[b.owner].bombs_placed > 0) --s.players[b.owner].bombs_placed;
+            continue;
         }
+        // sub_423209(bomb, -1) does NOT explode synchronously — it only
+        // APPENDS to a 100-slot pending-detonation queue (dword_4621F8/
+        // FC/462200). The queue is drained by sub_42331C (force-sets the
+        // bomb's elapsed-fuse word +68 to its own threshold +74, so the
+        // SAME call's normal fuse check detonates it), and that drain
+        // only runs once per frame, gated on a frame-stamp
+        // (dword_462210 != dword_464994). Per sub_42A191's per-frame
+        // order, sub_4245B9 (which drains) runs BEFORE sub_426818
+        // (enclosure); sub_42459A, the ONLY other sub_42331C call this
+        // frame, runs AFTER enclosure but does not drain (the frame-
+        // stamp gate already fired). So a bomb queued by THIS frame's
+        // wall drop is not drained/detonated until the FOLLOWING frame's
+        // sub_4245B9 — a confirmed one-tick defer, not an instant
+        // explosion. Force our own fuse to fire on the NEXT tick_fuses()
+        // pass (which runs before enclosure.update() in our own tick
+        // order) instead of exploding here — the faithful equivalent.
+        b.fuse = 1;
+        // A FIZZLING DUD is crushed exactly like a live bomb. The dud
+        // marker lives in the bomb record's state dword (sub_422EDE
+        // writes 2 there), not in the motion word, so the grounded-bomb
+        // finder sub_422E48 — which rejects only a zero state or motion
+        // 2/3 — finds a dud just like an armed bomb, and sub_426818's
+        // crush loop has no dud branch at all. On the drain side
+        // (sub_42331C) only the elapsed-fuse INCREMENT is gated on
+        // "state != 2"; the "elapsed >= duration" detonation test right
+        // after it is UNGATED, so the queue's forced elapsed = duration
+        // write detonates a dud on the next frame's pass, same as a live
+        // bomb. Our tick_fuses() gates on dud_left FIRST (correctly — an
+        // ordinary fuse must stay frozen while the bomb fizzles), so the
+        // forced fuse would otherwise be swallowed for the rest of the
+        // fizzle window (up to dud_frames = 120 ticks = 6 s) and erupt
+        // from under an already-solid wall. Clear the fizzle here, on the
+        // forced path only. facts.md "Enclosure wall crushes a fizzling
+        // dud".
+        b.dud_left = 0;
+        // FIX (enclosure F1, docs/re/audit/enclosure.md Finding 1):
+        // sub_426818's bomb-crush loop (native/src/game/batch_0x42583B.cpp
+        // lines 769-820; at pseudo.c 27262 it hands the bomb it found to the
+        // pending-detonation queue sub_423209 with mode -1, and at 27263 it
+        // jumps unconditionally out to the loop's exit) queues only the
+        // FIRST grounded bomb it finds on the crushed tile per drop event
+        // -- there is no path back to the top of that while(1) loop on
+        // the ON branch, so the search runs at most once. A second
+        // grounded bomb sharing the exact same tile (structurally
+        // possible: sub_422E48 is a linear scan by cell coordinate, not
+        // a 1:1 per-cell grid) is left untouched by this event. Break
+        // after the first match to match.
+        break;
     }
     s.cells[wy][wx] = Cell::Solid;
     s.burning[wy][wx] = 0;

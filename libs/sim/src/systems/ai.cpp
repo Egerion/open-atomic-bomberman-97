@@ -13,27 +13,21 @@
 // file-split, no behaviour change): ai_grids.cpp (danger/obstacle grids + the
 // tile predicates), ai_pathfind.cpp (the 3 BFS variants + the flame veto),
 // ai_behaviours.cpp (the 8 behave_* + the enemy finder), and this file (the
-// dispatcher entry + the PlayerInput adapters). Shared godir tables live in
-// ai_internal.hpp. See ai.hpp for the API and staged scope.
+// dispatcher entry + the PlayerInput adapters). The shared godir tables live in
+// grid.hpp. See ai.hpp for the API and staged scope.
 
 #include "systems/ai.hpp"
 
 #include "bomber/sim/rng.hpp"
+#include "grid.hpp"
 
 namespace bomber::sim {
-
-namespace {
-
-// Godir -> our Direction enum for writing the input direction flag.
-constexpr Direction kGodirDir[4] = {Direction::Up, Direction::Right, Direction::Down,
-                                    Direction::Left};
-
-}  // namespace
 
 void AISystem::write_move(PlayerInput& out, int godir) {
     out.up = out.down = out.left = out.right = false;
     if (godir < 0) return;
-    switch (kGodirDir[godir & 3]) {
+    // grid::from_godir is the godir -> Direction map (it applies the same & 3).
+    switch (grid::from_godir(godir)) {
         case Direction::Up: out.up = true; break;
         case Direction::Right: out.right = true; break;
         case Direction::Down: out.down = true; break;

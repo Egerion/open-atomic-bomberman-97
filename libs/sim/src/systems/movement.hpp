@@ -10,11 +10,15 @@ class MovementSystem {
 public:
     explicit MovementSystem(State& s) : s_(s) {}
 
-    // Step-on callback: invoked the instant a per-pixel step lands the player
-    // exactly on a tile centre (both axes aligned), passing that tile. This is
-    // the port of sub_41EC84's in-loop check for an offset-to-centre of -1 (the
-    // pixel before the centre) — the original fires
-    // the warphole/trampoline step-on DURING the walk, not after it. A plain
+    // Step-on callback: invoked when a per-pixel step is one pixel SHORT of a
+    // tile centre along the TRAVEL AXIS, passing that tile — before the step is
+    // committed, and without consulting the perpendicular axis. This is the port
+    // of sub_41EC84's in-loop check for an offset-to-centre of -1; the original
+    // fires the warphole/trampoline step-on DURING the walk, not after it.
+    //
+    // NOT "lands exactly on the centre, both axes aligned": testing the POST-step
+    // position was this port's old behaviour and is why it grabbed players the
+    // original does not (see the retraction at the head of movement.cpp). A plain
     // function pointer (no heap, deterministic) keeps the stepper body in the
     // .cpp; ctx carries the caller's state. See docs/re/stage-actors.md §5.
     using StepOnFn = void (*)(void* ctx, Player& p, int tx, int ty);
@@ -39,10 +43,10 @@ public:
         move(p, d, 0, nullptr, nullptr, true, nullptr, nullptr, delta_ms);
     }
 
-    // Full form: `on_center(ctx, p, tx, ty)` fires each per-pixel step that
-    // settles the player exactly on tile (tx,ty)'s centre — the faithful
-    // step-on trigger point (sub_41EC84's offset-to-centre check for -1). Pass
-    // nullptr to skip it.
+    // Full form: `on_center(ctx, p, tx, ty)` fires on each per-pixel step that
+    // is one pixel short of tile (tx,ty)'s centre along the travel axis — the
+    // faithful step-on trigger point (sub_41EC84's offset-to-centre check for
+    // -1), evaluated pre-step. Pass nullptr to skip it.
     //
     // extra_budget is the conveyor term, getvalue(190+idx) 1/100-px units
     // SIGNED (with/against the belt), delta-scaled inside like the speed term

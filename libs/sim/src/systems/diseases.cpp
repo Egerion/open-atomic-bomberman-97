@@ -87,7 +87,8 @@ void DiseaseSystem::give(int idx, Disease d, bool announce) {
         // — NOT the +58 head-hit stun countdown, so a stunned-but-alive player
         // is still a valid swap target (facts.md "Stun does NOT gate flame-
         // death or pickup"; an earlier mislabel added a spurious `stun == 0`).
-        int targets[kMaxPlayers], n = 0;
+        std::array<int, kMaxPlayers> targets{};
+        int n = 0;
         for (int j = 0; j < kMaxPlayers; ++j)
             if (j != idx && s.players[j].present && s.players[j].alive)
                 targets[n++] = j;

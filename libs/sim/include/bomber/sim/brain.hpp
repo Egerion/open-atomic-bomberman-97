@@ -13,10 +13,11 @@
 //  - Pointers -> indices. The original keeps raw actor/cell pointers (+16/+32);
 //    we store the player SLOT or the TILE (snapshot-safe, hashable). Behaviours
 //    only ever read the target's tile + liveness, both recoverable each tick.
-//  - Timers in TICKS. The original accumulates ms (each frame adds the frame
-//    delta held in dword_464958 to the timer) and times
-//    out at 10*msPerFrame; at the locked 20 Hz that is exactly 10 ticks, stored
-//    here as an integer countdown (no wall clock enters the sim, ADR-0003).
+//  - Timers in integer MILLISECONDS, counting UP, exactly as the original does
+//    (each frame adds the frame delta held in dword_464958 to the timer) and
+//    timing out at 10*msPerFrame = 10 ticks' worth. The ms come from the sim's
+//    own canonical sub-frame schedule (constants.hpp kSubFrameMs), never from a
+//    wall clock, so ADR-0003 holds. They are NOT tick counts and NOT countdowns.
 //  - Tile granularity. The original packs 16.16 coords (tile in the high word);
 //    the AI only ever uses the tile (>>16), so we keep plain tile ints.
 

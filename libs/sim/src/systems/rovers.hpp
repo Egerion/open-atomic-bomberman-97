@@ -13,8 +13,9 @@ class RoverSystem {
 public:
     explicit RoverSystem(State& s) : s_(s) {}
 
-    // Spawns `count` rovers/ghosts at random walkable tiles at least 3 tiles
-    // (Manhattan) from every player, speed `speed` (the .CAM rover_speed/
+    // Spawns `count` rovers/ghosts at random walkable tiles MORE than 3 tiles
+    // (Manhattan) from every player — a candidate at exactly 3 is rejected —
+    // speed `speed` (the .CAM rover_speed/
     // ghost_speed field). Mirrors sub_401AAE/sub_401B05 -> sub_4019C2: up to
     // 200 placement attempts PER actor (2 RNG draws per attempt), silently
     // spawning fewer than `count` if the board has no room (the original
@@ -35,9 +36,10 @@ public:
     // (set only by build_state, only when MatchConfig::campaign_rovers/
     // campaign_ghosts > 0), NOT on `s.rovers.empty()`, because a campaign
     // match's grace timer must keep counting even after the last hazard
-    // dies and the vector empties (see the .cpp). This function's FIRST
-    // action is an early-out on that flag, so it is provably a no-op for
-    // the entire existing golden suite (every scenario leaves it false).
+    // dies and the vector empties (see the .cpp). The flag is tested before
+    // anything observable happens — only the unhashed `hazards_just_cleared_`
+    // scratch flag is reset above it — so this is provably a no-op for the
+    // entire existing golden suite (every scenario leaves it false).
     void tick();
 
     // True on the exact tick every rover/ghost has been dead for
