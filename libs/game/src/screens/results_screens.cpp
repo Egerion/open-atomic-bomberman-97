@@ -11,24 +11,21 @@
 #include "bomber/game/hud_format.hpp"            // fmt_u / fmt_s
 #include "bomber/game/match_outcome.hpp"         // round_winner / is_team_mode / match_clinch / auto_advance_results
 #include "bomber/game/screens/help_screens.hpp"  // HelpBrowserScreen (the wheel's F1)
+#include "bomber/game/screens/outcome_tier.hpp"  // kResultsDwellMs
 #include "bomber/game/sprites.hpp"               // Sprite
 #include "bomber/platform/frame_clock.hpp"       // platform::FrameClock
 
 namespace bomber::game {
 
-namespace {
-
-// sub_42A3F6's 6 s auto-advance dwell for an all-AI/attract RESULTS loop (a
-// human match waits for Enter — auto_advance_results()). game_app.cpp keeps its
-// own copy for the outcome tier it still owns, alongside kDrawMusicId.
+// kResultsDwellMs (sub_42A3F6's 6 s auto-advance dwell for an all-AI/attract
+// RESULTS loop; a human match waits for Enter — auto_advance_results()) comes
+// from screens/outcome_tier.hpp, which owns the whole tier's shared vocabulary.
+// This file used to keep a second copy alongside game_app.cpp's.
 //
-// There is no music id here any more: 1020 is the SETUP-SCREENS backdrop track
+// There is no music id here: 1020 is the SETUP-SCREENS backdrop track
 // (docs/re/in-match-shell.md §2) and the goldman wheel genuinely inherits it
 // from the Play handler sub_42A3F6 rather than starting it, so game_app.cpp is
 // its only owner (docs/re/sound-engine.md §9).
-constexpr std::uint32_t kResultsDwellMs = 6000;  // sub_42A3F6 attract auto-advance
-
-}  // namespace
 
 // The between-round RESULTS cumulative-tally screen (sub_42A3F6 tail,
 // docs/re/results-and-options.md §1): RESULTS.PCX backdrop, a header drawn

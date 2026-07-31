@@ -50,6 +50,12 @@ add_library(bomber_game_core STATIC
   # (net_stats.hpp does the measuring; this only draws and writes).
   src/screens/net_overlay.cpp
   src/screens/net_setup_link.cpp
+  # The netplay orchestration, extracted out of GameApp (ADR-0009): the entry
+  # points + the setup stage + the session loop, and the best-of-N match under
+  # them. Built unconditionally like the rest — only the online-lobby LEAF
+  # inside the runner is BOMBER_HAS_LOBBY-guarded.
+  src/screens/netplay_runner.cpp
+  src/screens/netplay_match.cpp
   src/screens/map_select_screen.cpp
   src/screens/campaign_screens.cpp
   src/screens/setup_screen.cpp
