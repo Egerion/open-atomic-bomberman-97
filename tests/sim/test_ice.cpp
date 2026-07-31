@@ -75,6 +75,10 @@ TEST_CASE("Hockey Rink delays a human's first step by the 250ms lag, capped by t
     int lag = (250 * kSubFrames + kMsPerTick - 1) / kMsPerTick;
     if (lag >= Player::kIceHistoryLen) lag = Player::kIceHistoryLen - 1;
     const int frozen_ticks = lag / kSubFrames;  // full ticks the slot still reads -1
+    // Without this the "the delay really happened" loop can empty (lag < one
+    // tick's worth of sub-frames), leaving only `p.x > x0` below — which an
+    // UNDELAYED walker satisfies just as well.
+    REQUIRE(frozen_ticks >= 1);
     for (int t = 1; t <= frozen_ticks; ++t) {
         s.tick(right);
         CHECK(p.x == x0);

@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "bomber/net/transport.hpp"
+#include "correlated_delay.hpp"
 
 // SOCKET-FREE MULTI-ENDPOINT TOPOLOGIES for the bomber::net suites. Two peers fit
 // in a LoopbackLink; three or more need a shape, and the shape is the thing under
@@ -95,25 +96,19 @@ private:
 class StarBus {
 public:
     // `jitter_steps` / `persist_pct` add ARRIVAL VARIANCE on top of the flat
-    // latency, with the same correlated model tests/net/ms_clock_harness.hpp
-    // uses: a packet either inherits the previous one's extra delay or draws a
-    // fresh one, so the delay comes in RUNS rather than as a sprinkle (white
-    // noise is absorbed almost entirely by the redundant input window; runs are
-    // what stall a confirmation frontier).
-    //
-    // Both default to 0, and at 0 not a single RNG step is taken, so every
-    // pre-existing star scenario keeps its exact arrival schedule. It exists so
-    // that host migration can be exercised on a link jittery enough for the
-    // arrival-variance absorber (rollback_session.hpp) to be ACTIVE when the hub
-    // dies — the seam between the two features, which neither suite covered.
+    // latency; correlated_delay.hpp owns the model and says why it is correlated
+    // rather than white noise. Both default to 0, and at 0 the model draws
+    // nothing at all, so every pre-existing star scenario keeps its exact arrival
+    // schedule. The knob exists so host migration can be exercised on a link
+    // jittery enough for the arrival-variance absorber (rollback_session.hpp) to
+    // be ACTIVE when the hub dies — the seam between the two features, which
+    // neither suite covered.
     explicit StarBus(std::size_t endpoints, int latency = 0, int jitter_steps = 0,
                      int persist_pct = 0, unsigned seed = 0x2468ACEU)
         : queues_(endpoints),
+          delay_(/*lanes=*/1, jitter_steps, persist_pct, seed),
           endpoints_(endpoints),
-          latency_(latency),
-          jitter_(jitter_steps),
-          persist_pct_(persist_pct),
-          rng_(seed) {}
+          latency_(latency) {}
 
     void send(std::size_t from, const std::uint8_t* data, std::size_t size) {
         if (dead(from)) return;  // a corpse's socket sends nothing
@@ -181,39 +176,18 @@ private:
 
     void enqueue(std::size_t to, const std::vector<std::uint8_t>& pkt, std::size_t from) {
         if (dead(to)) return;  // nothing is ever delivered to a corpse
-        queues_[to].push_back({step_ + latency_ + extra_delay(), from, pkt});
-    }
-
-    // 0 draws nothing at all, so a bus built without jitter is bit-identical to
-    // the one this class had before the knob existed.
-    std::int64_t extra_delay() {
-        if (jitter_ <= 0) return 0;
-        bool inherit = false;
-        if (persist_pct_ > 0) {
-            rng_ = rng_ * 1103515245U + 12345U;  // test-local, never the sim's stream
-            inherit = static_cast<int>((rng_ >> 16) % 100U) < persist_pct_ && drew_;
-        }
-        if (!inherit) {
-            rng_ = rng_ * 1103515245U + 12345U;
-            last_extra_ = static_cast<std::int64_t>((rng_ >> 16) % static_cast<unsigned>(jitter_ + 1));
-        }
-        drew_ = true;
-        return last_extra_;
+        queues_[to].push_back({step_ + latency_ + delay_.draw(0), from, pkt});
     }
 
     // Grouped by alignment, as everything in this codebase is
     // (clang-analyzer-optin.performance.Padding).
     std::vector<std::deque<Pending>> queues_;
     std::vector<std::size_t> dead_;
+    CorrelatedDelay delay_;  // one lane: the star has a single shared schedule
     std::int64_t step_ = 0;
-    std::int64_t last_extra_ = 0;
     std::size_t endpoints_;
     std::size_t hub_ = kHub;
     int latency_;
-    int jitter_ = 0;
-    int persist_pct_ = 0;
-    unsigned rng_ = 0;
-    bool drew_ = false;
 };
 
 class StarTransport : public net::Transport {

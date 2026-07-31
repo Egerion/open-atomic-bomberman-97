@@ -1,6 +1,6 @@
 // LIVE interop test: the C++ lobby stack against the REAL Go matchmaker
 // (services/matchmaker). This is the one check that proves the two independently
-// written sides of PROTOCOL.md actually agree on the wire â€” every other suite
+// written sides of PROTOCOL.md actually agree on the wire — every other suite
 // tests one side against a fake.
 //
 // OPT-IN: skips unless BOMBER_MATCHMAKER_URL is set, so it never blocks the
@@ -26,7 +26,7 @@
 #include "bomber/net/lobby_flow.hpp"
 #include "bomber/net/udp_transport.hpp"
 
-using namespace bomber::net;  // NOLINT(google-build-using-namespace) â€” test-local
+using namespace bomber::net;  // NOLINT(google-build-using-namespace) — test-local
 
 namespace {
 
@@ -52,8 +52,8 @@ std::int64_t now_ms() {
         .count();
 }
 
-// The STUN echo lives on the SAME host as the WebSocket (PROTOCOL.md Â§2), so
-// derive it from the URL rather than assuming loopback â€” hard-coding 127.0.0.1
+// The STUN echo lives on the SAME host as the WebSocket (PROTOCOL.md §2), so
+// derive it from the URL rather than assuming loopback — hard-coding 127.0.0.1
 // silently pointed the probe at nothing whenever the tests ran against a
 // deployed matchmaker, which is exactly the case worth exercising.
 // BOMBER_MATCHMAKER_STUN_HOST still overrides.
@@ -97,7 +97,7 @@ TEST_CASE("live: host + join + ready + start against the real matchmaker") {
     REQUIRE(tb.bind(0));
 
     // Both peers must present the SAME build_hash or the server rejects the join
-    // (the cross-build door, ADR-0011) â€” here they are literally one binary.
+    // (the cross-build door, ADR-0011) — here they are literally one binary.
     LobbyFlow::Config cfg;
     cfg.server_url = url;
     cfg.stun_host = stun_host_from(url);
@@ -122,7 +122,7 @@ TEST_CASE("live: host + join + ready + start against the real matchmaker") {
     CHECK(a.my_seat() == 0);
     MESSAGE("lobby code: " << a.code());
 
-    // 2. Join by that code â€” the guest lands in the next free seat.
+    // 2. Join by that code — the guest lands in the next free seat.
     b.join_lobby(a.code());
     REQUIRE(pump_until(a, b, [&] { return b.phase() == LobbyFlow::Phase::InLobby; }, 8000));
     CHECK(b.my_seat() == 1);
@@ -155,7 +155,7 @@ TEST_CASE("live: host + join + ready + start against the real matchmaker") {
               << static_cast<int>(b.phase()) << " err='" << b.error() << "'");
     REQUIRE(both_ready);
 
-    // Identical parity payload, per-peer seat ownership â€” exactly what the
+    // Identical parity payload, per-peer seat ownership — exactly what the
     // deterministic sim needs to start byte-identical on both machines.
     CHECK(a.match_start().seed == b.match_start().seed);
     CHECK(a.match_start().seed != 0u);
@@ -168,7 +168,7 @@ TEST_CASE("live: host + join + ready + start against the real matchmaker") {
 TEST_CASE("live: a public lobby shows up in another client's browse") {
     // Phase 3: a PUBLIC lobby is visible to everyone, so a player can find a
     // match without being handed a code. Browsing must not commit the browser to
-    // anything â€” it drops back to Idle so the row can then be joined.
+    // anything — it drops back to Idle so the row can then be joined.
     const std::string url = env_or("BOMBER_MATCHMAKER_URL", "");
     if (url.empty()) {
         MESSAGE("BOMBER_MATCHMAKER_URL unset; skipping the live browse test");
@@ -207,7 +207,7 @@ TEST_CASE("live: a public lobby shows up in another client's browse") {
     REQUIRE(pump_until(host, browser,
                        [&] { return browser.public_list_revision() != before; }, 8000));
 
-    // Browsing is not a commitment â€” the browser is free to act again.
+    // Browsing is not a commitment — the browser is free to act again.
     CHECK(browser.phase() == LobbyFlow::Phase::Idle);
 
     bool found = false;
@@ -226,7 +226,7 @@ TEST_CASE("live: a public lobby shows up in another client's browse") {
 }
 
 TEST_CASE("live: lobby chat round-trips through the real matchmaker") {
-    // PORT-ONLY lobby chat (PROTOCOL.md Â§7) against the REAL Go relay â€” the one
+    // PORT-ONLY lobby chat (PROTOCOL.md §7) against the REAL Go relay — the one
     // check that proves the two independently-written sides agree on the Chat
     // frame. NOTE: this needs a server built from THIS tree; the deployed
     // instance answers `unknown_type` until it is redeployed.
@@ -271,7 +271,7 @@ TEST_CASE("live: lobby chat round-trips through the real matchmaker") {
         a, b, [&] { return !a.chat_log().empty() && !b.chat_log().empty(); }, 8000));
     CHECK(a.chat_log().back().text == "gl hf");
     CHECK(b.chat_log().back().text == "gl hf");
-    // Attribution is the SERVER's, off its roster â€” the guest's own seat 1 and
+    // Attribution is the SERVER's, off its roster — the guest's own seat 1 and
     // the node name it joined with.
     CHECK(a.chat_log().back().seat == 1);
     CHECK(a.chat_log().back().name == "ADA");
@@ -285,8 +285,8 @@ TEST_CASE("live: lobby chat round-trips through the real matchmaker") {
 }
 
 TEST_CASE("live: relay fallback carries the match when the punch cannot land") {
-    // The Phase 2 proof (ADR-0011 decision 3): force the hole punch to fail â€”
-    // exactly what symmetric NAT / CGNAT does â€” and check both peers fall back
+    // The Phase 2 proof (ADR-0011 decision 3): force the hole punch to fail —
+    // exactly what symmetric NAT / CGNAT does — and check both peers fall back
     // through the server's UDP forwarder and can still exchange datagrams.
     //
     // The server must advertise a ROUTABLE relay host for a client to use it;
@@ -343,7 +343,7 @@ TEST_CASE("live: relay fallback carries the match when the punch cannot land") {
     pump_until(a, b, [] { return false; }, 1500);
 
     // Sabotage: replace each peer's view of the other with TEST-NET-1
-    // (192.0.2.0/24, RFC 5737 â€” guaranteed unroutable), so no candidate pair can
+    // (192.0.2.0/24, RFC 5737 — guaranteed unroutable), so no candidate pair can
     // ever complete and the punch must time out.
     LobbyServerMessage bogus_for_a;
     bogus_for_a.type = LobbyMsgType::PeerCandidates;

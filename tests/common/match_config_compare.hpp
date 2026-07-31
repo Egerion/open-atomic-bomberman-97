@@ -176,6 +176,76 @@ inline bool field_eq(const std::vector<SpawnPoint>& x, const std::vector<SpawnPo
 
 using FieldReport = std::vector<std::pair<std::string, bool>>;
 
+// These two are FLAT TABLES on purpose, and stay over the §3 length target the
+// way a ported dispatch switch does (§8): each names every field of one struct,
+// in that struct's own declaration order, so "is field X covered?" is answered by
+// scanning one list. Breaking either into themed helpers would hide exactly the
+// omission they exist to make visible. The split below is the one that carries
+// meaning — it follows the struct boundary, so each function has a single
+// header to be kept in sync with.
+
+// Every gameplay field of Tuning, named, with whether a and b agree on it.
+inline void compare_tuning(const Tuning& a, const Tuning& b, FieldReport* out) {
+#define BOMBER_CMP(path) out->emplace_back("tuning." #path, detail::field_eq(a.path, b.path))
+    BOMBER_CMP(input_freeze_ticks);
+    BOMBER_CMP(fuse_frames);
+    BOMBER_CMP(start_speed);
+    BOMBER_CMP(skate_speed_bonus);
+    BOMBER_CMP(clogs_speed_penalty);
+    BOMBER_CMP(kicked_bomb_speed);
+    BOMBER_CMP(punched_bomb_speed);
+    BOMBER_CMP(game_seconds);
+    BOMBER_CMP(taunt_chance);
+    BOMBER_CMP(hurry_seconds);
+    BOMBER_CMP(overpowered_relocate_seconds);
+    BOMBER_CMP(enclosement_depth);
+    BOMBER_CMP(wall_detonates);
+    BOMBER_CMP(start_with);
+    BOMBER_CMP(limits);
+    BOMBER_CMP(spawn_counts);
+    BOMBER_CMP(color_rgb);
+    BOMBER_CMP(level_enabled);
+    BOMBER_CMP(level_index);
+    BOMBER_CMP(regen_seconds);
+    BOMBER_CMP(regen_clear_radius);
+    BOMBER_CMP(ice_delay_ms);
+    BOMBER_CMP(pickup_pause);
+    BOMBER_CMP(powers_lost_min);
+    BOMBER_CMP(powers_lost_rand);
+    BOMBER_CMP(head_stun_frames);
+    BOMBER_CMP(punch_arc_first);
+    BOMBER_CMP(punch_arc_hop);
+    BOMBER_CMP(taunt_many_bombs);
+    BOMBER_CMP(taunt_many_chance);
+    BOMBER_CMP(jelly_turn_chance);
+    BOMBER_CMP(dud_gate_base);
+    BOMBER_CMP(dud_gate_rand);
+    BOMBER_CMP(dud_chance);
+    BOMBER_CMP(dud_frames);
+    BOMBER_CMP(flame_frames);
+    BOMBER_CMP(brick_burn_frames);
+    BOMBER_CMP(conveyor_speed_count);
+    BOMBER_CMP(conveyor_speeds);
+    BOMBER_CMP(conveyor_speed_index);
+    BOMBER_CMP(trampoline_bounce_frames);
+    BOMBER_CMP(ai_personalities);
+    BOMBER_CMP(fire_god_lookahead);
+    BOMBER_CMP(ai_blast_chance);
+    BOMBER_CMP(ai_powerup_range);
+    BOMBER_CMP(disease_frames);
+    BOMBER_CMP(disease_freshness);
+    BOMBER_CMP(disease_cure_chance);
+    BOMBER_CMP(diseases_time_limited);
+    BOMBER_CMP(diseases_multiply);
+    BOMBER_CMP(diseases_curable);
+    BOMBER_CMP(diseases_destroyable);
+    BOMBER_CMP(rover_turn_chance);
+    BOMBER_CMP(campaign_ai_kill_score);
+    BOMBER_CMP(rover_kill_score);
+    BOMBER_CMP(ghost_kill_score);
+#undef BOMBER_CMP
+}
+
 // Every gameplay field of MatchConfig, named, with whether a and b agree on it.
 inline FieldReport compare_match_config(const MatchConfig& a, const MatchConfig& b) {
     FieldReport out;
@@ -199,63 +269,8 @@ inline FieldReport compare_match_config(const MatchConfig& a, const MatchConfig&
     BOMBER_CMP(campaign_rover_speed);
     BOMBER_CMP(campaign_ghosts);
     BOMBER_CMP(campaign_ghost_speed);
-    BOMBER_CMP(tuning.input_freeze_ticks);
-    BOMBER_CMP(tuning.fuse_frames);
-    BOMBER_CMP(tuning.start_speed);
-    BOMBER_CMP(tuning.skate_speed_bonus);
-    BOMBER_CMP(tuning.clogs_speed_penalty);
-    BOMBER_CMP(tuning.kicked_bomb_speed);
-    BOMBER_CMP(tuning.punched_bomb_speed);
-    BOMBER_CMP(tuning.game_seconds);
-    BOMBER_CMP(tuning.taunt_chance);
-    BOMBER_CMP(tuning.hurry_seconds);
-    BOMBER_CMP(tuning.overpowered_relocate_seconds);
-    BOMBER_CMP(tuning.enclosement_depth);
-    BOMBER_CMP(tuning.wall_detonates);
-    BOMBER_CMP(tuning.start_with);
-    BOMBER_CMP(tuning.limits);
-    BOMBER_CMP(tuning.spawn_counts);
-    BOMBER_CMP(tuning.color_rgb);
-    BOMBER_CMP(tuning.level_enabled);
-    BOMBER_CMP(tuning.level_index);
-    BOMBER_CMP(tuning.regen_seconds);
-    BOMBER_CMP(tuning.regen_clear_radius);
-    BOMBER_CMP(tuning.ice_delay_ms);
-    BOMBER_CMP(tuning.pickup_pause);
-    BOMBER_CMP(tuning.powers_lost_min);
-    BOMBER_CMP(tuning.powers_lost_rand);
-    BOMBER_CMP(tuning.head_stun_frames);
-    BOMBER_CMP(tuning.punch_arc_first);
-    BOMBER_CMP(tuning.punch_arc_hop);
-    BOMBER_CMP(tuning.taunt_many_bombs);
-    BOMBER_CMP(tuning.taunt_many_chance);
-    BOMBER_CMP(tuning.jelly_turn_chance);
-    BOMBER_CMP(tuning.dud_gate_base);
-    BOMBER_CMP(tuning.dud_gate_rand);
-    BOMBER_CMP(tuning.dud_chance);
-    BOMBER_CMP(tuning.dud_frames);
-    BOMBER_CMP(tuning.flame_frames);
-    BOMBER_CMP(tuning.brick_burn_frames);
-    BOMBER_CMP(tuning.conveyor_speed_count);
-    BOMBER_CMP(tuning.conveyor_speeds);
-    BOMBER_CMP(tuning.conveyor_speed_index);
-    BOMBER_CMP(tuning.trampoline_bounce_frames);
-    BOMBER_CMP(tuning.ai_personalities);
-    BOMBER_CMP(tuning.fire_god_lookahead);
-    BOMBER_CMP(tuning.ai_blast_chance);
-    BOMBER_CMP(tuning.ai_powerup_range);
-    BOMBER_CMP(tuning.disease_frames);
-    BOMBER_CMP(tuning.disease_freshness);
-    BOMBER_CMP(tuning.disease_cure_chance);
-    BOMBER_CMP(tuning.diseases_time_limited);
-    BOMBER_CMP(tuning.diseases_multiply);
-    BOMBER_CMP(tuning.diseases_curable);
-    BOMBER_CMP(tuning.diseases_destroyable);
-    BOMBER_CMP(tuning.rover_turn_chance);
-    BOMBER_CMP(tuning.campaign_ai_kill_score);
-    BOMBER_CMP(tuning.rover_kill_score);
-    BOMBER_CMP(tuning.ghost_kill_score);
 #undef BOMBER_CMP
+    compare_tuning(a.tuning, b.tuning, &out);
     return out;
 }
 

@@ -65,8 +65,11 @@ TEST_CASE("client->server encoders produce PROTOCOL.md-shaped frames") {
     CHECK(mo["type"] == "MatchOver");
 }
 
+// One SUBCASE per server frame rather than seven anonymous scopes in one body:
+// the frames are independent, and a failure now names the frame that broke
+// instead of only "decodes every server frame".
 TEST_CASE("parse_server_message decodes every server frame") {
-    {
+    SUBCASE("LobbyCreated") {
         const auto m = parse_server_message(
             R"({"type":"LobbyCreated","code":"K7Q2MP","lobby_id":"L","host_token":"T","your_seat":0})");
         CHECK(m.type == LobbyMsgType::LobbyCreated);
@@ -75,7 +78,7 @@ TEST_CASE("parse_server_message decodes every server frame") {
         CHECK(m.host_token == "T");
         CHECK(m.your_seat == 0);
     }
-    {
+    SUBCASE("JoinAccepted carries the whole roster") {
         const auto m = parse_server_message(
             R"({"type":"JoinAccepted","lobby_id":"L","your_seat":1,)"
             R"("roster":[{"seat":0,"name":"Ege","ready":false,"is_host":true},)"
@@ -88,7 +91,7 @@ TEST_CASE("parse_server_message decodes every server frame") {
         CHECK(m.roster[1].seat == 1);
         CHECK(m.roster[1].ready);
     }
-    {
+    SUBCASE("StartMatch carries seed, seats, delay and topology") {
         const auto m = parse_server_message(
             R"({"type":"StartMatch","seed":1592371220,"seat_assign":[0,1],)"
             R"("match_config_digest":"0xC0FFEE01","input_delay":2,)"
@@ -101,12 +104,12 @@ TEST_CASE("parse_server_message decodes every server frame") {
         CHECK(m.hub_seat == 0);
         CHECK(m.local_seats_mask == 2);
     }
-    {
+    SUBCASE("JoinRejected") {
         const auto m = parse_server_message(R"({"type":"JoinRejected","reason":"build_mismatch"})");
         CHECK(m.type == LobbyMsgType::JoinRejected);
         CHECK(m.reason == "build_mismatch");
     }
-    {
+    SUBCASE("PeerCandidates") {
         const auto m = parse_server_message(
             R"({"type":"PeerCandidates","seat":0,"list":[{"kind":"host","addr":"192.168.1.9:41234"}]})");
         CHECK(m.type == LobbyMsgType::PeerCandidates);
@@ -115,7 +118,7 @@ TEST_CASE("parse_server_message decodes every server frame") {
         CHECK(m.candidates[0].kind == "host");
         CHECK(m.candidates[0].addr == "192.168.1.9:41234");
     }
-    {
+    SUBCASE("PublicList") {
         const auto m = parse_server_message(
             R"({"type":"PublicList","lobbies":[{"code":"K7Q2MP","name":"g","players":2,"max":4,"build_ok":true}]})");
         CHECK(m.type == LobbyMsgType::PublicList);
@@ -124,16 +127,17 @@ TEST_CASE("parse_server_message decodes every server frame") {
         CHECK(m.lobbies[0].players == 2);
         CHECK(m.lobbies[0].build_ok);
     }
-    {
+    SUBCASE("Error") {
         const auto m = parse_server_message(R"({"type":"Error","code":"not_host","message":"nope"})");
         CHECK(m.type == LobbyMsgType::Error);
         CHECK(m.error_code == "not_host");
         CHECK(m.error_message == "nope");
     }
-    // Malformed / unknown → Unknown (never throws, never acted on).
-    CHECK(parse_server_message("not json").type == LobbyMsgType::Unknown);
-    CHECK(parse_server_message(R"({"type":"Nonsense"})").type == LobbyMsgType::Unknown);
-    CHECK(parse_server_message("[]").type == LobbyMsgType::Unknown);
+    SUBCASE("anything unrecognised is Unknown, never a throw and never acted on") {
+        CHECK(parse_server_message("not json").type == LobbyMsgType::Unknown);
+        CHECK(parse_server_message(R"({"type":"Nonsense"})").type == LobbyMsgType::Unknown);
+        CHECK(parse_server_message("[]").type == LobbyMsgType::Unknown);
+    }
 }
 
 TEST_CASE("STUN probe/reply match PROTOCOL.md §2") {

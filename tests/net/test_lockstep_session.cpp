@@ -12,10 +12,13 @@
 
 #include "bomber/net/lockstep_session.hpp"
 #include "bomber/net/transport.hpp"
-#include "helpers.hpp"  // bomber::sim::test::open_config
+#include "helpers.hpp"        // bomber::sim::test::open_config
+#include "input_scripts.hpp"  // the SPARSER walk; see that header on the three scripts
 
 using namespace bomber;                  // NOLINT(google-build-using-namespace) — test-local
 using bomber::sim::test::open_config;
+using bomber::test::scripted_cycle8;
+using bomber::test::seat_input;
 
 namespace {
 
@@ -23,33 +26,12 @@ constexpr std::uint16_t kSeat0 = 0x1;
 constexpr std::uint16_t kSeat1 = 0x2;
 constexpr std::uint16_t kBoth = 0x3;
 
-sim::TickInputs seat_input(int seat, const sim::PlayerInput& in) {
-    sim::TickInputs t;
-    t.players[static_cast<std::size_t>(seat)] = in;
-    return t;
-}
-
-// Deterministic per-seat script: cycle moves, drop a bomb every 8th tick,
-// phase-shifted per seat so the two seats differ (a real divergence test).
-sim::PlayerInput scripted(int seat, std::uint32_t tick) {
-    sim::PlayerInput in;
-    switch ((tick + static_cast<std::uint32_t>(seat) * 7U) % 8U) {
-        case 0: in.right = true; break;
-        case 1: in.down = true; break;
-        case 2: in.left = true; break;
-        case 3: in.up = true; break;
-        case 4: in.action1 = true; break;
-        default: break;
-    }
-    return in;
-}
-
 // One round of the harness: each peer feeds its OWN seat's scripted input (keyed
 // on that session's next input frame, so a stalled tick re-uses the same value)
 // and tries to advance; then the link's delivery clock ticks once.
 void pump(net::LockstepSession& a, net::LockstepSession& b, net::LoopbackLink& link) {
-    a.advance(seat_input(0, scripted(0, a.input_tick())));
-    b.advance(seat_input(1, scripted(1, b.input_tick())));
+    a.advance(seat_input(0, scripted_cycle8(0, a.input_tick())));
+    b.advance(seat_input(1, scripted_cycle8(1, b.input_tick())));
     link.step();
 }
 

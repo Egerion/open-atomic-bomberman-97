@@ -32,10 +32,13 @@
 #include "bomber/net/net_stats.hpp"
 #include "bomber/net/rollback_session.hpp"
 #include "bomber/net/transport.hpp"
-#include "helpers.hpp"  // bomber::sim::test::open_config
+#include "helpers.hpp"        // bomber::sim::test::open_config
+#include "input_scripts.hpp"  // the antiphase walk; see that header on the three scripts
 
 using namespace bomber;  // NOLINT(google-build-using-namespace) — test-local
 using bomber::sim::test::open_config;
+using bomber::test::scripted_cycle6;
+using bomber::test::seat_input;
 
 namespace {
 
@@ -46,28 +49,6 @@ constexpr std::uint16_t kBoth = 0x3;
 // One pump is one sim tick: 50 ms at the fixed 20 Hz the sessions run at, which
 // is also what a real match's frame loop hands in.
 constexpr std::int64_t kPumpMs = 1000 / net::kPumpHz;
-
-sim::TickInputs seat_input(int seat, const sim::PlayerInput& in) {
-    sim::TickInputs t;
-    t.players[static_cast<std::size_t>(seat)] = in;
-    return t;
-}
-
-// Changes most ticks and is phase-shifted per seat, so "repeat the peer's last
-// input" is frequently wrong and real rollbacks happen (mirrors
-// test_rollback_session.cpp's script).
-sim::PlayerInput scripted(int seat, std::uint32_t tick) {
-    sim::PlayerInput in;
-    switch ((tick + static_cast<std::uint32_t>(seat) * 3U) % 6U) {
-        case 0: in.right = true; break;
-        case 1: in.down = true; break;
-        case 2: in.left = true; break;
-        case 3: in.up = true; break;
-        case 4: in.action1 = true; break;
-        default: break;
-    }
-    return in;
-}
 
 // A two-peer harness over one LoopbackLink. `clocked` decides whether the
 // sessions are handed a wall clock at all — the whole point of the
@@ -91,8 +72,8 @@ struct Pair {
 
     void pump() {
         const std::int64_t t = clocked ? now : -1;
-        a.advance(seat_input(0, scripted(0, a.predicted_tick())), t);
-        b.advance(seat_input(1, scripted(1, b.predicted_tick())), t);
+        a.advance(seat_input(0, scripted_cycle6(0, a.predicted_tick())), t);
+        b.advance(seat_input(1, scripted_cycle6(1, b.predicted_tick())), t);
         link.step();
         now += kPumpMs;
     }
@@ -360,8 +341,13 @@ TEST_CASE("net stats: rollbacks, re-sim depth and the redundancy count are all e
     for (const net::NetStats* s : {&p.a.stats(), &p.b.stats()}) {
         CHECK(s->rollbacks > 0);                // latency forced real mispredictions
         CHECK(s->resim_ticks >= s->rollbacks);  // each rollback replays >= 1 tick
-        CHECK(s->prediction_depth >= 0);
-        CHECK(s->worst_prediction_depth >= s->prediction_depth);
+        // Was `prediction_depth >= 0` and `worst >= prediction_depth`. Neither
+        // could fail: net_stats.cpp computes the depth through a `? :` that
+        // floors it at 0, then assigns worst = max(worst, depth) on the very next
+        // line. Pin the two things that CAN break instead — that this run really
+        // speculated, and that it never ran past the cap it was given.
+        CHECK(s->worst_prediction_depth > 0);
+        CHECK(s->worst_prediction_depth <= s->max_prediction);
         CHECK(s->max_prediction == 16);
         CHECK(s->rx_packets > 0);
         // The redundancy window means most arriving input repeats what is held.
@@ -387,7 +373,7 @@ TEST_CASE("net stats: a stall is counted only when the prediction cap really hol
     // Peer B never pumps: A speculates to its cap and then cannot move.
     std::int64_t now = 0;
     for (int i = 0; i < 20; ++i) {
-        a.advance(seat_input(0, scripted(0, a.predicted_tick())), now);
+        a.advance(seat_input(0, scripted_cycle6(0, a.predicted_tick())), now);
         link.step();
         now += kPumpMs;
     }
@@ -400,8 +386,8 @@ TEST_CASE("net stats: a stall is counted only when the prediction cap really hol
     // the frontier moves again.
     const std::uint32_t stalled = a.stats().stall_pumps;
     for (int i = 0; i < 20; ++i) {
-        b.advance(seat_input(1, scripted(1, b.predicted_tick())), now);
-        a.advance(seat_input(0, scripted(0, a.predicted_tick())), now);
+        b.advance(seat_input(1, scripted_cycle6(1, b.predicted_tick())), now);
+        a.advance(seat_input(0, scripted_cycle6(0, a.predicted_tick())), now);
         link.step();
         now += kPumpMs;
     }
@@ -455,8 +441,8 @@ TEST_CASE("net stats: the round tick base does not confuse the diagnostics") {
     net::RollbackSession b(sb, kSeat1, kBoth, 16, tb, {}, kBase);
     std::int64_t now = 500;
     for (int i = 0; i < 120; ++i) {
-        a.advance(seat_input(0, scripted(0, a.predicted_tick())), now);
-        b.advance(seat_input(1, scripted(1, b.predicted_tick())), now);
+        a.advance(seat_input(0, scripted_cycle6(0, a.predicted_tick())), now);
+        b.advance(seat_input(1, scripted_cycle6(1, b.predicted_tick())), now);
         link.step();
         now += kPumpMs;
     }
@@ -467,10 +453,13 @@ TEST_CASE("net stats: the round tick base does not confuse the diagnostics") {
     CHECK(b.stats().peers[0].rtt_ms > 0);
 }
 
-TEST_CASE("net stats: the end-of-session log line is one greppable record") {
-    // What the owner actually pastes back to us after "it suddenly cut out".
-    // Pinned literally, because a log format that drifts is a log nobody can
-    // read two builds later.
+namespace {
+
+// A summary with EVERY field set to a distinct, recognisable value, so the
+// format assertion below pins each one's position and spelling rather than
+// accidentally matching a zero. The numbers describe a plausible bad session:
+// relayed path, deep prediction, heavy stalling, and a desync at tick 1201.
+net::SessionSummary desynced_relay_summary() {
     net::SessionSummary s;
     s.timestamp = "2026-07-29 14:03:11";
     s.reason = net::SessionEndReason::Desync;
@@ -513,8 +502,16 @@ TEST_CASE("net stats: the end-of-session log line is one greppable record") {
     p.recv_per_sec = 18;
     p.dup_inputs = 9412;
     p.loss_pct_est = 10;
+    return s;
+}
 
-    const std::string line = net::format_session_log_line(s);
+}  // namespace
+
+TEST_CASE("net stats: the end-of-session log line is one greppable record") {
+    // What the owner actually pastes back to us after "it suddenly cut out".
+    // Pinned literally, because a log format that drifts is a log nobody can read
+    // two builds later.
+    const std::string line = net::format_session_log_line(desynced_relay_summary());
     CHECK(line ==
           "2026-07-29 14:03:11 netdiag end=desync path=relayed host=1 round=2 "
           "local_seats=0x001 all_seats=0x003 elapsed=92s tick=1264 confirmed=1201 depth=63/64 "

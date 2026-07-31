@@ -27,89 +27,36 @@
 #include "bomber/net/transport.hpp"
 #include "bomber/sim/constants.hpp"
 #include "bomber/sim/types.hpp"
+#include "correlated_delay.hpp"
+#include "input_scripts.hpp"
 
 namespace bomber::net::test {
 
 inline constexpr int kTickMs = 50;
 inline constexpr int kMaxCatchupTicks = 4;  // match_runner.cpp's own long-stall clamp
 
-inline sim::TickInputs seat_input(int seat, const sim::PlayerInput& in) {
-    sim::TickInputs t;
-    t.players[static_cast<std::size_t>(seat)] = in;
-    return t;
-}
-
-// Changes most ticks and is phase-shifted per seat, so "repeat the last remote
-// input" is frequently wrong and the rollback path is genuinely exercised.
-inline sim::PlayerInput scripted(int seat, std::uint32_t tick) {
-    sim::PlayerInput in;
-    switch ((tick + static_cast<std::uint32_t>(seat) * 3U) % 6U) {
-        case 0: in.right = true; break;
-        case 1: in.down = true; break;
-        case 2: in.left = true; break;
-        case 3: in.up = true; break;
-        case 4: in.action1 = true; break;
-        default: break;
-    }
-    return in;
-}
+// Re-exported so `net::test::` call sites reach the shared scripts unqualified.
+// The rig drives scripted_cycle6: it changes on five ticks in six and puts two
+// seats in antiphase, so "repeat the last remote input" is frequently wrong and
+// the rollback path is genuinely exercised.
+using bomber::test::scripted_cycle6;
+using bomber::test::seat_input;
 
 // A link whose delay is in MILLISECONDS against a clock the driver owns, with
 // independent per-direction delay and deterministic jitter. LoopbackLink cannot
 // express any of the three: its latency is a single count of synchronous pumps.
 //
-// ARRIVAL VARIANCE, not merely extra delay (2026-07-30). `jitter_ms` on its own
-// draws an INDEPENDENT extra delay per packet — white noise, and the protocol's
-// redundant input window absorbs nearly all of it: a datagram delayed on its own
-// is superseded by the next one, which carries its ticks as well. What actually
-// stalls a peer's confirmation frontier is a RUN of late packets, i.e. the
-// correlated delay a filling queue produces, which is also what a path reports as
-// high jitter. `persist_pct` is the chance that a packet INHERITS the previous
-// packet's extra delay, turning the same spread into bursts.
-//
-// It defaults to 0, and at 0 the draw is the original single RNG step per packet,
-// bit for bit — so every pre-existing scenario in tests/net keeps its exact
-// arrival schedule.
+// The arrival-variance model itself lives in tests/common/correlated_delay.hpp,
+// which owns the reasoning; each DIRECTION is one lane of it.
 class MsLink {
 public:
-    // `seed` picks WHICH realisation of the delay process this run gets. It
-    // matters more than it looks: the arrival schedule is consumed in send order,
-    // so any behaviour change that alters how many datagrams a peer sends
-    // reshuffles every later delay. A jittery run is therefore CHAOTIC — two
-    // builds that differ by one held tick diverge into genuinely different
-    // histories — and a threshold fitted to one realisation is fitted to noise.
-    // Suites that assert on a jittery path should sweep several seeds and assert
-    // on the aggregate; the default reproduces the original single realisation.
     MsLink(int a_to_b_ms, int b_to_a_ms, int jitter_ms, int persist_pct = 0,
            unsigned seed = 0x1234567U)
-        : delay_{a_to_b_ms, b_to_a_ms},
-          jitter_(jitter_ms),
-          persist_pct_(persist_pct),
-          rng_(seed) {}
+        : delay_{a_to_b_ms, b_to_a_ms}, extra_(/*lanes=*/2, jitter_ms, persist_pct, seed) {}
 
     void send(int from, const std::uint8_t* d, std::size_t n, std::int64_t now) {
         const std::size_t f = static_cast<std::size_t>(from);
-        std::int64_t extra = 0;
-        if (jitter_ > 0) {
-            bool inherit = false;
-            if (persist_pct_ > 0) {
-                rng_ = rng_ * 1103515245U + 12345U;  // test-local, never the sim's stream
-                inherit = static_cast<int>((rng_ >> 16) % 100U) < persist_pct_ && seen_[f];
-            }
-            if (inherit) {
-                extra = last_extra_[f];  // the queue is still full: stay late
-            } else {
-                rng_ = rng_ * 1103515245U + 12345U;
-                extra = static_cast<std::int64_t>((rng_ >> 16) % static_cast<unsigned>(jitter_ + 1));
-            }
-            if (seen_[f]) {
-                delta_sum_[f] += extra > last_extra_[f] ? extra - last_extra_[f]
-                                                        : last_extra_[f] - extra;
-                ++delta_n_[f];
-            }
-            last_extra_[f] = extra;
-            seen_[f] = true;
-        }
+        const std::int64_t extra = extra_.draw(f);
         q_[static_cast<std::size_t>(1 - from)].push_back(
             {now + delay_[f] + extra, std::vector<std::uint8_t>(d, d + n)});
     }
@@ -126,25 +73,10 @@ public:
         return false;
     }
 
-    // Turn the variance on or off part-way through a run. A path does not stay
-    // jittery for a whole round — a queue fills, drains, and fills again — and a
-    // suite that only ever measures a steady condition never exercises anything
-    // that ADAPTS to one. Deliberately leaves the RNG stream and the accumulated
-    // per-direction statistics alone, so a scenario that never calls it is
-    // bit-for-bit the scenario it was.
-    void set_jitter(int jitter_ms, int persist_pct) {
-        jitter_ = jitter_ms;
-        persist_pct_ = persist_pct;
-    }
+    void set_jitter(int jitter_ms, int persist_pct) { extra_.set(jitter_ms, persist_pct); }
 
-    // What the model ACTUALLY produced in one direction: the mean |d_i - d_{i-1}|
-    // over consecutive packets. That is the same quantity net_stats' `jitter_ms`
-    // estimates from ack samples, so a suite can print the path it MODELLED beside
-    // the jitter the SESSION derived — rather than asserting against a knob whose
-    // relation to the live numbers nobody can check.
     int mean_abs_delta_ms(int from) const {
-        const std::size_t f = static_cast<std::size_t>(from);
-        return delta_n_[f] == 0 ? 0 : static_cast<int>(delta_sum_[f] / delta_n_[f]);
+        return extra_.mean_abs_delta(static_cast<std::size_t>(from));
     }
 
 private:
@@ -153,13 +85,7 @@ private:
         std::vector<std::uint8_t> packet;
     };
     std::array<std::int64_t, 2> delay_;
-    int jitter_;
-    int persist_pct_;
-    unsigned rng_;
-    std::array<std::int64_t, 2> last_extra_{};
-    std::array<bool, 2> seen_{};
-    std::array<std::int64_t, 2> delta_sum_{};
-    std::array<std::int64_t, 2> delta_n_{};
+    bomber::test::CorrelatedDelay extra_;
     std::array<std::deque<P>, 2> q_{};
 };
 
@@ -201,7 +127,7 @@ struct Driver {
         last = now;
         if (acc > kMaxCatchupTicks * kTickMs) acc = kMaxCatchupTicks * kTickMs;
         while (acc >= kTickMs) {
-            s.advance(seat_input(seat, scripted(seat, s.predicted_tick())), now);
+            s.advance(seat_input(seat, scripted_cycle6(seat, s.predicted_tick())), now);
             ++pumps;
             after(s);
             acc -= kTickMs;

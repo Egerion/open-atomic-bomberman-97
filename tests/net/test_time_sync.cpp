@@ -159,17 +159,35 @@ TEST_CASE("EVERY hold implies the unfiltered predicate") {
     // unfiltered controller would also have held. It can only ever hold LESS."
     // Swept rather than argued, because it is the property that makes the filter
     // safe to ship over a path nobody has modelled.
+    int holds = 0, suppressions = 0;
     for (int spread = 0; spread <= 8; ++spread) {
         for (int advantage = -4; advantage <= 8; ++advantage) {
             Rig r;
             r.fill_window(spread, advantage);
             for (int i = 0; i < 8; ++i) {
                 const Decision d = r.pump(i % 2 == 0 ? 0 : spread, advantage);
-                if (d.hold) CHECK(d.raw >= net::kRephaseAdvantageTicks);
-                if (d.suppressed) CHECK(d.raw >= net::kRephaseAdvantageTicks);
+                if (d.hold) {
+                    ++holds;
+                    CHECK(d.raw >= net::kRephaseAdvantageTicks);
+                }
+                if (d.suppressed) {
+                    ++suppressions;
+                    CHECK(d.raw >= net::kRephaseAdvantageTicks);
+                }
             }
         }
     }
+    // A universally quantified property needs a non-empty set. Both assertions
+    // above sit inside conditionals, so a controller that stopped holding
+    // altogether — the "the re-phase went dead" regression — would sweep this
+    // whole grid and assert nothing at all.
+    CHECK(holds > 0);
+    // MEASURED, and deliberately not asserted: `suppressions` is 0 over this
+    // grid. The suppressed branch above therefore never executes here, so it
+    // pins nothing and must not be mistaken for coverage — suppression's own
+    // positive lives in "the absorber reports what it swallowed" above. The
+    // branch stays because the property is stated over both outcomes, but the
+    // floor is only claimed for the one this sweep actually produces.
 }
 
 TEST_CASE("a REORDERED datagram does not report the depth the peer left behind") {

@@ -154,20 +154,30 @@ TEST_CASE("the enemy finder (behaviour 6) never picks a teammate") {
     add_player(st, 0, 2, 5, /*ai=*/true, /*team=*/9);
     add_player(st, 1, 10, 5, /*ai=*/false, /*team=*/9);  // teammate, far east, idle
 
-    const int start_x = tile_x(st.players[0]);
-    int max_x = start_x;
+    bool ever_active = false;
     for (int t = 0; t < 800; ++t) {
         s.tick(idle());
-        if (st.players[0].alive) max_x = std::max(max_x, tile_x(st.players[0]));
         // Never latches a target onto the teammate's slot.
-        if (st.brains[0].enemy_seek.active) CHECK(st.brains[0].enemy_seek.target_slot != 1);
+        if (st.brains[0].enemy_seek.active) {
+            ever_active = true;
+            CHECK(st.brains[0].enemy_seek.target_slot != 1);
+        }
     }
-    // With no valid enemy anywhere, behaviour 6 never acquires, so movement is
-    // just wander noise — it should NOT have marched purposefully toward slot 1
-    // the way the analogous "closes on the foe" Stage-5 test does (max advance
-    // of a couple of tiles from wander alone is fine; a directed multi-tile
-    // beeline like the non-team test is what we must NOT see).
+    // The guarded CHECK above runs ZERO times on a correct build — pick_live_enemy
+    // returns -1 for a teammate, so enemy_seek never activates at all — which is
+    // why the claim has to be stated directly and not left inside the guard. Only
+    // `alive` used to be asserted here, and that is true by construction (open
+    // arena, no enemy, behaviour 4 refuses to bomb a teammate, so nothing can
+    // kill it), so the case had no assertion that could go red.
+    CHECK_FALSE(ever_active);
     CHECK(st.players[0].alive);
+    // NOT asserted, and the retraction is the point: this case used to carry a
+    // comment claiming the AI "should NOT have marched purposefully toward slot
+    // 1", beside a max_x it computed and never read. Measured over these 800
+    // ticks the wander alone advances 9 tiles east — it reaches the teammate
+    // regardless — so position discriminates nothing here and the prose was
+    // wrong. Whether behaviour 6 ACQUIRED is the property; where the AI drifted
+    // is not.
 }
 
 // ---------------------------------------------------------------------------

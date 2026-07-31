@@ -9,7 +9,8 @@
 #include "bomber/net/rollback_session.hpp"
 #include "bomber/sim/simulation.hpp"
 #include "fanout_bus.hpp"
-#include "helpers.hpp"  // bomber::sim::test::open_config
+#include "helpers.hpp"        // bomber::sim::test::open_config
+#include "input_scripts.hpp"  // the HELD walk; see that header on the three scripts
 
 // HOST MIGRATION (wire v9, ADR-0011 decision 5, docs/online-multiplayer-design
 // .md §8). What is under test is the half that lives in libs/net: detecting that
@@ -30,6 +31,8 @@
 
 using namespace bomber;  // NOLINT(google-build-using-namespace) — test-local
 using bomber::sim::test::open_config;
+using bomber::test::scripted_held;
+using bomber::test::seat_input;
 
 namespace {
 
@@ -44,25 +47,6 @@ sim::MatchConfig three_config() {
     cfg.spawns = {{0, 0}, {14, 10}, {14, 0}};
     cfg.player_count = 3;
     return cfg;
-}
-
-// A pure function of (seat, tick) so every peer's re-simulation derives the same
-// input, phase-shifted per seat so prediction genuinely mispredicts.
-sim::PlayerInput scripted(int seat, std::uint32_t tick) {
-    sim::PlayerInput in;
-    const std::uint32_t phase = (tick + static_cast<std::uint32_t>(seat) * 3) % 8;
-    in.left = phase == 1 || phase == 2;
-    in.right = phase == 5 || phase == 6;
-    in.up = phase == 3;
-    in.down = phase == 7;
-    in.action1 = phase == 4;
-    return in;
-}
-
-sim::TickInputs seat_input(int seat, const sim::PlayerInput& in) {
-    sim::TickInputs t;
-    t.players[static_cast<std::size_t>(seat)] = in;
-    return t;
 }
 
 // A LOSSY INBOUND LEG for one peer. While deaf it drains and DISCARDS whatever
@@ -128,7 +112,7 @@ struct Peer {
           seat_index(seat) {}
 
     void pump(std::uint32_t tick) {
-        session.advance(seat_input(seat_index, scripted(seat_index, tick)));
+        session.advance(seat_input(seat_index, scripted_held(seat_index, tick)));
     }
 
     sim::Simulation sim;
@@ -650,16 +634,16 @@ TEST_CASE("host migration: off by default leaves every pre-existing session unch
     CHECK_FALSE(b.hosting());
 
     for (std::uint32_t t = 0; t < 30; ++t) {
-        a.advance(seat_input(0, scripted(0, t)));
-        b.advance(seat_input(1, scripted(1, t)));
+        a.advance(seat_input(0, scripted_held(0, t)));
+        b.advance(seat_input(1, scripted_held(1, t)));
         bus.step();
     }
     // An inbound HostLost is ignored outright rather than scheduling anything.
     const std::vector<std::uint8_t> pkt = net::encode_host_lost(0, 5);
     t1.send(pkt.data(), pkt.size());
     for (std::uint32_t t = 30; t < 50; ++t) {
-        a.advance(seat_input(0, scripted(0, t)));
-        b.advance(seat_input(1, scripted(1, t)));
+        a.advance(seat_input(0, scripted_held(0, t)));
+        b.advance(seat_input(1, scripted_held(1, t)));
         bus.step();
     }
     CHECK(b.host_lost_seats() == 0);
