@@ -32,16 +32,25 @@ private:
 // list, open the pick through the same viewer, and re-show the list on return
 // (HelpBrowser owns that loop-back) until Esc cancels the list itself.
 //
-// The BACKDROP is the only thing that differs between the original's two
-// openings, which is why it is a parameter and the loop is not duplicated: the
-// main menu's row 5 composites over MAINMENU, and the in-round F1 over the
-// frozen match frame (docs/re/in-match-shell.md §1's sub_42A16F(1)/(0) bracket —
-// that loop never ticks the sim). sub_41431C is ONE routine either way.
+// TWO things differ between openings, and both are parameters so the loop is
+// not duplicated — sub_41431C is ONE routine at every F1 site:
+//   * the BACKDROP: the main menu's row 5 composites over MAINMENU, the
+//     in-round F1 over the frozen match frame (docs/re/in-match-shell.md §1's
+//     sub_42A16F(1)/(0) bracket — that loop never ticks the sim), and the two
+//     setup screens over their own live frame;
+//   * the per-frame PUMP: the online setup/map-select screens must keep their
+//     net link and the lobby heartbeat alive under the browser, or the peer
+//     times the silent side out mid-help. Screens with nothing to pump pass
+//     nothing. This parameter is what used to make those screens re-implement
+//     the loop by hand — WITHOUT dispatch_list_mouse, so their F1 help was
+//     keyboard-only against sub_42DBCC's mouse-first input model.
 //
-// `paint_backdrop` runs every frame after the clear and before the widget.
-// Returns Quit on window close, else Advance.
-template <class PaintBackdrop>
-inline AppInput run_help_browser(const ScreenContext& ctx, PaintBackdrop paint_backdrop) {
+// `paint_backdrop` runs every frame after the clear and before the widget;
+// `pump` runs once per frame before it. Returns Quit on window close, else
+// Advance.
+template <class PaintBackdrop, class Pump>
+inline AppInput run_help_browser(const ScreenContext& ctx, PaintBackdrop paint_backdrop,
+                                 Pump pump) {
     HelpBrowser browser(ctx.assets, ctx.front_font);
     // getvalue(15) ("is the online manual enabled?", default 1, §4): gate BEFORE
     // the glob, matching sub_414235's own order.
@@ -57,6 +66,7 @@ inline AppInput run_help_browser(const ScreenContext& ctx, PaintBackdrop paint_b
             browser.on_key(ev.key.key, ctx.audio);
         }
         if (browser.viewing() && browser.viewer().done()) browser.close_viewer();
+        pump();
         ctx.audio.update_music();
         SDL_SetRenderDrawColor(ctx.sdl, 0, 0, 0, 255);
         SDL_RenderClear(ctx.sdl);
@@ -68,6 +78,12 @@ inline AppInput run_help_browser(const ScreenContext& ctx, PaintBackdrop paint_b
     // No wipe out: the browser cuts back to its caller, like every
     // sub_42A088-style screen.
     return AppInput::Advance;
+}
+
+// The common no-pump opening.
+template <class PaintBackdrop>
+inline AppInput run_help_browser(const ScreenContext& ctx, PaintBackdrop paint_backdrop) {
+    return run_help_browser(ctx, paint_backdrop, [] {});
 }
 
 // The menu-row opening of the above, over MAINMENU.

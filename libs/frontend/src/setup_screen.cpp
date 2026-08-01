@@ -17,7 +17,7 @@
 #include "bomber/input/input.hpp"                // cycle_slot_input_type / reset_setup_teams
 #include "bomber/match/match_factory.hpp"        // scheme_setup_teams
 #include "bomber/render/sprites.hpp"             // Sprite, Anim, resolve_sequence
-#include "bomber/ui/bmscreen.hpp"                // HelpBrowser
+#include "bomber/ui/help_screens.hpp"            // run_help_browser
 #include "bomber/ui/dialog_chrome.hpp"           // draw_acknowledge_dialog
 
 namespace bomber::game {
@@ -368,23 +368,19 @@ void SetupLoop::toggle_slot_team() {
 }
 
 std::optional<AppInput> SetupLoop::run_help_browser() {
-    HelpBrowser browser(ctx_.assets, ctx_.front_font);
-    browser.enter(ctx_.values.at_or(15, 1) != 0);
-    while (!browser.done()) {
-        SDL_Event hev;
-        while (SDL_PollEvent(&hev)) {
-            if (hev.type == SDL_EVENT_QUIT) return AppInput::Quit;
-            if (hev.type == SDL_EVENT_KEY_DOWN) browser.on_key(hev.key.key, ctx_.audio);
-        }
-        if (browser.viewing() && browser.viewer().done()) browser.close_viewer();
-        net_setup_pump(seams_.net);  // the link must not go silent under the browser
-        if (seams_.chat != nullptr) seams_.chat->pump();  // nor the lobby's heartbeat
-        ctx_.audio.update_music();
-        draw_frame();
-        browser.draw(ctx_.sdl);
-        SDL_RenderPresent(ctx_.sdl);
-        SDL_Delay(2);
-    }
+    // The shared sub_41431C loop over this screen's own live frame, with the
+    // net link + lobby heartbeat pumped every iteration (they must not go
+    // silent under the browser). Routing through the template rather than a
+    // hand copy is what gives THIS F1 the mouse half back: the local fork
+    // never called dispatch_list_mouse, so help from Setup was keyboard-only
+    // against sub_42DBCC's mouse-first input model.
+    const AppInput r = ::bomber::game::run_help_browser(
+        ctx_, [this] { draw_frame(); },
+        [this] {
+            net_setup_pump(seams_.net);
+            if (seams_.chat != nullptr) seams_.chat->pump();
+        });
+    if (r == AppInput::Quit) return AppInput::Quit;
     return std::nullopt;
 }
 
