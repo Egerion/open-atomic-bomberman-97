@@ -17,8 +17,8 @@
 #include "bomber/input/input.hpp"                // cycle_slot_input_type / reset_setup_teams
 #include "bomber/match/match_factory.hpp"        // scheme_setup_teams
 #include "bomber/render/sprites.hpp"             // Sprite, Anim, resolve_sequence
-#include "bomber/ui/help_screens.hpp"            // run_help_browser
 #include "bomber/ui/dialog_chrome.hpp"           // draw_acknowledge_dialog
+#include "bomber/ui/help_screens.hpp"            // run_help_browser
 
 namespace bomber::game {
 

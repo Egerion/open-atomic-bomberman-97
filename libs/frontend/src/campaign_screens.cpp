@@ -54,8 +54,7 @@ AppInput run_acknowledge(ScreenContext& ctx, MatchBackdrop& backdrop, const std:
         backdrop.renderer.draw_frame(backdrop.state);
         draw_acknowledge_dialog(DialogPen{ctx.sdl, ctx.front_font},
                                 &ctx.assets.frontend_pcx("WINZ"),
-                                AcknowledgeLabels{top, bottom, ok},
-                                AcknowledgeStyle{{164, 0, 0}});
+                                AcknowledgeLabels{top, bottom, ok}, AcknowledgeStyle{{164, 0, 0}});
         SDL_RenderPresent(ctx.sdl);
         SDL_Delay(2);
     }
@@ -161,9 +160,10 @@ AppInput CampaignConfirmScreen::run() {
         draw_dialog_text(pen, top_line,
                          SDL_FPoint{win.x + (win.w - top_w) / 2.0f, win.y + h + 32.0f},
                          DialogInk{kDialogInk});
-        draw_dialog_text(pen, bottom_line,
-                         SDL_FPoint{win.x + (win.w - bottom_w) / 2.0f, win.y + h + 32.0f + h + 2.0f},
-                         DialogInk{kDialogInk});
+        draw_dialog_text(
+            pen, bottom_line,
+            SDL_FPoint{win.x + (win.w - bottom_w) / 2.0f, win.y + h + 32.0f + h + 2.0f},
+            DialogInk{kDialogInk});
         SDL_RenderPresent(ctx_.sdl);
         SDL_Delay(2);
     }

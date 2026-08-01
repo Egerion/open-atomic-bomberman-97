@@ -153,7 +153,7 @@ TEST_CASE("splice_int scans THROUGH a wrong-kind specifier - pinned, not endorse
     std::string s = "Player %s okay";  // no u/d/i anywhere after the '%'...
     splice_int(s, 4);
     CHECK(s == "Player %s okay");  // ...so the scan runs off the end and refuses
-    std::string t = "%s placed";  // here the 'd' inside "placed" is the stop
+    std::string t = "%s placed";   // here the 'd' inside "placed" is the stop
     splice_int(t, 4);
     CHECK(t == "4");  // everything from '%' through that 'd' became the number
 }

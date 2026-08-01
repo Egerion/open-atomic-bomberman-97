@@ -297,12 +297,11 @@ void KeyRemapScreen::draw_capture_modal(SDL_Renderer* ren) const {
 void KeyRemapScreen::draw_note_modal(SDL_Renderer* ren) const {
     const bool ok_pressed =
         pressed_id_ == kNoteOkWidgetId && note_ok_rect().contains(mouse_x_, mouse_y_);
-    draw_acknowledge_dialog(DialogPen{ren, *font_},
-                            assets_ ? &assets_->frontend_pcx("WINZ") : nullptr,
-                            AcknowledgeLabels{msg(95, "NOTE!"),
-                                              msg(1131, "Default key controls restored"),
-                                              msg(27, " Ok ")},
-                            AcknowledgeStyle{kWhite, ok_pressed});
+    draw_acknowledge_dialog(
+        DialogPen{ren, *font_}, assets_ ? &assets_->frontend_pcx("WINZ") : nullptr,
+        AcknowledgeLabels{msg(95, "NOTE!"), msg(1131, "Default key controls restored"),
+                          msg(27, " Ok ")},
+        AcknowledgeStyle{kWhite, ok_pressed});
 }
 
 // The widget library's own 8x8 arrow, hotspot (1,1), walked as one flat 64-cell

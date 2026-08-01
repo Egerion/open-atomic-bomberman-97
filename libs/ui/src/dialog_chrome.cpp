@@ -430,15 +430,16 @@ void draw_confirm_dialog(const DialogPen& pen, const Sprite* winz, const Confirm
 void draw_compact_confirm_dialog(const DialogPen& pen, const std::string& line,
                                  const std::string& yes_label, const std::string& no_label) {
     const float h = line_h(pen.font);
-    const float win_w = std::max(text_w(pen.font, line), 128.0f) + 32.0f;  // see header's width note
-    const float win_h = 3.0f * h + 16.0f;                                  // CONFIRMED formula
+    const float win_w =
+        std::max(text_w(pen.font, line), 128.0f) + 32.0f;  // see header's width note
+    const float win_h = 3.0f * h + 16.0f;                  // CONFIRMED formula
     const DialogRect win = dialog_rect_vcentered(win_h, win_w);
     draw_dialog_chrome(pen.ren, win, nullptr);  // sub_42EDE0 has no sub_41726B call — flat
 
-    draw_dialog_text(pen, line,
-                     SDL_FPoint{win.x + (win.w - text_w(pen.font, line)) / 2.0f,
-                                win.y + h / 2.0f + 4.0f},
-                     DialogInk{kDialogInk});
+    draw_dialog_text(
+        pen, line,
+        SDL_FPoint{win.x + (win.w - text_w(pen.font, line)) / 2.0f, win.y + h / 2.0f + 4.0f},
+        DialogInk{kDialogInk});
 
     const float btn_y = win.y + win.h - h - 12.0f;
     draw_dialog_button(pen, SDL_FPoint{win.x + win.w / 2.0f - 64.0f, btn_y}, yes_label);

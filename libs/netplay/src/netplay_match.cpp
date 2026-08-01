@@ -3,8 +3,8 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>  // std::any_of
-#include <cstdint>
 #include <array>
+#include <cstdint>
 #include <cstdio>
 #include <string>
 #include <utility>

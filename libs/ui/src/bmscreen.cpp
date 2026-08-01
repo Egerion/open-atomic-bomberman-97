@@ -498,7 +498,8 @@ void HelpBrowser::draw_error_dialog(SDL_Renderer* ren) const {
         assets_ ? assets_->getstring(disabled_ ? 5 : 4, body_default) : std::string(body_default);
     const std::string head = assets_ ? assets_->getstring(95, "NOTE!") : std::string("NOTE!");
     const std::string ok = assets_ ? assets_->getstring(27, " Ok ") : std::string(" Ok ");
-    draw_acknowledge_dialog(DialogPen{ren, *font_}, assets_ ? &assets_->frontend_pcx("WINZ") : nullptr,
+    draw_acknowledge_dialog(DialogPen{ren, *font_},
+                            assets_ ? &assets_->frontend_pcx("WINZ") : nullptr,
                             AcknowledgeLabels{head, body, ok}, AcknowledgeStyle{kErrorInk});
 }
 

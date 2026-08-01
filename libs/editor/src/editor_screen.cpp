@@ -17,9 +17,9 @@ namespace {
 // results-and-options.md §1 "screen-ink byte globals"). kSel/kHint are our own
 // cursor/hint tints — the original has no keyboard cursor, its rows are mouse
 // buttons.
-constexpr Rgb kInk{255, 255, 255};   // byte_49D38F white
-constexpr Rgb kName{252, 248, 88};   // byte_49D37A yellow
-constexpr Rgb kHead{96, 252, 252};   // byte_497F8F cyan
+constexpr Rgb kInk{255, 255, 255};  // byte_49D38F white
+constexpr Rgb kName{252, 248, 88};  // byte_49D37A yellow
+constexpr Rgb kHead{96, 252, 252};  // byte_497F8F cyan
 constexpr Rgb kSel{255, 220, 80};
 constexpr Rgb kHint{160, 160, 160};
 // byte_49A390 — sub_407582's empty-glob error ink (LUT offset 0x5000 -> idx
@@ -173,12 +173,12 @@ void SchemeFilePicker::draw(SDL_Renderer* ren) const {
         // byte_49A390. This lives in the picker rather than in each caller
         // because in the original it is the same ONE routine both entry points
         // call.
-        draw_acknowledge_dialog(
-            DialogPen{ren, *font_}, assets_ ? &assets_->frontend_pcx("WINZ") : nullptr,
-            AcknowledgeLabels{text_of(assets_, 95, "NOTE!"),
-                              text_of(assets_, 720, "No Scheme files found!"),
-                              text_of(assets_, 27, " Ok ")},
-            AcknowledgeStyle{kErr});
+        draw_acknowledge_dialog(DialogPen{ren, *font_},
+                                assets_ ? &assets_->frontend_pcx("WINZ") : nullptr,
+                                AcknowledgeLabels{text_of(assets_, 95, "NOTE!"),
+                                                  text_of(assets_, 720, "No Scheme files found!"),
+                                                  text_of(assets_, 27, " Ok ")},
+                                AcknowledgeStyle{kErr});
         return;
     }
     // sub_407582 @0x407641 pushes the LITERAL pair (100, 100) and getstring(721)
@@ -229,9 +229,10 @@ void EditorChooserScreen::draw(SDL_Renderer* ren) const {
 
     // getstring(730), then getstring(731..733); our paraphrases (see the file
     // header's note on MESSAGES.TXT).
-    font_->draw(ren, "SCHEME EDITOR",
-                SDL_FPoint{static_cast<float>(kChooserHeaderX), static_cast<float>(kChooserHeaderY)},
-                TextStyle{kInk});
+    font_->draw(
+        ren, "SCHEME EDITOR",
+        SDL_FPoint{static_cast<float>(kChooserHeaderX), static_cast<float>(kChooserHeaderY)},
+        TextStyle{kInk});
     static constexpr std::array<const char*, 3> kItems{"1) EDIT AN EXISTING SCHEME",
                                                        "2) NEW SCHEME", "ESC) EXIT"};
     for (int i = 0; i < static_cast<int>(kItems.size()); ++i) {
@@ -413,16 +414,14 @@ void PowerupRulesScreen::draw_chain_prompt(SDL_Renderer* ren) const {
     const DialogPen pen{ren, *font_};
     switch (step_) {
         case ChainStep::BornWith:
-            draw_text_entry_dialog(
-                pen, 400.0f,
-                TextEntryLabels{text_of(assets_, 762, "Born with:") + name, entry_, "Done",
-                                "Cancel"});
+            draw_text_entry_dialog(pen, 400.0f,
+                                   TextEntryLabels{text_of(assets_, 762, "Born with:") + name,
+                                                   entry_, "Done", "Cancel"});
             return;
         case ChainStep::OverrideValue:
-            draw_text_entry_dialog(
-                pen, 400.0f,
-                TextEntryLabels{text_of(assets_, 768, "Override value:") + name, entry_, "Done",
-                                "Cancel"});
+            draw_text_entry_dialog(pen, 400.0f,
+                                   TextEntryLabels{text_of(assets_, 768, "Override value:") + name,
+                                                   entry_, "Done", "Cancel"});
             return;
         case ChainStep::Forbidden:
             // sub_42EDE0's HARDCODED literal "Yes"/"No" labels, not a
@@ -831,11 +830,11 @@ void EditorScreen::draw_status(SDL_Renderer* ren) const {
 
 void EditorScreen::draw_confirm(SDL_Renderer* ren, int line_id, const char* line_default,
                                 int note_id) const {
-    draw_confirm_dialog(DialogPen{ren, *font_}, assets_ ? &assets_->frontend_pcx("WINZ") : nullptr,
-                        ConfirmLabels{text_of(assets_, line_id, line_default),
-                                      text_of(assets_, note_id, ""), text_of(assets_, 26, " Yes "),
-                                      text_of(assets_, 25, " No ")},
-                        DialogInk{kDialogInk});
+    draw_confirm_dialog(
+        DialogPen{ren, *font_}, assets_ ? &assets_->frontend_pcx("WINZ") : nullptr,
+        ConfirmLabels{text_of(assets_, line_id, line_default), text_of(assets_, note_id, ""),
+                      text_of(assets_, 26, " Yes "), text_of(assets_, 25, " No ")},
+        DialogInk{kDialogInk});
 }
 
 void EditorScreen::draw_prompt(SDL_Renderer* ren) const {

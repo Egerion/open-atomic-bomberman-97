@@ -58,15 +58,14 @@ void ListPicker::measure_rows(const std::function<std::string(int)>& row_text) {
 }
 
 const std::filesystem::path* ListPicker::selected() const {
-    const int sel = nav_.top_row + nav_.highlight;      // @0x42E39A
-    if (sel < 0 || sel >= count()) return nullptr;      // @0x42E3A8
+    const int sel = nav_.top_row + nav_.highlight;  // @0x42E39A
+    if (sel < 0 || sel >= count()) return nullptr;  // @0x42E3A8
     return &entries_[static_cast<std::size_t>(sel)];
 }
 
 ListDialogGeometry ListPicker::layout() const {
-    return list_dialog_layout_for(
-        *font_, ListDialogSpec{header_, kListX, kListY, item_w_, kVisibleRows, count(),
-                               nav_.top_row});
+    return list_dialog_layout_for(*font_, ListDialogSpec{header_, kListX, kListY, item_w_,
+                                                         kVisibleRows, count(), nav_.top_row});
 }
 
 bool ListPicker::hit_testable() const {
@@ -98,10 +97,9 @@ ListDialogAction ListPicker::on_mouse_up(float x, float y) {
 
 void ListPicker::draw(SDL_Renderer* ren, const std::function<std::string(int)>& row_text) const {
     const int last = std::min(count(), nav_.top_row + kVisibleRows);
-    const ListDialogLayout lay =
-        draw_list_dialog(DialogPen{ren, *font_}, ListDialogSpec{header_, kListX, kListY, item_w_,
-                                                                kVisibleRows, count(),
-                                                                nav_.top_row});
+    const ListDialogLayout lay = draw_list_dialog(
+        DialogPen{ren, *font_},
+        ListDialogSpec{header_, kListX, kListY, item_w_, kVisibleRows, count(), nav_.top_row});
     for (int i = nav_.top_row; i < last; ++i) {
         const int vi = i - nav_.top_row;
         const float ty = lay.item_y0 + static_cast<float>(vi) * lay.item_h;

@@ -54,8 +54,7 @@ inline AckChrome ack_chrome(ScreenContext ctx) {
 inline void draw_ack(ScreenContext ctx, const AckChrome& c, const std::string& top,
                      const std::string& body) {
     draw_acknowledge_dialog(DialogPen{ctx.sdl, ctx.front_font}, c.winz,
-                            AcknowledgeLabels{top, body, c.ok_label},
-                            AcknowledgeStyle{kDialogInk});
+                            AcknowledgeLabels{top, body, c.ok_label}, AcknowledgeStyle{kDialogInk});
 }
 
 // sub_414340's own key loop: the modal closes on Enter / Space / Esc only, and

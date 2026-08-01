@@ -75,8 +75,8 @@ public:
     // COMPAT overload of the above, kept ONLY while goldman_screen.cpp (frozen
     // under another agent's edit) still spells the colour as three Uint8s.
     // Delete it and convert that one call site once the freeze lifts.
-    float draw(SDL_Renderer* ren, const std::string& s, float x, float y, Uint8 r, Uint8 g,
-               Uint8 b, float scale = 1.0f) const {
+    float draw(SDL_Renderer* ren, const std::string& s, float x, float y, Uint8 r, Uint8 g, Uint8 b,
+               float scale = 1.0f) const {
         return draw(ren, s, SDL_FPoint{x, y}, TextStyle{{r, g, b}, scale});
     }
 

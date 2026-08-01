@@ -119,8 +119,7 @@ void VideoSettingsScreen::draw_rows(const DialogRect& win, float lh) {
             std::string(sel ? "> " : "  ") + kRowLabels[i] + ":  " + (vals[i] ? "On" : "Off");
         // Selected row yellow, others a dim white — the same read-at-a-glance
         // convention as the fps overlay's green/white.
-        draw_dialog_text(DialogPen{ctx_.sdl, ctx_.front_font}, shown,
-                         SDL_FPoint{win.x + 24.0f, ry},
+        draw_dialog_text(DialogPen{ctx_.sdl, ctx_.front_font}, shown, SDL_FPoint{win.x + 24.0f, ry},
                          DialogInk{sel ? Rgb{255, 220, 80} : Rgb{200, 200, 200}});
         ry += lh + 6.0f;
     }

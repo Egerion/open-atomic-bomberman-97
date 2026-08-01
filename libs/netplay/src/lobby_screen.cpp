@@ -122,7 +122,8 @@ PickOutcome pick_mouse(ScreenContext ctx, PickState& st, const SDL_Event& ev) {
     // as they are in the original for a list that fits — but the rows and the two
     // arrow buttons are live.
     const ListDialogGeometry g = pick_geometry(ctx.front_font, st);
-    const ListDialogHit hit = list_dialog_hit_for(ctx.front_font, g, st.count(), SDL_FPoint{mx, my});
+    const ListDialogHit hit =
+        list_dialog_hit_for(ctx.front_font, g, st.count(), SDL_FPoint{mx, my});
     ListDialogNav nav{0, st.sel};
     if (ev.type == SDL_EVENT_MOUSE_MOTION) {
         if (ev.motion.state == 0) list_dialog_mouse_move(nav, hit, st.count());

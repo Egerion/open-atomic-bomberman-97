@@ -367,8 +367,7 @@ SetupState GameApp::setup_state() {
 MatchBackdrop GameApp::match_backdrop() {
     // The frozen backdrop the campaign dialogs and the in-round help modal draw over
     // — match-runtime members, so kept out of the service-only ScreenContext.
-    return MatchBackdrop{.renderer = *renderer_,
-                         .state = sim_.state()};
+    return MatchBackdrop{.renderer = *renderer_, .state = sim_.state()};
 }
 
 CampaignState GameApp::campaign_state() {

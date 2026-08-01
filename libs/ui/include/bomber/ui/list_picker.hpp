@@ -57,9 +57,7 @@ public:
 
     int count() const { return static_cast<int>(entries_.size()); }
     bool empty() const { return entries_.empty(); }
-    const std::filesystem::path& path(int i) const {
-        return entries_[static_cast<std::size_t>(i)];
-    }
+    const std::filesystem::path& path(int i) const { return entries_[static_cast<std::size_t>(i)]; }
 
     // The selection sum @0x42E39A under the @0x42E3A8 range check; nullptr for
     // an empty list or a stale highlight, so no caller can index out of range.

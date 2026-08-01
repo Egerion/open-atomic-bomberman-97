@@ -97,8 +97,7 @@ void net_setup_seed_host_roster(const NetSetupLink& l, std::array<int, sim::kMax
 // `level.level` is -1 for RANDOM and `level.rounds` 0 while still on the roster
 // screen (the sentinel above). The roster's `sub` half never travels — the wire
 // carries seat KINDS, and each machine re-derives its own key sets.
-void net_setup_publish(const NetSetupLink& l, const LocalRoster& roster,
-                       const LevelPreview& level);
+void net_setup_publish(const NetSetupLink& l, const LocalRoster& roster, const LevelPreview& level);
 
 // HOST, from LEVEL & ROUNDS: re-publish the CURRENT preview with only the
 // level/rounds fields replaced. The roster half comes from the session's own last

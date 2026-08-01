@@ -6,9 +6,9 @@
 #include <cstdlib>
 #include <string>
 
-#include "bomber/game_util/death_anim.hpp"
 #include "bomber/game_util/anim_pace.hpp"
 #include "bomber/game_util/carry_pose.hpp"
+#include "bomber/game_util/death_anim.hpp"
 #include "bomber/game_util/hud_format.hpp"
 #include "bomber/match/team_colour.hpp"
 
