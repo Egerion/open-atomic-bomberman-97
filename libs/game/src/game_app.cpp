@@ -841,7 +841,10 @@ int GameApp::run() {
     if (!opts_.bm_shot_name.empty() || !opts_.menu_shot_out.empty() || opts_.demo)
         rc = run_capture();
     else if (opts_.net_role != 0)
-        rc = netplay().run_cli();
+        // Back = the CLI never got a working link (bind/resolve/exchange).
+        // Anything else — a finished match, a window close — exits 0, as the
+        // CLI always has.
+        rc = netplay().run_cli() == AppInput::Back ? 1 : 0;
     else
         rc = run_app();
     flush_settings(settings_slots());

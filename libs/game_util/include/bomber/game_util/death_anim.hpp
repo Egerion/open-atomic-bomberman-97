@@ -14,6 +14,11 @@
 // choice and no call order, so the sound cannot describe a corpse other than the
 // one drawn. (The audio side once rolled its own roll(24): right 1 in 24.)
 //
+// It lives in game_util — the SDL-free floor both stacks reach — because its
+// two consumers sit in DIFFERENT packages (libs/render's corpse pick,
+// libs/audio's overlay cue) and neither is above the other; parking it in
+// libs/audio was the one reason bomber::render linked bomber::audio at all.
+//
 // Arithmetic rather than random is a PORT-ONLY stand-in for `rand() % 24 + 1`,
 // not an extraction. It buys back what the original gets from replicating the
 // field: two netplay peers hear the death they each drew.

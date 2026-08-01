@@ -60,9 +60,12 @@ public:
         : seams_(std::move(seams)), state_(state) {}
 
     // ADR-0010 §3.3 step 5: ONE 2-player UDP match run in place of the front end.
-    // Returns a process exit code. GOLDEN-SAFE: only reachable via net_role,
-    // which no test/golden/demo path sets.
-    int run_cli();
+    // Returns an AppInput like its two sibling entries: Back means the CLI never
+    // got a working link (bind/resolve/config-exchange failure — the caller maps
+    // it to exit code 1); anything else is the match's own verdict, which the
+    // CLI exit deliberately does not distinguish. GOLDEN-SAFE: only reachable
+    // via net_role, which no test/golden/demo path sets.
+    AppInput run_cli();
 
     AppInput present_network_menu();
     AppInput present_direct_join();

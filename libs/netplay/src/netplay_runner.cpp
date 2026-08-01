@@ -123,7 +123,7 @@ constexpr std::uint64_t kGuestAckSettleMs = 300;
 
 }  // namespace
 
-int NetplayRunner::run_cli() {
+AppInput NetplayRunner::run_cli() {
     // The CLI carries --seed on BOTH peers, so there is no discovery and NO seed
     // handshake here — bind + set_peer straight from the options, then agree the
     // CONFIG over the wire (exchange_cli_config; the seed alone is not enough,
@@ -140,20 +140,19 @@ int NetplayRunner::run_cli() {
     if (!transport.bind(state_.net_local_port)) {
         log_warn("netplay: bind failed (local port %u)",
                  static_cast<unsigned>(state_.net_local_port));
-        return 1;
+        return AppInput::Back;
     }
     if (!transport.set_peer(state_.net_peer_host, state_.net_peer_port)) {
         log_warn("netplay: cannot resolve peer %s:%u", state_.net_peer_host.c_str(),
                  static_cast<unsigned>(state_.net_peer_port));
-        return 1;
+        return AppInput::Back;
     }
     log_info("netplay: %s  bound_port=%u  peer=%s:%u  seed=0x%08X  seat=%d",
              host ? "HOST" : "GUEST", static_cast<unsigned>(transport.local_port()),
              state_.net_peer_host.c_str(), static_cast<unsigned>(state_.net_peer_port),
              static_cast<unsigned>(state_.net_seed), local_seat);
 
-    run_cli_match(transport, state_.net_role, state_.net_seed);
-    return 0;  // CLI always exits 0 after the single match (window-close included)
+    return run_cli_match(transport, state_.net_role, state_.net_seed);
 }
 
 sim::MatchConfig NetplayRunner::canonical_config(std::uint32_t seed) const {

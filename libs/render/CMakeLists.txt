@@ -33,12 +33,11 @@ bomber_embed_binary(
 add_library(bomber::render ALIAS bomber_render)
 target_include_directories(bomber_render PUBLIC include)
 target_compile_features(bomber_render PUBLIC cxx_std_20)
+# No bomber::audio edge: renderer.cpp's one reason for it — the shared
+# death-animation table — lives in bomber::game_util now (death_anim.hpp), and
+# the consumers that DO speak audio types (bomber::ui via bmscreen.hpp, and
+# everything above it) all link bomber::audio themselves.
 target_link_libraries(bomber_render
   PUBLIC bomber::assets bomber::sim bomber::match bomber::game_util SDL3::SDL3
-  # bomber::audio: renderer.cpp reads the death-animation table (death_anim.hpp)
-  # to pick a corpse sequence. PUBLIC because asset_store.hpp is not the only
-  # header a consumer reaches through — see bomber::ui, which needs the same
-  # audio types via bmscreen.hpp.
-  PUBLIC bomber::audio
   PRIVATE bomber::warnings
 )

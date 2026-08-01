@@ -533,7 +533,7 @@ animation, so the two agreed 1 time in 24 and `burnedup` was as likely to play
 over any of the other 23 sprites as over its own.
 
 Both sides now call one pure function, `death_anim_index(tick, victim_slot)`
-(`libs/audio/include/bomber/audio/death_anim.hpp`) — the arithmetic the
+(`libs/game_util/include/bomber/game_util/death_anim.hpp`) — the arithmetic the
 renderer was already using inline, promoted to the lowest module both can see.
 Nothing is stored, handed over, or ordered: the same two integers, off the same
 `const State&`, on the same tick. There is no state in which the sound can

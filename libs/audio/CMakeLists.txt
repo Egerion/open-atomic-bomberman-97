@@ -26,6 +26,12 @@ add_library(bomber_audio_core STATIC
 add_library(bomber::audio_core ALIAS bomber_audio_core)
 
 target_include_directories(bomber_audio_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+# sound_director.cpp reads the shared death-animation table
+# (bomber/game_util/death_anim.hpp, a dependency-free header) via a raw include
+# dir rather than by linking bomber::game_util — the same precedent tests/game
+# sets: that target PUBLIC-links bomber::net, and audio must not carry an
+# IXWebSocket/mbedTLS link line for one constexpr header.
+target_include_directories(bomber_audio_core PRIVATE ${CMAKE_SOURCE_DIR}/libs/game_util/include)
 target_compile_features(bomber_audio_core PUBLIC cxx_std_20)
 target_link_libraries(bomber_audio_core
   PUBLIC bomber::assets bomber::sim

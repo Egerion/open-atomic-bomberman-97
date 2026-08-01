@@ -6,7 +6,7 @@
 #include <set>
 #include <vector>
 
-#include "bomber/audio/death_anim.hpp"
+#include "bomber/game_util/death_anim.hpp"
 #include "bomber/audio/sound_director.hpp"
 #include "bomber/sim/state.hpp"
 

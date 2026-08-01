@@ -1,6 +1,6 @@
 #include "bomber/audio/sound_director.hpp"
 
-#include "bomber/audio/death_anim.hpp"
+#include "bomber/game_util/death_anim.hpp"
 
 namespace bomber::game {
 
@@ -79,7 +79,7 @@ void SoundDirector::on_player_died(const sim::State& s, const sim::Event& ev) {
     //
     // NEITHER SIDE ROLLS the index. The renderer picks the corpse sprite from
     // the same pure derivation, on values both already share, so the sound
-    // cannot describe a different corpse — see bomber/audio/death_anim.hpp.
+    // cannot describe a different corpse — see bomber/game_util/death_anim.hpp.
     const int anim = death_anim_index(s.tick, ev.player);
     audio_.play_exact(death_overlay_sound(anim), s.tick);
     // Post-death taunt from a survivor: VALUELST 95, 1-in-N, group base 700.
