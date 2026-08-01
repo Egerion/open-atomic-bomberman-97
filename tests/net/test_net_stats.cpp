@@ -186,9 +186,10 @@ TEST_CASE("net stats: an ack-RTT dominated by the peer's tick offset says so") {
     const net::PeerStats& ahead = t.stats().peers[1];
     REQUIRE(ahead.rtt_ms == 400);
     CHECK(ahead.lag_ticks == 8);
-    // The contaminated reading has collapsed onto the offset: it is ~1x the lag,
-    // where a healthy one would be ~2x (net_stats.cpp derives both).
-    CHECK(ahead.rtt_ms * 2 < ahead.lag_ticks * (1000 / net::kPumpHz) * 3);
+    // The contaminated reading has collapsed onto the offset: 400 ms is ~1x the
+    // 8-tick lag (8 x 50 ms), where a healthy one would be ~2x. Both values are
+    // pinned just above, so that relation is arithmetic on them (800 < 1200) —
+    // the DETECTOR's verdict on it is the assertion:
     CHECK(ahead.rtt_offset_bound);
 
     // It reaches the log too, so a line pasted back to us cannot be misread

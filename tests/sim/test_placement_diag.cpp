@@ -111,11 +111,15 @@ TEST_CASE("B: constipation refuses every drop, flash cue always renderable") {
     infect(p, Disease::Constipation);
 
     // The renderer's disease strobe is `(disease_timer & 8) != 0` (the confirmed
-    // sub_41F29B ~23252 mechanism). Pin that this cue actually PULSES (both on
-    // and off phases occur) over the infection — a stuck-on or stuck-off value
-    // would not read as a distinct diseased state. This verifies the render
-    // cue's logic headlessly against the real hashed disease_timer, since
-    // renderer.cpp is not built in the headless preset.
+    // sub_41F29B ~23252 mechanism, renderer.cpp:pose_view). What is pinned here
+    // is the HASHED SIGNAL under it: the timer really counts down through the
+    // infection, so bit 3 pulses (a frozen timer fails one of the two phase
+    // checks — that is the discriminating case, not the predicate itself). The
+    // predicate as typed below is this test's own copy: renderer.cpp includes
+    // SDL and is out of headless reach, so its actual gate stays covered only
+    // by the visual golden until the `& 8` moves behind an SDL-free seam the
+    // way round_start_body_colour (bomber::match) already did for the colour
+    // branches beside it.
     int placed = 0;
     bool flash_live = true, flash_on = false, flash_off = false;
     for (int t = 0; t < 20; ++t) {

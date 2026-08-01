@@ -460,9 +460,24 @@ TEST_CASE("seed_campaign_ai_slots clamps an out-of-range count to [0, kMaxPlayer
 TEST_CASE(
     "seed_campaign_ai_slots is deterministic for a fixed lcg seed/count (presentation RNG, not "
     "State::rng)") {
+    // Two INDEPENDENT lcg objects, deliberately (the test_match.cpp:174 shape):
+    // equality across fresh state is what an implementation reaching for global
+    // entropy (::rand, a time seed) fails. On its own, though, this whole suite
+    // was satisfied by a sequential fill of the free slots — the exact shape
+    // docs/re/campaign.md's CORRECTION refutes — so the two assertions after it
+    // pin that the lcg is really the source: the call consumes it, and a
+    // different seed produces a different claim set.
     std::uint32_t lcg_a = 42;
     std::uint32_t lcg_b = 42;
-    CHECK(seed_campaign_ai_slots(lcg_a, 5) == seed_campaign_ai_slots(lcg_b, 5));
+    const auto slots_a = seed_campaign_ai_slots(lcg_a, 5);
+    CHECK(slots_a == seed_campaign_ai_slots(lcg_b, 5));
+    CHECK(lcg_a != 42u);  // the roll stream was consumed, not ignored
+    bool varies = false;
+    for (std::uint32_t seed : {7u, 99u, 0xBEEFu, 0x5EED5u}) {
+        std::uint32_t lcg = seed;
+        if (seed_campaign_ai_slots(lcg, 5) != slots_a) varies = true;
+    }
+    CHECK(varies);  // rand()%10 placement: the seed picks the slots
 }
 
 // sub_422928 @0x422977 only claims a slot whose type byte currently reads 0, and

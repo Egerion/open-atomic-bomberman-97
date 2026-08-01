@@ -35,10 +35,11 @@ constexpr std::uint32_t kBuildHash = 2776396481u;
 // The cross-build compatibility digest (ADR-0011): peers compare it before a
 // match to reject incompatible builds.
 TEST_CASE("build_hash is stable and non-degenerate") {
+    // No self-equality CHECK: build_hash() returns a function-local static, so
+    // two calls are equal by the language, not by the digest. Stability across
+    // PROCESSES is what matters and the pinned kBuildHash below carries it.
     const std::uint32_t a = bomber::net::build_hash();
-    const std::uint32_t b = bomber::net::build_hash();
     MESSAGE("build_hash = " << a);
-    CHECK(a == b);  // deterministic + cached
     CHECK(a != 0u);
     CHECK(a != 0xFFFFFFFFu);
     // Not merely the wire-protocol mix with a zero scenario hash (would mean the

@@ -90,7 +90,7 @@ TEST_CASE("golden B: 4-player brick match with all abilities") {
     }
 }
 
-TEST_CASE("golden C: trigger bombs and a fast hurry phase") {
+TEST_CASE("golden C: trigger duel on a short 70 s clock") {
     Simulation s = golden::make_c();
     for (std::uint64_t t = 0; t < golden::kTicksC; ++t) s.tick(golden::input_c(t));
     CHECK(s.hash() == 0x0f6cced5cb6934a3ull);
