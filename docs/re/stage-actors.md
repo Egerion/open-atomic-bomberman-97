@@ -143,7 +143,7 @@ never produced), and whatever sat there (brick OR solid) is set to Blank.
 
 Port: `apply_actors` clears one neighbour off the SETUP-only LCG (same stream as
 `-T,H`), never `State::rng` — it only mutates `cfg.cells`, so no per-tick RNG and
-no golden impact (golden has no warpholes). Test: `tests/test_match.cpp`.
+no golden impact (golden has no warpholes). Test: `tests/match/test_match.cpp`.
 
 ## 3. CONVEYOR mechanic (type 2) — the player-facing rule  [VERIFIED 2026-07-04]
 

@@ -13,20 +13,20 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       135), flying jelly rolls a 1-in-getvalue(667)=3 ±90° veer per landing
       boundary, kind is exclusive at creation (trigger overrides jelly).
       Implemented in BombSystem + events BombStopped(130)/JellyBounced(135);
-      `tests/test_jelly.cpp`; golden B refreshed + new golden E pins the
+      `tests/sim/test_jelly.cpp`; golden B refreshed + new golden E pins the
       ping-pong/veer choreography.
 - [x] 2. Random powerup — DONE 2026-07-03. RE'd from `sub_41E21E` case 0xC
       (facts.md "Powerup pickup dispatcher"): rerolls uniformly over the 12
       real kinds (never Random), retries up to 200 times against the scheme's
       forbidden table, then dispatches as the rolled kind (skulls included).
-      `State::forbidden` added (config, unhashed); `tests/test_random.cpp`.
+      `State::forbidden` added (config, unhashed); `tests/sim/test_random.cpp`.
       Bonus fixes from the same read: AWESOME cadence is every 5th after the
       7th with a wrap past 50 (was every 3rd), jelly pickup plays 135.
 - [x] 3. Dud bombs — DONE 2026-07-03 (facts.md "Dud bombs"). Roll at
       creation for regular bombs only, behind a global gate re-armed
       180 + rand(180) ticks ahead (ids 320/321); 1-in-3 roll (id 322);
       fizzle 120 ticks (id 323) with the fuse frozen, then relight.
-      DUDS.ANI wired for rendering; `tests/test_dud.cpp`; golden fully
+      DUDS.ANI wired for rendering; `tests/sim/test_dud.cpp`; golden fully
       recaptured (hash layout + setup arm draw).
 - [x] 4. Airborne fuse pause — CONFIRMED 2026-07-03 via `sub_42331C`: the
       fuse only advances when not dud, not flying (+46==2), not carried
@@ -47,7 +47,7 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       Data confirms it is not even a terminal marker (0xFFFF never first,
       mostly mid-sequence). Our `Renderer::draw_anim` already matched; made it
       explicit via `game/anim_pace.hpp` (`anim_step_index`, mirrors
-      `sub_41DAA7`), documented `SeqStep::head0` as inert, `tests/test_anim.cpp`.
+      `sub_41DAA7`), documented `SeqStep::head0` as inert, `tests/game/test_anim.cpp`.
 - [x] 7. Stage specials: conveyors, trampolines, dirarrows, warpholes +
       bomb interactions — DONE 2026-07-04, CORRECTED+COMPLETED (strict 1:1),
       (docs/re/stage-actors.md). Actor placement is NOT a .SCH flag — it comes
@@ -119,13 +119,13 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       lifetime budget of `max_bombs` placements, after which bombs downgrade to
       normal timed bombs (placement is not blocked). Ported `Player::
       trigger_placed` (hashed) in `BombSystem::place` + Trigger pickup case.
-      `tests/test_trigger_allowance.cpp`; golden recaptured.
+      `tests/sim/test_trigger_allowance.cpp`; golden recaptured.
 - [x] 10. Goldflame literalness — DONE 2026-07-04 (facts.md "Goldflame
       literalness"). Goldflame is flag +94 (`sub_41E21E` case 8); reach is
       computed at drop time in `sub_41EB13` as max(gridW,gridH)=15, OVERRIDING
       short-flame (which sets 1 first). Ported `Player::goldflame` (hashed),
       set in the pickup case, applied in `BombSystem::place` (replaces the old
-      flame=99 sentinel). `tests/test_goldflame.cpp`; golden recaptured
+      flame=99 sentinel). `tests/sim/test_goldflame.cpp`; golden recaptured
       (flame 99 → 15 + flag). (The deferred head-hit goldflame drop is now DONE
       in item 15 §4.)
 - [x] 11. Powerup mutual exclusions — DONE 2026-07-04 (`sub_41E21E` via
@@ -187,12 +187,12 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       - [x] Stage 3 — directed BFS (sub_4092A1) + behaviour 2 directed branch,
             powerup scan (sub_409C1F) + seek-powerup (behaviour 5 sub_40BAF5,
             getvalue(920)=4). Corrected sub_40A59D (does NOT reject powerup
-            tiles). NO new hashed field ⇒ golden FROZEN. tests/test_ai.cpp +3.
+            tiles). NO new hashed field ⇒ golden FROZEN. tests/sim/test_ai.cpp +3.
       - [x] Stage 4 — blast-bricks (sub_40AD8D, getvalue(915)=5) + grab-glove
             (sub_40BD44). Both DROP via the bomb-key edge (action1) → normal
             BombSystem in player_turn. RE corrections: sub_423188 = drop-tile
             CLEARANCE (not escape search); grab-carry = grab-then-LOB (not hold).
-            NO new hashed field ⇒ golden FROZEN. tests/test_ai.cpp +5.
+            NO new hashed field ⇒ golden FROZEN. tests/sim/test_ai.cpp +5.
       - [x] Stage 5 — DONE 2026-07-05 (AI COMPLETE). enemy targeting
             (sub_422718 two-pass rand%10 / sub_40B8C2 behaviour 6), bomb-near-
             enemy (sub_40ABED behaviour 4, with the byte-confirmed OOB cross-table
@@ -201,7 +201,7 @@ behaviour changes (cite the facts.md entry) → tick the box here.
             (sub_40B20F trigger && !punch && rand%10). TEAM reduces to slot!=self
             (no Player::team; team wiring = documented follow-up). NO new hashed
             field ⇒ golden FROZEN (proven byte-identical via a Stage-5-disabled
-            differential build). tests/test_ai.cpp +6; one Stage-3 emergent seed
+            differential build). tests/sim/test_ai.cpp +6; one Stage-3 emergent seed
             refreshed for the new draw stream.
 
 ## Phase 3 — Front-end
@@ -216,11 +216,11 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       string — loaded generically). No FMV ships; the whole front-end is
       PCX+ANI+RSS the pipeline already parses (RSS tracks are SOUNDLST ids:
       title 1000, menu 1010, menuexit 10). Built an SDL-free flow core
-      (`libs/game/app_flow.hpp`, pure `next(state,input)`) + a data-driven
+      (`libs/game_util/include/bomber/game_util/app_flow.hpp`, pure `next(state,input)`) + a data-driven
       `Screen` primitive + a `Transition` (HEADWIPE wipe / fade fallback);
       `GameApp` now boots Boot->Logo->Title->Menu(stub)->Match->Results(stub)
       ->Menu (dev fast-path `--match` / `BOMBER_BOOT_MATCH`). AssetStore gained
-      front-end PCX + HEADWIPE loaders (guarded). `tests/test_frontend.cpp`
+      front-end PCX + HEADWIPE loaders (guarded). `tests/game/test_frontend.cpp`
       pins the flow graph. libs/sim untouched — no golden impact.
 - [~] Polished screens — Title/attract + Results + navigable Menu DONE
       2026-07-04 (docs/re/frontend-flow.md "main-menu items" + "results flow").
@@ -235,7 +235,7 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       wrap, Enter select, Esc quit; nav blip 20 / accept 10; `present_menu`);
       real Results (`round_winner()` -> DRAW or VICTORY<player>). Added four
       `.BM`-backed leaf AppStates (Options/Controllers/Network/Credits) as the
-      hub's stub leaves + edges; `tests/test_frontend.cpp` pins the hub graph.
+      hub's stub leaves + edges; `tests/game/test_frontend.cpp` pins the hub graph.
       libs/sim untouched — no golden impact.
 - [x] `.BM` text-screen leaves + menu/results polish (#40) — the four leaves now
       render their real text via the `.BM` viewer (`sub_41302D`, `bmscreen.cpp`):
@@ -268,7 +268,7 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       config/presentation only, `active` defaults all-true so hand-built configs
       are unchanged; sim hash byte-identical.
 - [x] Interactive Options screen (Team Play / Conveyor Speed → options.ini) —
-      `libs/game/src/options_screen.cpp`. The menu's Options row now opens a
+      `libs/frontend/src/options_screen.cpp`. The menu's Options row now opens a
       real editable screen (random `GLUE<n>` backdrop via the same `pick_glue`
       convention as `present_setup`, FONT6 text, Up/Down select, Left/Right
       change, Enter/Esc leave; SFX 20 nav / 10 accept) in place of the `.BM`
@@ -331,7 +331,7 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       sub_40B8C2) honour the documented team filter, round-end generalised to
       "one SIDE left" (`sides_remaining`/`winning_side`, our semantics — team 0
       = solo). Frontend maps the setup 0/1 byte to sim teams 1/2 under Team
-      Play (both +84 values are real teams, sub_4141F8). tests/test_team.cpp
+      Play (both +84 values are real teams, sub_4141F8). tests/match/test_team.cpp
       (9 cases); suite 28/28.
 - [x] TEAM MODE, the red/white colour split — DONE 2026-07-09. A user report
       ("Team Play doesn't visibly split the roster into two colours") led to a
@@ -447,10 +447,10 @@ behaviour changes (cite the facts.md entry) → tick the box here.
 - [x] Campaign mode — DONE-with-scope 2026-07-09, consumers RE'd + banner/
       AI-seeding corrected same day (`docs/re/campaign.md`,
       `sub_401085`/`sub_4015C6`/`sub_410F81`/`sub_40151B`/`sub_4016DA`/
-      `sub_40133F`). `.CAM` parser (`libs/assets/campaign.hpp/.cpp`,
+      `sub_40133F`). `.CAM` parser (`libs/assets`'s `campaign.hpp`/`.cpp`,
       `bomber::assets::res`): `;` comments, `-C`-marked 9-field stage lines
       (case-insensitive marker), lenient per-line malformed-line warnings,
-      mirrors `messages.hpp`'s parse/load split (`tests/test_campaign.cpp`,
+      mirrors `messages.hpp`'s parse/load split (`tests/assets/test_campaign.cpp`,
       registered). Trigger: present_setup's 'C'×5 same-key counter
       (`campaign_trigger_count_`, mirrors the menu's Ctrl+E×6
       `editor_trigger_count_`) opens `CampaignFilePicker` (`libs/game/
@@ -572,9 +572,9 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       is dead) is `State::hazard_clear_timer`, edge-checked in `run_match`
       against `kHazardClearTicks`. Clause 5 (mutual-wipeout stage-replay
       fallback) remains a documented follow-up (edge case, no test pressure).
-      Renderer draws the actors (`renderer.cpp`); `tests/test_rovers.cpp`
+      Renderer draws the actors (`renderer.cpp`); `tests/sim/test_rovers.cpp`
       (spawn/wander/flame-death/knockback); golden hashes recaptured (rover-
-      free scenarios byte-identical, per test_golden.cpp's updated cases).
+      free scenarios byte-identical, per tests/sim/test_golden.cpp's updated cases).
 - [x] Widescreen/fullscreen window support — DONE 2026-07-09. **Deliberate
       PORT ENHANCEMENT, not an RE fidelity item** (like the Ctrl+Q/Esc-forfeit
       note above): the 1997 binary is a hardcoded 640x480 window with no
@@ -597,7 +597,7 @@ behaviour changes (cite the facts.md entry) → tick the box here.
       PORT-ONLY (not one of results-and-options.md §3's confirmed 22 keys)
       in `install.hpp`'s `Options::fullscreen` doc comment, round-tripped
       through the same read-modify-write `load_options`/`save_options`
-      machinery and covered by `tests/test_options.cpp`. No Options-screen
+      machinery and covered by `tests/assets/test_options.cpp`. No Options-screen
       row was added — `options_screen.hpp`'s row list is a tight 1:1 mirror
       of the original's 19 positions (§3), and grafting an unRE'd 20th row
       onto it would violate the no-invented-visuals rule; Alt+Enter/F11 +

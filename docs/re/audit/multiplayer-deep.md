@@ -23,7 +23,7 @@ set of network screens ("the extra pages")**, a **deeper mechanics diff**, and a
 `dark-matter.md` §4, `results-and-options.md` §2-3, `audit/{diseases,setup}.md`,
 plus the port's own net path (`libs/net/`, `libs/game/src/game_app.cpp`
 `run_netplay`/`run_netplay_match`/`present_net_host`/`present_net_join`,
-`libs/game/src/screens/netplay_connect_screen.cpp`, `apps/game/main.cpp`). **The
+`libs/netplay/src/netplay_connect_screen.cpp`, `apps/game/main.cpp`). **The
 binary and the `native/` transliteration are NOT in this worktree** (gitignored);
 every claim that needs them to settle is marked **[NEEDS BINARY]** with the exact
 `sub_XXXX` a trace must read. **No code was changed; no build is needed** (this is
@@ -420,7 +420,7 @@ dead connection. The exact drop-detection + handover site is **[NEEDS BINARY]**
 and label.
 
 **CONSUMED as of the peer-drop increment** (ADR-0011 Risks, "Dropped/late
-peers"): `net::DropPolicy::revert_to_ai` in `libs/net/rollback_session.hpp`. ON,
+peers"): `net::DropPolicy::revert_to_ai` in `libs/net/include/bomber/net/rollback_session.hpp`. ON,
 the host broadcasts `MsgType::Drop` and every peer sets `Player::ai` for that
 seat at one agreed tick; OFF, the drop ends the match (`aborted()`). The port's
 timeout and handover point are OUR design (the original's are still [NEEDS

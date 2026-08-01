@@ -81,10 +81,21 @@ Past 3 parameters, pass a **parameter object** instead of a longer list —
 This codebase already has the pattern (`MatchConfig`, `TurnContext`,
 `ScreenContext`); reach for it rather than growing a signature.
 
-**Guard clauses over nesting, and this is the weakest axis in the repo.**
-Measured 2026-07-31: 111 places nested past 3, 89 nested `for` loops, 263 `else`
-branches. Almost none are `else`-after-`return` (that check is nearly clean) —
-they are `if/else` and `else if` chains that would read as a sequence of guards.
+**Guard clauses over nesting.** This was the weakest axis in the repo when this
+document was adopted — measured 2026-07-31: 111 places nested past 3, 89 nested
+`for` loops, 263 `else` branches. Almost none were `else`-after-`return` (that
+check was nearly clean); they were `if/else` and `else if` chains that would
+read as a sequence of guards.
+
+> **Re-measured 2026-08-01, after the `libs/game` split and the flattening pass
+> it forced.** One script, run against both trees (statement-position `else`,
+> `for` inside an enclosing `for`, control statements at indent ≥ 16 as a
+> nesting proxy): **321 → 91** `else`, **194 → 67** nested `for`, **325 → 10**
+> deeply-nested control statements. The counts above and these are *not* the
+> same metric — they are two methods, each applied consistently to both trees —
+> so read the direction, not the difference between the two rows. The axis is no
+> longer the weakest one; the rules below still stand.
+
 The order to prefer:
 
 1. Invert the condition and `return`/`continue` early. Most `else` blocks vanish.
@@ -99,9 +110,11 @@ measured, not length.
 **Complexity is gated in the pre-push hook** (`scripts/complexity.sh`), on
 clang-tidy's *cognitive* complexity rather than McCabe cyclomatic — it charges
 nesting and charges nothing for a flat `switch`, which is the right bias for a
-codebase full of ported dispatch tables. It is a **ratchet**: the 66 functions
+codebase full of ported dispatch tables. It is a **ratchet**: the functions
 already over the threshold are baselined and may stay, none may get worse, and
-new code meets the threshold from its first line. See `CLAUDE.md`.
+new code meets the threshold from its first line. The list only shrinks — it was
+70 entries (worst 251) when the gate landed and is **6 (worst 58)** as of
+2026-08-01, all of them in `libs/sim`. See `CLAUDE.md`.
 
 ---
 
@@ -224,10 +237,17 @@ invented alone.
 
 ## 9. Architecture, coupling, cohesion
 
-The layering already exists and is drawn in `CLAUDE.md`'s dependency graph:
-apps → game → match → assets, with sim at the bottom and `libs/core` beneath
-everything. It maps onto the general Application → Engine → Subsystems →
-Platform shape; do not re-layer it, extend it.
+The layering already exists and is drawn in `CLAUDE.md`'s dependency graph. Two
+stacks meet at one floor: the SDL-free core (`apps` → `match` → `assets`, with
+`sim` at the bottom and `libs/core` beneath everything) and, above it, the nine
+presentation packages that used to be one `libs/game` — `game_util` →
+{`input`, `render`} → `ui` → `netui` → `editor` → `frontend` → `netplay` →
+`game`. It maps onto the general Application → Engine → Subsystems → Platform
+shape; do not re-layer it, extend it.
+
+`libs/game_util` is the SDL-free floor of the upper stack and the only one of
+the nine the pre-push gate compiles. **Grow it by preference**: a rule that can
+be stated without SDL belongs where a headless test can pin it.
 
 Dependencies point one way only. Never reach into another component's internals
 — that is what the public headers under `include/bomber/<name>/` are for.
@@ -250,15 +270,33 @@ indistinguishable in tone from the ones that are right, which teaches a reader t
 trust none of them. Six such comments were found and fixed in a single pass on
 2026-07-31.
 
-### But there are far too many of them, and that is also a defect
+### But there were far too many of them, and that is also a defect
 
-Measured 2026-07-31: **45% of `libs/` + `apps/` is comment** — 20,110 comment
-lines against 24,539 of code. `libs/sim` is 56%. `time_sync.hpp` is **86%**
-(288 comment lines to 45 of code); `rollback_session.hpp` 80%; `game_app.hpp`
-74%. That is not a well-documented codebase, it is a codebase that needed a
-manual, and a reader who must clear three paragraphs to reach five lines of code
-is not being helped. **A junior engineer should be able to follow this code**;
-volume is the enemy of that as surely as absence is.
+Measured 2026-07-31, when this document was adopted: **45% of `libs/` + `apps/`
+was comment** — 20,110 comment lines against 24,539 of code. `libs/sim` 56%.
+`time_sync.hpp` **86%** (288 comment lines to 45 of code); `rollback_session.hpp`
+80%; `game_app.hpp` 74%. That is not a well-documented codebase, it is a codebase
+that needed a manual, and a reader who must clear three paragraphs to reach five
+lines of code is not being helped. **A junior engineer should be able to follow
+this code**; volume is the enemy of that as surely as absence is.
+
+> **Re-measured 2026-08-01** — same method, and the calibration holds
+> (`time_sync.hpp`'s code half reads 45 lines at both points, exactly as the
+> 2026-07-31 row records it, so the two snapshots are comparable rather than
+> merely adjacent):
+>
+> | | 2026-07-31 | 2026-08-01 |
+> |---|---|---|
+> | `libs/` + `apps/` | 45% (20,110 / 24,539) | **32%** (11,911 / 25,508) |
+> | `libs/sim` | 56% | 45% |
+> | `time_sync.hpp` | 86% (288 / 45) | 59% (66 / 45) |
+> | `rollback_session.hpp` | 80% | 58% |
+> | `game_app.hpp` | 74% | 31% |
+>
+> Roughly 8,200 comment lines went and ~1,000 lines of code arrived. The numbers
+> above are kept because the argument depends on them having been real when it
+> was made — this is a record of a pass that happened, not a claim about today.
+> `libs/sim` is still over the 35% cap the rules of thumb below set for it.
 
 The tension with the paragraph above is real, and it resolves by *kind*, not by
 line count:
@@ -305,21 +343,41 @@ Two honest exceptions:
   deliberate design: it survives any exit path, which is the whole point. It is
   not ad-hoc console noise.
 
-Everything else is a finding. As of 2026-07-31 there are 76 such sites, 74 of
-them in `libs/game`.
+Everything else is a finding. There were 76 such sites on 2026-07-31, 74 of them
+in `libs/game`. Re-counted 2026-08-01 over `libs/` (`std::cout` / `std::cerr` /
+`printf`-family, `snprintf` excluded): **69 → 5**, and neither kind that remains
+is console noise. Four are `std::printf` in `libs/game/src/capture_runs.cpp`, the
+`--demo-shots` / `--bm-shot` / `--menu-shot` capture paths, whose product IS
+their stdout — the same honest exception `apps/abtool` gets. The fifth is
+`std::fprintf` inside `libs/game_util/src/log.cpp`, which is the seam itself.
+No library code writes to the console any more.
 
 ---
 
 ## 12. Testing
 
-**doctest**, one suite per executable under `tests/`, registered in ctest. The
-source document names GoogleTest and Catch2; doctest is what is wired in, and
-Arrange / Act / Assert is the structure regardless of framework.
+**doctest**, one suite per executable under `tests/`, registered in ctest and
+grouped into per-module subdirectories mirroring the package layout
+(`tests/sim/`, `tests/net/`, `tests/assets/`, `tests/audio/`, `tests/match/`,
+`tests/platform/`, `tests/game/`). Every ctest NAME survived that regrouping, so
+`ctest -R <name>` still works; the *paths* changed, which is why a citation
+written before it points at a file that is no longer there. The source document
+names GoogleTest and Catch2; doctest is what is wired in, and Arrange / Act /
+Assert is the structure regardless of framework.
 
 Every business rule should be testable, and a test that cannot fail is not a
 test: **prove a new suite discriminates** by breaking the rule it covers,
-confirming the *right* case goes red, and restoring it. That practice has caught
-three separate "green having verified nothing" gates in this repo.
+confirming the *right* case goes red, and restoring it. This repo has now been
+bitten **five** times by a gate that was green having measured nothing —
+`BOMBER_ENABLE_LOBBY` OFF skipping half of `tests/net`, `BOMBER_LOBBY_TLS` OFF
+preprocessing the certificate-rejection cases away, `libs/audio` never being
+compiled at all, and then both `scripts/lint.sh` and `scripts/complexity.sh`
+reading the empty `#else` branch of every lobby guard for want of two `-D`
+flags. All five are written up in `CLAUDE.md` § Build & test.
+
+One suite that is **not** in the gate: `visual_golden`, the renderer's only
+regression pin. It lives in `apps/game`, which `headless` switches off. See
+`CLAUDE.md`.
 
 Sim behaviour is additionally pinned by golden hashes and by `build_hash`; see
 the determinism contract in `CLAUDE.md`.

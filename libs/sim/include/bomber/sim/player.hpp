@@ -130,7 +130,10 @@ struct Player {
     // Up/Right/Down/Left) and index k is k sub-frames ago, NOT k ticks: the buffer
     // is pushed once per sub-frame, so its 30 slots span ~167 ms at kSubFrames =
     // 9. Written and read only by MovementSystem::ice_delay, and only where
-    // ice_delay_ms > 0, so it stays all-zero on every other level.
+    // ice_delay_ms > 0, so on every other level it keeps the value setup.cpp
+    // filled it with — all -1, NOT all zero. That distinction is the whole
+    // reason `fill(-1)` is there: zero is godir 0, so a zeroed buffer reads back
+    // as a phantom "Up" for the first ceil(delay/50) ticks (sub_4214BC).
     static constexpr int kIceHistoryLen = 30;  // mirrors the original's 30-slot buffer
     std::array<std::int8_t, kIceHistoryLen> ice_history{};
 

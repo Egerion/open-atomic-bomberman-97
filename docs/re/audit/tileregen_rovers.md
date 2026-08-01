@@ -104,7 +104,7 @@ rather than mid-tick). A test forcing a rover through two adjacent flame
 tiles in one tick's budget (to pin the repeat-score-award behaviour) and a
 test putting a live human player on the exact tile a rover dies to flame
 on (to pin the same-tile landing-kill) would close the gap; no existing
-`tests/test_rovers.cpp` case currently exercises either (checked: its two
+`tests/sim/test_rovers.cpp` case currently exercises either (checked: its two
 flame-death cases place the flame one tile away with nothing else on it).
 
 ---
@@ -311,5 +311,5 @@ than copy-paste).
 - `libs/sim/src/systems/tile_regen.cpp`, `libs/sim/src/systems/rovers.cpp`,
   `libs/sim/src/setup.cpp:136-148`, `libs/sim/src/simulation.cpp:647-656,
   708-709`, `libs/sim/src/systems/flames.cpp:90-134,295-308`,
-  `libs/sim/src/grid.hpp:43-48`, `tests/test_rovers.cpp`,
-  `tests/test_regen.cpp`.
+  `libs/sim/src/grid.hpp:43-48`, `tests/sim/test_rovers.cpp`,
+  `tests/sim/test_regen.cpp`.

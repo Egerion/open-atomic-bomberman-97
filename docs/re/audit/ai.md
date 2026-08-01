@@ -140,7 +140,7 @@ instead of the current absolute-magnitude test. This needs a new hashed
 `Player` field (or reuse of an existing one if `bombs.cpp`'s punch-init path
 already snapshots something equivalent — not found in this audit's scope) —
 zero golden impact by construction (no AI players in golden, `ai.md` §11),
-but grows the hash layout by one field per player, so `tests/test_golden.cpp`
+but grows the hash layout by one field per player, so `tests/sim/test_golden.cpp`
 would need its one-time constant recapture noted the same way the `team`
 field's did.
 

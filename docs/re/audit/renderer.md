@@ -13,7 +13,7 @@ counter. All four are presentation-only (no golden/hash impact). Highest
 severity: the player draw-order finding (#1) — it changes which sprite wins
 an overlap on every multiplayer round, not just a rare pose edge case.**
 
-Scope: `libs/game/src/renderer.cpp` + `libs/game/include/bomber/game/renderer.hpp`.
+Scope: `libs/render/src/renderer.cpp` + `libs/render/include/bomber/render/renderer.hpp`.
 
 ## Fix status — 2026-07-20 (all four FIXED, presentation-only)
 
@@ -80,7 +80,7 @@ player, each player's FULL turn completing before the next slot."* There is
 no Y-comparison, no depth buffer, no re-ordering of any kind — slot 9 always
 draws over slot 0 when they overlap, regardless of vertical position.
 
-**Port**: `libs/game/src/renderer.cpp` lines 667-673 (`draw_world`):
+**Port**: `libs/render/src/renderer.cpp` lines 667-673 (`draw_world`):
 
 ```cpp
 // Players, bottom-anchored, in Y order so lower players draw in front.
@@ -160,7 +160,7 @@ player is still boxed in — gets immediately re-rolled to a (possibly
 different) variant on the very next tick. The re-roll cadence is therefore
 however long THAT PARTICULAR variant's art actually is, not a fixed spread.
 
-**Port**: `libs/game/src/renderer.cpp` lines 371-378 (`sample_movement`) +
+**Port**: `libs/render/src/renderer.cpp` lines 371-378 (`sample_movement`) +
 lines 760-764 (`draw_world`), and `kPanicSpread` (renderer.cpp line 37):
 
 ```cpp
@@ -239,7 +239,7 @@ cornerhead (Finding 2) — there is no fixed tick budget anywhere in the
 original; every one of these transient poses plays for exactly as long as
 its own ANI has frames.
 
-**Port**: `libs/game/src/renderer.cpp` line 17 and its own comment admits
+**Port**: `libs/render/src/renderer.cpp` line 17 and its own comment admits
 the guess:
 
 ```cpp
@@ -325,7 +325,7 @@ counter happens to read at that moment (frozen at its last value if the
 player wasn't mid-step when the grab started), not a clean 0-to-N
 playthrough of `PUP*.ANI`.
 
-**Port**: `libs/game/src/renderer.cpp` lines 793-798:
+**Port**: `libs/render/src/renderer.cpp` lines 793-798:
 
 ```cpp
 const Anim& up = q.pickup[body_colour][dir];
@@ -455,7 +455,7 @@ timer (unchanged).
   non-hotspot direct-rect path (`sub_41532B`) than the sprite-queue path
   (`sub_415A9F`/`sub_415920`) every other draw in `renderer.cpp` goes
   through; reconciling the two would require auditing the ANI hotspot
-  PARSER (`libs/game/src/sprites.cpp`), which is asset-layer, not this
+  PARSER (`libs/render/src/sprites.cpp`), which is asset-layer, not this
   system.
 - `boxed_in`'s exact blocked-tile predicate vs. `sub_41E5C3`
   (`!sub_422E48 && sub_425FB9==0`) — plausible match, not exhaustively

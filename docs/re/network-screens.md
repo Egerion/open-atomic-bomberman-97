@@ -500,7 +500,7 @@ shared local screens**, not from the network screens. Their net behaviour:
 1997 wire. `GameApp::present_net_setup` runs between the connect step (lobby
 punch or direct seed handshake) and the match, over the same UDP socket, driving
 the ORDINARY `SetupScreen` (`sub_410F81`) and `MapSelectScreen` (`sub_406DDE`)
-with a `NetSetupLink` (`libs/game/include/bomber/game/screens/net_setup_link.hpp`):
+with a `NetSetupLink` (`libs/netui/include/bomber/netui/net_setup_link.hpp`):
 the host publishes a `net::SetupPreviewFrame` after each edit, the guest renders
 it read-only and buzzes SFX 40 at any edit key. Differences, all deliberate:
 

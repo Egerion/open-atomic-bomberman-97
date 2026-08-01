@@ -413,7 +413,7 @@ ONE-SHOT "already initialised" latch (rover-only, see step 0 below).
    — there is no `GHOST.ANI`/`ROVER.ANI` and no sequence-name string match
    anywhere in the install's binary assets. **The art was never shipped** —
    this is confirmed cut content at the asset level, not just "we didn't
-   find it": `resolve_sequence` (`libs/game/src/sprites.cpp:126`) already
+   find it": `resolve_sequence` (`libs/render/src/sprites.cpp:126`) already
    returns an empty `Anim` (no steps) for an unmatched name and callers
    already no-op on an empty `Anim`, so the port's fallback path (a static
    marker sprite / colored tile, see Presentation below) is not a guess
@@ -709,7 +709,7 @@ fall into `0x42A6CB` — the attract-abort check, the 1130 start, and the
 DRAW/RESULTS/VICTORY tier with its `sub_421B56` win award at `0x42A919`.
 
 **Port status — PORTED 2026-07-30.** The decision is
-`libs/game/include/bomber/game/campaign_round_end.hpp` (`campaign_verdict` =
+`libs/game_util/include/bomber/game_util/campaign_round_end.hpp` (`campaign_verdict` =
 `sub_4016DA`'s three writes in order; `campaign_round_end` = the `0x42A63B`
 tail), pure and pinned by `tests/game/test_campaign_round_end.cpp`. The SDL
 side is `run_app`'s Results handler, which now takes the campaign arm before
@@ -766,7 +766,7 @@ the original) — the SAME dialog family `sub_4015C6`'s own post-pick
 confirmation overlay uses (getstring 1210+95), which this port's
 `present_campaign_picker` already stands in for with a sound sting.
 
-**Ported**: `GameApp::present_campaign_banner()` (`libs/game/game_app.hpp`/
+**Ported**: `GameApp::present_campaign_banner()` (`libs/game/include/bomber/game/game_app.hpp`/
 `.cpp`) shows `"(<stage name>)"` over `"Prepare to begin Campaign!"`
 (`campaign_banner_`, set by `load_campaign_stage`) as a blocking-with-dwell
 two-line overlay (any key dismisses immediately; a 2s dwell auto-advances so

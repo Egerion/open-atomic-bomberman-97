@@ -21,7 +21,7 @@ settled, plus the two implementation choices they imply:
    must be able to connect. The bandwidth cost is accepted; the server is sized
    for a modest concurrent-relayed-match budget and the client always prefers a
    direct punch, relaying only on failure.
-4. **Max seats = 10**, matching the native audit (`docs/re/multiplayer-deep.md`:
+4. **Max seats = 10**, matching the native audit (`docs/re/audit/multiplayer-deep.md`:
    input-type-4 lets any of the 10 roster slots be remote).
 5. **Host drop = HOST MIGRATION** (not "match ends"). Because the sim is P2P
    deterministic, every peer already holds the full `State`; the host owns no

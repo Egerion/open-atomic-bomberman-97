@@ -35,7 +35,7 @@ CONFIRMED", "Ice / input-lag", "Canonical frame cadence", the 2026-07-10
 `libs/sim/src/systems/movement.hpp`, `libs/sim/src/systems/stage_actors.cpp`
 (conveyor budget wiring), `libs/sim/src/simulation.cpp` lines 141-540,
 `libs/sim/include/bomber/sim/player.hpp`, `libs/sim/include/bomber/sim/
-constants.hpp`, `libs/sim/include/bomber/sim/tuning.hpp`, `tests/test_ice.cpp`.
+constants.hpp`, `libs/sim/include/bomber/sim/tuning.hpp`, `tests/sim/test_ice.cpp`.
 
 ---
 
@@ -100,7 +100,7 @@ delta), so exact tracking would settle on `k = 1` — a one-slot (~5-6 ms)
 difference in which buffered sample is surfaced.
 
 **Visible effect**: none today — the shipped default (250 ms) round-trips
-exactly, and `tests/test_ice.cpp` only exercises that value (confirmed by
+exactly, and `tests/sim/test_ice.cpp` only exercises that value (confirmed by
 inspection: `hockey_config()` hardcodes `level_index = 2`, no other
 `ice_delay_ms` is ever set in any test or the default table). A custom
 scheme setting a non-tick-aligned ice delay would see the input-lag onset

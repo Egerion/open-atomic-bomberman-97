@@ -136,14 +136,14 @@ neither half needs the other.
   exactly `kSubFrames` steps, so the only honest target is one distinct step per
   present. The number on the overlay therefore means "distinct images
   delivered" and will read below 180 on a machine that cannot make them.
-- **The presentation stack** — eight packages, each one CMake target with public
+- **The presentation stack** — nine packages, each one CMake target with public
   headers under `include/bomber/<name>/`, split out of what used to be a single
   13k-line `libs/game` holding the renderer, the asset store, the UI chrome,
   input, the editor, every screen, the whole netplay front end and the app shell
   behind one namespace and 73 headers in one directory. All of them read `State`
   + `events` and never mutate them.
   - **libs/game_util** (`bomber::game_util`) — the **SDL-FREE floor**, and the
-    only one of the eight the `headless` preset builds. Pure models: the
+    only one of the nine the `headless` preset builds. Pure models: the
     front-end state machine (`app_flow`), the match/results bookkeeping
     (`results`, `match_outcome`, `campaign_round_end`, `net_tally`, `net_esc`),
     the pixel and pacing rules the renderer applies (`alpha_bleed`, `key_color`,
@@ -217,7 +217,7 @@ The sim is deterministic lockstep (`docs/adr/0003`). Rules:
    `state_hash()` (`libs/sim/src/hash.cpp`). `State::events` are derived
    per-tick outputs: rebuilt every tick, never hashed, never read back by the
    sim.
-5. `tests/test_golden.cpp` pins hashes of full scenarios. A refactor must
+5. `tests/sim/test_golden.cpp` pins hashes of full scenarios. A refactor must
    keep them byte-identical. A deliberate behaviour change (new RE fact) must
    update the constants in the same commit and cite the `facts.md` entry.
 6. Cosmetic randomness (sound picks, death-anim choice, disease flash) uses
@@ -307,10 +307,12 @@ is deliberately kept rather than modernised (§2). What follows is the summary.
   full of faithful ports of the original's dispatch tables, which McCabe scores
   as catastrophic while a reader walks them without effort; what needs pushing
   down here is tangle, not arm count.
-  It is a **RATCHET, not a wall**: `scripts/complexity-baseline.txt` records the
-  66 functions that were already over when the gate was added (worst: 251), and
-  they may stay — but none may get worse, and anything new must meet the
-  threshold from its first line. The list only shrinks. Regenerate with
+  It is a **RATCHET, not a wall**: `scripts/complexity-baseline.txt` records
+  what was already over when the gate was added — 70 functions, worst 251 — and
+  they may stay, but none may get worse, and anything new must meet the
+  threshold from its first line. The list only shrinks, and it has: as of
+  2026-08-01 it is down to **6 entries, worst 58** (`player_turn`), all of them
+  in `libs/sim`. Regenerate with
   `scripts/complexity.sh --update` AFTER a refactor lands, never to make a red
   gate go green; a number going up in that diff is the ratchet failing open.
   A shape that genuinely mirrors the binary's control flow is an exception —
@@ -348,26 +350,53 @@ that by recompiling `sound_bank.cpp`/`sound_director.cpp` into its own binaries.
 Its SDL-free half is now the always-built `bomber::audio_core` and the suites
 link it. The presentation stack is split on the same line and for the same
 reason: `bomber::game_util` is declared unconditionally and everything above it
-early-returns without the viewer. What the gate still CANNOT cover is anything
-that includes SDL — `audio_engine.cpp`, `libs/platform`, and the seven SDL
-presentation packages (`input`, `render`, `ui`, `netui`, `editor`, `frontend`,
-`netplay`) plus `libs/game` and `apps/game|viewer`; those are compiled by CI's
+early-returns without the viewer. `libs/platform` is split on that line too, and
+only the SDL header falls outside: `frame_pacer.hpp` is pinned headlessly by
+`tests/platform` (ctest `frame_pacer`), which adds the include directory rather
+than linking the SDL-pulling target; `frame_clock.hpp` is the uncovered half.
+What the gate still CANNOT cover is anything that includes SDL —
+`audio_engine.cpp`, `frame_clock.hpp`, and the seven SDL presentation packages
+(`input`, `render`, `ui`, `netui`, `editor`, `frontend`, `netplay`) plus
+`libs/game` and `apps/game|viewer`; those are compiled by CI's
 linux/macos/windows-fetch matrix and parsed (with clang, not MSVC) by
 `scripts/lint.sh`. Runtime verification against
 a real install: `abtool survey <game_dir>` and `bomber_viewer <game_dir>
 --selftest`. The game auto-detects the install via `BOMBER_GAME_DIR`,
 `gamedir.txt`, or the standard paths (`libs/assets/src/install.cpp`).
-Renderer output is pinned the same way `test_golden.cpp` pins the sim —
-`tests/visual/` (`ctest -R visual_golden`, SKIPs without an install).
+
+Renderer output is pinned the same way `tests/sim/test_golden.cpp` pins the sim
+— `tests/visual/` (`ctest -R visual_golden`, SKIPs without an install) — but
+**that pin is NOT in the pre-push gate.** It is registered in
+`apps/game/CMakeLists.txt`, because it needs the `bomber_game` target, and
+`headless` sets `BOMBER_BUILD_VIEWER=OFF`, so the test does not exist in that
+build at all (`tests/CMakeLists.txt` says so at the bottom). It runs only in
+CI's three SDL presets, where it SKIPs for want of an install. So the
+renderer's only regression pin fires exactly when a human runs it against a
+real copy of the game — treat a renderer change as unpinned until you have.
 
 A `lefthook` pre-push hook (`lefthook.yml`, `scripts/test.sh`,
-`scripts/lint.sh`, `scripts/format.sh`) runs the `headless` build+ctest, a
-repo-wide `clang-tidy` pass (`.clang-tidy`) and a `clang-format` check before
-every push; see README "Git hooks"
+`scripts/lint.sh`, `scripts/format.sh`, `scripts/complexity.sh`) runs four
+commands in parallel before every push: the `headless` build+ctest, a repo-wide
+`clang-tidy` pass (`.clang-tidy`), a `clang-format` check, and the complexity
+ratchet. See README "Git hooks"
 to enable it per clone. `.clang-tidy`'s check list is curated to this
 codebase's terse, faithful-port style (bugprone/performance/clang-analyzer,
 not broad readability/cppcoreguidelines) — extend it there, not by adding
 NOLINTs, unless a specific line is a deliberate one-off.
+
+Two things `lint.sh` and `complexity.sh` both carry are worth knowing, because
+each was a **fourth and fifth instance of the green-having-measured-nothing
+shape above**. They pass `--header-filter="(libs|apps)/"`: clang-tidy suppresses
+diagnostics outside the main file by default, and `libs/core`, `libs/match` and
+`libs/platform` have no `.cpp` between them, so "all N files clean" was true and
+misleading in one breath — three whole components had never been read, and the
+filter immediately surfaced two over-threshold functions in `match_factory.hpp`.
+And they pass `-DBOMBER_HAS_LOBBY=1 -DBOMBER_HAS_LOBBY_TLS=1`, the defines
+`libs/net/CMakeLists.txt` sets PUBLIC and every preset turns on; without them
+both tools read the `#else` half of every lobby guard and the entire online
+stack is invisible to them. Keep those defines in sync with
+`libs/net/CMakeLists.txt` — a define the build sets and the gate does not is a
+blind spot by construction.
 
 `scripts/format.sh` checks only the LINES a push changes, not whole files:
 nothing ran `clang-format` until it was added and 170 of 333 `.cpp`/`.hpp` files

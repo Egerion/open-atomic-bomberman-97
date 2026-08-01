@@ -30,6 +30,8 @@ The human's role was product direction and reverse-engineering guidance — "her
 
 ## Layout
 
+The SDL-free core:
+
 ```
 libs/core     shared vocabulary: fixed-point unit, field geometry, limits — header-only, no deps
 libs/assets   loaders for the original formats (ANI, PCX, SCH, RES, RSS) — SDL-free
@@ -38,10 +40,27 @@ libs/match    scheme + VALUELST -> MatchConfig glue (header-only)
 libs/net      online netcode: input codec, lockstep + rollback sessions, UDP transport, lobby client — SDL-free
 libs/audio    AudioEngine + SoundBank (the ported selection engine) + SoundDirector
 libs/platform engine base: SDL3 frame clock + an SDL-free, unit-tested frame pacer
-libs/game     SDL3 presentation and front-end: asset store, renderer, screens, input, app shell
+```
+
+The presentation stack — nine packages, arrows pointing one way only, split out
+of what was a single 13k-line `libs/game`:
+
+```
+libs/game_util  SDL-FREE models: front-end state machine, results bookkeeping, pixel/pacing rules
+libs/input      keyboard, gamepad, DOS-scancode bridge (SDL-free public headers)
+libs/render     AssetStore, sprites, sequences, the world Renderer
+libs/ui         Screen/ScreenContext, the .BM text viewer, window/dialog/list chrome
+libs/netui      net widgets drawn inside another screen: chat overlay, setup link, F3 panel
+libs/editor     the .SCH scheme editor's SDL surface
+libs/frontend   every screen the player sees, plus MatchRunner
+libs/netplay    the online session end to end: lobby, connect/host, best-of-N match
+libs/game       the application shell: GameApp — SDL/window lifetime and the AppState loop
+```
+
+```
 apps/         bomber_game (OPEN-BM95), bomber_viewer, abtool (thin mains)
 services/     matchmaker (Go, separate build): lobby control plane + STUN + relay
-tests/        doctest suites incl. golden-hash behaviour pins + netcode determinism
+tests/        doctest suites, one directory per module, incl. golden-hash behaviour pins + netcode determinism
 ```
 
 See `CLAUDE.md` for the full architecture and project rules, `docs/re/facts.md` and `docs/adr/` for research notes and decisions.
@@ -218,6 +237,8 @@ For play across machines, replace `127.0.0.1` with the other machine's LAN IP (s
 
 `ctest` runs the doctest suites: determinism (10k-tick lockstep), gameplay rules, movement (faithful `sub_41EC84` port), diseases, the netcode (loopback lockstep, rollback, real-UDP round-trip, seed handshake), and the golden-hash pins that freeze sim behaviour. Full verification against an original install: `abtool survey` and `bomber_viewer --selftest`.
 
+One pin is worth calling out because it is easy to assume otherwise: **`visual_golden`, which hashes rendered frames, is not part of the pre-push gate.** It needs the SDL `bomber_game` target, which the `headless` preset does not build, and it SKIPs on CI for want of an original install — so it only ever really runs when a human runs it against their own copy. A renderer change is unpinned until then.
+
 ## Git hooks
 
 `lefthook.yml` wires a pre-push gate: full `headless` build + `ctest`, a repo-wide `clang-tidy` pass (config in `.clang-tidy`), a `clang-format` check (config in `.clang-format`) over the lines the push changes, and a function-complexity check. Each clone/worktree must enable it once:
@@ -233,7 +254,7 @@ Two of those are deliberately scoped to what a push actually touches, for the sa
 
 The **format** check is line-scoped rather than file-scoped — only the lines you write have to match. `scripts/format.sh [base]` defaults to the merge-base with `origin/main`.
 
-The **complexity** check is a ratchet. It measures clang-tidy's *cognitive* complexity (which charges nesting, and charges nothing for a flat `switch` — the right bias for a codebase full of ported dispatch tables) at threshold 25, and compares against `scripts/complexity-baseline.txt`, the 66 functions that were already over when it was added. Those may stay; none may get worse; anything new must meet the threshold. Re-record with `scripts/complexity.sh --update` after a refactor genuinely improves things — not to clear a red gate.
+The **complexity** check is a ratchet. It measures clang-tidy's *cognitive* complexity (which charges nesting, and charges nothing for a flat `switch` — the right bias for a codebase full of ported dispatch tables) at threshold 25, and compares against `scripts/complexity-baseline.txt`, which records what was already over when it was added. Those may stay; none may get worse; anything new must meet the threshold. The list only shrinks: it started at 70 functions (worst 251) and is down to 6 (worst 58). Re-record with `scripts/complexity.sh --update` after a refactor genuinely improves things — not to clear a red gate.
 
 ## Roadmap
 
@@ -296,7 +317,7 @@ Contributions are welcome — issues and pull requests both. A few house rules k
 
 Open Bomberman is an independent, **clean-room re-implementation**. It is **not** affiliated with, endorsed by, or connected to Interplay Entertainment or Konami.
 
-- **No original code or assets are included.** This repository contains only original source authored by the contributors, written from observing data formats and behaviour. It ships no Interplay/Konami code, audio, level data, or game data of any kind, and the reverse-engineering working material (the binary, disassembly, decompiler output) is never committed either (see `.gitignore`). One thing is worth naming rather than glossing: the screenshot and animation at the top of this page are captures of *this* engine running, so they do show the original's artwork on screen. They are documentation of what the port looks like — nothing in the repository lets you play without your own copy of the game.
+- **No original code or game data is included.** This repository contains only original source authored by the contributors, written from observing data formats and behaviour. It ships no Interplay/Konami code, audio, level data, or game data of any kind, and the reverse-engineering working material (the binary, disassembly, decompiler output) is never committed either (see `.gitignore`). One thing is worth naming rather than glossing: the screenshot and animation at the top of this page are captures of *this* engine running, so they do show the original's artwork on screen. They are documentation of what the port looks like — nothing in the repository lets you play without your own copy of the game.
 - **You must own the original game.** The engine loads Atomic Bomberman's data at runtime from *your own* legally-obtained copy; it ships none of it. Without an original install there is nothing to play.
 - **Trademarks.** "Atomic Bomberman" and "Bomberman" and all related names, logos, characters, and artwork are the property of their respective owners (Interplay / Konami). They are used here only nominatively, to describe what this software is compatible with.
 - **License.** The original source and documentation in this repository are released under the MIT License — see [`LICENSE`](LICENSE). That license covers the contributors' code **only**; it grants no rights to any third-party names, trademarks, or assets.

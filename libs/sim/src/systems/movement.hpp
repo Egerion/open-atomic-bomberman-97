@@ -54,8 +54,9 @@ public:
     // SUB-FRAME's desired direction into p.ice_history and returns the EFFECTIVE
     // direction to move with. Safe to call unconditionally for every player:
     // an AI, and any level with ice_delay_ms == 0, is returned unchanged with the
-    // buffer UNTOUCHED — which is what keeps p.ice_history a fixed all-zero
-    // hashed field elsewhere. See the .cpp for the citations and the deliberately
+    // buffer UNTOUCHED — which is what keeps p.ice_history at setup.cpp's fill
+    // value elsewhere. That value is -1, not 0: zero is godir 0 and would read
+    // back as a phantom "Up". See the .cpp for the citations and the deliberately
     // short buffer span.
     int ice_delay(Player& p, int want_godir) const;
 

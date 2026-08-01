@@ -97,7 +97,7 @@ bomber/sim/tuning.hpp`, `libs/sim/include/bomber/sim/player.hpp`,
 > recaptured; D/E zero all `spawn_counts` so their scatter draws nothing either
 > way and stayed byte-identical (kExpectedRng / bounces / final rng UNCHANGED,
 > verified before recapture); A never runs `build_state`. Pinned by
-> `tests/test_sim.cpp` two scatter tests. Visual golden left un-recaptured — it
+> `tests/sim/test_sim.cpp` two scatter tests. Visual golden left un-recaptured — it
 > is contaminated by concurrent uncommitted renderer WIP (the pre-explosion
 > `walking`/`bomb_pulse` frames, which this sim-only change cannot affect, also
 > moved), so a clean recapture waits for that renderer work to land per the

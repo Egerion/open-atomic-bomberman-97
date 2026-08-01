@@ -18,7 +18,7 @@ landed — `Player::team` (hashed, copied verbatim from `MatchConfig::team[]` at
 setup, itself fed by the setup screen's 'T' toggle, docs/re/setup-screens.md)
 now gates the enemy scans (`AISystem::same_team`, §3.4/§5.3) and round-end
 ("one team left", our semantics — see the round-end note below). This grew
-the hash layout by one word per player, so `tests/test_golden.cpp` needed a
+the hash layout by one word per player, so `tests/sim/test_golden.cpp` needed a
 one-time constant recapture (see that file's own note); the untamed
 (all-zero-team) RNG stream and gameplay are unchanged. A 2026-07-10 pass
 independently re-verified every behaviour's arithmetic and RNG draw order
@@ -282,7 +282,7 @@ Key facts:
   (`brain.target(+4/+6)=pos; ...; return 1`) is unaffected — the original
   returns 1 unconditionally there and never calls the veto (there is no godir
   to veto: the step is already -1), matching the port's plain `return true`.
-  No golden impact (golden has no AI players); a new `tests/test_ai.cpp` case
+  No golden impact (golden has no AI players); a new `tests/sim/test_ai.cpp` case
   covers the fall-through.
 
 ### 3.3 — `sub_40AD8D`: blast bricks (priority 3)
@@ -801,7 +801,7 @@ draws nothing. `player_turn` already no-ops a stunned player's turn (ticks the
 countdown and returns before reading any input), so this was invisible to
 gameplay but not to the RNG stream — fixed by gating the call on `p.stun == 0`
 (`simulation.cpp`, the step-1 player loop). No golden impact (golden has no AI
-players); a new `tests/test_ai.cpp` case pins a stunned AI drawing zero RNG.
+players); a new `tests/sim/test_ai.cpp` case pins a stunned AI drawing zero RNG.
 
 **Consequence for the port (the linchpin):** the computer player is a
 `PlayerInput` producer. If our `AISystem` writes the same `up/down/left/right/
@@ -1103,13 +1103,13 @@ a row in §8's table (one precision fix: b5b is `sub_409C1F` line 10128, not
 ### Why none of this touches golden
 
 Every fix above is reachable only through `AISystem`, which runs only for
-`players[i].ai == true` (ADR-0005 §7). `tests/test_golden.cpp` sets no `ai`
+`players[i].ai == true` (ADR-0005 §7). `tests/sim/test_golden.cpp` sets no `ai`
 player in any scenario, so `AISystem::decide()` is never called there — the
 five fixes are proven inert on golden by construction, not just by
 observation. Verified anyway: the full suite (`ctest --test-dir build/headless
 -C Debug`) passed 37/37 both before and after these changes, `golden` and `ai`
-included, with **zero constant recaptures needed** in `tests/test_golden.cpp`.
-New regression coverage for all five fixes lives in `tests/test_ai.cpp`
+included, with **zero constant recaptures needed** in `tests/sim/test_golden.cpp`.
+New regression coverage for all five fixes lives in `tests/sim/test_ai.cpp`
 ("2026-07-10" test cases).
 
 ## 12. Follow-up correction — target-liveness `+8` is DEAD, not stunned (2026-07-10)
@@ -1143,7 +1143,7 @@ the OTHER-player target-liveness reads, which mirror `+8`, were the mislabel.
 
 GOLDEN: none. `AISystem` runs only for `ai==true` players and no golden
 scenario has one, so all 37 tests stay green with zero recaptures. Regression
-coverage: `tests/test_ai.cpp` "Mislabel fix: an AI still bombs a stunned-but-
+coverage: `tests/sim/test_ai.cpp` "Mislabel fix: an AI still bombs a stunned-but-
 alive enemy (+8 not +58)" (the AI drops a bomb on an enemy kept stunned every
 tick — impossible under the old `stun == 0` gate, which had no other drop path
 in that room).

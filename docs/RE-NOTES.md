@@ -24,7 +24,7 @@ Goal: clean-room rewrite in modern C++ using the original assets.
 | `.RSS` audio | Binary | ✅ Raw PCM per above. Trivial loader. |
 | `.PCX` images | Binary | ✅ Standard PCX, 640×480 8-bit palettized. Palette: `TOOLS/BOMBPAL.PCX` / `COLOR.PAL`. |
 | `.ANI` animations | Binary | ✅ Custom chunked format (`CHFILEANI` / HEAD / PAL / FRAM / SEQ), fully parsed natively (`libs/assets/src/ani.cpp`, `docs/formats/ani.md`) — the community references below were consulted early on but the port doesn't depend on them. |
-| `.CAM` | Text | ✅ Campaign/stage info. Parsed (`libs/assets/src/campaign.hpp/.cpp`) and fully wired: hidden 'C'×5 trigger, stage sequencing, AI-count roster seeding, rover/ghost hazard actors — see `docs/re/campaign.md`. |
+| `.CAM` | Text | ✅ Campaign/stage info. Parsed (`libs/assets`'s `campaign.hpp`/`.cpp`) and fully wired: hidden 'C'×5 trigger, stage sequencing, AI-count roster seeding, rover/ghost hazard actors — see `docs/re/campaign.md`. |
 | `MESSAGES.TXT` | Text | ✅ All UI strings. |
 | `.FON`, `.RMP` | Binary | ✅ Both fully RE'd and ported — `.FON` bitmap fonts (`docs/formats/fon.md`, `bmfont.hpp`), `.RMP` player-colour palette remap (`docs/re/player-colour.md`, `rmp.hpp/.cpp`). Stale "minor/low priority" note from the initial survey removed 2026-07-09 (`docs/re/coverage-audit.md` flagged this row). |
 | `LEVELS.DAT` | Binary | ✅ RE'd 2026-07-09: not read by `BM95.EXE` or any other shipped executable (exhaustive `pseudo.c`/`strings` grep across the whole install tree finds zero "level" references anywhere). 4-byte installer artifact, dead/tooling data — no port needed. See `docs/re/facts.md` and `docs/re/coverage-audit.md` §3. |

@@ -185,7 +185,7 @@ tick/phase before use; it only orders live-bomb tiles, never vs flame's 1000.
 
 ### 7. Golden scenarios stay inert (confirmed)
 
-`tests/test_golden.cpp` drives players purely through scripted `TickInputs` (a
+`tests/sim/test_golden.cpp` drives players purely through scripted `TickInputs` (a
 `pattern(t)` generator); there is **no AI-controlled player and no `ai` flag** in
 any golden scenario (verified: the file constructs `Simulation(cfg)` with plain
 player counts and feeds hand-built inputs). Because:
@@ -252,7 +252,7 @@ never regresses golden. Every stage cites `docs/re/ai.md`.
   mover's grab block already uses; (4) the column guard's `< v2` is the documented
   undefined-edx artifact — reproduced as "no bomb already in my column ⇒ may drop".
   *Golden: unchanged — `state_flag`/`path_target` were already hashed in Stage 2,
-  so NO new hashed brain field and NO golden recapture.* `tests/test_ai.cpp`
+  so NO new hashed brain field and NO golden recapture.* `tests/sim/test_ai.cpp`
   extended (blast-drop-and-flee, no-brick / column-full suppression, grab-glove,
   bombing-AI replay-hash). Behaviours 1/4/6 remain stubs (Stage 5).
 
@@ -283,7 +283,7 @@ never regresses golden. Every stage cites `docs/re/ai.md`.
   field exists but is unwired — team wiring is a documented follow-up).
   **NO new hashed field** (`enemy_seek` was hashed in Stage 2; no `Player::team`
   added) ⇒ *golden unchanged* — proven: a Stage-5-disabled differential build
-  produces byte-identical golden hashes. `tests/test_ai.cpp` +6 (punch, bomb-
+  produces byte-identical golden hashes. `tests/sim/test_ai.cpp` +6 (punch, bomb-
   near-enemy + no-enemy control, seek-enemy latched + emergent, two-live-AI
   replay-hash); one Stage-3 emergent seed refreshed for the new draw stream.
   Tests: AI adjacent to a live enemy with an escape drops a bomb per the
@@ -336,7 +336,7 @@ the AI's decisions change gameplay state and must be identical in lockstep/repla
    getvalue(905) is an unused reserved id.
 2. [x] Stage 2: `Player::ai` + `Brain` + `AISystem` skeleton + flee/wander +
    danger/obstacle grids + draws A/B; add fields to `state_hash()`; recapture
-   golden ONCE; add `tests/test_ai.cpp`. DONE 2026-07-05 — `Player::ai` +
+   golden ONCE; add `tests/sim/test_ai.cpp`. DONE 2026-07-05 — `Player::ai` +
    `State::brains` (hashed), `libs/sim/src/systems/ai.{hpp,cpp}` (dispatcher with
    draws A/B, danger + obstacle grids, flee BFS `sub_40970B`, flame veto
    `sub_40A76E`, wander `sub_40A81F`; behaviours 0,1,3,4,5,6 stubbed in the
@@ -349,12 +349,12 @@ the AI's decisions change gameplay state and must be identical in lockstep/repla
    Stage 3 DONE 2026-07-05 (directed BFS `sub_4092A1`, powerup scan `sub_409C1F`,
    behaviour 5 `sub_40BAF5`, behaviour 2 directed branch; `sub_40A59D` corrected
    to not reject powerup tiles). No new hashed brain field ⇒ NO golden recapture.
-   `tests/test_ai.cpp` extended (seek-and-collect + emergent + replay-hash).
+   `tests/sim/test_ai.cpp` extended (seek-and-collect + emergent + replay-hash).
    Stage 4 DONE 2026-07-05 (behaviour 0 grab-glove `sub_40BD44`, behaviour 3
    blast-bricks `sub_40AD8D` with the `sub_423188` clearance check + `state_flag`
    commit; RE corrections to `sub_423188` = clearance-not-escape and behaviour 0 =
    grab-then-lob logged in `docs/re/ai.md` §3.0/§3.3). No new hashed brain field ⇒
-   NO golden recapture. `tests/test_ai.cpp` extended (blast-drop-and-flee, no-brick
+   NO golden recapture. `tests/sim/test_ai.cpp` extended (blast-drop-and-flee, no-brick
    / column-full suppression, grab-glove, bombing replay-hash).
    **Stage 5 DONE 2026-07-05 — the AI is COMPLETE (all 8 behaviours live):**
    behaviour 1 punch `sub_40BE02`, behaviour 4 bomb-near-enemy `sub_40ABED`
@@ -364,4 +364,4 @@ the AI's decisions change gameplay state and must be identical in lockstep/repla
    whim (`sub_40B20F`, `trigger && !punch && rand()%10`). TEAM reduces to
    `slot != self` (no `Player::team`; team wiring is a documented follow-up).
    NO new hashed brain field ⇒ NO golden recapture (proven byte-identical via a
-   Stage-5-disabled differential golden build). `tests/test_ai.cpp` +6.
+   Stage-5-disabled differential golden build). `tests/sim/test_ai.cpp` +6.
