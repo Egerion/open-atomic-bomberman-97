@@ -79,7 +79,7 @@ Both `dx` and `dy` are ADDED (rec+4→X, rec+8→Y); the flame-only `- tileH/2`
 re-anchors the piece from tile-bottom to tile-centre before the offset. The
 SAME function's brick-burn branch (kind 9, `"flame brick <n>"`) does not call
 `sub_41DB41`, applies no `dx/dy`, and no `-tileH/2` — it blits at the raw
-`Y_base` base anchor, per the general rule above. `libs/game/src/sprites.cpp`'s
+`Y_base` base anchor, per the general rule above. `libs/render/src/sprites.cpp`'s
 `resolve_sequence` carries `dx/dy` through onto `Sprite` (still inert by
 default) specifically so `Renderer::draw_world`'s flame-arm draw can apply the
 formula above; every other draw site must keep ignoring them. See

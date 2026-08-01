@@ -154,8 +154,8 @@ would scale with cadence and 9x would be ~9x faster). The clean-room's
 pre-fix base-speed slide (1000 units/tick = ~0.25 tile/tick) matched this;
 the "fix" that folded `+100 * kSubFrames` (=1900 units/tick) ran ~1.9x too
 fast and DIVERGED from the oracle at t=4. Reverted in
-`bombs.cpp advance_bombs`/`conveyor_carry`, `tests/test_fidelity_audit.cpp`,
-`tests/test_kick_nuances.cpp`, golden E (`test_golden.cpp`), and the visual
+`bombs.cpp advance_bombs`/`conveyor_carry`, `tests/sim/test_fidelity_audit.cpp`,
+`tests/sim/test_kick_nuances.cpp`, golden E (`tests/sim/test_golden.cpp`), and the visual
 goldens.
 
 **Not to be confused with the rover +100** (rovers.cpp, `sub_401B5C`): that
@@ -226,7 +226,7 @@ way.
 tile still a conveyor" check every tick before continuing to slide a
 belt-origin bomb, clearing `moving` the instant it isn't) so it freezes off-belt
 instead of falling into the kicked-speed budget, and exclude that state from
-`stop_own_sliding`'s target set. Needs new `tests/test_stage_actors.cpp`
+`stop_own_sliding`'s target set. Needs new `tests/sim/test_stage_actors.cpp`
 cases (a short belt ending on open floor: bomb stops exactly at the belt's
 last tile edge, does not coast further; "stop own bombs" has no effect on a
 belt-riding bomb) and a golden recapture if any scenario uses conveyors.
@@ -342,7 +342,7 @@ cited deviation:
   and a flying bomb cannot settle on one but hops onward
   (`sub_42331C` ~pseudo.c 25451-25461). Matches `slide()`'s cell-entry
   probe (`bombs.cpp:474-481`) and `fly()`'s landing verdict
-  (`bombs.cpp:332-364`); extensively tested in `tests/test_stage_actors.cpp`.
+  (`bombs.cpp:332-364`); extensively tested in `tests/sim/test_stage_actors.cpp`.
 - **Dirarrow re-steer gated on exact tile-centre on both axes**
   (both of the original's x- and y-offset-from-centre locals must be zero,
   pseudo.c ~25532-25542) — matches `slide()`'s
@@ -381,10 +381,10 @@ cited deviation:
   live player, a powerup, a blocked tile, an existing bomb, or exhausted
   supply; the k-th bomb gets a `+k`-tick fuse stagger via
   `sub_422EDE`'s elapsed-init. Matches `spooge_ahead`
-  (`bombs.cpp:89-106`); already covered by `tests/test_spooge.cpp` and
+  (`bombs.cpp:89-106`); already covered by `tests/sim/test_spooge.cpp` and
   cited in `facts.md` Core-feel audit item 3.
 - **No bombs on a warphole tile** (drop refusal) — matches `drop()`
-  (`bombs.cpp:73-87`); tested in `tests/test_stage_actors.cpp`.
+  (`bombs.cpp:73-87`); tested in `tests/sim/test_stage_actors.cpp`.
 - **Kicked-bomb speed source is VALUELST id 300, punch/throw is id 301,
   conveyor is id 190+idx** — the *sources* are correct (only the +100
   ground-speed term, Finding 2, and case-0-vs-case-1 continuity, Finding 3,

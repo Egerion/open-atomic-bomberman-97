@@ -12,7 +12,7 @@ Scope: `libs/sim/src/systems/diseases.cpp`/`.hpp`, the disease-effect gates in
 (the end-of-turn action tail, reversed-controls decode),
 `libs/sim/src/systems/ai.cpp`
 (Constipation gate), and the presentation-side disease flash/voice
-(`libs/game/src/renderer.cpp`, `libs/game/src/sound_director.cpp`).
+(`libs/render/src/renderer.cpp`, `libs/audio/src/sound_director.cpp`).
 
 Method: line-by-line read of `native/src/game/batch_0x41DAA7.cpp` (`sub_41DF4C`
 cure @269-285, `sub_41DFB6` assign @288-345, `sub_41E16A`/`sub_41E21E` pickup
@@ -34,7 +34,7 @@ most of the ground here in detail.
 > `assign_random()` calls `give()` unconditionally (the old `continue` that
 > skipped it on a no-target Swap is gone). RNG- and hash-neutral (the announce
 > is a derived, unhashed event and adds no `State::rng` draw). Pinned by
-> `tests/test_disease.cpp` "a swap roll with no valid target still emits the
+> `tests/sim/test_disease.cpp` "a swap roll with no valid target still emits the
 > pickup announce". No golden moved.
 
 **Severity:** Medium (player-audible feedback bug, narrow trigger condition).
@@ -84,7 +84,7 @@ void DiseaseSystem::assign_random(int idx, int count) {
 When `d == Disease::Swap` and `has_swap_target(idx)` is false, the loop
 `continue`s *before* calling `give()` — which is the only place that pushes
 the `Event::Type::Infected` event `give()` (`diseases.cpp:23-58`) uses to
-drive the voice line in `SoundDirector` (`libs/game/src/sound_director.cpp:
+drive the voice line in `SoundDirector` (`libs/audio/src/sound_director.cpp:
 147-156`). The announce sound is therefore skipped entirely for that roll.
 
 **Visible effect:** for a plain Skull (`assign_random(idx, 1)`), if the

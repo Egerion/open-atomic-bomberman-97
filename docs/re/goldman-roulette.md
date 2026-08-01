@@ -144,8 +144,8 @@ either row regardless of the resulting value, closing this gap too.
 
 (Files touched: `libs/game/src/game_app.cpp` (`present_map_select`'s Esc
 handler + its `StartMatch` caller + `present_options_screen`'s exit check),
-`libs/game/include/bomber/game/options_screen.hpp` /
-`libs/game/src/options_screen.cpp` (the two `_touched_` flags +
+`libs/frontend/include/bomber/frontend/options_screen.hpp` /
+`libs/frontend/src/options_screen.cpp` (the two `_touched_` flags +
 `gold_forfeiting_row_touched()`). Provenance: `sub_406DDE` Esc pseudo.c
 8186-8191; `sub_410F81` tail pseudo.c 15494-15519; Options screen switches
 pseudo.c 9280-9460.)
@@ -396,7 +396,7 @@ Three facts this pins that §6 alone did not:
 **Port status: PORTED (2026-07-09).** Landed the same day as this section,
 in the parallel worktree the scope note above anticipated
 (`33669ec`, "Port id-audit.md presentation-side gaps... gold twinkle"):
-`Renderer::update_gold_sparkles`/`draw_world` (`libs/game/src/renderer.cpp`),
+`Renderer::update_gold_sparkles`/`draw_world` (`libs/render/src/renderer.cpp`),
 fed by `GameApp::set_gold_player`. Matches every fact this section pins —
 `goldman_anim_.steps.size()` bounds each particle's lifetime (not
 getvalue(1010)), the draw is a plain opaque `draw_anim` call (no

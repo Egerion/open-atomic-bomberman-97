@@ -249,7 +249,7 @@ phantom corner repeats + 1 ordinary-but-duplicate start-tile revisit) — e.g.
 the outer ring of a 15×11 board has 48 unique tiles but **52 events**. A full,
 literal reconstruction of ring 0's exact 52-event sequence — including
 exactly where the three phantoms and the one ordinary duplicate land — is
-pinned in `tests/test_sim.cpp`'s `"the enclosure spiral's full ring-0 event
+pinned in `tests/sim/test_sim.cpp`'s `"the enclosure spiral's full ring-0 event
 order, phantoms and all"` test case.
 
 - Starts at **(0,0)** with **dir = 1 (Right)**, walks the top edge, turns
@@ -273,7 +273,7 @@ VALUELST 27's own AUTHORED comment (`DATA/RES/VALUELST.RES`, verbatim):
 i.e. **rings closed = 2 × depth setting** (0/2/4/"all"). This port's
 `EnclosureSystem::total`/`position` close exactly that many rings, matching
 this comment and the pre-existing golden-tested behaviour (`cells[2][2]`
-stays open at depth 1 in `tests/test_sim.cpp`).
+stays open at depth 1 in `tests/sim/test_sim.cpp`).
 
 A LITERAL transcription of the stop check above (`if (2*getvalue(27) <=
 depth) return;`, evaluated once a ring's own traversal has fully wrapped back
@@ -533,8 +533,8 @@ after the wall itself solidifies, not on the same tick.** Ported as: instead
 of exploding synchronously, `drop_wall()` sets `b.fuse = 1`, so the sim's own
 NEXT `tick_fuses()` pass (which runs before `enclosure.update()` in our own
 tick order — the same relative order as the original's `sub_4245B9`-before-
-`sub_426818`) detonates it on schedule. `tests/test_sim.cpp`'s "hurry walls…"
-test and `tests/test_stomped_diseases.cpp`'s "stomped_bombs_detonate ON" test
+`sub_426818`) detonates it on schedule. `tests/sim/test_sim.cpp`'s "hurry walls…"
+test and `tests/sim/test_stomped_diseases.cpp`'s "stomped_bombs_detonate ON" test
 both pin the one-tick gap directly (bomb still present immediately after the
 drop tick, gone one tick later).
 
@@ -574,7 +574,7 @@ report for the full trace (`sub_42331C` pseudo.c ~25611-25652).
 The ONLY `rand()` call anywhere in `sub_426818` is `dword_462244 = rand() %
 3` at ARM time (§2/§3) — the drop-SOUND variant pick, drawn once per arm, on
 the presentation stream. The sim's `EnclosureSystem` draws ZERO
-`State::rng` — golden B/C's hash constants move (see `tests/test_golden.cpp`'s
+`State::rng` — golden B/C's hash constants move (see `tests/sim/test_golden.cpp`'s
 UPDATE note) purely from *when* and *where* walls solidify, never from any
 new/reordered RNG draw; every existing RNG-stream assertion in the golden
 suite (D's `kExpectedRng`, E's final `rng`/bounce count) is byte-identical

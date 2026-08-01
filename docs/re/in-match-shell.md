@@ -130,7 +130,7 @@ Presentation-only; no `libs/sim` change; golden untouched.
 
 Prompted by the "bomb placement sometimes just vanishes" report (the sim's
 placement gate was separately proven faithful by a 30k-trial fuzz —
-`tests/test_placement_diag.cpp` G/H/I/J/K): is losing a short tap AUTHENTIC
+`tests/sim/test_placement_diag.cpp` G/H/I/J/K): is losing a short tap AUTHENTIC
 to the original, or a port infidelity? Traced the whole keyboard path:
 
 - **The gameplay reader `sub_41E61E` @ 0x41E61E reads a LIVE STATE ARRAY,
@@ -987,7 +987,7 @@ than the messages:
   different board from the same index and desync on tick 0). No new MsgType and
   no protocol-version bump: round N+1's config is just another confirmation.
 - The guest's blocking wait at `sub_410B6E`'s head becomes the **outcome screen's
-  gate** (`libs/game/include/bomber/game/screens/net_round_gate.hpp`): the host's
+  gate** (`libs/game_util/include/bomber/game_util/net_round_gate.hpp`): the host's
   accept confirms the next round, the guest's screen ends when that confirmation
   arrives. Same host-drives-the-advance shape, one screen earlier.
 - Each round's seed and RollbackSession tick base come from

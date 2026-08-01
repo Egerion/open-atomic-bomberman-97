@@ -34,7 +34,7 @@ layered exactly like the sim's testable-core ethos:
    function `next(state, AppInput) -> AppState` over a tiny event alphabet
    (`Advance` = key/timeout accept, `Back` = escape, `MatchOver`, `Quit`). No
    SDL, no globals; it is unit-tested without a window
-   (`libs/game/include/bomber/game/app_flow.hpp`, `tests/test_frontend.cpp`).
+   (`libs/game_util/include/bomber/game_util/app_flow.hpp`, `tests/game/test_frontend.cpp`).
    This mirrors the RE'd top-level flow (`sub_42B060` → `sub_42B9CE`).
 
 2. **A generic asset-driven `Screen` primitive.** Data, not code: a `ScreenDef`
@@ -43,12 +43,14 @@ layered exactly like the sim's testable-core ethos:
    PCX, starts the music track, advances overlay ANIs by a frame counter, and
    reports `Advance` on keypress **or** dwell timeout — a direct port of
    `sub_42A088`'s "keypress OR getvalue(12)" wait. Missing art/audio logs and is
-   skipped (never aborts). `libs/game/.../screen.hpp` + `src/screen.cpp`.
+   skipped (never aborts). `libs/ui/.../screen.hpp` + `libs/ui/src/screen.cpp`.
 
 3. **A generic transition primitive.** `HEADWIPE.ANI` played as an overlay wipe,
    its step chosen `counter % statecnt` (the confirmed universal ANI driver,
    `sub_41DAA7`); a wall-clock alpha fade is the fallback when the ANI is
-   absent. `libs/game/.../transition.hpp` + `src/transition.cpp`.
+   absent. Built, but never as its own file: the wipe lives with the screens that
+   use it (`libs/frontend/src/asset_screen.cpp`, `menu_screen.cpp`) over
+   `libs/render`'s HEADWIPE loader, so there is no `transition.hpp` to open.
 
 4. **`GameApp` drives the machine around the existing match loop.** `run()`
    walks Boot→Logo→Title→Menu, hands the existing `start_match`/tick loop the
@@ -67,7 +69,7 @@ run on the **wall clock / frame time**. Any front-end randomness (attract
 variety, wipe jitter) uses a presentation-side LCG (as `Renderer::panic_lcg_` /
 `flash_lcg_` do), **never `State::rng`**. `libs/sim` is untouched: no gameplay
 field, no hash input, no RNG draw changes — the golden hashes
-(`tests/test_golden.cpp`) are unaffected by construction.
+(`tests/sim/test_golden.cpp`) are unaffected by construction.
 
 ## Options Considered
 
@@ -96,7 +98,7 @@ individual-screen agents.
 ## Extension points (for the parallel screen agents)
 
 1. **Add a state**: extend the `AppState` enum + the `next()` switch, add a
-   doctest edge in `tests/test_frontend.cpp`.
+   doctest edge in `tests/game/test_frontend.cpp`.
 2. **Add a screen**: author a `ScreenDef` (bg / overlays / music id / dwell /
    next) and register it; no core change needed for a plain image screen.
 3. **Replace a stub**: swap the Menu / Results placeholder for a real
@@ -108,7 +110,7 @@ individual-screen agents.
 
 ## Action Items
 
-1. [x] SDL-free `app_flow.hpp` core + `tests/test_frontend.cpp`.
+1. [x] SDL-free `app_flow.hpp` core + `tests/game/test_frontend.cpp`.
 2. [x] `Screen` + `Transition` primitives; front-end PCX / HEADWIPE loaders.
 3. [x] Wire Boot→Logo→Title→Menu(stub)→Match→Results(stub)→Menu in `GameApp`.
 4. [ ] Parallel agents: polished Title/attract, Menu, Results, `.BM` viewer.

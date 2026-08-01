@@ -62,7 +62,7 @@ corrupt `.RMP` as fatal.
 
 The `.RMP` files are the user's own game-install data (loaded at runtime
 from the install root) and are never committed to this repo; tests use
-synthetic 259-byte buffers only (`tests/test_rmp.cpp`).
+synthetic 259-byte buffers only (`tests/assets/test_rmp.cpp`).
 
 See `docs/re/player-colour.md` for: the green-dominant recolour formula
 that BUILDS a table when the file is absent, the blit itself

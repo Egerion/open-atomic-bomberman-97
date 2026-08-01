@@ -115,7 +115,7 @@ palette getter `sub_42C570`), doing this per entry, in this order:
    the nearest base-palette entry, scanned over the whole palette.
 
 The **baseline `(R+B)/2` is preserved**, so the sprite's shading/casing survives.
-Our `recolor_image` (`libs/game/src/sprites.cpp`) is the truecolour port of THIS
+Our `recolor_image` (`libs/render/src/sprites.cpp`) is the truecolour port of THIS
 formula (it keeps the computed RGB instead of snapping to a palette entry). It is
 used ONLY as the fallback for a colour whose `.RMP` failed to load.
 
@@ -249,7 +249,7 @@ the `? 2 : 0` rule above into our team-numbering space.
   whenever Team Play is on — the `sub_4141F8`-equivalent second draw call,
   mirroring the original's separate marker block.
 - **In-match sprites — Team Play colour override**: `Renderer::render_colour`
-  (`libs/game/src/renderer.cpp`) resolves the colour-set index to draw a given
+  (`libs/render/src/renderer.cpp`) resolves the colour-set index to draw a given
   player slot with, delegating to the SDL-free `bomber::match::
   team_render_colour(Player::team, slot)` (`libs/match/include/bomber/match/
   team_colour.hpp`) — the direct port of `sub_4214BC`'s `? 2 : 0` rule above.
@@ -265,7 +265,7 @@ the `? 2 : 0` rule above into our team-numbering space.
 ## Determinism / golden — NO IMPACT
 
 Recolour and slot colour are entirely PRESENTATION-side. `libs/sim` `State`,
-`state_hash()`, and `tests/test_golden.cpp` are byte-identical — player colour is
+`state_hash()`, and `tests/sim/test_golden.cpp` are byte-identical — player colour is
 NOT a hashed field (it is `MatchConfig`/asset data, never mixed into the hash).
 Confirmed unchanged: no sim file was touched; `team_render_colour` only READS
 the already-hashed `Player::team`, never writes it.

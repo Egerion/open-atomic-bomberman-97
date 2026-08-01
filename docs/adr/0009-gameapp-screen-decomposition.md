@@ -20,16 +20,35 @@ Constraints from CLAUDE.md and the determinism contract:
   reproduced statement-for-statement, changing only member access to the new
   seam. Extractions are adversarially verified 1:1 before they land.
 - `run_match`/`start_match` are **golden-sensitive** (they drive the deterministic
-  sim). `tests/test_golden.cpp` must stay byte-identical.
-- Many screens are **visual-golden / RE-faithful** — they mirror a specific
-  `sub_XXXX` and their pixels are pinned by `tests/visual/`.
+  sim). `tests/sim/test_golden.cpp` must stay byte-identical.
+- Many screens are **RE-faithful** — they mirror a specific `sub_XXXX`.
+  *Corrected 2026-08-01: this bullet used to add "and their pixels are pinned by
+  `tests/visual/`", which is not true and was load-bearing here.* The harness
+  pins ten frames: five in-match ones that go only through
+  `Renderer::draw_frame`, and five CREDITS `.BM` frames. No pinned frame renders
+  a front-end screen's chrome, and none renders a single outlined glyph — see
+  `tests/visual/README.md` § "What these ten frames do NOT cover". Two
+  contradicting ports of `sub_41696C` coexisted for as long as both existed and
+  the harness was green throughout. Treat a screen extraction as pinned by
+  `bomber_game_core` compiling and by a live eyeball, not by pixels.
 
 ## Decision
 
 Keep `run_app` (the `AppState` + `next()` pure-flow-graph driver, ADR-0004) as
-the state-machine spine. Lift each `present_*` screen into its own class in
-`libs/game/src/screens/`, constructed from two seams, so the god-object shrinks
-to the SDL lifecycle + the driver.
+the state-machine spine. Lift each `present_*` screen into its own class,
+constructed from two seams, so the god-object shrinks to the SDL lifecycle + the
+driver.
+
+> **Where they actually landed (2026-08-01).** This ADR was written against
+> `libs/game/src/screens/`; that directory no longer exists. ADR-0008's stage 3
+> split `libs/game` into nine packages afterwards, and the screens went to
+> **`libs/frontend/src/`** (with `MatchRunner`), the generic chrome to `libs/ui`,
+> the net widgets to `libs/netui`, the editor to `libs/editor`, the online
+> session to `libs/netplay`, and the SDL-free models (`app_flow`, `editor_grid`,
+> the results bookkeeping) to `libs/game_util`. The two seams below are unchanged
+> and are exactly what made that later split cheap — read every
+> `libs/game/src/screens/X.cpp` in this document as `libs/frontend/src/X.cpp`.
+> `libs/game` is now the app shell alone.
 
 ### Seam 1 — `ScreenContext` (stable services)
 

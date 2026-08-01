@@ -234,7 +234,7 @@ and delivered 147 bytes.
 `AllocateRelay` is answered **only to the sender** (PROTOCOL.md §6 is frozen and
 carries no broadcast that could tell the other seat), so the peers have to
 converge by themselves. They do it with a **mutual path verification** between
-the punch and the match (`libs/net/link_probe.hpp`, `Phase::Verifying`):
+the punch and the match (`libs/net/include/bomber/net/link_probe.hpp`, `Phase::Verifying`):
 
     MsgType::Probe { nonce, seen_peer }, over the CHOSEN Transport
 

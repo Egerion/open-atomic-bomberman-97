@@ -137,6 +137,6 @@ identical boards.
 round-trip a `Scheme { version, name, brick_density, rows[], spawns[],
 powerups[] }`. `to_text`/`write` reproduce the exact shipped grammar above
 (verified round-trip: `load(write(s))` reproduces every field `load()`
-reads, `tests/test_sch_write.cpp`) so the hidden scheme editor
+reads, `tests/assets/test_sch_write.cpp`) so the hidden scheme editor
 (`docs/re/results-and-options.md` #5) can save `.SCH` files the original
 game (and this port) can read back.

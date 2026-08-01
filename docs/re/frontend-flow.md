@@ -423,7 +423,7 @@ re-decoded through COLOR.PAL):
 
 **Port status: re-skinned 2026-07-10, ANIMATED 2026-07-24**
 (`draw_boot_loading_dialog`, `libs/game/src/game_app.cpp` +
-`draw_dialog_chrome`/`draw_dialog_text`, `libs/game/src/dialog_chrome.cpp`) —
+`draw_dialog_chrome`/`draw_dialog_text`, `libs/ui/src/dialog_chrome.cpp`) —
 WINZ.PCX 9-patch window (loaded standalone before the first flash via
 `AssetStore::load_frontend_winz`, mirroring `sub_414DF4`'s own winz.plt load),
 caption/readout as outlined text in the LUT-true inks, white bar frame,
@@ -981,7 +981,7 @@ keyboard layouts" row, and it never touches `INPUT.BM`.
 
 Net effect: **our port already reproduces `INPUT.BM`'s one real reachability
 path** — it is globbed and listed by the SAME `HelpBrowser` menu row 5 / F1
-uses (`libs/game/include/bomber/game/bmscreen.hpp`'s `HelpBrowser::enter()`,
+uses (`libs/ui/include/bomber/ui/bmscreen.hpp`'s `HelpBrowser::enter()`,
 which globs `*.BM` in the install root exactly like `sub_41404B`). The port's
 separate `AppState::Controllers` / `AppInput::OpenControllers` /
 `present_bm_screen("INPUT")` construct (`app_flow.hpp`, `game_app.cpp`) does
@@ -1251,7 +1251,7 @@ parser + the new `bmfont` parser):
 **Interactive settings — Options screen and key-remap UI both RE'd and
 ported, 1:1 aligned.** These `.BM` files are the **HELP overlays** listed by
 the help browser (`sub_41431C`, corrected above). The **Options screen**
-(`libs/game/src/options_screen.cpp`) is a fully-interactive 19-row editor
+(`libs/frontend/src/options_screen.cpp`) is a fully-interactive 19-row editor
 persisting to `options.ini` (read-modify-write, `bomber::assets::save_options`);
 its F1 key still reaches OPTIONS.BM. It was originally built clean-room
 against the glue-screen conventions (random `GLUE<n>` backdrop, FONT6 text,

@@ -251,7 +251,7 @@ the mechanism before any code lands.
   no actor registry (Finding 0), a covered actor can never re-trigger in the sim
   anyway (a solid tile is impassable), and mutating hashed `State::actor_type`
   would DIVERGE from the registry-retaining original. So the fix lives entirely in
-  `libs/game/src/renderer.cpp` — no `state_hash()` impact, golden untouched.
+  `libs/render/src/renderer.cpp` — no `state_hash()` impact, golden untouched.
 - **Why not implement now.** The current per-tile gate is ITSELF an unconfirmed
   inference; swapping it for an arm-time gate would replace one guess with
   another. The exact trigger (arm at `hurry−5` vs. hurry-banner at `< hurry` vs.

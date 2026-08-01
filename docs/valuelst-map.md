@@ -142,6 +142,6 @@ per-tick flame-grid update at `sub_426d06` (facts.md "Flame lifetime —
 CONFIRMED = 10 frames"). The old `corner_threshold` guess (900 = 9 px) was
 deleted outright — corner-assist is not a distance threshold at all; it
 resolves per-pixel via `sub_41EC84`'s movement budget (facts.md "no distance
-threshold" note, verified by `tests/test_move.cpp`).
+threshold" note, verified by `tests/sim/test_move.cpp`).
 
 Parsing notes: `;` starts a comment; the file ends with a DOS EOF byte (0x1A); a few ids hold coordinate pairs (`id,x,y`) — the current parser keeps the first value only, which is fine for the ids the sim reads.

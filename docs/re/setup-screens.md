@@ -335,7 +335,7 @@ grey joystick pane, +70 selected-row boost and key-legend line removed).
   index**, and then the loaded scheme overrides whichever slots it names —
   not a flat 0, and not persisted from a prior visit. The port's setup screen
   mirrors both halves at entry: `reset_setup_teams()`
-  (`libs/game/include/bomber/game/input.hpp`) lays down the parity default,
+  (`libs/input/include/bomber/input/input.hpp`) lays down the parity default,
   then `match::scheme_setup_teams()`
   (`libs/match/include/bomber/match/match_factory.hpp`) overlays the scheme's
   `-S` teams. The `T` key still overrides both afterwards, exactly as in
@@ -613,7 +613,7 @@ and not copied into any hashed `Player` field. That follow-up (tracked in
 `docs/re/ai.md`) has since landed: `Player::team` is now a hashed field, copied
 verbatim from `MatchConfig::team[]` at setup (`setup.cpp`), and gates AI
 targeting (`docs/re/ai.md` §3.4/§5.3) and round-end ("one team left"). This grew
-the hash layout by one word per player (`hash.cpp`), so `tests/test_golden.cpp`
+the hash layout by one word per player (`hash.cpp`), so `tests/sim/test_golden.cpp`
 needed a one-time constant recapture — see that file's own note and the commit
 that landed `Player::team`. Every golden scenario leaves every slot's team at 0
 (the default), so gameplay is byte-identical; only the digest layout shifted.

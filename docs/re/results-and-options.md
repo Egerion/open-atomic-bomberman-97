@@ -180,7 +180,7 @@ colour once nearest-match is resolved to an exact/near-exact hit as above.
 
 `byte_49D0DA`'s second use, §4's `HelpBrowser` error dialog ink, is now also
 hardcoded from this same table (`kErrorInkR/G/B` = (252, 80, 80),
-`libs/game/src/bmscreen.cpp`) rather than a placeholder grey — the two call
+`libs/ui/src/bmscreen.cpp`) rather than a placeholder grey — the two call
 sites (team-1 player ink here, and the "manual disabled"/"no help files"
 dialogs in §4) are confirmed the SAME LUT element, not independently-tuned
 reds that merely resemble each other.
@@ -262,7 +262,7 @@ claim below, and adds the mouse/widget facts the 1:1 port rebuild needed):
   E0-extended arrow codes alias their numpad names — the default set 0
   displays as `(8)Up / (6)Right / (2)Down / (4)Left / Space / Enter`. The
   table content is pinned verbatim in the port
-  (`libs/game/include/bomber/game/dos_scancode.hpp`; read from the EXE data
+  (`libs/input/include/bomber/input/dos_scancode.hpp`; read from the EXE data
   2026-07-13). An unbound 0 still has a table entry (the empty string), so
   it shows `Key: ''`.
 - **Clicks arrive through the key queue.** The widget pump (`sub_432998`)
@@ -422,7 +422,7 @@ throughout `sub_42B9CE`'s children).
 
 A user report ("the OPTIONS screen likely has gaps vs the original") prompted
 a full re-read of `sub_4080DC`'s decompiled body (pseudo.c 8914-9491, not
-just the summary table above) against `libs/game/src/options_screen.cpp`.
+just the summary table above) against `libs/frontend/src/options_screen.cpp`.
 Five confirmed mismatches, all now fixed in the port:
 
 1. **All rows draw unconditionally, in the SAME ink, always** — the
@@ -758,7 +758,7 @@ returned a null/empty filename array) is
 between the two error cases (5 vs 4), both share the `95` second line and
 the `414340` two-line dialog shape.
 
-**Port status (2026-07-08):** `HelpBrowser` (`libs/game/src/bmscreen.cpp`)
+**Port status (2026-07-08):** `HelpBrowser` (`libs/ui/src/bmscreen.cpp`)
 now wires both facts: `enter(bool manual_enabled)` gates on the caller's
 `getvalue(15)` reading BEFORE the glob (both `GameApp::present_help_browser`
 and `present_help_browser_modal` pass `values_.at_or(15, 1) != 0`), and its
@@ -969,7 +969,7 @@ merely wrong but impossible: the item area alone needs `13*fh` starting at
 
 **Geometry** (window-relative; the widget draws into the window's own
 buffer at `bitmap + y*pitch + x`). Full offset citations live in
-`libs/game/include/bomber/game/list_dialog_geometry.hpp`:
+`libs/game_util/include/bomber/game_util/list_dialog_geometry.hpp`:
 
 - `item_w` = widest ITEM (`sub_42FEF0` @ `0x42DC16`, a plain max over
   `textwidth`); `win_w = max(item_w + 16, textwidth(title)) + 20`, and the
