@@ -40,6 +40,7 @@ constexpr Uint8 kBadR = 255, kBadG = 96, kBadB = 96;
 // which is the correct reading: "off the scale".
 constexpr int kSparkFloorMs = 150;
 constexpr float kSparkH = 12.0f;
+constexpr float kSparkGap = 3.0f;
 
 struct Ink {
     Uint8 r = kDialogInkR, g = kDialogInkG, b = kDialogInkB;
@@ -76,6 +77,29 @@ std::string local_seat_label(std::uint16_t local_seats) {
     return out.empty() ? std::string() : (" ME s" + out);
 }
 
+// A pen walking down the panel: where the next row goes, and what draws it. One
+// value rather than the (renderer, font, x, y, ink) argument list every row used
+// to carry (§3).
+struct PanelPen {
+    SDL_Renderer* ren = nullptr;
+    const FontTextures* font = nullptr;
+    float x = 0.0f;
+    float y = 0.0f;
+    float line_h = 0.0f;
+
+    // A 1-px black outline under the ink, the same manual four-pass the fps
+    // overlay uses — the panel is translucent, so text over a bright field needs
+    // it.
+    void row(const std::string& s, Ink ink) {
+        font->draw(ren, s, x - 1, y, 0, 0, 0, kScale);
+        font->draw(ren, s, x + 1, y, 0, 0, 0, kScale);
+        font->draw(ren, s, x, y - 1, 0, 0, 0, kScale);
+        font->draw(ren, s, x, y + 1, 0, 0, 0, kScale);
+        font->draw(ren, s, x, y, ink.r, ink.g, ink.b, kScale);
+        y += line_h;
+    }
+};
+
 // The translucent slab the chat overlay uses, in the same chrome colours, so the
 // two port-only overlays look like siblings rather than two inventions.
 void draw_slab(SDL_Renderer* ren, const SDL_FRect& r) {
@@ -87,30 +111,19 @@ void draw_slab(SDL_Renderer* ren, const SDL_FRect& r) {
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
 }
 
-// A 1-px black outline under the ink, the same manual four-pass the fps overlay
-// uses — the panel is translucent, so text over a bright field needs it.
-void line_at(SDL_Renderer* ren, const FontTextures& font, const std::string& s, float x, float y,
-             Ink ink) {
-    font.draw(ren, s, x - 1, y, 0, 0, 0, kScale);
-    font.draw(ren, s, x + 1, y, 0, 0, 0, kScale);
-    font.draw(ren, s, x, y - 1, 0, 0, 0, kScale);
-    font.draw(ren, s, x, y + 1, 0, 0, 0, kScale);
-    font.draw(ren, s, x, y, ink.r, ink.g, ink.b, kScale);
-}
-
 // The RTT sparkline. Each bucket is 100 ms of history and holds that bucket's
 // WORST sample, so a spike cannot be smoothed away by decimation; a bucket with
-// no sample at all is stored as 0 and drawn as a GAP, which is exactly what
-// "no acknowledgement came back in that tenth of a second" should look like.
-void draw_spark(SDL_Renderer* ren, const net::PeerStats& p, float x, float y, float w) {
+// no sample at all is stored as 0 and drawn as a GAP, which is exactly what "no
+// acknowledgement came back in that tenth of a second" should look like.
+void draw_spark(const PanelPen& pen, const net::PeerStats& p, float w) {
     const int top = std::max(kSparkFloorMs, p.rtt_recent_max_ms);
-    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawBlendMode(pen.ren, SDL_BLENDMODE_BLEND);
     // A dim baseline so the gaps are legible as gaps rather than as nothing.
-    SDL_SetRenderDrawColor(ren, kDialogDimR, kDialogDimG, kDialogDimB, 90);
-    SDL_FRect base{x, y + kSparkH, w, 1.0f};
-    SDL_RenderFillRect(ren, &base);
+    SDL_SetRenderDrawColor(pen.ren, kDialogDimR, kDialogDimG, kDialogDimB, 90);
+    SDL_FRect base{pen.x, pen.y + kSparkH, w, 1.0f};
+    SDL_RenderFillRect(pen.ren, &base);
     if (p.rtt_history_len == 0) {
-        SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
+        SDL_SetRenderDrawBlendMode(pen.ren, SDL_BLENDMODE_NONE);
         return;
     }
     const float bw = w / static_cast<float>(net::kRttHistory);
@@ -119,13 +132,13 @@ void draw_spark(SDL_Renderer* ren, const net::PeerStats& p, float x, float y, fl
         if (v == 0) continue;  // a gap: draw nothing, so the hole is visible
         const float h = std::min(1.0f, static_cast<float>(v) / static_cast<float>(top)) * kSparkH;
         const bool hot = v >= top && top > kSparkFloorMs;
-        SDL_SetRenderDrawColor(ren, hot ? kBadR : kDialogInkR, hot ? kBadG : kDialogInkG,
+        SDL_SetRenderDrawColor(pen.ren, hot ? kBadR : kDialogInkR, hot ? kBadG : kDialogInkG,
                                hot ? kBadB : kDialogInkB, 220);
-        SDL_FRect bar{x + static_cast<float>(i) * bw, y + kSparkH - h, std::max(1.0f, bw - 1.0f),
-                      std::max(1.0f, h)};
-        SDL_RenderFillRect(ren, &bar);
+        SDL_FRect bar{pen.x + static_cast<float>(i) * bw, pen.y + kSparkH - h,
+                      std::max(1.0f, bw - 1.0f), std::max(1.0f, h)};
+        SDL_RenderFillRect(pen.ren, &bar);
     }
-    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
+    SDL_SetRenderDrawBlendMode(pen.ren, SDL_BLENDMODE_NONE);
 }
 
 // How a path should READ. Relayed and star are not faults, but they are the
@@ -153,6 +166,176 @@ std::string path_label(net::NetPath p) {
     return "UNKNOWN PATH";
 }
 
+// What the panel will contain, counted before anything is drawn so the slab is
+// exactly as tall as its contents: a panel with dead space at the bottom reads
+// as a panel with missing data.
+struct PanelRows {
+    int peers = 0;  // each tracked peer costs two text rows plus a sparkline
+    bool offset_bound = false;
+};
+
+PanelRows count_rows(const net::NetStats& s) {
+    PanelRows n;
+    for (const net::PeerStats& p : s.peers) {
+        if (!p.tracked) continue;
+        ++n.peers;
+        if (p.rtt_offset_bound) n.offset_bound = true;
+    }
+    return n;
+}
+
+constexpr int kSessionRows = 7;
+
+// Rows 1-3: where the session IS. The path comes first because it is the biggest
+// decision-changer and the one field the client could never answer before — a
+// direct match does not touch the matchmaker after tick 0, so it alone rules
+// half the causes in or out. A desynced or aborted session is shown next rather
+// than buried, because it makes every number below it historical.
+void draw_session_state(PanelPen& pen, const net::NetStats& s, std::uint16_t local_seats) {
+    pen.row(path_label(s.path) + local_seat_label(local_seats), path_ink(s.path));
+
+    if (s.desynced)
+        pen.row(fmt("DESYNC @ TICK %u", static_cast<unsigned>(s.desync_tick)), kBad);
+    else if (s.aborted)
+        pen.row("PEER LOST - MATCH ENDING", kBad);
+    else if (s.dropped_seats != 0)
+        pen.row(fmt("SEAT(S) 0x%03X -> AI", static_cast<unsigned>(s.dropped_seats)), kWarn);
+    else
+        pen.row(fmt("TICK %u  CONF %u", static_cast<unsigned>(s.tick),
+                    static_cast<unsigned>(s.confirmed)),
+                kOk);
+
+    // Prediction depth == how far the confirmed frontier trails the head. Amber
+    // once within one tick of the cap: past that the display stops being allowed
+    // to move.
+    const bool deep = s.max_prediction > 0 && s.prediction_depth >= s.max_prediction - 1;
+    pen.row(
+        fmt("PRED %d/%d  PEAK %d", s.prediction_depth, s.max_prediction, s.worst_prediction_depth),
+        deep ? kWarn : kOk);
+}
+
+// Rows 4-7: what the session is COSTING.
+void draw_session_cost(PanelPen& pen, const net::NetStats& s) {
+    // THE STUTTER LINE. A pump the session was not allowed to simulate is what
+    // the player feels as a hitch; if this is zero the stutter is not the
+    // netcode. A re-phase HOLD returns before the cap check, so it costs the same
+    // displayed tick and is NOT counted here.
+    pen.row(fmt("STALL %d/s  (%u)", s.stalls_per_sec, static_cast<unsigned>(s.stall_pumps)),
+            s.stalls_per_sec > 0 ? kBad : kOk);
+
+    // THE ARRIVAL-VARIANCE ABSORBER (rollback_session.hpp's jitter note), and the
+    // only line here that names something the PLAYER pays for: each tick of LEAD
+    // is 50 ms of local input lag, spent to put our input on the wire before the
+    // peer needs it. On a clean path this row reads all zeros, and that is the
+    // whole guarantee. SPREAD is the measured jitter in ticks, HOLD the skew
+    // correction, ABS the number of holds jitter no longer costs us.
+    pen.row(
+        fmt("LEAD %dt SPRD %dt HOLD %u ABS %u", s.local_lead, s.peer_depth_spread,
+            static_cast<unsigned>(s.rephase_holds), static_cast<unsigned>(s.rephase_suppressed)),
+        s.local_lead > 0 ? kWarn : kOk);
+
+    pen.row(fmt("RB %d/s  RESIM %d/s  (%u)", s.rollbacks_per_sec, s.resim_ticks_per_sec,
+                static_cast<unsigned>(s.rollbacks)),
+            s.resim_ticks_per_sec > net::kPumpHz ? kWarn : kOk);
+
+    // A non-zero BAD count means something on the path is corrupting or
+    // injecting — nothing else here would show that.
+    pen.row(fmt("RX %d/s  BAD %u", s.rx_per_sec, static_cast<unsigned>(s.rx_malformed)),
+            s.rx_malformed > 0 ? kBad : kOk);
+}
+
+Ink lag_ink(const net::NetStats& s, const net::PeerStats& p) {
+    if (s.max_prediction > 0 && p.lag_ticks >= s.max_prediction) return kBad;
+    return p.lag_ticks > s.max_prediction / 2 ? kWarn : kOk;
+}
+
+void draw_peer_rows(PanelPen& pen, const net::NetStats& s) {
+    for (int i = 0; i < sim::kMaxPlayers; ++i) {
+        const net::PeerStats& p = s.peers[static_cast<std::size_t>(i)];
+        if (!p.tracked) continue;
+        if (!p.live) {
+            pen.row(fmt("s%d  DROPPED -> AI", i), kWarn);
+            pen.y += pen.line_h + kSparkH + kSparkGap;  // the height calc reserved it
+            continue;
+        }
+        // The "*" is the whole honesty of these two lines: while the peer is
+        // running behind us, the ack-RTT is measuring that tick offset and not
+        // the wire, so it must not be read as a path latency (net_stats.hpp).
+        const char* star = p.rtt_offset_bound ? "*" : "";
+        pen.row(fmt("s%d LAG %dt  RTT %sms%s  J%d", i, p.lag_ticks, ms(p.rtt_smooth_ms).c_str(),
+                    star, p.jitter_ms),
+                lag_ink(s, p));
+        // The loss figure is an ESTIMATE and is marked "~" on screen for the same
+        // reason it is documented as one: it cannot separate datagrams lost on
+        // the path from the peer's own loop stalling. MIN is the tightest reading
+        // of the real path — the ack-RTT is an upper bound.
+        pen.row(fmt("   %d/s  ~%d%% LOSS  MIN %sms%s", p.recv_per_sec, p.loss_pct_est,
+                    ms(p.rtt_min_ms).c_str(), star),
+                p.loss_pct_est >= 20 ? kBad : (p.loss_pct_est >= 5 ? kWarn : kOk));
+        draw_spark(pen, p, kPanelW - kPad * 2);
+        pen.y += kSparkH + kSparkGap;
+    }
+}
+
+// The session-end modal's rows, built before anything is drawn.
+using SummaryRow = std::pair<std::string, Ink>;
+
+std::vector<SummaryRow> session_end_rows(const net::SessionSummary& summary) {
+    const net::NetStats& s = summary.stats;
+    std::vector<SummaryRow> rows;
+    rows.emplace_back(std::string("NETWORK SESSION ENDED"), kBad);
+    rows.emplace_back(std::string("REASON: ") + net::end_reason_name(summary.reason), kWarn);
+    rows.emplace_back(std::string("PATH: ") + path_label(s.path), path_ink(s.path));
+    if (s.desynced)
+        rows.emplace_back(fmt("DESYNC AT TICK %u", static_cast<unsigned>(s.desync_tick)), kBad);
+    rows.emplace_back(fmt("TICK %u   CONFIRMED %u", static_cast<unsigned>(s.tick),
+                          static_cast<unsigned>(s.confirmed)),
+                      kOk);
+    rows.emplace_back(
+        fmt("STALLS %u   ROLLBACKS %u   RESIM %u", static_cast<unsigned>(s.stall_pumps),
+            static_cast<unsigned>(s.rollbacks), static_cast<unsigned>(s.resim_ticks)),
+        kOk);
+    // The absorber's own row. All zeros means the path never needed it, which is
+    // as much a result as a non-zero one — a laggy report with nothing here says
+    // the arrival timing was not the cause.
+    rows.emplace_back(fmt("HOLDS %u   ABSORBED %u   LEAD %ut PUMPS %u",
+                          static_cast<unsigned>(s.rephase_holds),
+                          static_cast<unsigned>(s.rephase_suppressed),
+                          static_cast<unsigned>(s.local_lead),
+                          static_cast<unsigned>(s.lead_pumps)),
+                      s.lead_pumps > 0 ? kWarn : kOk);
+    rows.emplace_back(fmt("PACKETS %u   MALFORMED %u", static_cast<unsigned>(s.rx_packets),
+                          static_cast<unsigned>(s.rx_malformed)),
+                      s.rx_malformed > 0 ? kBad : kOk);
+    for (int i = 0; i < sim::kMaxPlayers; ++i) {
+        const net::PeerStats& p = s.peers[static_cast<std::size_t>(i)];
+        if (!p.tracked) continue;
+        rows.emplace_back(fmt("SEAT %d  LAG %dt (PEAK %dt)  RTT %d/%d/%d MS%s", i, p.lag_ticks,
+                              p.worst_lag_ticks, p.rtt_ms, p.rtt_min_ms, p.rtt_max_ms,
+                              p.rtt_offset_bound ? " (TICK OFFSET, NOT PATH)" : ""),
+                          p.live ? kOk : kWarn);
+    }
+    rows.emplace_back(std::string("WRITTEN TO netdiag.log NEXT TO THE GAME"), kOk);
+    return rows;
+}
+
+void draw_session_end(ScreenContext ctx, const std::vector<SummaryRow>& rows,
+                      const DialogRect& win) {
+    const float lh = static_cast<float>(ctx.front_font.line_height());
+    ctx.audio.update_music();
+    SDL_SetRenderDrawColor(ctx.sdl, 0, 0, 0, 255);
+    SDL_RenderClear(ctx.sdl);
+    draw_dialog_chrome(ctx.sdl, win, &ctx.assets.frontend_pcx("WINZ"));
+    float ty = win.y + 16.0f;
+    for (const auto& [text, ink] : rows) {
+        draw_dialog_text(ctx.sdl, ctx.front_font, text, win.x + 20.0f, ty, ink.r, ink.g, ink.b);
+        ty += lh + 2.0f;
+    }
+    draw_dialog_text(ctx.sdl, ctx.front_font, "PRESS [ENTER] OR [ESC]", win.x + 20.0f,
+                     win.y + win.h - 16.0f - lh, kDialogInkR, kDialogInkG, kDialogInkB);
+    SDL_RenderPresent(ctx.sdl);
+}
+
 }  // namespace
 
 void draw_net_overlay(SDL_Renderer* ren, const FontTextures& font, const net::NetStats& s,
@@ -160,111 +343,18 @@ void draw_net_overlay(SDL_Renderer* ren, const FontTextures& font, const net::Ne
     if (ren == nullptr || !font.loaded()) return;
 
     const float lh = static_cast<float>(font.line_height()) * kScale + 1.0f;
-    // Count the rows first so the slab is exactly as tall as its contents: a
-    // panel with dead space at the bottom reads as a panel with missing data.
-    int peer_count = 0;  // each tracked peer costs two text rows plus a sparkline
-    bool any_offset_bound = false;
-    for (const net::PeerStats& p : s.peers) {
-        if (!p.tracked) continue;
-        ++peer_count;
-        if (p.rtt_offset_bound) any_offset_bound = true;
-    }
-    const int footer_rows = any_offset_bound ? 1 : 0;
-    const float h = kPad * 2 + lh * static_cast<float>(7 + peer_count * 2 + footer_rows) +
-                    static_cast<float>(peer_count) * (kSparkH + 3.0f);
+    const PanelRows n = count_rows(s);
+    const float h = kPad * 2 +
+                    lh * static_cast<float>(kSessionRows + n.peers * 2 + (n.offset_bound ? 1 : 0)) +
+                    static_cast<float>(n.peers) * (kSparkH + kSparkGap);
     const SDL_FRect panel{kMargin, kMargin, kPanelW, h};
     draw_slab(ren, panel);
 
-    float x = panel.x + kPad;
-    float y = panel.y + kPad;
-    const auto row = [&](const std::string& t, Ink ink) {
-        line_at(ren, font, t, x, y, ink);
-        y += lh;
-    };
-
-    // 1. THE PATH — first, biggest decision-changer, and the one field the
-    //    client could never answer before. A direct match does not touch the
-    //    matchmaker after tick 0, so this alone rules half the causes in or out.
-    row(path_label(s.path) + local_seat_label(local_seats), path_ink(s.path));
-
-    // 2. The loud states, if any. Shown here rather than buried at the bottom:
-    //    a desynced or aborted session makes every number below it historical.
-    if (s.desynced)
-        row(fmt("DESYNC @ TICK %u", static_cast<unsigned>(s.desync_tick)), kBad);
-    else if (s.aborted)
-        row("PEER LOST - MATCH ENDING", kBad);
-    else if (s.dropped_seats != 0)
-        row(fmt("SEAT(S) 0x%03X -> AI", static_cast<unsigned>(s.dropped_seats)), kWarn);
-    else
-        row(fmt("TICK %u  CONF %u", static_cast<unsigned>(s.tick),
-                static_cast<unsigned>(s.confirmed)),
-            kOk);
-
-    // 3. Prediction depth == how far the confirmed frontier trails the head.
-    //    Amber once it is within one tick of the cap: that is the point past
-    //    which the display stops being allowed to move.
-    const bool deep = s.max_prediction > 0 && s.prediction_depth >= s.max_prediction - 1;
-    row(fmt("PRED %d/%d  PEAK %d", s.prediction_depth, s.max_prediction, s.worst_prediction_depth),
-        deep ? kWarn : kOk);
-
-    // 4. THE STUTTER LINE. A pump the session was not allowed to simulate is
-    //    what the player feels as a hitch; if this is zero the stutter is not
-    //    the netcode, and that alone rules out half a day of guessing. Add
-    //    HOLD below to it for the whole picture: a re-phase hold returns before
-    //    the cap check, so it costs the same displayed tick and is NOT a stall.
-    row(fmt("STALL %d/s  (%u)", s.stalls_per_sec, static_cast<unsigned>(s.stall_pumps)),
-        s.stalls_per_sec > 0 ? kBad : kOk);
-
-    // 5. THE ARRIVAL-VARIANCE ABSORBER (rollback_session.hpp's jitter note), and
-    //    the only line here that names something the PLAYER pays for: each tick
-    //    of LEAD is 50 ms of local input lag, spent to put our input on the wire
-    //    before the peer needs it. On a clean path this row reads all zeros, and
-    //    that is the whole guarantee — if it does not, the link is being measured
-    //    as jittery (SPREAD, in ticks) and the absorber is at work. HOLD is the
-    //    skew correction, ABS the number of holds jitter no longer costs us.
-    row(fmt("LEAD %dt SPRD %dt HOLD %u ABS %u", s.local_lead, s.peer_depth_spread,
-            static_cast<unsigned>(s.rephase_holds), static_cast<unsigned>(s.rephase_suppressed)),
-        s.local_lead > 0 ? kWarn : kOk);
-
-    // 6. The correction workload.
-    row(fmt("RB %d/s  RESIM %d/s  (%u)", s.rollbacks_per_sec, s.resim_ticks_per_sec,
-            static_cast<unsigned>(s.rollbacks)),
-        s.resim_ticks_per_sec > net::kPumpHz ? kWarn : kOk);
-
-    // 7. Raw traffic. A non-zero BAD count means something on the path is
-    //    corrupting or injecting — nothing else here would show that.
-    row(fmt("RX %d/s  BAD %u", s.rx_per_sec, static_cast<unsigned>(s.rx_malformed)),
-        s.rx_malformed > 0 ? kBad : kOk);
-
-    for (int i = 0; i < sim::kMaxPlayers; ++i) {
-        const net::PeerStats& p = s.peers[static_cast<std::size_t>(i)];
-        if (!p.tracked) continue;
-        if (!p.live) {
-            row(fmt("s%d  DROPPED -> AI", i), kWarn);
-            y += lh + kSparkH + 3.0f;  // keep the layout the height calc reserved
-            continue;
-        }
-        const Ink lag_ink = (s.max_prediction > 0 && p.lag_ticks >= s.max_prediction) ? kBad
-                            : (p.lag_ticks > s.max_prediction / 2)                    ? kWarn
-                                                                                      : kOk;
-        // The "*" is the whole honesty of this line: while the peer is running
-        // behind us, the ack-RTT is measuring that tick offset and not the wire,
-        // so it must not be read as a path latency (net_stats.hpp).
-        const char* star = p.rtt_offset_bound ? "*" : "";
-        row(fmt("s%d LAG %dt  RTT %sms%s  J%d", i, p.lag_ticks, ms(p.rtt_smooth_ms).c_str(), star,
-                p.jitter_ms),
-            lag_ink);
-        // The loss figure is an ESTIMATE and is marked "~" on screen for the same
-        // reason it is documented as one: it cannot separate datagrams lost on
-        // the path from the peer's own loop stalling. MIN is the tightest
-        // reading of the real path — the ack-RTT is an upper bound.
-        row(fmt("   %d/s  ~%d%% LOSS  MIN %sms%s", p.recv_per_sec, p.loss_pct_est,
-                ms(p.rtt_min_ms).c_str(), star),
-            p.loss_pct_est >= 20 ? kBad : (p.loss_pct_est >= 5 ? kWarn : kOk));
-        draw_spark(ren, p, x, y, kPanelW - kPad * 2);
-        y += kSparkH + 3.0f;
-    }
-    if (any_offset_bound) row("* RTT = TICK OFFSET, NOT PATH", kWarn);
+    PanelPen pen{ren, &font, panel.x + kPad, panel.y + kPad, lh};
+    draw_session_state(pen, s, local_seats);
+    draw_session_cost(pen, s);
+    draw_peer_rows(pen, s);
+    if (n.offset_bound) pen.row("* RTT = TICK OFFSET, NOT PATH", kWarn);
 }
 
 std::string net_log_timestamp() {
@@ -300,42 +390,7 @@ AppInput present_net_session_end(ScreenContext ctx, const net::SessionSummary& s
     // RE'd Alt+D window): a WINZ 9-patch panel, Enter or Escape dismisses. Drawn
     // over black rather than over the frozen field, because by the time this is
     // shown the match's own renderer state is finished with.
-    const net::NetStats& s = summary.stats;
-    std::vector<std::pair<std::string, Ink>> rows;
-    rows.emplace_back(std::string("NETWORK SESSION ENDED"), kBad);
-    rows.emplace_back(std::string("REASON: ") + net::end_reason_name(summary.reason), kWarn);
-    rows.emplace_back(std::string("PATH: ") + path_label(s.path), path_ink(s.path));
-    if (s.desynced)
-        rows.emplace_back(fmt("DESYNC AT TICK %u", static_cast<unsigned>(s.desync_tick)), kBad);
-    rows.emplace_back(fmt("TICK %u   CONFIRMED %u", static_cast<unsigned>(s.tick),
-                          static_cast<unsigned>(s.confirmed)),
-                      kOk);
-    rows.emplace_back(
-        fmt("STALLS %u   ROLLBACKS %u   RESIM %u", static_cast<unsigned>(s.stall_pumps),
-            static_cast<unsigned>(s.rollbacks), static_cast<unsigned>(s.resim_ticks)),
-        kOk);
-    // The absorber's own row. All zeros means the path never needed it, which is
-    // as much a result as a non-zero one — a laggy report with nothing here says
-    // the arrival timing was not the cause.
-    rows.emplace_back(fmt("HOLDS %u   ABSORBED %u   LEAD %ut PUMPS %u",
-                          static_cast<unsigned>(s.rephase_holds),
-                          static_cast<unsigned>(s.rephase_suppressed),
-                          static_cast<unsigned>(s.local_lead),
-                          static_cast<unsigned>(s.lead_pumps)),
-                      s.lead_pumps > 0 ? kWarn : kOk);
-    rows.emplace_back(fmt("PACKETS %u   MALFORMED %u", static_cast<unsigned>(s.rx_packets),
-                          static_cast<unsigned>(s.rx_malformed)),
-                      s.rx_malformed > 0 ? kBad : kOk);
-    for (int i = 0; i < sim::kMaxPlayers; ++i) {
-        const net::PeerStats& p = s.peers[static_cast<std::size_t>(i)];
-        if (!p.tracked) continue;
-        rows.emplace_back(fmt("SEAT %d  LAG %dt (PEAK %dt)  RTT %d/%d/%d MS%s", i, p.lag_ticks,
-                              p.worst_lag_ticks, p.rtt_ms, p.rtt_min_ms, p.rtt_max_ms,
-                              p.rtt_offset_bound ? " (TICK OFFSET, NOT PATH)" : ""),
-                          p.live ? kOk : kWarn);
-    }
-    rows.emplace_back(std::string("WRITTEN TO netdiag.log NEXT TO THE GAME"), kOk);
-
+    const std::vector<SummaryRow> rows = session_end_rows(summary);
     const float lh = static_cast<float>(ctx.front_font.line_height());
     const float panel_h = std::max(180.0f, lh * static_cast<float>(rows.size() + 4) + 32.0f);
     const DialogRect win{(static_cast<float>(kScreenW) - 460.0f) / 2.0f,
@@ -350,18 +405,7 @@ AppInput present_net_session_end(ScreenContext ctx, const net::SessionSummary& s
                 ev.key.key == SDLK_ESCAPE || ev.key.key == SDLK_SPACE)
                 return AppInput::Advance;
         }
-        ctx.audio.update_music();
-        SDL_SetRenderDrawColor(ctx.sdl, 0, 0, 0, 255);
-        SDL_RenderClear(ctx.sdl);
-        draw_dialog_chrome(ctx.sdl, win, &ctx.assets.frontend_pcx("WINZ"));
-        float ty = win.y + 16.0f;
-        for (const auto& [text, ink] : rows) {
-            draw_dialog_text(ctx.sdl, ctx.front_font, text, win.x + 20.0f, ty, ink.r, ink.g, ink.b);
-            ty += lh + 2.0f;
-        }
-        draw_dialog_text(ctx.sdl, ctx.front_font, "PRESS [ENTER] OR [ESC]", win.x + 20.0f,
-                         win.y + win.h - 16.0f - lh, kDialogInkR, kDialogInkG, kDialogInkB);
-        SDL_RenderPresent(ctx.sdl);
+        draw_session_end(ctx, rows, win);
         SDL_Delay(2);
     }
 }

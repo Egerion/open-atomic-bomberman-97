@@ -5,27 +5,21 @@
 #include <cstdint>
 #include <functional>
 
-// THE SETTLE PUMP — "keep draining the link for a moment before handing it on".
+// THE SETTLE PUMP — "keep draining the link for a moment before handing it on",
+// at every seam where one net session stops pumping a transport and another is
+// about to start.
 //
-// It appears at every seam where one net session stops pumping a transport and
-// another is about to start: the CLI config exchange, the guest's setup-stage
-// exit, the round-handoff, and the catch-up after an abandoned round. All four
-// exist for the same reason and all four used to be the same hand-written loop.
+// The LAST datagram a peer sends before it leaves a stage is exactly the one it
+// cannot re-send: a session only re-acks when the other side's next burst
+// arrives, which a peer that left the instant it decoded will never see. So the
+// loser of that race sits until its own timeout and reports the other player as
+// gone.
 //
-// The reason is that the LAST datagram a peer sends before it leaves a stage is
-// exactly the one it cannot re-send: a session only re-acks when the other
-// side's next burst arrives, which a peer that left the instant it decoded will
-// never see. So the loser of that race sits until its own timeout and reports
-// the other player as gone. Pumping for a few hundred milliseconds costs
-// nothing and makes a lost ack recover.
-//
-// It is safe against setup_session.hpp's one-pump-at-a-time rule for a reason
-// worth stating once: RollbackSession re-sends its WHOLE unconfirmed input
-// window on every pump, so an early input datagram swallowed here comes again.
+// Safe against setup_session.hpp's one-pump-at-a-time rule for a reason worth
+// stating once: RollbackSession re-sends its WHOLE unconfirmed input window on
+// every pump, so an early input datagram swallowed here comes again.
 //
 // Returns false if the window closed under it — the caller then returns Quit.
-// Each call site keeps its own comment: the arguments above are general, but
-// what is being raced and why the duration is what it is are not.
 
 namespace bomber::game {
 
