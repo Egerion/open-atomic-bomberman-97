@@ -144,7 +144,6 @@ void MatchRunner::start_match(std::uint32_t seed) {
     // The 1001 sentinel is presentation-only (the sim gets a long finite clock —
     // options_model.hpp), so tell the renderer directly rather than trying to
     // infer "untimed" back out of ticks_left.
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — emplaced in init()
     state_.renderer.reset_match(state_.options.playtime_seconds == kPlayTimeUnlimited);
     ctx_.sounds.reset();
 }
@@ -469,9 +468,7 @@ std::optional<AppInput> MatchRunner::advance_native(RunLoop& loop) {
     // Pose countdowns age once per SIM TICK, not per displayed frame: pass
     // whether this frame actually crossed a tick, else kick/punch/pickup poses
     // play ~9x too fast in native cadence.
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     state_.renderer.on_events(state_.sim.state(), state_.sim.state().tick != tick_before);
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     state_.renderer.advance_tick(state_.sim.state());
     // Local-only path: F9 is force-disabled online, so there is no replaying
     // event stream to guard against — the live events are each tick's one pass.
@@ -533,11 +530,10 @@ std::optional<AppInput> MatchRunner::tick_once(RunLoop& loop) {
     clear_latch(loop);
     loop.acc -= loop.tick_ns;
     ctx_.sounds.on_tick(state_.sim.state());
-    state_.renderer.on_events(state_.sim.state());  // NOLINT(bugprone-unchecked-optional-access)
+    state_.renderer.on_events(state_.sim.state());
     // Roll the renderer's inter-tick snapshots forward INSIDE the catch-up loop,
     // so a frame that advances the sim two ticks still leaves interp `prev` at the
     // penultimate tick (a clean 1-tick lerp) instead of two ticks back.
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     state_.renderer.advance_tick(state_.sim.state());
     tally_round_kills(loop);
     // ONCE AN ABANDON IS AGREED (Esc online), the agreed tick is the ONLY exit:
@@ -624,16 +620,12 @@ bool MatchRunner::present_frame(RunLoop& loop) {
     // Gold Bomberman twinkle (docs/re/goldman-roulette.md §6), pushed every frame
     // rather than on change: a cheap int pair, and it keeps the renderer decoupled
     // from the shell's own state.
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — emplaced in init()
     state_.renderer.set_gold_player(
         state_.gold_player,
         ::bomber::game::is_team_mode(state_.team_play, state_.sim.state(), state_.setup_team));
     const MatchCadence draw = cadence(loop.acc, loop.tick_ns);
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — emplaced in init()
     state_.renderer.set_native_cadence(draw.native);
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — emplaced in init()
     state_.renderer.set_entity_interp(draw.entity_interp);
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — emplaced in init()
     state_.renderer.draw_frame(state_.sim.state(), draw.interp_alpha);
     // The player-row HUD strip needs win_count/kill_count/front_font, none of
     // which Renderer owns, so it is an overlay on top of Renderer's frame — the

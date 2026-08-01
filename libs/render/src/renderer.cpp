@@ -285,7 +285,7 @@ void Renderer::on_player_died(const sim::State& s, const sim::Event& ev) {
     const auto& pool = assets_->deaths_for(colour);
     if (pool.empty()) return;
     DeathFx fx;
-    fx.player = colour;  // NOLINT(bugprone-signed-char-misuse) — range-checked above
+    fx.player = colour;
     // WHICH death animation, shared with the audio side: the original has one
     // `actor[+4]` that both the `die green %d` sprite name and
     // `sub_4278F2(340 + actor[+4])` read (docs/re/sound-engine.md §10). The port

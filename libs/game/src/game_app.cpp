@@ -30,11 +30,10 @@ namespace bomber::game {
 
 namespace fs = std::filesystem;
 
-// The `renderer_`/`screen_` NOLINTs below (bugprone-unchecked-optional-access):
-// both optionals are engaged exactly once, unconditionally, at the end of a
-// successful init(), and every method that dereferences them runs only from run(),
-// which the app mains call strictly after a successful init(). clang-tidy's flow
-// analysis is per-function and cannot see that cross-method invariant.
+// The `renderer_`/`screen_` optionals are engaged exactly once, unconditionally,
+// at the end of a successful init(), and every method that dereferences them runs
+// only from run(), which the app mains call strictly after a successful init() —
+// the invariant every bare `*renderer_`/`*screen_` below leans on.
 
 namespace {
 
@@ -277,7 +276,7 @@ CaptureSlots GameApp::capture_slots() {
                         .front_font = front_font_,
                         .values = values_,
                         .sim = sim_,
-                        .renderer = *renderer_,  // NOLINT(bugprone-unchecked-optional-access)
+                        .renderer = *renderer_,
                         .sounds = sounds_};
 }
 
@@ -302,7 +301,7 @@ ScreenContext GameApp::sctx() {
                          .gamepads = gamepads_,
                          .front_font = front_font_,
                          .cursor_blink = cursor_blink_,
-                         .asset_screen = *screen_,  // NOLINT(bugprone-unchecked-optional-access)
+                         .asset_screen = *screen_,
                          .seqs = seqs_,
                          .values = values_,
                          .sdl = sdl_renderer_.get(),
@@ -368,7 +367,7 @@ SetupState GameApp::setup_state() {
 MatchBackdrop GameApp::match_backdrop() {
     // The frozen backdrop the campaign dialogs and the in-round help modal draw over
     // — match-runtime members, so kept out of the service-only ScreenContext.
-    return MatchBackdrop{.renderer = *renderer_,  // NOLINT(bugprone-unchecked-optional-access)
+    return MatchBackdrop{.renderer = *renderer_,
                          .state = sim_.state()};
 }
 
@@ -406,7 +405,7 @@ GoldmanState GameApp::goldman_state() {
 
 MatchRunnerState GameApp::match_runner_state() {
     return MatchRunnerState{.sim = sim_,
-                            .renderer = *renderer_,  // NOLINT(bugprone-unchecked-optional-access)
+                            .renderer = *renderer_,
                             .next_seed = next_seed_,
                             .kill_count = kill_count_,
                             .campaign_pacing = campaign_pacing_,
@@ -446,7 +445,7 @@ NetplaySeams GameApp::netplay_seams() {
 
 NetplayState GameApp::netplay_state() {
     return NetplayState{.sim = sim_,
-                        .renderer = *renderer_,  // NOLINT(bugprone-unchecked-optional-access)
+                        .renderer = *renderer_,
                         .win_count = win_count_,
                         .kill_count = kill_count_,
                         .setup_type = setup_type_,
