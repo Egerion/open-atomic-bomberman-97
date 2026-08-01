@@ -87,6 +87,16 @@ target_link_libraries(bomber_net_peer_drop_tests PRIVATE bomber::net)
 bomber_add_test(bomber_net_host_migration_tests net_host_migration test_host_migration.cpp)
 target_link_libraries(bomber_net_host_migration_tests PRIVATE bomber::net)
 
+# Mid-match path failover (design §4.2, task #56): the netdiag one-way-death
+# signature (frontier frozen WHILE the peer's duplicate flood keeps the silence
+# timer fed — the failure the 600-pump drop detector structurally cannot see),
+# the in-place wedge cure, the mutual-proof relay switch, and every degrade
+# path landing on the existing drop policy instead of a hang. Lobby-free by
+# construction (the control plane is behind the RelayAllocator seam), so the
+# suite runs on the headless gate.
+bomber_add_test(bomber_net_path_failover_tests net_path_failover test_path_failover.cpp)
+target_link_libraries(bomber_net_path_failover_tests PRIVATE bomber::net)
+
 # Match shell (wire v8): the host-authoritative round ABANDON (Esc -> one agreed
 # end tick -> draw, instead of a local freeze that dropped the connection) and
 # the post-match REMATCH rendezvous that hands the same transport back to the

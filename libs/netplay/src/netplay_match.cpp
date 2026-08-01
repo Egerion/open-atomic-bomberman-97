@@ -19,6 +19,7 @@
 #include "bomber/game_util/net_round_gate.hpp"
 #include "bomber/input/input.hpp"           // SlotInputType
 #include "bomber/net/net_stats.hpp"         // net::SessionSummary / SessionEndReason
+#include "bomber/net/path_failover.hpp"     // net::PathFailover (mid-match dead-path failover)
 #include "bomber/net/rematch_session.hpp"   // net::RematchSession (the post-match rendezvous)
 #include "bomber/net/rollback_session.hpp"  // net::RollbackSession + net::DropPolicy
 #include "bomber/net/round_rotation.hpp"    // net::round_seed / round_tick_base
@@ -45,8 +46,12 @@ namespace {
 class RoundRotationGate final : public NetRoundGate {
 public:
     RoundRotationGate(net::SetupSession& session, bool host, sim::MatchConfig next,
-                      std::uint32_t expect_seed)
-        : session_(&session), next_(std::move(next)), expect_seed_(expect_seed), host_(host) {
+                      std::uint32_t expect_seed, net::PathFailover* failover)
+        : session_(&session),
+          failover_(failover),
+          next_(std::move(next)),
+          expect_seed_(expect_seed),
+          host_(host) {
         // ONE heartbeat preview: SetupSession's guest liveness clock only
         // advances on inbound setup traffic, so without it a host that reads the
         // scoreboard for longer than the session timeout would look, to the
@@ -54,7 +59,14 @@ public:
         if (host_) session_->publish(net::SetupPreviewFrame{});
     }
 
-    void pump() override { session_->step(static_cast<std::int64_t>(SDL_GetTicks())); }
+    void pump() override {
+        session_->step(static_cast<std::int64_t>(SDL_GetTicks()));
+        // No session to watch between rounds (nullptr), but the engine still
+        // heart-beats the control plane and finishes an in-flight failover —
+        // the matchmaker reaps a member ~30 s of silence in, scoreboard or not.
+        if (failover_ != nullptr)
+            failover_->pump(static_cast<std::int64_t>(SDL_GetTicks()), nullptr);
+    }
     bool readonly() const override { return !host_; }
 
     void accept() override {
@@ -79,6 +91,7 @@ public:
 
 private:
     net::SetupSession* session_;
+    net::PathFailover* failover_;
     sim::MatchConfig next_;
     std::uint32_t expect_seed_;
     bool host_;
@@ -106,9 +119,14 @@ constexpr std::uint64_t kRoundHandoffSettleMs = 300;
 // route it around the gate): leaving is always the local player's own call.
 class RematchGate final : public NetRoundGate {
 public:
-    explicit RematchGate(net::RematchSession& session) : session_(&session) {}
+    RematchGate(net::RematchSession& session, net::PathFailover* failover)
+        : session_(&session), failover_(failover) {}
 
-    void pump() override { session_->step(static_cast<std::int64_t>(SDL_GetTicks())); }
+    void pump() override {
+        session_->step(static_cast<std::int64_t>(SDL_GetTicks()));
+        if (failover_ != nullptr)  // control-plane keep-alive, as in the round gate
+            failover_->pump(static_cast<std::int64_t>(SDL_GetTicks()), nullptr);
+    }
 
     // Phase A: nobody is read-only. Phase B: the guest follows the host.
     bool readonly() const override { return final_phase_ && !session_->is_host(); }
@@ -129,6 +147,7 @@ public:
 
 private:
     net::RematchSession* session_;
+    net::PathFailover* failover_;
     bool final_phase_ = false;
     bool local_accepted_ = false;
 };
@@ -174,6 +193,11 @@ public:
     }
     void latch(net::SessionEndReason r) { summary_.reason = r; }
     void note(std::string n) { summary_.note = std::move(n); }
+    // The failover's verdict (PathFailover::log_token). Re-stamped at every
+    // snapshot point so the line carries the LATEST state — an attempt still
+    // in flight when the window closes logs as pending(...), which is itself
+    // an answer.
+    void note_failover(std::string t) { summary_.failover = std::move(t); }
     const net::SessionSummary& summary() const { return summary_; }
 
 private:
@@ -190,6 +214,7 @@ public:
           state_(&run.state),
           transport_(&run.transport),
           carry_(run.carry),
+          failover_(run.failover),
           round_cfg_(run.config),
           // The MATCH seed. Round 0's config carries it and every later round
           // derives its own from it (net::round_seed) — identically on both
@@ -253,6 +278,7 @@ private:
     NetplayState* state_;
     net::Transport* transport_;
     NetSessionCarry* carry_;
+    net::PathFailover* failover_ = nullptr;
     sim::MatchConfig round_cfg_;
     std::uint32_t match_seed_;
     int base_round_;
@@ -281,6 +307,12 @@ AppInput MatchLoop::run() {
 
     for (round_ = 0;; ++round_) {
         const Rotation rot = play_round();
+        if (rot == Rotation::WindowClosed || rot == Rotation::EndMatch) {
+            // The failover verdict may have moved after play_round stamped it —
+            // an attempt can complete (or fail) under the between-rounds gates —
+            // so the line the recorder is about to write gets the final word.
+            if (failover_ != nullptr) recorder_.note_failover(failover_->log_token());
+        }
         if (rot == Rotation::WindowClosed) return AppInput::Quit;
         if (rot == Rotation::EndMatch) break;
     }
@@ -314,6 +346,7 @@ MatchLoop::Rotation MatchLoop::play_round() {
     NetLeave left = NetLeave::None;
     result_ = drive_round(session, left);
     recorder_.snapshot(session, round_);  // this round's numbers, whatever it ended as
+    if (failover_ != nullptr) recorder_.note_failover(failover_->log_token());
 
     if (stopped_after_round(session, left)) return Rotation::EndMatch;
 
@@ -443,6 +476,7 @@ AppInput MatchLoop::drive_round(net::RollbackSession& session, NetLeave& left) {
     // fixed ~200 ms. max_prediction=8 caps how far the display may run ahead.
     MatchRunnerState mrs = seams_->match_runner_state();
     mrs.net_session = &session;
+    mrs.net_failover = failover_;
     mrs.net_local_seats = seats_.local;
     mrs.net_is_host = seats_.host;
     mrs.net_leave = &left;
@@ -525,8 +559,10 @@ bool MatchLoop::settle_abandon(net::RollbackSession& session) {
     // The peer may still be short of the agreed tick, and only OUR input window
     // can get it there. advance() no longer simulates once round_ended() — it
     // just receives, re-announces and re-sends — so this is a pure catch-up pump.
-    if (!net_settle(kAbandonSettleMs, [&session] {
+    if (!net_settle(kAbandonSettleMs, [this, &session] {
             session.advance(sim::TickInputs{}, static_cast<std::int64_t>(SDL_GetTicks()));
+            if (failover_ != nullptr)
+                failover_->pump(static_cast<std::int64_t>(SDL_GetTicks()), &session);
         })) {
         recorder_.latch(net::SessionEndReason::WindowClosed);
         return false;
@@ -553,7 +589,7 @@ void MatchLoop::present_clinch(int clinched) {
     // over the SAME link, and the RematchGate is the door.
     const ScreenContext ctx = seams_->sctx();
     net::RematchSession rematch_session(*transport_, seats_.host);
-    RematchGate gate(rematch_session);
+    RematchGate gate(rematch_session, failover_);
     ctx.audio.start_music(kDrawMusicId);                   // 1130 under RESULTS/VICTORY (doc §2)
     ctx.audio.play_sting(kWinnerStingLo, kWinnerStingHi);  // winner voice — clinch only
     ScoreboardState csbs = seams_->scoreboard_state();
@@ -637,7 +673,8 @@ MatchLoop::Rotation MatchLoop::rotate(int winner, const net::RollbackSession& se
     const ScreenContext ctx = seams_->sctx();
     net::SetupSession rotate_session(*transport_, seats_.host, seats_.local, seats_.remote());
     const std::uint32_t next_seed = net::round_seed(match_seed_, round_ + 1);
-    RoundRotationGate gate(rotate_session, seats_.host, next_round_config(next_seed), next_seed);
+    RoundRotationGate gate(rotate_session, seats_.host, next_round_config(next_seed), next_seed,
+                           failover_);
 
     ctx.audio.start_music(kDrawMusicId);  // 1130 under DRAW *and* RESULTS (doc §2)
     if (winner < 0 && !present_draw()) return Rotation::EndMatch;

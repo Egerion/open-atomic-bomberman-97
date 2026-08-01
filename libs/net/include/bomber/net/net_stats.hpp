@@ -298,6 +298,14 @@ struct SessionSummary {
     NetStats stats;
     std::string timestamp;  // e.g. "2026-07-29 14:03:11"
     std::string note;       // free-form context; may be empty
+    // The mid-match path failover's verdict (PathFailover::log_token) — e.g.
+    // "switched(starved-with-dups@41s,alloc=210ms,probe=580ms)" or
+    // "failed(relay-refused,starved-silent@52s)". Empty = never fired, and the
+    // key is then omitted from the line. This is what makes the NEXT "what
+    // happened" answerable from the log alone: the five 2026-08-01 stalls all
+    // read `live=1 ... loss~100%` and nothing on the line said why the match
+    // neither recovered nor ended.
+    std::string failover;
     SessionEndReason reason = SessionEndReason::Unknown;
     int round = 0;
     std::uint16_t local_seats = 0;

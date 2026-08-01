@@ -47,8 +47,15 @@ public:
     void detach() { target_ = nullptr; }
     bool attached() const { return target_ != nullptr; }
 
+    // Datagrams poll() has DELIVERED, ever. The arrival evidence PathFailover's
+    // traffic arm reads — counted here rather than taken from NetStats, because
+    // the stats are instrumentation by contract ("consulted by no decision") and
+    // a failover is very much a decision.
+    std::uint64_t rx_polled() const { return rx_polled_; }
+
 private:
     Transport* target_;  // BORROWED; null = detached
+    std::uint64_t rx_polled_ = 0;
 };
 
 }  // namespace bomber::net

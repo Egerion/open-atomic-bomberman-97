@@ -296,6 +296,26 @@ void LobbyFlow::begin_relay_fallback() {
     client_.send(encode_allocate_relay(lobby_id_, my_seat_));
 }
 
+void LobbyFlow::request_match_relay() {
+    // Mid-match only. Ready is the phase a match runs in; every other phase
+    // belongs to the pre-match fallback (begin_relay_fallback), which moves the
+    // phase machinery this deliberately leaves alone. An existing relay_ means
+    // the match is ALREADY relayed — there is nothing to escalate to.
+    if (phase_ != Phase::Ready || relay_ != nullptr || match_relay_requested_) return;
+    if (!can_relay()) {  // a star has no relay topology (relayed_transport.hpp)
+        match_relay_refused_ = true;
+        return;
+    }
+    match_relay_requested_ = true;
+    client_.send(encode_allocate_relay(lobby_id_, my_seat_));
+}
+
+bool LobbyFlow::roster_has_seat(int seat) const {
+    for (const RosterEntry& e : roster_)
+        if (e.seat == seat) return true;
+    return false;
+}
+
 void LobbyFlow::step_verify(std::int64_t now_ms) {
     // THE CONVERGENCE STEP (design §4.1). A punch outcome is per-peer and
     // unsynchronised, so nothing is handed to the match layer until the peer has
@@ -409,6 +429,16 @@ void LobbyFlow::report_server_error(const LobbyServerMessage& msg) {
         fail("RELAY UNAVAILABLE - CANNOT CONNECT");
         return;
     }
+    // A MID-MATCH allocation is answered while Ready, where the only frame this
+    // client has outstanding is that request — so any Error here is its refusal
+    // (the same reading the arm above applies, and PROTOCOL.md §8.3's "the
+    // refusal is indistinguishable from a server-side error" makes precise).
+    // Recorded, never fail()ed: the match is running and must not be torn down
+    // by a control-plane no.
+    if (phase_ == Phase::Ready && match_relay_requested_ && relay_ == nullptr) {
+        match_relay_refused_ = true;
+        return;
+    }
     if (msg.error_code == "build_mismatch") {
         fail("VERSION MISMATCH - UPDATE THE GAME");
         return;
@@ -443,6 +473,10 @@ void LobbyFlow::adopt_relay_allocation(const LobbyServerMessage& msg) {
         return;
     }
     relay_ = std::make_unique<RelayedTransport>(transport_, host, port, alloc, dst);
+    // A MID-MATCH allocation (request_match_relay): the flow stays Ready and
+    // does not probe — the failover engine owns the verification and the swap,
+    // and running step_verify here would poll the very socket the match is on.
+    if (phase_ == Phase::Ready) return;
     // NOT Ready yet. An allocation is a handle, not a path: the relay drops
     // everything aimed at a seat that has not allocated its own
     // (drop_unknown_dst), and the peer only allocates when ITS punch gives up —

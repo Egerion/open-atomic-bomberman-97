@@ -56,10 +56,17 @@ public:
 
     void send(int from, const std::uint8_t* d, std::size_t n, std::int64_t now) {
         const std::size_t f = static_cast<std::size_t>(from);
+        if (dead_[f]) return;  // one-way death: this direction's datagrams vanish
         const std::int64_t extra = extra_.draw(f);
         q_[static_cast<std::size_t>(1 - from)].push_back(
             {now + delay_[f] + extra, std::vector<std::uint8_t>(d, d + n)});
     }
+
+    // Kill (or heal) ONE direction — the netdiag failure shape a symmetric drop
+    // rate cannot express: `from`'s datagrams die at send while the other
+    // direction keeps delivering, dups included. Packets already in flight
+    // still arrive, as they would on a real path.
+    void set_blackhole(int from, bool dead) { dead_[static_cast<std::size_t>(from)] = dead; }
 
     bool poll(int to, std::vector<std::uint8_t>* out, std::int64_t now) {
         auto& q = q_[static_cast<std::size_t>(to)];
@@ -87,6 +94,7 @@ private:
     std::array<std::int64_t, 2> delay_;
     bomber::test::CorrelatedDelay extra_;
     std::array<std::deque<P>, 2> q_{};
+    std::array<bool, 2> dead_{};
 };
 
 class MsTransport : public Transport {

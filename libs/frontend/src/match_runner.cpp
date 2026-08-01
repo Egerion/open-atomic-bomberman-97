@@ -17,6 +17,7 @@
 #include "bomber/game_util/results.hpp"             // tally_kills
 #include "bomber/input/input.hpp"                   // SlotInputType
 #include "bomber/match/match_factory.hpp"   // build_match_config / pick_stage / apply_actors
+#include "bomber/net/path_failover.hpp"     // net::PathFailover (pumped beside the session)
 #include "bomber/net/rollback_session.hpp"  // net::RollbackSession (netplay drive, seam is fwd-only)
 #include "bomber/netui/net_overlay.hpp"     // draw_net_overlay (the F3 panel)
 #include "bomber/render/renderer.hpp"       // kScreenW
@@ -503,6 +504,12 @@ void MatchRunner::drive_tick(const sim::TickInputs& in) {
         return;
     }
     state_.net_session->advance(in, static_cast<std::int64_t>(SDL_GetTicks()));
+    // The mid-match path failover rides the same 20 Hz pump as the session it
+    // watches (path_failover.hpp): detection reads the frontier this advance
+    // just moved (or failed to move), and the control-plane keep-alive rides
+    // along. Null on every local path, so the golden tick path is untouched.
+    if (state_.net_failover != nullptr)
+        state_.net_failover->pump(static_cast<std::int64_t>(SDL_GetTicks()), state_.net_session);
 }
 
 // §1's kill tally (sub_421B0F), cumulative for the whole match. ONLINE the

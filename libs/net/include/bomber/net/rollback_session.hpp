@@ -197,6 +197,20 @@ public:
     void set_migration_hold(bool held);
     bool migration_held() const { return migration_hold_; }
 
+    // --- mid-match path failover (design §4.2, path_failover.hpp) ------------
+
+    // Re-send from a full rewind window BELOW the frontier (resend_from(), the
+    // same widening a healing migration uses) until the frontier has cleared
+    // this point by that window. THE WEDGE IT CURES: an asymmetric outage parts
+    // the frontiers — the side that could still hear kept finalising ticks the
+    // deaf side never received (the gap is bounded by cap + lead + flight, ~a
+    // dozen ticks), pruned them, and resends from a base the deaf side's hole
+    // sits below — so the link carrying again, whether the direct path healed
+    // or a relay replaced it, is NOT enough: without this both peers sit live,
+    // resending, frozen. Three of the 2026-08-01 netdiag stalls have exactly
+    // that shape (rx=20/s, loss~0%, frontier frozen).
+    void widen_resend_window();
+
     static constexpr std::uint32_t kNoHandoff = 0xFFFFFFFFU;
     static constexpr std::uint32_t kNoEndRound = 0xFFFFFFFFU;
 
@@ -297,6 +311,9 @@ private:
     // suppression, and — correctness rather than tuning — the refusal to declare
     // a SECOND host loss (detect_drops).
     bool migration_healing() const { return host_lost_ != 0 && confirmed_ < heal_until_; }
+    // The path-failover twin: widen_resend_window() widens the re-send window
+    // for the same reason a healing migration does.
+    bool resend_widened() const { return confirmed_ < widen_until_; }
     int hub_of(std::uint16_t live) const;  // THE ELECTION: pure, no vote, no coordinator
     // The survivor set the election runs over, derived from the SCHEDULE and not
     // from hashed State — a player who has been blown up still runs a machine —
@@ -367,6 +384,9 @@ private:
     // Where the WIDE re-send may stop: a full rewind window past the migration
     // tick. Raised, never lowered, so a second host loss extends it.
     std::uint32_t heal_until_ = 0;
+    // Its path-failover twin: a full rewind window past the frontier at the
+    // moment widen_resend_window() was asked for.
+    std::uint32_t widen_until_ = 0;
     // The oldest tick still retained, and it only ever RISES — prune() keeps a
     // window below confirmed_ so rewind_for_migration() can un-confirm into it.
     std::uint32_t oldest_slot_ = 0;

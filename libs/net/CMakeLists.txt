@@ -23,6 +23,7 @@ add_library(bomber_net STATIC
   src/relayed_transport.cpp
   src/star_hub_transport.cpp
   src/migrating_transport.cpp
+  src/path_failover.cpp
 )
 add_library(bomber::net ALIAS bomber_net)
 
