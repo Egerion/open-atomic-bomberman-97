@@ -170,15 +170,47 @@ if(BOMBER_ENABLE_LOBBY)
   target_link_libraries(bomber_net_lobby_flow_tests PRIVATE bomber::net)
 
   # TLS (SECURITY.md S1): the wss:// handshake and, just as importantly, the
-  # rejection of a certificate that does not verify. The downgrade guard runs
-  # offline on every gate; the two network cases are opt-in (BOMBER_TLS_LIVE=1).
-  bomber_add_test(bomber_net_lobby_tls_tests net_lobby_tls test_lobby_tls.cpp)
-  target_link_libraries(bomber_net_lobby_tls_tests PRIVATE bomber::net)
+  # rejection of a certificate that does not verify.
+  #
+  # ONE binary, TWO ctest entries, split on the `live:` case-name prefix. The
+  # offline cases (no downgrade to cleartext; a self-signed listener refused) run
+  # everywhere and must PASS; the two internet cases are opt-in behind
+  # BOMBER_TLS_LIVE and must report SKIP. A single entry has one status word for
+  # both facts and would have to lie about one of them — and the lie it told was
+  # PASSED, because doctest has no runtime skip and an early return prints the
+  # same word as a full pass.
+  # Spelled out rather than via bomber_add_test, which registers exactly one
+  # unfiltered ctest entry per binary.
+  add_executable(bomber_net_lobby_tls_tests test_lobby_tls.cpp)
+  target_link_libraries(bomber_net_lobby_tls_tests
+    PRIVATE bomber::net doctest::doctest bomber::warnings)
+  # No SKIP_REGULAR_EXPRESSION on this half, deliberately: nothing in it may
+  # skip, so the marker appearing here would be a fact worth failing over.
+  add_test(NAME net_lobby_tls COMMAND bomber_net_lobby_tls_tests --test-case-exclude=live:*)
+  add_test(NAME net_lobby_tls_live COMMAND bomber_net_lobby_tls_tests --test-case=live:*)
+  set_tests_properties(net_lobby_tls_live PROPERTIES
+    SKIP_REGULAR_EXPRESSION "LOBBY_TLS_SKIP")
 
   # LIVE interop against the real Go matchmaker — the only check that proves both
   # independently-written sides of PROTOCOL.md agree on the wire. OPT-IN: skips
   # unless BOMBER_MATCHMAKER_URL points at a running server, so the pre-push gate
-  # is unaffected.
+  # is unaffected. All four cases gate on the same variable, so unlike the TLS
+  # suite this one is honestly all-or-nothing and needs no split.
   bomber_add_test(bomber_net_lobby_live_tests net_lobby_live test_lobby_live.cpp)
   target_link_libraries(bomber_net_lobby_live_tests PRIVATE bomber::net)
+  set_tests_properties(net_lobby_live PROPERTIES
+    SKIP_REGULAR_EXPRESSION "LOBBY_LIVE_SKIP")
+else()
+  # BOMBER_ENABLE_LOBBY defaults OFF (root CMakeLists.txt). Every preset pins it
+  # ON, so the repo's own builds are fine — but `cmake -S . -B build`, which is
+  # what a new contributor types, silently drops five suites and then reports a
+  # full green run over what is left. That silence is the bug: the same option
+  # being OFF is how a broken lobby suite reached main, and pinning the presets
+  # fixed the presets, not the default. Say it out loud instead.
+  message(WARNING
+    "BOMBER_ENABLE_LOBBY=OFF: SKIPPING five tests/net suites -- net_lobby_protocol, "
+    "net_stun, net_lobby_flow, net_lobby_tls(+_live), net_lobby_live. The whole lobby "
+    "control plane, including the TLS certificate-verification checks, is UNTESTED in "
+    "this build tree. Configure with a preset (all five pin the option ON) or pass "
+    "-DBOMBER_ENABLE_LOBBY=ON.")
 endif()

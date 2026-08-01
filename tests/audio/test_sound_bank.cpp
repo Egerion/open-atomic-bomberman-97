@@ -274,12 +274,15 @@ constexpr GroupSize kShippedGroups[] = {
     {2700, 5, "culled: 'hurry up!' callouts"},
 };
 
-TEST_CASE("against the real SOUNDLST.RES") {
+TEST_CASE("install: against the real SOUNDLST.RES") {
     // The only case here that a missing install can defeat, and the only early
-    // return in the file. Read the skip honestly: doctest has no runtime skip,
-    // so without an install this reports PASSED having asserted nothing. The
-    // marker is the only thing distinguishing it from real coverage; the
-    // synthetic cases above are what actually gate the cull table.
+    // return in the file. doctest has no runtime skip, so without an install
+    // this reports PASSED having asserted nothing — which is why the `install:`
+    // prefix exists: tests/audio/CMakeLists.txt registers this binary twice on
+    // that name filter, so `sound_bank` (everything else, and what actually
+    // gates the cull table) stays a real PASS while `sound_bank_install` reports
+    // SKIP off the marker below. Folding the two into one ctest entry would
+    // report one word about two different facts.
     const std::filesystem::path dir = bomber::assets::default_game_dir();
     if (dir.empty() || !std::filesystem::exists(dir / "DATA" / "RES" / "SOUNDLST.RES")) {
         MESSAGE("SOUND_BANK_SKIP: no original install found - this case asserted nothing");

@@ -16,6 +16,16 @@
 // Both endpoints are overridable — BOMBER_TLS_GOOD_URL (default: the deployed
 // matchmaker) and BOMBER_TLS_BAD_URL (default: badssl.com's untrusted-root
 // host, the standard public fixture for exactly this check).
+//
+// THE `live:` PREFIX IS LOAD-BEARING. ctest registers this one binary TWICE,
+// filtered on that prefix (tests/net/CMakeLists.txt), because a single
+// registration cannot report the truth: case 1 really runs and cases 2-3 really
+// do not, and one status word covering both is wrong whichever word it picks.
+// `net_lobby_tls` excludes the prefix and must always PASS; `net_lobby_tls_live`
+// selects it and SKIPs on the LOBBY_TLS_SKIP marker. Name a new case
+// accordingly, and note that a name filter matching NOTHING is a silent pass —
+// which is why the no-TLS build below still declares a `live:` case rather than
+// leaving the second registration with an empty selection.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
@@ -93,7 +103,9 @@ TEST_CASE("a wss:// URL is never silently downgraded to cleartext") {
 
 TEST_CASE("live: wss:// to the deployed matchmaker completes a verified handshake") {
     if (!live_enabled()) {
-        MESSAGE("BOMBER_TLS_LIVE unset; skipping the live TLS handshake test");
+        MESSAGE(
+            "LOBBY_TLS_SKIP: BOMBER_TLS_LIVE unset; the live handshake case asserted "
+            "nothing");
         return;
     }
     const std::string url =
@@ -126,7 +138,9 @@ TEST_CASE("live: wss:// to the deployed matchmaker completes a verified handshak
 
 TEST_CASE("live: a certificate that does not verify is refused") {
     if (!live_enabled()) {
-        MESSAGE("BOMBER_TLS_LIVE unset; skipping the certificate-rejection test");
+        MESSAGE(
+            "LOBBY_TLS_SKIP: BOMBER_TLS_LIVE unset; the live certificate-rejection case "
+            "asserted nothing");
         return;
     }
     // The counter-proof for the test above. Without it, "it connected" is also
@@ -166,6 +180,17 @@ TEST_CASE("live: a certificate that does not verify is refused") {
     // and passed — this suite's own "green, having verified nothing" shape, one
     // level below the build switch that produced it the first time.
     CHECK(endpoints_checked > 0);
+}
+
+#else  // !BOMBER_HAS_LOBBY_TLS
+
+TEST_CASE("live: TLS verification cases are absent from this build") {
+    // Without this, `--test-case=live:*` selects nothing and doctest reports a
+    // clean pass over zero cases — the same "green having verified nothing"
+    // shape one level down from the build switch that produced it originally.
+    MESSAGE(
+        "LOBBY_TLS_SKIP: built with BOMBER_LOBBY_TLS=OFF; the certificate- and "
+        "hostname-rejection cases are preprocessed away, not skipped");
 }
 
 #endif  // BOMBER_HAS_LOBBY_TLS
