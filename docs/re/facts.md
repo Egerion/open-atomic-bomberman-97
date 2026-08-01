@@ -6579,6 +6579,84 @@ file, recorded here so it is a citation and not a re-derivation.
 digest). Tests: `tests/sim/test_state_machine.cpp` "the grab's movement pause is
 getvalue(665) + 1 ticks".
 
+## `sub_41696C`'s four outline passes are DIAGONAL — CONFIRMED + PORT FIXED (2026-08-01, `sub_41696C` @ 0x4169E4-0x416A8E)
+
+Two ports of this one routine had contradicted each other for as long as both
+existed. `FontTextures::draw_outlined` (`libs/ui/src/bmscreen.cpp`) put the four
+outline passes at the ink's **diagonal** neighbours; `draw_dialog_text`
+(`libs/ui/src/dialog_chrome.cpp`) put them at the **cardinal** ones. Both cited
+this address, and until 2026-07-31 each asserted its own reading was the only
+one the evidence allowed. `frontend-flow.md` and `network-screens.md` §12 both
+backed the cardinal reading on the grounds that the per-pass offsets were
+*register-lost in the decompile*.
+
+**They are not register-lost.** All five destination pointers are plain add
+chains off the scratch allocation, fully visible in the instruction stream:
+
+| pass | instructions | `eax` at the call | buffer (col, row) |
+|---|---|---|---|
+| 1 | `mov eax,[ebp-4]` @0x4169F9 | `buf` | (0, 0) |
+| 2 | `mov eax,[ebp-0xc]; add eax,eax; add eax,[ebp-4]; add eax,2` @0x416A17 | `buf + 2*pitch + 2` | (2, 2) |
+| 3 | `mov eax,[ebp-0xc]; add eax,eax; add eax,[ebp-4]` @0x416A3D | `buf + 2*pitch` | (0, 2) |
+| 4 | `mov eax,[ebp-4]; add eax,2` @0x416A60 | `buf + 2` | (2, 0) |
+| ink | `mov eax,[ebp-4]; add eax,[ebp-0xc]; inc eax` @0x416A81 | `buf + pitch + 1` | (1, 1) |
+
+`[ebp-4]` is the scratch from `sub_4184D0` @0x4169CB; `[ebp-0xc]` is
+`min(text_width, max_w) + 2`, and it is the **pitch** — every one of the five
+`dword_45C378` calls passes it in `ECX` as the pitch and `[ebp-0xc]-2` in `EBX`
+as the clip width, so a byte offset of `k*[ebp-0xc] + c` is exactly row `k`,
+column `c`. Passes 1-4 take the outline colour (`[ebp+0x18]`, `a7`) and the
+fifth takes the ink (`[ebp+0x14]`, `a6`), confirming the existing pass-order
+fact. **Relative to the ink at (1,1) the outline sits at (-1,-1), (+1,+1),
+(-1,+1), (+1,-1): the four CORNERS.** The cardinal reading is retracted.
+
+Why it went unnoticed for so long: for any glyph stroke two pixels or longer the
+diagonal union *subsumes* the cardinal one, so both shapes read as "a 1-px
+outline" at a glance. The visible difference is that the diagonals also fill the
+outline's corners, which is the blockier look the original actually has.
+
+**PORTED.** `draw_dialog_text` no longer carries its own loop at all — it
+delegates to `FontTextures::draw_outlined`, so the routine has one port and the
+offsets have one place to be wrong in.
+
+Two further hand-rolled four-pass loops exist in
+`libs/frontend/src/match_runner.cpp` (the net-ESC prompt @219-223 and
+`draw_fps_overlay`), and they are **not** ports of this routine — both are
+port-invented overlays the original has no equivalent of, and neither cites
+`sub_41696C`. They are open-coded for a concrete reason worth recording: they
+need `FontTextures::draw`'s `scale` argument (0.7), which neither
+`draw_outlined` nor `draw_dialog_text` exposes. Giving `draw_outlined` a `scale`
+parameter would let both collapse into it; that is a `libs/frontend` change and
+is left to whoever owns that file.
+
+**A second divergence found in the same read, recorded and NOT fixed.** The tail
+@0x416A8E-0x416B26 computes `dest = sub_43DDA4(win) + a5*pitch + a3` and hands it
+to the colour-key blit `sub_4428E4`, i.e. the scratch's **top-left** lands at
+`(x, y)`. So the original's ink lands at `(x+1, y+1)` and its outline spans
+`(x, y)..(x+2, y+2)`, while the port centres the composite on `(x, y)`. The call
+sites are not compensating for this: they pass the original's own arguments
+verbatim (the menu's version string is `sub_41696C(root, aV10, 0, 50, 0, ...)`
+against the port's `draw_outlined(..., "V1.0", 0, 0, ..., 50.0f)`), so **every
+outlined string in the front end sits one pixel up and left of where the
+original puts it**, and the menu string's outline is clipped off the top-left
+edge where the original's is fully on screen. It is a proven live divergence of
+the same class as the spawn-pocket clear, left for a pass that can put eyes on
+the result: it moves every front-end string by a pixel, `libs/ui` and
+`libs/render` have no headless test surface, and — see below — no pinned frame
+would catch a mistake either.
+
+**Test impact: none, and that is itself the finding.** No frame in
+`tests/visual` renders a single outlined glyph, so nothing here was recaptured.
+`--demo-shots` (`shots.txt`) draws only through `Renderer::draw_frame`, and
+`libs/render` sits *below* `libs/ui` in the dependency graph and cannot reach
+either function; the in-match score row that does call `draw_outlined` lives in
+`MatchRunner` and is never invoked on the demo path. `--bm-shot`
+(`bm_shots.txt`) draws the `.BM` viewer, whose body text goes through the
+**no-outline** `dword_45C378` blit @16458-16461 — a separately confirmed fact —
+and whose chrome and buttons use the plain `FontTextures::draw`. The one capture
+entry point that would cover the primitive is `--menu-shot`, and no manifest
+pins it.
+
 ## Still guessed — not yet extracted from the binary
 
 | Constant | Current value | Status |

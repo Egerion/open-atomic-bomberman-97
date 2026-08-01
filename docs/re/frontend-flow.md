@@ -360,10 +360,15 @@ call @ 18560), and
 blits the scratch with `sub_4428E4` (the colour-key-0 MMX blit — background
 transparent, NOT a filled box). So dialog text = **ink glyphs with a 1-px
 4-way OUTLINE**; every visible call site passes
-`byte_495390[0]` (black) as the outline. The per-pass offsets are
-register-lost; the
-four cardinal ±1 offsets are the only reading consistent with the pass
-count. The ink-then-outline argument order is confirmed by the
+`byte_495390[0]` (black) as the outline. **The per-pass offsets are the ink's
+four DIAGONAL neighbours** — settled 2026-08-01 by reading the instructions
+(facts.md "`sub_41696C`'s four outline passes are DIAGONAL"): buffer offsets
+(0,0), (2,2), (0,2), (2,0) for the outline and (1,1) for the ink, each a plain
+add chain off the scratch pointer at 0x4169F9-0x416A87. *This paragraph used to
+say the offsets were register-lost and that the four cardinal ±1 offsets were
+the only consistent reading; both halves of that are retracted — nothing was
+lost, and the answer is the corners.* The ink-then-outline argument order is
+confirmed by the
 percent dialog's own calls (white/black and yellow/black) and by
 `sub_41456C`'s caller @ 5713, which passes black then white — and
 `sub_4172BA` SWAPS that pair on the way through, so it lands as outline
