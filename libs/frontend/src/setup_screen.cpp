@@ -411,8 +411,9 @@ std::optional<AppInput> SetupLoop::show_error(const std::string& reason) {
         if (seams_.chat != nullptr) seams_.chat->pump();
         ctx_.audio.update_music();
         draw_frame();
-        draw_acknowledge_dialog(ctx_.sdl, ctx_.front_font, &ctx_.assets.frontend_pcx("WINZ"),
-                                reason, sub, ok, 164, 0, 0);
+        draw_acknowledge_dialog(DialogPen{ctx_.sdl, ctx_.front_font},
+                                &ctx_.assets.frontend_pcx("WINZ"),
+                                AcknowledgeLabels{reason, sub, ok}, AcknowledgeStyle{{164, 0, 0}});
         SDL_RenderPresent(ctx_.sdl);
         SDL_Delay(2);
     }
@@ -467,7 +468,8 @@ void SetupLoop::draw_frame() {
     // Header (msg 50): white ink / black outline (byte_49D38F over byte_495390[0],
     // pseudo.c 15154-15160).
     ctx_.front_font.draw_outlined(ctx_.sdl, ctx_.assets.getstring(50, "Available players:"),
-                                  layout_.hx, layout_.hy, 255, 255, 255, 0, 0, 0, layout_.hw);
+                                  SDL_FPoint{layout_.hx, layout_.hy},
+                                  OutlinedTextStyle{{255, 255, 255}, {}, layout_.hw});
     draw_slot_rows();
     draw_joystick_pane();
     draw_footer();
@@ -513,14 +515,14 @@ void SetupLoop::draw_slot_row(int i) {
     ctx_.assets.slot_color(i, sc);
     const Uint8 oc = i == 1 ? 255 : 0;
     const float row_y = layout_.ly + layout_.lys * static_cast<float>(i);
-    const float lx_end = ctx_.front_font.draw_outlined(ctx_.sdl, line, layout_.lx, row_y, sc[0],
-                                                       sc[1], sc[2], oc, oc, oc, layout_.lw);
+    const float lx_end = ctx_.front_font.draw_outlined(
+        ctx_.sdl, line, SDL_FPoint{layout_.lx, row_y},
+        OutlinedTextStyle{{sc[0], sc[1], sc[2]}, {oc, oc, oc}, layout_.lw});
     if (!state_.team_play) return;
     const std::string marker = "  " + ctx_.assets.getstring(230, "TEAM");
     const bool team1 = state_.setup_team[i] != 0;  // sub_4141F8's `a1 ?` branch
-    ctx_.front_font.draw_outlined(
-        ctx_.sdl, marker, lx_end, row_y, static_cast<Uint8>(team1 ? 252 : 255),
-        static_cast<Uint8>(team1 ? 80 : 255), static_cast<Uint8>(team1 ? 80 : 255), 0, 0, 0);
+    ctx_.front_font.draw_outlined(ctx_.sdl, marker, SDL_FPoint{lx_end, row_y},
+                                  OutlinedTextStyle{team1 ? Rgb{252, 80, 80} : Rgb{255, 255, 255}});
 }
 
 // Joystick pane (getvalue 715/720): heading msg 40, then one line per detected
@@ -528,20 +530,23 @@ void SetupLoop::draw_slot_row(int i) {
 // msg-42 line. ALL of it plain white ink over a black outline (pseudo.c
 // 15227-15263) — the old grey tints were invented.
 void SetupLoop::draw_joystick_pane() {
-    ctx_.front_font.draw_outlined(ctx_.sdl, ctx_.assets.getstring(40, "JOYSTICKS"), layout_.jhx,
-                                  layout_.jhy, 255, 255, 255, 0, 0, 0, layout_.jhw);
+    ctx_.front_font.draw_outlined(ctx_.sdl, ctx_.assets.getstring(40, "JOYSTICKS"),
+                                  SDL_FPoint{layout_.jhx, layout_.jhy},
+                                  OutlinedTextStyle{{255, 255, 255}, {}, layout_.jhw});
     const int joy_count = ctx_.gamepads.count();
     if (joy_count == 0) {
-        ctx_.front_font.draw_outlined(ctx_.sdl, ctx_.assets.getstring(42, "none"), layout_.jlx,
-                                      layout_.jly, 255, 255, 255, 0, 0, 0, layout_.jlw);
+        ctx_.front_font.draw_outlined(ctx_.sdl, ctx_.assets.getstring(42, "none"),
+                                      SDL_FPoint{layout_.jlx, layout_.jly},
+                                      OutlinedTextStyle{{255, 255, 255}, {}, layout_.jlw});
         return;
     }
     for (int j = 0; j < joy_count; ++j) {
         const std::string jline =
             fmt_us(ctx_.assets.getstring(41, "Joy %u - %s"), j, ctx_.gamepads.name(j));
-        ctx_.front_font.draw_outlined(ctx_.sdl, jline, layout_.jlx,
-                                      layout_.jly + layout_.jlys * static_cast<float>(j), 255, 255,
-                                      255, 0, 0, 0, layout_.jlw);
+        ctx_.front_font.draw_outlined(
+            ctx_.sdl, jline,
+            SDL_FPoint{layout_.jlx, layout_.jly + layout_.jlys * static_cast<float>(j)},
+            OutlinedTextStyle{{255, 255, 255}, {}, layout_.jlw});
     }
 }
 
@@ -550,8 +555,9 @@ void SetupLoop::draw_joystick_pane() {
 void SetupLoop::draw_footer() {
     const std::string help = ctx_.assets.getstring(330, "Press F1 for help");
     const float help_w = static_cast<float>(ctx_.front_font.measure(help));
-    ctx_.front_font.draw_outlined(ctx_.sdl, help, layout_.fcx - (help_w + 2.0f) / 2.0f, layout_.ffy,
-                                  96, 252, 252, 0, 0, 0, layout_.ffw);
+    ctx_.front_font.draw_outlined(ctx_.sdl, help,
+                                  SDL_FPoint{layout_.fcx - (help_w + 2.0f) / 2.0f, layout_.ffy},
+                                  OutlinedTextStyle{{96, 252, 252}, {}, layout_.ffw});
 }
 
 // The row cursor (sub_413BD6): MISC.ANI "cursor1" at (getvalue(710) - 15,

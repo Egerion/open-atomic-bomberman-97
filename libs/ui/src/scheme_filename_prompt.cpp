@@ -67,7 +67,8 @@ std::string SchemeFilenamePrompt::run(const std::string& seed) {
         ctx_.audio.update_music();
         SDL_SetRenderDrawColor(ctx_.sdl, 0, 0, 0, 255);
         SDL_RenderClear(ctx_.sdl);
-        draw_text_entry_dialog(ctx_.sdl, ctx_.front_font, 180.0f, label, entry, "Done", "Cancel");
+        draw_text_entry_dialog(DialogPen{ctx_.sdl, ctx_.front_font}, 180.0f,
+                               TextEntryLabels{label, entry, "Done", "Cancel"});
         SDL_RenderPresent(ctx_.sdl);
         SDL_Delay(2);
     }

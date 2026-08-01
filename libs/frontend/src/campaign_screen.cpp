@@ -12,8 +12,8 @@ namespace {
 // The general white ink every row is drawn in — the selected one included,
 // because sub_442C28 LIGHTENS the band under the text rather than inverting it,
 // so no per-row recolour and no "> " marker are needed.
-constexpr Uint8 kInkR = 255, kInkG = 255, kInkB = 255;
-constexpr Uint8 kHintR = 160, kHintG = 160, kHintB = 160;
+constexpr Rgb kInk{255, 255, 255};
+constexpr Rgb kHint{160, 160, 160};
 
 bool has_cam_extension(const std::filesystem::path& p) {
     std::string ext = p.extension().string();
@@ -51,8 +51,9 @@ std::string CampaignFilePicker::header() const {
 }
 
 ListDialogGeometry CampaignFilePicker::layout() const {
-    return list_dialog_layout_for(*font_, header(), 100.0f, 100.0f, item_w_, kVisibleRows,
-                                  static_cast<int>(entries_.size()), nav_.top_row);
+    return list_dialog_layout_for(
+        *font_, ListDialogSpec{header(), 100.0f, 100.0f, item_w_, kVisibleRows,
+                               static_cast<int>(entries_.size()), nav_.top_row});
 }
 
 void CampaignFilePicker::on_key(SDL_Keycode key, AudioEngine& audio) {
@@ -91,14 +92,15 @@ void CampaignFilePicker::on_key(SDL_Keycode key, AudioEngine& audio) {
 
 void CampaignFilePicker::on_mouse_move(float x, float y, bool buttons_held) {
     if (entries_.empty() || !font_ || !font_->loaded() || buttons_held) return;
-    list_dialog_mouse_move(nav_, list_dialog_hit_for(*font_, layout(), kVisibleRows, x, y),
+    list_dialog_mouse_move(nav_,
+                           list_dialog_hit_for(*font_, layout(), kVisibleRows, SDL_FPoint{x, y}),
                            static_cast<int>(entries_.size()));
 }
 
 void CampaignFilePicker::on_mouse_down(float x, float y) {
     if (entries_.empty() || !font_ || !font_->loaded()) return;
     const ListDialogGeometry g = layout();
-    const ListDialogHit hit = list_dialog_hit_for(*font_, g, kVisibleRows, x, y);
+    const ListDialogHit hit = list_dialog_hit_for(*font_, g, kVisibleRows, SDL_FPoint{x, y});
     pressed_ = hit.widget;
     switch (list_dialog_mouse_down(nav_, g, hit, kVisibleRows,
                                    static_cast<int>(entries_.size()), static_cast<int>(y))) {
@@ -117,7 +119,8 @@ void CampaignFilePicker::on_mouse_down(float x, float y) {
 
 void CampaignFilePicker::on_mouse_up(float x, float y) {
     if (entries_.empty() || !font_ || !font_->loaded()) return;
-    const ListDialogHit hit = list_dialog_hit_for(*font_, layout(), kVisibleRows, x, y);
+    const ListDialogHit hit =
+        list_dialog_hit_for(*font_, layout(), kVisibleRows, SDL_FPoint{x, y});
     const ListDialogWidget was = pressed_;
     pressed_ = ListDialogWidget::None;
     if (list_dialog_mouse_up(hit, was) == ListDialogAction::Cancel) {
@@ -147,8 +150,8 @@ void CampaignFilePicker::draw(SDL_Renderer* ren) const {
         // dialog (docs/re/campaign.md §3).
         const std::string err =
             assets_ ? assets_->getstring(1215, "No campaign files found!") : std::string();
-        font_->draw(ren, err.empty() ? "No campaign files found!" : err, 100.0f, 124.0f, kHintR,
-                    kHintG, kHintB);
+        font_->draw(ren, err.empty() ? "No campaign files found!" : err, SDL_FPoint{100.0f, 124.0f},
+                    TextStyle{kHint});
         return;
     }
     // sub_4015C6 hands its glob to the SAME sub_41485A -> sub_42DB80 ->
@@ -161,15 +164,16 @@ void CampaignFilePicker::draw(SDL_Renderer* ren) const {
     // enter()); the widget folds the title in itself, so it must NOT be pre-maxed.
     const int count = static_cast<int>(entries_.size());
     const int last = std::min(count, nav_.top_row + kVisibleRows);
-    const ListDialogLayout lay = draw_list_dialog(ren, *font_, header(), 100.0f, 100.0f, item_w_,
-                                                  kVisibleRows, count, nav_.top_row);
+    const ListDialogLayout lay = draw_list_dialog(
+        DialogPen{ren, *font_},
+        ListDialogSpec{header(), 100.0f, 100.0f, item_w_, kVisibleRows, count, nav_.top_row});
     for (int i = nav_.top_row; i < last; ++i) {
         const int vi = i - nav_.top_row;
         const float ty = lay.item_y0 + static_cast<float>(vi) * lay.item_h;
         // The selection band follows the highlight OFFSET (@0x42E656).
         if (vi == nav_.highlight) draw_list_selection(ren, lay, vi);
-        font_->draw(ren, entries_[static_cast<std::size_t>(i)].filename().string(), lay.item_x, ty,
-                    kInkR, kInkG, kInkB);
+        font_->draw(ren, entries_[static_cast<std::size_t>(i)].filename().string(),
+                    SDL_FPoint{lay.item_x, ty}, TextStyle{kInk});
     }
 }
 

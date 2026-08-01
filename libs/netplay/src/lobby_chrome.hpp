@@ -36,8 +36,8 @@ inline void draw_lobby_backdrop(ScreenContext ctx) {
 // One centred line of the pinned outlined dialog text (sub_41696C).
 inline void draw_centred(ScreenContext ctx, const std::string& s, float y) {
     const float w = static_cast<float>(ctx.front_font.measure(s));
-    draw_dialog_text(ctx.sdl, ctx.front_font, s, (kScreenW - w) / 2.0f, y, kDialogInkR, kDialogInkG,
-                     kDialogInkB);
+    draw_dialog_text(DialogPen{ctx.sdl, ctx.front_font}, s, SDL_FPoint{(kScreenW - w) / 2.0f, y},
+                     DialogInk{kDialogInk});
 }
 
 // The sub_414340 acknowledge modal's two chrome pieces, resolved once per screen
@@ -53,8 +53,9 @@ inline AckChrome ack_chrome(ScreenContext ctx) {
 
 inline void draw_ack(ScreenContext ctx, const AckChrome& c, const std::string& top,
                      const std::string& body) {
-    draw_acknowledge_dialog(ctx.sdl, ctx.front_font, c.winz, top, body, c.ok_label, kDialogInkR,
-                            kDialogInkG, kDialogInkB);
+    draw_acknowledge_dialog(DialogPen{ctx.sdl, ctx.front_font}, c.winz,
+                            AcknowledgeLabels{top, body, c.ok_label},
+                            AcknowledgeStyle{kDialogInk});
 }
 
 // sub_414340's own key loop: the modal closes on Enter / Space / Esc only, and

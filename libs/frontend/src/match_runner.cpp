@@ -22,7 +22,7 @@
 #include "bomber/netui/net_overlay.hpp"     // draw_net_overlay (the F3 panel)
 #include "bomber/render/renderer.hpp"       // kScreenW
 #include "bomber/render/sprites.hpp"        // Sprite (player-row "xxx" marker)
-#include "bomber/ui/dialog_chrome.hpp"      // kDialogInkR/G/B (fps overlay)
+#include "bomber/ui/dialog_chrome.hpp"      // kDialogInk (fps overlay)
 
 namespace bomber::game {
 
@@ -217,11 +217,11 @@ void MatchRunner::draw_net_esc_prompt() {
         const float x =
             (static_cast<float>(kScreenW) - static_cast<float>(ctx_.front_font.measure(line)) * kS) /
             2.0f;
-        ctx_.front_font.draw(ctx_.sdl, line, x - 1, y, 0, 0, 0, kS);
-        ctx_.front_font.draw(ctx_.sdl, line, x + 1, y, 0, 0, 0, kS);
-        ctx_.front_font.draw(ctx_.sdl, line, x, y - 1, 0, 0, 0, kS);
-        ctx_.front_font.draw(ctx_.sdl, line, x, y + 1, 0, 0, 0, kS);
-        ctx_.front_font.draw(ctx_.sdl, line, x, y, 255, 220, 90, kS);
+        ctx_.front_font.draw(ctx_.sdl, line, SDL_FPoint{x - 1, y}, TextStyle{{}, kS});
+        ctx_.front_font.draw(ctx_.sdl, line, SDL_FPoint{x + 1, y}, TextStyle{{}, kS});
+        ctx_.front_font.draw(ctx_.sdl, line, SDL_FPoint{x, y - 1}, TextStyle{{}, kS});
+        ctx_.front_font.draw(ctx_.sdl, line, SDL_FPoint{x, y + 1}, TextStyle{{}, kS});
+        ctx_.front_font.draw(ctx_.sdl, line, SDL_FPoint{x, y}, TextStyle{{255, 220, 90}, kS});
         y += lh;
     }
 }
@@ -291,7 +291,8 @@ void MatchRunner::draw_player_score(int i, SDL_FPoint at) {
     const bool solo =
         !::bomber::game::is_team_mode(state_.team_play, state_.sim.state(), state_.setup_team);
     const std::uint8_t ol = (solo && i == 1) ? 255 : 0;
-    ctx_.front_font.draw_outlined(ctx_.sdl, line, at.x, at.y, c[0], c[1], c[2], ol, ol, ol);
+    ctx_.front_font.draw_outlined(ctx_.sdl, line, at,
+                                  OutlinedTextStyle{{c[0], c[1], c[2]}, {ol, ol, ol}});
 }
 
 void MatchRunner::draw_eliminated_marker(SDL_FPoint at) {
@@ -312,12 +313,12 @@ void MatchRunner::draw_fps_overlay(int fps) {
     const float lh = static_cast<float>(ctx_.front_font.line_height()) * kS;
     auto line = [&](const std::string& s, float y, bool hot) {
         const float x = right - static_cast<float>(ctx_.front_font.measure(s)) * kS;
-        ctx_.front_font.draw(ctx_.sdl, s, x - 1, y, 0, 0, 0, kS);
-        ctx_.front_font.draw(ctx_.sdl, s, x + 1, y, 0, 0, 0, kS);
-        ctx_.front_font.draw(ctx_.sdl, s, x, y - 1, 0, 0, 0, kS);
-        ctx_.front_font.draw(ctx_.sdl, s, x, y + 1, 0, 0, 0, kS);
-        ctx_.front_font.draw(ctx_.sdl, s, x, y, hot ? 120 : kDialogInkR, hot ? 240 : kDialogInkG,
-                             hot ? 120 : kDialogInkB, kS);
+        ctx_.front_font.draw(ctx_.sdl, s, SDL_FPoint{x - 1, y}, TextStyle{{}, kS});
+        ctx_.front_font.draw(ctx_.sdl, s, SDL_FPoint{x + 1, y}, TextStyle{{}, kS});
+        ctx_.front_font.draw(ctx_.sdl, s, SDL_FPoint{x, y - 1}, TextStyle{{}, kS});
+        ctx_.front_font.draw(ctx_.sdl, s, SDL_FPoint{x, y + 1}, TextStyle{{}, kS});
+        ctx_.front_font.draw(ctx_.sdl, s, SDL_FPoint{x, y},
+                             TextStyle{hot ? Rgb{120, 240, 120} : kDialogInk, kS});
     };
     char buf[24];
     std::snprintf(buf, sizeof(buf), "%d FPS", fps);

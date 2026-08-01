@@ -104,9 +104,9 @@ private:
         // y = 180 is the CONFIRMED sub_42E938 prompt anchor. sub_4074DC's own y is
         // register-lost in the decompile, so the port reuses the family's one
         // pinned anchor rather than guessing a new one.
-        draw_text_entry_dialog(ctx_.sdl, ctx_.front_font, 180.0f,
-                               ctx_.assets.getstring(290, "Enter new node name:"), entry_, "Done",
-                               "Cancel");
+        draw_text_entry_dialog(DialogPen{ctx_.sdl, ctx_.front_font}, 180.0f,
+                               TextEntryLabels{ctx_.assets.getstring(290, "Enter new node name:"),
+                                               entry_, "Done", "Cancel"});
     }
 
     ScreenContext& ctx_;

@@ -55,11 +55,12 @@ void draw_boot_loading_dialog(SDL_Renderer* ren, const FontTextures& font, const
 
     std::string cap_str = caption;
     float cap_w = font.loaded() ? static_cast<float>(font.measure(cap_str)) : 0.0f;
-    draw_dialog_text(ren, font, cap_str, win.x + (win.w - cap_w) / 2, win.y + 1.5f * h, kDialogInkR,
-                     kDialogInkG, kDialogInkB);
+    draw_dialog_text(DialogPen{ren, font}, cap_str,
+                     SDL_FPoint{win.x + (win.w - cap_w) / 2, win.y + 1.5f * h},
+                     DialogInk{kDialogInk});
 
     SDL_FRect frame{win.x + 30.0f, win.y + 5.5f * h, 302.0f, h + 1.0f};
-    SDL_SetRenderDrawColor(ren, kDialogInkR, kDialogInkG, kDialogInkB, 255);
+    SDL_SetRenderDrawColor(ren, kDialogInk.r, kDialogInk.g, kDialogInk.b, 255);
     SDL_RenderRect(ren, &frame);
 
     // Two-tone bar (sub_43D1C0 x2): paint the whole 300-px track black, then the
@@ -75,8 +76,9 @@ void draw_boot_loading_dialog(SDL_Renderer* ren, const FontTextures& font, const
 
     std::string pct_str = std::to_string(static_cast<int>(std::lround(fraction * 100.0f)));
     float pct_w = font.loaded() ? static_cast<float>(font.measure(pct_str)) : 0.0f;
-    draw_dialog_text(ren, font, pct_str, win.x + (win.w - pct_w) / 2, win.y + 3.5f * h, 252, 248,
-                     88);
+    draw_dialog_text(DialogPen{ren, font}, pct_str,
+                     SDL_FPoint{win.x + (win.w - pct_w) / 2, win.y + 3.5f * h},
+                     DialogInk{{252, 248, 88}});
 
     SDL_RenderPresent(ren);
 }

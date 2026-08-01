@@ -96,14 +96,17 @@ void VideoSettingsScreen::draw() {
         std::max(190.0f, 38.0f + 3.0f * lh + static_cast<float>(kRows) * (lh + 6.0f));
     const DialogRect win{(kScreenW - 380.0f) / 2.0f, 140.0f, 380.0f, win_h};
     draw_dialog_chrome(ctx_.sdl, win, &ctx_.assets.frontend_pcx("WINZ"));
-    draw_dialog_text(ctx_.sdl, ctx_.front_font, "VIDEO SETTINGS (port)", win.x + 24.0f,
-                     win.y + 16.0f, 255, 255, 255);
+    const DialogPen pen{ctx_.sdl, ctx_.front_font};
+    draw_dialog_text(pen, "VIDEO SETTINGS (port)", SDL_FPoint{win.x + 24.0f, win.y + 16.0f},
+                     DialogInk{{255, 255, 255}});
     draw_rows(win, lh);
     // Centred so it can't spill past the panel edge (the reported overflow).
     const std::string hint = "Enter toggle    Esc close";
-    draw_dialog_text(ctx_.sdl, ctx_.front_font, hint,
-                     win.x + (win.w - static_cast<float>(ctx_.front_font.measure(hint))) / 2.0f,
-                     win.y + win.h - 16.0f - lh, 255, 255, 255);
+    draw_dialog_text(
+        pen, hint,
+        SDL_FPoint{win.x + (win.w - static_cast<float>(ctx_.front_font.measure(hint))) / 2.0f,
+                   win.y + win.h - 16.0f - lh},
+        DialogInk{{255, 255, 255}});
 }
 
 void VideoSettingsScreen::draw_rows(const DialogRect& win, float lh) {
@@ -116,8 +119,9 @@ void VideoSettingsScreen::draw_rows(const DialogRect& win, float lh) {
             std::string(sel ? "> " : "  ") + kRowLabels[i] + ":  " + (vals[i] ? "On" : "Off");
         // Selected row yellow, others a dim white — the same read-at-a-glance
         // convention as the fps overlay's green/white.
-        draw_dialog_text(ctx_.sdl, ctx_.front_font, shown, win.x + 24.0f, ry, sel ? 255 : 200,
-                         sel ? 220 : 200, sel ? 80 : 200);
+        draw_dialog_text(DialogPen{ctx_.sdl, ctx_.front_font}, shown,
+                         SDL_FPoint{win.x + 24.0f, ry},
+                         DialogInk{sel ? Rgb{255, 220, 80} : Rgb{200, 200, 200}});
         ry += lh + 6.0f;
     }
 }

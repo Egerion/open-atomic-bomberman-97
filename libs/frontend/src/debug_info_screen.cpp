@@ -56,16 +56,18 @@ void DebugInfoScreen::draw() {
     draw_dialog_chrome(ctx_.sdl, win, &ctx_.assets.frontend_pcx("WINZ"));
     draw_stats(win);
     const float lh = static_cast<float>(ctx_.front_font.line_height());
-    draw_dialog_text(ctx_.sdl, ctx_.front_font,
+    draw_dialog_text(DialogPen{ctx_.sdl, ctx_.front_font},
                      ctx_.assets.getstring(401, "Press [Enter] or [Esc] to continue"),
-                     win.x + 24.0f, win.y + win.h - 16.0f - lh, 255, 255, 255);
+                     SDL_FPoint{win.x + 24.0f, win.y + win.h - 16.0f - lh},
+                     DialogInk{{255, 255, 255}});
 }
 
 void DebugInfoScreen::draw_stats(const DialogRect& win) {
     const float lh = static_cast<float>(ctx_.front_font.line_height());
     float ty = win.y + 16.0f;
     auto line = [&](const std::string& s) {
-        draw_dialog_text(ctx_.sdl, ctx_.front_font, s, win.x + 24.0f, ty, 255, 255, 255);
+        draw_dialog_text(DialogPen{ctx_.sdl, ctx_.front_font}, s, SDL_FPoint{win.x + 24.0f, ty},
+                         DialogInk{{255, 255, 255}});
         ty += lh + 6.0f;
     };
     line(ctx_.assets.getstring(400, "Internal debugging information"));

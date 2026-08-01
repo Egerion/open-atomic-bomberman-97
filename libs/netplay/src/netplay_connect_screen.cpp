@@ -107,9 +107,10 @@ AddressOutcome prompt_address(ScreenContext ctx, AddressEntry& a) {
         }
         ctx.audio.update_music();
         draw_lobby_backdrop(ctx);
-        draw_text_entry_dialog(ctx.sdl, ctx.front_font, kJoinPromptY,
-                               a.error.empty() ? std::string("JOIN - HOST ADDRESS:") : a.error,
-                               a.draft, "Connect", "Cancel");
+        draw_text_entry_dialog(
+            DialogPen{ctx.sdl, ctx.front_font}, kJoinPromptY,
+            TextEntryLabels{a.error.empty() ? std::string("JOIN - HOST ADDRESS:") : a.error,
+                            a.draft, "Connect", "Cancel"});
         SDL_RenderPresent(ctx.sdl);
         frame_clock.pace();
     }
@@ -165,8 +166,9 @@ NetplayConnectResult NetplayConnectScreen::pump_handshake(net::UdpTransport& tra
 
         ctx_.audio.update_music();
         draw_lobby_backdrop(ctx_);
-        draw_acknowledge_dialog(ctx_.sdl, ctx_.front_font, ack.winz, prompt.line1, prompt.line2,
-                                kCancelLabel, kDialogInkR, kDialogInkG, kDialogInkB);
+        draw_acknowledge_dialog(DialogPen{ctx_.sdl, ctx_.front_font}, ack.winz,
+                                AcknowledgeLabels{prompt.line1, prompt.line2, kCancelLabel},
+                                AcknowledgeStyle{kDialogInk});
         SDL_RenderPresent(ctx_.sdl);
         frame_clock.pace();
     }

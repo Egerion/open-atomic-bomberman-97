@@ -169,7 +169,8 @@ int run_bm_capture(const CaptureSlots& s) {
 
 int run_menu_capture(const CaptureSlots& s) {
     draw_menu_backdrop(s);
-    s.front_font.draw_outlined(s.sdl, "V1.0", 0, 0, 168, 168, 164, 0, 0, 0, 50.0f);
+    s.front_font.draw_outlined(s.sdl, "V1.0", SDL_FPoint{0, 0},
+                               OutlinedTextStyle{{168, 168, 164}, {}, 50.0f});
     const int cx = static_cast<int>(s.values.column_or(700, 0, kMenuCursorXFallback));
     const int cy = static_cast<int>(s.values.column_or(700, 1, kMenuCursorYFallback));
     const Anim cur = resolve_sequence(s.assets.trigbomb(-1), "bomb trigger green");

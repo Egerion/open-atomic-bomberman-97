@@ -459,22 +459,24 @@ std::string MapSelectLoop::displayed_level_name() const {
 // left a literal "%s" on screen with the real MESSAGES.TXT.
 void MapSelectLoop::draw_rows() {
     const std::string level_line = fmt_s(ctx_.assets.getstring(210, "%s"), displayed_level_name());
-    ctx_.front_font.draw_outlined(ctx_.sdl, level_line, layout_.lx, layout_.ly, 240, 248, 252, 0, 0,
-                                  0, layout_.lw);
+    ctx_.front_font.draw_outlined(ctx_.sdl, level_line, SDL_FPoint{layout_.lx, layout_.ly},
+                                  OutlinedTextStyle{{240, 248, 252}, {}, layout_.lw});
     const std::string wins_word = ctx_.assets.getstring(
         state_.options.win_by_kills ? 209 : 208, state_.options.win_by_kills ? "Kills" : "Wins");
     const std::string wins_line =
         fmt_us(ctx_.assets.getstring(211, "%u %s to win match"), wins_, wins_word);
-    ctx_.front_font.draw_outlined(ctx_.sdl, wins_line, layout_.lx, layout_.ly + layout_.lys, 240,
-                                  248, 252, 0, 0, 0, layout_.lw);
+    ctx_.front_font.draw_outlined(ctx_.sdl, wins_line,
+                                  SDL_FPoint{layout_.lx, layout_.ly + layout_.lys},
+                                  OutlinedTextStyle{{240, 248, 252}, {}, layout_.lw});
 }
 
 // Footer (sub_413FB9): centred cyan "Press F1 for help".
 void MapSelectLoop::draw_footer() {
     const std::string help = ctx_.assets.getstring(330, "Press F1 for help");
     const float help_w = static_cast<float>(ctx_.front_font.measure(help));
-    ctx_.front_font.draw_outlined(ctx_.sdl, help, layout_.fcx - (help_w + 2.0f) / 2.0f, layout_.ffy,
-                                  96, 252, 252, 0, 0, 0);
+    ctx_.front_font.draw_outlined(ctx_.sdl, help,
+                                  SDL_FPoint{layout_.fcx - (help_w + 2.0f) / 2.0f, layout_.ffy},
+                                  OutlinedTextStyle{{96, 252, 252}});
 }
 
 // The bomber-dude row cursor (sub_413BD6 at 8140-8141): (getvalue(735) - 20,

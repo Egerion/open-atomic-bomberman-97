@@ -22,6 +22,30 @@
 
 namespace bomber::game {
 
+// One colour triple. Every draw call used to spell a colour as three adjacent
+// Uint8s — and an outlined draw as SIX — which is a transposition hazard nothing
+// warns about here (.clang-tidy disables bugprone-easily-swappable-parameters
+// repo-wide). The struct is the guard rail.
+struct Rgb {
+    Uint8 r = 0, g = 0, b = 0;
+};
+
+// FontTextures::draw's per-call style: the ink, and the dst-rect-only scale.
+struct TextStyle {
+    Rgb ink;
+    float scale = 1.0f;
+};
+
+// FontTextures::draw_outlined's per-call style: ink over its outline colour
+// (sub_41696C's a6/a7 — black at every dialog site but the quit confirm), plus
+// the routine's max_w clip (its a4; <= 0 disables the clip, and only the [WAIT]
+// prompt passes one).
+struct OutlinedTextStyle {
+    Rgb ink;
+    Rgb outline{};
+    float max_w = 0.0f;
+};
+
 // One glyph uploaded as an alpha texture (white ink, transparent ground); the
 // on-screen colour is applied per-draw with SDL_SetTextureColorMod.
 class FontTextures {
@@ -47,19 +71,25 @@ public:
 
     // Returns the x just past the run, so a caller can continue the same line
     // (e.g. after an inline image).
+    float draw(SDL_Renderer* ren, const std::string& s, SDL_FPoint at,
+               const TextStyle& style) const;
+    // COMPAT overload of the above, kept ONLY while goldman_screen.cpp (frozen
+    // under another agent's edit) still spells the colour as three Uint8s.
+    // Delete it and convert that one call site once the freeze lifts.
     float draw(SDL_Renderer* ren, const std::string& s, float x, float y, Uint8 r, Uint8 g,
-               Uint8 b, float scale = 1.0f) const;
+               Uint8 b, float scale = 1.0f) const {
+        return draw(ren, s, SDL_FPoint{x, y}, TextStyle{{r, g, b}, scale});
+    }
 
     // sub_41696C (pseudo.c 18516-18572) renders every front-end string FIVE
     // times — four outline passes and one ink pass — into a (w+2)-wide scratch,
-    // and CLIPS the run to `max_w` pixels (its 4th argument; VALUELST rows
-    // 705/710/715/720/790 column 3). max_w <= 0 disables the clip.
+    // and CLIPS the run to `style.max_w` pixels (its 4th argument; VALUELST rows
+    // 705/710/715/720/790 column 3).
     // The four outline passes are the ink's DIAGONAL neighbours, not its
     // cardinal ones (facts.md). THE port of that routine: draw_dialog_text
     // delegates here, so there is one place for the offsets to be wrong in.
-    float draw_outlined(SDL_Renderer* ren, const std::string& s, float x, float y, Uint8 r,
-                        Uint8 g, Uint8 b, Uint8 outline_r, Uint8 outline_g, Uint8 outline_b,
-                        float max_w = 0) const;
+    float draw_outlined(SDL_Renderer* ren, const std::string& s, SDL_FPoint at,
+                        const OutlinedTextStyle& style) const;
 
 private:
     struct GlyphTex {

@@ -32,6 +32,21 @@ struct DialogRect {
     float x, y, w, h;
 };
 
+// The (renderer, font) pair every chrome call threads through — one handle
+// instead of two leading arguments on every signature below.
+struct DialogPen {
+    SDL_Renderer* ren;
+    const FontTextures& font;
+};
+
+// Ink over its outline colour for the dialog text family (sub_41696C's a6/a7
+// argument pair). Outline defaults to black, which every dialog site but the
+// quit confirm passes.
+struct DialogInk {
+    Rgb ink;
+    Rgb outline{};
+};
+
 // CORRECTED 2026-07-26: sub_43C734 is SIX-arg — (x, y, width, height, colormode,
 // flags), and a1 is X, a2 is Y. Proof: a1/a2 flow into sub_43D398 @0x43C8C2,
 // which bounds-checks width + a1 against the right clip edge and height + a2
@@ -48,14 +63,14 @@ DialogRect dialog_rect_vcentered(float height_px, float width_px);
 // Chrome colours, decoded through the REAL LUT bytes and the shared reserved-UI
 // palette region (frontend-flow.md "COLOR.PAL — byte_495390 decoded for real").
 // These CORRECT the earlier nearest-colour approximations.
-inline constexpr Uint8 kDialogFillR = 88, kDialogFillG = 84, kDialogFillB = 80;
+inline constexpr Rgb kDialogFill{88, 84, 80};
 // byte_49D38F (LUT offset 0x7FFF) -> idx 72: the general dialog text ink.
-inline constexpr Uint8 kDialogInkR = 240, kDialogInkG = 248, kDialogInkB = 252;
+inline constexpr Rgb kDialogInk{240, 248, 252};
 // dword_45C478 = 21140 -> idx 178: the sub_432298 button LABEL ink, and the list
 // dialog's title-strip grey. Exported so a screen can DIM an un-actionable item
 // (the lobby browser's incompatible-build rows) in a colour the front end
 // already uses for text rather than inventing a greyed-out ramp.
-inline constexpr Uint8 kDialogDimR = 168, kDialogDimG = 168, kDialogDimB = 164;
+inline constexpr Rgb kDialogDim{168, 168, 164};
 
 // The WINZ 9-patch when `winz` is a loaded sprite, the flat base coat when it is
 // not (sub_41726B/sub_416B43; partial tiles clip at the far edges exactly like
@@ -63,28 +78,25 @@ inline constexpr Uint8 kDialogDimR = 168, kDialogDimG = 168, kDialogDimB = 164;
 void draw_dialog_chrome(SDL_Renderer* ren, const DialogRect& r, const Sprite* winz);
 
 // sub_41696C — ink glyphs over a 4-pass 1-px outline at the ink's DIAGONAL
-// neighbours. The outline colour is a per-call argument (a7), black for every
-// dialog except the quit confirm (see draw_confirm_dialog). `x, y` is the
-// top-left. A thin wrapper over FontTextures::draw_outlined, which IS the port
-// of sub_41696C — this one only spares the dialog sites the max_w argument none
-// of them clip with. It used to be a second, contradicting implementation.
-void draw_dialog_text(SDL_Renderer* ren, const FontTextures& font, const std::string& text,
-                      float x, float y, Uint8 r, Uint8 g, Uint8 b, Uint8 outline_r = 0,
-                      Uint8 outline_g = 0, Uint8 outline_b = 0);
+// neighbours. `at` is the top-left. A thin wrapper over
+// FontTextures::draw_outlined, which IS the port of sub_41696C — this one only
+// spares the dialog sites the max_w argument none of them clip with. It used to
+// be a second, contradicting implementation.
+void draw_dialog_text(const DialogPen& pen, const std::string& text, SDL_FPoint at,
+                      const DialogInk& ink);
 
 // sub_432298 — size derived from the label (w = measure+16, h = fontheight+6),
 // face = the base coat washed toward white by sub_442C28 -> (108,112,108), a
 // two-ring inset bevel at insets 1 and 2, a 1-px black outline, and the
-// dword_45C478 label ink. `x, y` are WINDOW-relative. `pressed` draws the "down"
+// dword_45C478 label ink. `at` is WINDOW-relative. `pressed` draws the "down"
 // bitmap (pseudo.c 35238-35256): the same construction with the bevel pair
 // SWAPPED and WITHOUT the wash, so its face is the raw base coat.
-void draw_dialog_button(SDL_Renderer* ren, const FontTextures& font, float x, float y,
-                        const std::string& label, bool pressed = false);
+void draw_dialog_button(const DialogPen& pen, SDL_FPoint at, const std::string& label,
+                        bool pressed = false);
 
 // sub_44240C — interior fill plus a light top/left and dark bottom/right 1-px
 // strip (swapped for sunken), in the button widget's own dword_45C470/45C474.
-void draw_bevel_rect(SDL_Renderer* ren, float x, float y, float w, float h, bool raised,
-                     Uint8 face_r, Uint8 face_g, Uint8 face_b);
+void draw_bevel_rect(SDL_Renderer* ren, const SDL_FRect& r, bool raised, Rgb face);
 
 // The 4-space run separating two key hints. Exported so a caller measuring a
 // hint block by hand uses the SAME gap pack_hint_lines does.
@@ -118,6 +130,21 @@ struct ListDialogLayout {
     float footer_y0;  // top y of the first reserved footer line (see footer_lines)
 };
 
+// The arguments the list-dialog widget takes, shared by the draw and the
+// layout-for-hit-test entry points below so the two CANNOT be handed different
+// values — a hit test that re-derived the layout from its own copy of these
+// could drift from what is on screen.
+struct ListDialogSpec {
+    const std::string& title;  // folded into the width by the WIDGET (see below)
+    float x_px;                // NOT centred — both RE'd callers pass (100, 100)
+    float y_px;
+    float item_text_w;  // the widest ITEM's measured width (sub_42FEF0's max)
+    int visible_rows;
+    int total_rows;
+    int top_row;
+    int footer_lines = 0;
+};
+
 // The generic bevel LIST dialog — sub_42DBCC, RE-PINNED 2026-07-26 from a full
 // body read. Every offset and the draw order live in list_dialog_geometry.hpp
 // with their per-address citations; the three facts a CALLER must know are:
@@ -136,10 +163,7 @@ struct ListDialogLayout {
 // PORT-ONLY room for the online lobby's key hints (ADR-0011), with no home in
 // sub_42DBCC's own chrome. It defaults to 0, so every RE'd caller keeps the
 // pinned geometry exactly.
-ListDialogLayout draw_list_dialog(SDL_Renderer* ren, const FontTextures& font,
-                                  const std::string& title, float x_px, float y_px,
-                                  float item_text_w, int visible_rows, int total_rows, int top_row,
-                                  int footer_lines = 0);
+ListDialogLayout draw_list_dialog(const DialogPen& pen, const ListDialogSpec& spec);
 
 // The selection highlight. The original does NOT invert: sub_442C28 @0x42DF80
 // washes the row's rect toward white over a base coat that is exactly the
@@ -155,16 +179,13 @@ void draw_list_selection(SDL_Renderer* ren, const ListDialogLayout& lay, int vis
 // the addresses). The DECISIONS live in that SDL-free header so the headless
 // suite can drive them; these are only the font/SDL adapters.
 
-// The same geometry draw_list_dialog builds for the identical arguments, so a
-// screen can hit-test exactly what it last drew.
-ListDialogGeometry list_dialog_layout_for(const FontTextures& font, const std::string& title,
-                                          float x_px, float y_px, float item_text_w,
-                                          int visible_rows, int total_rows, int top_row,
-                                          int footer_lines = 0);
+// The same geometry draw_list_dialog builds for the identical spec, so a screen
+// can hit-test exactly what it last drew.
+ListDialogGeometry list_dialog_layout_for(const FontTextures& font, const ListDialogSpec& spec);
 
 // Which hotspot a screen-space point lands on.
 ListDialogHit list_dialog_hit_for(const FontTextures& font, const ListDialogGeometry& g,
-                                  int visible_rows, float mx, float my);
+                                  int visible_rows, SDL_FPoint at);
 
 // One SDL keycode as the code sub_42DBCC's own switch expects, or 0 for a key
 // the widget does not handle. Only the keys the ORIGINAL binds are mapped —
@@ -196,6 +217,20 @@ inline bool dispatch_list_mouse(SDL_Renderer* ren, const SDL_Event& ev, ListWidg
     return true;
 }
 
+// The two lines and the button label of one sub_414340 acknowledge box, plus
+// the confirm family's four strings below. Reference members: these are
+// call-argument bundles built in place, never stored.
+struct AcknowledgeLabels {
+    const std::string& top;
+    const std::string& bottom;
+    const std::string& ok;
+};
+
+struct AcknowledgeStyle {
+    Rgb ink;
+    bool ok_pressed = false;
+};
+
 // sub_414340 — the ACKNOWLEDGE modal (PINNED, pseudo.c 17003-17107): two centred
 // lines (the halves of one packed 64-bit string argument; the top is
 // getstring(95) "NOTE!" at every UI call site), width = max(the two widths, 80)
@@ -209,10 +244,15 @@ DialogRect acknowledge_dialog_rect(const FontTextures& font, const std::string& 
                                    const std::string& bottom);
 DialogRect acknowledge_ok_rect(const FontTextures& font, const DialogRect& win,
                                const std::string& ok_label);
-void draw_acknowledge_dialog(SDL_Renderer* ren, const FontTextures& font, const Sprite* winz,
-                             const std::string& top, const std::string& bottom,
-                             const std::string& ok_label, Uint8 ink_r, Uint8 ink_g, Uint8 ink_b,
-                             bool ok_pressed = false);
+void draw_acknowledge_dialog(const DialogPen& pen, const Sprite* winz,
+                             const AcknowledgeLabels& labels, const AcknowledgeStyle& style);
+
+struct ConfirmLabels {
+    const std::string& line1;
+    const std::string& line2;  // empty gives the one-line shape
+    const std::string& yes;
+    const std::string& no;
+};
 
 // The sub_41456C confirm family (PINNED geometry, pseudo.c 17128-17277): centred
 // both ways, height = 4*fontheight + 64 + linesHeight, width = max(textwidth,
@@ -231,11 +271,8 @@ void draw_acknowledge_dialog(SDL_Renderer* ren, const FontTextures& font, const 
 // NOT pinned: which packed half lands on TOP — the register spill (pseudo.c
 // 17167-17190) is ambiguous the same way sub_43C734's X-placement was. This
 // primitive always draws `line1` first, a port convention.
-void draw_confirm_dialog(SDL_Renderer* ren, const FontTextures& font, const Sprite* winz,
-                         const std::string& line1, const std::string& line2,
-                         const std::string& yes_label, const std::string& no_label, Uint8 ink_r,
-                         Uint8 ink_g, Uint8 ink_b, Uint8 outline_r = 0, Uint8 outline_g = 0,
-                         Uint8 outline_b = 0);
+void draw_confirm_dialog(const DialogPen& pen, const Sprite* winz, const ConfirmLabels& labels,
+                         const DialogInk& ink);
 
 // The sub_42EDE0 family (PARTIALLY pinned, pseudo.c ~32897-32920) — the lighter
 // Yes/No the powerup sub-editor's Forbidden/HasOverride prompts use.
@@ -244,9 +281,15 @@ void draw_confirm_dialog(SDL_Renderer* ren, const FontTextures& font, const Spri
 // offsets center-64/center+16, and a 3*fontheight + 16 height. The WIDTH
 // baseline is decompiler-ambiguous (the dword_45C37C/45C380 font-metric chain is
 // register-spilled), so it reuses the confirm family's content-width shape.
-void draw_compact_confirm_dialog(SDL_Renderer* ren, const FontTextures& font,
-                                 const std::string& line, const std::string& yes_label,
-                                 const std::string& no_label);
+void draw_compact_confirm_dialog(const DialogPen& pen, const std::string& line,
+                                 const std::string& yes_label, const std::string& no_label);
+
+struct TextEntryLabels {
+    const std::string& label;
+    const std::string& entry;  // the live editable buffer, caret appended by the draw
+    const std::string& done;
+    const std::string& cancel;
+};
 
 // The sub_42E938 text-entry family (PARTIALLY pinned, pseudo.c 32748-32796) —
 // the Done/Cancel prompt behind every editable field: the editor's
@@ -254,8 +297,6 @@ void draw_compact_confirm_dialog(SDL_Renderer* ren, const FontTextures& font,
 // sub-editor's born-with/override prompts (y=400, CONFIRMED literal).
 // CONFIRMED: flat base coat, height = 5*fontheight + 16, HARDCODED
 // "Done"/"Cancel". The width has the same register-spilled ambiguity as above.
-void draw_text_entry_dialog(SDL_Renderer* ren, const FontTextures& font, float y_px,
-                            const std::string& label, const std::string& entry_text,
-                            const std::string& done_label, const std::string& cancel_label);
+void draw_text_entry_dialog(const DialogPen& pen, float y_px, const TextEntryLabels& labels);
 
 }  // namespace bomber::game

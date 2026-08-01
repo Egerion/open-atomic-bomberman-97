@@ -20,14 +20,14 @@ namespace {
 // results-and-options.md §1 "screen-ink byte globals"). kSel/kHint are our own
 // cursor/hint tints — the original has no keyboard cursor, its rows are mouse
 // buttons.
-constexpr Uint8 kInkR = 255, kInkG = 255, kInkB = 255;    // byte_49D38F white
-constexpr Uint8 kNameR = 252, kNameG = 248, kNameB = 88;  // byte_49D37A yellow
-constexpr Uint8 kHeadR = 96, kHeadG = 252, kHeadB = 252;  // byte_497F8F cyan
-constexpr Uint8 kSelR = 255, kSelG = 220, kSelB = 80;
-constexpr Uint8 kHintR = 160, kHintG = 160, kHintB = 160;
+constexpr Rgb kInk{255, 255, 255};   // byte_49D38F white
+constexpr Rgb kName{252, 248, 88};   // byte_49D37A yellow
+constexpr Rgb kHead{96, 252, 252};   // byte_497F8F cyan
+constexpr Rgb kSel{255, 220, 80};
+constexpr Rgb kHint{160, 160, 160};
 // byte_49A390 — sub_407582's empty-glob error ink (LUT offset 0x5000 -> idx
 // 248), the same dark red the main-menu quit prompt uses.
-constexpr Uint8 kErrR = 164, kErrG = 0, kErrB = 0;
+constexpr Rgb kErr{164, 0, 0};
 
 // §5 CONFIRMED: title getstring(730) at getvalue(810/811/813); rows
 // getstring(731..733) at getvalue(815-818). MESSAGES.TXT is install data and is
@@ -144,8 +144,9 @@ std::string SchemeFilePicker::header() const {
 }
 
 ListDialogGeometry SchemeFilePicker::layout() const {
-    return list_dialog_layout_for(*font_, header(), 100.0f, 100.0f, item_w_, kVisibleRows,
-                                  static_cast<int>(entries_.size()), nav_.top_row);
+    return list_dialog_layout_for(
+        *font_, ListDialogSpec{header(), 100.0f, 100.0f, item_w_, kVisibleRows,
+                               static_cast<int>(entries_.size()), nav_.top_row});
 }
 
 bool SchemeFilePicker::interactive() const {
@@ -183,14 +184,15 @@ void SchemeFilePicker::on_key(SDL_Keycode key, AudioEngine& audio) {
 
 void SchemeFilePicker::on_mouse_move(float x, float y, bool buttons_held) {
     if (!interactive() || buttons_held) return;
-    list_dialog_mouse_move(nav_, list_dialog_hit_for(*font_, layout(), kVisibleRows, x, y),
+    list_dialog_mouse_move(nav_,
+                           list_dialog_hit_for(*font_, layout(), kVisibleRows, SDL_FPoint{x, y}),
                            static_cast<int>(entries_.size()));
 }
 
 void SchemeFilePicker::on_mouse_down(float x, float y) {
     if (!interactive()) return;
     const ListDialogGeometry g = layout();
-    const ListDialogHit hit = list_dialog_hit_for(*font_, g, kVisibleRows, x, y);
+    const ListDialogHit hit = list_dialog_hit_for(*font_, g, kVisibleRows, SDL_FPoint{x, y});
     pressed_ = hit.widget;
     apply(list_dialog_mouse_down(nav_, g, hit, kVisibleRows, static_cast<int>(entries_.size()),
                                  static_cast<int>(y)));
@@ -198,7 +200,8 @@ void SchemeFilePicker::on_mouse_down(float x, float y) {
 
 void SchemeFilePicker::on_mouse_up(float x, float y) {
     if (!interactive()) return;
-    const ListDialogHit hit = list_dialog_hit_for(*font_, layout(), kVisibleRows, x, y);
+    const ListDialogHit hit =
+        list_dialog_hit_for(*font_, layout(), kVisibleRows, SDL_FPoint{x, y});
     const ListDialogWidget was = pressed_;
     pressed_ = ListDialogWidget::None;
     apply(list_dialog_mouse_up(hit, was));
@@ -214,10 +217,12 @@ void SchemeFilePicker::draw(SDL_Renderer* ren) const {
         // byte_49A390. This lives in the picker rather than in each caller
         // because in the original it is the same ONE routine both entry points
         // call.
-        draw_acknowledge_dialog(ren, *font_, assets_ ? &assets_->frontend_pcx("WINZ") : nullptr,
-                                text_of(assets_, 95, "NOTE!"),
-                                text_of(assets_, 720, "No Scheme files found!"),
-                                text_of(assets_, 27, " Ok "), kErrR, kErrG, kErrB);
+        draw_acknowledge_dialog(
+            DialogPen{ren, *font_}, assets_ ? &assets_->frontend_pcx("WINZ") : nullptr,
+            AcknowledgeLabels{text_of(assets_, 95, "NOTE!"),
+                              text_of(assets_, 720, "No Scheme files found!"),
+                              text_of(assets_, 27, " Ok ")},
+            AcknowledgeStyle{kErr});
         return;
     }
     // sub_407582 @0x407641 pushes the LITERAL pair (100, 100) and getstring(721)
@@ -228,8 +233,9 @@ void SchemeFilePicker::draw(SDL_Renderer* ren) const {
     // in itself, so it must NOT be pre-maxed here.
     const int count = static_cast<int>(entries_.size());
     const int last = std::min(count, nav_.top_row + kVisibleRows);
-    const ListDialogLayout lay = draw_list_dialog(ren, *font_, header(), 100.0f, 100.0f, item_w_,
-                                                  kVisibleRows, count, nav_.top_row);
+    const ListDialogLayout lay = draw_list_dialog(
+        DialogPen{ren, *font_},
+        ListDialogSpec{header(), 100.0f, 100.0f, item_w_, kVisibleRows, count, nav_.top_row});
     for (int i = nav_.top_row; i < last; ++i) {
         const int vi = i - nav_.top_row;
         const float ty = lay.item_y0 + static_cast<float>(vi) * lay.item_h;
@@ -237,7 +243,7 @@ void SchemeFilePicker::draw(SDL_Renderer* ren) const {
         // inverted, so the ink is the same for every row. The band follows the
         // highlight OFFSET (@0x42E656), not an absolute index.
         if (vi == nav_.highlight) draw_list_selection(ren, lay, vi);
-        font_->draw(ren, row_text(i), lay.item_x, ty, kInkR, kInkG, kInkB);
+        font_->draw(ren, row_text(i), SDL_FPoint{lay.item_x, ty}, TextStyle{kInk});
     }
 }
 
@@ -283,17 +289,20 @@ void EditorChooserScreen::draw(SDL_Renderer* ren) const {
 
     // getstring(730), then getstring(731..733); our paraphrases (see the file
     // header's note on MESSAGES.TXT).
-    font_->draw(ren, "SCHEME EDITOR", static_cast<float>(kChooserHeaderX),
-                static_cast<float>(kChooserHeaderY), kInkR, kInkG, kInkB);
+    font_->draw(ren, "SCHEME EDITOR",
+                SDL_FPoint{static_cast<float>(kChooserHeaderX), static_cast<float>(kChooserHeaderY)},
+                TextStyle{kInk});
     static constexpr std::array<const char*, 3> kItems{"1) EDIT AN EXISTING SCHEME",
                                                        "2) NEW SCHEME", "ESC) EXIT"};
     for (int i = 0; i < static_cast<int>(kItems.size()); ++i) {
         const float y = static_cast<float>(kChooserItemY0 + i * kChooserItemYStep);
-        font_->draw(ren, kItems[static_cast<std::size_t>(i)], static_cast<float>(kChooserItemX), y,
-                    kInkR, kInkG, kInkB);
+        font_->draw(ren, kItems[static_cast<std::size_t>(i)],
+                    SDL_FPoint{static_cast<float>(kChooserItemX), y}, TextStyle{kInk});
     }
-    font_->draw(ren, "F1 HELP", static_cast<float>(kChooserItemX),
-                static_cast<float>(kChooserItemY0 + 4 * kChooserItemYStep), kHintR, kHintG, kHintB);
+    font_->draw(ren, "F1 HELP",
+                SDL_FPoint{static_cast<float>(kChooserItemX),
+                           static_cast<float>(kChooserItemY0 + 4 * kChooserItemYStep)},
+                TextStyle{kHint});
 }
 
 // ---------------------------------------------------------------------------
@@ -441,15 +450,15 @@ void PowerupRulesScreen::draw_row(SDL_Renderer* ren, int row) const {
     const auto& pr = (*rows_)[static_cast<std::size_t>(row)];
     const float y = 60.0f + 24.0f * static_cast<float>(row);
     const bool sel = row == row_;
-    font_->draw(ren, (sel ? "> " : "  ") + powerup_name(row), 10.0f, y, sel ? kSelR : kNameR,
-                sel ? kSelG : kNameG, sel ? kSelB : kNameB);
+    font_->draw(ren, (sel ? "> " : "  ") + powerup_name(row), SDL_FPoint{10.0f, y},
+                TextStyle{sel ? kSel : kName});
     std::array<char, 64> mid{};
     std::snprintf(mid.data(), mid.size(), "BORN-WITH:%d%s", pr.born_with,
                   pr.forbidden ? "  FORBIDDEN" : "");
-    font_->draw(ren, mid.data(), 210.0f, y, kInkR, kInkG, kInkB);
+    font_->draw(ren, mid.data(), SDL_FPoint{210.0f, y}, TextStyle{kInk});
     const std::string ov = pr.has_override ? ("OVERRIDE " + std::to_string(pr.override_value))
                                            : std::string("(default)");
-    font_->draw(ren, ov, 450.0f, y, kInkR, kInkG, kInkB);
+    font_->draw(ren, ov, SDL_FPoint{450.0f, y}, TextStyle{kInk});
 }
 
 void PowerupRulesScreen::draw_chain_prompt(SDL_Renderer* ren) const {
@@ -461,25 +470,29 @@ void PowerupRulesScreen::draw_chain_prompt(SDL_Renderer* ren) const {
     // through the SAME pinned dialog_chrome primitives as the parent editor.
     if (step_ == ChainStep::None || !rows_ || rows_->empty()) return;
     const std::string name = " " + powerup_name(row_);
+    const DialogPen pen{ren, *font_};
     switch (step_) {
         case ChainStep::BornWith:
-            draw_text_entry_dialog(ren, *font_, 400.0f, text_of(assets_, 762, "Born with:") + name,
-                                   entry_, "Done", "Cancel");
+            draw_text_entry_dialog(
+                pen, 400.0f,
+                TextEntryLabels{text_of(assets_, 762, "Born with:") + name, entry_, "Done",
+                                "Cancel"});
             return;
         case ChainStep::OverrideValue:
-            draw_text_entry_dialog(ren, *font_, 400.0f,
-                                   text_of(assets_, 768, "Override value:") + name, entry_, "Done",
-                                   "Cancel");
+            draw_text_entry_dialog(
+                pen, 400.0f,
+                TextEntryLabels{text_of(assets_, 768, "Override value:") + name, entry_, "Done",
+                                "Cancel"});
             return;
         case ChainStep::Forbidden:
             // sub_42EDE0's HARDCODED literal "Yes"/"No" labels, not a
             // message-table lookup (dialog_chrome.hpp).
-            draw_compact_confirm_dialog(ren, *font_, text_of(assets_, 764, "Forbidden?") + name,
-                                        "Yes", "No");
+            draw_compact_confirm_dialog(pen, text_of(assets_, 764, "Forbidden?") + name, "Yes",
+                                        "No");
             return;
         case ChainStep::HasOverride:
-            draw_compact_confirm_dialog(
-                ren, *font_, text_of(assets_, 766, "Override amount?") + name, "Yes", "No");
+            draw_compact_confirm_dialog(pen, text_of(assets_, 766, "Override amount?") + name,
+                                        "Yes", "No");
             return;
         default: return;
     }
@@ -492,12 +505,13 @@ void PowerupRulesScreen::draw(SDL_Renderer* ren) const {
     if (!font_ || !font_->loaded()) return;
 
     // Header getstring(754) at (300, 30) in the byte_497F8F cyan.
-    font_->draw(ren, text_of(assets_, 754, "POWERUP RULES"), 300.0f, 30.0f, kHeadR, kHeadG, kHeadB);
+    font_->draw(ren, text_of(assets_, 754, "POWERUP RULES"), SDL_FPoint{300.0f, 30.0f},
+                TextStyle{kHead});
     if (!rows_) return;
     for (int i = 0; i < static_cast<int>(rows_->size()); ++i) draw_row(ren, i);
     draw_chain_prompt(ren);
-    font_->draw(ren, "UP/DOWN ROW   E/RIGHT EDIT ROW   ENTER/ESC/SPACE/Q DONE", 40.0f, 460.0f,
-                kHintR, kHintG, kHintB);
+    font_->draw(ren, "UP/DOWN ROW   E/RIGHT EDIT ROW   ENTER/ESC/SPACE/Q DONE",
+                SDL_FPoint{40.0f, 460.0f}, TextStyle{kHint});
 }
 
 // ---------------------------------------------------------------------------
@@ -824,7 +838,8 @@ void EditorScreen::draw_start_marker(SDL_Renderer* ren, int slot) const {
     if (font_ && font_->loaded()) {
         std::array<std::uint8_t, 3> c{255, 255, 255};
         if (assets_) assets_->slot_color(slot, c.data());
-        font_->draw(ren, std::to_string(slot + 1), ccx - 20.0f, cby - kCellH, c[0], c[1], c[2]);
+        font_->draw(ren, std::to_string(slot + 1), SDL_FPoint{ccx - 20.0f, cby - kCellH},
+                    TextStyle{{c[0], c[1], c[2]}});
     }
     if (!drew_ring) {
         // Fallback marker when MISC.ANI is missing: an outline box, team flag as
@@ -867,19 +882,20 @@ void EditorScreen::draw_status(SDL_Renderer* ren) const {
     std::snprintf(status.data(), status.size(), "BRUSH:%s  START:%d%s  DENSITY:%d  NAME:%s",
                   brush_name, selected_start_ + 1, grid_.start(selected_start_).team ? "[T]" : "",
                   grid_.density(), grid_.name().empty() ? "(none)" : grid_.name().c_str());
-    font_->draw(ren, status.data(), 20.0f, 5.0f, kInkR, kInkG, kInkB);
+    font_->draw(ren, status.data(), SDL_FPoint{20.0f, 5.0f}, TextStyle{kInk});
     font_->draw(ren,
                 "1/2/3 BRUSH  TAB CYCLE  CTRL+F FILL  CTRL+B RESET  0 TILESET  +/- START  T TEAM  "
                 "D DENSITY  N NAME  P POWERUPS  ESC SAVE/EXIT",
-                20.0f, 460.0f, kHintR, kHintG, kHintB);
+                SDL_FPoint{20.0f, 460.0f}, TextStyle{kHint});
 }
 
 void EditorScreen::draw_confirm(SDL_Renderer* ren, int line_id, const char* line_default,
                                 int note_id) const {
-    draw_confirm_dialog(ren, *font_, assets_ ? &assets_->frontend_pcx("WINZ") : nullptr,
-                        text_of(assets_, line_id, line_default), text_of(assets_, note_id, ""),
-                        text_of(assets_, 26, " Yes "), text_of(assets_, 25, " No "), kDialogInkR,
-                        kDialogInkG, kDialogInkB);
+    draw_confirm_dialog(DialogPen{ren, *font_}, assets_ ? &assets_->frontend_pcx("WINZ") : nullptr,
+                        ConfirmLabels{text_of(assets_, line_id, line_default),
+                                      text_of(assets_, note_id, ""), text_of(assets_, 26, " Yes "),
+                                      text_of(assets_, 25, " No ")},
+                        DialogInk{kDialogInk});
 }
 
 void EditorScreen::draw_prompt(SDL_Renderer* ren) const {
@@ -895,7 +911,8 @@ void EditorScreen::draw_prompt(SDL_Renderer* ren) const {
             const bool density = prompt_kind_ == PromptKind::Density;
             const std::string label =
                 text_of(assets_, density ? 739 : 728, density ? "DENSITY (0-100):" : "NAME:");
-            draw_text_entry_dialog(ren, *font_, 180.0f, label, prompt_text_, "Done", "Cancel");
+            draw_text_entry_dialog(DialogPen{ren, *font_}, 180.0f,
+                                   TextEntryLabels{label, prompt_text_, "Done", "Cancel"});
             return;
         }
         // getstring(735) + getstring(95) — §5's exit case, pseudo.c 5626-5629.

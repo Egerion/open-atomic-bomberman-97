@@ -12,19 +12,15 @@ namespace bomber::game {
 
 namespace {
 
-struct Rgb {
-    Uint8 r, g, b;
-};
-
 // Bevel/ink globals — siblings of the window fill colour, from the SAME
 // sub_43C150 init block (literal LUT offsets), decoded through COLOR.PAL's real
 // LUT bytes + the shared UI palette region (docs/re/frontend-flow.md "COLOR.PAL
 // — byte_495390 decoded for real"; these CORRECT the earlier nearest-colour
 // values (123,123,123)/(66,66,66)/(165,165,165)).
-constexpr Rgb kBevelLight{108, 116, 128};                         // dword_45C470 = 15855 -> idx  60
-constexpr Rgb kBevelDark{60, 68, 56};                             // dword_45C474 =  8456 -> idx 142
-constexpr Rgb kButtonInk{kDialogDimR, kDialogDimG, kDialogDimB};  // dword_45C478
-constexpr Rgb kBaseCoat{kDialogFillR, kDialogFillG, kDialogFillB};
+constexpr Rgb kBevelLight{108, 116, 128};  // dword_45C470 = 15855 -> idx  60
+constexpr Rgb kBevelDark{60, 68, 56};      // dword_45C474 =  8456 -> idx 142
+constexpr Rgb kButtonInk = kDialogDim;     // dword_45C478
+constexpr Rgb kBaseCoat = kDialogFill;
 
 // The window base coat (idx 205) run through sub_442C28's whole-bitmap
 // brightness wash (byte_475390 lighten-ramp entry 0x93 = step 19 of 128 toward
@@ -123,8 +119,10 @@ public:
     }
 
     void bevel(Corners c, bool raised, Rgb face) const {
-        draw_bevel_rect(ren_, x(c.x0), y(c.y0), static_cast<float>(c.x1 - c.x0 + 1),
-                        static_cast<float>(c.y1 - c.y0 + 1), raised, face.r, face.g, face.b);
+        draw_bevel_rect(ren_,
+                        SDL_FRect{x(c.x0), y(c.y0), static_cast<float>(c.x1 - c.x0 + 1),
+                                  static_cast<float>(c.y1 - c.y0 + 1)},
+                        raised, face);
     }
 
 private:
@@ -174,9 +172,8 @@ void draw_dialog_chrome(SDL_Renderer* ren, const DialogRect& r, const Sprite* wi
     blit_patch_cell(ren, p, PatchBand{{2 * cw, 2 * ch, cw, ch}, {rx, by, cw, ch}}, SDL_Point{0, 0});
 }
 
-void draw_dialog_text(SDL_Renderer* ren, const FontTextures& font, const std::string& text, float x,
-                      float y, Uint8 r, Uint8 g, Uint8 b, Uint8 outline_r, Uint8 outline_g,
-                      Uint8 outline_b) {
+void draw_dialog_text(const DialogPen& pen, const std::string& text, SDL_FPoint at,
+                      const DialogInk& ink) {
     // ONE port of sub_41696C, not two. This carried its own four-pass loop at the
     // CARDINAL neighbours while FontTextures::draw_outlined used the DIAGONAL
     // ones, both citing this address; the cardinals are wrong (facts.md
@@ -184,13 +181,13 @@ void draw_dialog_text(SDL_Renderer* ren, const FontTextures& font, const std::st
     // copying the corrected offsets over is what stops the two from drifting
     // apart a second time — the dialog call sites only ever wanted the case
     // where nothing is clipped, which is the whole difference between them.
-    font.draw_outlined(ren, text, x, y, r, g, b, outline_r, outline_g, outline_b);
+    pen.font.draw_outlined(pen.ren, text, at, OutlinedTextStyle{ink.ink, ink.outline});
 }
 
-void draw_dialog_button(SDL_Renderer* ren, const FontTextures& font, float x, float y,
-                        const std::string& label, bool pressed) {
-    const float label_w = text_w(font, label);
-    const float h = line_h(font);
+void draw_dialog_button(const DialogPen& pen, SDL_FPoint at, const std::string& label,
+                        bool pressed) {
+    const float label_w = text_w(pen.font, label);
+    const float h = line_h(pen.font);
     const float w = label_w + 16.0f;
     const float bh = h + 6.0f;
 
@@ -203,34 +200,33 @@ void draw_dialog_button(SDL_Renderer* ren, const FontTextures& font, float x, fl
     const Rgb face_ink = pressed ? kBaseCoat : kButtonFace;
     const Rgb hi = pressed ? kBevelDark : kBevelLight;
     const Rgb lo = pressed ? kBevelLight : kBevelDark;
-    fill_rect(ren, SDL_FRect{x, y, w, bh}, face_ink);
+    fill_rect(pen.ren, SDL_FRect{at.x, at.y, w, bh}, face_ink);
     for (int inset = 2; inset >= 1; --inset) {
-        const float x0 = x + static_cast<float>(inset), y0 = y + static_cast<float>(inset);
+        const float x0 = at.x + static_cast<float>(inset), y0 = at.y + static_cast<float>(inset);
         const float rw = w - static_cast<float>(2 * inset), rh = bh - static_cast<float>(2 * inset);
-        fill_rect(ren, SDL_FRect{x0, y0, rw, 1}, hi);
-        fill_rect(ren, SDL_FRect{x0, y0, 1, rh}, hi);
-        fill_rect(ren, SDL_FRect{x0, y0 + rh - 1, rw, 1}, lo);
-        fill_rect(ren, SDL_FRect{x0 + rw - 1, y0, 1, rh}, lo);
+        fill_rect(pen.ren, SDL_FRect{x0, y0, rw, 1}, hi);
+        fill_rect(pen.ren, SDL_FRect{x0, y0, 1, rh}, hi);
+        fill_rect(pen.ren, SDL_FRect{x0, y0 + rh - 1, rw, 1}, lo);
+        fill_rect(pen.ren, SDL_FRect{x0 + rw - 1, y0, 1, rh}, lo);
     }
-    SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);  // byte_495390[0]
-    SDL_FRect outline{x, y, w, bh};
-    SDL_RenderRect(ren, &outline);
+    SDL_SetRenderDrawColor(pen.ren, 0, 0, 0, 255);  // byte_495390[0]
+    SDL_FRect outline{at.x, at.y, w, bh};
+    SDL_RenderRect(pen.ren, &outline);
 
-    font.draw(ren, label, x + (w - label_w) / 2.0f, y + 3.0f, kButtonInk.r, kButtonInk.g,
-              kButtonInk.b);
+    pen.font.draw(pen.ren, label, SDL_FPoint{at.x + (w - label_w) / 2.0f, at.y + 3.0f},
+                  TextStyle{kButtonInk});
 }
 
-void draw_bevel_rect(SDL_Renderer* ren, float x, float y, float w, float h, bool raised,
-                     Uint8 face_r, Uint8 face_g, Uint8 face_b) {
+void draw_bevel_rect(SDL_Renderer* ren, const SDL_FRect& r, bool raised, Rgb face) {
     // sub_44240C: fill the interior, then a 1-px light strip on top+left and a
     // 1-px dark strip on bottom+right for the raised look (swapped for sunken).
     const Rgb hi = raised ? kBevelLight : kBevelDark;
     const Rgb lo = raised ? kBevelDark : kBevelLight;
-    fill_rect(ren, SDL_FRect{x, y, w, h}, Rgb{face_r, face_g, face_b});
-    fill_rect(ren, SDL_FRect{x, y, w, 1}, hi);
-    fill_rect(ren, SDL_FRect{x, y, 1, h}, hi);
-    fill_rect(ren, SDL_FRect{x, y + h - 1, w, 1}, lo);
-    fill_rect(ren, SDL_FRect{x + w - 1, y, 1, h}, lo);
+    fill_rect(ren, r, face);
+    fill_rect(ren, SDL_FRect{r.x, r.y, r.w, 1}, hi);
+    fill_rect(ren, SDL_FRect{r.x, r.y, 1, r.h}, hi);
+    fill_rect(ren, SDL_FRect{r.x, r.y + r.h - 1, r.w, 1}, lo);
+    fill_rect(ren, SDL_FRect{r.x + r.w - 1, r.y, 1, r.h}, lo);
 }
 
 HintBlock pack_hint_lines(const FontTextures& font, const std::vector<std::string>& parts,
@@ -287,8 +283,8 @@ void draw_list_title(const WindowPainter& p, const FontTextures& font, const std
                      const ListDialogGeometry& g) {
     p.fill_base(Box{5, 5, g.strip_fill_w, g.strip_fill_h});
     p.bevel(Corners{5, 5, g.strip_x1, g.strip_y1}, /*raised=*/false, kBaseCoat);
-    draw_dialog_text(p.ren(), font, title, p.x(g.title_x), p.y(g.title_y), kButtonInk.r,
-                     kButtonInk.g, kButtonInk.b);
+    draw_dialog_text(DialogPen{p.ren(), font}, title, SDL_FPoint{p.x(g.title_x), p.y(g.title_y)},
+                     DialogInk{kButtonInk});
 }
 
 // Item area: base-coat fill @0x42DEA2 and its SUNKEN frame @0x42DFD2.
@@ -307,8 +303,9 @@ void draw_list_item_area(const WindowPainter& p, const ListDialogGeometry& g) {
 // original's partial repaint does.
 void draw_list_scrollbar(const WindowPainter& p, const FontTextures& font,
                          const ListDialogGeometry& g) {
-    draw_dialog_button(p.ren(), font, p.x(g.sb_button_x), p.y(g.sb_up_y), "\x18");
-    draw_dialog_button(p.ren(), font, p.x(g.sb_button_x), p.y(g.sb_down_y), "\x19");
+    const DialogPen pen{p.ren(), font};
+    draw_dialog_button(pen, SDL_FPoint{p.x(g.sb_button_x), p.y(g.sb_up_y)}, "\x18");
+    draw_dialog_button(pen, SDL_FPoint{p.x(g.sb_button_x), p.y(g.sb_down_y)}, "\x19");
     p.fill_base(Box{g.sb_track_x, g.sb_track_y, g.sb_track_w, g.sb_track_h});
     p.bevel(Corners{g.sb_frame_x0, g.sb_frame_y0, g.sb_frame_x1, g.sb_frame_y1},
             /*raised=*/false, kBaseCoat);
@@ -318,24 +315,18 @@ void draw_list_scrollbar(const WindowPainter& p, const FontTextures& font,
 
 }  // namespace
 
-ListDialogLayout draw_list_dialog(SDL_Renderer* ren, const FontTextures& font,
-                                  const std::string& title, float x_px, float y_px,
-                                  float item_text_w, int visible_rows, int total_rows, int top_row,
-                                  int footer_lines) {
-    const float h = line_h(font);
+ListDialogLayout draw_list_dialog(const DialogPen& pen, const ListDialogSpec& spec) {
+    const float h = line_h(pen.font);
     // Every number below comes from list_dialog_geometry(), which carries the
     // per-offset sub_42DBCC citations — including the thumb's Y, the one field
     // total_rows/top_row feed.
-    const ListDialogGeometry g =
-        list_dialog_geometry(static_cast<int>(x_px), static_cast<int>(y_px),
-                             static_cast<int>(item_text_w), static_cast<int>(text_w(font, title)),
-                             static_cast<int>(h), visible_rows, footer_lines, total_rows, top_row);
-    const WindowPainter p{ren, static_cast<float>(g.win_x), static_cast<float>(g.win_y)};
+    const ListDialogGeometry g = list_dialog_layout_for(pen.font, spec);
+    const WindowPainter p{pen.ren, static_cast<float>(g.win_x), static_cast<float>(g.win_y)};
 
     draw_list_panel(p, g);
-    draw_list_title(p, font, title, g);
+    draw_list_title(p, pen.font, spec.title, g);
     draw_list_item_area(p, g);
-    draw_list_scrollbar(p, font, g);
+    draw_list_scrollbar(p, pen.font, g);
 
     ListDialogLayout lay{};
     lay.win = DialogRect{p.x(0), p.y(0), static_cast<float>(g.win_w), static_cast<float>(g.win_h)};
@@ -347,7 +338,7 @@ ListDialogLayout draw_list_dialog(SDL_Renderer* ren, const FontTextures& font,
     lay.done_x = p.x(g.done_x);
     lay.done_y = p.y(g.done_y);
     // "Done" @0x42E072 — the literal at 0x45AAB4, widget id 27 (Esc).
-    draw_dialog_button(ren, font, lay.done_x, lay.done_y, "Done");
+    draw_dialog_button(pen, SDL_FPoint{lay.done_x, lay.done_y}, "Done");
     return lay;
 }
 
@@ -392,110 +383,106 @@ float centered_x(const DialogRect& win, float w) {
 
 }  // namespace
 
-void draw_acknowledge_dialog(SDL_Renderer* ren, const FontTextures& font, const Sprite* winz,
-                             const std::string& top, const std::string& bottom,
-                             const std::string& ok_label, Uint8 ink_r, Uint8 ink_g, Uint8 ink_b,
-                             bool ok_pressed) {
-    const float h = line_h(font);
-    const DialogRect win = acknowledge_dialog_rect(font, top, bottom);
-    draw_dialog_chrome(ren, win, winz);
+void draw_acknowledge_dialog(const DialogPen& pen, const Sprite* winz,
+                             const AcknowledgeLabels& labels, const AcknowledgeStyle& style) {
+    const float h = line_h(pen.font);
+    const DialogRect win = acknowledge_dialog_rect(pen.font, labels.top, labels.bottom);
+    draw_dialog_chrome(pen.ren, win, winz);
 
     // Lines at window-relative y = fontheight+32 and +fontheight+2 more.
     const float line1_y = win.y + h + 32.0f;
-    if (!top.empty())
-        draw_dialog_text(ren, font, top, centered_x(win, text_w(font, top)), line1_y, ink_r, ink_g,
-                         ink_b);
-    if (!bottom.empty())
-        draw_dialog_text(ren, font, bottom, centered_x(win, text_w(font, bottom)),
-                         line1_y + h + 2.0f, ink_r, ink_g, ink_b);
+    if (!labels.top.empty())
+        draw_dialog_text(pen, labels.top,
+                         SDL_FPoint{centered_x(win, text_w(pen.font, labels.top)), line1_y},
+                         DialogInk{style.ink});
+    if (!labels.bottom.empty())
+        draw_dialog_text(
+            pen, labels.bottom,
+            SDL_FPoint{centered_x(win, text_w(pen.font, labels.bottom)), line1_y + h + 2.0f},
+            DialogInk{style.ink});
 
-    const DialogRect ok = acknowledge_ok_rect(font, win, ok_label);
-    draw_dialog_button(ren, font, ok.x, ok.y, ok_label, ok_pressed);
+    const DialogRect ok = acknowledge_ok_rect(pen.font, win, labels.ok);
+    draw_dialog_button(pen, SDL_FPoint{ok.x, ok.y}, labels.ok, style.ok_pressed);
 }
 
-void draw_confirm_dialog(SDL_Renderer* ren, const FontTextures& font, const Sprite* winz,
-                         const std::string& line1, const std::string& line2,
-                         const std::string& yes_label, const std::string& no_label, Uint8 ink_r,
-                         Uint8 ink_g, Uint8 ink_b, Uint8 outline_r, Uint8 outline_g,
-                         Uint8 outline_b) {
-    const float h = line_h(font);
-    const float w1 = text_w(font, line1);
-    const float w2 = line2.empty() ? 0.0f : text_w(font, line2);
-    const float lines_h = line2.empty() ? h : (2.0f * h);
+void draw_confirm_dialog(const DialogPen& pen, const Sprite* winz, const ConfirmLabels& labels,
+                         const DialogInk& ink) {
+    const float h = line_h(pen.font);
+    const float w1 = text_w(pen.font, labels.line1);
+    const float w2 = labels.line2.empty() ? 0.0f : text_w(pen.font, labels.line2);
+    const float lines_h = labels.line2.empty() ? h : (2.0f * h);
     const float win_w = std::max(std::max(w1, w2), 80.0f) + 64.0f;
     const float win_h = 4.0f * h + 64.0f + lines_h;
     const DialogRect win = dialog_rect_vcentered(win_h, win_w);
-    draw_dialog_chrome(ren, win, winz);
+    draw_dialog_chrome(pen.ren, win, winz);
 
     const float line1_y = win.y + h + 32.0f;
-    draw_dialog_text(ren, font, line1, centered_x(win, w1), line1_y, ink_r, ink_g, ink_b, outline_r,
-                     outline_g, outline_b);
-    if (!line2.empty())
-        draw_dialog_text(ren, font, line2, centered_x(win, w2), line1_y + h + 2.0f, ink_r, ink_g,
-                         ink_b, outline_r, outline_g, outline_b);
+    draw_dialog_text(pen, labels.line1, SDL_FPoint{centered_x(win, w1), line1_y}, ink);
+    if (!labels.line2.empty())
+        draw_dialog_text(pen, labels.line2, SDL_FPoint{centered_x(win, w2), line1_y + h + 2.0f},
+                         ink);
 
     const float btn_y = win.y + win.h - 32.0f - h - 6.0f;
-    draw_dialog_button(ren, font, win.x + win.w / 2.0f - 80.0f, btn_y, yes_label);
-    draw_dialog_button(ren, font, win.x + win.w / 2.0f + 22.0f, btn_y, no_label);
+    draw_dialog_button(pen, SDL_FPoint{win.x + win.w / 2.0f - 80.0f, btn_y}, labels.yes);
+    draw_dialog_button(pen, SDL_FPoint{win.x + win.w / 2.0f + 22.0f, btn_y}, labels.no);
 }
 
-void draw_compact_confirm_dialog(SDL_Renderer* ren, const FontTextures& font,
-                                 const std::string& line, const std::string& yes_label,
-                                 const std::string& no_label) {
-    const float h = line_h(font);
-    const float win_w = std::max(text_w(font, line), 128.0f) + 32.0f;  // see header's width note
-    const float win_h = 3.0f * h + 16.0f;                              // CONFIRMED formula
+void draw_compact_confirm_dialog(const DialogPen& pen, const std::string& line,
+                                 const std::string& yes_label, const std::string& no_label) {
+    const float h = line_h(pen.font);
+    const float win_w = std::max(text_w(pen.font, line), 128.0f) + 32.0f;  // see header's width note
+    const float win_h = 3.0f * h + 16.0f;                                  // CONFIRMED formula
     const DialogRect win = dialog_rect_vcentered(win_h, win_w);
-    draw_dialog_chrome(ren, win, nullptr);  // sub_42EDE0 has no sub_41726B call — flat
+    draw_dialog_chrome(pen.ren, win, nullptr);  // sub_42EDE0 has no sub_41726B call — flat
 
-    draw_dialog_text(ren, font, line, win.x + (win.w - text_w(font, line)) / 2.0f,
-                     win.y + h / 2.0f + 4.0f, kDialogInkR, kDialogInkG, kDialogInkB);
+    draw_dialog_text(pen, line,
+                     SDL_FPoint{win.x + (win.w - text_w(pen.font, line)) / 2.0f,
+                                win.y + h / 2.0f + 4.0f},
+                     DialogInk{kDialogInk});
 
     const float btn_y = win.y + win.h - h - 12.0f;
-    draw_dialog_button(ren, font, win.x + win.w / 2.0f - 64.0f, btn_y, yes_label);
-    draw_dialog_button(ren, font, win.x + win.w / 2.0f + 16.0f, btn_y, no_label);
+    draw_dialog_button(pen, SDL_FPoint{win.x + win.w / 2.0f - 64.0f, btn_y}, yes_label);
+    draw_dialog_button(pen, SDL_FPoint{win.x + win.w / 2.0f + 16.0f, btn_y}, no_label);
 }
 
-void draw_text_entry_dialog(SDL_Renderer* ren, const FontTextures& font, float y_px,
-                            const std::string& label, const std::string& entry_text,
-                            const std::string& done_label, const std::string& cancel_label) {
-    const float h = line_h(font);
-    const float label_w = text_w(font, label);
-    const float entry_w = text_w(font, entry_text);
+void draw_text_entry_dialog(const DialogPen& pen, float y_px, const TextEntryLabels& labels) {
+    const float h = line_h(pen.font);
+    const float label_w = text_w(pen.font, labels.label);
+    const float entry_w = text_w(pen.font, labels.entry);
     const float win_w = std::max(std::max(label_w, entry_w) + 28.0f, 160.0f);  // see header note
     const float win_h = 5.0f * h + 16.0f;                                      // CONFIRMED formula
     const DialogRect win = dialog_rect(y_px, win_h, win_w);
-    draw_dialog_chrome(ren, win, nullptr);  // sub_42E938 has no sub_41726B call — flat
+    draw_dialog_chrome(pen.ren, win, nullptr);  // sub_42E938 has no sub_41726B call — flat
 
-    draw_dialog_text(ren, font, label, win.x + (win.w - label_w) / 2.0f, win.y + h * 0.5f,
-                     kDialogInkR, kDialogInkG, kDialogInkB);
+    draw_dialog_text(pen, labels.label,
+                     SDL_FPoint{win.x + (win.w - label_w) / 2.0f, win.y + h * 0.5f},
+                     DialogInk{kDialogInk});
     // The live editable buffer with a plain caret — our own reproduction, in our
     // own selection tint; sub_42FF1C's real caret draw is not pinned.
-    const std::string shown = entry_text + "_";
-    font.draw(ren, shown, win.x + (win.w - text_w(font, shown)) / 2.0f, win.y + h * 2.0f, 255, 220,
-              80);
+    const std::string shown = labels.entry + "_";
+    pen.font.draw(pen.ren, shown,
+                  SDL_FPoint{win.x + (win.w - text_w(pen.font, shown)) / 2.0f, win.y + h * 2.0f},
+                  TextStyle{{255, 220, 80}});
 
     const float btn_y = win.y + win.h - h - 10.0f;
-    draw_dialog_button(ren, font, win.x + win.w / 2.0f - 72.0f, btn_y, done_label);
-    draw_dialog_button(ren, font, win.x + win.w / 2.0f + 8.0f, btn_y, cancel_label);
+    draw_dialog_button(pen, SDL_FPoint{win.x + win.w / 2.0f - 72.0f, btn_y}, labels.done);
+    draw_dialog_button(pen, SDL_FPoint{win.x + win.w / 2.0f + 8.0f, btn_y}, labels.cancel);
 }
 
 // --- the list dialog's INPUT side ----------------------------------------
 
-ListDialogGeometry list_dialog_layout_for(const FontTextures& font, const std::string& title,
-                                          float x_px, float y_px, float item_text_w,
-                                          int visible_rows, int total_rows, int top_row,
-                                          int footer_lines) {
-    // Deliberately the same call draw_list_dialog makes, argument for argument:
-    // a hit test that re-derived the layout could drift from what is on screen.
-    return list_dialog_geometry(
-        static_cast<int>(x_px), static_cast<int>(y_px), static_cast<int>(item_text_w),
-        static_cast<int>(text_w(font, title)), static_cast<int>(line_h(font)), visible_rows,
-        footer_lines, total_rows, top_row);
+ListDialogGeometry list_dialog_layout_for(const FontTextures& font, const ListDialogSpec& spec) {
+    // Deliberately the same call draw_list_dialog makes, spec for spec: a hit
+    // test that re-derived the layout could drift from what is on screen.
+    return list_dialog_geometry(static_cast<int>(spec.x_px), static_cast<int>(spec.y_px),
+                                static_cast<int>(spec.item_text_w),
+                                static_cast<int>(text_w(font, spec.title)),
+                                static_cast<int>(line_h(font)), spec.visible_rows,
+                                spec.footer_lines, spec.total_rows, spec.top_row);
 }
 
 ListDialogHit list_dialog_hit_for(const FontTextures& font, const ListDialogGeometry& g,
-                                  int visible_rows, float mx, float my) {
+                                  int visible_rows, SDL_FPoint at) {
     const int fh = static_cast<int>(line_h(font));
     // Both arrow boxes are sized from their own FONT6 label, so take the wider
     // and let the y bands separate them (they never overlap in x anyway).
@@ -503,8 +490,8 @@ ListDialogHit list_dialog_hit_for(const FontTextures& font, const ListDialogGeom
         static_cast<int>(std::max(text_w(font, "\x18"), text_w(font, "\x19"))));
     const int done_w = list_dialog_button_w(static_cast<int>(text_w(font, "Done")));
     const int bh = list_dialog_button_h(fh);
-    return list_dialog_hit_test(g, visible_rows, arrow_w, bh, done_w, bh, static_cast<int>(mx),
-                                static_cast<int>(my));
+    return list_dialog_hit_test(g, visible_rows, arrow_w, bh, done_w, bh, static_cast<int>(at.x),
+                                static_cast<int>(at.y));
 }
 
 bool list_mouse_point(SDL_Renderer* ren, const SDL_Event& ev, float& x, float& y) {

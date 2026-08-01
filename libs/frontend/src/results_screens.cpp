@@ -196,8 +196,8 @@ void ScoreboardLoop::draw_header() {
     const std::string header =
         fmt_s(ctx_.assets.getstring(30, "Game Winner was %s !"),
               round_w >= 0 ? "P" + std::to_string(round_w + 1) : std::string("-"));
-    ctx_.front_font.draw_outlined(ctx_.sdl, header, layout_.hx, layout_.hy, kHeaderR, kHeaderG,
-                                  kHeaderB, 0, 0, 0);
+    ctx_.front_font.draw_outlined(ctx_.sdl, header, SDL_FPoint{layout_.hx, layout_.hy},
+                                  OutlinedTextStyle{{kHeaderR, kHeaderG, kHeaderB}});
 }
 
 // Team rows use the original's fixed two-ink helper sub_4141F8 (`team ?
@@ -217,9 +217,9 @@ void ScoreboardLoop::draw_team_rows() {
         line += " " + std::to_string(state_.win_count[i]);
         const bool team1 = t != 0;  // sub_4141F8's `a1 ?` branch
         ctx_.front_font.draw_outlined(
-            ctx_.sdl, line, layout_.rx, layout_.ry0 + layout_.rystep * static_cast<float>(row),
-            static_cast<Uint8>(team1 ? 252 : 255), static_cast<Uint8>(team1 ? 80 : 255),
-            static_cast<Uint8>(team1 ? 80 : 255), 0, 0, 0);
+            ctx_.sdl, line,
+            SDL_FPoint{layout_.rx, layout_.ry0 + layout_.rystep * static_cast<float>(row)},
+            OutlinedTextStyle{team1 ? Rgb{252, 80, 80} : Rgb{255, 255, 255}});
         ++row;
     }
 }
@@ -242,9 +242,10 @@ void ScoreboardLoop::draw_player_rows() {
         // outline so its dark ink stays legible; everyone else gets black, as do
         // the team rows, the header and the outcome line.
         const std::uint8_t ol = i == 1 ? 255 : 0;
-        ctx_.front_font.draw_outlined(ctx_.sdl, line, layout_.rx,
-                                      layout_.ry0 + layout_.rystep * static_cast<float>(row), c[0],
-                                      c[1], c[2], ol, ol, ol);
+        ctx_.front_font.draw_outlined(
+            ctx_.sdl, line,
+            SDL_FPoint{layout_.rx, layout_.ry0 + layout_.rystep * static_cast<float>(row)},
+            OutlinedTextStyle{{c[0], c[1], c[2]}, {ol, ol, ol}});
         ++row;
     }
 }
@@ -280,10 +281,9 @@ std::string ScoreboardLoop::clinch_line() const {
 void ScoreboardLoop::draw_outcome() {
     const bool clinched = clinched_player_ >= 0;
     const std::string outcome = clinched ? clinch_line() : pre_clinch_line();
-    const Uint8 r = clinched ? 96 : 168;
-    const Uint8 g = clinched ? 252 : 168;
-    const Uint8 b = clinched ? 252 : 164;
-    ctx_.front_font.draw_outlined(ctx_.sdl, outcome, layout_.ox, layout_.oy, r, g, b, 0, 0, 0);
+    const Rgb ink = clinched ? Rgb{96, 252, 252} : Rgb{168, 168, 164};
+    ctx_.front_font.draw_outlined(ctx_.sdl, outcome, SDL_FPoint{layout_.ox, layout_.oy},
+                                  OutlinedTextStyle{ink});
 }
 
 }  // namespace

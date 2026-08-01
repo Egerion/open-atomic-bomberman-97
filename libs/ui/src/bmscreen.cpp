@@ -44,19 +44,19 @@ constexpr int kImageBleed = 16;
 // Text ink — CONFIRMED byte_49D38F pure white, drawn through the low-level blit
 // dword_45C378 with NO outline (pseudo.c 16458-16461), unlike every sub_41696C
 // site. The old (230,230,210) tint was a port invention.
-constexpr Uint8 kInkR = 255, kInkG = 255, kInkB = 255;
+constexpr Rgb kInk{255, 255, 255};
 
 constexpr float kButtonRowY = 388.0f;  // window-relative
 
 // HelpBrowser's list item ink — byte_49D38F again, the SAME ink
 // SchemeFilePicker's list uses at the identical (100,100) call site (§4/§5).
-constexpr Uint8 kListInkR = 255, kListInkG = 255, kListInkB = 255;
+constexpr Rgb kListInk{255, 255, 255};
 
 // The browser's two error dialogs (§4) draw in byte_49D0DA — PINNED in
 // results-and-options.md §1's LUT table (offset 0x7D4A -> (252,80,80)), which
 // also confirms byte_49D0DA IS sub_4141F8's team-1 ink: the same LUT element,
 // not a coincidence of similar reds.
-constexpr Uint8 kErrorInkR = 252, kErrorInkG = 80, kErrorInkB = 80;
+constexpr Rgb kErrorInk{252, 80, 80};
 
 // Expand a glyph's 0/255 coverage into white RGBA: the alpha carries the shape,
 // the colour is applied at draw time via SDL_SetTextureColorMod.
@@ -114,39 +114,39 @@ int FontTextures::measure(const std::string& s) const {
     return w;
 }
 
-float FontTextures::draw(SDL_Renderer* ren, const std::string& s, float x, float y, Uint8 r,
-                         Uint8 g, Uint8 b, float scale) const {
+float FontTextures::draw(SDL_Renderer* ren, const std::string& s, SDL_FPoint at,
+                         const TextStyle& style) const {
+    float x = at.x;
     for (char ch : s) {
         const unsigned char c = static_cast<unsigned char>(ch);
         if (static_cast<std::size_t>(c) >= glyphs_.size()) continue;
         const GlyphTex& gt = glyphs_[c];
         if (gt.tex) {
-            SDL_SetTextureColorMod(gt.tex, r, g, b);
+            SDL_SetTextureColorMod(gt.tex, style.ink.r, style.ink.g, style.ink.b);
             // `scale` shrinks the destination rect only (the glyph atlas is
             // untouched); scaling the dst is self-contained, unlike
             // SDL_SetRenderScale, which perturbs the whole render transform.
-            SDL_FRect dst{x, y, static_cast<float>(gt.w) * scale,
-                          static_cast<float>(line_height_) * scale};
+            SDL_FRect dst{x, at.y, static_cast<float>(gt.w) * style.scale,
+                          static_cast<float>(line_height_) * style.scale};
             SDL_RenderTexture(ren, gt.tex, nullptr, &dst);
             SDL_SetTextureColorMod(gt.tex, 255, 255, 255);
         }
-        x += static_cast<float>(gt.w + spacing_) * scale;
+        x += static_cast<float>(gt.w + spacing_) * style.scale;
     }
     return x;
 }
 
-float FontTextures::draw_outlined(SDL_Renderer* ren, const std::string& s, float x, float y,
-                                  Uint8 r, Uint8 g, Uint8 b, Uint8 outline_r, Uint8 outline_g,
-                                  Uint8 outline_b, float max_w) const {
+float FontTextures::draw_outlined(SDL_Renderer* ren, const std::string& s, SDL_FPoint at,
+                                  const OutlinedTextStyle& style) const {
     // Clip the run to max_w pixels of advance (sub_41696C 18542-18551): stop at
     // the first glyph whose advance would cross the limit.
     std::string run = s;
-    if (max_w > 0) {
+    if (style.max_w > 0) {
         float w = 0;
         std::size_t n = 0;
         for (char ch : s) {
             const int a = advance(static_cast<unsigned char>(ch));
-            if (w + static_cast<float>(a) > max_w) break;
+            if (w + static_cast<float>(a) > style.max_w) break;
             w += static_cast<float>(a);
             ++n;
         }
@@ -170,8 +170,9 @@ float FontTextures::draw_outlined(SDL_Renderer* ren, const std::string& s, float
     // own x/y verbatim, so each outlined string sits one pixel up and left of
     // where the original puts it.
     static constexpr std::array<std::array<float, 2>, 4> kOff{{{-1, -1}, {1, 1}, {-1, 1}, {1, -1}}};
-    for (const auto& o : kOff) draw(ren, run, x + o[0], y + o[1], outline_r, outline_g, outline_b);
-    return draw(ren, run, x, y, r, g, b);
+    for (const auto& o : kOff)
+        draw(ren, run, SDL_FPoint{at.x + o[0], at.y + o[1]}, TextStyle{style.outline});
+    return draw(ren, run, at, TextStyle{style.ink});
 }
 
 // --- BmScreen -------------------------------------------------------------
@@ -268,7 +269,7 @@ void draw_text_segment(SDL_Renderer* ren, const BmPage& page, const std::string&
         ++n;
     }
     run.resize(n);
-    if (pen.visible) page.font.draw(ren, run, pen.x, pen.y, kInkR, kInkG, kInkB);
+    if (pen.visible) page.font.draw(ren, run, SDL_FPoint{pen.x, pen.y}, TextStyle{kInk});
     pen.x += w;
 }
 
@@ -346,7 +347,8 @@ void draw_bm_buttons(SDL_Renderer* ren, const FontTextures& font) {
                                                             {190.0f, "Page \x19"},
                                                             {516.0f, "Done"}}};
     for (const ControlButton& b : kButtons)
-        draw_dialog_button(ren, font, kWinX + b.x, kWinY + kButtonRowY, b.label);
+        draw_dialog_button(DialogPen{ren, font}, SDL_FPoint{kWinX + b.x, kWinY + kButtonRowY},
+                           b.label);
 }
 
 }  // namespace
@@ -424,8 +426,9 @@ std::string HelpBrowser::header() const {
 }
 
 ListDialogGeometry HelpBrowser::layout() const {
-    return list_dialog_layout_for(*font_, header(), 100.0f, 100.0f, item_w_, kVisibleRows,
-                                  static_cast<int>(entries_.size()), nav_.top_row);
+    return list_dialog_layout_for(
+        *font_, ListDialogSpec{header(), 100.0f, 100.0f, item_w_, kVisibleRows,
+                               static_cast<int>(entries_.size()), nav_.top_row});
 }
 
 bool HelpBrowser::list_active() const {
@@ -499,14 +502,15 @@ void HelpBrowser::on_key(SDL_Keycode key, AudioEngine& audio) {
 void HelpBrowser::on_mouse_move(float x, float y, bool buttons_held) {
     if (!list_active()) return;
     if (buttons_held) return;  // @0x4330A0: the enter id needs an idle mouse
-    list_dialog_mouse_move(nav_, list_dialog_hit_for(*font_, layout(), kVisibleRows, x, y),
+    list_dialog_mouse_move(nav_,
+                           list_dialog_hit_for(*font_, layout(), kVisibleRows, SDL_FPoint{x, y}),
                            static_cast<int>(entries_.size()));
 }
 
 void HelpBrowser::on_mouse_down(float x, float y) {
     if (!list_active()) return;
     const ListDialogGeometry g = layout();
-    const ListDialogHit hit = list_dialog_hit_for(*font_, g, kVisibleRows, x, y);
+    const ListDialogHit hit = list_dialog_hit_for(*font_, g, kVisibleRows, SDL_FPoint{x, y});
     pressed_ = hit.widget;
     switch (list_dialog_mouse_down(nav_, g, hit, kVisibleRows, static_cast<int>(entries_.size()),
                                    static_cast<int>(y))) {
@@ -518,7 +522,7 @@ void HelpBrowser::on_mouse_down(float x, float y) {
 
 void HelpBrowser::on_mouse_up(float x, float y) {
     if (!list_active()) return;
-    const ListDialogHit hit = list_dialog_hit_for(*font_, layout(), kVisibleRows, x, y);
+    const ListDialogHit hit = list_dialog_hit_for(*font_, layout(), kVisibleRows, SDL_FPoint{x, y});
     const ListDialogWidget was = pressed_;
     pressed_ = ListDialogWidget::None;
     if (list_dialog_mouse_up(hit, was) == ListDialogAction::Cancel) done_ = true;
@@ -535,8 +539,8 @@ void HelpBrowser::draw_error_dialog(SDL_Renderer* ren) const {
         assets_ ? assets_->getstring(disabled_ ? 5 : 4, body_default) : std::string(body_default);
     const std::string head = assets_ ? assets_->getstring(95, "NOTE!") : std::string("NOTE!");
     const std::string ok = assets_ ? assets_->getstring(27, " Ok ") : std::string(" Ok ");
-    draw_acknowledge_dialog(ren, *font_, assets_ ? &assets_->frontend_pcx("WINZ") : nullptr, head,
-                            body, ok, kErrorInkR, kErrorInkG, kErrorInkB);
+    draw_acknowledge_dialog(DialogPen{ren, *font_}, assets_ ? &assets_->frontend_pcx("WINZ") : nullptr,
+                            AcknowledgeLabels{head, body, ok}, AcknowledgeStyle{kErrorInk});
 }
 
 void HelpBrowser::draw_topic_list(SDL_Renderer* ren) const {
@@ -546,8 +550,9 @@ void HelpBrowser::draw_topic_list(SDL_Renderer* ren) const {
     // itself, so pre-maxing here would inflate it by 16.
     const int count = static_cast<int>(entries_.size());
     const int last = std::min(count, nav_.top_row + kVisibleRows);
-    const ListDialogLayout lay = draw_list_dialog(ren, *font_, header(), 100.0f, 100.0f, item_w_,
-                                                  kVisibleRows, count, nav_.top_row);
+    const ListDialogLayout lay = draw_list_dialog(
+        DialogPen{ren, *font_},
+        ListDialogSpec{header(), 100.0f, 100.0f, item_w_, kVisibleRows, count, nav_.top_row});
     for (int i = nav_.top_row; i < last; ++i) {
         const int vi = i - nav_.top_row;
         const float ty = lay.item_y0 + static_cast<float>(vi) * lay.item_h;
@@ -555,8 +560,8 @@ void HelpBrowser::draw_topic_list(SDL_Renderer* ren) const {
         // row keeps the same ink. The band tracks the highlight OFFSET, which is
         // what the original draws @0x42E656 — not an absolute selection.
         if (vi == nav_.highlight) draw_list_selection(ren, lay, vi);
-        font_->draw(ren, entries_[static_cast<std::size_t>(i)].filename().string(), lay.item_x, ty,
-                    kListInkR, kListInkG, kListInkB);
+        font_->draw(ren, entries_[static_cast<std::size_t>(i)].filename().string(),
+                    SDL_FPoint{lay.item_x, ty}, TextStyle{kListInk});
     }
 }
 

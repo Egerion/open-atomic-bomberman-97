@@ -52,8 +52,10 @@ AppInput run_acknowledge(ScreenContext& ctx, MatchBackdrop& backdrop, const std:
         SDL_SetRenderDrawColor(ctx.sdl, 0, 0, 0, 255);
         SDL_RenderClear(ctx.sdl);
         backdrop.renderer.draw_frame(backdrop.state);
-        draw_acknowledge_dialog(ctx.sdl, ctx.front_font, &ctx.assets.frontend_pcx("WINZ"), top,
-                                bottom, ok, 164, 0, 0);
+        draw_acknowledge_dialog(DialogPen{ctx.sdl, ctx.front_font},
+                                &ctx.assets.frontend_pcx("WINZ"),
+                                AcknowledgeLabels{top, bottom, ok},
+                                AcknowledgeStyle{{164, 0, 0}});
         SDL_RenderPresent(ctx.sdl);
         SDL_Delay(2);
     }
@@ -175,10 +177,13 @@ AppInput CampaignConfirmScreen::run() {
         // sub_414340 paints the WINZ 9-patch too (its sub_41726B call @ pseudo.c
         // 17070) and draws its lines via sub_41696C (outlined).
         draw_dialog_chrome(ctx_.sdl, win, &ctx_.assets.frontend_pcx("WINZ"));
-        draw_dialog_text(ctx_.sdl, ctx_.front_font, top_line, win.x + (win.w - top_w) / 2.0f,
-                         win.y + h + 32.0f, kDialogInkR, kDialogInkG, kDialogInkB);
-        draw_dialog_text(ctx_.sdl, ctx_.front_font, bottom_line, win.x + (win.w - bottom_w) / 2.0f,
-                         win.y + h + 32.0f + h + 2.0f, kDialogInkR, kDialogInkG, kDialogInkB);
+        const DialogPen pen{ctx_.sdl, ctx_.front_font};
+        draw_dialog_text(pen, top_line,
+                         SDL_FPoint{win.x + (win.w - top_w) / 2.0f, win.y + h + 32.0f},
+                         DialogInk{kDialogInk});
+        draw_dialog_text(pen, bottom_line,
+                         SDL_FPoint{win.x + (win.w - bottom_w) / 2.0f, win.y + h + 32.0f + h + 2.0f},
+                         DialogInk{kDialogInk});
         SDL_RenderPresent(ctx_.sdl);
         SDL_Delay(2);
     }
@@ -203,8 +208,10 @@ AppInput CampaignBannerScreen::run() {
         SDL_SetRenderDrawColor(ctx_.sdl, 0, 0, 0, 255);
         SDL_RenderClear(ctx_.sdl);
         backdrop_.renderer.draw_frame(backdrop_.state);
-        ctx_.front_font.draw(ctx_.sdl, state_.campaign_banner, 220.0f, 200.0f, 255, 255, 255);
-        ctx_.front_font.draw(ctx_.sdl, prepare, 220.0f, 224.0f, 255, 220, 80);
+        ctx_.front_font.draw(ctx_.sdl, state_.campaign_banner, SDL_FPoint{220.0f, 200.0f},
+                             TextStyle{{255, 255, 255}});
+        ctx_.front_font.draw(ctx_.sdl, prepare, SDL_FPoint{220.0f, 224.0f},
+                             TextStyle{{255, 220, 80}});
         SDL_RenderPresent(ctx_.sdl);
         SDL_Delay(2);
     }

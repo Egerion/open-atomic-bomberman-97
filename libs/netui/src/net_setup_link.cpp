@@ -112,8 +112,8 @@ void draw_net_wait_prompt(ScreenContext ctx, unsigned& spinner) {
     const char c = kSpinner[spinner % (sizeof(kSpinner) / sizeof(kSpinner[0]))];
     ++spinner;  // dword_464AFC advances once per RENDERED frame, not per ms
     const std::string line = fmt_c(ctx.assets.getstring(80, "Waiting for the server... %c"), c);
-    ctx.front_font.draw_outlined(ctx.sdl, line, kWaitPromptX, kWaitPromptY, kDialogInkR,
-                                 kDialogInkG, kDialogInkB, 0, 0, 0, kWaitPromptW);
+    ctx.front_font.draw_outlined(ctx.sdl, line, SDL_FPoint{kWaitPromptX, kWaitPromptY},
+                                 OutlinedTextStyle{kDialogInk, {}, kWaitPromptW});
 }
 
 AppInput run_net_notice(ScreenContext ctx, const std::string& top, const std::string& body) {
@@ -138,8 +138,9 @@ AppInput run_net_notice(ScreenContext ctx, const std::string& top, const std::st
             SDL_FRect d{0, 0, static_cast<float>(bg.w), static_cast<float>(bg.h)};
             SDL_RenderTexture(ctx.sdl, bg.tex, nullptr, &d);
         }
-        draw_acknowledge_dialog(ctx.sdl, ctx.front_font, winz, top, body, ok_label, kDialogInkR,
-                                kDialogInkG, kDialogInkB);
+        draw_acknowledge_dialog(DialogPen{ctx.sdl, ctx.front_font}, winz,
+                                AcknowledgeLabels{top, body, ok_label},
+                                AcknowledgeStyle{kDialogInk});
         SDL_RenderPresent(ctx.sdl);
         frame_clock.pace();
     }
