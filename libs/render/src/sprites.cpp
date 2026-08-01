@@ -11,8 +11,6 @@ namespace bomber::game {
 
 namespace {
 
-// The live filter + the classic textures it applies to (sprites.hpp
-// "THE SCALING FILTER" for why this is a registry rather than a container walk).
 // File-scope because make_texture is a free function called from every texture
 // owner in the process (AssetStore, FontTextures, BmScreen, the viewer) — there
 // is no object all of them already share to hang it off.
@@ -31,7 +29,9 @@ SDL_ScaleMode sdl_scale_mode(ScaleFilter filter) {
     return filter == ScaleFilter::Soft ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST;
 }
 
-ScaleFilter scale_filter() { return g_filter; }
+ScaleFilter scale_filter() {
+    return g_filter;
+}
 
 void set_scale_filter(ScaleFilter filter) {
     g_filter = filter;
@@ -51,15 +51,13 @@ void destroy_texture(SDL_Texture* tex) {
 SDL_Texture* make_texture(SDL_Renderer* ren, const assets::Image& img, TextureArt art,
                           const assets::colorpal::Palette* snap) {
     // Work on a COPY so the caller's decoded image is left intact (the recolour
-    // paths re-read it, and bleed_transparent_rgb below mutates pixels). The
-    // in-match master-palette snap (colorpal.hpp) folds into the same copy; it is
-    // a no-op when snap is null/inert.
+    // paths re-read it, and bleed_transparent_rgb mutates pixels).
     assets::Image work = img;
     if (snap && snap->ok()) snap->remap(work);
-    // Every uploaded texture is left safe to sample linearly, whatever the
-    // current filter is — the filter can be toggled at any time and an already
-    // uploaded texture cannot be re-encoded then (the CPU pixels are freed after
-    // upload, drop_classic_cpu).
+    // Every uploaded texture must be left safe to sample LINEARLY whatever the
+    // current filter is: the filter can be toggled at any time and an already
+    // uploaded texture cannot be re-encoded then (drop_classic_cpu has freed
+    // its pixels).
     bleed_transparent_rgb(work);
     const assets::Image* src = &work;
     SDL_Surface* surf =
@@ -88,21 +86,16 @@ SDL_FRect texture_src_rect(SDL_Texture* tex, int classic_w, int classic_h,
 }
 
 assets::Image recolor_image(assets::Image img, const std::int32_t rgb[3]) {
-    // Faithful port of the original's remap-table builder sub_414A65 (0x414A65),
-    // the per-palette-entry green-armour recolor the engine bakes into each
-    // player's `.rmp` table. For a green-dominant source colour it scales the
-    // green EXCESS over the red/blue baseline into the target percent-RGB and
-    // adds the baseline back, so the shading/casing survives; non-green pixels
-    // are left untouched. rgb[] is the percent-RGB from VALUELST 200/201/202
-    // (id 200+5k = R%, 201 = G%, 202 = B%; sub_414A65 args a2=R%, a4=G%, a3=B%).
+    // sub_414A65: the green EXCESS over the red/blue baseline is scaled into the
+    // target percent-RGB (VALUELST 200/201/202) and the baseline added back, so
+    // casing and shading survive. The original then snaps to the nearest 8-bit
+    // palette entry; we are truecolour and keep the computed RGB.
     //
-    // Our earlier approximation used lum=G (not the excess), dropped the
-    // (R+B)/2 baseline, added a fabricated "glint" and a +24 test margin. On the
-    // vivid regular bomb (R~12,B~2) the error was small, but on the DESATURATED
-    // trigger bomb (mean 58,150,41) it discarded the ~49 baseline and blew the
-    // bright pixels to pure white via the glint -> a featureless white blob for
-    // the white player {100,100,100}. The original snaps to the nearest 8-bit
-    // palette entry afterwards; we are truecolour so we keep the computed RGB.
+    // RETRACTED approximation: an earlier version used lum=G rather than the
+    // excess, dropped the baseline and added a fabricated "glint". On the vivid
+    // regular bomb the error was small, but on the DESATURATED trigger bomb
+    // (mean 58,150,41) it blew the bright pixels to white — a featureless blob
+    // for the white player {100,100,100}.
     for (std::size_t i = 0; i + 3 < img.rgba.size(); i += 4) {
         if (img.rgba[i + 3] == 0) continue;
         const int r = img.rgba[i], g = img.rgba[i + 1], b = img.rgba[i + 2];
@@ -121,17 +114,12 @@ assets::Image recolor_image(assets::Image img, const std::int32_t rgb[3]) {
 }
 
 assets::Image recolor_image_rmp(assets::Image img, const std::array<std::uint8_t, 256>& rmp) {
-    // The authentic recolour (docs/re/player-colour.md). The original stores each
-    // player sprite as an 8-bit paletted image; the blit sub_415A1C rewrites each
-    // pixel's palette index through the colour's remap table dword_460564[colour]
-    // and then does the palette lookup. We reproduce that here directly on the
-    // frame's retained indices + palette: dst = rmp[src], colour = palette[dst].
-    //
-    // The table is total after the load-time backfill (0 entries -> identity, so
-    // shadow/casing/transparent indices map to themselves), which is why only the
-    // colour band actually changes and the rest of the sprite is untouched. The
-    // key-colour transparency is already baked into rgba's alpha by the ANI
-    // loader, so we preserve alpha and only rewrite the RGB.
+    // The authentic recolour (docs/re/player-colour.md): sub_415A1C rewrites
+    // each pixel's palette index through dword_460564[colour] and then does the
+    // palette lookup, i.e. dst = rmp[src], colour = palette[dst]. The table is
+    // total after the load-time backfill (0 entries -> identity), which is why
+    // only the colour band changes. Alpha already carries the key-colour
+    // transparency from the ANI loader, so only RGB is rewritten.
     if (!img.paletted()) return img;  // 16bpp CIMG (type 4): no indices to remap
     const std::size_t px =
         static_cast<std::size_t>(img.width) * static_cast<std::size_t>(img.height);
@@ -155,20 +143,14 @@ assets::Image recolor_image_rmp(assets::Image img, const std::array<std::uint8_t
 static assets::Image recolor_image_master(assets::Image img,
                                           const std::array<std::uint8_t, 256>& rmp,
                                           const assets::colorpal::Palette& snap) {
-    // The FAITHFUL native player recolour for 16bpp (type-4) frames — which is
-    // ALL player art in this install (a CIMG survey of STAND/WALK/KICK/BOMBS/
-    // PUNBOMB/CORNER/BWALK/XPLODE returns 100% type-4, 0 type-11). The native
-    // stores even type-4 cels in the 8-bit back buffer as MASTER-palette indices
-    // (sub_41C837 decode: `*dst = byte_495390[rgb555]`); the player blit
-    // sub_415A1C then rewrites that index through the colour's remap table
-    // dword_460564[colour] (== the loaded `.RMP`, master-index -> master-index)
-    // and re-looks-up the master palette. Reproduce it exactly, per pixel:
+    // The FAITHFUL native recolour for type-4 frames — which is ALL player art
+    // in this install (a CIMG survey returns 100% type-4). The native stores
+    // even type-4 cels in the 8-bit back buffer as MASTER-palette indices
+    // (sub_41C837: `*dst = byte_495390[rgb555]`), and sub_415A1C then remaps
+    // that index through the `.RMP` and re-looks-up the master palette:
     //   master_idx = index_of(px) ; disp = master_rgb(rmp[master_idx]).
-    // Non-green master colours are identity in the .RMP (load-time backfill), so
-    // only the green armour band changes — the rest is snapped to its master
-    // colour, same as the base texture. This REPLACES the green-excess TINT
-    // approximation (recolor_image) with the artist-authored per-colour shades
-    // the original actually shows (2026-07-22 colour-pipeline audit, decision a).
+    // REPLACES the green-excess tint approximation with the artist-authored
+    // per-colour shades (2026-07-22 colour-pipeline audit).
     for (std::size_t i = 0; i + 3 < img.rgba.size(); i += 4) {
         if (img.rgba[i + 3] == 0) continue;  // transparent: leave as-is
         const std::uint8_t idx = snap.index_of(img.rgba[i + 0], img.rgba[i + 1], img.rgba[i + 2]);
@@ -177,16 +159,24 @@ static assets::Image recolor_image_master(assets::Image img,
     return img;
 }
 
+// One frame of the AUTHENTIC per-colour recolour, in priority order. Four
+// parameters (the §3 hard ceiling) because each is an independent input the
+// choice reads.
+static assets::Image recolor_frame(assets::Image img, const std::array<std::uint8_t, 256>& rmp,
+                                   const std::int32_t tail[3],
+                                   const assets::colorpal::Palette* snap) {
+    if (img.paletted()) return recolor_image_rmp(std::move(img), rmp);
+    if (snap && snap->ok()) return recolor_image_master(std::move(img), rmp, *snap);
+    return recolor_image(std::move(img), tail);
+}
+
 void AniTextures::load(SDL_Renderer* ren, const std::filesystem::path& path,
                        const assets::colorpal::Palette* snap) {
     reset();
     data_ = assets::ani::load(path);
     textures_.assign(data_.frames.size(), nullptr);
-    // In-match master-palette snap for classic match art (colorpal.hpp): the
-    // original quantizes every decoded cel to the shared 256-colour hardware
-    // palette; our raw RGB555 expand5 otherwise renders a few % brighter/more-
-    // saturated. Passed to make_texture so the retained data_ image stays raw
-    // (recolored() re-snaps its own copies).
+    // The snap is passed to make_texture rather than applied here, so the
+    // retained data_ image stays RAW and recolored() can re-snap its own copies.
     for (std::size_t i = 0; i < data_.frames.size(); ++i)
         if (!data_.frames[i].image.empty())
             textures_[i] = make_texture(ren, data_.frames[i].image, TextureArt::Classic, snap);
@@ -204,88 +194,59 @@ AniTextures AniTextures::recolored(SDL_Renderer* ren, const std::int32_t rgb[3],
         out.textures_[i] = make_texture(ren, f.image, TextureArt::Classic, snap);
     }
     out.drop_classic_cpu();  // textures uploaded; free this set's classic CPU pixels
-    // Recolour the base's retained HD frames too (never paletted -> green-excess),
-    // so the per-player HD sprite sets exist. LINEAR + un-snapped, like
-    // load_hd_overlay. Gated on with_hd: skipped when HD artwork is off (the boot
-    // default) — build_recolored_hd() rebuilds these on the first Tab instead. The
-    // recolour source (base hd_images_) is copied per frame and left intact; the
-    // per-player set keeps only its uploaded HD textures, never a CPU copy.
-    if (with_hd && !hd_images_.empty()) {
-        out.hd_textures_.assign(hd_images_.size(), nullptr);
-        for (std::size_t i = 0; i < hd_images_.size(); ++i) {
-            if (hd_images_[i].empty()) continue;
-            assets::Image img = recolor_image(hd_images_[i], rgb);
-            out.hd_textures_[i] = make_texture(ren, img, TextureArt::HighRes, nullptr);
-        }
-    }
+    // Gated on with_hd: skipped when HD artwork is off (the boot default), and
+    // build_recolored_hd() fills these in on the first Tab instead.
+    if (with_hd) out.recolor_hd_from(ren, hd_images_, rgb);
     return out;
 }
 
-AniTextures AniTextures::recolored(SDL_Renderer* ren, const std::array<std::uint8_t, 256>& rmp,
-                                   const std::array<std::uint8_t, 3>& tail_rgb,
+AniTextures AniTextures::recolored(SDL_Renderer* ren, const PlayerRemap& colour,
                                    const assets::colorpal::Palette* snap, bool with_hd) const {
-    // Per-frame dispatch. All player art in this install is 16bpp type 4 (a CIMG
-    // survey returns 100% type-4), which the native recolours the SAME way as
-    // paletted art: snap each pixel to a master index, remap it through the
-    // colour's `.RMP` (dword_460564), re-look-up the master palette
-    // (recolor_image_master) — the artist-authored shades, not an arithmetic
-    // tint. The paletted (type-11) branch is kept for completeness; the
-    // green-excess `tail` path is only the LAST-resort fallback when no COLOR.PAL
-    // snap is available (missing install data), matching the pre-audit look.
-    const std::int32_t tail[3] = {tail_rgb[0], tail_rgb[1], tail_rgb[2]};
-    const bool have_snap = snap && snap->ok();
+    // Per-frame dispatch. The paletted (type-11) branch is kept for
+    // completeness — no frame in this install takes it — and the green-excess
+    // `tail` path is the LAST-resort fallback when no COLOR.PAL snap is
+    // available (missing install data), matching the pre-audit look.
+    const std::int32_t tail[3] = {colour.tail[0], colour.tail[1], colour.tail[2]};
     AniTextures out;
     out.data_ = data_;
     out.textures_.assign(out.data_.frames.size(), nullptr);
     for (std::size_t i = 0; i < out.data_.frames.size(); ++i) {
         auto& f = out.data_.frames[i];
         if (f.image.empty()) continue;
-        if (f.image.paletted())
-            f.image = recolor_image_rmp(std::move(f.image), rmp);
-        else if (have_snap)
-            f.image = recolor_image_master(std::move(f.image), rmp, *snap);
-        else
-            f.image = recolor_image(std::move(f.image), tail);
+        f.image = recolor_frame(std::move(f.image), colour.rmp, tail, snap);
         // recolor_image_master already emits final master-palette RGB, so the
         // make_texture snap is an idempotent no-op there; it still snaps the
         // paletted/fallback outputs.
         out.textures_[i] = make_texture(ren, f.image, TextureArt::Classic, snap);
     }
     out.drop_classic_cpu();  // textures uploaded; free this set's classic CPU pixels
-    // HD frames are re-encoded as type-4 truecolour (never paletted), so the
-    // index remap can't touch them: use the same green-excess tail recolour the
-    // non-paletted classic frames take, then upload LINEAR/un-snapped. Gated on
-    // with_hd (see the sibling overload): the boot recolor skips this and Tab
-    // builds it lazily via build_recolored_hd(). Source pixels (base hd_images_)
-    // are copied per frame and left intact; no per-player HD CPU copy is kept.
-    if (with_hd && !hd_images_.empty()) {
-        out.hd_textures_.assign(hd_images_.size(), nullptr);
-        for (std::size_t i = 0; i < hd_images_.size(); ++i) {
-            if (hd_images_[i].empty()) continue;
-            assets::Image img = recolor_image(hd_images_[i], tail);
-            out.hd_textures_[i] = make_texture(ren, img, TextureArt::HighRes, nullptr);
-        }
-    }
+    // The tail, not the rmp: HD frames are re-encoded as truecolour type-4, so
+    // the index remap cannot touch them.
+    if (with_hd) out.recolor_hd_from(ren, hd_images_, tail);
     return out;
+}
+
+void AniTextures::recolor_hd_from(SDL_Renderer* ren, const std::vector<assets::Image>& src,
+                                  const std::int32_t rgb[3]) {
+    // HD cels are truecolour type-4 and never paletted, so they always take the
+    // green-excess tail recolour, LINEAR and un-snapped. `src` is the BASE set's
+    // shared source: copied per frame, never mutated, never retained here.
+    if (src.empty()) return;
+    hd_textures_.assign(src.size(), nullptr);
+    for (std::size_t i = 0; i < src.size(); ++i) {
+        if (src[i].empty()) continue;
+        assets::Image img = recolor_image(src[i], rgb);
+        hd_textures_[i] = make_texture(ren, img, TextureArt::HighRes, nullptr);
+    }
 }
 
 void AniTextures::build_recolored_hd(SDL_Renderer* ren, const AniTextures& src,
                                      const std::int32_t rgb[3]) {
-    // Fresh HD set (a classic-built per-player set has none yet). Recolour the
-    // base's retained HD source frames (truecolour type-4 -> green-excess tail),
-    // upload LINEAR/un-snapped exactly like recolored()'s HD block. src.hd_images_
-    // is the shared base source: copied per frame, never mutated or retained here.
-    for (auto* t : hd_textures_)
-        destroy_texture(t);
+    // Fresh HD set — a classic-built per-player set has none yet.
+    for (auto* t : hd_textures_) destroy_texture(t);
     hd_textures_.clear();
     hd_images_ = {};
-    if (src.hd_images_.empty()) return;
-    hd_textures_.assign(src.hd_images_.size(), nullptr);
-    for (std::size_t i = 0; i < src.hd_images_.size(); ++i) {
-        if (src.hd_images_[i].empty()) continue;
-        assets::Image img = recolor_image(src.hd_images_[i], rgb);
-        hd_textures_[i] = make_texture(ren, img, TextureArt::HighRes, nullptr);
-    }
+    recolor_hd_from(ren, src.hd_images_, rgb);
 }
 
 void AniTextures::drop_classic_cpu() {
@@ -300,14 +261,14 @@ void AniTextures::drop_classic_cpu() {
     }
 }
 
-void AniTextures::drop_hd_cpu() { hd_images_ = {}; }
+void AniTextures::drop_hd_cpu() {
+    hd_images_ = {};
+}
 
 void AniTextures::reset() {
-    for (auto* t : textures_)
-        destroy_texture(t);
+    for (auto* t : textures_) destroy_texture(t);
     textures_.clear();
-    for (auto* t : hd_textures_)
-        destroy_texture(t);
+    for (auto* t : hd_textures_) destroy_texture(t);
     hd_textures_.clear();
     hd_images_.clear();
     data_ = {};
@@ -315,8 +276,7 @@ void AniTextures::reset() {
 
 void AniTextures::load_hd_overlay(SDL_Renderer* ren, const std::filesystem::path& hd_path) {
     // Fresh overlay each call.
-    for (auto* t : hd_textures_)
-        destroy_texture(t);
+    for (auto* t : hd_textures_) destroy_texture(t);
     hd_textures_.clear();
     hd_images_.clear();
     // The HD ANI is a 1:1 upscale of the classic file — decoded the same way.
@@ -336,48 +296,45 @@ void AniTextures::load_hd_overlay(SDL_Renderer* ren, const std::filesystem::path
     }
 }
 
-Anim resolve_sequence(const AniTextures& ani, const std::string& name) {
+namespace {
+
+// One sequence's steps as an Anim, anchored by the FRAME hotspot ALONE. The
+// original's standard blit (sub_415920/sub_415A9F) does NOT apply the per-STAT
+// FRAM-leaf offset, and those are large for tiles (brick dy=18) and players
+// (stand dy=19), so folding them in shoved every such sprite that far DOWN
+// while dy=0 sprites looked fine — which is why only *some* things looked "too
+// low". The one confirmed exception is the real flame arms, which read dx/dy at
+// their own draw site; `carry_offsets` is what makes those values reach it, and
+// nothing else may act on them.
+Anim sequence_anim(const AniTextures& ani, const assets::ani::Sequence& sq, bool carry_offsets) {
     Anim out;
-    for (const auto& s : ani.data().sequences) {
-        if (s.name != name) continue;
-        for (const auto& st : s.steps) {
-            if (st.frame < 0) continue;
-            const auto& f = ani.data().frames[static_cast<std::size_t>(st.frame)];
-            // Anchor by the FRAME hotspot only — dx/dy are carried through but
-            // must NOT be applied by default. The original's standard blit
-            // (sub_415920/sub_415A9F) does NOT apply the per-STAT offset
-            // (FRAM leaf dx/dy) — those are large for tiles (brick dy=18) and
-            // players (stand dy=19), so subtracting them here shoved every
-            // sprite that far DOWN (bricks leaked below their cell, players
-            // sank below their shadow). dy=0 sprites (bombs, shadow) were fine,
-            // which is why only some things looked "too low". The one
-            // confirmed exception (real flame arms) reads st.dx/st.dy itself
-            // at its own draw site (renderer.cpp draw_world) rather than
-            // having it folded in here.
-            Sprite sp{ani.texture(static_cast<std::size_t>(st.frame)), f.image.width,
-                      f.image.height, f.hotspot_x, f.hotspot_y, st.dx, st.dy};
-            // Classic geometry is kept; only the HD texture (if any) is attached
-            // — the renderer samples it into the same 1x logical dst rect.
-            sp.tex_hd = ani.texture_hd(static_cast<std::size_t>(st.frame));
-            out.steps.push_back(sp);
+    for (const auto& st : sq.steps) {
+        if (st.frame < 0) continue;
+        const auto idx = static_cast<std::size_t>(st.frame);
+        const auto& f = ani.data().frames[idx];
+        Sprite sp{ani.texture(idx), f.image.width, f.image.height, f.hotspot_x, f.hotspot_y};
+        if (carry_offsets) {
+            sp.dx = st.dx;
+            sp.dy = st.dy;
         }
-        break;
+        sp.tex_hd = ani.texture_hd(idx);
+        out.steps.push_back(sp);
     }
     return out;
+}
+
+}  // namespace
+
+Anim resolve_sequence(const AniTextures& ani, const std::string& name) {
+    for (const auto& s : ani.data().sequences)
+        if (s.name == name) return sequence_anim(ani, s, /*carry_offsets=*/true);
+    return {};
 }
 
 void collect_death_anims(const AniTextures& ani, std::vector<Anim>& out) {
     for (const auto& sq : ani.data().sequences) {
         if (sq.name.rfind("die", 0) != 0) continue;
-        Anim a;
-        for (const auto& st : sq.steps) {
-            if (st.frame < 0) continue;
-            const auto& f = ani.data().frames[static_cast<std::size_t>(st.frame)];
-            Sprite sp{ani.texture(static_cast<std::size_t>(st.frame)), f.image.width,
-                      f.image.height, f.hotspot_x, f.hotspot_y};
-            sp.tex_hd = ani.texture_hd(static_cast<std::size_t>(st.frame));
-            a.steps.push_back(sp);
-        }
+        Anim a = sequence_anim(ani, sq, /*carry_offsets=*/false);
         if (!a.steps.empty()) out.push_back(std::move(a));
     }
 }
