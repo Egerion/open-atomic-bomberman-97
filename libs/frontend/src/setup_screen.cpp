@@ -17,8 +17,8 @@
 #include "bomber/input/input.hpp"                // cycle_slot_input_type / reset_setup_teams
 #include "bomber/match/match_factory.hpp"        // scheme_setup_teams
 #include "bomber/render/sprites.hpp"             // Sprite, Anim, resolve_sequence
-#include "bomber/ui/bmscreen.hpp"                // HelpBrowser
 #include "bomber/ui/dialog_chrome.hpp"           // draw_acknowledge_dialog
+#include "bomber/ui/help_screens.hpp"            // run_help_browser
 
 namespace bomber::game {
 
@@ -368,23 +368,19 @@ void SetupLoop::toggle_slot_team() {
 }
 
 std::optional<AppInput> SetupLoop::run_help_browser() {
-    HelpBrowser browser(ctx_.assets, ctx_.front_font);
-    browser.enter(ctx_.values.at_or(15, 1) != 0);
-    while (!browser.done()) {
-        SDL_Event hev;
-        while (SDL_PollEvent(&hev)) {
-            if (hev.type == SDL_EVENT_QUIT) return AppInput::Quit;
-            if (hev.type == SDL_EVENT_KEY_DOWN) browser.on_key(hev.key.key, ctx_.audio);
-        }
-        if (browser.viewing() && browser.viewer().done()) browser.close_viewer();
-        net_setup_pump(seams_.net);  // the link must not go silent under the browser
-        if (seams_.chat != nullptr) seams_.chat->pump();  // nor the lobby's heartbeat
-        ctx_.audio.update_music();
-        draw_frame();
-        browser.draw(ctx_.sdl);
-        SDL_RenderPresent(ctx_.sdl);
-        SDL_Delay(2);
-    }
+    // The shared sub_41431C loop over this screen's own live frame, with the
+    // net link + lobby heartbeat pumped every iteration (they must not go
+    // silent under the browser). Routing through the template rather than a
+    // hand copy is what gives THIS F1 the mouse half back: the local fork
+    // never called dispatch_list_mouse, so help from Setup was keyboard-only
+    // against sub_42DBCC's mouse-first input model.
+    const AppInput r = ::bomber::game::run_help_browser(
+        ctx_, [this] { draw_frame(); },
+        [this] {
+            net_setup_pump(seams_.net);
+            if (seams_.chat != nullptr) seams_.chat->pump();
+        });
+    if (r == AppInput::Quit) return AppInput::Quit;
     return std::nullopt;
 }
 
@@ -411,8 +407,9 @@ std::optional<AppInput> SetupLoop::show_error(const std::string& reason) {
         if (seams_.chat != nullptr) seams_.chat->pump();
         ctx_.audio.update_music();
         draw_frame();
-        draw_acknowledge_dialog(ctx_.sdl, ctx_.front_font, &ctx_.assets.frontend_pcx("WINZ"),
-                                reason, sub, ok, 164, 0, 0);
+        draw_acknowledge_dialog(DialogPen{ctx_.sdl, ctx_.front_font},
+                                &ctx_.assets.frontend_pcx("WINZ"),
+                                AcknowledgeLabels{reason, sub, ok}, AcknowledgeStyle{{164, 0, 0}});
         SDL_RenderPresent(ctx_.sdl);
         SDL_Delay(2);
     }
@@ -423,17 +420,18 @@ std::optional<AppInput> SetupLoop::show_error(const std::string& reason) {
 // `rounds = 0` is the "still on the roster screen" sentinel (net_setup_link.hpp);
 // the level travels from the LEVEL & ROUNDS screen, where the host picks it.
 std::optional<AppInput> SetupLoop::pump_link() {
+    const LocalRoster roster{state_.setup_type, state_.setup_sub, state_.setup_team,
+                             state_.team_play};
     if (net_mode_ && !net_guest_ && (net_dirty_ || !net_setup_has_preview(seams_.net))) {
-        net_setup_publish(seams_.net, state_.setup_type, state_.setup_team, state_.team_play,
-                          /*level=*/-1, /*level_name=*/std::string(), /*rounds=*/0);
+        net_setup_publish(seams_.net, roster,
+                          LevelPreview{/*level=*/-1, /*name=*/std::string(), /*rounds=*/0});
         net_dirty_ = false;
     }
     net_setup_pump(seams_.net);
     if (seams_.chat != nullptr) seams_.chat->pump();
     if (!net_guest_) return std::nullopt;
     // Read-only: the displayed roster IS the host's newest preview.
-    net_setup_apply_roster(seams_.net, state_.setup_type, state_.setup_sub, state_.setup_team,
-                           state_.team_play);
+    net_setup_apply_roster(seams_.net, roster);
     // The host moved on, or confirmed outright and we already hold the config.
     if (net_setup_final(seams_.net) || net_setup_on_level_screen(seams_.net))
         return AppInput::Advance;
@@ -467,7 +465,8 @@ void SetupLoop::draw_frame() {
     // Header (msg 50): white ink / black outline (byte_49D38F over byte_495390[0],
     // pseudo.c 15154-15160).
     ctx_.front_font.draw_outlined(ctx_.sdl, ctx_.assets.getstring(50, "Available players:"),
-                                  layout_.hx, layout_.hy, 255, 255, 255, 0, 0, 0, layout_.hw);
+                                  SDL_FPoint{layout_.hx, layout_.hy},
+                                  OutlinedTextStyle{{255, 255, 255}, {}, layout_.hw});
     draw_slot_rows();
     draw_joystick_pane();
     draw_footer();
@@ -513,14 +512,14 @@ void SetupLoop::draw_slot_row(int i) {
     ctx_.assets.slot_color(i, sc);
     const Uint8 oc = i == 1 ? 255 : 0;
     const float row_y = layout_.ly + layout_.lys * static_cast<float>(i);
-    const float lx_end = ctx_.front_font.draw_outlined(ctx_.sdl, line, layout_.lx, row_y, sc[0],
-                                                       sc[1], sc[2], oc, oc, oc, layout_.lw);
+    const float lx_end = ctx_.front_font.draw_outlined(
+        ctx_.sdl, line, SDL_FPoint{layout_.lx, row_y},
+        OutlinedTextStyle{{sc[0], sc[1], sc[2]}, {oc, oc, oc}, layout_.lw});
     if (!state_.team_play) return;
     const std::string marker = "  " + ctx_.assets.getstring(230, "TEAM");
     const bool team1 = state_.setup_team[i] != 0;  // sub_4141F8's `a1 ?` branch
-    ctx_.front_font.draw_outlined(
-        ctx_.sdl, marker, lx_end, row_y, static_cast<Uint8>(team1 ? 252 : 255),
-        static_cast<Uint8>(team1 ? 80 : 255), static_cast<Uint8>(team1 ? 80 : 255), 0, 0, 0);
+    ctx_.front_font.draw_outlined(ctx_.sdl, marker, SDL_FPoint{lx_end, row_y},
+                                  OutlinedTextStyle{team1 ? Rgb{252, 80, 80} : Rgb{255, 255, 255}});
 }
 
 // Joystick pane (getvalue 715/720): heading msg 40, then one line per detected
@@ -528,20 +527,23 @@ void SetupLoop::draw_slot_row(int i) {
 // msg-42 line. ALL of it plain white ink over a black outline (pseudo.c
 // 15227-15263) — the old grey tints were invented.
 void SetupLoop::draw_joystick_pane() {
-    ctx_.front_font.draw_outlined(ctx_.sdl, ctx_.assets.getstring(40, "JOYSTICKS"), layout_.jhx,
-                                  layout_.jhy, 255, 255, 255, 0, 0, 0, layout_.jhw);
+    ctx_.front_font.draw_outlined(ctx_.sdl, ctx_.assets.getstring(40, "JOYSTICKS"),
+                                  SDL_FPoint{layout_.jhx, layout_.jhy},
+                                  OutlinedTextStyle{{255, 255, 255}, {}, layout_.jhw});
     const int joy_count = ctx_.gamepads.count();
     if (joy_count == 0) {
-        ctx_.front_font.draw_outlined(ctx_.sdl, ctx_.assets.getstring(42, "none"), layout_.jlx,
-                                      layout_.jly, 255, 255, 255, 0, 0, 0, layout_.jlw);
+        ctx_.front_font.draw_outlined(ctx_.sdl, ctx_.assets.getstring(42, "none"),
+                                      SDL_FPoint{layout_.jlx, layout_.jly},
+                                      OutlinedTextStyle{{255, 255, 255}, {}, layout_.jlw});
         return;
     }
     for (int j = 0; j < joy_count; ++j) {
         const std::string jline =
             fmt_us(ctx_.assets.getstring(41, "Joy %u - %s"), j, ctx_.gamepads.name(j));
-        ctx_.front_font.draw_outlined(ctx_.sdl, jline, layout_.jlx,
-                                      layout_.jly + layout_.jlys * static_cast<float>(j), 255, 255,
-                                      255, 0, 0, 0, layout_.jlw);
+        ctx_.front_font.draw_outlined(
+            ctx_.sdl, jline,
+            SDL_FPoint{layout_.jlx, layout_.jly + layout_.jlys * static_cast<float>(j)},
+            OutlinedTextStyle{{255, 255, 255}, {}, layout_.jlw});
     }
 }
 
@@ -550,8 +552,9 @@ void SetupLoop::draw_joystick_pane() {
 void SetupLoop::draw_footer() {
     const std::string help = ctx_.assets.getstring(330, "Press F1 for help");
     const float help_w = static_cast<float>(ctx_.front_font.measure(help));
-    ctx_.front_font.draw_outlined(ctx_.sdl, help, layout_.fcx - (help_w + 2.0f) / 2.0f, layout_.ffy,
-                                  96, 252, 252, 0, 0, 0, layout_.ffw);
+    ctx_.front_font.draw_outlined(ctx_.sdl, help,
+                                  SDL_FPoint{layout_.fcx - (help_w + 2.0f) / 2.0f, layout_.ffy},
+                                  OutlinedTextStyle{{96, 252, 252}, {}, layout_.ffw});
 }
 
 // The row cursor (sub_413BD6): MISC.ANI "cursor1" at (getvalue(710) - 15,

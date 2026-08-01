@@ -14,8 +14,8 @@
 #include "bomber/frontend/campaign_screen.hpp"  // CampaignFilePicker
 #include "bomber/game_util/frontend_util.hpp"   // pick_glue
 #include "bomber/render/asset_store.hpp"        // Sprite (frontend_pcx)
-#include "bomber/ui/bmscreen.hpp"               // HelpBrowser
-#include "bomber/ui/dialog_chrome.hpp"          // DialogRect / draw_dialog_* / kDialogInk*
+#include "bomber/ui/dialog_chrome.hpp"          // DialogRect / draw_dialog_* / kDialogInk
+#include "bomber/ui/help_screens.hpp"           // run_help_browser
 
 namespace bomber::game {
 
@@ -52,8 +52,9 @@ AppInput run_acknowledge(ScreenContext& ctx, MatchBackdrop& backdrop, const std:
         SDL_SetRenderDrawColor(ctx.sdl, 0, 0, 0, 255);
         SDL_RenderClear(ctx.sdl);
         backdrop.renderer.draw_frame(backdrop.state);
-        draw_acknowledge_dialog(ctx.sdl, ctx.front_font, &ctx.assets.frontend_pcx("WINZ"), top,
-                                bottom, ok, 164, 0, 0);
+        draw_acknowledge_dialog(DialogPen{ctx.sdl, ctx.front_font},
+                                &ctx.assets.frontend_pcx("WINZ"),
+                                AcknowledgeLabels{top, bottom, ok}, AcknowledgeStyle{{164, 0, 0}});
         SDL_RenderPresent(ctx.sdl);
         SDL_Delay(2);
     }
@@ -61,33 +62,13 @@ AppInput run_acknowledge(ScreenContext& ctx, MatchBackdrop& backdrop, const std:
 
 }  // namespace
 
-// The in-round F1 browser (the sub_42A16F(1)/(0) bracket): this loop never ticks
-// the sim — the match is genuinely frozen for its duration — and the backdrop is
-// the live frozen match render rather than MAINMENU, since the original overlays
-// the list dialog on whatever screen was current.
+// The in-round F1 browser (the sub_42A16F(1)/(0) bracket): the shared
+// run_help_browser loop — this never ticks the sim, the match is genuinely
+// frozen for its duration — with the live frozen match render as the backdrop
+// rather than MAINMENU, since the original overlays the list dialog on whatever
+// screen was current.
 AppInput HelpBrowserModal::run() {
-    HelpBrowser browser(ctx_.assets, ctx_.front_font);
-    // getvalue(15) ("is the online manual enabled?", default 1, §4) gates BEFORE
-    // the glob, matching sub_414235's own order.
-    browser.enter(ctx_.values.at_or(15, 1) != 0);
-    while (!browser.done()) {
-        SDL_Event ev;
-        while (SDL_PollEvent(&ev)) {
-            if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
-            if (dispatch_list_mouse(ctx_.sdl, ev, browser)) continue;
-            if (ev.type != SDL_EVENT_KEY_DOWN) continue;
-            browser.on_key(ev.key.key, ctx_.audio);
-        }
-        if (browser.viewing() && browser.viewer().done()) browser.close_viewer();
-        ctx_.audio.update_music();
-        SDL_SetRenderDrawColor(ctx_.sdl, 0, 0, 0, 255);
-        SDL_RenderClear(ctx_.sdl);
-        backdrop_.renderer.draw_frame(backdrop_.state);
-        browser.draw(ctx_.sdl);
-        SDL_RenderPresent(ctx_.sdl);
-        SDL_Delay(2);
-    }
-    return AppInput::Advance;
+    return run_help_browser(ctx_, [this] { backdrop_.renderer.draw_frame(backdrop_.state); });
 }
 
 // sub_4015C6: glob "*.cam" in the install root, list, pick, parse, arm campaign
@@ -175,10 +156,14 @@ AppInput CampaignConfirmScreen::run() {
         // sub_414340 paints the WINZ 9-patch too (its sub_41726B call @ pseudo.c
         // 17070) and draws its lines via sub_41696C (outlined).
         draw_dialog_chrome(ctx_.sdl, win, &ctx_.assets.frontend_pcx("WINZ"));
-        draw_dialog_text(ctx_.sdl, ctx_.front_font, top_line, win.x + (win.w - top_w) / 2.0f,
-                         win.y + h + 32.0f, kDialogInkR, kDialogInkG, kDialogInkB);
-        draw_dialog_text(ctx_.sdl, ctx_.front_font, bottom_line, win.x + (win.w - bottom_w) / 2.0f,
-                         win.y + h + 32.0f + h + 2.0f, kDialogInkR, kDialogInkG, kDialogInkB);
+        const DialogPen pen{ctx_.sdl, ctx_.front_font};
+        draw_dialog_text(pen, top_line,
+                         SDL_FPoint{win.x + (win.w - top_w) / 2.0f, win.y + h + 32.0f},
+                         DialogInk{kDialogInk});
+        draw_dialog_text(
+            pen, bottom_line,
+            SDL_FPoint{win.x + (win.w - bottom_w) / 2.0f, win.y + h + 32.0f + h + 2.0f},
+            DialogInk{kDialogInk});
         SDL_RenderPresent(ctx_.sdl);
         SDL_Delay(2);
     }
@@ -203,8 +188,10 @@ AppInput CampaignBannerScreen::run() {
         SDL_SetRenderDrawColor(ctx_.sdl, 0, 0, 0, 255);
         SDL_RenderClear(ctx_.sdl);
         backdrop_.renderer.draw_frame(backdrop_.state);
-        ctx_.front_font.draw(ctx_.sdl, state_.campaign_banner, 220.0f, 200.0f, 255, 255, 255);
-        ctx_.front_font.draw(ctx_.sdl, prepare, 220.0f, 224.0f, 255, 220, 80);
+        ctx_.front_font.draw(ctx_.sdl, state_.campaign_banner, SDL_FPoint{220.0f, 200.0f},
+                             TextStyle{{255, 255, 255}});
+        ctx_.front_font.draw(ctx_.sdl, prepare, SDL_FPoint{220.0f, 224.0f},
+                             TextStyle{{255, 220, 80}});
         SDL_RenderPresent(ctx_.sdl);
         SDL_Delay(2);
     }

@@ -22,6 +22,7 @@
 #include "bomber/game_util/list_dialog_geometry.hpp"
 #include "bomber/render/asset_store.hpp"
 #include "bomber/ui/bmscreen.hpp"
+#include "bomber/ui/list_picker.hpp"
 
 namespace bomber::game {
 
@@ -45,7 +46,7 @@ namespace bomber::game {
 class SchemeFilePicker {
 public:
     SchemeFilePicker(const AssetStore& assets, const FontTextures& font)
-        : assets_(&assets), font_(&font) {}
+        : assets_(&assets), font_(&font), list_(font) {}
 
     // Case-insensitive extension match, as the real DOS findfirst would see on a
     // FAT volume; pre-reads each scheme's -N name for the second column.
@@ -64,34 +65,25 @@ public:
 
     bool done() const { return done_; }
     bool cancelled() const { return cancelled_; }
-    // Only valid when done() && !cancelled().
-    const std::filesystem::path& selected() const {
-        const int sel = nav_.top_row + nav_.highlight;  // @0x42E39A
-        return entries_[static_cast<std::size_t>(sel)];
-    }
-    bool empty() const { return entries_.empty(); }
+    // Only valid when done() && !cancelled(); range-checked all the same.
+    const std::filesystem::path& selected() const;
+    bool empty() const { return list_.empty(); }
 
-    static constexpr int kVisibleRows = kListDialogRows;
+    static constexpr int kVisibleRows = ListPicker::kVisibleRows;
 
 private:
     // One row as the original formats it: "<FILENAME.SCH>: <scheme name>". Used
     // both to draw and to measure the list's width (sub_42FEF0).
     std::string row_text(int i) const;
     std::string header() const;
-    ListDialogGeometry layout() const;
-    bool interactive() const;
     void apply(ListDialogAction action);
 
     const AssetStore* assets_ = nullptr;
     const FontTextures* font_ = nullptr;
     std::string backdrop_;
-    std::vector<std::filesystem::path> entries_;
+    // The shared (100,100) glob/list widget — sub_41404B + sub_42DBCC.
+    ListPicker list_;
     std::vector<std::string> names_;  // each file's -N scheme name ("" if unreadable)
-    // sub_42DBCC's own two registers: the first visible row and the highlight's
-    // OFFSET inside the window. Their sum is the selection.
-    ListDialogNav nav_;
-    float item_w_ = 0.0f;  // sub_42FEF0's max over row_text(), cached at enter()
-    ListDialogWidget pressed_ = ListDialogWidget::None;
     bool done_ = false;
     bool cancelled_ = false;
 };

@@ -18,10 +18,10 @@ constexpr std::uint64_t kCaptureArmDelayMs = 500;
 // LUT-true inks (docs/re/frontend-flow.md "COLOR.PAL — byte_495390 decoded for
 // real"): byte_49D37A (header/percent yellow) and byte_49D38F (general white).
 // These supersede the earlier nearest-search readings.
-constexpr Uint8 kYellowR = 252, kYellowG = 248, kYellowB = 88;  // byte_49D37A
-constexpr Uint8 kWhiteR = 240, kWhiteG = 248, kWhiteB = 252;    // byte_49D38F
+constexpr Rgb kYellow{252, 248, 88};  // byte_49D37A
+constexpr Rgb kWhite{240, 248, 252};  // byte_49D38F
 // byte_497498, LUT 0x2108 — the bevel-dark element of the widget cursor.
-constexpr Uint8 kBevelR = 60, kBevelG = 68, kBevelB = 56;
+constexpr Rgb kBevel{60, 68, 56};
 
 // The widget library's default 8x8 cursor — byte_45C310, read from BM95.EXE's
 // data section (2026-07-13) through sub_430E4C's colour remap. Hotspot (1,1).
@@ -212,8 +212,8 @@ void KeyRemapScreen::draw(SDL_Renderer* ren) const {
     if (!font_ || !font_->loaded()) return;
     // Title at (20, 20), clip 400 — recovered from the raw EXE bytes at 0x407BD0
     // after Hex-Rays lost the x; the old (400,20) read the CLIP WIDTH as the x.
-    font_->draw_outlined(ren, msg(1100, "Keyboard definitions"), 20.0f, 20.0f, kYellowR, kYellowG,
-                         kYellowB, 0, 0, 0, 400.0f);
+    font_->draw_outlined(ren, msg(1100, "Keyboard definitions"), SDL_FPoint{20.0f, 20.0f},
+                         OutlinedTextStyle{kYellow, {}, 400.0f});
     draw_grid(ren);
     draw_defaults_button(ren);
     if (capturing_) draw_capture_modal(ren);
@@ -243,21 +243,21 @@ void KeyRemapScreen::draw_grid(SDL_Renderer* ren) const {
 
 void KeyRemapScreen::draw_grid_button(SDL_Renderer* ren, int set, int action) const {
     const Rect r = grid_rect(set, action);
-    draw_dialog_button(ren, *font_, r.x, r.y, grid_label(set, action),
+    draw_dialog_button(DialogPen{ren, *font_}, SDL_FPoint{r.x, r.y}, grid_label(set, action),
                        widget_pressed(grid_widget_id(set, action)));
     // The bound-key line sits 22 px below and is drawn ONLY while
     // `(code & 0x7F) < 0x59` (pseudo.c 8743-8744).
     const int dos = dos_scancode_from_sdl(edited_[set].scancode[action]);
     const char* name = dos_scancode_name(dos);
     if (name == nullptr) return;
-    font_->draw_outlined(ren, fmt_s(msg(1140, "Key: '%s'"), name), r.x, r.y + 22.0f, kWhiteR,
-                         kWhiteG, kWhiteB, 0, 0, 0, 200.0f);
+    font_->draw_outlined(ren, fmt_s(msg(1140, "Key: '%s'"), name), SDL_FPoint{r.x, r.y + 22.0f},
+                         OutlinedTextStyle{kWhite, {}, 200.0f});
 }
 
 void KeyRemapScreen::draw_defaults_button(SDL_Renderer* ren) const {
     const Rect r = defaults_rect();
-    draw_dialog_button(ren, *font_, r.x, r.y, msg(1130, "Return to default keys"),
-                       widget_pressed(kDefaultsWidgetId));
+    draw_dialog_button(DialogPen{ren, *font_}, SDL_FPoint{r.x, r.y},
+                       msg(1130, "Return to default keys"), widget_pressed(kDefaultsWidgetId));
 }
 
 // A button shows its "down" bevel only while the mouse is held INSIDE it, and
@@ -277,17 +277,17 @@ void KeyRemapScreen::draw_capture_modal(SDL_Renderer* ren) const {
     const std::string m =
         fmt_s(msg(1105, "Press key for '%s'"), grid_label(capture_set_, capture_action_));
     const float mw = static_cast<float>(font_->measure(m));
-    font_->draw_outlined(ren, m, win.x + (360.0f - mw) / 2.0f, win.y + 1.5f * lh, kWhiteR, kWhiteG,
-                         kWhiteB, 0, 0, 0);
+    font_->draw_outlined(ren, m, SDL_FPoint{win.x + (360.0f - mw) / 2.0f, win.y + 1.5f * lh},
+                         OutlinedTextStyle{kWhite});
     const std::string pct = "0%";
     const float pw = static_cast<float>(font_->measure(pct));
-    font_->draw_outlined(ren, pct, win.x + (360.0f - pw) / 2.0f, win.y + 3.5f * lh, kYellowR,
-                         kYellowG, kYellowB, 0, 0, 0);
+    font_->draw_outlined(ren, pct, SDL_FPoint{win.x + (360.0f - pw) / 2.0f, win.y + 3.5f * lh},
+                         OutlinedTextStyle{kYellow});
     SDL_FRect track{win.x + 31.0f, win.y + 5.5f * lh + 1.0f, 300.0f, lh - 1.0f};
     SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
     SDL_RenderFillRect(ren, &track);
     SDL_FRect frame{win.x + 30.0f, win.y + 5.5f * lh, 302.0f, lh + 1.0f};
-    SDL_SetRenderDrawColor(ren, kWhiteR, kWhiteG, kWhiteB, 255);
+    SDL_SetRenderDrawColor(ren, kWhite.r, kWhite.g, kWhite.b, 255);
     SDL_RenderRect(ren, &frame);
 }
 
@@ -297,9 +297,11 @@ void KeyRemapScreen::draw_capture_modal(SDL_Renderer* ren) const {
 void KeyRemapScreen::draw_note_modal(SDL_Renderer* ren) const {
     const bool ok_pressed =
         pressed_id_ == kNoteOkWidgetId && note_ok_rect().contains(mouse_x_, mouse_y_);
-    draw_acknowledge_dialog(ren, *font_, assets_ ? &assets_->frontend_pcx("WINZ") : nullptr,
-                            msg(95, "NOTE!"), msg(1131, "Default key controls restored"),
-                            msg(27, " Ok "), kWhiteR, kWhiteG, kWhiteB, ok_pressed);
+    draw_acknowledge_dialog(
+        DialogPen{ren, *font_}, assets_ ? &assets_->frontend_pcx("WINZ") : nullptr,
+        AcknowledgeLabels{msg(95, "NOTE!"), msg(1131, "Default key controls restored"),
+                          msg(27, " Ok ")},
+        AcknowledgeStyle{kWhite, ok_pressed});
 }
 
 // The widget library's own 8x8 arrow, hotspot (1,1), walked as one flat 64-cell
@@ -311,8 +313,8 @@ void KeyRemapScreen::draw_mouse_cursor(SDL_Renderer* ren) const {
         const char c = kMouseCursorRows[row][col];
         if (c == '.') continue;
         const bool white = c == 'W';
-        SDL_SetRenderDrawColor(ren, white ? kWhiteR : kBevelR, white ? kWhiteG : kBevelG,
-                               white ? kWhiteB : kBevelB, 255);
+        const Rgb ink = white ? kWhite : kBevel;
+        SDL_SetRenderDrawColor(ren, ink.r, ink.g, ink.b, 255);
         SDL_FRect px{mouse_x_ - kCursorHotX + static_cast<float>(col),
                      mouse_y_ - kCursorHotY + static_cast<float>(row), 1.0f, 1.0f};
         SDL_RenderFillRect(ren, &px);

@@ -3,6 +3,7 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>  // std::any_of
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -495,13 +496,13 @@ void MatchLoop::note_walkout(const net::RollbackSession& session, bool stalled) 
     // "left-stalled with depth 8/8" is a bug report, where a bare "left" is a
     // player who stopped enjoying themselves.
     const net::NetStats& ns = session.stats();
-    char note[128];
-    std::snprintf(note, sizeof(note),
+    std::array<char, 128> note{};
+    std::snprintf(note.data(), note.size(),
                   stalled ? "double-Esc bail-out; depth=%d/%d stalls=%u rephase=%u"
                           : "Ctrl+Q forfeit; depth=%d/%d stalls=%u rephase=%u",
                   ns.prediction_depth, ns.max_prediction, static_cast<unsigned>(ns.stall_pumps),
                   static_cast<unsigned>(ns.rephase_holds));
-    recorder_.note(note);
+    recorder_.note(note.data());
 }
 
 // The two ways the SESSION itself ended the round, each of which gets the modal.

@@ -1,48 +1,29 @@
 #include "bomber/frontend/campaign_screen.hpp"
 
-#include <algorithm>
-#include <cctype>
-
 #include "bomber/ui/dialog_chrome.hpp"  // the shared sub_42DBCC list chrome
 
 namespace bomber::game {
 
 namespace {
 
-// The general white ink every row is drawn in — the selected one included,
-// because sub_442C28 LIGHTENS the band under the text rather than inverting it,
-// so no per-row recolour and no "> " marker are needed.
-constexpr Uint8 kInkR = 255, kInkG = 255, kInkB = 255;
-constexpr Uint8 kHintR = 160, kHintG = 160, kHintB = 160;
-
-bool has_cam_extension(const std::filesystem::path& p) {
-    std::string ext = p.extension().string();
-    for (auto& c : ext) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    return ext == ".CAM";
-}
+// sub_4015C6's empty-glob hint tint (a port stand-in; the pinned error dialog
+// ids are cited at the draw site).
+constexpr Rgb kHint{160, 160, 160};
 
 }  // namespace
 
 void CampaignFilePicker::enter(const std::filesystem::path& install_root, std::string backdrop) {
     backdrop_ = std::move(backdrop);
-    entries_.clear();
-    nav_ = ListDialogNav{};
-    item_w_ = 0.0f;
-    pressed_ = ListDialogWidget::None;
+    list_.reset();
     done_ = false;
     cancelled_ = false;
-    std::error_code ec;
-    if (!std::filesystem::is_directory(install_root, ec)) return;
-    for (const auto& entry : std::filesystem::directory_iterator(install_root, ec)) {
-        if (!entry.is_regular_file()) continue;
-        if (has_cam_extension(entry.path())) entries_.push_back(entry.path());
-    }
-    std::sort(entries_.begin(), entries_.end());  // sub_41404B qsorts its glob results
-    // sub_42FEF0 @0x42DC16 — the widest ITEM alone, cached so the mouse
-    // handlers hit-test exactly the layout draw() paints.
-    if (font_)
-        for (const auto& e : entries_)
-            item_w_ = std::max(item_w_, static_cast<float>(font_->measure(e.filename().string())));
+    // sub_4015C6 globs through the SAME sub_41404B helper as the *.SCH picker
+    // and the help browser, so the glob, the case-insensitive extension match
+    // and the PINNED uppercased-filename sort live in ListPicker — this picker
+    // used to sort the full paths case-sensitively against the same citation.
+    list_.set_header(header());
+    list_.glob(install_root, ".CAM");
+    list_.measure_rows([this](int i) { return list_.path(i).filename().string(); });
 }
 
 std::string CampaignFilePicker::header() const {
@@ -50,17 +31,24 @@ std::string CampaignFilePicker::header() const {
                    : std::string("Select a campaign:");
 }
 
-ListDialogGeometry CampaignFilePicker::layout() const {
-    return list_dialog_layout_for(*font_, header(), 100.0f, 100.0f, item_w_, kVisibleRows,
-                                  static_cast<int>(entries_.size()), nav_.top_row);
+const std::filesystem::path& CampaignFilePicker::selected() const {
+    // @0x42E39A under the @0x42E3A8 range check (see ListPicker::selected). The
+    // empty fallback covers only API misuse — a call without done() &&
+    // !cancelled() — which no runner performs.
+    static const std::filesystem::path kNone;
+    const std::filesystem::path* sel = list_.selected();
+    return sel != nullptr ? *sel : kNone;
 }
 
 void CampaignFilePicker::on_key(SDL_Keycode key, AudioEngine& audio) {
-    if (entries_.empty()) {
+    if (list_.empty()) {
         // The empty-glob acknowledge box (sub_414340): unconditional nav blip on
         // any real key @0x414532, dismissed by Enter/Space/Escape with no sting.
         audio.play(20);
-        if (key == SDLK_ESCAPE || key == SDLK_RETURN) { done_ = true; cancelled_ = true; }
+        if (key == SDLK_ESCAPE || key == SDLK_RETURN) {
+            done_ = true;
+            cancelled_ = true;
+        }
         return;
     }
     // THE LIST DIALOG IS SILENT (docs/re/sound-engine.md §8). sub_4015C6 is the
@@ -68,14 +56,14 @@ void CampaignFilePicker::on_key(SDL_Keycode key, AudioEngine& audio) {
     // sub_414340 box and — through the LOADER sub_401085, not the list —
     // sub_4074A3's SFX-40 load-failure buzz. Its list navigation and its accept
     // make no sound, because the shared list widget makes none.
-    const int count = static_cast<int>(entries_.size());
+    //
     // W/S stay as the port's own alias, like the *.SCH picker's.
     const int code = (key == SDLK_W)   ? kListKeyUp
                      : (key == SDLK_S) ? kListKeyDown
                      : (key == SDLK_SPACE)
                          ? kListKeyEnter
                          : list_dialog_key_code(key);
-    switch (list_dialog_key(nav_, code, kVisibleRows, count)) {
+    switch (list_dialog_key(list_.nav(), code, kVisibleRows, list_.count())) {
         case ListDialogAction::Activate:
             done_ = true;
             cancelled_ = false;
@@ -90,18 +78,11 @@ void CampaignFilePicker::on_key(SDL_Keycode key, AudioEngine& audio) {
 }
 
 void CampaignFilePicker::on_mouse_move(float x, float y, bool buttons_held) {
-    if (entries_.empty() || !font_ || !font_->loaded() || buttons_held) return;
-    list_dialog_mouse_move(nav_, list_dialog_hit_for(*font_, layout(), kVisibleRows, x, y),
-                           static_cast<int>(entries_.size()));
+    list_.on_mouse_move(x, y, buttons_held);
 }
 
 void CampaignFilePicker::on_mouse_down(float x, float y) {
-    if (entries_.empty() || !font_ || !font_->loaded()) return;
-    const ListDialogGeometry g = layout();
-    const ListDialogHit hit = list_dialog_hit_for(*font_, g, kVisibleRows, x, y);
-    pressed_ = hit.widget;
-    switch (list_dialog_mouse_down(nav_, g, hit, kVisibleRows,
-                                   static_cast<int>(entries_.size()), static_cast<int>(y))) {
+    switch (list_.on_mouse_down(x, y)) {
         case ListDialogAction::Activate:
             done_ = true;
             cancelled_ = false;
@@ -116,11 +97,7 @@ void CampaignFilePicker::on_mouse_down(float x, float y) {
 }
 
 void CampaignFilePicker::on_mouse_up(float x, float y) {
-    if (entries_.empty() || !font_ || !font_->loaded()) return;
-    const ListDialogHit hit = list_dialog_hit_for(*font_, layout(), kVisibleRows, x, y);
-    const ListDialogWidget was = pressed_;
-    pressed_ = ListDialogWidget::None;
-    if (list_dialog_mouse_up(hit, was) == ListDialogAction::Cancel) {
+    if (list_.on_mouse_up(x, y) == ListDialogAction::Cancel) {
         done_ = true;
         cancelled_ = true;
     }
@@ -142,13 +119,13 @@ void CampaignFilePicker::draw(SDL_Renderer* ren) const {
     if (!ren) return;
     draw_backdrop(ren);
     if (!font_ || !font_->loaded()) return;
-    if (entries_.empty()) {
+    if (list_.empty()) {
         // sub_4015C6's empty-glob path: the getstring(1215)/getstring(97) error
         // dialog (docs/re/campaign.md §3).
         const std::string err =
             assets_ ? assets_->getstring(1215, "No campaign files found!") : std::string();
-        font_->draw(ren, err.empty() ? "No campaign files found!" : err, 100.0f, 124.0f, kHintR,
-                    kHintG, kHintB);
+        font_->draw(ren, err.empty() ? "No campaign files found!" : err, SDL_FPoint{100.0f, 124.0f},
+                    TextStyle{kHint});
         return;
     }
     // sub_4015C6 hands its glob to the SAME sub_41485A -> sub_42DB80 ->
@@ -156,21 +133,7 @@ void CampaignFilePicker::draw(SDL_Renderer* ren) const {
     // same chrome at the same literal (100, 100). This screen used to draw bare
     // "> name" text with no panel and no scrollbar — a port stand-in, and the
     // reason a scrolled campaign list showed no position at all.
-    //
-    // sub_42FEF0 @0x42DC16: the widest ITEM drives the width (measured at
-    // enter()); the widget folds the title in itself, so it must NOT be pre-maxed.
-    const int count = static_cast<int>(entries_.size());
-    const int last = std::min(count, nav_.top_row + kVisibleRows);
-    const ListDialogLayout lay = draw_list_dialog(ren, *font_, header(), 100.0f, 100.0f, item_w_,
-                                                  kVisibleRows, count, nav_.top_row);
-    for (int i = nav_.top_row; i < last; ++i) {
-        const int vi = i - nav_.top_row;
-        const float ty = lay.item_y0 + static_cast<float>(vi) * lay.item_h;
-        // The selection band follows the highlight OFFSET (@0x42E656).
-        if (vi == nav_.highlight) draw_list_selection(ren, lay, vi);
-        font_->draw(ren, entries_[static_cast<std::size_t>(i)].filename().string(), lay.item_x, ty,
-                    kInkR, kInkG, kInkB);
-    }
+    list_.draw(ren, [this](int i) { return list_.path(i).filename().string(); });
 }
 
 }  // namespace bomber::game

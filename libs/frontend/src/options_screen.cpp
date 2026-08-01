@@ -26,7 +26,7 @@ constexpr float kRowClipW = 500.0f;
 // CONFIRMED (§1's LUT decode table): byte_49D38F = general draw ink =
 // RGB(255,255,255), used for EVERY row, selected or not — the original has no
 // per-row or selected recolour at all; only the cursor1 sprite marks selection.
-constexpr Uint8 kInkR = 255, kInkG = 255, kInkB = 255;
+constexpr Rgb kInk{255, 255, 255};
 
 // Pinned EMPIRICALLY from a 1:1 native capture of the level screen (2026-07-12;
 // VALUELST 736 = 170, measured sprite rows 155..186 -> anchor = row_y + 16, one
@@ -47,25 +47,6 @@ int cycle(int value, int dir, int count) {
     if (next < 0) return count - 1;
     if (next >= count) return 0;
     return next;
-}
-
-// Sequential splice for the four-field modem row (getstring(264) "Modem: P:%u
-// I:%u  B:%u  #:%s"): each %u/%d/%i/%s in order takes the next argument; %% and
-// anything unmatched stays literal. (hud_format's fmt_u/fmt_s fill only the
-// first specifier.)
-std::string fmt_seq(std::string f, std::initializer_list<std::string> args) {
-    std::size_t pos = 0;
-    for (const auto& a : args) {
-        auto p = f.find('%', pos);
-        while (p != std::string::npos && p + 1 < f.size() && f[p + 1] == '%')
-            p = f.find('%', p + 2);
-        if (p == std::string::npos || p + 1 >= f.size()) break;
-        const char c = f[p + 1];
-        if (c != 'u' && c != 'd' && c != 'i' && c != 's') break;
-        f.replace(p, 2, a);
-        pos = p + a.size();
-    }
-    return f;
 }
 
 }  // namespace
@@ -269,8 +250,8 @@ void OptionsScreen::draw_rows(SDL_Renderer* ren) const {
     const auto rows = row_text();
     for (std::size_t i = 0; i < rows.size(); ++i) {
         const float y = static_cast<float>(kListY0 + static_cast<int>(i) * kListYStep);
-        font_->draw_outlined(ren, rows[i], static_cast<float>(kListX), y, kInkR, kInkG, kInkB, 0, 0,
-                             0, kRowClipW);
+        font_->draw_outlined(ren, rows[i], SDL_FPoint{static_cast<float>(kListX), y},
+                             OutlinedTextStyle{kInk, {}, kRowClipW});
     }
 }
 
@@ -282,7 +263,8 @@ void OptionsScreen::draw_footer(SDL_Renderer* ren) const {
     if (!assets_) return;
     const std::string help = assets_->getstring(330, "Press F1 for help");
     const float help_w = static_cast<float>(font_->measure(help));
-    font_->draw_outlined(ren, help, 320.0f - (help_w + 2.0f) / 2.0f, 440.0f, 96, 252, 252, 0, 0, 0);
+    font_->draw_outlined(ren, help, SDL_FPoint{320.0f - (help_w + 2.0f) / 2.0f, 440.0f},
+                         OutlinedTextStyle{{96, 252, 252}});
 }
 
 // The selection cursor — CONFIRMED sub_413BD6: the "cursor1" MISC.ANI sprite at
@@ -296,7 +278,7 @@ void OptionsScreen::draw_cursor(SDL_Renderer* ren) const {
     if (cur.steps.empty()) {
         // Missing MISC.ANI: a plain marker keeps the selected row legible rather
         // than silently losing its cursor.
-        font_->draw(ren, ">", static_cast<float>(kCursorX), row_y, kInkR, kInkG, kInkB);
+        font_->draw(ren, ">", SDL_FPoint{static_cast<float>(kCursorX), row_y}, TextStyle{kInk});
         return;
     }
     const std::size_t step = anim_step_index(

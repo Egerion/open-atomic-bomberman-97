@@ -5,8 +5,8 @@
 #include <cstdint>
 #include <vector>
 
-#include "bomber/audio/death_anim.hpp"
 #include "bomber/audio/sound_director.hpp"
+#include "bomber/game_util/death_anim.hpp"
 #include "bomber/sim/state.hpp"
 
 // Pins the event -> SOUNDLST-group mapping, and in particular the cues the

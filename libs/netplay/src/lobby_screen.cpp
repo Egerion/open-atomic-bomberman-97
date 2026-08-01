@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "bomber/game_util/list_dialog_geometry.hpp"  // list_dialog_width (centring)
+#include "bomber/netui/net_setup_roster.hpp"          // wire_safe_text
 #include "bomber/platform/frame_clock.hpp"
 #include "bomber/render/sprites.hpp"    // Sprite
 #include "bomber/ui/dialog_chrome.hpp"  // the pinned chrome primitives
@@ -108,9 +109,9 @@ void pick_measure(const FontTextures& font, PickState& st) {
 }
 
 ListDialogGeometry pick_geometry(const FontTextures& font, const PickState& st) {
-    return list_dialog_layout_for(font, st.title, centered_list_x(font, st.title, st.content_w),
-                                  kListY, st.content_w, st.count(), st.count(), 0,
-                                  st.footer_lines());
+    return list_dialog_layout_for(
+        font, ListDialogSpec{st.title, centered_list_x(font, st.title, st.content_w), kListY,
+                             st.content_w, st.count(), st.count(), 0, st.footer_lines()});
 }
 
 PickOutcome pick_mouse(ScreenContext ctx, PickState& st, const SDL_Event& ev) {
@@ -121,7 +122,8 @@ PickOutcome pick_mouse(ScreenContext ctx, PickState& st, const SDL_Event& ev) {
     // as they are in the original for a list that fits — but the rows and the two
     // arrow buttons are live.
     const ListDialogGeometry g = pick_geometry(ctx.front_font, st);
-    const ListDialogHit hit = list_dialog_hit_for(ctx.front_font, g, st.count(), mx, my);
+    const ListDialogHit hit =
+        list_dialog_hit_for(ctx.front_font, g, st.count(), SDL_FPoint{mx, my});
     ListDialogNav nav{0, st.sel};
     if (ev.type == SDL_EVENT_MOUSE_MOTION) {
         if (ev.motion.state == 0) list_dialog_mouse_move(nav, hit, st.count());
@@ -168,15 +170,16 @@ PickOutcome pick_key(ScreenContext ctx, PickState& st, const SDL_Event& ev) {
 
 void pick_draw(ScreenContext ctx, const PickState& st) {
     const ListDialogLayout lay = draw_list_dialog(
-        ctx.sdl, ctx.front_font, st.title, centered_list_x(ctx.front_font, st.title, st.content_w),
-        kListY, st.content_w, st.count(), st.count(), 0, st.footer_lines());
+        DialogPen{ctx.sdl, ctx.front_font},
+        ListDialogSpec{st.title, centered_list_x(ctx.front_font, st.title, st.content_w), kListY,
+                       st.content_w, st.count(), st.count(), 0, st.footer_lines()});
     for (int i = 0; i < st.count(); ++i) {
         const float ty = lay.item_y0 + static_cast<float>(i) * lay.item_h;
         // The selection LIGHTENS the row (sub_442C28), it does not invert it, so
         // the ink is the same either way.
         if (i == st.sel) draw_list_selection(ctx.sdl, lay, i);
-        ctx.front_font.draw(ctx.sdl, st.labels[static_cast<std::size_t>(i)], lay.item_x, ty,
-                            kDialogInkR, kDialogInkG, kDialogInkB);
+        ctx.front_font.draw(ctx.sdl, st.labels[static_cast<std::size_t>(i)],
+                            SDL_FPoint{lay.item_x, ty}, TextStyle{kDialogInk});
     }
     for (std::size_t i = 0; i < st.hints.lines.size(); ++i)
         draw_centred(ctx, st.hints.lines[i], lay.footer_y0 + static_cast<float>(i) * lay.item_h);
@@ -310,8 +313,8 @@ bool LobbyScreen::run_code_entry(std::string& code, bool& window_closed) {
 
         ctx_.audio.update_music();
         draw_lobby_backdrop(ctx_);
-        draw_text_entry_dialog(ctx_.sdl, ctx_.front_font, kJoinPromptY, c.label, c.entry, "Join",
-                               "Cancel");
+        draw_text_entry_dialog(DialogPen{ctx_.sdl, ctx_.front_font}, kJoinPromptY,
+                               TextEntryLabels{c.label, c.entry, "Join", "Cancel"});
         SDL_RenderPresent(ctx_.sdl);
         frame_clock.pace();
     }
@@ -325,16 +328,12 @@ constexpr float kNameCol = 26.0f;       // seat-number column width inside a ros
 constexpr std::size_t kNameChars = 20;  // clamp for an untrusted wire-supplied name
 
 // A name that arrived over the wire is another player's typing — untrusted
-// input, treated with the same posture as the 1997 files. Keep only codes the
-// FON can actually draw, and clamp the length so no single row can widen a
-// dialog off the 640-px screen.
+// input, run through netui's ONE printable-ASCII filter (wire_safe_text). The
+// clamp here is the ROW-WIDTH cap, not the wire cap: kNameChars is what keeps
+// one long name from widening the roster dialog off the 640-px screen. The
+// fallback stands in for a name the filter emptied.
 std::string safe_wire_name(const std::string& raw, const char* fallback) {
-    std::string out;
-    for (const char c : raw) {
-        if (out.size() >= kNameChars) break;
-        const auto u = static_cast<unsigned char>(c);
-        if (u >= 32 && u < 127) out += c;
-    }
+    std::string out = wire_safe_text(raw, kNameChars);
     return out.empty() ? std::string(fallback) : out;
 }
 
@@ -373,18 +372,18 @@ void draw_room_seats(ScreenContext ctx, const net::LobbyFlow& flow, const ListDi
         const float ty = lay.item_y0 + static_cast<float>(i) * lay.item_h;
         // Own-seat highlight: the lightening band, same ink (sub_442C28).
         if (e.seat == flow.my_seat()) draw_list_selection(ctx.sdl, lay, static_cast<int>(i));
-        ctx.front_font.draw(ctx.sdl, std::to_string(e.seat + 1), lay.item_x, ty, kDialogInkR,
-                            kDialogInkG, kDialogInkB);
-        ctx.front_font.draw(ctx.sdl, safe_wire_name(e.name, "PLAYER"), lay.item_x + kNameCol, ty,
-                            kDialogInkR, kDialogInkG, kDialogInkB);
+        ctx.front_font.draw(ctx.sdl, std::to_string(e.seat + 1), SDL_FPoint{lay.item_x, ty},
+                            TextStyle{kDialogInk});
+        ctx.front_font.draw(ctx.sdl, safe_wire_name(e.name, "PLAYER"),
+                            SDL_FPoint{lay.item_x + kNameCol, ty}, TextStyle{kDialogInk});
         // Right-aligned status column. Words rather than tick/cross glyphs: the
         // original FON fonts have no check/cross codepoint, and drawing one would
         // mean inventing art.
         const std::string mark =
             std::string(e.is_host ? "HOST  " : "") + (e.ready ? "READY" : "WAITING");
         const float mw = static_cast<float>(ctx.front_font.measure(mark));
-        ctx.front_font.draw(ctx.sdl, mark, lay.item_x + lay.item_w - mw, ty, kDialogInkR,
-                            kDialogInkG, kDialogInkB);
+        ctx.front_font.draw(ctx.sdl, mark, SDL_FPoint{lay.item_x + lay.item_w - mw, ty},
+                            TextStyle{kDialogInk});
     }
 }
 
@@ -394,11 +393,11 @@ void draw_room_seats(ScreenContext ctx, const net::LobbyFlow& flow, const ListDi
 void draw_open_seats(ScreenContext ctx, const ListDialogLayout& lay, std::size_t taken, int rows) {
     for (std::size_t i = taken; i < static_cast<std::size_t>(rows); ++i) {
         const float ty = lay.item_y0 + static_cast<float>(i) * lay.item_h;
-        ctx.front_font.draw(ctx.sdl, std::to_string(i + 1), lay.item_x, ty, kDialogDimR,
-                            kDialogDimG, kDialogDimB);
+        ctx.front_font.draw(ctx.sdl, std::to_string(i + 1), SDL_FPoint{lay.item_x, ty},
+                            TextStyle{kDialogDim});
         const float mw = static_cast<float>(ctx.front_font.measure(kOpenSeatMark));
-        ctx.front_font.draw(ctx.sdl, kOpenSeatMark, lay.item_x + lay.item_w - mw, ty, kDialogDimR,
-                            kDialogDimG, kDialogDimB);
+        ctx.front_font.draw(ctx.sdl, kOpenSeatMark, SDL_FPoint{lay.item_x + lay.item_w - mw, ty},
+                            TextStyle{kDialogDim});
     }
 }
 
@@ -423,8 +422,9 @@ void draw_room(ScreenContext ctx, const net::LobbyFlow& flow, bool local_ready, 
     content_w = std::max({content_w, kMinListW, hints.width});
 
     const ListDialogLayout lay = draw_list_dialog(
-        ctx.sdl, ctx.front_font, title, centered_list_x(ctx.front_font, title, content_w), kListY,
-        content_w, rows, rows, 0, static_cast<int>(hints.lines.size()));
+        DialogPen{ctx.sdl, ctx.front_font},
+        ListDialogSpec{title, centered_list_x(ctx.front_font, title, content_w), kListY, content_w,
+                       rows, rows, 0, static_cast<int>(hints.lines.size())});
     draw_room_seats(ctx, flow, lay);
     draw_open_seats(ctx, lay, roster.size(), rows);
     for (std::size_t i = 0; i < hints.lines.size(); ++i)
@@ -559,10 +559,11 @@ void draw_browser(ScreenContext ctx, const std::vector<net::PublicLobby>& list, 
     const HintBlock hints = browse_hints(ctx);
     const BrowseColumns col = browse_columns(ctx, list);
 
-    const ListDialogLayout lay =
-        draw_list_dialog(ctx.sdl, ctx.front_font, kBrowseTitle,
-                         centered_list_x(ctx.front_font, kBrowseTitle, col.content), kListY,
-                         col.content, visible, count, top, static_cast<int>(hints.lines.size()));
+    const ListDialogLayout lay = draw_list_dialog(
+        DialogPen{ctx.sdl, ctx.front_font},
+        ListDialogSpec{kBrowseTitle, centered_list_x(ctx.front_font, kBrowseTitle, col.content),
+                       kListY, col.content, visible, count, top,
+                       static_cast<int>(hints.lines.size())});
     // Columns are laid out from the RIGHT edge of the item area — marker, code,
     // occupancy — so the name takes what is left and a scrollbar (which narrows
     // that area) simply shifts them.
@@ -578,16 +579,15 @@ void draw_browser(ScreenContext ctx, const std::vector<net::PublicLobby>& list, 
         // LIGHTENS the row instead of inverting it, so those rows keep their dim
         // ink while selected — which the earlier inverted band could not express
         // without inventing a third colour.
-        const Uint8 r = l.build_ok ? kDialogInkR : kDialogDimR;
-        const Uint8 g = l.build_ok ? kDialogInkG : kDialogDimG;
-        const Uint8 b = l.build_ok ? kDialogInkB : kDialogDimB;
+        const TextStyle row_style{l.build_ok ? kDialogInk : kDialogDim};
         if (i == sel) draw_list_selection(ctx.sdl, lay, i - top);
-        ctx.front_font.draw(ctx.sdl, display_name(l.name), lay.item_x, ty, r, g, b);
+        ctx.front_font.draw(ctx.sdl, display_name(l.name), SDL_FPoint{lay.item_x, ty}, row_style);
         const std::string occ = occupancy(l);
         const float ow = static_cast<float>(ctx.front_font.measure(occ));
-        ctx.front_font.draw(ctx.sdl, occ, occ_x + col.occ - ow, ty, r, g, b);
-        ctx.front_font.draw(ctx.sdl, l.code, code_x, ty, r, g, b);
-        if (!l.build_ok) ctx.front_font.draw(ctx.sdl, kStaleMark, mark_x, ty, r, g, b);
+        ctx.front_font.draw(ctx.sdl, occ, SDL_FPoint{occ_x + col.occ - ow, ty}, row_style);
+        ctx.front_font.draw(ctx.sdl, l.code, SDL_FPoint{code_x, ty}, row_style);
+        if (!l.build_ok)
+            ctx.front_font.draw(ctx.sdl, kStaleMark, SDL_FPoint{mark_x, ty}, row_style);
     }
 
     for (std::size_t i = 0; i < hints.lines.size(); ++i)
@@ -656,10 +656,11 @@ PickOutcome browse_mouse(ScreenContext ctx, BrowseState& st, const SDL_Event& ev
     const int visible = std::min(st.count(), kBrowseRows);
     const float content_w = browse_columns(ctx, st.list()).content;
     const ListDialogGeometry g = list_dialog_layout_for(
-        ctx.front_font, kBrowseTitle, centered_list_x(ctx.front_font, kBrowseTitle, content_w),
-        kListY, content_w, visible, st.count(), st.nav.top_row,
-        static_cast<int>(browse_hints(ctx).lines.size()));
-    const ListDialogHit hit = list_dialog_hit_for(ctx.front_font, g, visible, mx, my);
+        ctx.front_font,
+        ListDialogSpec{kBrowseTitle, centered_list_x(ctx.front_font, kBrowseTitle, content_w),
+                       kListY, content_w, visible, st.count(), st.nav.top_row,
+                       static_cast<int>(browse_hints(ctx).lines.size())});
+    const ListDialogHit hit = list_dialog_hit_for(ctx.front_font, g, visible, SDL_FPoint{mx, my});
     if (ev.type == SDL_EVENT_MOUSE_MOTION) {
         if (ev.motion.state == 0) list_dialog_mouse_move(st.nav, hit, st.count());
         return PickOutcome::Consumed;

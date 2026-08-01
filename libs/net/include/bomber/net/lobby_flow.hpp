@@ -217,9 +217,12 @@ private:
 
     // --- the arms of handle_server_message() ---------------------------------
     //
-    // That function is a FLAT dispatch over LobbyMsgType and stays one
-    // (coding-standards §8). Named for what they decide, not for the message that
-    // triggers them.
+    // That function is a FLAT dispatch over LobbyMsgType and stays one: a
+    // strategy hierarchy over a handful of fixed wire messages is a pattern
+    // solving no problem we have (coding-standards §8's opening rule — NOT its
+    // faithful-port exception, which protects the 1997 binary's switches;
+    // LobbyMsgType is port-invented, ADR-0011). Named for what they decide, not
+    // for the message that triggers them.
     void adopt_roster(const std::vector<RosterEntry>& roster);
     void fail_join_rejected(const std::string& reason);
     void adopt_match_start(const LobbyServerMessage& msg);

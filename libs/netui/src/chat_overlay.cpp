@@ -117,9 +117,9 @@ std::vector<ChatRow> layout_rows(const FontTextures& font, const std::vector<net
 // grey the list dialogs already use for their own edges.
 void draw_slab(SDL_Renderer* ren, const SDL_FRect& r, Uint8 alpha) {
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(ren, kDialogFillR, kDialogFillG, kDialogFillB, alpha);
+    SDL_SetRenderDrawColor(ren, kDialogFill.r, kDialogFill.g, kDialogFill.b, alpha);
     SDL_RenderFillRect(ren, &r);
-    SDL_SetRenderDrawColor(ren, kDialogDimR, kDialogDimG, kDialogDimB, alpha);
+    SDL_SetRenderDrawColor(ren, kDialogDim.r, kDialogDim.g, kDialogDim.b, alpha);
     SDL_RenderRect(ren, &r);
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
 }
@@ -148,28 +148,23 @@ void draw_tab(ScreenContext ctx, unsigned unread, float line_h) {
     const float h = line_h + 2.0f * kPad;
     const SDL_FRect box{kScreenW - kMargin - w, kScreenH - kMargin - h, w, h};
     draw_slab(ctx.sdl, box, kTabAlpha);
-    const Uint8 r = unread != 0 ? kDialogInkR : kDialogDimR;
-    const Uint8 g = unread != 0 ? kDialogInkG : kDialogDimG;
-    const Uint8 b = unread != 0 ? kDialogInkB : kDialogDimB;
-    draw_dialog_text(ctx.sdl, font, label, box.x + kPad, box.y + kPad, r, g, b);
+    draw_dialog_text(DialogPen{ctx.sdl, font}, label, SDL_FPoint{box.x + kPad, box.y + kPad},
+                     DialogInk{unread != 0 ? kDialogInk : kDialogDim});
 }
 
 // One laid-out row. Your OWN name goes in the chrome grey, everyone else's in
 // the bright ink: you already know who you are, and the eye should go to them.
 // The message body is always the bright ink — legibility first.
 void draw_row(ScreenContext ctx, const ChatRow& row, SDL_FPoint at) {
-    const FontTextures& font = ctx.front_font;
+    const DialogPen pen{ctx.sdl, ctx.front_font};
     if (row.split == 0) {
-        draw_dialog_text(ctx.sdl, font, row.text, at.x, at.y, kDialogInkR, kDialogInkG,
-                         kDialogInkB);
+        draw_dialog_text(pen, row.text, at, DialogInk{kDialogInk});
         return;
     }
-    const Uint8 nr = row.mine ? kDialogDimR : kDialogInkR;
-    const Uint8 ng = row.mine ? kDialogDimG : kDialogInkG;
-    const Uint8 nb = row.mine ? kDialogDimB : kDialogInkB;
-    draw_dialog_text(ctx.sdl, font, row.text.substr(0, row.split), at.x, at.y, nr, ng, nb);
-    draw_dialog_text(ctx.sdl, font, row.text.substr(row.split), at.x + row.split_w, at.y,
-                     kDialogInkR, kDialogInkG, kDialogInkB);
+    draw_dialog_text(pen, row.text.substr(0, row.split), at,
+                     DialogInk{row.mine ? kDialogDim : kDialogInk});
+    draw_dialog_text(pen, row.text.substr(row.split), SDL_FPoint{at.x + row.split_w, at.y},
+                     DialogInk{kDialogInk});
 }
 
 // The message rows. Returns the y the input line goes on.
@@ -188,25 +183,25 @@ float draw_rows(ScreenContext ctx, const std::vector<ChatRow>& rows, const SDL_F
 // losing sight of its start. `line` is {x, y, available width, height}.
 void draw_entry(ScreenContext ctx, const std::string& entry, const SDL_FRect& line) {
     const FontTextures& font = ctx.front_font;
+    const DialogPen pen{ctx.sdl, font};
     const float prompt_w = static_cast<float>(font.measure(kEntryPrompt));
-    draw_dialog_text(ctx.sdl, font, kEntryPrompt, line.x, line.y, kDialogInkR, kDialogInkG,
-                     kDialogInkB);
+    draw_dialog_text(pen, kEntryPrompt, SDL_FPoint{line.x, line.y}, DialogInk{kDialogInk});
     if (entry.empty()) {
-        draw_dialog_text(ctx.sdl, font, kEntryHint, line.x + prompt_w, line.y, kDialogDimR,
-                         kDialogDimG, kDialogDimB);
+        draw_dialog_text(pen, kEntryHint, SDL_FPoint{line.x + prompt_w, line.y},
+                         DialogInk{kDialogDim});
         return;
     }
     std::string shown = entry;
     while (!shown.empty() && static_cast<float>(font.measure(shown + "_")) > line.w - prompt_w)
         shown.erase(shown.begin());
-    draw_dialog_text(ctx.sdl, font, shown, line.x + prompt_w, line.y, kDialogInkR, kDialogInkG,
-                     kDialogInkB);
+    draw_dialog_text(pen, shown, SDL_FPoint{line.x + prompt_w, line.y}, DialogInk{kDialogInk});
     // A plain blinking underscore caret, on the presentation clock — the sim and
     // its RNG are nowhere near this (ADR-0004).
     if ((SDL_GetTicks() / 500ull) % 2ull == 0ull)
-        draw_dialog_text(ctx.sdl, font, "_",
-                         line.x + prompt_w + static_cast<float>(font.measure(shown)), line.y,
-                         kDialogInkR, kDialogInkG, kDialogInkB);
+        draw_dialog_text(
+            pen, "_",
+            SDL_FPoint{line.x + prompt_w + static_cast<float>(font.measure(shown)), line.y},
+            DialogInk{kDialogInk});
 }
 
 }  // namespace

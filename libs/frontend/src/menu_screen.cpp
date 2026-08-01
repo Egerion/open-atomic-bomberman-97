@@ -371,7 +371,8 @@ void MenuLoop::draw_backdrop() {
     }
     // "V1.0" every menu frame (pseudo.c 30779) in the general grey — a literal
     // hardcoded in the binary (aV10), not a MESSAGES.TXT entry.
-    ctx_.front_font.draw_outlined(ctx_.sdl, "V1.0", 0, 0, 168, 168, 164, 0, 0, 0, 50.0f);
+    ctx_.front_font.draw_outlined(ctx_.sdl, "V1.0", SDL_FPoint{0, 0},
+                                  OutlinedTextStyle{{168, 168, 164}, {}, 50.0f});
 }
 
 // The "bomb trigger green" cursor at the CONFIRMED VALUELST 700 anchor. Its phase
@@ -407,8 +408,9 @@ void MenuLoop::draw_quit_confirm() {
     const std::string prompt = ctx_.assets.getstring(10, "Are you sure you want to exit?");
     const std::string yes_label = ctx_.assets.getstring(26, " Yes ");
     const std::string no_label = ctx_.assets.getstring(25, " No ");
-    draw_confirm_dialog(ctx_.sdl, ctx_.front_font, &ctx_.assets.frontend_pcx("WINZ"), prompt, "",
-                        yes_label, no_label, 164, 0, 0, 252, 248, 88);
+    draw_confirm_dialog(DialogPen{ctx_.sdl, ctx_.front_font}, &ctx_.assets.frontend_pcx("WINZ"),
+                        ConfirmLabels{prompt, "", yes_label, no_label},
+                        DialogInk{{164, 0, 0}, {252, 248, 88}});
 }
 
 }  // namespace

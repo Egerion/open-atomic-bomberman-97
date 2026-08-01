@@ -50,12 +50,18 @@ void apply_gameplay_options(const SettingsSlots& s, const assets::Options& in, b
         capture ? std::optional<int>{kCaptureConveyorSpeed} : in.conveyor_speed;
     // Absent team_play key means OFF, the confirmed default (docs/re/
     // setup-screens.md: "Team mode ... OFF by default").
-    s.team_play = !s.opts.demo && in.team_play.value_or(false);
+    //
+    // team_play and playtime are pinned on `capture` — the SAME predicate as
+    // every other pinned key. They used to sit on opts.demo, which held only
+    // because all four capture entry points happen to set demo too; capture is
+    // a superset of demo (is_capture_run), so this is strictly stronger, and it
+    // closes failure mode #5 of the class tests/visual/README.md documents.
+    s.team_play = !capture && in.team_play.value_or(false);
     s.options.team_play = s.team_play;
     s.options.random_start =
         capture ? kCaptureRandomStart : in.random_start.value_or(s.values.at_or(40, 1) != 0);
     s.options.conveyor_speed_index = s.conveyor_speed_index.value_or(1);
-    s.options.playtime_seconds = s.opts.demo ? 150 : in.playtime.value_or(150);
+    s.options.playtime_seconds = capture ? 150 : in.playtime.value_or(150);
     s.options.stomped_bombs_detonate =
         in.stomped_bombs_detonate.value_or(s.values.at_or(46, 1) != 0);
     s.options.diseases_destroyable = in.diseases_destroyable.value_or(s.values.at_or(120, 1) != 0);
@@ -122,11 +128,13 @@ void apply_key_bindings(const SettingsSlots& s, const assets::Options& in) {
 // Row 8: schemefilename= DRIVES the loaded scheme — the original re-parses
 // byte_4648C4 at every Play-flow entry (sub_410F81 -> sub_4046CC -> sub_403EEE), so
 // the key was never display-only. An explicit --scheme wins, and a capture stays
-// pinned to BASIC.SCH for the same reproducibility reason the playtime pin cites.
+// pinned to BASIC.SCH for the same reproducibility reason the playtime pin cites
+// — on `capture`, the predicate that exists for exactly this, not on opts.demo,
+// which merely coincided with it (see apply_gameplay_options).
 void apply_scheme_choice(const SettingsSlots& s, const assets::Options& in,
-                         const fs::path& scheme_path) {
+                         const fs::path& scheme_path, bool capture) {
     s.options.scheme_filename = in.schemefilename.value_or(scheme_path.filename().string());
-    if (s.opts.demo || !s.opts.scheme.empty()) return;
+    if (capture || !s.opts.scheme.empty()) return;
     if (!in.schemefilename || in.schemefilename->empty()) return;
     if (reload_scheme(s.scheme, s.opts.game_dir, *in.schemefilename)) return;
     log_warn("schemefilename '%s' not found; keeping %s", in.schemefilename->c_str(),
@@ -185,8 +193,10 @@ void fill_port_keys(assets::Options& out, const SettingsSlots& s) {
 
 // The original rewrites nodename.ini unconditionally; skipping a write whose bytes
 // would be identical is the same outcome without touching the install every launch.
+// A CAPTURE never writes at all — same class of pin as the reads above: hermetic
+// runs must not touch the install (tests/visual/README.md).
 void flush_node_name(const SettingsSlots& s) {
-    if (s.opts.demo || s.node_name_path.empty()) return;
+    if (is_capture_run(s.opts) || s.node_name_path.empty()) return;
     if (s.options.node_name.empty() || s.options.node_name == s.node_name_loaded) return;
     try {
         assets::save_node_name(s.node_name_path, s.options.node_name);
@@ -213,7 +223,7 @@ bool load_settings(const SettingsSlots& s, const fs::path& scheme_path) {
         const bool capture = is_capture_run(s.opts);
         apply_gameplay_options(s, loaded, capture);
         load_node_identity(s);
-        apply_scheme_choice(s, loaded, scheme_path);
+        apply_scheme_choice(s, loaded, scheme_path, capture);
         apply_key_bindings(s, loaded);
         apply_port_options(s, loaded, capture);
     } catch (const std::exception& e) {
@@ -226,8 +236,9 @@ bool load_settings(const SettingsSlots& s, const fs::path& scheme_path) {
 void seed_default_node_name(const SettingsSlots& s) {
     if (!s.options.node_name.empty()) return;
     // A capture must not draw from a pinned LCG nor rewrite the install; it never
-    // reaches the Options screen or the lobby either.
-    if (s.opts.demo) return;
+    // reaches the Options screen or the lobby either. Gated on the capture
+    // predicate its own comment always described, not the demo coincidence.
+    if (is_capture_run(s.opts)) return;
     // getvalue(47) = 49 (MESSAGES ids 500..548). Presentation-only, so it runs on the
     // shared front-end LCG and never State::rng (ADR-0004) — one draw, once per
     // install, since flush_settings then makes the name permanent as sub_40C140 does.

@@ -45,16 +45,6 @@ ScoreboardLayout read_layout(const assets::res::ValueList& v) {
 // install's FIELD0/5/10/MAINMENU palettes (dist2=0 on all four).
 constexpr Uint8 kHeaderR = 255, kHeaderG = 255, kHeaderB = 255;
 
-// hud_format's fmt_u fills only the FIRST specifier; this splices the next one in
-// by hand so the RE'd format string still reads naturally with real fallback text.
-void splice_next(std::string& f, int v) {
-    const std::size_t p = f.find('%');
-    if (p == std::string::npos) return;
-    std::size_t q = p + 1;
-    while (q < f.size() && f[q] != 'u' && f[q] != 'd' && f[q] != 'i') ++q;
-    if (q < f.size()) f = f.substr(0, p) + std::to_string(v) + f.substr(q + 1);
-}
-
 // The between-round RESULTS screen's frame loop, as its own object. nullopt from
 // a phase method means "keep looping"; a value means run() returns it now.
 class ScoreboardLoop {
@@ -196,8 +186,8 @@ void ScoreboardLoop::draw_header() {
     const std::string header =
         fmt_s(ctx_.assets.getstring(30, "Game Winner was %s !"),
               round_w >= 0 ? "P" + std::to_string(round_w + 1) : std::string("-"));
-    ctx_.front_font.draw_outlined(ctx_.sdl, header, layout_.hx, layout_.hy, kHeaderR, kHeaderG,
-                                  kHeaderB, 0, 0, 0);
+    ctx_.front_font.draw_outlined(ctx_.sdl, header, SDL_FPoint{layout_.hx, layout_.hy},
+                                  OutlinedTextStyle{{kHeaderR, kHeaderG, kHeaderB}});
 }
 
 // Team rows use the original's fixed two-ink helper sub_4141F8 (`team ?
@@ -217,9 +207,9 @@ void ScoreboardLoop::draw_team_rows() {
         line += " " + std::to_string(state_.win_count[i]);
         const bool team1 = t != 0;  // sub_4141F8's `a1 ?` branch
         ctx_.front_font.draw_outlined(
-            ctx_.sdl, line, layout_.rx, layout_.ry0 + layout_.rystep * static_cast<float>(row),
-            static_cast<Uint8>(team1 ? 252 : 255), static_cast<Uint8>(team1 ? 80 : 255),
-            static_cast<Uint8>(team1 ? 80 : 255), 0, 0, 0);
+            ctx_.sdl, line,
+            SDL_FPoint{layout_.rx, layout_.ry0 + layout_.rystep * static_cast<float>(row)},
+            OutlinedTextStyle{team1 ? Rgb{252, 80, 80} : Rgb{255, 255, 255}});
         ++row;
     }
 }
@@ -234,17 +224,20 @@ void ScoreboardLoop::draw_player_rows() {
         if (!s.players[i].present) continue;
         std::string line =
             fmt_u(ctx_.assets.getstring(31, "Player %u score: %u (kills: %d)"), i + 1);
-        splice_next(line, state_.win_count[i]);
-        splice_next(line, state_.kill_count[i]);
+        // fmt_u fills only the FIRST specifier; hud_format's splice_int fills
+        // the next one per call, so the RE'd row reads naturally either way.
+        splice_int(line, state_.win_count[i]);
+        splice_int(line, state_.kill_count[i]);
         std::uint8_t c[3];
         ctx_.assets.slot_color(i, c);
         // sub_416867(i): in solo mode player 1 (the BLACK bomberman) gets a WHITE
         // outline so its dark ink stays legible; everyone else gets black, as do
         // the team rows, the header and the outcome line.
         const std::uint8_t ol = i == 1 ? 255 : 0;
-        ctx_.front_font.draw_outlined(ctx_.sdl, line, layout_.rx,
-                                      layout_.ry0 + layout_.rystep * static_cast<float>(row), c[0],
-                                      c[1], c[2], ol, ol, ol);
+        ctx_.front_font.draw_outlined(
+            ctx_.sdl, line,
+            SDL_FPoint{layout_.rx, layout_.ry0 + layout_.rystep * static_cast<float>(row)},
+            OutlinedTextStyle{{c[0], c[1], c[2]}, {ol, ol, ol}});
         ++row;
     }
 }
@@ -280,10 +273,9 @@ std::string ScoreboardLoop::clinch_line() const {
 void ScoreboardLoop::draw_outcome() {
     const bool clinched = clinched_player_ >= 0;
     const std::string outcome = clinched ? clinch_line() : pre_clinch_line();
-    const Uint8 r = clinched ? 96 : 168;
-    const Uint8 g = clinched ? 252 : 168;
-    const Uint8 b = clinched ? 252 : 164;
-    ctx_.front_font.draw_outlined(ctx_.sdl, outcome, layout_.ox, layout_.oy, r, g, b, 0, 0, 0);
+    const Rgb ink = clinched ? Rgb{96, 252, 252} : Rgb{168, 168, 164};
+    ctx_.front_font.draw_outlined(ctx_.sdl, outcome, SDL_FPoint{layout_.ox, layout_.oy},
+                                  OutlinedTextStyle{ink});
 }
 
 }  // namespace

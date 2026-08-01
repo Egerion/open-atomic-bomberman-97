@@ -12,6 +12,7 @@
 #include "bomber/frontend/campaign_screens.hpp"     // HelpBrowserModal (the in-round F1)
 #include "bomber/game_util/campaign_round_end.hpp"  // CampaignVerdict / campaign_verdict
 #include "bomber/game_util/goldman_wheel.hpp"       // kClogsPrizeId / wheel_prize_to_powerup
+#include "bomber/game_util/hud_format.hpp"          // splice_int (the score-strip splice)
 #include "bomber/game_util/match_outcome.hpp"       // is_team_mode
 #include "bomber/game_util/net_tally.hpp"           // tally_netplay_kills (the rollback-safe tally)
 #include "bomber/game_util/results.hpp"             // tally_kills
@@ -22,22 +23,11 @@
 #include "bomber/netui/net_overlay.hpp"     // draw_net_overlay (the F3 panel)
 #include "bomber/render/renderer.hpp"       // kScreenW
 #include "bomber/render/sprites.hpp"        // Sprite (player-row "xxx" marker)
-#include "bomber/ui/dialog_chrome.hpp"      // kDialogInkR/G/B (fps overlay)
+#include "bomber/ui/dialog_chrome.hpp"      // kDialogInk (fps overlay)
 
 namespace bomber::game {
 
 namespace {
-
-// Substitute the NEXT %u/%d/%i in `f`, leaving anything else literal — a modified
-// MESSAGES.TXT must not be able to crash a draw. (hud_format's fmt_u fills only
-// the first; results_screens.cpp carries the same helper.)
-void splice_int(std::string& f, int v) {
-    const std::size_t p = f.find('%');
-    if (p == std::string::npos) return;
-    std::size_t q = p + 1;
-    while (q < f.size() && f[q] != 'u' && f[q] != 'd' && f[q] != 'i') ++q;
-    if (q < f.size()) f = f.substr(0, p) + std::to_string(v) + f.substr(q + 1);
-}
 
 // ANY key, mouse button, or gamepad button — the attract abort's input set.
 bool is_any_input(const SDL_Event& ev) {
@@ -144,7 +134,6 @@ void MatchRunner::start_match(std::uint32_t seed) {
     // The 1001 sentinel is presentation-only (the sim gets a long finite clock —
     // options_model.hpp), so tell the renderer directly rather than trying to
     // infer "untimed" back out of ticks_left.
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — emplaced in init()
     state_.renderer.reset_match(state_.options.playtime_seconds == kPlayTimeUnlimited);
     ctx_.sounds.reset();
 }
@@ -217,11 +206,11 @@ void MatchRunner::draw_net_esc_prompt() {
         const float x =
             (static_cast<float>(kScreenW) - static_cast<float>(ctx_.front_font.measure(line)) * kS) /
             2.0f;
-        ctx_.front_font.draw(ctx_.sdl, line, x - 1, y, 0, 0, 0, kS);
-        ctx_.front_font.draw(ctx_.sdl, line, x + 1, y, 0, 0, 0, kS);
-        ctx_.front_font.draw(ctx_.sdl, line, x, y - 1, 0, 0, 0, kS);
-        ctx_.front_font.draw(ctx_.sdl, line, x, y + 1, 0, 0, 0, kS);
-        ctx_.front_font.draw(ctx_.sdl, line, x, y, 255, 220, 90, kS);
+        ctx_.front_font.draw(ctx_.sdl, line, SDL_FPoint{x - 1, y}, TextStyle{{}, kS});
+        ctx_.front_font.draw(ctx_.sdl, line, SDL_FPoint{x + 1, y}, TextStyle{{}, kS});
+        ctx_.front_font.draw(ctx_.sdl, line, SDL_FPoint{x, y - 1}, TextStyle{{}, kS});
+        ctx_.front_font.draw(ctx_.sdl, line, SDL_FPoint{x, y + 1}, TextStyle{{}, kS});
+        ctx_.front_font.draw(ctx_.sdl, line, SDL_FPoint{x, y}, TextStyle{{255, 220, 90}, kS});
         y += lh;
     }
 }
@@ -291,7 +280,8 @@ void MatchRunner::draw_player_score(int i, SDL_FPoint at) {
     const bool solo =
         !::bomber::game::is_team_mode(state_.team_play, state_.sim.state(), state_.setup_team);
     const std::uint8_t ol = (solo && i == 1) ? 255 : 0;
-    ctx_.front_font.draw_outlined(ctx_.sdl, line, at.x, at.y, c[0], c[1], c[2], ol, ol, ol);
+    ctx_.front_font.draw_outlined(ctx_.sdl, line, at,
+                                  OutlinedTextStyle{{c[0], c[1], c[2]}, {ol, ol, ol}});
 }
 
 void MatchRunner::draw_eliminated_marker(SDL_FPoint at) {
@@ -312,12 +302,12 @@ void MatchRunner::draw_fps_overlay(int fps) {
     const float lh = static_cast<float>(ctx_.front_font.line_height()) * kS;
     auto line = [&](const std::string& s, float y, bool hot) {
         const float x = right - static_cast<float>(ctx_.front_font.measure(s)) * kS;
-        ctx_.front_font.draw(ctx_.sdl, s, x - 1, y, 0, 0, 0, kS);
-        ctx_.front_font.draw(ctx_.sdl, s, x + 1, y, 0, 0, 0, kS);
-        ctx_.front_font.draw(ctx_.sdl, s, x, y - 1, 0, 0, 0, kS);
-        ctx_.front_font.draw(ctx_.sdl, s, x, y + 1, 0, 0, 0, kS);
-        ctx_.front_font.draw(ctx_.sdl, s, x, y, hot ? 120 : kDialogInkR, hot ? 240 : kDialogInkG,
-                             hot ? 120 : kDialogInkB, kS);
+        ctx_.front_font.draw(ctx_.sdl, s, SDL_FPoint{x - 1, y}, TextStyle{{}, kS});
+        ctx_.front_font.draw(ctx_.sdl, s, SDL_FPoint{x + 1, y}, TextStyle{{}, kS});
+        ctx_.front_font.draw(ctx_.sdl, s, SDL_FPoint{x, y - 1}, TextStyle{{}, kS});
+        ctx_.front_font.draw(ctx_.sdl, s, SDL_FPoint{x, y + 1}, TextStyle{{}, kS});
+        ctx_.front_font.draw(ctx_.sdl, s, SDL_FPoint{x, y},
+                             TextStyle{hot ? Rgb{120, 240, 120} : kDialogInk, kS});
     };
     char buf[24];
     std::snprintf(buf, sizeof(buf), "%d FPS", fps);
@@ -468,9 +458,7 @@ std::optional<AppInput> MatchRunner::advance_native(RunLoop& loop) {
     // Pose countdowns age once per SIM TICK, not per displayed frame: pass
     // whether this frame actually crossed a tick, else kick/punch/pickup poses
     // play ~9x too fast in native cadence.
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     state_.renderer.on_events(state_.sim.state(), state_.sim.state().tick != tick_before);
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     state_.renderer.advance_tick(state_.sim.state());
     // Local-only path: F9 is force-disabled online, so there is no replaying
     // event stream to guard against — the live events are each tick's one pass.
@@ -532,11 +520,10 @@ std::optional<AppInput> MatchRunner::tick_once(RunLoop& loop) {
     clear_latch(loop);
     loop.acc -= loop.tick_ns;
     ctx_.sounds.on_tick(state_.sim.state());
-    state_.renderer.on_events(state_.sim.state());  // NOLINT(bugprone-unchecked-optional-access)
+    state_.renderer.on_events(state_.sim.state());
     // Roll the renderer's inter-tick snapshots forward INSIDE the catch-up loop,
     // so a frame that advances the sim two ticks still leaves interp `prev` at the
     // penultimate tick (a clean 1-tick lerp) instead of two ticks back.
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     state_.renderer.advance_tick(state_.sim.state());
     tally_round_kills(loop);
     // ONCE AN ABANDON IS AGREED (Esc online), the agreed tick is the ONLY exit:
@@ -623,16 +610,12 @@ bool MatchRunner::present_frame(RunLoop& loop) {
     // Gold Bomberman twinkle (docs/re/goldman-roulette.md §6), pushed every frame
     // rather than on change: a cheap int pair, and it keeps the renderer decoupled
     // from the shell's own state.
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — emplaced in init()
     state_.renderer.set_gold_player(
         state_.gold_player,
         ::bomber::game::is_team_mode(state_.team_play, state_.sim.state(), state_.setup_team));
     const MatchCadence draw = cadence(loop.acc, loop.tick_ns);
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — emplaced in init()
     state_.renderer.set_native_cadence(draw.native);
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — emplaced in init()
     state_.renderer.set_entity_interp(draw.entity_interp);
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access) — emplaced in init()
     state_.renderer.draw_frame(state_.sim.state(), draw.interp_alpha);
     // The player-row HUD strip needs win_count/kill_count/front_font, none of
     // which Renderer owns, so it is an overlay on top of Renderer's frame — the

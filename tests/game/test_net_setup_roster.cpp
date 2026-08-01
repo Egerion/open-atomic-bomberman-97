@@ -96,8 +96,8 @@ TEST_CASE("preview round-trip re-points the seats for the guest") {
     // whole point (sub_40D372's "someone else's player").
     Roster guest;
     bool gteam_play = true;  // must be cleared: no team byte is set
-    game::apply_preview_roster(round_tripped(p), kGuestSeat, guest.type, guest.sub, guest.team,
-                               gteam_play);
+    game::apply_preview_roster(round_tripped(p), kGuestSeat,
+                               game::LocalRoster{guest.type, guest.sub, guest.team, gteam_play});
 
     CHECK(slot_type(guest.type, 0) == static_cast<int>(SlotInputType::Other));
     CHECK(slot_type(guest.type, 1) == static_cast<int>(SlotInputType::Keyboard));
@@ -122,12 +122,14 @@ TEST_CASE("team play off zeroes every team byte; on survives the trip") {
 
     Roster guest;
     bool gteam_play = false;
-    game::apply_preview_roster(on, kGuestSeat, guest.type, guest.sub, guest.team, gteam_play);
+    game::apply_preview_roster(on, kGuestSeat,
+                               game::LocalRoster{guest.type, guest.sub, guest.team, gteam_play});
     CHECK(gteam_play == true);
     CHECK(guest.team[1] == 1);
 
     gteam_play = true;
-    game::apply_preview_roster(off, kGuestSeat, guest.type, guest.sub, guest.team, gteam_play);
+    game::apply_preview_roster(off, kGuestSeat,
+                               game::LocalRoster{guest.type, guest.sub, guest.team, gteam_play});
     CHECK(gteam_play == false);
 }
 

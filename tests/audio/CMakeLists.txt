@@ -35,6 +35,11 @@ set_tests_properties(sound_bank_install PROPERTIES
 add_executable(bomber_sound_director_tests test_sound_director.cpp)
 target_link_libraries(bomber_sound_director_tests
   PRIVATE bomber::audio_core doctest::doctest bomber::warnings)
+# death_anim.hpp moved to the shared SDL-free floor; reached by include dir for
+# the same reason the tests/game suites reach game_util headers that way (its
+# target PUBLIC-links bomber::net, which this suite has no business linking).
+target_include_directories(bomber_sound_director_tests PRIVATE
+  ${CMAKE_SOURCE_DIR}/libs/game_util/include)
 add_test(NAME sound_director COMMAND bomber_sound_director_tests)
 
 # The round-init music decision (round_music.hpp). Header-only and SDL-free, so

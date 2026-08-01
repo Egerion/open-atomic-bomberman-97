@@ -3,16 +3,15 @@
 #include <SDL3/SDL.h>
 
 #include <cstdint>
-#include <filesystem>
 #include <string>
 #include <vector>
 
 #include "bomber/assets/bmfont.hpp"
 #include "bomber/assets/bmtext.hpp"
 #include "bomber/audio/audio_engine.hpp"
-#include "bomber/game_util/list_dialog_geometry.hpp"  // kListDialogRows
 #include "bomber/render/asset_store.hpp"
 #include "bomber/render/sdl.hpp"
+#include "bomber/ui/list_picker.hpp"
 
 // The front-end `.BM` text-screen viewer — sub_41302D (BM95.EXE @ 0x41302D): a
 // parsed BmDocument in the active bitmap font (FONT6.FON, pinned by graphics
@@ -21,6 +20,30 @@
 // in the original; Enter or Escape dismisses it. Presentation only (ADR-0004).
 
 namespace bomber::game {
+
+// One colour triple. Every draw call used to spell a colour as three adjacent
+// Uint8s — and an outlined draw as SIX — which is a transposition hazard nothing
+// warns about here (.clang-tidy disables bugprone-easily-swappable-parameters
+// repo-wide). The struct is the guard rail.
+struct Rgb {
+    Uint8 r = 0, g = 0, b = 0;
+};
+
+// FontTextures::draw's per-call style: the ink, and the dst-rect-only scale.
+struct TextStyle {
+    Rgb ink;
+    float scale = 1.0f;
+};
+
+// FontTextures::draw_outlined's per-call style: ink over its outline colour
+// (sub_41696C's a6/a7 — black at every dialog site but the quit confirm), plus
+// the routine's max_w clip (its a4; <= 0 disables the clip, and only the [WAIT]
+// prompt passes one).
+struct OutlinedTextStyle {
+    Rgb ink;
+    Rgb outline{};
+    float max_w = 0.0f;
+};
 
 // One glyph uploaded as an alpha texture (white ink, transparent ground); the
 // on-screen colour is applied per-draw with SDL_SetTextureColorMod.
@@ -47,19 +70,25 @@ public:
 
     // Returns the x just past the run, so a caller can continue the same line
     // (e.g. after an inline image).
-    float draw(SDL_Renderer* ren, const std::string& s, float x, float y, Uint8 r, Uint8 g,
-               Uint8 b, float scale = 1.0f) const;
+    float draw(SDL_Renderer* ren, const std::string& s, SDL_FPoint at,
+               const TextStyle& style) const;
+    // COMPAT overload of the above, kept ONLY while goldman_screen.cpp (frozen
+    // under another agent's edit) still spells the colour as three Uint8s.
+    // Delete it and convert that one call site once the freeze lifts.
+    float draw(SDL_Renderer* ren, const std::string& s, float x, float y, Uint8 r, Uint8 g, Uint8 b,
+               float scale = 1.0f) const {
+        return draw(ren, s, SDL_FPoint{x, y}, TextStyle{{r, g, b}, scale});
+    }
 
     // sub_41696C (pseudo.c 18516-18572) renders every front-end string FIVE
     // times — four outline passes and one ink pass — into a (w+2)-wide scratch,
-    // and CLIPS the run to `max_w` pixels (its 4th argument; VALUELST rows
-    // 705/710/715/720/790 column 3). max_w <= 0 disables the clip.
+    // and CLIPS the run to `style.max_w` pixels (its 4th argument; VALUELST rows
+    // 705/710/715/720/790 column 3).
     // The four outline passes are the ink's DIAGONAL neighbours, not its
     // cardinal ones (facts.md). THE port of that routine: draw_dialog_text
     // delegates here, so there is one place for the offsets to be wrong in.
-    float draw_outlined(SDL_Renderer* ren, const std::string& s, float x, float y, Uint8 r,
-                        Uint8 g, Uint8 b, Uint8 outline_r, Uint8 outline_g, Uint8 outline_b,
-                        float max_w = 0) const;
+    float draw_outlined(SDL_Renderer* ren, const std::string& s, SDL_FPoint at,
+                        const OutlinedTextStyle& style) const;
 
 private:
     struct GlyphTex {
@@ -119,7 +148,7 @@ private:
 class HelpBrowser {
 public:
     HelpBrowser(const AssetStore& assets, const FontTextures& font)
-        : assets_(&assets), font_(&font), bm_(assets, font) {}
+        : assets_(&assets), font_(&font), bm_(assets, font), list_(font) {}
 
     // `manual_enabled` is the caller's getvalue(15) reading ("is the online
     // manual enabled?", default 1). sub_414235 checks it BEFORE globbing at all,
@@ -151,36 +180,25 @@ public:
     bool done() const { return done_; }
     // sub_41404B found zero `*.BM`, or the install root is missing — §4's
     // getstring(4)/getstring(95) error case rather than an empty list.
-    bool empty() const { return entries_.empty(); }
+    bool empty() const { return list_.empty(); }
     // getvalue(15)==0 at enter() time — §4's getstring(5)/getstring(95) case.
     bool disabled() const { return disabled_; }
 
-    // CLARIFIED 2026-07-26 (list_dialog_geometry.hpp): sub_42DBCC keeps TWO
-    // counters @0x42DC44 — 10 rows drawn, and a separate 13 as the window's
-    // font-height multiplier. 10 is the row count outright.
-    static constexpr int kVisibleRows = kListDialogRows;
+    static constexpr int kVisibleRows = ListPicker::kVisibleRows;
 
 private:
-    // getstring(600), and the widest item — the two inputs the layout needs.
-    // Split out so the mouse handlers hit-test the SAME geometry draw() paints
-    // without re-measuring every item on every motion event.
-    std::string header() const;
-    ListDialogGeometry layout() const;
+    std::string header() const;  // getstring(600)
+    std::string row_text(int i) const;
     void open_selected();
     // True while the list itself is the thing on screen taking input.
     bool list_active() const;
     void draw_error_dialog(SDL_Renderer* ren) const;
-    void draw_topic_list(SDL_Renderer* ren) const;
 
     const AssetStore* assets_ = nullptr;
     const FontTextures* font_ = nullptr;
     BmScreen bm_;
-    std::vector<std::filesystem::path> entries_;
-    // sub_42DBCC's own two registers — see ListDialogNav. `top_row + highlight`
-    // is the selected entry.
-    ListDialogNav nav_;
-    float item_w_ = 0.0f;  // sub_42FEF0's max over the item text, cached at enter()
-    ListDialogWidget pressed_ = ListDialogWidget::None;
+    // The shared (100,100) glob/list widget — sub_41404B + sub_42DBCC.
+    ListPicker list_;
     bool viewing_ = false;
     bool done_ = false;
     bool disabled_ = false;

@@ -3,7 +3,7 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
-#include <cstdarg>
+#include <array>
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "bomber/net/net_stats.hpp"
+#include "bomber/platform/frame_clock.hpp"
 #include "bomber/render/renderer.hpp"  // kScreenW / kScreenH
 #include "bomber/ui/dialog_chrome.hpp"
 
@@ -42,21 +43,18 @@ constexpr int kSparkFloorMs = 150;
 constexpr float kSparkH = 12.0f;
 constexpr float kSparkGap = 3.0f;
 
-struct Ink {
-    Uint8 r = kDialogInkR, g = kDialogInkG, b = kDialogInkB;
-};
+constexpr Rgb kOk = kDialogInk;
+constexpr Rgb kWarn{kWarnR, kWarnG, kWarnB};
+constexpr Rgb kBad{kBadR, kBadG, kBadB};
 
-constexpr Ink kOk{};
-constexpr Ink kWarn{kWarnR, kWarnG, kWarnB};
-constexpr Ink kBad{kBadR, kBadG, kBadB};
-
-std::string fmt(const char* f, ...) {  // NOLINT(cert-dcl50-cpp) — local, fixed buffer
-    char buf[96];
-    va_list ap;
-    va_start(ap, f);
-    std::vsnprintf(buf, sizeof(buf), f, ap);
-    va_end(ap);
-    return std::string(buf);
+// A snprintf wrapper that keeps every argument TYPED to the call boundary (no
+// va_list erasure) over a fixed std::array — a diagnostics panel must never be
+// the thing that overruns.
+template <class... Args>
+std::string fmt(const char* f, Args... args) {
+    std::array<char, 96> buf{};
+    std::snprintf(buf.data(), buf.size(), f, args...);
+    return std::string(buf.data());
 }
 
 // -1 is "never measured", not "zero milliseconds", and the two must not look
@@ -90,12 +88,12 @@ struct PanelPen {
     // A 1-px black outline under the ink, the same manual four-pass the fps
     // overlay uses — the panel is translucent, so text over a bright field needs
     // it.
-    void row(const std::string& s, Ink ink) {
-        font->draw(ren, s, x - 1, y, 0, 0, 0, kScale);
-        font->draw(ren, s, x + 1, y, 0, 0, 0, kScale);
-        font->draw(ren, s, x, y - 1, 0, 0, 0, kScale);
-        font->draw(ren, s, x, y + 1, 0, 0, 0, kScale);
-        font->draw(ren, s, x, y, ink.r, ink.g, ink.b, kScale);
+    void row(const std::string& s, Rgb ink) {
+        font->draw(ren, s, SDL_FPoint{x - 1, y}, TextStyle{{}, kScale});
+        font->draw(ren, s, SDL_FPoint{x + 1, y}, TextStyle{{}, kScale});
+        font->draw(ren, s, SDL_FPoint{x, y - 1}, TextStyle{{}, kScale});
+        font->draw(ren, s, SDL_FPoint{x, y + 1}, TextStyle{{}, kScale});
+        font->draw(ren, s, SDL_FPoint{x, y}, TextStyle{ink, kScale});
         y += line_h;
     }
 };
@@ -104,9 +102,9 @@ struct PanelPen {
 // two port-only overlays look like siblings rather than two inventions.
 void draw_slab(SDL_Renderer* ren, const SDL_FRect& r) {
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(ren, kDialogFillR, kDialogFillG, kDialogFillB, kPanelAlpha);
+    SDL_SetRenderDrawColor(ren, kDialogFill.r, kDialogFill.g, kDialogFill.b, kPanelAlpha);
     SDL_RenderFillRect(ren, &r);
-    SDL_SetRenderDrawColor(ren, kDialogDimR, kDialogDimG, kDialogDimB, kPanelAlpha);
+    SDL_SetRenderDrawColor(ren, kDialogDim.r, kDialogDim.g, kDialogDim.b, kPanelAlpha);
     SDL_RenderRect(ren, &r);
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
 }
@@ -119,7 +117,7 @@ void draw_spark(const PanelPen& pen, const net::PeerStats& p, float w) {
     const int top = std::max(kSparkFloorMs, p.rtt_recent_max_ms);
     SDL_SetRenderDrawBlendMode(pen.ren, SDL_BLENDMODE_BLEND);
     // A dim baseline so the gaps are legible as gaps rather than as nothing.
-    SDL_SetRenderDrawColor(pen.ren, kDialogDimR, kDialogDimG, kDialogDimB, 90);
+    SDL_SetRenderDrawColor(pen.ren, kDialogDim.r, kDialogDim.g, kDialogDim.b, 90);
     SDL_FRect base{pen.x, pen.y + kSparkH, w, 1.0f};
     SDL_RenderFillRect(pen.ren, &base);
     if (p.rtt_history_len == 0) {
@@ -132,8 +130,8 @@ void draw_spark(const PanelPen& pen, const net::PeerStats& p, float w) {
         if (v == 0) continue;  // a gap: draw nothing, so the hole is visible
         const float h = std::min(1.0f, static_cast<float>(v) / static_cast<float>(top)) * kSparkH;
         const bool hot = v >= top && top > kSparkFloorMs;
-        SDL_SetRenderDrawColor(pen.ren, hot ? kBadR : kDialogInkR, hot ? kBadG : kDialogInkG,
-                               hot ? kBadB : kDialogInkB, 220);
+        const Rgb bar_ink = hot ? kBad : kDialogInk;
+        SDL_SetRenderDrawColor(pen.ren, bar_ink.r, bar_ink.g, bar_ink.b, 220);
         SDL_FRect bar{pen.x + static_cast<float>(i) * bw, pen.y + kSparkH - h,
                       std::max(1.0f, bw - 1.0f), std::max(1.0f, h)};
         SDL_RenderFillRect(pen.ren, &bar);
@@ -144,7 +142,7 @@ void draw_spark(const PanelPen& pen, const net::PeerStats& p, float w) {
 // How a path should READ. Relayed and star are not faults, but they are the
 // first thing to know when something goes wrong, so they are not drawn in the
 // same ink as a direct match.
-Ink path_ink(net::NetPath p) {
+Rgb path_ink(net::NetPath p) {
     switch (p) {
         case net::NetPath::Direct: return kOk;
         case net::NetPath::Relayed:
@@ -244,7 +242,7 @@ void draw_session_cost(PanelPen& pen, const net::NetStats& s) {
             s.rx_malformed > 0 ? kBad : kOk);
 }
 
-Ink lag_ink(const net::NetStats& s, const net::PeerStats& p) {
+Rgb lag_ink(const net::NetStats& s, const net::PeerStats& p) {
     if (s.max_prediction > 0 && p.lag_ticks >= s.max_prediction) return kBad;
     return p.lag_ticks > s.max_prediction / 2 ? kWarn : kOk;
 }
@@ -278,7 +276,7 @@ void draw_peer_rows(PanelPen& pen, const net::NetStats& s) {
 }
 
 // The session-end modal's rows, built before anything is drawn.
-using SummaryRow = std::pair<std::string, Ink>;
+using SummaryRow = std::pair<std::string, Rgb>;
 
 std::vector<SummaryRow> session_end_rows(const net::SessionSummary& summary) {
     const net::NetStats& s = summary.stats;
@@ -326,13 +324,14 @@ void draw_session_end(ScreenContext ctx, const std::vector<SummaryRow>& rows,
     SDL_SetRenderDrawColor(ctx.sdl, 0, 0, 0, 255);
     SDL_RenderClear(ctx.sdl);
     draw_dialog_chrome(ctx.sdl, win, &ctx.assets.frontend_pcx("WINZ"));
+    const DialogPen pen{ctx.sdl, ctx.front_font};
     float ty = win.y + 16.0f;
     for (const auto& [text, ink] : rows) {
-        draw_dialog_text(ctx.sdl, ctx.front_font, text, win.x + 20.0f, ty, ink.r, ink.g, ink.b);
+        draw_dialog_text(pen, text, SDL_FPoint{win.x + 20.0f, ty}, DialogInk{ink});
         ty += lh + 2.0f;
     }
-    draw_dialog_text(ctx.sdl, ctx.front_font, "PRESS [ENTER] OR [ESC]", win.x + 20.0f,
-                     win.y + win.h - 16.0f - lh, kDialogInkR, kDialogInkG, kDialogInkB);
+    draw_dialog_text(pen, "PRESS [ENTER] OR [ESC]",
+                     SDL_FPoint{win.x + 20.0f, win.y + win.h - 16.0f - lh}, DialogInk{kDialogInk});
     SDL_RenderPresent(ctx.sdl);
 }
 
@@ -365,9 +364,9 @@ std::string net_log_timestamp() {
 #else
     localtime_r(&now, &tmv);
 #endif
-    char buf[32];
-    if (std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tmv) == 0) return "-";
-    return std::string(buf);
+    std::array<char, 32> buf{};
+    if (std::strftime(buf.data(), buf.size(), "%Y-%m-%d %H:%M:%S", &tmv) == 0) return "-";
+    return std::string(buf.data());
 }
 
 void append_net_session_log(const net::SessionSummary& summary) {
@@ -396,6 +395,11 @@ AppInput present_net_session_end(ScreenContext ctx, const net::SessionSummary& s
     const DialogRect win{(static_cast<float>(kScreenW) - 460.0f) / 2.0f,
                          (static_cast<float>(kScreenH) - panel_h) / 2.0f, 460.0f, panel_h};
 
+    // Refresh-boundary pacing, not a blind SDL_Delay(2): that loop re-presented
+    // a STATIC modal at 300-500 Hz on Windows — the exact bug the goldman
+    // wheel's loop documents fixing (results_screens.cpp), and every sibling
+    // modal already paces through FrameClock.
+    platform::FrameClock frame_clock(ctx.window);
     while (true) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -406,7 +410,7 @@ AppInput present_net_session_end(ScreenContext ctx, const net::SessionSummary& s
                 return AppInput::Advance;
         }
         draw_session_end(ctx, rows, win);
-        SDL_Delay(2);
+        frame_clock.pace();
     }
 }
 

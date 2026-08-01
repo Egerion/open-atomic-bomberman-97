@@ -14,7 +14,7 @@
 #include "bomber/match/level_registry.hpp"     // LevelRegistry / LevelDef
 #include "bomber/render/sprites.hpp"           // Sprite, Anim, resolve_sequence
 #include "bomber/sim/constants.hpp"            // sim::kTileW / kTileH
-#include "bomber/ui/bmscreen.hpp"              // HelpBrowser
+#include "bomber/ui/help_screens.hpp"          // run_help_browser
 
 namespace bomber::game {
 
@@ -283,23 +283,18 @@ void MapSelectLoop::step_wins(int delta) {
 }
 
 std::optional<AppInput> MapSelectLoop::run_help_browser() {
-    HelpBrowser browser(ctx_.assets, ctx_.front_font);
-    browser.enter(ctx_.values.at_or(15, 1) != 0);
-    while (!browser.done()) {
-        SDL_Event hev;
-        while (SDL_PollEvent(&hev)) {
-            if (hev.type == SDL_EVENT_QUIT) return AppInput::Quit;
-            if (hev.type == SDL_EVENT_KEY_DOWN) browser.on_key(hev.key.key, ctx_.audio);
-        }
-        if (browser.viewing() && browser.viewer().done()) browser.close_viewer();
-        net_setup_pump(net_);                 // the link must not go silent under the browser
-        if (chat_ != nullptr) chat_->pump();  // nor the lobby's heartbeat
-        ctx_.audio.update_music();
-        draw_frame();
-        browser.draw(ctx_.sdl);
-        SDL_RenderPresent(ctx_.sdl);
-        SDL_Delay(2);
-    }
+    // The shared sub_41431C loop over this screen's own live frame, with the
+    // net link + lobby heartbeat pumped every iteration (they must not go
+    // silent under the browser). Like SetupLoop's, this used to be a hand copy
+    // WITHOUT dispatch_list_mouse, so F1 help from Map Select was
+    // keyboard-only; the template restores the widget's mouse half.
+    const AppInput r = ::bomber::game::run_help_browser(
+        ctx_, [this] { draw_frame(); },
+        [this] {
+            net_setup_pump(net_);
+            if (chat_ != nullptr) chat_->pump();
+        });
+    if (r == AppInput::Quit) return AppInput::Quit;
     return std::nullopt;
 }
 
@@ -308,14 +303,14 @@ std::optional<AppInput> MapSelectLoop::run_help_browser() {
 // has LEFT the roster screen, so the first publish fires on entry.
 std::optional<AppInput> MapSelectLoop::pump_link() {
     if (net_mode_ && !net_guest_ && (net_dirty_ || !net_setup_on_level_screen(net_))) {
-        net_setup_publish_level(net_, level_, local_level_name(), wins_);
+        net_setup_publish_level(net_, LevelPreview{level_, local_level_name(), wins_});
         net_dirty_ = false;
     }
     net_setup_pump(net_);
     if (chat_ != nullptr) chat_->pump();
     if (!net_guest_) return std::nullopt;
     // Read-only: the level/rounds ARE the host's newest preview.
-    net_setup_apply_level(net_, level_count_, level_, wins_, net_level_name_);
+    net_setup_apply_level(net_, level_count_, LevelChoice{level_, wins_, net_level_name_});
     if (net_setup_final(net_)) {
         // COMMIT the mirrored working copies. The WIN TARGET is not part of the
         // confirmed MatchConfig, so without this the guest ran the host's board
@@ -459,22 +454,24 @@ std::string MapSelectLoop::displayed_level_name() const {
 // left a literal "%s" on screen with the real MESSAGES.TXT.
 void MapSelectLoop::draw_rows() {
     const std::string level_line = fmt_s(ctx_.assets.getstring(210, "%s"), displayed_level_name());
-    ctx_.front_font.draw_outlined(ctx_.sdl, level_line, layout_.lx, layout_.ly, 240, 248, 252, 0, 0,
-                                  0, layout_.lw);
+    ctx_.front_font.draw_outlined(ctx_.sdl, level_line, SDL_FPoint{layout_.lx, layout_.ly},
+                                  OutlinedTextStyle{{240, 248, 252}, {}, layout_.lw});
     const std::string wins_word = ctx_.assets.getstring(
         state_.options.win_by_kills ? 209 : 208, state_.options.win_by_kills ? "Kills" : "Wins");
     const std::string wins_line =
         fmt_us(ctx_.assets.getstring(211, "%u %s to win match"), wins_, wins_word);
-    ctx_.front_font.draw_outlined(ctx_.sdl, wins_line, layout_.lx, layout_.ly + layout_.lys, 240,
-                                  248, 252, 0, 0, 0, layout_.lw);
+    ctx_.front_font.draw_outlined(ctx_.sdl, wins_line,
+                                  SDL_FPoint{layout_.lx, layout_.ly + layout_.lys},
+                                  OutlinedTextStyle{{240, 248, 252}, {}, layout_.lw});
 }
 
 // Footer (sub_413FB9): centred cyan "Press F1 for help".
 void MapSelectLoop::draw_footer() {
     const std::string help = ctx_.assets.getstring(330, "Press F1 for help");
     const float help_w = static_cast<float>(ctx_.front_font.measure(help));
-    ctx_.front_font.draw_outlined(ctx_.sdl, help, layout_.fcx - (help_w + 2.0f) / 2.0f, layout_.ffy,
-                                  96, 252, 252, 0, 0, 0);
+    ctx_.front_font.draw_outlined(ctx_.sdl, help,
+                                  SDL_FPoint{layout_.fcx - (help_w + 2.0f) / 2.0f, layout_.ffy},
+                                  OutlinedTextStyle{{96, 252, 252}});
 }
 
 // The bomber-dude row cursor (sub_413BD6 at 8140-8141): (getvalue(735) - 20,

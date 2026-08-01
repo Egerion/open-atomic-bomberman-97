@@ -23,6 +23,10 @@ add_library(bomber_ui STATIC
   src/bmscreen.cpp
   src/dialog_chrome.cpp
   src/help_screens.cpp
+  # The ONE glob->sort->measure->layout->mouse file-list modal (sub_41404B +
+  # sub_42DBCC). HelpBrowser, SchemeFilePicker and CampaignFilePicker were
+  # ~70-line near-clones of it, disagreeing on the pinned sort.
+  src/list_picker.cpp
   src/scheme_filename_prompt.cpp
 )
 add_library(bomber::ui ALIAS bomber_ui)
