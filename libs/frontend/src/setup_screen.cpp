@@ -420,17 +420,18 @@ std::optional<AppInput> SetupLoop::show_error(const std::string& reason) {
 // `rounds = 0` is the "still on the roster screen" sentinel (net_setup_link.hpp);
 // the level travels from the LEVEL & ROUNDS screen, where the host picks it.
 std::optional<AppInput> SetupLoop::pump_link() {
+    const LocalRoster roster{state_.setup_type, state_.setup_sub, state_.setup_team,
+                             state_.team_play};
     if (net_mode_ && !net_guest_ && (net_dirty_ || !net_setup_has_preview(seams_.net))) {
-        net_setup_publish(seams_.net, state_.setup_type, state_.setup_team, state_.team_play,
-                          /*level=*/-1, /*level_name=*/std::string(), /*rounds=*/0);
+        net_setup_publish(seams_.net, roster,
+                          LevelPreview{/*level=*/-1, /*name=*/std::string(), /*rounds=*/0});
         net_dirty_ = false;
     }
     net_setup_pump(seams_.net);
     if (seams_.chat != nullptr) seams_.chat->pump();
     if (!net_guest_) return std::nullopt;
     // Read-only: the displayed roster IS the host's newest preview.
-    net_setup_apply_roster(seams_.net, state_.setup_type, state_.setup_sub, state_.setup_team,
-                           state_.team_play);
+    net_setup_apply_roster(seams_.net, roster);
     // The host moved on, or confirmed outright and we already hold the config.
     if (net_setup_final(seams_.net) || net_setup_on_level_screen(seams_.net))
         return AppInput::Advance;

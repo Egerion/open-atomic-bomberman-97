@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "bomber/game_util/list_dialog_geometry.hpp"  // list_dialog_width (centring)
+#include "bomber/netui/net_setup_roster.hpp"          // wire_safe_text
 #include "bomber/platform/frame_clock.hpp"
 #include "bomber/render/sprites.hpp"    // Sprite
 #include "bomber/ui/dialog_chrome.hpp"  // the pinned chrome primitives
@@ -326,16 +327,12 @@ constexpr float kNameCol = 26.0f;       // seat-number column width inside a ros
 constexpr std::size_t kNameChars = 20;  // clamp for an untrusted wire-supplied name
 
 // A name that arrived over the wire is another player's typing — untrusted
-// input, treated with the same posture as the 1997 files. Keep only codes the
-// FON can actually draw, and clamp the length so no single row can widen a
-// dialog off the 640-px screen.
+// input, run through netui's ONE printable-ASCII filter (wire_safe_text). The
+// clamp here is the ROW-WIDTH cap, not the wire cap: kNameChars is what keeps
+// one long name from widening the roster dialog off the 640-px screen. The
+// fallback stands in for a name the filter emptied.
 std::string safe_wire_name(const std::string& raw, const char* fallback) {
-    std::string out;
-    for (const char c : raw) {
-        if (out.size() >= kNameChars) break;
-        const auto u = static_cast<unsigned char>(c);
-        if (u >= 32 && u < 127) out += c;
-    }
+    std::string out = wire_safe_text(raw, kNameChars);
     return out.empty() ? std::string(fallback) : out;
 }
 

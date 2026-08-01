@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -20,6 +21,33 @@
 // host/guest split are.
 
 namespace bomber::game {
+
+// The local screens' view of one machine's ten slots — the parallel arrays the
+// PLAYER INPUT screen owns, plus the team-mode flag, bundled by reference so
+// the setup exchange passes ONE thing instead of four adjacent array
+// references. Built in place at each call; never stored.
+struct LocalRoster {
+    std::array<int, sim::kMaxPlayers>& type;
+    std::array<int, sim::kMaxPlayers>& sub;
+    std::array<int, sim::kMaxPlayers>& team;
+    bool& team_play;
+};
+
+// The LEVEL & ROUNDS half of the preview as the HOST announces it. `name` is a
+// reference so a call site may pass a temporary; `rounds` 0 is the
+// still-on-the-roster-screen sentinel (net_setup_link.hpp).
+struct LevelPreview {
+    int level;  // -1 = RANDOM
+    const std::string& name;
+    int rounds;
+};
+
+// The same half as the GUEST mirrors it — out-parameters, bundled.
+struct LevelChoice {
+    int& level;
+    int& rounds;
+    std::string& name;
+};
 
 inline constexpr bool seat_in_mask(std::uint16_t mask, int slot) {
     return (mask & static_cast<std::uint16_t>(1u << slot)) != 0;
@@ -82,37 +110,35 @@ inline void fill_preview_roster(const std::array<int, sim::kMaxPlayers>& type,
 // local controller, every other human as type 4 OTHER — which is exactly what
 // the original's kind-40 handler writes on each receiving machine.
 inline void apply_preview_roster(const net::SetupPreviewFrame& p, std::uint16_t local_seats,
-                                 std::array<int, sim::kMaxPlayers>& type,
-                                 std::array<int, sim::kMaxPlayers>& sub,
-                                 std::array<int, sim::kMaxPlayers>& team, bool& team_play) {
+                                 const LocalRoster& out) {
     bool any_team = false;
     int key_set = 0;
     for (int i = 0; i < sim::kMaxPlayers; ++i) {
         const auto slot = static_cast<std::size_t>(i);
         switch (p.slots[slot]) {
             case net::SetupSlotKind::Off:
-                type[slot] = static_cast<int>(SlotInputType::Off);
-                sub[slot] = 0;
+                out.type[slot] = static_cast<int>(SlotInputType::Off);
+                out.sub[slot] = 0;
                 break;
             case net::SetupSlotKind::Ai:
-                type[slot] = static_cast<int>(SlotInputType::Computer);
-                sub[slot] = 0;
+                out.type[slot] = static_cast<int>(SlotInputType::Computer);
+                out.sub[slot] = 0;
                 break;
             case net::SetupSlotKind::Human:
             case net::SetupSlotKind::Remote:
                 if (seat_in_mask(local_seats, i)) {
-                    type[slot] = static_cast<int>(SlotInputType::Keyboard);
-                    sub[slot] = key_set++;
+                    out.type[slot] = static_cast<int>(SlotInputType::Keyboard);
+                    out.sub[slot] = key_set++;
                 } else {
-                    type[slot] = static_cast<int>(SlotInputType::Other);
-                    sub[slot] = 0;
+                    out.type[slot] = static_cast<int>(SlotInputType::Other);
+                    out.sub[slot] = 0;
                 }
                 break;
         }
-        team[slot] = p.team[slot] != 0 ? 1 : 0;
+        out.team[slot] = p.team[slot] != 0 ? 1 : 0;
         if (p.team[slot] != 0) any_team = true;
     }
-    team_play = any_team;
+    out.team_play = any_team;
 }
 
 // The LEVEL & ROUNDS screen's level value is -1 for RANDOM; the preview field is
@@ -129,20 +155,28 @@ inline constexpr std::uint8_t index_to_preview_level(int level) {
     return level < 0 ? std::uint8_t{255} : static_cast<std::uint8_t>(level & 0xFF);
 }
 
-// The level label rides the wire into the guest's display, and it comes from the
-// HOST's MESSAGES.TXT — an editable 1997 text file. encode_setup_preview
-// truncates at kSetupLevelNameMax but decode REJECTS a non-printable byte, so a
-// stray control character would silently kill the whole preview stream rather
-// than mangle one line. Filter to printable ASCII, the same posture
-// lobby_screen.cpp's display_name takes with a server-supplied lobby name.
-inline std::string wire_safe_level_name(const std::string& raw) {
+// The printable-ASCII filter + length clamp for ANY wire-adjacent string —
+// another player's typing and the host's own editable 1997 text files get the
+// same untrusted-input posture. ONE definition; each caller supplies the clamp
+// its field is actually bounded by and justifies it there (the level name's
+// wire cap below, the lobby roster's row-width cap in lobby_screen.cpp).
+inline std::string wire_safe_text(const std::string& raw, std::size_t max_len) {
     std::string out;
     for (const char c : raw) {
-        if (out.size() >= net::kSetupLevelNameMax) break;
+        if (out.size() >= max_len) break;
         const auto u = static_cast<unsigned char>(c);
         if (u >= 32 && u < 127) out += c;
     }
     return out;
+}
+
+// The level label rides the wire into the guest's display, and it comes from the
+// HOST's MESSAGES.TXT — an editable 1997 text file. encode_setup_preview
+// truncates at kSetupLevelNameMax but decode REJECTS a non-printable byte, so a
+// stray control character would silently kill the whole preview stream rather
+// than mangle one line — hence the clamp is the WIRE cap.
+inline std::string wire_safe_level_name(const std::string& raw) {
+    return wire_safe_text(raw, net::kSetupLevelNameMax);
 }
 
 }  // namespace bomber::game

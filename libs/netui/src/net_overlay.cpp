@@ -3,7 +3,7 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
-#include <cstdarg>
+#include <array>
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "bomber/net/net_stats.hpp"
+#include "bomber/platform/frame_clock.hpp"
 #include "bomber/render/renderer.hpp"  // kScreenW / kScreenH
 #include "bomber/ui/dialog_chrome.hpp"
 
@@ -46,13 +47,14 @@ constexpr Rgb kOk = kDialogInk;
 constexpr Rgb kWarn{kWarnR, kWarnG, kWarnB};
 constexpr Rgb kBad{kBadR, kBadG, kBadB};
 
-std::string fmt(const char* f, ...) {  // NOLINT(cert-dcl50-cpp) — local, fixed buffer
-    char buf[96];
-    va_list ap;
-    va_start(ap, f);
-    std::vsnprintf(buf, sizeof(buf), f, ap);
-    va_end(ap);
-    return std::string(buf);
+// A snprintf wrapper that keeps every argument TYPED to the call boundary (no
+// va_list erasure) over a fixed std::array — a diagnostics panel must never be
+// the thing that overruns.
+template <class... Args>
+std::string fmt(const char* f, Args... args) {
+    std::array<char, 96> buf{};
+    std::snprintf(buf.data(), buf.size(), f, args...);
+    return std::string(buf.data());
 }
 
 // -1 is "never measured", not "zero milliseconds", and the two must not look
@@ -362,9 +364,9 @@ std::string net_log_timestamp() {
 #else
     localtime_r(&now, &tmv);
 #endif
-    char buf[32];
-    if (std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tmv) == 0) return "-";
-    return std::string(buf);
+    std::array<char, 32> buf{};
+    if (std::strftime(buf.data(), buf.size(), "%Y-%m-%d %H:%M:%S", &tmv) == 0) return "-";
+    return std::string(buf.data());
 }
 
 void append_net_session_log(const net::SessionSummary& summary) {
@@ -393,6 +395,11 @@ AppInput present_net_session_end(ScreenContext ctx, const net::SessionSummary& s
     const DialogRect win{(static_cast<float>(kScreenW) - 460.0f) / 2.0f,
                          (static_cast<float>(kScreenH) - panel_h) / 2.0f, 460.0f, panel_h};
 
+    // Refresh-boundary pacing, not a blind SDL_Delay(2): that loop re-presented
+    // a STATIC modal at 300-500 Hz on Windows — the exact bug the goldman
+    // wheel's loop documents fixing (results_screens.cpp), and every sibling
+    // modal already paces through FrameClock.
+    platform::FrameClock frame_clock(ctx.window);
     while (true) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -403,7 +410,7 @@ AppInput present_net_session_end(ScreenContext ctx, const net::SessionSummary& s
                 return AppInput::Advance;
         }
         draw_session_end(ctx, rows, win);
-        SDL_Delay(2);
+        frame_clock.pace();
     }
 }
 

@@ -66,46 +66,41 @@ void net_setup_seed_host_roster(const NetSetupLink& l, std::array<int, sim::kMax
     seed_net_host_roster(l.local_seats, l.remote_seats, type, sub);
 }
 
-void net_setup_publish(const NetSetupLink& l, const std::array<int, sim::kMaxPlayers>& type,
-                       const std::array<int, sim::kMaxPlayers>& team, bool team_play, int level,
-                       const std::string& level_name, int rounds) {
+void net_setup_publish(const NetSetupLink& l, const LocalRoster& roster,
+                       const LevelPreview& level) {
     if (l.session == nullptr || !l.host) return;
     net::SetupPreviewFrame p;
-    fill_preview_roster(type, team, team_play, p);
-    p.level_index = index_to_preview_level(level);
-    p.level_name = wire_safe_level_name(level_name);
-    p.rounds = rounds < 0 ? std::uint8_t{0} : static_cast<std::uint8_t>(rounds & 0xFF);
+    fill_preview_roster(roster.type, roster.team, roster.team_play, p);
+    p.level_index = index_to_preview_level(level.level);
+    p.level_name = wire_safe_level_name(level.name);
+    p.rounds = level.rounds < 0 ? std::uint8_t{0} : static_cast<std::uint8_t>(level.rounds & 0xFF);
     l.session->publish(p);
 }
 
-void net_setup_publish_level(const NetSetupLink& l, int level, const std::string& level_name,
-                             int rounds) {
+void net_setup_publish_level(const NetSetupLink& l, const LevelPreview& level) {
     if (l.session == nullptr || !l.host) return;
     // The host's own last frame IS the roster half; only the level fields move,
     // so the level screen — which holds no roster state — cannot blank the
     // roster the guest is showing.
     net::SetupPreviewFrame p =
         l.session->has_preview() ? l.session->preview() : net::SetupPreviewFrame{};
-    p.level_index = index_to_preview_level(level);
-    p.level_name = wire_safe_level_name(level_name);
-    p.rounds = rounds < 0 ? std::uint8_t{0} : static_cast<std::uint8_t>(rounds & 0xFF);
+    p.level_index = index_to_preview_level(level.level);
+    p.level_name = wire_safe_level_name(level.name);
+    p.rounds = level.rounds < 0 ? std::uint8_t{0} : static_cast<std::uint8_t>(level.rounds & 0xFF);
     l.session->publish(p);
 }
 
-void net_setup_apply_roster(const NetSetupLink& l, std::array<int, sim::kMaxPlayers>& type,
-                            std::array<int, sim::kMaxPlayers>& sub,
-                            std::array<int, sim::kMaxPlayers>& team, bool& team_play) {
+void net_setup_apply_roster(const NetSetupLink& l, const LocalRoster& out) {
     if (!net_setup_has_preview(l)) return;
-    apply_preview_roster(l.session->preview(), l.local_seats, type, sub, team, team_play);
+    apply_preview_roster(l.session->preview(), l.local_seats, out);
 }
 
-void net_setup_apply_level(const NetSetupLink& l, int level_count, int& level, int& rounds,
-                           std::string& level_name) {
+void net_setup_apply_level(const NetSetupLink& l, int level_count, const LevelChoice& out) {
     if (!net_setup_has_preview(l)) return;
     const net::SetupPreviewFrame& p = l.session->preview();
-    level = preview_level_to_index(p.level_index, level_count);
-    rounds = p.rounds != 0 ? static_cast<int>(p.rounds) : rounds;
-    if (!p.level_name.empty()) level_name = p.level_name;
+    out.level = preview_level_to_index(p.level_index, level_count);
+    out.rounds = p.rounds != 0 ? static_cast<int>(p.rounds) : out.rounds;
+    if (!p.level_name.empty()) out.name = p.level_name;
 }
 
 void draw_net_wait_prompt(ScreenContext ctx, unsigned& spinner) {

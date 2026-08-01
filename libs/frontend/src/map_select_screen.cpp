@@ -303,14 +303,14 @@ std::optional<AppInput> MapSelectLoop::run_help_browser() {
 // has LEFT the roster screen, so the first publish fires on entry.
 std::optional<AppInput> MapSelectLoop::pump_link() {
     if (net_mode_ && !net_guest_ && (net_dirty_ || !net_setup_on_level_screen(net_))) {
-        net_setup_publish_level(net_, level_, local_level_name(), wins_);
+        net_setup_publish_level(net_, LevelPreview{level_, local_level_name(), wins_});
         net_dirty_ = false;
     }
     net_setup_pump(net_);
     if (chat_ != nullptr) chat_->pump();
     if (!net_guest_) return std::nullopt;
     // Read-only: the level/rounds ARE the host's newest preview.
-    net_setup_apply_level(net_, level_count_, level_, wins_, net_level_name_);
+    net_setup_apply_level(net_, level_count_, LevelChoice{level_, wins_, net_level_name_});
     if (net_setup_final(net_)) {
         // COMMIT the mirrored working copies. The WIN TARGET is not part of the
         // confirmed MatchConfig, so without this the guest ran the host's board

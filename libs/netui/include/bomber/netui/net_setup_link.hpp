@@ -4,8 +4,9 @@
 #include <cstdint>
 #include <string>
 
-#include "bomber/game_util/app_flow.hpp"  // AppInput
-#include "bomber/sim/constants.hpp"       // sim::kMaxPlayers
+#include "bomber/game_util/app_flow.hpp"      // AppInput
+#include "bomber/netui/net_setup_roster.hpp"  // LocalRoster / LevelPreview / LevelChoice
+#include "bomber/sim/constants.hpp"           // sim::kMaxPlayers
 #include "bomber/ui/screen_context.hpp"
 
 // ONLINE MATCH SETUP — the "this screen is driven by someone else" seam.
@@ -92,31 +93,27 @@ bool net_setup_on_level_screen(const NetSetupLink& l);
 void net_setup_seed_host_roster(const NetSetupLink& l, std::array<int, sim::kMaxPlayers>& type,
                                 std::array<int, sim::kMaxPlayers>& sub);
 
-// HOST: broadcast the current roster + level choice as a live preview. `level`
-// is -1 for RANDOM and `rounds` 0 while still on the roster screen (the
-// sentinel above).
-void net_setup_publish(const NetSetupLink& l, const std::array<int, sim::kMaxPlayers>& type,
-                       const std::array<int, sim::kMaxPlayers>& team, bool team_play, int level,
-                       const std::string& level_name, int rounds);
+// HOST: broadcast the current roster + level choice as a live preview.
+// `level.level` is -1 for RANDOM and `level.rounds` 0 while still on the roster
+// screen (the sentinel above). The roster's `sub` half never travels — the wire
+// carries seat KINDS, and each machine re-derives its own key sets.
+void net_setup_publish(const NetSetupLink& l, const LocalRoster& roster,
+                       const LevelPreview& level);
 
 // HOST, from LEVEL & ROUNDS: re-publish the CURRENT preview with only the
 // level/rounds fields replaced. The roster half comes from the session's own last
 // frame, so a screen that holds no roster state cannot blank the guest's roster.
-void net_setup_publish_level(const NetSetupLink& l, int level, const std::string& level_name,
-                             int rounds);
+void net_setup_publish_level(const NetSetupLink& l, const LevelPreview& level);
 
 // GUEST: mirror the newest preview into the display roster, re-pointed to THIS
 // machine's view (see SEAT LOCKING). A no-op until the first preview arrives.
-void net_setup_apply_roster(const NetSetupLink& l, std::array<int, sim::kMaxPlayers>& type,
-                            std::array<int, sim::kMaxPlayers>& sub,
-                            std::array<int, sim::kMaxPlayers>& team, bool& team_play);
+void net_setup_apply_roster(const NetSetupLink& l, const LocalRoster& out);
 
-// GUEST: mirror the newest preview's level/rounds. `level` is clamped to a stage
-// this install's registry knows (an unknown index falls back to RANDOM for the
-// sample-block swatch only); `level_name` is the HOST's own label, so the guest
-// reads the map the host picked even for a custom map it does not have.
-void net_setup_apply_level(const NetSetupLink& l, int level_count, int& level, int& rounds,
-                           std::string& level_name);
+// GUEST: mirror the newest preview's level/rounds. `out.level` is clamped to a
+// stage this install's registry knows (an unknown index falls back to RANDOM for
+// the sample-block swatch only); `out.name` is the HOST's own label, so the
+// guest reads the map the host picked even for a custom map it does not have.
+void net_setup_apply_level(const NetSetupLink& l, int level_count, const LevelChoice& out);
 
 // `sub_42B47D`'s [WAIT] prompt (docs/re/network-screens.md §6/§9): getstring(80)'s
 // single `%c` takes the 4-phase spinner `dword_45BFB4 = {'/','-','\\','|'}`,
