@@ -10,6 +10,7 @@
 #include "bomber/game_util/anim_pace.hpp"
 #include "bomber/game_util/carry_pose.hpp"
 #include "bomber/game_util/hud_format.hpp"
+#include "bomber/game_util/results.hpp"
 #include "bomber/match/team_colour.hpp"
 
 namespace bomber::game {
@@ -182,10 +183,12 @@ void Renderer::update_gold_sparkles(const sim::State& s) {
     for (int i = 0; i < sim::kMaxPlayers; ++i) {
         const sim::Player& p = s.players[i];
         if (!p.present || !p.alive) continue;
-        // dword_46492C holds the clinching player's TEAM id in team play and
-        // the player SLOT in solo play (assign_gold_player's doc comment).
-        const bool is_gold = gold_team_mode_ ? (p.team == gold_player_) : (i == gold_player_);
-        if (is_gold) spawn_gold_sparkle(p);
+        // sub_420F07's per-slot gate. dword_46492C holds the clinching player's
+        // RAW 0/1 team id in team play and the player SLOT in solo play; the
+        // predicate (results.hpp) owns the alignment against the +1-shifted
+        // Player::team — inlining the compare here once put the twinkle on the
+        // beaten team (docs/re/goldman-roulette.md §6).
+        if (gold_twinkle_matches(gold_team_mode_, gold_player_, i, p.team)) spawn_gold_sparkle(p);
     }
 }
 

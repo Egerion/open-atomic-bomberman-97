@@ -298,6 +298,41 @@ call rolls `rand()%6` (spawn 5-in-6) and places a particle at
 presentation-side rand draws per spawn attempt. So the gold player sparkles
 for the first ~5 s of every round while goldman is pending.
 
+**Team mode — the exact per-slot gate (PINNED 2026-08-01, pseudo.c
+23658-23671).** "The player (or each member of the team) matching
+`dword_46492C`" above was a summary; the comparison itself matters, because
+the port got its encoding wrong. Inside `sub_420F07`'s 10-slot loop, under
+the `!dword_464938 && dword_4648BC` gate, the seeding test splits on
+`dword_464964`:
+
+- **team mode:** re-encode THE SLOT'S OWN +84 team byte into
+  `dword_46492C`'s doubled representation — `v11 = byte_461C18[152*i] ? 2 : 0`
+  (0x461C18 − 0x461BC4 = 0x54 = +84, the same byte `sub_4223E7` reads) —
+  then seed `sub_420D4E` when `dword_46492C == v11 && dword_461BC4[38*i]`.
+  Both sides of the compare sit in the SAME 0/2 encoding, and the second
+  operand is the slot's +0 ALIVE dword (the flag whose zero draws the HUD's
+  `"xxx"` dead marker later in the same loop) — so every ALIVE member of the
+  gold team twinkles, a dead teammate does not, and PRESENT is never tested
+  here (an absent slot is never alive).
+- **solo:** `dword_46492C == i && dword_461BC4[38*i]` — the slot index,
+  same alive gate.
+
+**PORT BUG FOUND AND FIXED against this pin (2026-08-01) — the team-play
+"sparkle on the losing team" report.** `Renderer::update_gold_sparkles`
+compared the port's raw 0/1 stored gold id straight against the hashed
+`Player::team`, which carries the +84 byte SHIFTED +1
+(`match_factory.hpp`/`apply_roster` reserve team 0 for "no team / solo
+side"). The encodings only agree in solo mode: under Team Play a raw-team-1
+clinch matched `Player::team == 1` — the OTHER, just-beaten team — and a
+raw-team-0 clinch matched nobody. The alignment now lives in one pure
+predicate, `gold_twinkle_matches`
+(`libs/game_util/include/bomber/game_util/results.hpp`), consumed by
+`update_gold_sparkles` and pinned headlessly by
+`tests/game/test_frontend.cpp`. The award side was already correct on both
+of its consumers (`apply_gold_award` compares raw `setup_team` vs raw gold
+id, §4; `assign_gold_player` stores raw, §2) — only the twinkle target was
+wrong.
+
 **One correction to the above:** `sub_420D4E`'s 100-record pool loop finds
 only the FIRST currently-inactive slot (the first record whose active flag is
 zero) and returns immediately after

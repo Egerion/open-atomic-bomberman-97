@@ -82,7 +82,9 @@ public:
     void draw_frame(const sim::State& s, float alpha = 1.0f);
 
     // The pending Goldman-wheel winner. `who` is -1 for none, otherwise a player
-    // SLOT in solo play or a TEAM id in team play — dword_46492C's dual encoding.
+    // SLOT in solo play or a RAW 0/1 team id in team play — dword_46492C's dual
+    // encoding, kept raw here; gold_twinkle_matches (results.hpp) aligns it with
+    // the +1-shifted Player::team at the seeding site.
     void set_gold_player(int who, bool team_mode) {
         gold_player_ = who;
         gold_team_mode_ = team_mode;

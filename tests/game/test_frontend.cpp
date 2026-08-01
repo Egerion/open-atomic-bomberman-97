@@ -33,6 +33,7 @@ using bomber::game::cycle_slot_input_type;
 using bomber::game::default_setup_team;
 using bomber::game::fill_attract_roster;
 using bomber::game::format_clock;
+using bomber::game::gold_twinkle_matches;
 using bomber::game::is_terminal;
 using bomber::game::kClockWarningSeconds;
 using bomber::game::KeyAction;
@@ -410,6 +411,57 @@ TEST_CASE("assign_gold_player mirrors dword_46492C's RESULTS-tier write") {
     CHECK(assign_gold_player(true, true, 0, team_of) == 0);  // player 0 -> team 0
     // No clinch yet: -1 passes straight through, never indexed into team_of.
     CHECK(assign_gold_player(true, true, -1, team_of) == -1);
+}
+
+// The gold TWINKLE seeding gate, end to end through the same chain the app
+// wires: a team-mode clinch -> assign_gold_player stores the RAW 0/1 team id ->
+// the renderer's per-slot gate compares against the hashed Player::team, which
+// apply_roster (match_runner.cpp) builds as `setup_team[i] + 1` (0 is reserved
+// for "no team / solo side", match_factory.hpp). sub_420F07's own team branch
+// (pseudo.c 23662-23669) re-encodes the slot's +84 byte into dword_46492C's
+// doubled representation before comparing — SAME encoding on both sides — so
+// the port must apply its own +1 shift here. Unshifted, a raw-team-1 clinch
+// twinkled the LOSING team and a raw-team-0 clinch twinkled nobody (the
+// 2026-08-01 team-play sparkle bug).
+TEST_CASE("the gold twinkle lands on the clinching team's members, never the beaten team's") {
+    std::array<int, kMaxPlayers> setup_team{};  // raw ids: slots 0/1 -> 0, 2/3 -> 1
+    setup_team[2] = setup_team[3] = 1;
+    std::array<int, kMaxPlayers> sim_team{};  // the +1 shift apply_roster performs
+    for (int i = 0; i < 4; ++i) sim_team[i] = setup_team[i] + 1;
+
+    // Team raw 1 clinches through slot 2 (winning_side resolves to the lowest
+    // alive member): the pending gold id is the raw team, 1.
+    const int gold = assign_gold_player(/*goldman_on=*/true, /*team_mode=*/true,
+                                        /*clinched=*/2, setup_team);
+    REQUIRE(gold == 1);
+    // Every member of the CLINCHING team twinkles; no member of the beaten team
+    // does (sub_420F07 seeds sub_420D4E for each matching alive slot).
+    for (int i = 0; i < 4; ++i)
+        CHECK(gold_twinkle_matches(/*team_mode=*/true, gold, i, sim_team[i]) ==
+              (setup_team[i] == 1));
+
+    // The mirror clinch: team raw 0 wins -> ITS members twinkle. Under the
+    // unshifted comparison this selected NOBODY (no Player::team is 0 in team
+    // mode) while the raw-1 case above selected exactly the losers.
+    const int gold0 = assign_gold_player(true, true, /*clinched=*/0, setup_team);
+    REQUIRE(gold0 == 0);
+    for (int i = 0; i < 4; ++i)
+        CHECK(gold_twinkle_matches(true, gold0, i, sim_team[i]) == (setup_team[i] == 0));
+}
+
+TEST_CASE("gold_twinkle_matches: solo compares the slot index; no pending gold seeds nobody") {
+    // Solo (sub_420F07's else branch): dword_46492C == i, the slot index; the
+    // slot's team value is irrelevant.
+    CHECK(gold_twinkle_matches(/*team_mode=*/false, /*gold=*/2, /*slot=*/2, /*sim_team=*/0));
+    CHECK_FALSE(gold_twinkle_matches(false, 2, 1, 0));
+    // -1 = no pending gold player: nobody matches in either mode. (The original
+    // never reaches the compare with -1 — the seeding is gated earlier — but the
+    // port pushes the pair to the renderer every frame, so the predicate itself
+    // must refuse.)
+    for (int i = 0; i < 4; ++i) {
+        CHECK_FALSE(gold_twinkle_matches(false, -1, i, i + 1));
+        CHECK_FALSE(gold_twinkle_matches(true, -1, i, i + 1));
+    }
 }
 
 // docs/re/frontend-flow.md "VICTORY" §3 (aTeamU vs aVictoryU): the
