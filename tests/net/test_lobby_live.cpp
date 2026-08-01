@@ -11,6 +11,14 @@
 //   ctest -R net_lobby_live --output-on-failure
 //
 // BOMBER_MATCHMAKER_STUN_PORT overrides the UDP STUN port (default 8081).
+//
+// doctest has NO runtime skip, so an early return prints the same word as a full
+// pass and every one of the four cases below took it on every machine: ctest said
+// PASSED for a suite that had executed nothing, which is precisely the shape this
+// repo has been bitten by five times. LOBBY_LIVE_SKIP is the marker
+// tests/net/CMakeLists.txt hands to SKIP_REGULAR_EXPRESSION; all four cases gate
+// on the same variable, so the suite is all-or-nothing and one ctest status can
+// tell the truth about it.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
@@ -85,7 +93,9 @@ bool pump_until(LobbyFlow& a, LobbyFlow& b, Pred pred, int timeout_ms) {
 TEST_CASE("live: host + join + ready + start against the real matchmaker") {
     const std::string url = env_or("BOMBER_MATCHMAKER_URL", "");
     if (url.empty()) {
-        MESSAGE("BOMBER_MATCHMAKER_URL unset; skipping the live matchmaker test");
+        MESSAGE(
+            "LOBBY_LIVE_SKIP: BOMBER_MATCHMAKER_URL unset; the live matchmaker case "
+            "asserted nothing");
         return;
     }
     const auto stun_port =
@@ -171,7 +181,9 @@ TEST_CASE("live: a public lobby shows up in another client's browse") {
     // anything — it drops back to Idle so the row can then be joined.
     const std::string url = env_or("BOMBER_MATCHMAKER_URL", "");
     if (url.empty()) {
-        MESSAGE("BOMBER_MATCHMAKER_URL unset; skipping the live browse test");
+        MESSAGE(
+            "LOBBY_LIVE_SKIP: BOMBER_MATCHMAKER_URL unset; the live browse case "
+            "asserted nothing");
         return;
     }
 
@@ -232,7 +244,9 @@ TEST_CASE("live: lobby chat round-trips through the real matchmaker") {
     // instance answers `unknown_type` until it is redeployed.
     const std::string url = env_or("BOMBER_MATCHMAKER_URL", "");
     if (url.empty()) {
-        MESSAGE("BOMBER_MATCHMAKER_URL unset; skipping the live chat test");
+        MESSAGE(
+            "LOBBY_LIVE_SKIP: BOMBER_MATCHMAKER_URL unset; the live chat case "
+            "asserted nothing");
         return;
     }
     const auto stun_port =
@@ -295,7 +309,9 @@ TEST_CASE("live: relay fallback carries the match when the punch cannot land") {
     // `-relay-advertise 127.0.0.1:8082` for this test.
     const std::string url = env_or("BOMBER_MATCHMAKER_URL", "");
     if (url.empty()) {
-        MESSAGE("BOMBER_MATCHMAKER_URL unset; skipping the live relay test");
+        MESSAGE(
+            "LOBBY_LIVE_SKIP: BOMBER_MATCHMAKER_URL unset; the live relay case "
+            "asserted nothing");
         return;
     }
     const auto stun_port =

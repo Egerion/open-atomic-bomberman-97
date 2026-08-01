@@ -20,6 +20,12 @@ namespace {
 //
 // docs/net-build-hash.md is the evidence register — what each scenario is
 // MEASURED to discriminate, the reverts that prove it, and the gaps still open.
+//
+// Scenarios 7 and 8 additionally carry EXECUTION WITNESSES (build_hash_coverage,
+// asserted by tests/net/test_build_hash.cpp): counts of the bounces, detonations
+// and rover deaths they reach. A hash cannot tell you a scenario stopped
+// reaching its mechanic, and that — not a wrong number — is how this file has
+// lost coverage three times.
 
 // The classic (odd,odd) pillar arena's fill rule, as a pure function of the
 // tile: pillars on odd/odd, a deterministic brick pattern elsewhere so setup's
@@ -244,6 +250,129 @@ std::uint64_t disease_scenario_hash() {
     return sim.hash();
 }
 
+// Seat 0 drops a JELLY bomb, steps west off it, walks back east to kick it into
+// the wall at column 7, then leaves row 0 to the ping-pong. Seat 1 drops a
+// TRIGGER bomb, walks clear, fires it with action2, and repeats — the second
+// cycle is past the allowance, where the placement DOWNGRADES to a timed bomb
+// (facts.md "Trigger allowance").
+sim::TickInputs bomb_kind_inputs(int t) {
+    sim::TickInputs in;
+    auto& jelly = in.players[0];
+    jelly.action1 = (t == 0);
+    jelly.left = (t >= 1 && t <= 10);
+    jelly.right = (t >= 11 && t <= 18);  // walk back INTO the bomb -> kick east
+    jelly.down = (t >= 19 && t <= 26);
+
+    auto& trig = in.players[1];
+    trig.action1 = (t == 0 || t == 60);
+    trig.down = (t >= 1 && t <= 12) || (t >= 61 && t <= 72);
+    trig.action2 = (t == 20 || t == 80);
+    return in;
+}
+
+// 7. BOMB KINDS, DRIVEN. Scenarios 1-6 reach neither a jelly bomb nor a trigger
+// bomb: nothing grants either kind, and no bomb in them is ever kicked. The gap
+// was MEASURED, not assumed — reversing the jelly bounce direction left the
+// digest byte-identical at 3364373141 while golden E moved, which is determinism
+// rule 7 failing exactly as it has three times before.
+sim::MatchConfig bomb_kind_arena() {
+    using namespace sim;
+    MatchConfig cfg;
+    for (auto& row : cfg.cells) row.fill(Cell::Blank);
+    cfg.cells[0][7] = Cell::Solid;  // the wall the kicked jelly reverses off
+    cfg.spawns = {{2, 0}, {2, 4}};
+    cfg.player_count = 2;
+    cfg.seed = 0x4A454C4Cu;  // "JELL"
+    cfg.tuning.input_freeze_ticks = 0;
+    cfg.tuning.fuse_frames = 200;  // long enough for the kick to happen first
+    cfg.born_with_extra[0][static_cast<std::size_t>(PowerupType::Jelly)] = true;
+    cfg.born_with_extra[0][static_cast<std::size_t>(PowerupType::Kick)] = true;
+    cfg.born_with_extra[1][static_cast<std::size_t>(PowerupType::Trigger)] = true;
+    return cfg;
+}
+
+bool holds_live_trigger_bomb(const sim::State& s, int seat) {
+    for (const auto& b : s.bombs)
+        if (b.owner == seat && b.trigger && b.fuse < 0) return true;
+    return false;
+}
+
+void note_bomb_kind_events(const sim::State& s, int t, BuildHashCoverage& cov) {
+    // Only a trigger detonation can put an explosion in these windows: the sole
+    // timed bomb on the board is seat 0's jelly, on a 200-frame fuse. A few ticks
+    // of slack because the key sets the fuse and the blast resolves on the bomb
+    // system's next pass.
+    const bool after_action2 = (t >= 20 && t <= 24) || (t >= 80 && t <= 84);
+    for (const auto& e : s.events) {
+        if (e.type == sim::Event::Type::JellyBounced) ++cov.jelly_bounces;
+        if (e.type == sim::Event::Type::Explosion && after_action2) ++cov.trigger_detonations;
+        // Seat 1's placements only, and only the ones that really came out as a
+        // key-waiting bomb: both seats drop on tick 0, so reading bombs.back()
+        // per BombPlaced event counted seat 0's jelly as a trigger bomb and
+        // reported two where there is one.
+        if (e.type == sim::Event::Type::BombPlaced && e.player == 1 &&
+            holds_live_trigger_bomb(s, 1))
+            ++cov.trigger_bombs;
+    }
+}
+
+std::uint64_t bomb_kind_scenario_hash(BuildHashCoverage* cov) {
+    sim::Simulation sim(bomb_kind_arena());
+    for (int t = 0; t < 300; ++t) {
+        sim.tick(bomb_kind_inputs(t));
+        if (cov != nullptr) note_bomb_kind_events(sim.state(), t, *cov);
+    }
+    return sim.hash();
+}
+
+// Seat 0 walks a lap and drops a bomb every 24 ticks, so the board carries flame
+// the wandering rovers can walk into, and so a rover has a stationary target to
+// land on between drops.
+sim::TickInputs rover_inputs(int t) {
+    sim::TickInputs in;
+    in.players[0].right = (t % 96) < 24;
+    in.players[0].down = (t % 96) >= 24 && (t % 96) < 48;
+    in.players[0].left = (t % 96) >= 48 && (t % 96) < 72;
+    in.players[0].up = (t % 96) >= 72;
+    in.players[0].action1 = (t % 24 == 0);
+    return in;
+}
+
+// 8. CAMPAIGN ROVERS. Their per-tick wander mover draws on State::rng every tick
+// (docs/re/campaign.md), so the whole hazard subsystem — spawn placement, the
+// mover, flame death, the landing-tile kill — is invisible to a digest whose
+// scenarios all leave campaign_rovers at 0. A DEFAULT IS NOT COVERAGE, the same
+// lesson scenario 6 records about diseases_time_limited.
+void note_rover_events(const sim::State& s, BuildHashCoverage& cov) {
+    for (const auto& e : s.events) {
+        if (e.type == sim::Event::Type::RoverSpawned) ++cov.rovers_spawned;
+        if (e.type == sim::Event::Type::RoverDied) ++cov.rover_deaths;
+        if (e.type == sim::Event::Type::RoverKilledPlayer) ++cov.rover_kills;
+    }
+}
+
+std::uint64_t rover_scenario_hash(BuildHashCoverage* cov) {
+    using namespace sim;
+    MatchConfig cfg;
+    for (auto& row : cfg.cells) row.fill(Cell::Blank);
+    cfg.spawns = {{1, 1}};
+    cfg.player_count = 1;
+    cfg.seed = 0x524F5652u;  // "ROVR"
+    cfg.tuning.input_freeze_ticks = 0;
+    cfg.campaign_rovers = 6;
+    cfg.campaign_rover_speed = 300;
+
+    Simulation sim(cfg);
+    // Spawn events are emitted by the CONSTRUCTOR and the first tick() rebuilds
+    // the list, so they have to be read before the loop starts.
+    if (cov != nullptr) note_rover_events(sim.state(), *cov);
+    for (int t = 0; t < 400; ++t) {
+        sim.tick(rover_inputs(t));
+        if (cov != nullptr) note_rover_events(sim.state(), *cov);
+    }
+    return sim.hash();
+}
+
 std::uint32_t fold64(std::uint64_t h) {
     return static_cast<std::uint32_t>(h ^ (h >> 32));
 }
@@ -257,7 +386,8 @@ std::uint32_t build_hash() {
         std::uint64_t h = core_scenario_hash();
         for (const std::uint64_t s :
              {enclosure_scenario_hash(), ai_scenario_hash(), stage_actor_scenario_hash(),
-              ai_gloves_scenario_hash(), disease_scenario_hash()}) {
+              ai_gloves_scenario_hash(), disease_scenario_hash(), bomb_kind_scenario_hash(nullptr),
+              rover_scenario_hash(nullptr)}) {
             h ^= s + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2);
         }
         std::uint32_t v = fold64(h);
@@ -265,6 +395,16 @@ std::uint32_t build_hash() {
         return v;
     }();
     return cached;
+}
+
+BuildHashCoverage build_hash_coverage() {
+    BuildHashCoverage cov;
+    // Re-runs the two scenarios rather than sharing state with build_hash's
+    // cached fold: an accumulator the digest path also wrote would be one more
+    // thing that could make reading the coverage change the number.
+    bomb_kind_scenario_hash(&cov);
+    rover_scenario_hash(&cov);
+    return cov;
 }
 
 }  // namespace bomber::net

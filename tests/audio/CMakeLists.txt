@@ -12,10 +12,21 @@
 # (same source, but a separate TU built with different flags).
 
 # The sound SELECTION engine (sub_427961 & friends).
+#
+# TWO ctest entries over one binary, split on the `install:` case-name prefix.
+# The synthetic cases are what gate the cull table and run everywhere; exactly
+# one case needs an original install and returns early without it, and doctest
+# has no runtime skip — so a single entry reported PASSED for a run that was
+# partly a skip. Filtering separates the two facts: `sound_bank` is a real pass,
+# `sound_bank_install` reports SKIP off the marker the case already printed and
+# nothing consumed.
 add_executable(bomber_sound_bank_tests test_sound_bank.cpp)
 target_link_libraries(bomber_sound_bank_tests
   PRIVATE bomber::audio_core doctest::doctest bomber::warnings)
-add_test(NAME sound_bank COMMAND bomber_sound_bank_tests)
+add_test(NAME sound_bank COMMAND bomber_sound_bank_tests --test-case-exclude=install:*)
+add_test(NAME sound_bank_install COMMAND bomber_sound_bank_tests --test-case=install:*)
+set_tests_properties(sound_bank_install PROPERTIES
+  SKIP_REGULAR_EXPRESSION "SOUND_BANK_SKIP")
 
 # SoundDirector's event -> SOUNDLST-group mapping. The director talks to
 # SoundSink, so the suite substitutes a recorder for AudioEngine. It pins the

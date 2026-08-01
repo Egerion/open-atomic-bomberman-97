@@ -24,6 +24,26 @@ namespace bomber::net {
 // wrongly refuse to play. Computed once, then cached.
 std::uint32_t build_hash();
 
+// EXECUTION WITNESSES for the scenarios whose mechanic a player has to be driven
+// INTO. The digest is opaque, and this file's recurring failure is not a wrong
+// number but a scenario that quietly stops REACHING its mechanic: three fixes
+// have left the digest byte-identical, most recently one whose actors were
+// PLACED in two scenarios and never stepped on. A hash cannot say that happened;
+// these counts can, and tests/net/test_build_hash.cpp asserts them.
+//
+// Test-facing only. Nothing in the game calls this, and it is not mixed into the
+// digest — reading it must never be able to change what two peers compare.
+struct BuildHashCoverage {
+    int jelly_bounces = 0;        // a kicked jelly bomb really reversed
+    int trigger_bombs = 0;        // bombs placed that waited for the key
+    int trigger_detonations = 0;  // ...and were then fired by action2
+    int rovers_spawned = 0;       // campaign hazards really entered the board
+    int rover_deaths = 0;         // ...one walked into a flame
+    int rover_kills = 0;          // ...and one landed on a player
+};
+
+BuildHashCoverage build_hash_coverage();
+
 // Bump when the wire codec/protocol changes shape but sim BEHAVIOUR does not (a
 // behaviour change is caught by the reference-scenario hash instead).
 //
