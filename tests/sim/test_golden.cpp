@@ -6,6 +6,12 @@
 // the constants IN THE SAME COMMIT as the change and cite the docs/re/facts.md
 // entry that justifies it (CLAUDE.md's determinism contract, rule 5).
 //
+// The scenarios themselves live in tests/common/golden_scenarios.hpp, because
+// tests/net/test_build_hash.cpp's rule-7 detector needs the same six runs to
+// answer "did sim behaviour change?" from a source OTHER than build_hash. This
+// file keeps every pinned constant and every non-hash assertion; the header
+// holds only the setup and the per-tick keys.
+//
 // HOW TO RECAPTURE, AND THE PROOF THAT MUST COME WITH IT. A hash is opaque, so a
 // recapture can hide a second, unintended change inside the one you meant. Run
 // BOTH revisions and check the NON-HASH assertions first: golden A's final rng,
@@ -14,6 +20,9 @@
 // byte-identical across the two builds then the change added, removed and
 // reordered no draws — and only then is moving the hashes alone honest. Record
 // in the commit message which scenarios moved and which stayed byte-identical.
+// A recapture also moves the golden FINGERPRINT pinned in
+// tests/net/test_build_hash.cpp; that suite is where you find out whether
+// build_hash moved with it, which rule 7 requires.
 //
 // WHAT EACH SCENARIO DISCRIMINATES. They are not interchangeable, and a scenario
 // that stops REACHING its mechanic silently retires that coverage:
@@ -46,72 +55,20 @@
 #include <doctest/doctest.h>
 
 #include "bomber/sim/simulation.hpp"
+#include "golden_scenarios.hpp"
 
 using namespace bomber::sim;
-
-namespace {
-
-TickInputs pattern(std::uint64_t t) {
-    TickInputs in{};
-    for (int p = 0; p < kMaxPlayers; ++p) {
-        auto& pi = in.players[static_cast<std::size_t>(p)];
-        pi.up = (t + static_cast<std::uint64_t>(p)) % 7 == 0;
-        pi.down = (t + static_cast<std::uint64_t>(p)) % 11 == 1;
-        pi.left = (t * 3 + static_cast<std::uint64_t>(p)) % 5 == 2;
-        pi.right = (t * 5 + static_cast<std::uint64_t>(p)) % 9 == 3;
-        pi.action1 = (t * 31 + static_cast<std::uint64_t>(p)) % 13 == 0;
-        pi.action2 = (t * 17 + static_cast<std::uint64_t>(p)) % 23 == 0;
-    }
-    return in;
-}
-
-MatchConfig pillars_config() {
-    MatchConfig cfg;
-    for (int y = 0; y < kGridHeight; ++y)
-        for (int x = 0; x < kGridWidth; ++x)
-            cfg.cells[y][x] = (x % 2 == 1 && y % 2 == 1) ? Cell::Solid : Cell::Blank;
-    // Disarm the round-start input freeze (facts.md "Round-start input freeze",
-    // VALUELST id 30 ≈ 1 s of dead input): these scenarios were captured acting
-    // from tick 0 and golden E's choreography depends on it. test_freeze.cpp
-    // pins the freeze itself.
-    cfg.tuning.input_freeze_ticks = 0;
-    return cfg;
-}
-
-}  // namespace
+namespace golden = bomber::testing::golden;
 
 TEST_CASE("golden A: empty state, 10000 ticks") {
-    Simulation a;
-    a.state().rng = 42u;
-    // The bare ctor zero-inits ticks_left, which the enclosure reads as "time's
-    // up" and would close walls from tick 0. A was never meant to exercise the
-    // spiral (docs/re/enclosure.md §2/§6 documents it as having no clock), so
-    // seed a countdown generous enough to keep the stepper dormant.
-    a.state().ticks_left = 9999 * kTicksPerSecond;
-    for (std::uint64_t t = 0; t < 10000; ++t) a.tick(pattern(t));
+    Simulation a = golden::make_a();
+    for (std::uint64_t t = 0; t < golden::kTicksA; ++t) a.tick(golden::input_a(t));
     CHECK(a.hash() == 0xd220967578a0d145ull);
     CHECK(a.state().rng == 0x0000002au);
 }
 
 TEST_CASE("golden B: 4-player brick match with all abilities") {
-    MatchConfig cfg;
-    for (int y = 0; y < kGridHeight; ++y)
-        for (int x = 0; x < kGridWidth; ++x)
-            cfg.cells[y][x] = (x % 2 == 1 && y % 2 == 1) ? Cell::Solid : Cell::Brick;
-    cfg.spawns = {{0, 0}, {14, 10}, {14, 0}, {0, 10}};
-    cfg.player_count = 4;
-    cfg.seed = 0xB0BB1E5;
-    cfg.tuning.input_freeze_ticks = 0;  // see pillars_config's disarm note
-    // "Born with" is a starting-inventory BASELINE, not a grant replayed through
-    // PowerupSystem::apply (facts.md "The .SCH -P row's 2nd field is a COUNT
-    // that REPLACES the starting inventory"): the scheme field writes VALUELST
-    // id 50+kind, which IS Tuning::start_with[].
-    cfg.tuning.start_with[static_cast<int>(PowerupType::Kick)] = 1;
-    cfg.tuning.start_with[static_cast<int>(PowerupType::Punch)] = 1;
-    cfg.tuning.start_with[static_cast<int>(PowerupType::Grab)] = 1;
-    cfg.tuning.start_with[static_cast<int>(PowerupType::Spooger)] = 1;
-    cfg.tuning.start_with[static_cast<int>(PowerupType::Jelly)] = 1;
-    Simulation s(cfg);
+    Simulation s = golden::make_b();
     CHECK(s.hash() == 0xb97f8753728e6233ull);  // setup alone is pinned, before any tick
 
     // B is the only roster that both starts with the grab glove and drives the
@@ -127,22 +84,15 @@ TEST_CASE("golden B: 4-player brick match with all abilities") {
         0x462455175efacff9ull,  // tick 2500
         0xc4287cb46255ecfdull,  // tick 3000
     };
-    for (std::uint64_t t = 0; t < 3000; ++t) {
-        s.tick(pattern(t));
+    for (std::uint64_t t = 0; t < golden::kTicksB; ++t) {
+        s.tick(golden::input_b(t));
         if ((t + 1) % 500 == 0) CHECK(s.hash() == kExpected[(t + 1) / 500 - 1]);
     }
 }
 
 TEST_CASE("golden C: trigger bombs and a fast hurry phase") {
-    MatchConfig cfg = pillars_config();
-    cfg.cells[0][2] = Cell::Brick;
-    cfg.spawns = {{0, 0}, {14, 10}};
-    cfg.player_count = 2;
-    cfg.seed = 99;
-    cfg.tuning.game_seconds = 70;
-    cfg.tuning.start_with[static_cast<int>(PowerupType::Trigger)] = 1;  // baseline, see B
-    Simulation s(cfg);
-    for (std::uint64_t t = 0; t < 1500; ++t) s.tick(pattern(t * 7 + 3));
+    Simulation s = golden::make_c();
+    for (std::uint64_t t = 0; t < golden::kTicksC; ++t) s.tick(golden::input_c(t));
     CHECK(s.hash() == 0x0f6cced5cb6934a3ull);
     // Legible companions to the digest, so a stepper regression names itself
     // instead of only moving an opaque hash. The round decides at tick 11 of
@@ -154,26 +104,7 @@ TEST_CASE("golden C: trigger bombs and a fast hurry phase") {
 }
 
 TEST_CASE("golden D: the disease gauntlet") {
-    MatchConfig cfg = pillars_config();
-    cfg.spawns = {{0, 0}, {14, 10}, {7, 0}};
-    cfg.player_count = 3;
-    cfg.seed = 1234;
-    for (auto& c : cfg.tuning.spawn_counts) c = 0;
-    Simulation s(cfg);
-    int k = 0;
-    for (int y = 0; y < kGridHeight; ++y)
-        for (int x = 0; x < kGridWidth; ++x) {
-            if (s.state().cells[y][x] != Cell::Blank) continue;
-            int m = k++ % 5;
-            if (m == 0)
-                s.state().floor[y][x] = PowerupType::Disease;
-            else if (m == 1)
-                s.state().floor[y][x] = PowerupType::SuperDisease;
-            else if (m == 2)
-                s.state().floor[y][x] = PowerupType::Skate;
-            else if (m == 3)
-                s.state().floor[y][x] = PowerupType::Flame;
-        }
+    Simulation s = golden::make_d();
 
     static constexpr std::uint64_t kExpectedHash[4] = {
         0x75310962f429a817ull,  // tick 200
@@ -188,13 +119,8 @@ TEST_CASE("golden D: the disease gauntlet") {
     // after tick 200 because the gauntlet's pickups are all consumed by then.
     static constexpr std::uint32_t kExpectedRng[4] = {0x49cffff6u, 0xf1401d55u, 0xf1401d55u,
                                                       0xf1401d55u};
-    for (std::uint64_t t = 0; t < 800; ++t) {
-        TickInputs in = pattern(t);
-        for (int p = 0; p < kMaxPlayers; ++p) {
-            in.players[p].action1 = false;
-            in.players[p].action2 = false;
-        }
-        s.tick(in);
+    for (std::uint64_t t = 0; t < golden::kTicksD; ++t) {
+        s.tick(golden::input_d(t));
         if ((t + 1) % 200 == 0) {
             CHECK(s.hash() == kExpectedHash[(t + 1) / 200 - 1]);
             CHECK(s.state().rng == kExpectedRng[(t + 1) / 200 - 1]);
@@ -203,45 +129,7 @@ TEST_CASE("golden D: the disease gauntlet") {
 }
 
 TEST_CASE("golden E: jelly ping-pong and a veering punched flight") {
-    // Jelly mechanics per docs/re/facts.md "Bomb machine" (sub_42331C): a kicked
-    // jelly reverses off obstacles, a flying jelly rolls the 1-in-getvalue(667)
-    // veer at each landing boundary. Choreography: drop a jelly bomb, kick it
-    // into a wall so it ping-pongs between the wall and the player, then drop a
-    // second bomb on a free row and punch it east (the veer roll consumes RNG).
-    MatchConfig cfg = pillars_config();
-    cfg.cells[0][7] = Cell::Solid;  // kick wall
-    cfg.spawns = {{2, 0}, {14, 10}};
-    cfg.player_count = 2;
-    cfg.seed = 4242;
-    for (auto& c : cfg.tuning.spawn_counts) c = 0;
-    cfg.tuning.fuse_frames = 200;  // long fuse: room for the ping-pong
-    cfg.tuning.start_with[0] = 3;  // three bombs
-    cfg.tuning.start_with[static_cast<int>(PowerupType::Kick)] = 1;   // baseline, see B
-    cfg.tuning.start_with[static_cast<int>(PowerupType::Punch)] = 1;  // baseline, see B
-    cfg.tuning.start_with[static_cast<int>(PowerupType::Jelly)] = 1;  // baseline, see B
-    Simulation s(cfg);
-
-    auto script = [](std::uint64_t t) {
-        TickInputs in{};
-        auto& p = in.players[0];
-        if (t == 0)
-            p.action1 = true;  // drop jelly bomb at (2,0)
-        else if (t >= 1 && t <= 10)
-            p.left = true;  // step off westward
-        else if (t >= 11 && t <= 18)
-            p.right = true;  // walk back -> kick east
-        else if (t >= 19 && t <= 26)
-            p.down = true;  // leave row 0 to the ping-pong
-        else if (t == 32)
-            p.action1 = true;  // drop bomb #2 at (2,2)
-        else if (t >= 33 && t <= 36)
-            p.left = true;  // one tile west of it
-        else if (t == 40)
-            p.right = true;  // face east (no contact)
-        else if (t == 44)
-            p.action2 = true;  // punch #2 -> flight + veer RNG
-        return in;
-    };
+    Simulation s = golden::make_e();
 
     static constexpr std::uint64_t kExpected[4] = {
         0x4e11a09ce588db56ull,  // tick 75
@@ -250,8 +138,8 @@ TEST_CASE("golden E: jelly ping-pong and a veering punched flight") {
         0xc527e8cf81ba5d96ull,  // tick 300
     };
     int bounces = 0;
-    for (std::uint64_t t = 0; t < 300; ++t) {
-        s.tick(script(t));
+    for (std::uint64_t t = 0; t < golden::kTicksE; ++t) {
+        s.tick(golden::input_e(t));
         for (const auto& e : s.state().events)
             if (e.type == Event::Type::JellyBounced) ++bounces;
         if ((t + 1) % 75 == 0) CHECK(s.hash() == kExpected[(t + 1) / 75 - 1]);
@@ -268,35 +156,7 @@ TEST_CASE("golden E: jelly ping-pong and a veering punched flight") {
 }
 
 TEST_CASE("golden F: a full hurry phase with the round still undecided") {
-    MatchConfig cfg = pillars_config();
-    // Both spawns are ring-4 tiles (min(x, y, 14-x, 10-y) == 4); with
-    // enclosement_depth = 1 the walls close rings 0-1 only, so neither player is
-    // ever crushed and the round stays undecided to the last tick. That is the
-    // whole point: nobody presses a key, nobody dies, sides_remaining stays 2,
-    // and the stepper's round-end gate never trips.
-    cfg.spawns = {{6, 4}, {8, 6}};
-    cfg.player_count = 2;
-    cfg.seed = 0xEC105u;
-    cfg.tuning.game_seconds = 30;
-    cfg.tuning.hurry_seconds = 25;
-    cfg.tuning.enclosement_depth = 1;
-    // One of each actor type, all on ring-4 tiles the spiral never reaches and
-    // none under a player, so the ONLY thing that can change them is the arm
-    // sweep: the warphole pair and the trampoline must go, the belt and the
-    // arrow must stay (sub_405D0C, docs/re/enclosure.md §5.1).
-    cfg.actor_type[4][4] = ActorType::Warphole;
-    cfg.warp_dest_x[4][4] = 10;
-    cfg.warp_dest_y[4][4] = 6;
-    cfg.actor_type[6][10] = ActorType::Warphole;
-    cfg.warp_dest_x[6][10] = 4;
-    cfg.warp_dest_y[6][10] = 4;
-    cfg.actor_type[6][4] = ActorType::Trampoline;
-    cfg.actor_type[4][10] = ActorType::Conveyor;
-    cfg.actor_dir[4][10] = 1;
-    cfg.actor_type[6][6] = ActorType::DirArrow;
-    cfg.actor_dir[6][6] = 2;
-
-    Simulation s(cfg);
+    Simulation s = golden::make_f();
     // The walls arm at tick 180 (30 s clock, hurry 25 ⇒ the arm predicate
     // `remaining <= hurry - 5` first holds with 419 ticks left) and the two-ring
     // spiral's 96th and last tile lands around tick 660.
@@ -306,8 +166,8 @@ TEST_CASE("golden F: a full hurry phase with the round still undecided") {
         0x0b52431bb67422d7ull,  // tick 750  (index 96 — past TimeUp at tick 600)
         0x29426b6cfd46a0daull,  // tick 1000 (spiral exhausted, board static)
     };
-    for (std::uint64_t t = 0; t < 1000; ++t) {
-        s.tick(TickInputs{});
+    for (std::uint64_t t = 0; t < golden::kTicksF; ++t) {
+        s.tick(golden::input_f(t));
         if ((t + 1) % 250 == 0) CHECK(s.hash() == kExpected[(t + 1) / 250 - 1]);
     }
     // Legible assertions alongside the opaque digests, so a regression in the

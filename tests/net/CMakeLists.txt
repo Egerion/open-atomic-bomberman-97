@@ -101,7 +101,12 @@ bomber_add_test(bomber_net_handshake_tests net_handshake test_handshake.cpp)
 target_link_libraries(bomber_net_handshake_tests PRIVATE bomber::net)
 
 # build_hash: the cross-build compatibility digest (ADR-0011) two online peers
-# compare before a match — deterministic, stable, and non-degenerate.
+# compare before a match, and DETERMINISM RULE 7's only detector. It runs
+# tests/sim/test_golden.cpp's six scenarios (tests/common/golden_scenarios.hpp)
+# beside the digest, so the suite can tell a legitimate recapture — both move —
+# from the rule's actual failure, which is behaviour moving while the digest
+# does not. That is why a net suite drives sim scenarios; the two answers have to
+# be independent, and reading them from one place is the whole mechanism.
 bomber_add_test(bomber_net_build_hash_tests net_build_hash test_build_hash.cpp)
 target_link_libraries(bomber_net_build_hash_tests PRIVATE bomber::net)
 
