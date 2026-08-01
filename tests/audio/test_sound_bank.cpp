@@ -341,4 +341,48 @@ TEST_CASE("an empty sound list is inert rather than fatal") {
     CHECK(bank.pick_debounced(135, 0) == -1);
 }
 
+// SECURITY. SOUNDLST.RES is a file on the player's disk and reslist parses its
+// ids with no range check, so `load` sizes two vectors from a number the file
+// chooses. Both of these used to allocate: the first asks for roughly 64 GB of
+// std::string plus 8 GB of counts, the second wraps the cast to about 2^64.
+//
+// What they threw before the guard is the point. bad_alloc and length_error are
+// OUTSIDE this module's documented runtime_error/out_of_range contract, and
+// nothing between SoundBank::load and main catches either — AudioEngine::init
+// wraps the file read but not this call — so a hostile SOUNDLST terminated the
+// process. The guard makes it an out_of_range the caller's contract covers.
+//
+// Note what does NOT pin these: on a box whose page file can absorb the reserve
+// the old code SUCCEEDS, slowly, and a test asserting only the exception type
+// stays green. That is exactly what tests/assets/CMakeLists.txt records for the
+// ANI and PCX cases, which is why this suite now carries a TIMEOUT as well.
+TEST_CASE("SECURITY: a huge sound id is refused rather than allocated") {
+    SoundBank bank;
+    bomber::assets::res::SoundList list;
+    list.names[2000000000] = "HUGE.RSS";
+    CHECK_THROWS_AS(bank.load(list, 1), std::out_of_range);
+    CHECK(bank.size() == 0);
+}
+
+TEST_CASE("SECURITY: a negative-only sound list does not wrap the size cast") {
+    SoundBank bank;
+    bomber::assets::res::SoundList list;
+    list.names[-5] = "NEG.RSS";
+    CHECK_THROWS_AS(bank.load(list, 1), std::out_of_range);
+    CHECK(bank.size() == 0);
+}
+
+TEST_CASE("an id just inside the ceiling still loads") {
+    // The bound is generous on purpose — the shipped file tops out near 3450 —
+    // so this case is what stops a later tightening from locking modders out
+    // without anyone noticing.
+    SoundBank bank;
+    bomber::assets::res::SoundList list;
+    list.names[SoundBank::kMaxSoundId] = "EDGE.RSS";
+    bank.load(list, 1);
+    CHECK(bank.size() == static_cast<std::size_t>(SoundBank::kMaxSoundId) + 1);
+    REQUIRE(bank.name(SoundBank::kMaxSoundId) != nullptr);
+    CHECK(*bank.name(SoundBank::kMaxSoundId) == "EDGE.RSS");
+}
+
 }  // TEST_SUITE

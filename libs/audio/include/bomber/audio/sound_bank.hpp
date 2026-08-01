@@ -26,6 +26,13 @@ public:
     static constexpr int kPickTries = 200;     // sub_427961's literal 0xC8 bound
     static constexpr int kDebounceFrames = 3;  // sub_427ABB's `dword_464994 + 3`
 
+    // NOT an RE fact: a bound on untrusted input. SOUNDLST.RES comes off the
+    // player's disk and its ids are parsed with no range check, so `load` sizes
+    // its tables from a number a file chooses. The shipped file's highest id is
+    // ~3450; this leaves eighteen times that for a modder while capping the
+    // allocation at a couple of megabytes. See the comment at the check.
+    static constexpr int kMaxSoundId = 65535;
+
     // One entry of the cull table `sub_42814B` runs after parsing SOUNDLST.
     struct CullRange {
         int lo;

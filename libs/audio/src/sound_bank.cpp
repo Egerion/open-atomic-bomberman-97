@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <limits>
+#include <stdexcept>
+#include <string>
 
 namespace bomber::game {
 namespace {
@@ -46,7 +48,24 @@ void SoundBank::load(const assets::res::SoundList& list, std::uint32_t seed) {
     plays_.clear();
     if (list.names.empty()) return;
 
+    // SOUNDLST.RES is a file on the player's disk and `reslist.cpp` parses its
+    // ids with `std::stoi`, range-checking nothing — so `max_id` is attacker-
+    // controlled up to INT_MAX, and this used to size two vectors directly from
+    // it. `2000000000,FOO` asks for ~64 GB of `std::string` plus 8 GB of counts,
+    // and a file whose only id is negative wraps the cast to ~2^64. Both throw
+    // `bad_alloc`/`length_error`, which are OUTSIDE this module's documented
+    // runtime_error/out_of_range contract, and nothing between here and `main`
+    // catches them: `AudioEngine::init` wraps `load_sounds` but not this call.
+    //
+    // Same shape as the three allocation bugs fixed in libs/assets on
+    // 2026-07-31 — untrusted input sizing a container before anything proves the
+    // data behind it exists. The ceiling is generous rather than tight: the
+    // shipped file's highest id is ~3450 (the cull table's own last block ends
+    // at 3000 + 50*8 + 49 = 3449), so 65535 leaves a modder eighteen times the
+    // original's range while capping this at a couple of megabytes.
     const int max_id = list.names.rbegin()->first;
+    if (max_id < 0 || max_id > kMaxSoundId)
+        throw std::out_of_range("SOUNDLST: sound id out of range: " + std::to_string(max_id));
     slots_.assign(static_cast<std::size_t>(max_id) + 1, std::string{});
     plays_.assign(static_cast<std::size_t>(max_id) + 1, 0);
     for (const auto& [id, name] : list.names)
