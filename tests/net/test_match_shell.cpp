@@ -652,12 +652,21 @@ TEST_CASE("rematch: the round-rotation numbering keeps walking across a match bo
     // A rematch reuses the socket, so the FIRST round of match 2 must not sit in
     // the tick space match 1's last round was still sending into — the same
     // hazard round_tick_base exists to remove between rounds, one level up.
-    // GameApp walks one counter across both, wrapping well inside uint32.
+    // The netplay runner walks one counter across both, wrapping well inside
+    // uint32. Re-typed from bomber::netplay::kNetRoundBaseWrap (netplay_match.hpp)
+    // rather than included: that header's netplay_state.hpp include pulls the SDL
+    // renderer, which a headless net suite cannot reach.
     constexpr int kWrap = 1024;
     const int last_of_match_1 = 3;
     const int first_of_match_2 = (last_of_match_1 + 1) % kWrap;
-    CHECK(net::round_tick_base(first_of_match_2) > net::round_tick_base(last_of_match_1));
     CHECK(net::round_tick_base(first_of_match_2) - net::round_tick_base(last_of_match_1) ==
           net::kRoundTickStride);
-    CHECK(net::round_tick_base(kWrap - 1) < 0xFFFFFFFFu);
+    // "Well inside uint32", stated so it can fail: the LAST base of the wrap
+    // cycle, computed in 64 bits, is what the 32-bit function returns — no
+    // overflow anywhere in the cycle. At kWrap = 2048 this fires. The runtime
+    // `round_tick_base(kWrap - 1) < 0xFFFFFFFF` it replaces could not: every
+    // uint32 multiple of the 2^22 stride satisfies it.
+    static_assert(
+        std::uint64_t{kWrap - 1} * net::kRoundTickStride == net::round_tick_base(kWrap - 1),
+        "the round-base wrap must fit uint32 without overflow");
 }

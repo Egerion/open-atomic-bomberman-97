@@ -159,6 +159,15 @@ TEST_CASE("the wander turn roll draws exactly the documented RNG shape") {
     // At a tile centre with the ahead tile OPEN: 1 draw (turn chance) plus,
     // only if that draw selects "turn", a 2nd draw (direction) — never more
     // than 2, never 0 (the centring test itself costs nothing).
+    //
+    // The speed-0 walk makes both halves of that claim reachable: 9 x (+100
+    // flat) budget per tick is nine 1-px steps, so ticks 1-4 walk candidate
+    // offsets 1..36 of the 40-px tile (kTileW) — no centre, so the "costs
+    // nothing" half must hold as ZERO draws, not as an always-true disjunct
+    // (this case's original one-tick shape allowed `rng == before` and could
+    // not fail). Tick 5's steps 37..45 land step 40 exactly on the next
+    // centre: turn_at_centre runs once, and the stream must sit on exactly
+    // the 1- or 2-iteration successor of where it started.
     MatchConfig cfg = open_config();
     Simulation s(cfg);
     State& st = s.state();
@@ -172,24 +181,24 @@ TEST_CASE("the wander turn roll draws exactly the documented RNG shape") {
     r.x = centre_x(7);
     r.y = centre_y(5);
     r.dir = 1;
-    r.speed = 0;  // exactly 1 pixel of budget (+100 flat) per tick: slow, easy to reason about
+    r.speed = 0;  // exactly 1 pixel of budget (+100 flat) per sub-frame
     st.rovers.push_back(r);
 
-    std::uint32_t rng_before = st.rng;
-    s.tick(TickInputs{});
-    // Off-centre tick: budget only covers 1px, not a full tile — the RNG
-    // must be untouched (no centre crossed yet) OR advance by the documented
-    // amount if it happened to land exactly on centre this very tick.
-    // Regardless of which, the RNG state must have changed by a value
-    // reachable via 0, 1, or 2 xorshift32 iterations from rng_before.
-    std::uint32_t s0 = rng_before;
-    std::uint32_t s1 = s0 ^ (s0 << 13);
+    const std::uint32_t rng_before = st.rng;
+    for (int i = 0; i < 4; ++i) {
+        s.tick(TickInputs{});
+        CHECK(st.rng == rng_before);  // 9-36 px walked, no centre: zero draws
+    }
+    s.tick(TickInputs{});  // crosses the centre 40 px east of the start
+
+    std::uint32_t s1 = rng_before ^ (rng_before << 13);
     s1 ^= s1 >> 17;
     s1 ^= s1 << 5;
     std::uint32_t s2 = s1 ^ (s1 << 13);
     s2 ^= s2 >> 17;
     s2 ^= s2 << 5;
-    CHECK((st.rng == rng_before || st.rng == s1 || st.rng == s2));
+    CHECK(st.rng != rng_before);            // the turn logic really ran...
+    CHECK((st.rng == s1 || st.rng == s2));  // ...and drew exactly 1 or 2
 }
 
 // ---- Flame death + kill-score event ------------------------------------

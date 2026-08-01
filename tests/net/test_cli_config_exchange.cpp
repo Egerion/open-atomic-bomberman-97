@@ -155,15 +155,15 @@ TEST_CASE("the divergence this closes is real: the two derivations differ") {
     // (and now the port) leaves bricked.
     CHECK(count_bricks(legacy) == count_bricks(patched) - 5);
 
-    // And the warphole's own tile is cleared by BOTH — the one case sub_4056CA
-    // really does write (docs/re/facts.md "Stage actors do not clear the tile
-    // they sit on").
+    // And the warphole's own tile is cleared by the patched derivation — the one
+    // case sub_4056CA really does write (docs/re/facts.md "Stage actors do not
+    // clear the tile they sit on"). The legacy board shares it by construction
+    // (legacy_board() copies the patched board and never touches this cell, and
+    // its seed the same way), so neither is re-asserted here.
     CHECK(patched.cells[8][12] == sim::Cell::Blank);
-    CHECK(legacy.cells[8][12] == sim::Cell::Blank);
 
     // Sanity: this is exactly the shape of a tick-0 desync — same seed, same
     // actors, different cells.
-    CHECK(patched.seed == legacy.seed);
     bool differ = false;
     for (int y = 0; y < sim::kGridHeight && !differ; ++y)
         for (int x = 0; x < sim::kGridWidth; ++x)
@@ -197,8 +197,9 @@ TEST_CASE("CLI exchange: the guest adopts the HOST's board, not the one it would
     // have built for itself.
     CHECK(count_bricks(guest.final_config()) == count_bricks(host_cfg));
     CHECK(count_bricks(guest.final_config()) != count_bricks(guest_would_derive));
+    // (guest_would_derive's own (2,2) blank is legacy_board()'s unconditional
+    // write, not an outcome — asserting it back would restate the fixture.)
     CHECK(guest.final_config().cells[2][2] == sim::Cell::Brick);   // conveyor, kept
-    CHECK(guest_would_derive.cells[2][2] == sim::Cell::Blank);     // what it lost
     CHECK(guest.final_config().cells[8][12] == sim::Cell::Blank);  // warphole, cleared
 }
 

@@ -198,13 +198,12 @@ TEST_SUITE("frame_pacer") {
         for (int i = 0; i < 300; ++i) presents.push_back(loop.run_frame(pacer, true));
 
         for (std::uint64_t t : loop.targets) CHECK((t - loop.anchor) % kSubNs == 0);
-        for (std::size_t i = 1; i < presents.size(); ++i) {
-            // Never early: a present is at or after the boundary it belongs to,
-            // and never presented into a cell already shown.
-            const std::uint64_t idx = sub_index(presents[i], loop.anchor);
-            CHECK(presents[i] >= loop.anchor + idx * kSubNs);
-            CHECK(idx > sub_index(presents[i - 1], loop.anchor));
-        }
+        // Never presented into a cell already shown. ("Never early" needs no
+        // line of its own: a present sits at or after its own cell's boundary
+        // by the definition of subframe_index — floor division — so asserting
+        // it could not fail.)
+        for (std::size_t i = 1; i < presents.size(); ++i)
+            CHECK(sub_index(presents[i], loop.anchor) > sub_index(presents[i - 1], loop.anchor));
         // The stall costs its own sub-frames and nothing more. Each 6-frame
         // cycle advances the index by exactly 10: five on-time frames take one
         // cell each, and the stalled one takes five (four periods of blocked
@@ -274,10 +273,24 @@ TEST_SUITE("frame_pacer") {
         // across a whole tick. Against the hundreds of microseconds of real
         // present/sleep jitter that is nothing, but it means the boundaries are
         // congruent, not identical, and a test must not claim otherwise.
+        // The renderer's half of the agreement is arithmetic on this file's own
+        // constants (the float formula, every symbol test-local), so it is
+        // stated at COMPILE time like the lattice remainder at the top — a
+        // runtime CHECK of it would pass no matter what FramePacer did. The
+        // runtime loop below then holds the pacer's actual subframe_index to
+        // the same cell.
+        static_assert(
+            [] {
+                for (int f = 0; f < kSubFrames; ++f) {
+                    const std::uint64_t acc = static_cast<std::uint64_t>(f) * kSubNs + 1'000;
+                    const auto alpha = static_cast<float>(acc) / static_cast<float>(kTickNs);
+                    if (static_cast<int>(alpha * static_cast<float>(kSubFrames)) != f) return false;
+                }
+                return true;
+            }(),
+            "floor(alpha * kSubFrames) must open cell f where the lattice does");
         for (int f = 0; f < kSubFrames; ++f) {
             const std::uint64_t acc = f * kSubNs + 1'000;  // 1 us into cell f
-            const auto alpha = static_cast<float>(acc) / static_cast<float>(kTickNs);
-            CHECK(static_cast<int>(alpha * static_cast<float>(kSubFrames)) == f);
             CHECK(sub_index(acc, 0) == static_cast<std::uint64_t>(f));
         }
         // The same remainder (see the static_assert at the top) leaves a 5 ns

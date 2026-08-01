@@ -77,8 +77,21 @@ std::string scheme_text(const std::array<int, 10>& teams, const std::string& pow
 constexpr std::array<int, 10> kNoField = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
 // E_VS_W.SCH / N_VS_S.SCH / TENNIS.SCH / VOLLEY.SCH all ship exactly this: the
 // low five slots on one side, the high five on the other. It is deliberately
-// NOT the parity default, so a port that drops the field cannot produce it.
+// NOT the parity default, so a port that drops the field cannot produce it —
+// and that property belongs to the FIXTURE, so it is pinned at compile time: if
+// this array ever drifted onto the parity layout, the layout case below would
+// silently stop discriminating the drop-the-field regression it exists for. (A
+// runtime count of the disagreements, which this replaces, could only fail
+// after the elementwise CHECKs already had.)
 constexpr std::array<int, 10> kFiveVsFive = {0, 0, 0, 0, 0, 1, 1, 1, 1, 1};
+static_assert(
+    [] {
+        int off_parity = 0;
+        for (int i = 0; i < 10; ++i)
+            if (kFiveVsFive[static_cast<std::size_t>(i)] != (i & 1)) ++off_parity;
+        return off_parity == 4;
+    }(),
+    "kFiveVsFive must disagree with the parity default on four slots");
 
 }  // namespace
 
@@ -100,16 +113,10 @@ TEST_CASE("a team-designed scheme produces the layout its author drew") {
 
     std::array<int, 10> team{};
     match::scheme_setup_teams(s, team);
+    // A port that ignores the 4th field again produces the parity default,
+    // which kFiveVsFive's static_assert guarantees these ten CHECKs refuse.
     for (int i = 0; i < 10; ++i)
         CHECK(team[static_cast<std::size_t>(i)] == kFiveVsFive[static_cast<std::size_t>(i)]);
-
-    // ...and it is NOT what the old drop-the-field port produced. Four of the
-    // ten slots disagree with the parity default, so a regression that ignores
-    // the 4th field again cannot pass this.
-    int differs = 0;
-    for (int i = 0; i < 10; ++i)
-        if (team[static_cast<std::size_t>(i)] != (i & 1)) ++differs;
-    CHECK(differs == 4);
 }
 
 TEST_CASE("a partial scheme overrides only the slots it names") {

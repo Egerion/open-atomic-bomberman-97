@@ -43,6 +43,12 @@ constexpr std::size_t kSpawnCountAt = kCellsAt + 5 * kGridBytes;
 // a COUNT that REPLACES the starting inventory").
 constexpr std::size_t kFullConfigBytes = 1829;
 
+// Documented in setup_session's header as the reason the setup layer chunks: a
+// single datagram this big would depend on IP fragmentation surviving the path.
+// Arithmetic on the constant, so stated where it cannot masquerade as a runtime
+// test — the round-trip below already pins the blob to the constant itself.
+static_assert(kFullConfigBytes > 1200, "the full config no longer justifies chunking");
+
 std::string join(const std::vector<std::string>& names) {
     std::string s;
     for (const auto& n : names) {
@@ -83,9 +89,6 @@ TEST_CASE("a fully-populated MatchConfig round-trips field for field") {
     const std::vector<std::uint8_t> blob = net::encode_match_config(full);
 
     CHECK(blob.size() == kFullConfigBytes);
-    // Documented in the header as the reason the setup layer chunks: a single
-    // datagram this big would depend on IP fragmentation surviving the path.
-    CHECK(blob.size() > 1200);
 
     sim::MatchConfig back;
     REQUIRE(net::decode_match_config(blob.data(), blob.size(), &back));

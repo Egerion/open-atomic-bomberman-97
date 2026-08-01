@@ -83,8 +83,7 @@ TEST_CASE("a line longer than the internal stack buffer is not truncated") {
 
     const std::string expected = "front-end PCX '" + long_path + "' load failed";
     REQUIRE(g_recorded.size() == 1);
-    CHECK(g_recorded[0].message.size() == expected.size());  // i.e. nothing was cut at 256
-    CHECK(g_recorded[0].message == expected);
+    CHECK(g_recorded[0].message == expected);  // full equality: nothing was cut at 256
 }
 
 TEST_CASE("set_log_sink returns the previous sink, so callers can nest and restore") {

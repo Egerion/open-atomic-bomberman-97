@@ -8,7 +8,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
-#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <string>
@@ -148,6 +147,5 @@ TEST_CASE("adding a custom level leaves the built-in rotation unchanged") {
     reg_on.add(custom_on);
     const std::vector<int> rotation_on = reg_on.enabled_stages(t);
     CHECK(rotation_on.size() == rotation_before.size() + 1);
-    CHECK(rotation_on.back() == 11);
-    CHECK(std::find(rotation_on.begin(), rotation_on.end(), 11) != rotation_on.end());
+    CHECK(rotation_on.back() == 11);  // appended after the built-ins
 }

@@ -13,7 +13,6 @@
 #include <doctest/doctest.h>
 
 #include "bomber/match/team_colour.hpp"
-#include "bomber/sim/rng.hpp"
 #include "bomber/sim/simulation.hpp"
 
 using namespace bomber::sim;
@@ -57,13 +56,6 @@ Player& add_player(State& st, int slot, int tx, int ty, bool ai, std::uint8_t te
 
 TickInputs idle() {
     return TickInputs{};
-}
-
-int tile_x(const Player& p) {
-    return static_cast<int>(p.x / kTileWF);
-}
-int tile_y(const Player& p) {
-    return static_cast<int>(p.y / kTileHF);
 }
 
 }  // namespace
@@ -168,9 +160,9 @@ TEST_CASE("the enemy finder (behaviour 6) never picks a teammate") {
     // why the claim has to be stated directly and not left inside the guard. Only
     // `alive` used to be asserted here, and that is true by construction (open
     // arena, no enemy, behaviour 4 refuses to bomb a teammate, so nothing can
-    // kill it), so the case had no assertion that could go red.
+    // kill it) — so it is not asserted either; the case's one claim is the line
+    // below.
     CHECK_FALSE(ever_active);
-    CHECK(st.players[0].alive);
     // NOT asserted, and the retraction is the point: this case used to carry a
     // comment claiming the AI "should NOT have marched purposefully toward slot
     // 1", beside a max_x it computed and never read. Measured over these 800
@@ -273,16 +265,24 @@ TEST_CASE("state_hash differs when only Player::team differs") {
 TEST_CASE(
     "an all-zero-team roster hashes identically before/after the team "
     "field existed (regression pin against golden-style byte identity)") {
-    // Two configs that are identical except one explicitly zeroes team[] (a
-    // no-op, since it already defaults to 0) must hash the same — the team word
-    // mixes in a constant 0 for every player on the untamed path.
+    // The perturb-then-undo shape, because the original `cfg2 = cfg1;
+    // cfg2.team.fill(0)` filled zeros over the all-zero default — both operands
+    // were byte-identical by construction and the case compared a hash with
+    // itself. Setting a REAL nonzero team first (and pinning that it moves the
+    // hash) is what makes the fill's restoration a claim that can be wrong: if
+    // setup latched the nonzero value anywhere the fill does not reach, `b`
+    // would keep the poisoned hash instead of returning to the untamed path,
+    // where the team word mixes in a constant 0 for every player.
     MatchConfig cfg1;
     cfg1.player_count = 2;
     cfg1.spawns = {{0, 0}, {5, 5}};
     MatchConfig cfg2 = cfg1;
+    cfg2.team[1] = 9;
+    Simulation poisoned(cfg2);
     cfg2.team.fill(0);
     Simulation a(cfg1), b(cfg2);
-    CHECK(a.hash() == b.hash());
+    CHECK(a.hash() != poisoned.hash());  // the perturbation was real...
+    CHECK(a.hash() == b.hash());         // ...and zeroing it restores byte identity
 }
 
 // ---------------------------------------------------------------------------

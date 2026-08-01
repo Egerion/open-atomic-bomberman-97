@@ -99,7 +99,9 @@ inline sim::TickInputs input_b(std::uint64_t t) {
     return pattern(t);
 }
 
-// --- C: trigger bombs and a fast hurry phase ---------------------------------
+// --- C: trigger duel on a short 70 s clock -----------------------------------
+// (The title once promised "a fast hurry phase" too; the round decides at tick
+// 11 and the round-end freeze holds the stepper, so F carries that coverage.)
 
 inline constexpr std::uint64_t kTicksC = 1500;
 

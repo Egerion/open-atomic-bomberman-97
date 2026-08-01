@@ -3,7 +3,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <set>
 #include <vector>
 
 #include "bomber/audio/death_anim.hpp"
@@ -138,24 +137,19 @@ TEST_CASE("the death overlay covers 341..364, one id per death") {
     // actually AUDIBLE is SoundBank's business (15 of the 24 are empty slots and
     // sub_4278F2 returns without a sound) — the director's job is only to ask
     // for the right slot, so this asserts the mapping across the whole domain.
-    // Sweeping the tick sweeps the domain: 24 consecutive ticks visit all 24.
-    // `seen` is a SET on purpose — as a vector its size counted the loop's own
-    // iterations and would have read 24 whatever the director did, which is no
-    // assertion at all. As a set it is the claim in the case title: 24 ticks
-    // produce 24 DISTINCT ids, so a mapping that collapsed two anims onto one
-    // id fails here even though each individual id still looked in range.
-    std::set<int> seen;
+    // Sweeping the tick sweeps the domain: 24 consecutive ticks visit all 24,
+    // and the per-tick EXACT id is the whole claim — 24 ticks, 24 distinct ids,
+    // each the right one. (This once collected the ids into a container and
+    // asserted its size/bounds too; every such derived figure is implied by the
+    // exact pin, so the summary could only fail after a per-tick CHECK already
+    // had.)
     for (std::uint64_t tick = 0; tick < 24; ++tick) {
         CAPTURE(tick);
         Recorder rec;
         death_at(rec, tick, 0);
         REQUIRE(rec.ids.size() == 2);
         CHECK(rec.ids[1] == static_cast<int>(341 + tick));
-        seen.insert(rec.ids[1]);
     }
-    CHECK(seen.size() == 24);
-    CHECK(*seen.begin() == 341);
-    CHECK(*seen.rbegin() == 364);
 }
 
 TEST_CASE("the death overlay reproduces the original's id collision") {
