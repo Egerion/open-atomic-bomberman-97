@@ -2,8 +2,10 @@
 
 #include <SDL3/SDL.h>
 
+#include <bit>  // popcount / countr_zero — the failover's 2-seat gate + peer seat
 #include <cstdint>
 #include <cstdlib>
+#include <optional>
 #include <string>
 
 #include "bomber/assets/extra.hpp"  // assets::extra::load_for_board
@@ -14,6 +16,8 @@
 #include "bomber/game_util/frontend_util.hpp"  // pick_glue
 #include "bomber/game_util/log.hpp"
 #include "bomber/match/match_factory.hpp"
+#include "bomber/net/migrating_transport.hpp"  // net::MigratingTransport (the failover's seam)
+#include "bomber/net/path_failover.hpp"        // net::PathFailover + net::RelayAllocator
 #include "bomber/net/setup_session.hpp"  // net::SetupSession (the setup stage + the CLI exchange)
 #include "bomber/net/transport.hpp"      // net::Transport (the socket/star/relay seam)
 #include "bomber/net/udp_transport.hpp"  // net::UdpTransport (the CLI + direct/LAN rows)
@@ -241,19 +245,23 @@ AppInput NetplayRunner::run_cli_match(net::UdpTransport& transport, int role, st
 }
 
 AppInput NetplayRunner::run_session(net::Transport& transport, NetSeats seats,
-                                    const NetMatchStart& start, ChatOverlay* chat) {
-    // ONE CONNECTED TRANSPORT, MANY MATCHES. Nothing in this loop may touch the
-    // matchmaker: the server reaps a lobby about 30 s into a match
-    // (HeartbeatInterval 10 x HeartbeatMiss 3), so the control plane is already
-    // gone by the time the first match ends, and `chat` is likewise dead after
-    // the first setup stage. What the peers DO agree over the wire is the
-    // TRANSITION: the match loop's RematchGate holds VICTORY until the HOST
-    // dismisses it, so nobody walks into the next setup stage alone.
+                                    const NetMatchStart& start, ChatOverlay* chat,
+                                    net::PathFailover* failover) {
+    // ONE CONNECTED TRANSPORT, MANY MATCHES. The one thing here that touches
+    // the matchmaker is `failover`, whose pump IS the mid-match heartbeat —
+    // without it the server reaps a lobby about 30 s into a match
+    // (HeartbeatInterval 10 x HeartbeatMiss 3) and with the membership goes the
+    // relay allocation a dead path needs (design §4.2). `chat` is still dead
+    // after the first setup stage — the overlay is a lobby thing. What the
+    // peers DO agree over the wire is the TRANSITION: the match loop's
+    // RematchGate holds VICTORY until the HOST dismisses it, so nobody walks
+    // into the next setup stage alone.
     sim::MatchConfig match_cfg = start.config;
     std::uint32_t match_seed = start.seed;
     NetSessionCarry carry;
     while (true) {
-        const AppInput r = run_netplay_match({seams_, state_, transport, seats, match_cfg, &carry});
+        const AppInput r =
+            run_netplay_match({seams_, state_, transport, seats, match_cfg, &carry, failover});
         if (r == AppInput::Quit || !carry.rematch) return r;
         // The tick space walks on across the match boundary for the reason it
         // walks on across a round boundary (round_rotation.hpp): a datagram still
@@ -524,6 +532,36 @@ net::LobbyFlow::Config lobby_flow_config(const LobbyScreen::OnlineConfig& ocfg) 
     cfg.build_hash = net::build_hash();  // the cross-build door: the server rejects mismatches
     return cfg;
 }
+
+// PathFailover's control-plane seam, over the LobbyFlow that already owns the
+// WebSocket. pump() IS the mid-match heartbeat: LobbyFlow::step heart-beats
+// every phase that holds a seat (Ready included), and nothing else touches the
+// matchmaker once a match starts — without this the server reaps the member in
+// ~30 s and with the membership goes the very allocation a dead path needs.
+class LobbyRelayAllocator final : public net::RelayAllocator {
+public:
+    LobbyRelayAllocator(net::LobbyFlow& flow, std::uint16_t local_seats, std::uint16_t all_seats)
+        : flow_(&flow),
+          peer_seat_(std::countr_zero(static_cast<unsigned>(all_seats & ~local_seats))) {}
+
+    void pump(std::int64_t now_ms) override { flow_->step(now_ms); }
+    void request() override { flow_->request_match_relay(); }
+    Answer answer() const override {
+        if (flow_->match_relay() != nullptr) return Answer::Granted;
+        return flow_->match_relay_refused() ? Answer::Refused : Answer::Pending;
+    }
+    net::Transport* relay_transport() override { return flow_->match_relay(); }
+    // Only ABSENCE means anything (design §4.2's timing asymmetry): a seat gone
+    // from the live roster is a peer whose membership — and so whose own
+    // AllocateRelay — is gone, whether it quit or was reaped. That covers the
+    // one cross-build case too: an old-build peer never heartbeats mid-match,
+    // is reaped, and could never meet us on the relay anyway.
+    bool peer_reachable() const override { return flow_->roster_has_seat(peer_seat_); }
+
+private:
+    net::LobbyFlow* flow_;
+    int peer_seat_;
+};
 }  // namespace
 
 LobbyScreen::OnlineConfig NetplayRunner::online_config() const {
@@ -580,22 +618,42 @@ AppInput NetplayRunner::run_online_session(net::LobbyFlow& flow, ChatOverlay& ch
     // socket itself for a punched pair, the StarHubTransport on the hub of a
     // >2-seat match, or the RelayedTransport when the punch failed. Passing the
     // bare socket — as this did — worked only for the first of the three.
+    //
+    // ...and the SESSION runs over a MigratingTransport wrapping it, so a path
+    // that dies mid-match can be re-pointed at the relay underneath a session
+    // that must not notice (path_failover.hpp; the netdiag.log signature this
+    // answers is in that header).
     net::Transport& link = flow.transport();
+    net::MigratingTransport wire(&link);
+
+    // The failover engine, for the one shape it can help: a 2-seat DIRECT
+    // match. A star has no relay topology (RelayedTransport addresses one
+    // seat), and an already-relayed match has nothing to escalate to — a relay
+    // that dies mid-match keeps today's behaviour, ended by the drop policy.
+    LobbyRelayAllocator allocator(flow, room.local_seats_mask, room.all_seats_mask);
+    std::optional<net::PathFailover> failover;
+    if (!flow.is_relayed() && std::popcount(room.all_seats_mask) == 2) {
+        net::PathFailover::Config fcfg;
+        fcfg.probe_nonce = flow.local_probe_nonce();
+        failover.emplace(wire, link, allocator, fcfg);
+    }
 
     // present_setup stops pumping its session before returning, so the match
     // session has the transport to itself (setup_session.hpp's one obligation —
     // whichever polls first eats the datagram; on the hub that same poll is what
     // keeps the star reflecting).
     const NetSeats seats{room.local_seats_mask, room.all_seats_mask, room.is_host};
-    const NetSetupResult setup = present_setup(link, seats, room.seed, &chat);
-    // Chat stops at the door of the match: the overlay is a lobby thing, and the
-    // WS link closes with the client when the caller returns anyway.
+    const NetSetupResult setup = present_setup(wire, seats, room.seed, &chat);
+    // Chat stops at the door of the match: the overlay is a lobby thing. The WS
+    // client itself stays up — the failover engine's pump keeps heart-beating it
+    // through the match (run_session).
     chat.close();
     if (setup.input == AppInput::Quit) return AppInput::Quit;
     if (setup.input != AppInput::Advance) return AppInput::Advance;
-    // Later setup stages run without chat — see run_session on why nothing below
-    // here may depend on the server.
-    return run_session(link, seats, NetMatchStart{room.seed, setup.config});
+    // Later setup stages run without chat — see run_session on what mid-match
+    // control-plane traffic is now deliberate and what still is not.
+    return run_session(wire, seats, NetMatchStart{room.seed, setup.config}, nullptr,
+                       failover ? &*failover : nullptr);
 }
 
 AppInput NetplayRunner::present_online(bool host, bool browse, bool is_public) {

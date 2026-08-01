@@ -291,6 +291,9 @@ std::string format_session_log_line(const SessionSummary& s) {
     if (n.desynced) appendf(out, " desync_tick=%u", static_cast<unsigned>(n.desync_tick));
     if (n.dropped_seats != 0)
         appendf(out, " dropped_seats=0x%03X", static_cast<unsigned>(n.dropped_seats));
+    // One token, no spaces (PathFailover::log_token), so the line stays
+    // key=value greppable; omitted entirely when the failover never fired.
+    if (!s.failover.empty()) appendf(out, " failover=%s", s.failover.c_str());
     if (!n.clocked) out.append(" clock=none");
     for (int i = 0; i < sim::kMaxPlayers; ++i) {
         const PeerStats& p = n.peers[static_cast<std::size_t>(i)];

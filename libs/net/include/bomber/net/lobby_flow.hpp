@@ -112,6 +112,34 @@ public:
     Transport& transport();
     bool is_relayed() const { return relay_ != nullptr; }
 
+    // --- mid-match relay failover (design §4.2; path_failover.hpp drives it) --
+    //
+    // The match keeps this flow alive by PUMPING step() (which heartbeats every
+    // phase holding a seat, Ready included — that is what keeps the membership
+    // AllocateRelay requires from being reaped ~30 s into the match). When the
+    // failover engine fires, it asks HERE for the allocation; the answer rides
+    // the same poll pump. No server change: handleAllocateRelay is ungated and
+    // idempotent per (lobby, seat), PROTOCOL.md §6.1.
+
+    // Ask for this seat's allocation while Ready. Idempotent; a no-op in any
+    // other phase (the pre-match fallback owns those) or once a relay exists.
+    void request_match_relay();
+    // The relay wrapper, once RelayAllocated lands. The engine — not this flow —
+    // verifies it and swaps the session onto it; phase stays Ready throughout.
+    RelayedTransport* match_relay() { return relay_.get(); }
+    // The server refused (any Error while the mid-match request was the only
+    // outstanding one — the same reading the pre-match fallback applies).
+    bool match_relay_refused() const { return match_relay_refused_; }
+    // Does the live roster still hold `seat`? A seat that VANISHED mid-match is
+    // a peer whose membership is gone (it quit, or was reaped) and whose own
+    // AllocateRelay can only be refused. Presence proves nothing — the reaper
+    // takes up to 40 s (design §4.2's timing asymmetry) — so callers may act
+    // only on absence.
+    bool roster_has_seat(int seat) const;
+    // This peer's probe nonce, for the failover's LinkProbe — the same per-seat
+    // derivation the punch used, so the two ends recognise each other's probes.
+    std::uint32_t local_probe_nonce() const { return seat_nonce(my_seat_); }
+
     // The most recent public match list, and a counter the browser screen can
     // watch to know a fresh answer arrived (rather than polling for changes).
     const std::vector<PublicLobby>& public_lobbies() const { return public_lobbies_; }
@@ -265,6 +293,10 @@ private:
     bool candidates_sent_ = false;
     bool stun_pending_ = false;  // a reflexive candidate may still be added
     bool relay_requested_ = false;
+    // The mid-match (Ready-phase) allocation, kept apart from relay_requested_:
+    // the pre-match fallback moves the PHASE and the failover must not.
+    bool match_relay_requested_ = false;
+    bool match_relay_refused_ = false;
 };
 
 }  // namespace bomber::net

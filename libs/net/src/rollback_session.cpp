@@ -453,8 +453,21 @@ std::uint32_t RollbackSession::resend_from() const {
     // inputs the peer that is ahead has finalised and stopped re-sending.
     // Measured on a 3-seat star that wedged eight ticks apart; defensive rather
     // than covered here (docs/net-rollback.md §3).
-    if (!migration_healing()) return confirmed_;
+    //
+    // A mid-match one-way outage (path_failover.hpp) is the 2-seat instance of
+    // the SAME asymmetry: the hearing side finalises the deaf side's last ~cap
+    // ticks and walks its window past the hole. Measured before
+    // widen_resend_window existed: the healed link reconnected two live peers
+    // whose frontiers then never moved again.
+    if (!migration_healing() && !resend_widened()) return confirmed_;
     return oldest_slot_ < confirmed_ ? oldest_slot_ : confirmed_;
+}
+
+void RollbackSession::widen_resend_window() {
+    // Raised, never lowered, exactly as heal_until_ is — asking again while a
+    // widening is still open can only extend it.
+    const std::uint32_t until = confirmed_ + kMigrationRewindWindow;
+    if (until > widen_until_) widen_until_ = until;
 }
 
 bool RollbackSession::rewind_for_migration(std::uint32_t at_tick) {
@@ -618,11 +631,16 @@ void RollbackSession::broadcast_end_round() {
 
 void RollbackSession::prune() {
     // Everything strictly below confirmed_ is final and never needed again —
-    // UNLESS host migration is on, where rewind_for_migration() may move the
-    // frontier BACKWARDS onto a tick whose snapshot would otherwise be gone.
-    std::uint32_t keep_from = confirmed_;
-    if (migration_enabled())
-        keep_from = (confirmed_ > kMigrationRewindWindow) ? confirmed_ - kMigrationRewindWindow : 0;
+    // with two exceptions that both keep a rewind window: host migration, where
+    // rewind_for_migration() may move the frontier BACKWARDS onto a tick whose
+    // snapshot would otherwise be gone, and the mid-match path failover, where
+    // resend_from() must re-send ticks the peer's one-way outage swallowed
+    // (widen_resend_window). The second cannot be gated on anything known here —
+    // by the time the switch happens the hole is already below confirmed_ and
+    // pruned, so the window is retained UNCONDITIONALLY: ~64 ticks of slots and
+    // snapshots, the price migration-enabled sessions always paid.
+    const std::uint32_t keep_from =
+        (confirmed_ > kMigrationRewindWindow) ? confirmed_ - kMigrationRewindWindow : 0;
     for (auto it = slots_.begin(); it != slots_.end();)
         it = (it->first < keep_from) ? slots_.erase(it) : std::next(it);
     for (auto it = snapshots_.begin(); it != snapshots_.end();)

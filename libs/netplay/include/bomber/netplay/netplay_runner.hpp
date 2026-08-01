@@ -31,6 +31,7 @@ namespace bomber::net {
 class Transport;     // the abstract seam: a bare socket, the star hub, or the relay
 class UdpTransport;  // the concrete socket the CLI and the direct/LAN rows bind
 class LobbyFlow;     // the lobby control plane; only the guarded leaves touch it
+class PathFailover;  // the mid-match dead-path detector + relay switch
 }  // namespace bomber::net
 
 namespace bomber::game {
@@ -85,8 +86,11 @@ private:
     // roster/map screens with the link intact — the transport used to die with
     // the first match, so a rematch meant re-punching through a lobby the
     // matchmaker had already reaped. `start` is round 0 of the FIRST match.
+    //
+    // `failover` is the mid-match dead-path engine (online 2-seat direct matches
+    // only); the LAN/CLI paths have no control plane and pass nothing.
     AppInput run_session(net::Transport& transport, NetSeats seats, const NetMatchStart& start,
-                         ChatOverlay* chat = nullptr);
+                         ChatOverlay* chat = nullptr, net::PathFailover* failover = nullptr);
 
     // THE ONLINE SETUP STAGE (docs/re/network-screens.md §7, ADR-0011): the real
     // roster/AI and map screens between the connect step and the match, over the

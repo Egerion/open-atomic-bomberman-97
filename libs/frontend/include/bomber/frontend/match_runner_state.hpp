@@ -19,6 +19,7 @@
 // forward-declared, never included, so the heavy net/sim-coupled header stays out
 // of every screen TU that pulls this seam in.
 namespace bomber::net {
+class PathFailover;
 class RollbackSession;
 }  // namespace bomber::net
 
@@ -98,6 +99,10 @@ struct MatchRunnerState {
     // cadence) through the session. Every non-netplay caller leaves it null, so
     // the sim tick/seed path — and the golden hashes — are untouched.
     net::RollbackSession* net_session = nullptr;
+    // The mid-match path failover (path_failover.hpp), pumped beside the
+    // session. Null everywhere a failover is impossible — every local path, the
+    // LAN/CLI rows, stars, already-relayed matches — and on every golden path.
+    net::PathFailover* net_failover = nullptr;
     std::uint16_t net_local_seats = 0;  // this peer's human-seat bitmask (bit s == seat s)
     bool net_is_host = false;  // stopping the match is host-only; leaving is not
 

@@ -10,7 +10,9 @@ void MigratingTransport::send(const std::uint8_t* data, std::size_t size) {
 }
 
 bool MigratingTransport::poll(std::vector<std::uint8_t>* out) {
-    return target_ != nullptr && target_->poll(out);
+    if (target_ == nullptr || !target_->poll(out)) return false;
+    ++rx_polled_;
+    return true;
 }
 
 }  // namespace bomber::net

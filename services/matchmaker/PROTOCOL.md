@@ -197,11 +197,15 @@ is kept, and a RosterUpdate is broadcast — re-opening joins.
 > example above used to show one). More importantly the shipping client never
 > sends `MatchOver`: **rematch is peer-to-peer** over the already-connected game
 > transport (`net::RematchSession`), deliberately not through the matchmaker.
-> `netplay_runner.cpp` says why — the server reaps a lobby about 30 s into a
-> match (heartbeat 10 s × 3 misses) and the client stops pumping `LobbyFlow` once
-> the match begins, so by the time a match ends the control plane is already
-> gone and there is nothing left to tell. Read this entry as "re-open a lobby
-> that is still alive", not as the rematch mechanism.
+> `netplay_runner.cpp` says why — historically the client stopped pumping
+> `LobbyFlow` once the match began, so the server reaped the lobby about 30 s in
+> (heartbeat 10 s × 3 misses) and there was nothing left to tell by match end.
+> As of 2026-08-01 a 2-seat direct match DOES keep heart-beating mid-match (the
+> path-failover engine's pump, `libs/net/.../path_failover.hpp` — it needs the
+> membership for a mid-match §6.1 `AllocateRelay`), but rematch stays P2P: a
+> lobby surviving is an ordinary heartbeat consequence, not a contract change,
+> and nothing may depend on it. Read this entry as "re-open a lobby that is
+> still alive", not as the rematch mechanism.
 
 ### Chat → Chat (fan-out — see §7)
 ```json

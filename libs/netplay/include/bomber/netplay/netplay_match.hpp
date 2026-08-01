@@ -16,7 +16,8 @@
 // namespace, so nothing net-shaped crosses this header.
 
 namespace bomber::net {
-class Transport;  // the abstract seam: a bare socket, the star hub, or the relay
+class Transport;     // the abstract seam: a bare socket, the star hub, or the relay
+class PathFailover;  // the mid-match dead-path detector + relay switch (design §4.2)
 }  // namespace bomber::net
 
 namespace bomber::game {
@@ -77,6 +78,12 @@ struct NetMatchRun {
     NetSeats seats;
     const sim::MatchConfig& config;
     NetSessionCarry* carry = nullptr;
+    // The mid-match path failover, or nullptr where none is possible (LAN/CLI —
+    // no control plane; a star or an already-relayed match — no relay topology
+    // to escalate to). When set, `transport` is the MigratingTransport the
+    // engine re-points; the loop pumps the engine every session pump and
+    // through the between-rounds gates, and its verdict lands in netdiag.log.
+    net::PathFailover* failover = nullptr;
 };
 
 // Build a byte-identical arena and play rounds until somebody clinches, somebody
