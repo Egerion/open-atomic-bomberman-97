@@ -37,3 +37,4 @@ bomber_add_test(bomber_fidelity_tests    fidelity_audit    test_fidelity_audit.c
 bomber_add_test(bomber_diarrhea_tests    diarrhea_throw    test_diarrhea_throw.cpp)
 bomber_add_test(bomber_placement_diag_tests placement_diag test_placement_diag.cpp)
 bomber_add_test(bomber_goldman_award_tests goldman_award   test_goldman_award.cpp)
+bomber_add_test(bomber_hash_coverage_tests hash_coverage   test_hash_coverage.cpp)

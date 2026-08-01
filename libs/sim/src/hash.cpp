@@ -1,33 +1,144 @@
 // FNV-1a digest of the gameplay state. Every field that influences gameplay
-// MUST be mixed in here (determinism contract rule 4); State::events and the
-// AI's danger/obstacle grids are derived per-tick outputs and are excluded.
+// MUST be mixed in here (determinism contract rule 4).
+//
+// THE EXCLUSION REGISTER. Everything in State/Player/Bomb/Brain/Rover is hashed
+// EXCEPT the five below, and this list is exhaustive on purpose: until the
+// 2026-08-01 sweep the packed words documented their UNUSED BITS to the bit
+// while nine genuinely missing fields went unmentioned, so a reader could not
+// tell a deliberate omission from a forgotten one. If you add a field, either
+// mix it or add it here with a reason.
+//   State::events     derived per-tick output: rebuilt every tick, never read
+//                     back by the sim (rule 4 names it explicitly).
+//   State::sub_trace  the same, for the renderer's intra-tick motion replay.
+//   State::tuning     static per-match config. Two peers holding different
+//                     tuning diverge in gameplay within a few ticks and the
+//                     hash catches it there; SetupSession puts the host's copy
+//                     on the wire, and build_hash guards the code that reads it.
+//   State::forbidden  static per-match config, as tuning.
+//   AISystem::danger_/obstacle_  not State at all — per-tick caches rebuilt from
+//                     hashed inputs and owned by the system.
+// Two fields are hashed that a reader might expect here, and are NOT excluded:
+// Bomb::fly_arc and Rover::anim_step drive only draw height and draw frame, but
+// both are persistent struct state rather than per-tick outputs, so rule 4
+// covers them and nobody has to relitigate it per field.
 //
 // The exact byte layout is part of the golden-hash contract
 // (tests/sim/test_golden.cpp), so the comments below record what each PACKED
 // word's bit ranges mean and which ranges are deliberately left unused. Growing
 // the layout is a deliberate act: it shifts every pinned constant even when no
 // gameplay moved, and the goldens are recaptured in the same commit.
+//
+// tests/sim/test_hash_coverage.cpp is the mechanical check on all of the above:
+// it perturbs every field of every struct and fails on any that leaves the
+// digest unmoved, and it pins the exclusions above by asserting they DON'T.
 
 #include "bomber/sim/simulation.hpp"
 
 #include "grid.hpp"
 
 namespace bomber::sim {
+namespace {
 
-std::uint64_t state_hash(const State& s) {
+// The FNV-1a accumulator as a callable, so a per-struct mixer can be lifted out
+// of state_hash without either copying the fold or changing a single call site:
+// `mix(word)` reads the same in here as it did as a lambda. The BYTE STREAM is
+// the golden-hash contract, so a mixer that moves out must fold exactly the
+// same words in exactly the same order.
+struct Fnv {
     std::uint64_t h = 1469598103934665603ULL;
-    auto mix = [&h](std::uint64_t v) {
+    void operator()(std::uint64_t v) {
         for (int i = 0; i < 8; ++i) {
             h ^= (v >> (i * 8)) & 0xFF;
             h *= 1099511628211ULL;
         }
-    };
+    }
+};
+
+// One bomb. Lifted out of state_hash rather than nested inside its loop because
+// the airborne block below is a second level of nesting, and the complexity
+// ratchet (scripts/complexity.sh) charges for depth: state_hash is baselined at
+// 26 and may not get worse.
+void mix_bomb(Fnv& mix, const Bomb& b) {
+    mix(static_cast<std::uint64_t>(b.id));  // the pending-chain queue's key
+    mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.x)) |
+        (static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.y)) << 32));
+    // Bits: 0 fuse, 32 flame, 40 moving, 41 flying, 42 jelly, 43 stop_pending
+    // (the sub_4247C5/+57 kick-stop flag, which decides where a sliding bomb
+    // halts), 44 colour (a slot < kMaxPlayers, 4 bits; equal to `owner` except
+    // on a chain-transferred bomb's final tick), 48 owner, 56 trigger, 57
+    // active, 58 dir (6 bits).
+    //
+    // jelly, trigger, dir and active were absent until the 2026-08-01 rule-4
+    // sweep. jelly decides whether a kicked bomb reverses off an obstacle and
+    // whether a flight boundary DRAWS the veer roll — a divergence there
+    // desynchronises the RNG stream itself, not just the board. trigger decides
+    // eligibility for detonate_triggered; dir is the slide and flight heading.
+    // Bit 42 held a bomb warp latch removed 2026-07-10 (bombs never warp:
+    // sub_4230A5 blocks entry to a warphole tile outright, facts.md
+    // "Bomb/warphole reconciliation") and was left free to keep the other shifts
+    // stable, so spending it on jelly costs nothing. fly_ticks MOVED to the
+    // flight word below, where it and fly_total get 32 bits each: the 6-bit mask
+    // it had here overflows silently once VALUELST id 301 (punched_bomb_speed)
+    // is tuned down far enough to make a leg 64+ ticks.
+    // One field per line: this IS the bit table the comment above describes, and
+    // packing two shifts onto a line (which the shorter indent now leaves room
+    // for) makes it unreviewable against that map.
+    // clang-format off
+    mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.fuse)) |
+        (static_cast<std::uint64_t>(b.flame) << 32) |
+        (static_cast<std::uint64_t>(b.moving) << 40) |
+        (static_cast<std::uint64_t>(b.flying) << 41) |
+        (static_cast<std::uint64_t>(b.jelly) << 42) |
+        (static_cast<std::uint64_t>(b.stop_pending) << 43) |
+        (static_cast<std::uint64_t>(b.colour & 0xF) << 44) |
+        (static_cast<std::uint64_t>(b.owner) << 48) |
+        (static_cast<std::uint64_t>(b.trigger) << 56) |
+        (static_cast<std::uint64_t>(b.active) << 57) |
+        (static_cast<std::uint64_t>(static_cast<std::uint8_t>(b.dir) & 0x3F) << 58));
+    // clang-format on
+    // fuse_init (+74) feeds the throw restart and the trigger-eviction relight
+    // (facts.md "Core-feel audit" §2/§5).
+    mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.dud_left)) |
+        (static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.fuse_init)) << 32));
+    // created_tick (+64) gates same-tick trigger detonation (bombs.md #4).
+    mix(b.created_tick);
+    // The airborne leg, gated on `flying` exactly as the carried-bomb payload is
+    // gated on `carrying`: BombSystem::fly and the renderer are the only readers
+    // and both test `flying` first, so on a grounded bomb these are a stale leg
+    // nothing consults and the next launch() rewrites all six together. fly_arc
+    // drives only the draw height, and is hashed on the same ground as
+    // Rover::anim_step (rover.hpp) — persistent struct state, not a per-tick
+    // derived output, so rule 4 covers it and no reader has to relitigate
+    // whether it counts as gameplay.
+    if (!b.flying) return;
+    mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.fly_ticks)) |
+        (static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.fly_total)) << 32));
+    mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.from_x)) |
+        (static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.from_y)) << 32));
+    mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.to_x)) |
+        (static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.to_y)) << 32));
+    mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.fly_arc)));
+}
+
+}  // namespace
+
+std::uint64_t state_hash(const State& s) {
+    Fnv mix;
     mix(s.tick);
     mix(s.rng);
     mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(s.ticks_left)));
     mix(static_cast<std::uint64_t>(s.hurry) |
         (static_cast<std::uint64_t>(static_cast<std::uint32_t>(s.enclose_index)) << 8) |
         (static_cast<std::uint64_t>(static_cast<std::uint32_t>(s.enclose_timer)) << 40));
+    // The spiral's ARMED flag as much as its cadence: EnclosureSystem::update
+    // arms once on the first closing tick and gates the whole drop branch on
+    // `enclose_interval > 0`, so two peers can disagree about whether the walls
+    // are closing at all. A non-zero interval is IMPLIED by the non-zero
+    // enclose_timer hashed above and NOTHING ENFORCES THAT, which is what kept
+    // the gap latent rather than absent. Its own word, not spare bits in the
+    // word above: the field is an int32 and a masked pack would trade this
+    // hazard for the silent-truncation one.
+    mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(s.enclose_interval)));
     mix(s.dud_gate);
     // Bomb-id allocator: grows by one per bomb ever created, and the pending-
     // chain queue below re-finds bombs by that id (facts.md "Chain-reaction
@@ -175,33 +286,7 @@ std::uint64_t state_hash(const State& s) {
             (static_cast<std::uint64_t>(static_cast<std::uint32_t>(br.enemy_seek.timer)) << 32));
     }
 
-    for (const auto& b : s.bombs) {
-        mix(static_cast<std::uint64_t>(b.id));  // the pending-chain queue's key
-        mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.x)) |
-            (static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.y)) << 32));
-        // Bits: 0 fuse, 32 flame, 40 moving, 41 flying, 43 stop_pending (the
-        // sub_4247C5/+57 kick-stop flag, which decides where a sliding bomb
-        // halts), 44 colour (a slot < kMaxPlayers, 4 bits; equal to `owner`
-        // except on a chain-transferred bomb's final tick), 48 owner, 56
-        // fly_ticks. Bit 42 formerly held a bomb warp latch, removed 2026-07-10:
-        // bombs never warp in the original, since sub_4230A5 blocks entry to a
-        // warphole tile outright (facts.md "Bomb/warphole reconciliation"). Left
-        // unused rather than reassigned, to keep every other shift stable.
-        mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.fuse)) |
-            (static_cast<std::uint64_t>(b.flame) << 32) |
-            (static_cast<std::uint64_t>(b.moving) << 40) |
-            (static_cast<std::uint64_t>(b.flying) << 41) |
-            (static_cast<std::uint64_t>(b.stop_pending) << 43) |
-            (static_cast<std::uint64_t>(b.colour & 0xF) << 44) |
-            (static_cast<std::uint64_t>(b.owner) << 48) |
-            (static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.fly_ticks) & 0x3F) << 56));
-        // fuse_init (+74) feeds the throw restart and the trigger-eviction
-        // relight (facts.md "Core-feel audit" §2/§5).
-        mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.dud_left)) |
-            (static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.fuse_init)) << 32));
-        // created_tick (+64) gates same-tick trigger detonation (bombs.md #4).
-        mix(b.created_tick);
-    }
+    for (const auto& b : s.bombs) mix_bomb(mix, b);
 
     // Pending chain-detonation queue (facts.md "Chain-reaction timing",
     // sub_423209's dword_4621F8/FC/462200): it determines which bombs forcibly
@@ -221,9 +306,16 @@ std::uint64_t state_hash(const State& s) {
         mix(static_cast<std::uint64_t>(r.alive) |
             (static_cast<std::uint64_t>(static_cast<std::uint8_t>(r.kind)) << 8) |
             (static_cast<std::uint64_t>(r.dir) << 16) |
-            (static_cast<std::uint64_t>(static_cast<std::uint32_t>(r.speed)) << 24) |
             (static_cast<std::uint64_t>(r.anim_step) << 48));
-        mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(r.move_budget)));
+        // speed moved down beside move_budget, where both get a clean 32 bits.
+        // At `<< 24` in the word above its uint32 spanned bits 24-55 and OVERLAID
+        // anim_step's 48-63, so the two ORed together and distinct (speed,
+        // anim_step) pairs could collide into one word. Every field WAS mixed —
+        // this is the other half of rule 4, that mixing a field and DISCRIMINATING
+        // it are not the same thing. Latent only because a .CAM speed never
+        // reaches 2^24; nothing enforces that either.
+        mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(r.move_budget)) |
+            (static_cast<std::uint64_t>(static_cast<std::uint32_t>(r.speed)) << 32));
     }
 
     // Campaign hazard-active flag + grace timer (docs/re/campaign.md "Round
@@ -233,7 +325,7 @@ std::uint64_t state_hash(const State& s) {
     mix(static_cast<std::uint64_t>(s.campaign_hazards_active) |
         (static_cast<std::uint64_t>(static_cast<std::uint32_t>(s.hazard_clear_timer)) << 8) |
         (static_cast<std::uint64_t>(static_cast<std::uint32_t>(s.input_freeze) & 0xFFFF) << 40));
-    return h;
+    return mix.h;
 }
 
 }  // namespace bomber::sim
