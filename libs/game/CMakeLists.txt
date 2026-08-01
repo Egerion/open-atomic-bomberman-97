@@ -1,9 +1,9 @@
 # bomber::game — the APPLICATION SHELL, and only that.
 #
-# GameApp: SDL/window/renderer lifetime, the install resolve, the options.ini
-# round trip, the shared services every screen borrows through a ScreenContext,
-# and the AppState loop that hands control to one screen at a time. It owns
-# nothing that draws; it owns who draws next.
+# GameApp: SDL/window/renderer lifetime, the install resolve, the shared services
+# every screen borrows through a ScreenContext, and the AppState loop that hands
+# control to one screen at a time. It owns nothing that draws; it owns who draws
+# next.
 #
 # This directory used to be the whole presentation layer — 112 files, 73 public
 # headers in one include/bomber/game/. It is now the top of an eight-package
@@ -12,14 +12,20 @@
 # public headers, and the arrows point one way only, so a change inside one of
 # them cannot silently reach sideways into another.
 #
-# The remaining work here is GameApp itself, which is still a single ~740-line
-# class. Splitting it is the next step, not this one.
+# app_options.hpp is the only PUBLIC header besides game_app.hpp; the four units
+# under src/ are private, each taking a by-reference slot bundle the shell builds
+# on demand.
 if(NOT BOMBER_BUILD_VIEWER)
   return()
 endif()
 
 add_library(bomber_game_core STATIC
+  src/app_settings.cpp
+  src/boot_loading.cpp
+  src/capture_runs.cpp
   src/game_app.cpp
+  src/global_hotkeys.cpp
+  src/window_icon.cpp
 )
 add_library(bomber::game ALIAS bomber_game_core)
 
