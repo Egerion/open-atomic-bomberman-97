@@ -7,7 +7,6 @@
 #include <cctype>
 #include <cstddef>
 #include <exception>
-#include <system_error>
 
 #include "bomber/assets/image.hpp"
 #include "bomber/game_util/credits_addendum.hpp"
@@ -47,10 +46,6 @@ constexpr int kImageBleed = 16;
 constexpr Rgb kInk{255, 255, 255};
 
 constexpr float kButtonRowY = 388.0f;  // window-relative
-
-// HelpBrowser's list item ink — byte_49D38F again, the SAME ink
-// SchemeFilePicker's list uses at the identical (100,100) call site (§4/§5).
-constexpr Rgb kListInk{255, 255, 255};
 
 // The browser's two error dialogs (§4) draw in byte_49D0DA — PINNED in
 // results-and-options.md §1's LUT table (offset 0x7D4A -> (252,80,80)), which
@@ -379,45 +374,21 @@ void BmScreen::draw(SDL_Renderer* ren) const {
 
 // --- HelpBrowser ------------------------------------------------------------
 
-namespace {
-
-bool has_extension(const std::filesystem::path& p, const char* upper_ext) {
-    std::string ext = p.extension().string();
-    for (auto& c : ext) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    return ext == upper_ext;
-}
-
-}  // namespace
-
 void HelpBrowser::enter(bool manual_enabled) {
-    entries_.clear();
-    nav_ = ListDialogNav{};
-    item_w_ = 0.0f;
-    pressed_ = ListDialogWidget::None;
+    list_.reset();
     viewing_ = false;
     done_ = false;
     // sub_414235's own first act: gate on getvalue(15) BEFORE the *.BM glob even
     // runs (§4).
     disabled_ = !manual_enabled;
     if (disabled_ || !assets_) return;
-    // sub_41404B: a DOS findfirst/findnext glob of "*.BM" over the install ROOT
-    // (not DATA/), qsort_-sorted. directory_iterator plus a case-insensitive
-    // extension check is the faithful equivalent — the original glob is
-    // case-insensitive on the FAT install media.
-    std::error_code ec;
-    const std::filesystem::path& root = assets_->game_dir();
-    if (!std::filesystem::is_directory(root, ec)) return;
-    for (const auto& entry : std::filesystem::directory_iterator(root, ec)) {
-        if (entry.is_regular_file() && has_extension(entry.path(), ".BM"))
-            entries_.push_back(entry.path());
-    }
-    std::sort(entries_.begin(), entries_.end());  // qsort_(sub_41400F, count)
-    // sub_42FEF0 @0x42DC16 — the widest ITEM alone drives the width (the widget
-    // folds the title in itself). Measured once here so the mouse handlers can
-    // rebuild the same layout cheaply.
-    if (!font_) return;
-    for (const auto& e : entries_)
-        item_w_ = std::max(item_w_, static_cast<float>(font_->measure(e.filename().string())));
+    // sub_41404B over the install ROOT (not DATA/). The glob, the
+    // case-insensitive extension match and the PINNED uppercased-filename sort
+    // all live in ListPicker — this browser used to sort the full paths
+    // case-sensitively against the same citation.
+    list_.set_header(header());
+    list_.glob(assets_->game_dir(), ".BM");
+    list_.measure_rows([this](int i) { return row_text(i); });
 }
 
 std::string HelpBrowser::header() const {
@@ -425,23 +396,21 @@ std::string HelpBrowser::header() const {
                    : std::string("Available help files:");
 }
 
-ListDialogGeometry HelpBrowser::layout() const {
-    return list_dialog_layout_for(
-        *font_, ListDialogSpec{header(), 100.0f, 100.0f, item_w_, kVisibleRows,
-                               static_cast<int>(entries_.size()), nav_.top_row});
+std::string HelpBrowser::row_text(int i) const {
+    return list_.path(i).filename().string();
 }
 
 bool HelpBrowser::list_active() const {
-    return !viewing_ && !disabled_ && !entries_.empty() && font_ && font_->loaded();
+    return !viewing_ && !disabled_ && !list_.empty() && font_ && font_->loaded();
 }
 
 void HelpBrowser::open_selected() {
     // sub_41302D is called on the highlighted glob entry; the list re-shows once
     // close_viewer() is called, matching sub_414235's do/while loop-back over
     // the same glob array.
-    const int sel = nav_.top_row + nav_.highlight;                    // @0x42E39A
-    if (sel < 0 || sel >= static_cast<int>(entries_.size())) return;  // @0x42E3A8
-    bm_.enter(entries_[static_cast<std::size_t>(sel)].stem().string());
+    const std::filesystem::path* sel = list_.selected();  // @0x42E39A + @0x42E3A8
+    if (sel == nullptr) return;
+    bm_.enter(sel->stem().string());
     viewing_ = true;
 }
 
@@ -451,11 +420,10 @@ namespace {
 // (case-insensitive). The match is pulled to the TOP of the window, not merely
 // scrolled into view, and in a list that fits nothing happens at all.
 // sub_42FEB0 is a leaf: it makes no calls, sound included.
-int first_entry_starting_with(const std::vector<std::filesystem::path>& entries, char want) {
-    for (std::size_t i = 0; i < entries.size(); ++i) {
-        const std::string f = entries[i].filename().string();
-        if (!f.empty() && std::tolower(static_cast<unsigned char>(f[0])) == want)
-            return static_cast<int>(i);
+int first_entry_starting_with(const ListPicker& list, char want) {
+    for (int i = 0; i < list.count(); ++i) {
+        const std::string f = list.path(i).filename().string();
+        if (!f.empty() && std::tolower(static_cast<unsigned char>(f[0])) == want) return i;
     }
     return -1;
 }
@@ -467,7 +435,7 @@ void HelpBrowser::on_key(SDL_Keycode key, AudioEngine& audio) {
         bm_.on_key(key);
         return;
     }
-    if (disabled_ || entries_.empty()) {
+    if (disabled_ || list_.empty()) {
         // §4's two gated error dialogs share sub_414340's two-line dismiss shape.
         // This branch is the ONE audible thing in the browser: sub_414340 opens
         // its key loop with an unconditional nav blip @0x414532 for every real
@@ -480,14 +448,14 @@ void HelpBrowser::on_key(SDL_Keycode key, AudioEngine& audio) {
     // sub_42DB80 -> sub_42DBCC: 344 functions of closure and NOT ONE calls a play
     // primitive (census in docs/re/sound-engine.md §8). The port invented every
     // cue that used to be in this handler.
-    const int count = static_cast<int>(entries_.size());
+    //
     // Arrow-only: sub_42DBCC binds 0x0d/0x1b plus the 0x147..0x151 jump table
     // @0x42DBA0 and nothing else, so there is no W/S alias. Space is the port's
     // own accept alias — in the original it is a printable character that falls
     // into the type-ahead default and matches nothing, so it is inert there.
     const int code = (key == SDLK_SPACE) ? kListKeyEnter : list_dialog_key_code(key);
     if (code != 0) {
-        switch (list_dialog_key(nav_, code, kVisibleRows, count)) {
+        switch (list_dialog_key(list_.nav(), code, kVisibleRows, list_.count())) {
             case ListDialogAction::Activate: open_selected(); break;
             case ListDialogAction::Cancel: done_ = true; break;
             case ListDialogAction::None: break;
@@ -496,24 +464,18 @@ void HelpBrowser::on_key(SDL_Keycode key, AudioEngine& audio) {
     }
     if (key < SDLK_A || key > SDLK_Z) return;
     const char want = static_cast<char>('a' + (key - SDLK_A));
-    list_dialog_letter_jump(nav_, first_entry_starting_with(entries_, want), kVisibleRows, count);
+    list_dialog_letter_jump(list_.nav(), first_entry_starting_with(list_, want), kVisibleRows,
+                            list_.count());
 }
 
 void HelpBrowser::on_mouse_move(float x, float y, bool buttons_held) {
     if (!list_active()) return;
-    if (buttons_held) return;  // @0x4330A0: the enter id needs an idle mouse
-    list_dialog_mouse_move(nav_,
-                           list_dialog_hit_for(*font_, layout(), kVisibleRows, SDL_FPoint{x, y}),
-                           static_cast<int>(entries_.size()));
+    list_.on_mouse_move(x, y, buttons_held);
 }
 
 void HelpBrowser::on_mouse_down(float x, float y) {
     if (!list_active()) return;
-    const ListDialogGeometry g = layout();
-    const ListDialogHit hit = list_dialog_hit_for(*font_, g, kVisibleRows, SDL_FPoint{x, y});
-    pressed_ = hit.widget;
-    switch (list_dialog_mouse_down(nav_, g, hit, kVisibleRows, static_cast<int>(entries_.size()),
-                                   static_cast<int>(y))) {
+    switch (list_.on_mouse_down(x, y)) {
         case ListDialogAction::Activate: open_selected(); break;
         case ListDialogAction::Cancel: done_ = true; break;
         case ListDialogAction::None: break;
@@ -522,10 +484,7 @@ void HelpBrowser::on_mouse_down(float x, float y) {
 
 void HelpBrowser::on_mouse_up(float x, float y) {
     if (!list_active()) return;
-    const ListDialogHit hit = list_dialog_hit_for(*font_, layout(), kVisibleRows, SDL_FPoint{x, y});
-    const ListDialogWidget was = pressed_;
-    pressed_ = ListDialogWidget::None;
-    if (list_dialog_mouse_up(hit, was) == ListDialogAction::Cancel) done_ = true;
+    if (list_.on_mouse_up(x, y) == ListDialogAction::Cancel) done_ = true;
 }
 
 void HelpBrowser::draw_error_dialog(SDL_Renderer* ren) const {
@@ -543,28 +502,6 @@ void HelpBrowser::draw_error_dialog(SDL_Renderer* ren) const {
                             AcknowledgeLabels{head, body, ok}, AcknowledgeStyle{kErrorInk});
 }
 
-void HelpBrowser::draw_topic_list(SDL_Renderer* ren) const {
-    // The generic list dialog at the LITERAL (100, 100), header getstring(600) —
-    // the SAME primitive and coordinates SchemeFilePicker uses (§4/§5c). The
-    // width comes from the widest ENTRY alone; the widget folds the title in
-    // itself, so pre-maxing here would inflate it by 16.
-    const int count = static_cast<int>(entries_.size());
-    const int last = std::min(count, nav_.top_row + kVisibleRows);
-    const ListDialogLayout lay = draw_list_dialog(
-        DialogPen{ren, *font_},
-        ListDialogSpec{header(), 100.0f, 100.0f, item_w_, kVisibleRows, count, nav_.top_row});
-    for (int i = nav_.top_row; i < last; ++i) {
-        const int vi = i - nav_.top_row;
-        const float ty = lay.item_y0 + static_cast<float>(vi) * lay.item_h;
-        // sub_442C28 LIGHTENS the selected row rather than inverting it, so every
-        // row keeps the same ink. The band tracks the highlight OFFSET, which is
-        // what the original draws @0x42E656 — not an absolute selection.
-        if (vi == nav_.highlight) draw_list_selection(ren, lay, vi);
-        font_->draw(ren, entries_[static_cast<std::size_t>(i)].filename().string(),
-                    SDL_FPoint{lay.item_x, ty}, TextStyle{kListInk});
-    }
-}
-
 void HelpBrowser::draw(SDL_Renderer* ren) const {
     if (!ren) return;
     if (viewing_) {
@@ -574,11 +511,13 @@ void HelpBrowser::draw(SDL_Renderer* ren) const {
         return;
     }
     if (!font_ || !font_->loaded()) return;
-    if (disabled_ || entries_.empty()) {
+    if (disabled_ || list_.empty()) {
         draw_error_dialog(ren);
         return;
     }
-    draw_topic_list(ren);
+    // The generic list dialog at the LITERAL (100, 100), header getstring(600) —
+    // the SAME primitive and coordinates SchemeFilePicker uses (§4/§5c).
+    list_.draw(ren, [this](int i) { return row_text(i); });
 }
 
 }  // namespace bomber::game

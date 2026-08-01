@@ -1,14 +1,11 @@
 #include "bomber/editor/editor_screen.hpp"
 
-#include <algorithm>
 #include <array>
-#include <cctype>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <string>
-#include <system_error>
 
 #include "bomber/ui/dialog_chrome.hpp"
 
@@ -41,17 +38,6 @@ constexpr int kChooserItemX = 80, kChooserItemY0 = 140,
 // getstring with a compiled-in fallback, for the null-AssetStore case.
 std::string text_of(const AssetStore* assets, int id, const char* fallback) {
     return assets ? assets->getstring(id, fallback) : std::string(fallback);
-}
-
-// sub_412A3B — the strupr the glob helper runs over every matched filename
-// before sorting (and that sub_407582 runs again over the picked value).
-std::string upper(std::string s) {
-    for (auto& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    return s;
-}
-
-bool has_extension(const std::filesystem::path& p, const char* upper_ext) {
-    return upper(p.extension().string()) == upper_ext;
 }
 
 // The chooser, the picker and the editor all sit on a pick_glue backdrop; a
@@ -96,61 +82,44 @@ ConfirmAnswer confirm_answer(SDL_Keycode key) {
 
 void SchemeFilePicker::enter(const std::filesystem::path& schemes_dir, std::string backdrop) {
     backdrop_ = std::move(backdrop);
-    entries_.clear();
     names_.clear();
-    nav_ = ListDialogNav{};
-    item_w_ = 0.0f;
-    pressed_ = ListDialogWidget::None;
+    list_.reset();
     done_ = false;
     cancelled_ = false;
-    std::error_code ec;
-    if (!std::filesystem::is_directory(schemes_dir, ec)) return;
-    for (const auto& entry : std::filesystem::directory_iterator(schemes_dir, ec)) {
-        if (entry.is_regular_file() && has_extension(entry.path(), ".SCH"))
-            entries_.push_back(entry.path());
-    }
-    // ORDERING, PINNED: sub_41404B uppercases EVERY globbed name first
-    // (@0x414146, a sub_412A3B/strupr pass over the whole array) and only then
-    // qsorts it (@0x41415D) with the comparator at 0x41400F, a plain
-    // sub_451F10/strcmp. So the sort key is the UPPERCASED BARE FILENAME — the
+    // The glob and the PINNED uppercased-filename ordering (sub_41404B's strupr
+    // pass @0x414146, then the strcmp qsort @0x41415D) live in ListPicker; the
     // ": <scheme name>" suffix is appended afterwards, by sub_407582's own
-    // reformat loop, and never participates.
-    std::sort(entries_.begin(), entries_.end(), [](const auto& a, const auto& b) {
-        return upper(a.filename().string()) < upper(b.filename().string());
-    });
+    // reformat loop, and never participates in the sort.
+    list_.set_header(header());
+    list_.glob(schemes_dir, ".SCH");
     // sub_407582 pre-reads each file's embedded -N name (sub_404BE9) for the
     // second column. An unreadable file keeps the getstring(727) default,
     // exactly as a file with no -N line does — sub_404BE9 seeds that default
     // into its buffer before it even opens the file.
-    names_.reserve(entries_.size());
-    for (const auto& p : entries_) {
+    names_.reserve(static_cast<std::size_t>(list_.count()));
+    for (int i = 0; i < list_.count(); ++i) {
         std::string n;
         try {
-            n = assets::sch::load(p).name;
+            n = assets::sch::load(list_.path(i)).name;
         } catch (const std::exception&) {  // NOLINT(bugprone-empty-catch)
             // Deliberate: see above — the default is already in place.
         }
         names_.push_back(std::move(n));
     }
-    // sub_42FEF0 @0x42DC16 — the widest ITEM row alone drives the width. Cached
-    // so the mouse handlers hit-test exactly what draw() paints.
-    if (!font_) return;
-    for (int i = 0; i < static_cast<int>(entries_.size()); ++i)
-        item_w_ = std::max(item_w_, static_cast<float>(font_->measure(row_text(i))));
+    list_.measure_rows([this](int i) { return row_text(i); });
 }
 
 std::string SchemeFilePicker::header() const {
     return text_of(assets_, 721, "Available Scheme Files:");
 }
 
-ListDialogGeometry SchemeFilePicker::layout() const {
-    return list_dialog_layout_for(
-        *font_, ListDialogSpec{header(), 100.0f, 100.0f, item_w_, kVisibleRows,
-                               static_cast<int>(entries_.size()), nav_.top_row});
-}
-
-bool SchemeFilePicker::interactive() const {
-    return !entries_.empty() && font_ && font_->loaded();
+const std::filesystem::path& SchemeFilePicker::selected() const {
+    // @0x42E39A under the @0x42E3A8 range check its HelpBrowser clone always
+    // carried and this copy lacked. The empty fallback covers only API misuse
+    // (a call without done() && !cancelled()); no runner takes that path.
+    static const std::filesystem::path kNone;
+    const std::filesystem::path* sel = list_.selected();
+    return sel != nullptr ? *sel : kNone;
 }
 
 void SchemeFilePicker::apply(ListDialogAction action) {
@@ -160,7 +129,7 @@ void SchemeFilePicker::apply(ListDialogAction action) {
 }
 
 void SchemeFilePicker::on_key(SDL_Keycode key, AudioEngine& audio) {
-    if (entries_.empty()) {
+    if (list_.empty()) {
         // The empty-glob acknowledge box is sub_414340's own key loop: a nav blip
         // on ANY real key, closing only on Enter(13)/Space(32)/Esc(27).
         audio.play(20);
@@ -179,39 +148,26 @@ void SchemeFilePicker::on_key(SDL_Keycode key, AudioEngine& audio) {
                      : (key == SDLK_S)     ? kListKeyDown
                      : (key == SDLK_SPACE) ? kListKeyEnter
                                            : list_dialog_key_code(key);
-    apply(list_dialog_key(nav_, code, kVisibleRows, static_cast<int>(entries_.size())));
+    apply(list_dialog_key(list_.nav(), code, kVisibleRows, list_.count()));
 }
 
 void SchemeFilePicker::on_mouse_move(float x, float y, bool buttons_held) {
-    if (!interactive() || buttons_held) return;
-    list_dialog_mouse_move(nav_,
-                           list_dialog_hit_for(*font_, layout(), kVisibleRows, SDL_FPoint{x, y}),
-                           static_cast<int>(entries_.size()));
+    list_.on_mouse_move(x, y, buttons_held);
 }
 
 void SchemeFilePicker::on_mouse_down(float x, float y) {
-    if (!interactive()) return;
-    const ListDialogGeometry g = layout();
-    const ListDialogHit hit = list_dialog_hit_for(*font_, g, kVisibleRows, SDL_FPoint{x, y});
-    pressed_ = hit.widget;
-    apply(list_dialog_mouse_down(nav_, g, hit, kVisibleRows, static_cast<int>(entries_.size()),
-                                 static_cast<int>(y)));
+    apply(list_.on_mouse_down(x, y));
 }
 
 void SchemeFilePicker::on_mouse_up(float x, float y) {
-    if (!interactive()) return;
-    const ListDialogHit hit =
-        list_dialog_hit_for(*font_, layout(), kVisibleRows, SDL_FPoint{x, y});
-    const ListDialogWidget was = pressed_;
-    pressed_ = ListDialogWidget::None;
-    apply(list_dialog_mouse_up(hit, was));
+    apply(list_.on_mouse_up(x, y));
 }
 
 void SchemeFilePicker::draw(SDL_Renderer* ren) const {
     if (!ren) return;
     draw_backdrop(ren, assets_, backdrop_);
     if (!font_ || !font_->loaded()) return;
-    if (entries_.empty()) {
+    if (list_.empty()) {
         // sub_407582's empty-glob branch @0x4076CA: instead of the list it raises
         // sub_414340 with getstring(95) "NOTE!" over getstring(720), ink
         // byte_49A390. This lives in the picker rather than in each caller
@@ -226,25 +182,9 @@ void SchemeFilePicker::draw(SDL_Renderer* ren) const {
         return;
     }
     // sub_407582 @0x407641 pushes the LITERAL pair (100, 100) and getstring(721)
-    // into sub_41485A -> sub_42DB80 -> sub_42DBCC, in the general white ink. Not
-    // centred, and not bare text on the backdrop: draw_list_dialog carries the
-    // whole pinned chrome. The width comes from the widest ITEM row alone
-    // (sub_42FEF0 @0x42DC16, measured at enter()) — the widget folds the title
-    // in itself, so it must NOT be pre-maxed here.
-    const int count = static_cast<int>(entries_.size());
-    const int last = std::min(count, nav_.top_row + kVisibleRows);
-    const ListDialogLayout lay = draw_list_dialog(
-        DialogPen{ren, *font_},
-        ListDialogSpec{header(), 100.0f, 100.0f, item_w_, kVisibleRows, count, nav_.top_row});
-    for (int i = nav_.top_row; i < last; ++i) {
-        const int vi = i - nav_.top_row;
-        const float ty = lay.item_y0 + static_cast<float>(vi) * lay.item_h;
-        // The selected row is LIGHTENED under unchanged text (sub_442C28), not
-        // inverted, so the ink is the same for every row. The band follows the
-        // highlight OFFSET (@0x42E656), not an absolute index.
-        if (vi == nav_.highlight) draw_list_selection(ren, lay, vi);
-        font_->draw(ren, row_text(i), SDL_FPoint{lay.item_x, ty}, TextStyle{kInk});
-    }
+    // into sub_41485A -> sub_42DB80 -> sub_42DBCC, in the general white ink —
+    // the pinned chrome ListPicker carries.
+    list_.draw(ren, [this](int i) { return row_text(i); });
 }
 
 std::string SchemeFilePicker::row_text(int i) const {
@@ -254,7 +194,7 @@ std::string SchemeFilePicker::row_text(int i) const {
     // uppercase; the -N name keeps the case the file spells it with.
     const std::string& nm = names_[static_cast<std::size_t>(i)];
     const std::string name = nm.empty() ? text_of(assets_, 727, "No Scheme Name") : nm;
-    return upper(entries_[static_cast<std::size_t>(i)].filename().string()) + ": " + name;
+    return upper_ascii(list_.path(i).filename().string()) + ": " + name;
 }
 
 // ---------------------------------------------------------------------------

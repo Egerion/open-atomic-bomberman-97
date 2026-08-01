@@ -12,9 +12,9 @@
 #include <vector>
 
 #include "bomber/audio/audio_engine.hpp"
-#include "bomber/game_util/list_dialog_geometry.hpp"  // kListDialogRows
 #include "bomber/render/asset_store.hpp"
 #include "bomber/ui/bmscreen.hpp"
+#include "bomber/ui/list_picker.hpp"
 
 namespace bomber::game {
 
@@ -25,7 +25,7 @@ namespace bomber::game {
 class CampaignFilePicker {
 public:
     CampaignFilePicker(const AssetStore& assets, const FontTextures& font)
-        : assets_(&assets), font_(&font) {}
+        : assets_(&assets), font_(&font), list_(font) {}
 
     // Globs `*.cam` (case-insensitive extension match) in `install_root` and
     // resets the list cursor.
@@ -44,30 +44,23 @@ public:
 
     bool done() const { return done_; }
     bool cancelled() const { return cancelled_; }
-    // The selected file's full path — only valid when done() && !cancelled().
-    const std::filesystem::path& selected() const {
-        const int sel = nav_.top_row + nav_.highlight;  // @0x42E39A
-        return entries_[static_cast<std::size_t>(sel)];
-    }
-    bool empty() const { return entries_.empty(); }
+    // Only valid when done() && !cancelled(); range-checked all the same.
+    const std::filesystem::path& selected() const;
+    bool empty() const { return list_.empty(); }
 
     // CORRECTED 2026-07-26: sub_42DBCC shows TEN rows, not thirteen — 13 is only
     // the window's font-height multiplier (list_dialog_geometry.hpp).
-    static constexpr int kVisibleRows = kListDialogRows;
+    static constexpr int kVisibleRows = ListPicker::kVisibleRows;
 
 private:
     std::string header() const;
-    ListDialogGeometry layout() const;
     void draw_backdrop(SDL_Renderer* ren) const;
 
     const AssetStore* assets_ = nullptr;
     const FontTextures* font_ = nullptr;
     std::string backdrop_;
-    std::vector<std::filesystem::path> entries_;
-    // sub_42DBCC's own two registers; their sum is the selection.
-    ListDialogNav nav_;
-    float item_w_ = 0.0f;  // sub_42FEF0's max over the item text, cached at enter()
-    ListDialogWidget pressed_ = ListDialogWidget::None;
+    // The shared (100,100) glob/list widget — sub_41404B + sub_42DBCC.
+    ListPicker list_;
     bool done_ = false;
     bool cancelled_ = false;
 };

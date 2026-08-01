@@ -3,16 +3,15 @@
 #include <SDL3/SDL.h>
 
 #include <cstdint>
-#include <filesystem>
 #include <string>
 #include <vector>
 
 #include "bomber/assets/bmfont.hpp"
 #include "bomber/assets/bmtext.hpp"
 #include "bomber/audio/audio_engine.hpp"
-#include "bomber/game_util/list_dialog_geometry.hpp"  // kListDialogRows
 #include "bomber/render/asset_store.hpp"
 #include "bomber/render/sdl.hpp"
+#include "bomber/ui/list_picker.hpp"
 
 // The front-end `.BM` text-screen viewer — sub_41302D (BM95.EXE @ 0x41302D): a
 // parsed BmDocument in the active bitmap font (FONT6.FON, pinned by graphics
@@ -149,7 +148,7 @@ private:
 class HelpBrowser {
 public:
     HelpBrowser(const AssetStore& assets, const FontTextures& font)
-        : assets_(&assets), font_(&font), bm_(assets, font) {}
+        : assets_(&assets), font_(&font), bm_(assets, font), list_(font) {}
 
     // `manual_enabled` is the caller's getvalue(15) reading ("is the online
     // manual enabled?", default 1). sub_414235 checks it BEFORE globbing at all,
@@ -181,36 +180,25 @@ public:
     bool done() const { return done_; }
     // sub_41404B found zero `*.BM`, or the install root is missing — §4's
     // getstring(4)/getstring(95) error case rather than an empty list.
-    bool empty() const { return entries_.empty(); }
+    bool empty() const { return list_.empty(); }
     // getvalue(15)==0 at enter() time — §4's getstring(5)/getstring(95) case.
     bool disabled() const { return disabled_; }
 
-    // CLARIFIED 2026-07-26 (list_dialog_geometry.hpp): sub_42DBCC keeps TWO
-    // counters @0x42DC44 — 10 rows drawn, and a separate 13 as the window's
-    // font-height multiplier. 10 is the row count outright.
-    static constexpr int kVisibleRows = kListDialogRows;
+    static constexpr int kVisibleRows = ListPicker::kVisibleRows;
 
 private:
-    // getstring(600), and the widest item — the two inputs the layout needs.
-    // Split out so the mouse handlers hit-test the SAME geometry draw() paints
-    // without re-measuring every item on every motion event.
-    std::string header() const;
-    ListDialogGeometry layout() const;
+    std::string header() const;  // getstring(600)
+    std::string row_text(int i) const;
     void open_selected();
     // True while the list itself is the thing on screen taking input.
     bool list_active() const;
     void draw_error_dialog(SDL_Renderer* ren) const;
-    void draw_topic_list(SDL_Renderer* ren) const;
 
     const AssetStore* assets_ = nullptr;
     const FontTextures* font_ = nullptr;
     BmScreen bm_;
-    std::vector<std::filesystem::path> entries_;
-    // sub_42DBCC's own two registers — see ListDialogNav. `top_row + highlight`
-    // is the selected entry.
-    ListDialogNav nav_;
-    float item_w_ = 0.0f;  // sub_42FEF0's max over the item text, cached at enter()
-    ListDialogWidget pressed_ = ListDialogWidget::None;
+    // The shared (100,100) glob/list widget — sub_41404B + sub_42DBCC.
+    ListPicker list_;
     bool viewing_ = false;
     bool done_ = false;
     bool disabled_ = false;
