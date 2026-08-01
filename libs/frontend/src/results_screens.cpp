@@ -45,16 +45,6 @@ ScoreboardLayout read_layout(const assets::res::ValueList& v) {
 // install's FIELD0/5/10/MAINMENU palettes (dist2=0 on all four).
 constexpr Uint8 kHeaderR = 255, kHeaderG = 255, kHeaderB = 255;
 
-// hud_format's fmt_u fills only the FIRST specifier; this splices the next one in
-// by hand so the RE'd format string still reads naturally with real fallback text.
-void splice_next(std::string& f, int v) {
-    const std::size_t p = f.find('%');
-    if (p == std::string::npos) return;
-    std::size_t q = p + 1;
-    while (q < f.size() && f[q] != 'u' && f[q] != 'd' && f[q] != 'i') ++q;
-    if (q < f.size()) f = f.substr(0, p) + std::to_string(v) + f.substr(q + 1);
-}
-
 // The between-round RESULTS screen's frame loop, as its own object. nullopt from
 // a phase method means "keep looping"; a value means run() returns it now.
 class ScoreboardLoop {
@@ -234,8 +224,10 @@ void ScoreboardLoop::draw_player_rows() {
         if (!s.players[i].present) continue;
         std::string line =
             fmt_u(ctx_.assets.getstring(31, "Player %u score: %u (kills: %d)"), i + 1);
-        splice_next(line, state_.win_count[i]);
-        splice_next(line, state_.kill_count[i]);
+        // fmt_u fills only the FIRST specifier; hud_format's splice_int fills
+        // the next one per call, so the RE'd row reads naturally either way.
+        splice_int(line, state_.win_count[i]);
+        splice_int(line, state_.kill_count[i]);
         std::uint8_t c[3];
         ctx_.assets.slot_color(i, c);
         // sub_416867(i): in solo mode player 1 (the BLACK bomberman) gets a WHITE

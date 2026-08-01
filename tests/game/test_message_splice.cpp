@@ -23,8 +23,10 @@
 #include "bomber/game_util/hud_format.hpp"
 
 using bomber::game::fmt_s;
+using bomber::game::fmt_seq;
 using bomber::game::fmt_u;
 using bomber::game::fmt_us;
+using bomber::game::splice_int;
 
 TEST_CASE("fmt_u substitutes the first integer specifier, in all three spellings") {
     CHECK(fmt_u("Round %u", 3) == "Round 3");
@@ -109,4 +111,64 @@ TEST_CASE("fmt_us degenerate rows: a missing half is left literal, not invented"
     CHECK(fmt_us("only %s", 5, "Ege") == "only Ege");
     CHECK(fmt_us("neither", 5, "Ege") == "neither");
     CHECK(fmt_us("", 5, "Ege").empty());
+}
+
+// --- the SEQUENTIAL variants, moved here from their two screen-local copies ---
+
+TEST_CASE("splice_int fills one integer specifier per call, left to right") {
+    // The score-strip row (getstring 37) and the results row (getstring 31),
+    // exactly as MatchRunner::draw_player_score and the scoreboard fill them.
+    std::string hud = "S:%d K:%d";
+    splice_int(hud, 3);
+    CHECK(hud == "S:3 K:%d");
+    splice_int(hud, 7);
+    CHECK(hud == "S:3 K:7");
+
+    std::string row = fmt_u("Player %u score: %u (kills: %d)", 2);
+    splice_int(row, 4);
+    splice_int(row, 9);
+    CHECK(row == "Player 2 score: 4 (kills: 9)");
+}
+
+TEST_CASE("splice_int never over-reads a degenerate row") {
+    std::string none = "no specifier";
+    splice_int(none, 1);
+    CHECK(none == "no specifier");
+    std::string trailing = "dangling %";
+    splice_int(trailing, 1);
+    CHECK(trailing == "dangling %");
+    std::string empty;
+    splice_int(empty, 1);
+    CHECK(empty.empty());
+}
+
+TEST_CASE("splice_int scans THROUGH a wrong-kind specifier - pinned, not endorsed") {
+    // Unlike fmt_u, the scan does not stop at 's' or '%': it walks from the
+    // first '%' to the first u/d/i and replaces the whole span. On the shipped
+    // rows (integers only) the two behave identically; on a hand-edited "%s"
+    // row this one eats up to the next integer conversion character. That is
+    // what BOTH original copies (match_runner's splice_int, results_screens'
+    // splice_next) always did — this case pins the quirk so a future "fix"
+    // is a decision, not an accident.
+    std::string s = "Player %s okay";  // no u/d/i anywhere after the '%'...
+    splice_int(s, 4);
+    CHECK(s == "Player %s okay");  // ...so the scan runs off the end and refuses
+    std::string t = "%s placed";  // here the 'd' inside "placed" is the stop
+    splice_int(t, 4);
+    CHECK(t == "4");  // everything from '%' through that 'd' became the number
+}
+
+TEST_CASE("fmt_seq fills each bare specifier in order and stops at what it cannot fill") {
+    // The four-field modem row (getstring 264) as OptionsScreen builds it.
+    CHECK(fmt_seq("Modem:  P:%u  I:%u  B:%u  #:%s", {"2", "3", "19200", "555-1212"}) ==
+          "Modem:  P:2  I:3  B:19200  #:555-1212");
+    // %% is a literal, never an argument slot.
+    CHECK(fmt_seq("100%% at %u", {"5"}) == "100%% at 5");
+    // A width flag is not a bare specifier: the walk stops rather than guesses.
+    CHECK(fmt_seq("%02u then %u", {"1", "2"}) == "%02u then %u");
+    // More arguments than slots: the excess is dropped, the row stays intact.
+    CHECK(fmt_seq("just %u", {"1", "2", "3"}) == "just 1");
+    // Fewer arguments than slots: the rest stay literal.
+    CHECK(fmt_seq("%u and %u", {"1"}) == "1 and %u");
+    CHECK(fmt_seq("", {"1"}).empty());
 }

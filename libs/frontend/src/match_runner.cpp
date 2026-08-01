@@ -12,6 +12,7 @@
 #include "bomber/frontend/campaign_screens.hpp"     // HelpBrowserModal (the in-round F1)
 #include "bomber/game_util/campaign_round_end.hpp"  // CampaignVerdict / campaign_verdict
 #include "bomber/game_util/goldman_wheel.hpp"       // kClogsPrizeId / wheel_prize_to_powerup
+#include "bomber/game_util/hud_format.hpp"          // splice_int (the score-strip splice)
 #include "bomber/game_util/match_outcome.hpp"       // is_team_mode
 #include "bomber/game_util/net_tally.hpp"           // tally_netplay_kills (the rollback-safe tally)
 #include "bomber/game_util/results.hpp"             // tally_kills
@@ -27,17 +28,6 @@
 namespace bomber::game {
 
 namespace {
-
-// Substitute the NEXT %u/%d/%i in `f`, leaving anything else literal — a modified
-// MESSAGES.TXT must not be able to crash a draw. (hud_format's fmt_u fills only
-// the first; results_screens.cpp carries the same helper.)
-void splice_int(std::string& f, int v) {
-    const std::size_t p = f.find('%');
-    if (p == std::string::npos) return;
-    std::size_t q = p + 1;
-    while (q < f.size() && f[q] != 'u' && f[q] != 'd' && f[q] != 'i') ++q;
-    if (q < f.size()) f = f.substr(0, p) + std::to_string(v) + f.substr(q + 1);
-}
 
 // ANY key, mouse button, or gamepad button — the attract abort's input set.
 bool is_any_input(const SDL_Event& ev) {

@@ -49,25 +49,6 @@ int cycle(int value, int dir, int count) {
     return next;
 }
 
-// Sequential splice for the four-field modem row (getstring(264) "Modem: P:%u
-// I:%u  B:%u  #:%s"): each %u/%d/%i/%s in order takes the next argument; %% and
-// anything unmatched stays literal. (hud_format's fmt_u/fmt_s fill only the
-// first specifier.)
-std::string fmt_seq(std::string f, std::initializer_list<std::string> args) {
-    std::size_t pos = 0;
-    for (const auto& a : args) {
-        auto p = f.find('%', pos);
-        while (p != std::string::npos && p + 1 < f.size() && f[p + 1] == '%')
-            p = f.find('%', p + 2);
-        if (p == std::string::npos || p + 1 >= f.size()) break;
-        const char c = f[p + 1];
-        if (c != 'u' && c != 'd' && c != 'i' && c != 's') break;
-        f.replace(p, 2, a);
-        pos = p + a.size();
-    }
-    return f;
-}
-
 }  // namespace
 
 void OptionsScreen::enter(const OptionsSnapshot& current, std::string backdrop) {

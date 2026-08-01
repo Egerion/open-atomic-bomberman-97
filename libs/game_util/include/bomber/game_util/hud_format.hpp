@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdio>
+#include <initializer_list>
 #include <string>
 
 // Pure, SDL-free helpers for the in-round clock HUD (docs/re/in-match-shell.md
@@ -102,6 +103,41 @@ inline std::string fmt_s(const std::string& f, const std::string& v) {
 // first, then the %s; a reordered MESSAGES.TXT degrades gracefully.
 inline std::string fmt_us(const std::string& f, int v, const std::string& s) {
     return fmt_s(fmt_u(f, v), s);
+}
+
+// Substitute the NEXT integer specifier IN PLACE: find the first '%', scan
+// forward to the first u/d/i, replace the whole span with the value. Called once
+// per integer field, so "S:%d K:%d" fills left to right. Unlike fmt_u the scan
+// does NOT stop at another conversion character or '%%' — the trade the two
+// byte-identical originals made (match_runner.cpp's splice_int and
+// results_screens.cpp's splice_next, now this one copy); what that means for a
+// hostile row is pinned in tests/game/test_message_splice.cpp rather than
+// left to the reader.
+inline void splice_int(std::string& f, int v) {
+    const std::size_t p = f.find('%');
+    if (p == std::string::npos) return;
+    std::size_t q = p + 1;
+    while (q < f.size() && f[q] != 'u' && f[q] != 'd' && f[q] != 'i') ++q;
+    if (q < f.size()) f = f.substr(0, p) + std::to_string(v) + f.substr(q + 1);
+}
+
+// Sequential splice for a MIXED row (getstring(264) "Modem:  P:%u  I:%u  B:%u
+// #:%s"): each bare %u/%d/%i/%s in order takes the next argument; %% is skipped
+// as a literal, and the walk STOPS at the first specifier of any other shape
+// rather than guessing — the same leave-it-literal contract as fmt_u/fmt_s.
+inline std::string fmt_seq(std::string f, std::initializer_list<std::string> args) {
+    std::size_t pos = 0;
+    for (const auto& a : args) {
+        auto p = f.find('%', pos);
+        while (p != std::string::npos && p + 1 < f.size() && f[p + 1] == '%')
+            p = f.find('%', p + 2);
+        if (p == std::string::npos || p + 1 >= f.size()) break;
+        const char c = f[p + 1];
+        if (c != 'u' && c != 'd' && c != 'i' && c != 's') break;
+        f.replace(p, 2, a);
+        pos = p + a.size();
+    }
+    return f;
 }
 
 }  // namespace bomber::game
