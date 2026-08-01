@@ -17,8 +17,15 @@
 //
 // WHAT EACH SCENARIO DISCRIMINATES. They are not interchangeable, and a scenario
 // that stops REACHING its mechanic silently retires that coverage:
-//   A  no players, no bombs, 10000 ticks. The control: it isolates hash-LAYOUT
-//      growth, because a field that is always zero here must leave A unmoved.
+//   A  no players, no bombs, no rovers, 10000 ticks. The control: nothing
+//      behavioural reaches it, so if A moves at all the hash LAYOUT changed.
+//      It does NOT follow that an always-zero field leaves A unmoved, which is
+//      what this line used to claim — corrected 2026-08-01, when adding
+//      State::enclose_interval (always 0 in A, since A never arms the spiral)
+//      moved it anyway. FNV folds the eight zero bytes of a new mix() word like
+//      any other input; only packing into an existing word's SPARE BITS is free.
+//      So: A moved + B-F moved => layout growth. A still + B-F moved =>
+//      behaviour, in state A cannot reach.
 //   B  4 players, all-brick board, every ability granted at baseline — the
 //      broadest behavioural net, and the first scenario a change usually moves.
 //   C  trigger duel on a short 70 s clock.
@@ -82,7 +89,7 @@ TEST_CASE("golden A: empty state, 10000 ticks") {
     // seed a countdown generous enough to keep the stepper dormant.
     a.state().ticks_left = 9999 * kTicksPerSecond;
     for (std::uint64_t t = 0; t < 10000; ++t) a.tick(pattern(t));
-    CHECK(a.hash() == 0xb9f782f923ce72c5ull);
+    CHECK(a.hash() == 0xd220967578a0d145ull);
     CHECK(a.state().rng == 0x0000002au);
 }
 
@@ -105,7 +112,7 @@ TEST_CASE("golden B: 4-player brick match with all abilities") {
     cfg.tuning.start_with[static_cast<int>(PowerupType::Spooger)] = 1;
     cfg.tuning.start_with[static_cast<int>(PowerupType::Jelly)] = 1;
     Simulation s(cfg);
-    CHECK(s.hash() == 0x7458970437db5433ull);  // setup alone is pinned, before any tick
+    CHECK(s.hash() == 0xb97f8753728e6233ull);  // setup alone is pinned, before any tick
 
     // B is the only roster that both starts with the grab glove and drives the
     // bomb key, so it is the only scenario that can reach the grab pause window
@@ -113,12 +120,12 @@ TEST_CASE("golden B: 4-player brick match with all abilities") {
     // mechanics the other scenarios cannot reach are pinned at the digest
     // instead, by build_hash.cpp's scenarios.
     static constexpr std::uint64_t kExpected[6] = {
-        0xda2b559cfb8cdc72ull,  // tick 500
-        0x589158226bdf46d2ull,  // tick 1000
-        0x9e5e3a31a12fb33aull,  // tick 1500
-        0x91ed72678f270b68ull,  // tick 2000
-        0xcb8ed8887388439dull,  // tick 2500
-        0x04f97b4b2b809321ull,  // tick 3000
+        0xbfa51c335b60afaeull,  // tick 500
+        0x4978c8e1aba1188eull,  // tick 1000
+        0x7e69dda620a4e346ull,  // tick 1500
+        0x13078aebb1e94facull,  // tick 2000
+        0x462455175efacff9ull,  // tick 2500
+        0xc4287cb46255ecfdull,  // tick 3000
     };
     for (std::uint64_t t = 0; t < 3000; ++t) {
         s.tick(pattern(t));
@@ -136,7 +143,7 @@ TEST_CASE("golden C: trigger bombs and a fast hurry phase") {
     cfg.tuning.start_with[static_cast<int>(PowerupType::Trigger)] = 1;  // baseline, see B
     Simulation s(cfg);
     for (std::uint64_t t = 0; t < 1500; ++t) s.tick(pattern(t * 7 + 3));
-    CHECK(s.hash() == 0x6fab474f1fd6f43aull);
+    CHECK(s.hash() == 0x0f6cced5cb6934a3ull);
     // Legible companions to the digest, so a stepper regression names itself
     // instead of only moving an opaque hash. The round decides at tick 11 of
     // 1500, and the round-end freeze (enclosure F2) then holds the stepper: this
@@ -169,10 +176,10 @@ TEST_CASE("golden D: the disease gauntlet") {
         }
 
     static constexpr std::uint64_t kExpectedHash[4] = {
-        0x0ef1674743ad8057ull,  // tick 200
-        0x919801537ace8a72ull,  // tick 400
-        0x629cf878692a55d0ull,  // tick 600
-        0xede44001d13a4df4ull,  // tick 800
+        0x75310962f429a817ull,  // tick 200
+        0x807d0b240e6a7052ull,  // tick 400
+        0xd5319ee16ac197f0ull,  // tick 600
+        0xb885a756ad019ed4ull,  // tick 800
     };
     // The RNG stream beside the board, and the reason D is the scenario every
     // recapture is proved against: it pins the DRAW COUNT independently of the
@@ -237,10 +244,10 @@ TEST_CASE("golden E: jelly ping-pong and a veering punched flight") {
     };
 
     static constexpr std::uint64_t kExpected[4] = {
-        0x14e4774347cc2b22ull,  // tick 75
-        0xb26f0905590b54edull,  // tick 150
-        0x3de8e4ca81b8f8d7ull,  // tick 225
-        0xf959093cebf4b5b6ull,  // tick 300
+        0x4e11a09ce588db56ull,  // tick 75
+        0x181750dc1a399221ull,  // tick 150
+        0xd09630ed746df4f9ull,  // tick 225
+        0xc527e8cf81ba5d96ull,  // tick 300
     };
     int bounces = 0;
     for (std::uint64_t t = 0; t < 300; ++t) {
@@ -294,10 +301,10 @@ TEST_CASE("golden F: a full hurry phase with the round still undecided") {
     // `remaining <= hurry - 5` first holds with 419 ticks left) and the two-ring
     // spiral's 96th and last tile lands around tick 660.
     static constexpr std::uint64_t kExpected[4] = {
-        0xc207d41f909d6e98ull,  // tick 250  (armed at 180; drop index 13)
-        0x19b41fdce589f38aull,  // tick 500  (index 63)
-        0xcec674472d4d107aull,  // tick 750  (index 96 — past TimeUp at tick 600)
-        0x97fa3868be8bf297ull,  // tick 1000 (spiral exhausted, board static)
+        0xd0a7a87582ccc5fdull,  // tick 250  (armed at 180; drop index 13)
+        0xbb32accff09772b7ull,  // tick 500  (index 63)
+        0x0b52431bb67422d7ull,  // tick 750  (index 96 — past TimeUp at tick 600)
+        0x29426b6cfd46a0daull,  // tick 1000 (spiral exhausted, board static)
     };
     for (std::uint64_t t = 0; t < 1000; ++t) {
         s.tick(TickInputs{});
