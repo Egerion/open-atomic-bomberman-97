@@ -231,6 +231,11 @@ ViewerArgs parse_args(int argc, char** argv) {
 
 std::vector<fs::path> collect_ani_files(const fs::path& dir) {
     std::vector<fs::path> files;
+    // A path the user typed is the ordinary case here, not the exceptional one:
+    // `directory_iterator` on anything that is not a directory throws, and
+    // "you gave me a path that isn't there" deserves the usage message below
+    // rather than an exception. main() still catches, for everything else.
+    if (!fs::is_directory(dir)) return files;
     for (const auto& e : fs::directory_iterator(dir)) {
         if (e.is_regular_file() && to_upper(e.path().extension().string()) == ".ANI")
             files.push_back(e.path());
@@ -342,9 +347,11 @@ int run_interactive(SDL_Renderer* ren, SDL_Window* win, const std::vector<fs::pa
     return 0;
 }
 
-}  // namespace
-
-int main(int argc, char** argv) {
+// Everything that can throw, so `main` below stays a handler and nothing escapes
+// it. `abtool`'s main is the model and states the reason: a bare main must not
+// let an exception out (bugprone-exception-escape), and the asset loaders throw
+// freely on a corrupt install — this viewer reads the same 1997 files.
+int run_viewer(int argc, char** argv) {
     ViewerArgs args = parse_args(argc, argv);
     if (args.dir.empty()) args.dir = bomber::assets::default_game_dir();
     if (args.dir.empty()) {
@@ -382,4 +389,18 @@ int main(int argc, char** argv) {
     SDL_DestroyWindow(win);
     SDL_Quit();
     return rc;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    try {
+        return run_viewer(argc, argv);
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "error: %s\n", e.what());
+        return 1;
+    } catch (...) {
+        std::fprintf(stderr, "error: unknown exception\n");
+        return 1;
+    }
 }
