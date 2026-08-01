@@ -27,12 +27,6 @@
 // owns the members and hands a fresh NetplayState + NetplaySeams to the runner's
 // constructor alongside the ScreenContext services bundle.
 //
-// This is the seam ADR-0009 never got round to. The per-screen decomposition
-// moved ~30 present_* methods out of GameApp; the netplay half stayed behind,
-// so the app shell still contained a 438-line match/round/rematch driver with
-// seven parameters and two out-params. Nothing about that half is app-shell
-// work: it is one collaborator that happens to need a lot of the shell's state.
-//
 // NOT GOLDEN-SENSITIVE in itself — the netplay path is unreachable from every
 // test/golden/demo entry — but `sim` and the roster arrays below ARE the same
 // members MatchRunner ticks, so the read/write ORDER here still decides what
@@ -40,13 +34,10 @@
 
 namespace bomber::game {
 
-// The seam BUILDERS, not the seams themselves. Every one of these is invoked
-// FRESH at each use, exactly as GameApp's own sctx()/scoreboard_state()/...
-// methods were called fresh at each use before the extraction — because the
-// round loop REPLACES the simulation between rounds (`sim = Simulation(cfg)`)
-// and rebuilds the presentation roster under it, and a bundle captured once
-// would then be describing a match that no longer exists. Cheap: each is a
-// lambda over a single `this`, so none of them allocates.
+// The seam BUILDERS, not the seams themselves. Every one is invoked FRESH at
+// each use, because the round loop REPLACES the simulation between rounds (`sim
+// = Simulation(cfg)`) and rebuilds the presentation roster under it: a bundle
+// captured once would be describing a match that no longer exists.
 struct NetplaySeams {
     std::function<ScreenContext()> sctx;
     std::function<MatchRunnerState()> match_runner_state;
@@ -102,20 +93,14 @@ struct NetplayState {
 // Borrow the team GATE for the duration of a scope and give it back.
 //
 // Both the online setup stage and the match itself drive `team_play` from
-// SOMEBODY ELSE'S state — the host's live preview during the guest's setup
-// stage, the agreed MatchConfig during a round — and both have to hand the
-// player's own Options setting back afterwards, because is_team_mode() and
-// draw_player_row read the gate and a following LOCAL game would otherwise be
-// played in a team mode nobody asked for. (Nothing is PERSISTED either way:
-// team_play is a mirror of options_.team_play, and flush_options writes the
-// latter, so a leak would be a live-session bug and not a file one.)
+// SOMEBODY ELSE'S state — the host's live preview, then the agreed MatchConfig —
+// and both have to hand the player's own Options setting back afterwards,
+// because is_team_mode()/draw_player_row read the gate and a following LOCAL
+// game would otherwise be played in a team mode nobody asked for.
 //
-// It is RAII rather than a saved local because the two scopes it guards have
-// SEVEN exits between them — four in the match loop, three in the guest's setup
-// arm — and every one of them restored by hand. That was correct when it was
-// audited, but only by inspection: the shape is one where the next exit added
-// is the one that forgets, and the extraction that moved this code into its own
-// classes was about to add several.
+// RAII rather than a saved local because the two scopes it guards have SEVEN
+// exits between them. Restoring by hand was correct when it was audited, but
+// only by inspection: this is the shape where the next exit added forgets.
 class TeamPlayScope {
 public:
     explicit TeamPlayScope(bool& team_play) : team_play_(&team_play), saved_(team_play) {}

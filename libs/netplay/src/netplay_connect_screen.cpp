@@ -13,13 +13,14 @@
 #include "bomber/platform/frame_clock.hpp"
 #include "bomber/render/sprites.hpp"    // Sprite
 #include "bomber/ui/dialog_chrome.hpp"  // draw_acknowledge_dialog / draw_text_entry_dialog
+#include "lobby_chrome.hpp"             // the backdrop / ack modal / SFX ids these screens share
 
 namespace bomber::game {
 
 namespace {
 
-// Presentation-only tunables for the connect modals (not RE'd — the original
-// has no netplay; ADR-0010 is our port's own online path).
+// Presentation-only tunables for the connect modals (not RE'd — the original has
+// no netplay; ADR-0010 is our port's own online path).
 constexpr std::uint64_t kHandshakeTimeoutMs = 10000;  // give up → back to the menu
 constexpr std::uint64_t kSettleMs = 300;  // keep broadcasting after done() so the peer finishes too
 constexpr std::size_t kAddressMax = 40;   // host:port line-edit cap
@@ -42,7 +43,8 @@ bool parse_host_port(const std::string& in, std::uint16_t default_port, std::str
     const std::string s = trim(in);
     const std::size_t colon = s.find(':');
     const std::string host_part = trim(colon == std::string::npos ? s : s.substr(0, colon));
-    const std::string port_part = colon == std::string::npos ? std::string() : trim(s.substr(colon + 1));
+    const std::string port_part =
+        colon == std::string::npos ? std::string() : trim(s.substr(colon + 1));
     if (host_part.empty()) return false;
     long p = default_port;
     if (!port_part.empty()) {
@@ -56,41 +58,93 @@ bool parse_host_port(const std::string& in, std::uint16_t default_port, std::str
     return true;
 }
 
-}  // namespace
+// The host:port line edit, running: the draft, the label above it (which doubles
+// as the rejection message — a bad address re-labels the prompt in place), and
+// the address it parsed to.
+struct AddressEntry {
+    std::string draft;
+    std::string error;
+    std::string host;
+    std::uint16_t port = 0;
+    std::uint16_t default_port = 0;
+};
 
-void NetplayConnectScreen::draw_backdrop() {
-    SDL_SetRenderDrawColor(ctx_.sdl, 0, 0, 0, 255);
-    SDL_RenderClear(ctx_.sdl);
-    const Sprite& bg = ctx_.assets.frontend_pcx("MAINMENU");
-    if (bg.tex) {
-        SDL_FRect d{0, 0, static_cast<float>(bg.w), static_cast<float>(bg.h)};
-        SDL_RenderTexture(ctx_.sdl, bg.tex, nullptr, &d);
+enum class AddressOutcome : std::uint8_t { Continue, Targeted, Cancelled, WindowClosed };
+
+AddressOutcome address_event(ScreenContext ctx, AddressEntry& a, const SDL_Event& ev) {
+    if (ev.type == SDL_EVENT_QUIT) return AddressOutcome::WindowClosed;
+    if (ev.type == SDL_EVENT_TEXT_INPUT) {
+        if (ev.text.text != nullptr && a.draft.size() < kAddressMax) a.draft += ev.text.text;
+        return AddressOutcome::Continue;
     }
+    if (ev.type != SDL_EVENT_KEY_DOWN) return AddressOutcome::Continue;
+    if (ev.key.key == SDLK_BACKSPACE) {
+        if (!a.draft.empty()) a.draft.pop_back();
+        return AddressOutcome::Continue;
+    }
+    if (ev.key.key == SDLK_ESCAPE) {
+        ctx.audio.play(kSfxBlip);
+        return AddressOutcome::Cancelled;
+    }
+    if (ev.key.key != SDLK_RETURN && ev.key.key != SDLK_KP_ENTER) return AddressOutcome::Continue;
+    if (parse_host_port(a.draft, a.default_port, a.host, a.port)) {
+        ctx.audio.play(kSfxAccept);
+        return AddressOutcome::Targeted;
+    }
+    ctx.audio.play(kSfxBlip);
+    a.error = "INVALID ADDRESS - USE host:port";
+    return AddressOutcome::Continue;
 }
 
-NetplayConnectResult NetplayConnectScreen::pump_handshake(net::UdpTransport& transport, bool is_host,
-                                                         std::uint32_t host_seed,
-                                                         const std::string& line1,
-                                                         const std::string& line2) {
-    NetplayConnectResult result;
-    net::SeedHandshake handshake(transport, is_host, host_seed);
-    platform::FrameClock frame_clock(ctx_.window);
-    const std::uint64_t start = SDL_GetTicks();
-    bool settling = false;
-    std::uint64_t done_at = 0;
-    const Sprite* winz = &ctx_.assets.frontend_pcx("WINZ");
-
+// Sit on the line edit until it parses, is cancelled, or the window closes.
+AddressOutcome prompt_address(ScreenContext ctx, AddressEntry& a) {
+    platform::FrameClock frame_clock(ctx.window);
     while (true) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
-            if (ev.type == SDL_EVENT_QUIT) {
-                result.window_closed = true;
-                return result;
-            }
-            if (ev.type == SDL_EVENT_KEY_DOWN && !ev.key.repeat && ev.key.key == SDLK_ESCAPE) {
-                ctx_.audio.play(20);  // nav blip; cancel back to the menu
-                return result;
-            }
+            const AddressOutcome out = address_event(ctx, a, ev);
+            if (out != AddressOutcome::Continue) return out;
+        }
+        ctx.audio.update_music();
+        draw_lobby_backdrop(ctx);
+        draw_text_entry_dialog(ctx.sdl, ctx.front_font, kJoinPromptY,
+                               a.error.empty() ? std::string("JOIN - HOST ADDRESS:") : a.error,
+                               a.draft, "Connect", "Cancel");
+        SDL_RenderPresent(ctx.sdl);
+        frame_clock.pace();
+    }
+}
+
+}  // namespace
+
+// Esc or the window close, the only two keys this screen reads. Engaged = leave
+// (with `connected` false, i.e. back to the menu).
+std::optional<bool> NetplayConnectScreen::pump_cancel() {
+    SDL_Event ev;
+    while (SDL_PollEvent(&ev)) {
+        if (ev.type == SDL_EVENT_QUIT) return true;  // window closed
+        if (ev.type == SDL_EVENT_KEY_DOWN && !ev.key.repeat && ev.key.key == SDLK_ESCAPE) {
+            ctx_.audio.play(kSfxBlip);
+            return false;  // cancelled
+        }
+    }
+    return std::nullopt;
+}
+
+NetplayConnectResult NetplayConnectScreen::pump_handshake(net::UdpTransport& transport,
+                                                          const HandshakePrompt& prompt) {
+    NetplayConnectResult result;
+    net::SeedHandshake handshake(transport, prompt.is_host, prompt.host_seed);
+    platform::FrameClock frame_clock(ctx_.window);
+    const AckChrome ack = ack_chrome(ctx_);
+    const std::uint64_t start = SDL_GetTicks();
+    std::uint64_t done_at = 0;
+    bool settling = false;
+
+    while (true) {
+        if (const std::optional<bool> left = pump_cancel()) {
+            result.window_closed = *left;
+            return result;
         }
 
         handshake.step();
@@ -101,121 +155,88 @@ NetplayConnectResult NetplayConnectScreen::pump_handshake(net::UdpTransport& tra
                 result.connected = true;
                 result.seed = handshake.seed();
             }
-            // Keep pumping (both sides re-broadcast) for a short settle so the
-            // PEER also latches done() — send-then-poll can mark us done the
-            // instant we receive the peer's reply, before our own datagram has
-            // carried the payload it needs (the host's seed / the guest's ack).
+            // Keep pumping so the PEER also latches done(): send-then-poll can
+            // mark us done the instant we receive its reply, before our own
+            // datagram has carried the payload it needs.
             if (SDL_GetTicks() - done_at >= kSettleMs) return result;
         } else if (SDL_GetTicks() - start >= kHandshakeTimeoutMs) {
             return result;  // timed out (connected stays false) → return to the menu
         }
 
         ctx_.audio.update_music();
-        draw_backdrop();
-        draw_acknowledge_dialog(ctx_.sdl, ctx_.front_font, winz, line1, line2, kCancelLabel,
-                                kDialogInkR, kDialogInkG, kDialogInkB);
+        draw_lobby_backdrop(ctx_);
+        draw_acknowledge_dialog(ctx_.sdl, ctx_.front_font, ack.winz, prompt.line1, prompt.line2,
+                                kCancelLabel, kDialogInkR, kDialogInkG, kDialogInkB);
         SDL_RenderPresent(ctx_.sdl);
         frame_clock.pace();
     }
 }
 
+NetplayConnectResult NetplayConnectScreen::show_bind_failure(std::uint16_t port) {
+    // Port busy / socket failure: the acknowledge modal, dismissed by any key or
+    // the ~10 s timeout. No handshake is pumped since the socket never opened.
+    NetplayConnectResult result;
+    platform::FrameClock frame_clock(ctx_.window);
+    const AckChrome ack = ack_chrome(ctx_);
+    const std::uint64_t start = SDL_GetTicks();
+    while (SDL_GetTicks() - start < kHandshakeTimeoutMs) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_EVENT_QUIT) {
+                result.window_closed = true;
+                return result;
+            }
+            if (ev.type == SDL_EVENT_KEY_DOWN && !ev.key.repeat) return result;
+        }
+        ctx_.audio.update_music();
+        draw_lobby_backdrop(ctx_);
+        draw_ack(ctx_, ack, "NETWORK ERROR", "PORT " + std::to_string(port) + " UNAVAILABLE");
+        SDL_RenderPresent(ctx_.sdl);
+        frame_clock.pace();
+    }
+    return result;
+}
+
 NetplayConnectResult NetplayConnectScreen::run_host(net::UdpTransport& transport,
                                                     std::uint16_t port, std::uint32_t host_seed) {
-    if (!transport.bind(port)) {
-        // Port busy / socket failure: show a brief NOTE and return to the menu.
-        // Reuses the acknowledge modal; dismissed by Esc or the ~10 s timeout,
-        // no handshake is pumped since the socket never opened.
-        NetplayConnectResult result;
-        platform::FrameClock frame_clock(ctx_.window);
-        const std::uint64_t start = SDL_GetTicks();
-        const Sprite* winz = &ctx_.assets.frontend_pcx("WINZ");
-        while (SDL_GetTicks() - start < kHandshakeTimeoutMs) {
-            SDL_Event ev;
-            while (SDL_PollEvent(&ev)) {
-                if (ev.type == SDL_EVENT_QUIT) {
-                    result.window_closed = true;
-                    return result;
-                }
-                if (ev.type == SDL_EVENT_KEY_DOWN && !ev.key.repeat) return result;
-            }
-            ctx_.audio.update_music();
-            draw_backdrop();
-            draw_acknowledge_dialog(ctx_.sdl, ctx_.front_font, winz, "NETWORK ERROR",
-                                    "PORT " + std::to_string(port) + " UNAVAILABLE", " Ok ",
-                                    kDialogInkR, kDialogInkG, kDialogInkB);
-            SDL_RenderPresent(ctx_.sdl);
-            frame_clock.pace();
-        }
-        return result;
-    }
-    return pump_handshake(transport, /*is_host=*/true, host_seed,
-                          "HOSTING ON PORT " + std::to_string(port), "WAITING FOR A PLAYER...");
+    if (!transport.bind(port)) return show_bind_failure(port);
+    return pump_handshake(transport, HandshakePrompt{"HOSTING ON PORT " + std::to_string(port),
+                                                     "WAITING FOR A PLAYER...", host_seed,
+                                                     /*is_host=*/true});
 }
 
 NetplayConnectResult NetplayConnectScreen::run_join(net::UdpTransport& transport,
                                                     std::uint16_t default_port) {
     // Phase 1 — the host:port line-edit (mirrors SchemeFilenamePrompt's SDL
-    // text-input loop): a WINZ-less text-entry dialog prefilled with the
-    // loopback default. Enter parses; a bad address re-labels the prompt in
-    // place. Esc cancels; the window-close is surfaced for a hard quit.
-    std::string entry = "127.0.0.1:" + std::to_string(default_port);
-    std::string error;
-    platform::FrameClock frame_clock(ctx_.window);
+    // text-input loop): a WINZ-less text-entry dialog prefilled with the loopback
+    // default. Phase 2 opens the socket; a bind/resolve failure re-labels the
+    // prompt and loops back to editing, which is why the two are one loop.
+    AddressEntry a;
+    a.default_port = default_port;
+    a.draft = "127.0.0.1:" + std::to_string(default_port);
     SDL_StartTextInput(ctx_.window);
 
     while (true) {
-        std::string host;
-        std::uint16_t port = 0;
-        bool targeted = false;
-
-        while (!targeted) {
-            SDL_Event ev;
-            while (SDL_PollEvent(&ev)) {
-                if (ev.type == SDL_EVENT_QUIT) {
-                    SDL_StopTextInput(ctx_.window);
-                    NetplayConnectResult r;
-                    r.window_closed = true;
-                    return r;
-                }
-                if (ev.type == SDL_EVENT_TEXT_INPUT) {
-                    if (ev.text.text && entry.size() < kAddressMax) entry += ev.text.text;
-                } else if (ev.type == SDL_EVENT_KEY_DOWN) {
-                    if (ev.key.key == SDLK_BACKSPACE) {
-                        if (!entry.empty()) entry.pop_back();
-                    } else if (ev.key.key == SDLK_RETURN || ev.key.key == SDLK_KP_ENTER) {
-                        if (parse_host_port(entry, default_port, host, port)) {
-                            ctx_.audio.play(10);  // accept sting
-                            targeted = true;
-                        } else {
-                            ctx_.audio.play(20);  // reject blip; stay on the prompt
-                            error = "INVALID ADDRESS - USE host:port";
-                        }
-                    } else if (ev.key.key == SDLK_ESCAPE) {
-                        ctx_.audio.play(20);
-                        SDL_StopTextInput(ctx_.window);
-                        return NetplayConnectResult{};  // cancelled → back to the menu
-                    }
-                }
-            }
-            ctx_.audio.update_music();
-            draw_backdrop();
-            draw_text_entry_dialog(ctx_.sdl, ctx_.front_font, kJoinPromptY,
-                                   error.empty() ? std::string("JOIN - HOST ADDRESS:") : error,
-                                   entry, "Connect", "Cancel");
-            SDL_RenderPresent(ctx_.sdl);
-            frame_clock.pace();
+        const AddressOutcome out = prompt_address(ctx_, a);
+        if (out == AddressOutcome::WindowClosed) {
+            SDL_StopTextInput(ctx_.window);
+            NetplayConnectResult r;
+            r.window_closed = true;
+            return r;
         }
-
-        // Phase 2 — open the socket and hand off to the shared handshake pump.
-        // A bind/resolve failure re-labels the prompt and loops back to editing.
-        if (!transport.bind(0) || !transport.set_peer(host, port)) {
-            error = "CANNOT REACH " + host + ":" + std::to_string(port);
+        if (out == AddressOutcome::Cancelled) {
+            SDL_StopTextInput(ctx_.window);
+            return NetplayConnectResult{};  // cancelled → back to the menu
+        }
+        if (!transport.bind(0) || !transport.set_peer(a.host, a.port)) {
+            a.error = "CANNOT REACH " + a.host + ":" + std::to_string(a.port);
             continue;
         }
         SDL_StopTextInput(ctx_.window);
-        return pump_handshake(transport, /*is_host=*/false, /*host_seed=*/0,
-                              "CONNECTING TO " + host + ":" + std::to_string(port) + "...",
-                              "PLEASE WAIT...");
+        const std::string where = a.host + ":" + std::to_string(a.port);
+        return pump_handshake(transport, HandshakePrompt{"CONNECTING TO " + where + "...",
+                                                         "PLEASE WAIT...", /*host_seed=*/0,
+                                                         /*is_host=*/false});
     }
 }
 

@@ -1,25 +1,17 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 #include "bomber/ui/screen_context.hpp"
 
-// The two netplay CONNECTION modals (netplay increment 5c, ADR-0010 §3.3 step 5
-// "lobby/session UI"): small screens driven from the main menu's START/JOIN NET
-// GAME rows. Each opens a UDP socket, runs the pre-match SeedHandshake
-// (handshake.hpp) over the SAME transport the lockstep match then borrows, and
-// reports the agreed seed back to GameApp — which owns the transport and calls
-// run_netplay_match() on success.
-//
-//   HOST: bind a known local port, show "HOSTING ON PORT n / WAITING FOR A
-//         PLAYER...", and pump the handshake as host (a fixed host seed) until a
-//         guest connects.
-//   JOIN: a text-input modal (reusing the save-as line-edit pattern,
-//         scheme_filename_prompt.cpp) prefilled "127.0.0.1:<port>"; Enter parses
-//         host:port (a bare host defaults the port), then "CONNECTING TO
-//         host:port..." pumps the handshake as guest until the host's seed is
-//         adopted.
+// The two netplay CONNECTION modals (ADR-0010 §3.3 step 5 "lobby/session UI"):
+// the direct/LAN rows of the NETWORK GAME menu. Each opens a UDP socket, runs
+// the pre-match SeedHandshake (handshake.hpp) over the SAME transport the match
+// then borrows, and reports the agreed seed back to NetplayRunner, which owns
+// the transport. JOIN's address line-edit follows the save-as prompt's pattern
+// (scheme_filename_prompt.cpp); a bare host defaults the port.
 //
 // Both are Esc-cancellable and time out after a few seconds; the window-close
 // case is surfaced so GameApp can propagate a hard quit. Reuses the shared
@@ -52,15 +44,23 @@ public:
     NetplayConnectResult run_join(net::UdpTransport& transport, std::uint16_t default_port);
 
 private:
-    // Draw the shared MAINMENU backdrop the connect modals sit over (same look
-    // as the menu's own quit-confirm overlay).
-    void draw_backdrop();
-    // The per-frame handshake loop shared by host + join: pump SeedHandshake,
-    // draw the status modal (`line1`/`line2` over a WINZ dialog), Esc/close
+    // What the shared handshake pump SHOWS while it runs, and which side of the
+    // handshake it is. One value rather than four arguments (§3).
+    struct HandshakePrompt {
+        std::string line1;
+        std::string line2;
+        std::uint32_t host_seed = 0;
+        bool is_host = false;
+    };
+
+    // Pump SeedHandshake, draw the status modal over a WINZ dialog, Esc/close
     // cancel, ~10 s timeout. Returns connected + the agreed seed on done().
-    NetplayConnectResult pump_handshake(net::UdpTransport& transport, bool is_host,
-                                        std::uint32_t host_seed, const std::string& line1,
-                                        const std::string& line2);
+    NetplayConnectResult pump_handshake(net::UdpTransport& transport,
+                                        const HandshakePrompt& prompt);
+    // Engaged = leave; the bool is "the window closed" rather than "Esc".
+    std::optional<bool> pump_cancel();
+    // The bind-failed modal, which is the one path with no handshake to pump.
+    NetplayConnectResult show_bind_failure(std::uint16_t port);
 
     ScreenContext ctx_;
 };

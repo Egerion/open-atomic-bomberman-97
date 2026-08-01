@@ -13,11 +13,10 @@
 // SetupPreviewFrame, plus the level-index convention the LEVEL & ROUNDS screen
 // uses. SDL-free and header-only on purpose — this is the part with real logic
 // in it (the seat re-pointing below is easy to get subtly wrong), so it is
-// unit-tested without a window (tests/game/test_net_setup_roster.cpp), exactly
-// like app_flow.hpp / goldman_wheel.hpp / input.hpp already are.
+// unit-tested without a window (tests/game/test_net_setup_roster.cpp).
 //
 // The screen-side wiring (which session to pump, what to draw while waiting)
-// lives in screens/net_setup_link.hpp, which is where the RE citations for the
+// lives in net_setup_link.hpp, which is where the RE citations for the
 // host/guest split are.
 
 namespace bomber::game {
