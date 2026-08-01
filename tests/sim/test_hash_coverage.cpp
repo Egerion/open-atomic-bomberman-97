@@ -356,9 +356,7 @@ TEST_CASE("state_hash covers every Rover field") {
 }
 
 TEST_CASE("state_hash excludes exactly the register in hash.cpp") {
-    excluded("events", [](State& s) {
-        s.events.push_back({Event::Type::Hurry, -1, -1, -1, 0});
-    });
+    excluded("events", [](State& s) { s.events.push_back({Event::Type::Hurry, -1, -1, -1, 0}); });
     excluded("sub_trace", [](State& s) {
         s.sub_trace[0][0].x = 999;
         s.sub_trace[0][0].facing = Direction::Left;
