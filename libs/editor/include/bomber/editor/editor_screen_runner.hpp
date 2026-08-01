@@ -3,26 +3,25 @@
 #include "bomber/editor/editor_state.hpp"
 #include "bomber/ui/screen_context.hpp"
 
-// The hidden scheme EDITOR screen, extracted VERBATIM from GameApp (ADR-0009 §9,
-// docs/re/results-and-options.md §5): the chooser (sub_403184) -> optional *.SCH
-// file picker (sub_407582) -> the editor proper (sub_4028D2) -> optional powerup
-// rules sub-editor (sub_402595), a nested loop that owns its own SDL event pump
-// and returns to present_menu's loop when the chooser is dismissed (there is no
-// AppState/AppInput slot — the editor has no menu row, only present_menu's raw
-// Ctrl+E x6 trigger reaches it). On a confirmed save it writes the edited scheme
-// via assets::sch::write() into the install's DATA/SCHEMES dir (never the repo)
-// and repoints the live scheme_ so the edit is immediately selectable.
+// The hidden scheme EDITOR screen (docs/re/results-and-options.md §5): the
+// chooser (sub_403184) -> optional *.SCH file picker (sub_407582) -> the editor
+// proper (sub_4028D2) -> optional powerup-rules sub-editor (sub_402595). A
+// nested loop that owns its own SDL event pump and returns to present_menu's
+// loop when the chooser is dismissed — there is no AppState/AppInput slot, since
+// only present_menu's raw Ctrl+E x6 trigger reaches the editor at all. On a
+// confirmed save it writes through assets::sch::write() into the install's
+// DATA/SCHEMES dir (never the repo) and repoints the live scheme.
 //
-// Named EditorRunner so it does NOT collide with the EditorChooserScreen /
-// EditorScreen / SchemeFilePicker *components* (editor_screen.hpp) it drives —
+// Named EditorRunner so it does not collide with the EditorChooserScreen /
+// EditorScreen / SchemeFilePicker *components* it drives (editor_screen.hpp):
 // the runner is the outer event loop, the components are the widgets it pumps.
-// Two seams, both stored BY VALUE: ScreenContext (the shared front-end services)
-// and EditorEditState (the editor-specific mutable state GameApp still owns).
 
 namespace bomber::game {
 
 class EditorRunner {
 public:
+    // Both seams are stored BY VALUE: the shared front-end services, and the
+    // editor-specific mutable state GameApp still owns.
     EditorRunner(ScreenContext ctx, EditorEditState state) : ctx_(ctx), state_(state) {}
     void run();
 

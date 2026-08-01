@@ -5,9 +5,8 @@
 #include "bomber/ui/screen_context.hpp"
 
 // The scheme editor's save-as filename line-edit (sub_42E938, getstring 736),
-// seeded with `seed` (the source filename when editing an existing scheme).
-// Extracted verbatim from GameApp::present_scheme_filename_prompt (ADR-0009):
-// max 30 chars; Enter-on-empty or Escape returns `seed`. Services-only.
+// seeded with the source filename when editing an existing scheme. Max 30
+// characters; Enter-on-empty or Escape returns the seed.
 
 namespace bomber::game {
 
