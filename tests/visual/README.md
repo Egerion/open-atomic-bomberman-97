@@ -147,6 +147,42 @@ Recapture uses the same command as above — `BOMBER_RECAPTURE=1` prints
 `RECAPTURE-BM <label> <name> <scroll> <hash>` rows alongside the match ones, and
 both manifests are refreshed in one pass.
 
+## What these ten frames do NOT cover: outlined text
+
+Established 2026-08-01, and worth stating because the gap is invisible from the
+manifests: **no pinned frame renders a single outlined glyph.** `sub_41696C` —
+ink over a four-pass 1-px outline — draws very nearly every string in the front
+end, and nothing here would notice if it broke.
+
+- `shots.txt`'s five in-match frames draw only through `Renderer::draw_frame`.
+  `libs/render` sits *below* `libs/ui` in the dependency graph
+  (`libs/ui/CMakeLists.txt` links `bomber::render` PUBLIC), so the renderer
+  cannot reach `FontTextures::draw_outlined` or `draw_dialog_text` even in
+  principle; the in-match clock is KFONT sprite digits, not font glyphs. The one
+  match-path caller, `MatchRunner::draw_player_score`, is never invoked by
+  `DemoRun`, which calls `draw_frame` and nothing else.
+- `bm_shots.txt`'s five CREDITS frames draw the `.BM` viewer, whose body text
+  goes through the **no-outline** `dword_45C378` blit (pseudo.c 16458-16461 — a
+  separately confirmed fact, see `kInk` in `libs/ui/src/bmscreen.cpp`) and whose
+  window chrome and buttons use the plain `FontTextures::draw`.
+
+This is not hypothetical. Two contradicting ports of `sub_41696C` — one at the
+ink's diagonal neighbours, one at its cardinal ones — coexisted in `libs/ui` for
+as long as both existed, and the harness was green through all of it. The
+comment on one of them asserted the disagreement could not be resolved without a
+recapture; there was never a frame to recapture.
+
+**The fix is cheap and it already has an entry point.** `bomber_game
+--menu-shot <out.bmp>` (`run_menu_capture`, `libs/game/src/capture_runs.cpp`)
+draws the MAINMENU backdrop plus the "V1.0" version string through
+`draw_outlined`, and it is a `capture_run()`, so it inherits the same
+`options.ini` pins the other two paths get. What is missing is only a third
+manifest and a third loop in `run_visual_golden.cmake`, alongside the
+`bm_shots.txt` one it would be modelled on. Worth doing **before** the next
+change to the outline primitive, not after — and worth extending to a frame
+containing a dialog, since "V1.0" is a single short string and
+`draw_dialog_text`'s real call sites are the acknowledge/confirm/list dialogs.
+
 ## Recapturing
 
 Recapture whenever a renderer change is deliberate — do it in the SAME

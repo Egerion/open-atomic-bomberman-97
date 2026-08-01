@@ -62,9 +62,12 @@ inline constexpr Uint8 kDialogDimR = 168, kDialogDimG = 168, kDialogDimB = 164;
 // the original's min(remaining, cell) loops).
 void draw_dialog_chrome(SDL_Renderer* ren, const DialogRect& r, const Sprite* winz);
 
-// sub_41696C — ink glyphs over a 4-pass 1-px outline. The outline colour is a
-// per-call argument (a7), black for every dialog except the quit confirm (see
-// draw_confirm_dialog). `x, y` is the top-left.
+// sub_41696C — ink glyphs over a 4-pass 1-px outline at the ink's DIAGONAL
+// neighbours. The outline colour is a per-call argument (a7), black for every
+// dialog except the quit confirm (see draw_confirm_dialog). `x, y` is the
+// top-left. A thin wrapper over FontTextures::draw_outlined, which IS the port
+// of sub_41696C — this one only spares the dialog sites the max_w argument none
+// of them clip with. It used to be a second, contradicting implementation.
 void draw_dialog_text(SDL_Renderer* ren, const FontTextures& font, const std::string& text,
                       float x, float y, Uint8 r, Uint8 g, Uint8 b, Uint8 outline_r = 0,
                       Uint8 outline_g = 0, Uint8 outline_b = 0);

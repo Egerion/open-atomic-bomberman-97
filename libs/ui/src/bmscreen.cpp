@@ -152,15 +152,23 @@ float FontTextures::draw_outlined(SDL_Renderer* ren, const std::string& s, float
         }
         run = s.substr(0, n);
     }
-    // Outline at the four DIAGONAL neighbours of the centred ink, per
-    // batch_0x415C1F.cpp: sub_41696C assembles the glyph into a (w+2)x(h+4)
-    // scratch, drawing the outline 4x at buffer offsets (0,0),(2,2),(0,2),(2,0)
-    // and the ink ONCE at (1,1). The port used the cardinal neighbours before.
+    // Outline at the four DIAGONAL neighbours of the ink — SETTLED 2026-08-01 at
+    // the instruction level (facts.md "sub_41696C's four outline passes are
+    // DIAGONAL"). sub_41696C assembles the string into a (w+2)x(h+4) scratch and
+    // calls the font blit five times: the outline at buffer offsets (0,0),
+    // (2,2), (0,2), (2,0) and the ink ONCE at (1,1), so relative to the ink the
+    // outline sits at the four CORNERS, not the four edges. Nothing there is
+    // register-lost, which is what the older reading assumed: all five
+    // destinations are plain add chains off the scratch pointer at
+    // 0x4169F9-0x416A87. draw_dialog_text now delegates here rather than keeping
+    // a second, contradicting copy.
     //
-    // UNRESOLVED: dialog_chrome.cpp's draw_dialog_text cites the SAME sub_41696C
-    // and uses the CARDINAL offsets. One of the two is wrong; both feed frames
-    // pinned by tests/visual, so reconciling them is a rendering change needing
-    // its own recapture, not a quiet edit here.
+    // KNOWN DIVERGENCE, recorded rather than fixed (facts.md, same entry): the
+    // original blits that scratch with its TOP-LEFT at (x, y), so its ink lands
+    // at (x+1, y+1) and its outline spans (x, y)..(x+2, y+2). The port centres
+    // the composite on (x, y) instead, and every call site passes the original's
+    // own x/y verbatim, so each outlined string sits one pixel up and left of
+    // where the original puts it.
     static constexpr std::array<std::array<float, 2>, 4> kOff{{{-1, -1}, {1, 1}, {-1, 1}, {1, -1}}};
     for (const auto& o : kOff) draw(ren, run, x + o[0], y + o[1], outline_r, outline_g, outline_b);
     return draw(ren, run, x, y, r, g, b);

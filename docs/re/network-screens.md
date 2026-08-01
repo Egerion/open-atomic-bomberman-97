@@ -631,6 +631,7 @@ The real per-slot stores are: the **152-byte player records** at
 | `multiplayer-deep.md` §2.4 | netprotocol 0..3 mapping [NEEDS BINARY] | **0 cancel / 1 IPX / 2 modem / 3 serial / 4 TCP-IP**, and TCP/IP is unreachable (§2) |
 | `multiplayer-deep.md` §2.5 | is there a separate lobby/waiting-room screen? | **No.** Screen A *is* the host's waiting room (its client list is live); Screen B's post-accept spinner loop is the guest's. Both are described completely above |
 | `multiplayer-deep.md` §2.5 | the SFX-40 sites need reading | they are the guest's "denied" buzz on the **shared** roster/level screens, not on the net screens (§7) |
+| this doc §12, `frontend-flow.md` | `sub_41696C`'s 4 outline offsets are register-lost; the cardinal ±1 offsets are the only consistent reading | nothing is lost — all five destinations are plain add chains at 0x4169F9-0x416A87, and the outline is at the ink's four **DIAGONAL** neighbours (facts.md, 2026-08-01) |
 
 ---
 
@@ -640,7 +641,6 @@ The real per-slot stores are: the **152-byte player records** at
 |---|---|
 | Does the host's 4-client cap imply 4 *machines* or 4 *players*? `word_45FFA4[4]` is keyed by node id, so it is 4 remote **machines** (+ the host = the 5 of `word_460130[5]`); the per-machine human count is bounded only by the shared roster's 10 slots. The exact clamp when a 5th machine requests is unread. | `sub_40D175`'s fall-through when both `for` loops fail (0x40D175), and whether any reply is sent |
 | Whether a guest that is *already* in [WAIT] is re-seated if the host restarts its screen | `sub_40D073`/`sub_40D251` interaction with `sub_40F243` |
-| The exact glyph offsets of `sub_41696C`'s 4 outline passes | register-lost in `sub_41696C` (0x41696C ~0x416A5x); the four cardinal ±1 offsets remain the only consistent reading |
 | The font in effect on these screens (the `dword_45C37C`/`dword_45C380` pair is a global font vtable; no net screen sets it) | the writer of `dword_45C37C`/`dword_45C380` in the window-system init |
 | `dword_4646BC`, `dword_460244` (`sub_411CF8`) — both set on entry, purpose unread | writers/readers of 0x4646BC and 0x460244 |
 | Whether the **host** ever surfaces a client's disconnect (the client row just vanishes; no sound, no modal on `sub_40D2F8`) | any presentation hook on kinds 1/39 outside the handlers |

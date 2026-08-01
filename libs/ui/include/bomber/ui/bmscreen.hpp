@@ -54,6 +54,9 @@ public:
     // times — four outline passes and one ink pass — into a (w+2)-wide scratch,
     // and CLIPS the run to `max_w` pixels (its 4th argument; VALUELST rows
     // 705/710/715/720/790 column 3). max_w <= 0 disables the clip.
+    // The four outline passes are the ink's DIAGONAL neighbours, not its
+    // cardinal ones (facts.md). THE port of that routine: draw_dialog_text
+    // delegates here, so there is one place for the offsets to be wrong in.
     float draw_outlined(SDL_Renderer* ren, const std::string& s, float x, float y, Uint8 r,
                         Uint8 g, Uint8 b, Uint8 outline_r, Uint8 outline_g, Uint8 outline_b,
                         float max_w = 0) const;

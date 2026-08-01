@@ -177,15 +177,14 @@ void draw_dialog_chrome(SDL_Renderer* ren, const DialogRect& r, const Sprite* wi
 void draw_dialog_text(SDL_Renderer* ren, const FontTextures& font, const std::string& text, float x,
                       float y, Uint8 r, Uint8 g, Uint8 b, Uint8 outline_r, Uint8 outline_g,
                       Uint8 outline_b) {
-    // sub_41696C: four 1-px outline passes in the a7 ink, then the ink pass on
-    // top. The four pass offsets are register-lost in the decompile; the four
-    // cardinal 1-px offsets are the only reading that yields the classic 1-px
-    // outline the count implies.
-    font.draw(ren, text, x - 1, y, outline_r, outline_g, outline_b);
-    font.draw(ren, text, x + 1, y, outline_r, outline_g, outline_b);
-    font.draw(ren, text, x, y - 1, outline_r, outline_g, outline_b);
-    font.draw(ren, text, x, y + 1, outline_r, outline_g, outline_b);
-    font.draw(ren, text, x, y, r, g, b);
+    // ONE port of sub_41696C, not two. This carried its own four-pass loop at the
+    // CARDINAL neighbours while FontTextures::draw_outlined used the DIAGONAL
+    // ones, both citing this address; the cardinals are wrong (facts.md
+    // "sub_41696C's four outline passes are DIAGONAL"). Delegating rather than
+    // copying the corrected offsets over is what stops the two from drifting
+    // apart a second time — the dialog call sites only ever wanted the case
+    // where nothing is clipped, which is the whole difference between them.
+    font.draw_outlined(ren, text, x, y, r, g, b, outline_r, outline_g, outline_b);
 }
 
 void draw_dialog_button(SDL_Renderer* ren, const FontTextures& font, float x, float y,
