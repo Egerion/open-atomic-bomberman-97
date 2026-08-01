@@ -6,7 +6,7 @@
 # next.
 #
 # This directory used to be the whole presentation layer — 112 files, 73 public
-# headers in one include/bomber/game/. It is now the top of an eight-package
+# headers in one include/bomber/game/. It is now the top of a NINE-package
 # stack: game_util (SDL-free models) -> input/render -> ui -> netui -> editor ->
 # frontend -> netplay -> here. Each of those is its own target with its own
 # public headers, and the arrows point one way only, so a change inside one of
