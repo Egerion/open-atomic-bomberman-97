@@ -8,12 +8,19 @@
 namespace bomber::game {
 
 namespace {
-// The general white ink every row of this widget is drawn in — the selected
-// one included, because sub_442C28 lightens the band UNDER the text rather
-// than inverting it (dialog_chrome.hpp). The old kSel*/"> " marker pair went
-// with the bare-text stand-in this screen used to draw.
+
+// The general white ink every row is drawn in — the selected one included,
+// because sub_442C28 LIGHTENS the band under the text rather than inverting it,
+// so no per-row recolour and no "> " marker are needed.
 constexpr Uint8 kInkR = 255, kInkG = 255, kInkB = 255;
 constexpr Uint8 kHintR = 160, kHintG = 160, kHintB = 160;
+
+bool has_cam_extension(const std::filesystem::path& p) {
+    std::string ext = p.extension().string();
+    for (auto& c : ext) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    return ext == ".CAM";
+}
+
 }  // namespace
 
 void CampaignFilePicker::enter(const std::filesystem::path& install_root, std::string backdrop) {
@@ -28,9 +35,7 @@ void CampaignFilePicker::enter(const std::filesystem::path& install_root, std::s
     if (!std::filesystem::is_directory(install_root, ec)) return;
     for (const auto& entry : std::filesystem::directory_iterator(install_root, ec)) {
         if (!entry.is_regular_file()) continue;
-        std::string ext = entry.path().extension().string();
-        for (auto& c : ext) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-        if (ext == ".CAM") entries_.push_back(entry.path());
+        if (has_cam_extension(entry.path())) entries_.push_back(entry.path());
     }
     std::sort(entries_.begin(), entries_.end());  // sub_41404B qsorts its glob results
     // sub_42FEF0 @0x42DC16 — the widest ITEM alone, cached so the mouse
@@ -121,24 +126,25 @@ void CampaignFilePicker::on_mouse_up(float x, float y) {
     }
 }
 
+void CampaignFilePicker::draw_backdrop(SDL_Renderer* ren) const {
+    if (!assets_) return;
+    const Sprite& bg = assets_->frontend_pcx(backdrop_);
+    if (bg.tex == nullptr) {
+        SDL_SetRenderDrawColor(ren, 20, 20, 30, 255);
+        SDL_RenderClear(ren);
+        return;
+    }
+    SDL_FRect d{0, 0, static_cast<float>(bg.w), static_cast<float>(bg.h)};
+    SDL_RenderTexture(ren, bg.tex, nullptr, &d);
+}
+
 void CampaignFilePicker::draw(SDL_Renderer* ren) const {
     if (!ren) return;
-    if (assets_) {
-        const Sprite& bg = assets_->frontend_pcx(backdrop_);
-        if (bg.tex) {
-            SDL_FRect d{0, 0, static_cast<float>(bg.w), static_cast<float>(bg.h)};
-            SDL_RenderTexture(ren, bg.tex, nullptr, &d);
-        } else {
-            SDL_SetRenderDrawColor(ren, 20, 20, 30, 255);
-            SDL_RenderClear(ren);
-        }
-    }
+    draw_backdrop(ren);
     if (!font_ || !font_->loaded()) return;
-    // sub_41485A's list dialog, header getstring(1250) ("Select a campaign:",
-    // docs/re/campaign.md §3) in the general white ink.
     if (entries_.empty()) {
-        // sub_4015C6's empty-glob path: getstring(1215)/getstring(97) error
-        // dialog (docs/re/campaign.md §3's "shows an error dialog instead").
+        // sub_4015C6's empty-glob path: the getstring(1215)/getstring(97) error
+        // dialog (docs/re/campaign.md §3).
         const std::string err =
             assets_ ? assets_->getstring(1215, "No campaign files found!") : std::string();
         font_->draw(ren, err.empty() ? "No campaign files found!" : err, 100.0f, 124.0f, kHintR,
@@ -146,26 +152,21 @@ void CampaignFilePicker::draw(SDL_Renderer* ren) const {
         return;
     }
     // sub_4015C6 hands its glob to the SAME sub_41485A -> sub_42DB80 ->
-    // sub_42DBCC widget the *.SCH picker and the help browser use, so it gets
-    // the same chrome at the same literal (100, 100): grey panel, title strip,
-    // bevelled item frame, scrollbar and "Done" button. This screen used to
-    // draw bare "> name" text on the backdrop with no panel and no scrollbar —
-    // a port stand-in, and the reason a scrolled campaign list showed no
-    // position at all. Laid out exactly like SchemeFilePicker::draw.
+    // sub_42DBCC widget the *.SCH picker and the help browser use, so it gets the
+    // same chrome at the same literal (100, 100). This screen used to draw bare
+    // "> name" text with no panel and no scrollbar — a port stand-in, and the
+    // reason a scrolled campaign list showed no position at all.
+    //
+    // sub_42FEF0 @0x42DC16: the widest ITEM drives the width (measured at
+    // enter()); the widget folds the title in itself, so it must NOT be pre-maxed.
     const int count = static_cast<int>(entries_.size());
     const int last = std::min(count, nav_.top_row + kVisibleRows);
-
-    // sub_42FEF0 @0x42DC16: the widest ITEM drives the width (measured at
-    // enter()); the widget folds the title in itself, so it must NOT be
-    // pre-maxed here.
     const ListDialogLayout lay = draw_list_dialog(ren, *font_, header(), 100.0f, 100.0f, item_w_,
                                                   kVisibleRows, count, nav_.top_row);
     for (int i = nav_.top_row; i < last; ++i) {
         const int vi = i - nav_.top_row;
         const float ty = lay.item_y0 + static_cast<float>(vi) * lay.item_h;
-        // sub_442C28 LIGHTENS the selected row instead of inverting it, so
-        // every row keeps the same ink and the "> " marker is not needed.
-        // The band follows the highlight OFFSET (@0x42E656).
+        // The selection band follows the highlight OFFSET (@0x42E656).
         if (vi == nav_.highlight) draw_list_selection(ren, lay, vi);
         font_->draw(ren, entries_[static_cast<std::size_t>(i)].filename().string(), lay.item_x, ty,
                     kInkR, kInkG, kInkB);
