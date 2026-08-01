@@ -79,6 +79,27 @@ inline int assign_gold_player(bool goldman_on, bool team_mode, int clinched_play
     return clinched_player;
 }
 
+// Which slots the Gold Bomberman twinkle seeds on — sub_420F07's per-slot gate
+// (pseudo.c 23658-23671, docs/re/goldman-roulette.md §6). Solo play compares
+// dword_46492C against the slot INDEX; team play first re-encodes THE SLOT'S OWN
+// +84 team byte into dword_46492C's doubled representation
+// (`v11 = byte_461C18[152*i] ? 2 : 0`) and compares that — the SAME encoding on
+// both sides of the ==, so every alive member of the gold team twinkles.
+//
+// The port's two encodings differ, and this is where they meet: gold_player
+// stores the RAW 0/1 team id (assign_gold_player above) while the hashed sim
+// Player::team carries that byte SHIFTED +1 (match_factory.hpp reserves 0 for
+// "no team / solo side"), so the original's re-encoding step lands here as
+// `raw + 1`. Comparing them UNSHIFTED put the twinkle on the OPPOSING — freshly
+// defeated — team whenever team 1 clinched, and on nobody when team 0 did.
+// The alive gate stays at the call site (the original tests the +0 alive dword
+// in the same && as this comparison).
+inline bool gold_twinkle_matches(bool team_mode, int gold_player, int slot, int sim_team) {
+    if (gold_player < 0) return false;
+    if (team_mode) return sim_team == gold_player + 1;
+    return slot == gold_player;
+}
+
 // The clinch screen's background (docs/re/frontend-flow.md "VICTORY" §3,
 // CONFIRMED): team game -> aTeamU ("team%u"), else aVictoryU ("victory%u").
 // `clinched_team` is the RAW 0/1 setup-screen team id, NOT the sim's shifted 1/2
