@@ -5359,7 +5359,100 @@ the dialog 9-patch (`sub_414DF4` 17546). WINZ measured raw→snap **2.15/channel
 mean, border blue (0,91,111) unchanged** (master-palette-authored), and the
 `.BM` inline images are rare — both left raw as imperceptible, documented.
 
-## Bomb/flame colour is not the owner — CONFIRMED (2026-07-16, `sub_422EDE`/`sub_42331C`/`sub_426FCC`)
+UPDATE 2026-08-01: the report recurred ("the original looks darker and deeper
+— as if a palette pass lies over everything", despite this entry being marked
+resolved). The re-audit CONFIRMS this entry end to end — nothing here is
+retracted — and root-causes the recurrence to the HD overlay layer, which
+postdates it. See the next section.
+
+## The "palette pass over everything" recurrence — re-audited, root-caused to DATA_HD (2026-08-01)
+
+The 2026-07-13 fix above was verified pixel-exact and then the SAME class of
+report came back three weeks later. The re-audit had to answer two questions:
+is there a darkening mechanism in the binary the first pass missed, and is the
+port's classic decode still faithful? Both answers close cleanly, and the
+actual regression is in neither.
+
+**The binary's palette upload chain, closed end to end.** Every DAC upload in
+the game funnels through `sub_42C534`, and that function passes every 6-bit
+palette byte through a 64-entry table before handing the buffer to
+`sub_443608`:
+
+- `sub_42C534` (31240): `upload[i] = byte_464E50[pal[i]]`, raw values retained
+  in `byte_464B50` (the "current palette" other code reads back). So the
+  binary DOES have a per-value LUT between every palette and the DAC —
+  hypothesis "a brightness/shading LUT lies over everything" is structurally
+  real, and the first investigation never looked at it.
+- `byte_464E50` is a GAMMA table: `sub_42CF84(double gamma)` fills
+  `table[i] = clamp(pow(i, gamma), 0.0, 63.0)` for i = 0..63 (FPU sequence at
+  0x42CFAB..0x42D008: `fild i` / Watcom `IF_DPOW` / clamp against
+  `dbl_45AA48 = 63.0` and 0.0 / `fistp`), then re-uploads the current palette.
+- **The runtime table is IDENTITY.** `byte_464E50` sits in `.bss` (no static
+  contents), `sub_42CF84`'s ONLY caller is the run-once init `sub_42DAE0`
+  (32147), and the argument is the literal double 1.0 (`0x3FF0000000000000`
+  built inline). `pow(i, 1.0) = i` exactly for i = 0..63, so the shipped game
+  never bends a value. A latent gamma feature, never engaged: **there is no
+  hidden brightness pass in the binary.** Hypothesis closed with the
+  arithmetic, not by absence of evidence.
+- `sub_443608` (48226) writes DirectDraw PALETTEENTRYs as `4 * v` into BYTES
+  (peFlags = 4, PC_NOCOLLAPSE) — so the multiply WRAPS mod 256 rather than
+  clamping. The 16-bit no-palette fallback builds `word_4A39DE` from the same
+  `4 * v`. Displayable ceiling 252 on every path, as already documented above.
+- 8-bit palettes are floored to 6-bit before upload: `sub_41522D` uploads the
+  own-palette screens as `pal[i] >> 2`, net display `v & 0xFC`. The port blits
+  those screens raw, so it renders up to +3/channel brighter there —
+  imperceptible, stays as documented above ("blitting these raw is 1:1" holds
+  to within that floor).
+- `sub_414DF4` freads only COLOR.PAL[0..767] and zeroes entry 0 — the port's
+  entry-0 fixup mirrors the original's, byte for byte.
+- Measured on the shipped COLOR.PAL (2026-08-01): **only entry 0 exceeds 63**
+  (the 255,255,255 sentinel both sides force to black before any multiply),
+  so `colorpal.cpp`'s defensive clamp and the binary's byte-wrap agree on
+  every reachable entry, and every reachable master channel is ≤ 252 and a
+  multiple of 4. Pinned install-gated in `tests/assets/test_colorpal.cpp`.
+
+Conclusion for classic art: the port's decode is arithmetic-identical to the
+original's DAC output. The 2026-07-13 resolution was correct and is intact.
+
+**The regression: DATA_HD is pre-snap art.** The HD overlay layer
+(2026-07-22, `57e0b24`) postdates the snap fix, and its generation pipeline
+(the `bomber_hd_toolkit` in the install root, outside this repo) extracts
+sources with the exact "raw per-asset decode" the entry above identifies as
+the pre-fix look: PCX through the file's raw 8-bit palette, type-4 cels
+through full-range expand5 (reaching 255) — **no COLOR.PAL snap, no 6-bit
+quantise** — then Real-ESRGAN upscales that and the results are repacked. The
+port deliberately never snaps HD textures (correct for the classic split;
+never re-examined for HD). Net: with HD art active (Tab), the palette pass is
+absent from every pixel on screen.
+
+Worked example, measured 2026-08-01 on the shipped files (FIELD1 floor,
+classic region (200,200)-(280,260), HD the same region ×4):
+
+| | dither pair | region mean |
+|---|---|---|
+| classic raw decode (pre-fix port) | (23,27,139)/(19,143,19) | (21,85,79) |
+| original's DAC / fixed classic port | (20,40,108)/(4,132,0), masters 57/128 | (12,86,54) |
+| DATA_HD/RES/FIELD1.PCX | raw pair survives near-verbatim: (23,26,139)/(19,144,19) | **(21,85,79)** |
+
+The HD floor's mean equals the RAW mean to the integer — it is the
+pre-2026-07-13 look, upscaled (blue 79 vs the original's 54). Every HD ANI
+loses the same things per pixel: the master pull (~2-3%), the 252 ceiling,
+and the 256-colour constraint (ESRGAN's smooth gradients). And the drift is
+not even uniformly bright: FIELD0's HD mean is (13,92,9) against an
+identity-snap (18,93,13) — the upscaler moves tones on its own — so HD mode
+is neither the raw classic decode nor the original's display; it is simply
+outside the palette contract, and no gate covers it (`visual_golden` shoots
+classic art).
+
+**Fix ownership.** Classic needs NO change. The honest HD fix is at
+GENERATION: snap every extracted source pixel through COLOR.PAL (the same
+`snap` the port applies at load) before the upscaler runs, then rebuild
+DATA_HD — the tonal base becomes the original's displayed palette and ESRGAN
+still supplies the gradients. The alternative — snapping HD images at load in
+the presentation stack — reproduces the original's 256-colour constraint
+exactly but posterises the upscaled gradients; whether that reads as "the
+original's look in HD" or as banding is a call for the user's eyes, not a
+fact this document can settle.
 
 The original keeps a bomb's DRAWN COLOUR and its OWNER as two separate fields
 packed into one dword at bomb +60: the low BYTE (+60) is the colour, written

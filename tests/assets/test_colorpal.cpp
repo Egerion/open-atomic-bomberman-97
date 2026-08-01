@@ -1,6 +1,8 @@
 // COLOR.PAL in-match palette snap (colorpal.hpp). Verifies the exact
 // RGB555 -> reverse-LUT -> master*4 chain and the entry-0-black fixup against
-// a SYNTHETIC COLOR.PAL, so it runs without the copyrighted install.
+// a SYNTHETIC COLOR.PAL, so the engine cases run without the copyrighted
+// install; the final case additionally pins the SHIPPED file when an install
+// is present, and SKIPs when it is not.
 //
 // The real FIELD1 "Classic Green Acres" dither mapping this reproduces
 // ((23,27,139)->(20,40,108), (19,143,19)->(4,132,0)) was validated pixel-exact
@@ -16,6 +18,7 @@
 #include <vector>
 
 #include "bomber/assets/colorpal.hpp"
+#include "bomber/assets/install.hpp"
 
 using namespace bomber::assets;
 
@@ -120,4 +123,76 @@ TEST_CASE("a default (unloaded) palette is an inert no-op") {
     CHECK(img.rgba[0] == 8);
     CHECK(img.rgba[1] == 16);
     CHECK(img.rgba[2] == 24);
+}
+
+// The cases above prove the ENGINE on synthetic data; this one pins the port
+// against the SHIPPED COLOR.PAL when an install is present (located the same
+// way the game locates it) and SKIPs otherwise, because two of colorpal.cpp's
+// load-bearing claims are claims about the FILE, not the code:
+//
+//  * "a valid 6-bit entry never exceeds 63". The original's upload
+//    (sub_443608) stores `4 * value` into a BYTE — it wraps mod 256 — while
+//    the port clamps to 255; the two agree only while no reachable entry
+//    exceeds 63. Measured 2026-08-01 (docs/re/facts.md, the palette-pass
+//    audit): only entry 0 does, and that is the white sentinel BOTH sides
+//    force to black before any multiply, so the divergence is unreachable.
+//
+//  * the 6-bit DAC ceiling. Every displayable channel is 4*(0..63): nothing
+//    the snap emits may exceed 252 or leave the multiple-of-4 grid. This is
+//    the "darker and deeper" palette pass — a decode that reached 255 or
+//    landed off-grid would be the pre-2026-07-13 raw look coming back.
+TEST_CASE("shipped COLOR.PAL: 6-bit master, DAC ceiling, facts.md examples") {
+    namespace fs = std::filesystem;
+    const fs::path dir = default_game_dir();
+    const fs::path pal_path = dir.empty() ? fs::path{} : dir / "COLOR.PAL";
+    if (pal_path.empty() || !fs::exists(pal_path)) {
+        MESSAGE("SKIP: no original install found (COLOR.PAL absent)");
+        return;
+    }
+
+    // Raw-file scan: entries 1..255 are 6-bit; entry 0 alone may exceed 63.
+    std::ifstream f(pal_path, std::ios::binary);
+    std::vector<char> raw(768);
+    f.read(raw.data(), 768);
+    REQUIRE(f.gcount() == 768);
+    for (std::size_t i = 3; i < 768; ++i) CHECK(static_cast<unsigned char>(raw[i]) <= 63);
+
+    auto pal = colorpal::Palette::load(pal_path);
+    REQUIRE(pal.ok());
+
+    // The three worked examples of docs/re/facts.md "In-match colour
+    // quantization", validated there pixel-exact against a live capture of the
+    // running original. Master bytes -> displayed = *4:
+    //   FIELD1 blue dither  (23,27,139)   -> idx 57  = (5,10,27)*4  = (20,40,108)
+    //   FIELD1 green dither (19,143,19)   -> idx 128 = (1,33,0)*4   = (4,132,0)
+    //   border brick grey   (126,126,126) -> idx 60  = (27,29,32)*4 = (108,116,128)
+    auto check_snap = [&](std::uint8_t r, std::uint8_t g, std::uint8_t b, int er, int eg, int eb) {
+        pal.snap(r, g, b);
+        CHECK(r == er);
+        CHECK(g == eg);
+        CHECK(b == eb);
+    };
+    check_snap(23, 27, 139, 20, 40, 108);
+    check_snap(19, 143, 19, 4, 132, 0);
+    check_snap(126, 126, 126, 108, 116, 128);
+
+    // Ceiling sweep: stepping every channel by 8 visits each of the 32768
+    // RGB555 LUT slots exactly once (index_of truncates with >>3), i.e. every
+    // colour the snap can ever produce. All outputs on the 4-multiple grid,
+    // none above 252.
+    for (int r = 0; r < 256; r += 8)
+        for (int g = 0; g < 256; g += 8)
+            for (int b = 0; b < 256; b += 8) {
+                std::uint8_t sr = static_cast<std::uint8_t>(r);
+                std::uint8_t sg = static_cast<std::uint8_t>(g);
+                std::uint8_t sb = static_cast<std::uint8_t>(b);
+                pal.snap(sr, sg, sb);
+                const bool on_grid = sr <= 252 && sg <= 252 && sb <= 252 && sr % 4 == 0 &&
+                                     sg % 4 == 0 && sb % 4 == 0;
+                if (!on_grid) {  // one CHECK per failure, not 32768 assertions
+                    CHECK(on_grid);
+                    return;
+                }
+            }
+    CHECK(true);  // sweep completed clean
 }
