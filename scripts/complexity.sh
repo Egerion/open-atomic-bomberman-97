@@ -58,6 +58,10 @@ fi
 # that as a cascade of nonsense rather than as a missing header. A half-blind
 # run here would silently under-report complexity, which is worse than not
 # running at all — it would let a new offender in while reading as clean.
+# Same defines the build sets PUBLIC from libs/net (see lint.sh for the full
+# reasoning). Without them every lobby-guarded body compiles to its empty branch
+# and this gate measures a complexity of zero for code that ships.
+DEFINES=(-DBOMBER_HAS_LOBBY=1 -DBOMBER_HAS_LOBBY_TLS=1)
 BUILD_DIR="${BUILD_DIR:-build/windows-fetch}"
 INCLUDES=(-Ilibs/sim/include -Ilibs/sim/src -Ilibs/assets/include \
           -Ilibs/audio/include -Ilibs/core/include -Ilibs/platform/include \
@@ -99,7 +103,7 @@ mapfile -t FILES < <(find libs apps -name "*.cpp" | grep -v "/build/")
 echo "complexity: measuring ${#FILES[@]} files (threshold $THRESHOLD)..."
 printf '%s\n' "${FILES[@]}" |
   xargs -P 8 -I{} bash -c '"$1" --quiet --header-filter="(libs|apps)/" --config="$2" "$3" -- -std=c++20 "${@:4}" 2>/dev/null' \
-    _ "$CT" "$CFG" {} "${INCLUDES[@]}" > "$RAW"
+    _ "$CT" "$CFG" {} "${INCLUDES[@]}" "${DEFINES[@]}" > "$RAW"
 
 # "<path>:<line>:<col>: warning: function 'NAME' has cognitive complexity of N"
 # Keyed on file+function, NOT line: a line number moves every time something

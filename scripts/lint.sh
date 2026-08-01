@@ -57,6 +57,17 @@ INCLUDES=(-Ilibs/sim/include -Ilibs/sim/src -Ilibs/assets/include \
 # Note the hard-coded build/windows-fetch path: if you lint from a git worktree
 # whose build dir is elsewhere, configure that preset there (or point BUILD_DIR
 # at an existing one) instead of letting the run proceed half-blind.
+# The defines libs/net/CMakeLists.txt sets PUBLIC, which every preset turns on.
+# Without them clang-tidy sees the #else half of every lobby guard and the whole
+# online stack is INVISIBLE to this gate — LobbyScreen's browser and room, the
+# runner's online leaf, chat_overlay's live half, and part of lobby_client. The
+# gate then reports "all N files clean" having read the empty branch. That is the
+# fourth instance of this exact failure in this repo, after ENABLE_LOBBY hiding
+# tests/net, LOBBY_TLS compiling the certificate cases away, and libs/audio never
+# being built — three of which are already written up in CLAUDE.md. Keep these in
+# sync with libs/net/CMakeLists.txt; a define the build sets and the gate does
+# not is a blind spot by construction.
+DEFINES=(-DBOMBER_HAS_LOBBY=1 -DBOMBER_HAS_LOBBY_TLS=1)
 BUILD_DIR="${BUILD_DIR:-build/windows-fetch}"
 missing=0
 for dep_inc in "$BUILD_DIR/_deps/sdl3-src/include" \
@@ -96,7 +107,7 @@ trap 'rm -f "$FAILLOG"' EXIT
 # where it immediately surfaced two over-threshold functions in match_factory.hpp.
 printf '%s\n' "${FILES[@]}" |
   xargs -P 8 -I{} bash -c '"$1" --header-filter="(libs|apps)/" "$2" -- -std=c++20 "${@:3}" || echo "$2" >> "$0"' \
-    "$FAILLOG" "$CT" {} "${INCLUDES[@]}"
+    "$FAILLOG" "$CT" {} "${INCLUDES[@]}" "${DEFINES[@]}"
 if [ -s "$FAILLOG" ]; then
   echo "lint: FAILED files:" >&2
   sort "$FAILLOG" >&2
