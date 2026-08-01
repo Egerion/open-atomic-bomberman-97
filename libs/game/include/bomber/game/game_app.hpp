@@ -13,761 +13,230 @@
 #include "bomber/assets/sch.hpp"
 #include "bomber/audio/audio_engine.hpp"
 #include "bomber/audio/sound_director.hpp"
-#include "bomber/editor/editor_screen.hpp"
-#include "bomber/frontend/campaign_screen.hpp"
 #include "bomber/frontend/campaign_state.hpp"
-#include "bomber/frontend/goldman_screen.hpp"
-#include "bomber/frontend/keyremap_screen.hpp"
 #include "bomber/frontend/map_select_state.hpp"
 #include "bomber/frontend/match_backdrop.hpp"
 #include "bomber/frontend/match_runner_state.hpp"
 #include "bomber/frontend/menu_state.hpp"
-#include "bomber/frontend/options_screen.hpp"
 #include "bomber/frontend/options_state.hpp"
 #include "bomber/frontend/results_state.hpp"
 #include "bomber/frontend/setup_state.hpp"
+#include "bomber/game/app_options.hpp"
 #include "bomber/game_util/app_flow.hpp"
 #include "bomber/game_util/campaign_round_end.hpp"
 #include "bomber/game_util/cursor_indicator.hpp"
-#include "bomber/game_util/results.hpp"
 #include "bomber/input/gamepad.hpp"
 #include "bomber/input/input.hpp"
 #include "bomber/netplay/netplay_runner.hpp"
 #include "bomber/netplay/netplay_state.hpp"
-#include "bomber/netui/chat_overlay.hpp"
 #include "bomber/render/asset_store.hpp"
 #include "bomber/render/renderer.hpp"
 #include "bomber/render/sdl.hpp"
 #include "bomber/render/sequences.hpp"
-#include "bomber/sim/match_config.hpp"
 #include "bomber/sim/simulation.hpp"
-#include "bomber/ui/bmscreen.hpp"
+#include "bomber/sim/tuning.hpp"
+#include "bomber/ui/bmscreen.hpp"  // FontTextures
 #include "bomber/ui/screen.hpp"
 #include "bomber/ui/screen_context.hpp"
 
-// The playable front-end: owns the SDL window, the asset store, the
-// presentation systems, and the match lifecycle around the deterministic sim.
-//
-// NETPLAY IS NOT HERE. The CLI entry, the connect/lobby leaves, the online setup
-// stage and the match/round/rematch loop all live in NetplayRunner
-// (screens/netplay_runner.hpp) and NetplayMatch (screens/netplay_match.hpp).
-// This class only DISPATCHES to them — netplay() below builds one from the two
-// seams, and run()/run_app() call it in three places. No net type is named in
-// this header at all any more, so the heavy socket headers stay out of it.
+// THE APPLICATION SHELL, and only that: SDL and window lifetime, the loaded
+// services every screen borrows, the settings this session is editing, and the
+// AppState loop that hands control to one screen at a time. Nothing here draws.
+// Its four heavier jobs are their own units under src/ (app_settings,
+// boot_loading, capture_runs, global_hotkeys), each taking a by-reference slot
+// bundle built here on demand, the same seam ScreenContext uses.
 
 namespace bomber::game {
 
-// clang-analyzer-optin.performance.Padding (NOLINT below) — a singleton root
-// object (one instance for the app's lifetime, apps/game/main.cpp), not a
-// hashed sim/hot-path type; clang-tidy's suggested reorder touches ~48
-// members by hand in a class this large, which risks a transcription bug
-// (member-initializer-list order must track it) for a one-time 34-byte
-// saving that has no measurable effect on a singleton.
+struct SettingsSlots;
+struct DataLoadSlots;
+struct CaptureSlots;
+struct HotkeySlots;
+
+// NOLINT: a singleton root object, not a hashed sim or hot-path type. The suggested
+// member reorder must be done by hand with the member-initializer order tracking it,
+// risking a transcription bug for a one-time 34-byte saving on one instance.
 class GameApp {  // NOLINT(clang-analyzer-optin.performance.Padding)
 public:
-    struct Options {
-        std::filesystem::path game_dir;  // empty: auto-detect (bomber::assets)
-        std::filesystem::path scheme;    // empty: DATA/SCHEMES/BASIC.SCH
-        bool demo = false;               // headless scripted run + screenshot(s)
-        int demo_ticks = 0;               // single-shot legacy mode: run this many ticks
-        std::filesystem::path demo_out;   // single-shot legacy mode: BMP output path
-        // Visual golden harness (tests/visual/, --demo-shots): (label, tick)
-        // pairs captured within ONE scripted run, each saved as
-        // "<label>.bmp" under demo_shot_dir. Non-empty overrides the legacy
-        // single-shot fields above — the run advances to the highest
-        // requested tick, saving a frame every time a requested tick is
-        // reached. See tests/visual/README.md for the recapture procedure
-        // and the determinism guarantees this depends on.
-        std::vector<std::pair<std::string, int>> demo_shots;
-        std::filesystem::path demo_shot_dir;
-        // Dev-only capture knobs (--demo-players / --demo-seed), used to render
-        // the README's match animation: fill N COMPUTER slots and/or replace the
-        // fixed demo seed, so a headless run can capture a BUSY all-AI match
-        // instead of the scripted 1-human + 1-AI pair (a human slot stands
-        // still with no keyboard attached). Both default to "as before", and
-        // tests/visual/ passes neither — its pinned frames are untouched.
-        int demo_players = 0;                  // 0 = keep the default roster
-        std::uint32_t demo_seed = 0xB0BB1E5u;  // the historic --demo match seed
-        // Dev fast-path: skip the front-end and boot straight into a match
-        // (also via env BOMBER_BOOT_MATCH). The spine still exists; this just
-        // starts the app in the Match state for quick iteration.
-        bool boot_match = false;
-        // Dev capture hook (--bm-shot): render one `.BM` text screen (Credits /
-        // Manual / ...) over the MAINMENU backdrop, scrolled `bm_shot_scroll`
-        // lines down, and save it as a BMP — the front-end analogue of --demo's
-        // match-frame capture, used to eyeball/regress the sub_41302D viewer
-        // layout without driving the menu by hand.
-        std::string bm_shot_name;               // e.g. "CREDITS"
-        std::filesystem::path bm_shot_out;       // BMP output path
-        // Dev capture hook (--menu-shot): render the main-menu composite
-        // (MAINMENU backdrop + "V1.0" + the row-0 trigger cursor) to a BMP, for
-        // pixel comparison against the native oracle's --boot-shot menu render.
-        std::filesystem::path menu_shot_out;
-        int bm_shot_scroll = 0;                  // lines scrolled down before capture
-        // Netplay (increment 5b, ADR-0010 §3.3 step 5): when net_role != 0, run()
-        // runs ONE networked 2-player UDP match (run_netplay) instead of the
-        // front-end. Both peers pass each other's host:port explicitly (no
-        // discovery/handshake in this MVP) and the SAME seed, which — with the
-        // canonical config run_netplay builds — gives byte-identical arenas.
-        int net_role = 0;                  // 0 = none, 1 = host (seat 0), 2 = guest (seat 1)
-        std::uint16_t net_local_port = 0;  // UDP port to bind (host); guest binds ephemeral
-        std::string net_peer_host;         // the OTHER peer's host (dotted IPv4 or name)
-        std::uint16_t net_peer_port = 0;   // the OTHER peer's UDP port
-        std::uint32_t net_seed = 0x1234u;  // shared match seed (must match on both peers)
-        // Online lobby endpoints (ADR-0011 Phase 1d). Empty = fall through to the
-        // BOMBER_MATCHMAKER_* env vars, then to the compile-time defaults in
-        // game_app.cpp, which now name the DEPLOYED matchmaker — so the online
-        // rows work with no flags. `--matchmaker <ws-url>` and `--matchmaker-stun
-        // <host[:port]>` override (a local instance, or your own host); the STUN
-        // host defaults to the URL's own host (the Go server serves the WebSocket
-        // and the UDP STUN echo from one box, PROTOCOL.md §2).
-        std::string matchmaker_url;
-        std::string matchmaker_stun_host;
-        std::uint16_t matchmaker_stun_port = 0;  // 0 = unset
-    };
+    explicit GameApp(AppOptions opts) : opts_(std::move(opts)) {}
+    ~GameApp();
 
-    explicit GameApp(Options opts) : opts_(std::move(opts)) {}
-    // Flushes options.ini on a normal shutdown if anything changed in memory
-    // (docs/re/results-and-options.md §2 "Persistence — CONFIRMED via an
-    // exit-time write-back": sub_405DE3 only runs through sub_410EBF's
-    // atexit-style hook on normal exit, never per-edit). run() calls this
-    // itself before returning; the destructor is a backstop for any other
-    // exit path (e.g. a test harness that never calls run()'s tail). The
-    // write does filesystem I/O that can throw; destructors are implicitly
-    // noexcept, so swallow — losing an options write on a failing disk is
-    // strictly better than std::terminate (bugprone-exception-escape).
-    ~GameApp() {
-        try {
-            flush_options();
-        } catch (...) {  // NOLINT(bugprone-empty-catch) — see the doc comment above
-        }
-    }
-
-    // Runs to completion; returns the process exit code.
-    int run();
+    int run();  // to completion; returns the process exit code
 
 private:
-    // init() is a straight-line boot sequence; these are its ordered steps
-    // (ADR-0008 god-object decomposition — a pure extract-method split, each
-    // runs exactly where it did in the original single function). init() just
-    // calls them in order, threading the resolved install paths and the live
-    // SDL renderer between the steps that need them.
     bool init();
-    // Is this run a PIXEL CAPTURE (--demo / --demo-shots / --bm-shot /
-    // --menu-shot) rather than someone playing? Capture runs must be hermetic:
-    // identical inputs, identical pixels, on any machine. Anything read from the
-    // player's own options.ini that could move a pixel has to be pinned for them.
-    //
-    // This exists because it was NOT one predicate. `playtime` was pinned here
-    // for exactly this reason, then the three PORT-ONLY Video Settings keys were
-    // added later and nobody pinned them — so simply playing the game with the
-    // FPS readout on (F3) silently broke all five visual pins, and an
-    // investigation blamed an innocent commit before the real cause was found.
-    bool capture_run() const;
-    void seed_front_end_rngs();  // reseed the presentation LCGs (demo pins them)
-    // Resolve the install dir + scheme path (out-params), or fail with usage.
-    bool resolve_install_paths(std::filesystem::path& game,
-                               std::filesystem::path& scheme_path);
-    // Load scheme + VALUELST + options.ini into the config members; false on any
-    // parse error (the whole load is one try/catch).
-    bool load_config(const std::filesystem::path& game,
-                     const std::filesystem::path& scheme_path);
-    // SDL init + window/renderer creation + logical-presentation/vsync setup;
-    // hands back the live renderer (used by the two asset steps below).
-    bool init_video(SDL_Renderer*& ren);
-    // FONT6 + the "Loading data..." dialog animated across assets_.load()'s
-    // decode (the recolor half lives in build_presentation; audio in load_sound).
-    bool load_assets(SDL_Renderer* ren, const std::filesystem::path& game);
-    // Base tuning + per-player recolor (the "Loading data..." bar's second
-    // half) + Renderer/Screen construction.
-    void build_presentation(SDL_Renderer* ren);
-    // The "Loading sound..." dialog + audio_.init(), run last so all sprite
-    // data is decoded AND recolored first (sub_41D695 before sub_42896E).
-    void load_sound(const std::filesystem::path& game);
-    // Pump the OS event queue (so the window stays responsive) then repaint the
-    // boot LOADING dialog at `fraction` (0..1). The progress callback threaded
-    // through assets_.load()/build_player_sets()/audio_.init() calls this.
-    void draw_boot_loading(const char* caption, float fraction);
-    // PORT ENHANCEMENT (not RE'd — the original has no fullscreen concept):
-    // the Alt+Enter/F11 fullscreen toggle, wired as a global SDL_EventFilter
-    // (installed once in init()) so it works from every one of this file's
-    // per-screen SDL_PollEvent loops without touching each of them. Returns
-    // false (swallow) for the toggle keys, true (keep) for everything else —
-    // matches SDL_EventFilter's contract, called via the static thunk below
-    // since SDL needs a plain function pointer + void* userdata.
-    bool handle_global_event(const SDL_Event& ev);
+    void seed_front_end_rngs();
+    // The install dir (into opts_.game_dir) + the scheme path, or fail with usage.
+    bool resolve_install_paths(std::filesystem::path& scheme_path);
+    bool init_video();
+    int run_capture();  // whichever of the four capture flags this run carries
     static bool SDLCALL sdl_event_filter(void* userdata, SDL_Event* event);
-    // Flips fullscreen_, applies it to the live window, and marks the choice
-    // for persistence (options_dirty_ — flush_options() is the sole writer).
-    void toggle_fullscreen();
-    // Presentation-only global shortcut: Tab selects optional DATA_HD artwork
-    // without changing the fixed gameplay coordinate system or simulation.
-    void toggle_hd_artwork();
-    // Write-on-exit (task requirement 3 / §2): serializes every in-memory
-    // option this session has touched back to options.ini, ONLY if something
-    // actually changed since load (options_dirty_) and a game_dir is known.
-    // Idempotent — safe to call more than once (run() and the destructor both
-    // do, in case a subclass/test skips run()'s normal return path). Also
-    // flushes nodename.ini (see flush_node_name), so run()'s five exit paths
-    // keep ONE settings-writeback call.
-    void flush_options();
-    // The node name's own write-on-exit hook: the original persists it through
-    // a SEPARATE shutdown callback (sub_40C4DB -> sub_40C140) into its own
-    // install-root nodename.ini, not through options.ini's writer
-    // (docs/re/network-screens.md §3 "Session model").
-    void flush_node_name();
-    // The absent-NODENAME.INI fallback (sub_40C74C): a random one of the 49
-    // names at MESSAGES ids 500..548, `getstring(500 + rand() % getvalue(47))`.
-    // Needs the message table, so it runs after load_assets(), not in
-    // load_config() where the file itself is read.
-    void seed_default_node_name();
-    void start_match(std::uint32_t seed);
-    int run_demo();
-    // NETPLAY DISPATCH (ADR-0009, screens/netplay_runner.hpp). Eleven methods and
-    // ~1000 lines of connect/setup/match/round/rematch orchestration used to sit
-    // here, in the app shell, next to the fullscreen toggle and the options
-    // writer; they are now NetplayRunner's, and this is the whole of what the
-    // shell keeps. Built fresh on demand like sctx() — the runner holds only
-    // reference bundles, so it is a stack object per entry, never a member.
-    //
-    // run()'s --host/--join path calls netplay().run_cli(); run_app's
-    // NetHost/NetJoin arms call present_network_menu()/present_direct_join().
-    NetplayRunner netplay();
-    // The netplay flow's two seams, the same shape as sctx()/match_runner_state():
-    // netplay_seams() bundles the per-screen state BUILDERS the flow needs to call
-    // (it drives the ordinary setup/level/scoreboard screens and the MatchRunner
-    // itself), and netplay_state() bundles the shell members it reads and writes.
-    // Both are cheap reference bundles, built fresh on demand.
+
+    SettingsSlots settings_slots();
+    DataLoadSlots data_load_slots();
+    CaptureSlots capture_slots();
+    HotkeySlots hotkey_slots();
+
+    // The shared-services bundle every extracted screen is handed (ADR-0008) and the
+    // ADR-0009 per-cluster state seams. Field order MUST track each struct's.
+    ScreenContext sctx();
+    OptionsEditState options_state();
+    MenuState menu_state();
+    MapSelectState map_select_state();
+    SetupState setup_state();
+    MatchBackdrop match_backdrop();
+    CampaignState campaign_state();
+    ScoreboardState scoreboard_state();
+    GoldmanState goldman_state();
+    MatchRunnerState match_runner_state();
+    // Netplay takes BUILDERS rather than built bundles: its round loop replaces sim_
+    // between rounds, so a bundle captured once would describe a dead match.
     NetplaySeams netplay_seams();
     NetplayState netplay_state();
-    // --bm-shot capture: draw one `.BM` screen over MAINMENU and SaveBMP it.
-    int run_bm_shot();
-    int run_menu_shot();
-    // Reads back the current backbuffer and writes it as a BMP. Shared by
-    // run_demo()'s legacy single-shot path and its --demo-shots multi-shot
-    // path. Returns false (and leaves stderr diagnostics to the caller) on
-    // an SDL failure.
-    bool save_screenshot(const std::filesystem::path& out) const;
+    NetplayRunner netplay();
 
-    // The front-end screen/state-machine shell (docs/adr/0004): drives
-    // Boot -> Logo -> Title -> Menu -> Match -> Results -> Menu around the
-    // existing match loop. The pure transition graph lives in app_flow.hpp; the
-    // methods below are the thin SDL side (render, audio, input) per state.
-    //
-    // The DISPATCH only. Two of its states used to own a hundred-plus-line
-    // handler inline — the Play flow under Menu and the outcome tail under
-    // Results — which is what made a switch over eight states 408 lines long.
-    // Both are their own methods below; the loop is now one arm each.
+    // The front-end shell (docs/adr/0004): Boot -> Logo -> Title -> Menu -> Match ->
+    // Results -> Menu. The pure transition graph is app_flow.hpp; these are the thin
+    // SDL side, documented at their definitions. std::optional = "the window closed".
     int run_app();
-    // The pre-match flow reached from Play (sub_42A3F6's head): campaign reset,
-    // the 1020 track, the attract short-circuit, the Goldman wheel, then the
-    // PLAYER INPUT and LEVEL & ROUNDS screens. Returns StartMatch to play,
-    // Advance if the player backed out (Menu -> Menu), or no value if the
-    // window closed — run_app's only two outcomes for that arm, said in the
-    // return type rather than through the shared `ev`.
+    std::optional<AppInput> run_state(AppState state);
+    std::optional<AppInput> run_menu_arm();
+    std::optional<AppInput> run_results_arm();
     std::optional<AppInput> run_play_flow();
-    // The two pre-match screens under it (sub_410F81 then sub_406DDE). True =
-    // both confirmed, false = Esc aborted the whole flow, no value = the window
-    // closed. It was written as a `while (!started)` loop that could never run
-    // twice — every path either sets `started` or breaks — so it is straight
-    // line here, which is also what the RE comment says it is.
     std::optional<bool> run_prematch_screens();
-    // A CAMPAIGN round end (docs/re/campaign.md "Round end"): the arm that
-    // shows at most one modal and then advances or replays the stage. Returns
-    // CampaignContinue, Advance, or no value on a window close.
     std::optional<AppInput> run_campaign_round_end(const CampaignRoundEnd& plan);
-    // The ORDINARY three-tier outcome tail (sub_42A3F6): tally, clinch, then
-    // DRAW / RESULTS / VICTORY. Returns the flow-graph event, Quit included.
     AppInput run_outcome_tier();
-    // Builds a fresh ScreenContext (the shared-services bundle) from this app's
-    // stable members, so an extracted screen class can run without threading
-    // GameApp's whole member set (ADR-0008 god-object decomposition). Cheap —
-    // a value bundle of references/pointers; valid any time after init().
-    ScreenContext sctx();
-    // The Options cluster's shared-state seam (ADR-0009 §4): a by-reference
-    // bundle of the non-service members present_options_screen and its two
-    // sub-screen runners read/write (options_/scheme_/setup_lcg_/... — see
-    // options_state.hpp). Built fresh on demand like sctx(), so the runner
-    // classes need no GameApp&.
-    OptionsEditState options_state();
-    // The main menu's shared-state seam (ADR-0009 §6): the non-service members
-    // present_menu + roll_attract_match read/write (menu_index_/the attract
-    // roster+level+LCG/the F10 video toggles/the four editor members — see
-    // menu_state.hpp), bundled by reference so MenuScreen needs no GameApp&.
-    // Built fresh on demand like sctx()/options_state()/editor_state().
-    MenuState menu_state();
-    // The LEVEL & ROUNDS screen's shared-state seam (ADR-0009 §7): the
-    // non-service members present_map_select reads/writes (selected_level_/
-    // win_target_/setup_lcg_/options_/gold_player_ — see map_select_state.hpp),
-    // bundled by reference so MapSelectScreen needs no GameApp&. Built fresh on
-    // demand like sctx()/menu_state().
-    MapSelectState map_select_state();
-    // The PLAYER INPUT screen's shared-state seam (ADR-0009 §7): the non-service
-    // members present_setup + cycle_input_type read/write (the setup_type_/sub_/
-    // team_ roster/setup_lcg_/campaign_trigger_count_/team_play_/gold_player_ + the
-    // campaign_active_/stages_/stage_index_ Esc tears down — see setup_state.hpp),
-    // bundled by reference so SetupScreen needs no GameApp&. Built fresh on demand
-    // like sctx()/map_select_state().
-    SetupState setup_state();
-    // The match-coupled backdrop seam (ADR-0009 §8): the live Renderer + sim
-    // State the campaign confirm/banner/complete dialogs and the in-round help
-    // modal draw as their frozen backdrop — kept SEPARATE from the front-end-
-    // service-only ScreenContext (match-runtime members, not presentation
-    // services). Built fresh on demand like sctx(); NOLINTs the renderer_
-    // optional deref exactly as sctx() does *screen_.
-    MatchBackdrop match_backdrop();
-    // The campaign flow's shared-state seam (ADR-0009 §8): the non-service
-    // members present_campaign_picker + load_campaign_stage read/write
-    // (campaign_active_/campaign_stages_/campaign_stage_index_/campaign_banner_/
-    // the setup_type_/sub_/team_ roster/setup_lcg_/scheme_/opts_.game_dir — see
-    // campaign_state.hpp), bundled by reference so CampaignPickerScreen and the
-    // free load_campaign_stage need no GameApp&. Built fresh on demand like
-    // sctx()/map_select_state().
-    CampaignState campaign_state();
-    // The RESULTS scoreboard's shared-state seam (ADR-0009 §8): the non-service
-    // members present_scoreboard reads (the frozen round's sim::State, the
-    // win/kill tally + roster + options it rows, and the demo/roster flags
-    // auto_advance_results() consults — see results_state.hpp), bundled so
-    // ScoreboardScreen needs no GameApp&. Built fresh on demand like sctx()/
-    // campaign_state().
-    ScoreboardState scoreboard_state();
-    // The Goldman wheel's shared-state seam (ADR-0009 §8): the three non-service
-    // members present_goldman_wheel writes (goldman_lcg_/gold_player_/gold_prize_
-    // — see results_state.hpp), bundled by reference so GoldmanWheelScreen needs
-    // no GameApp&. Built fresh on demand like sctx()/scoreboard_state().
-    GoldmanState goldman_state();
-    // The match runtime's shared-state seam (ADR-0009 §10): the non-service
-    // members run_match + start_match + collect_inputs + draw_player_row +
-    // draw_fps_overlay read/write (the ticked sim_/renderer_, the round seed, the
-    // kill tally, the F7/F8/F9 live levers, and the read-only MatchConfig inputs —
-    // see match_runner_state.hpp), bundled by reference so MatchRunner needs no
-    // GameApp&. Built fresh on demand like sctx()/goldman_state().
-    MatchRunnerState match_runner_state();
-    // Runs one asset-driven Screen (logo/title/results) to completion. sub_42A088
-    // CUTS between screens (palette + blit + flip, no wipe), so there is no
-    // transition out here — the next screen simply replaces this one. Returns the
-    // AppInput that ended it (Advance on key/timeout, Back on Escape, Quit on
-    // window close).
-    AppInput present_screen(const ScreenDef& def);
-    // Front-end frame pacing now lives in bomber::platform::FrameClock
-    // (engine-base layer, ADR-0008); the menu/setup/Goldman loops own one and
-    // call pace(). run_match keeps its own inline pacer (coupled to the F9
-    // cadence toggle) until a later stage migrates it too.
-    // Runs a `.BM` text-screen (Credits / Options / Network / Controllers help)
-    // to completion via the BmScreen viewer: draws MAINMENU as the backdrop with
-    // the parsed .BM text+images over it, scrolls on the arrow/page keys, and
-    // exits on Enter/Escape (sub_41302D). Returns Back on Escape else Advance
-    // (both route the leaf back to the menu), or Quit on window close.
-    AppInput present_bm_screen(const std::string& bm_name);
-    // The interactive Options screen (Team Play / Conveyor Speed): random
-    // GLUE<n> backdrop, FONT6 text, Up/Down select a row, Left/Right change
-    // its value, Enter/Esc leave (docs/re/frontend-flow.md "Interactive
-    // settings ... DEFERRED" — this is that follow-up). Persists to
-    // options.ini via bomber::assets::save_options only when a setting
-    // actually changed. F1 opens the generic *.BM help browser
-    // (present_help_browser) — CORRECTED 2026-07-08: sub_4080DC's own F1
-    // dispatch calls sub_41431C (§4), the SAME browser row 5 opens, not a
-    // fixed OPTIONS.BM cut. Returns Advance (both Enter/Esc route the leaf
-    // back to the menu, mirroring the other .BM-backed leaves) or Quit on
-    // window close.
-    AppInput present_options_screen();
-    // Case-insensitive DATA/SCHEMES/<name>.SCH resolve (name given with or
-    // without an extension) + assets::sch::load into scheme_. Returns false
-    // (scheme_ untouched) when the name doesn't resolve or the file is
-    // corrupt.
-    bool reload_scheme_from_name(const std::string& name);
-    // load_campaign_stage moved out of GameApp into a free function in
-    // screens/campaign_state.hpp (ADR-0009 §8): it is called by BOTH
-    // present_campaign_picker (now CampaignPickerScreen) AND run_app's Results
-    // auto-advance handler, so it takes a CampaignState (built by
-    // campaign_state()) instead of being a private method only one of them
-    // could reach. present_campaign_confirm likewise moved to
-    // CampaignConfirmScreen (screens/campaign_screens.hpp) — only the picker
-    // called it, so no GameApp forwarder remains.
-    // The campaign stage-start banner (docs/re/campaign.md "Stage banner"):
-    // a blocking two-line dialog, "(<stage name>)" (getstring 1235="(%s)")
-    // over "Prepare to begin Campaign!" (getstring 1230), shown once per
-    // stage transition (both the first stage, from present_campaign_picker,
-    // and every auto-advance in run_app's Results handler). Dismissed by any
-    // key or a short dwell; presentation-only — a separate sub_414340 call
-    // from present_campaign_confirm's above (different getstring ids,
-    // different content), but the same dialog FAMILY.
-    AppInput present_campaign_banner();
-    // The "Congratulations! You made it through the whole campaign!" acknowledge
-    // modal (sub_40133F stage-exhausted branch, getstring 1220/1225) shown once
-    // the last campaign stage is cleared, before returning to the menu.
-    AppInput present_campaign_complete();
-    // The "Oh Well! / Campaign unsuccessful!" round-end banner (sub_42A3F6's
-    // campaign arm @0x42A660, getstring 1240/1245) — the ONLY screen a campaign
-    // round end is allowed to show, and only when the pacing verdict is 2.
-    AppInput present_campaign_unsuccessful();
-    // The IPLOGO -> HSLOGO -> TITLE boot presentation (sub_42B060). LINEAR — no
-    // attract re-run: each screen advances on a key OR the getvalue(12) = 7 s
-    // timeout, and the title's Advance (key or timeout) returns so run_app drops
-    // into the menu (sub_42B060 synthesizes Enter on timeout and returns; the
-    // caller enters sub_42B9CE). Returns Advance to enter the menu, or Back/Quit
-    // to short-circuit.
-    AppInput run_boot_attract();
-    // The navigable main menu (sub_42B9CE): MAINMENU.PCX + an up/down highlight
-    // over the item rows, Enter selects, Escape quits. Resolves the highlighted
-    // row into a concrete AppInput (StartMatch / OpenOptions / ... / Quit).
-    //
-    // ALSO owns the ATTRACT-MODE idle timer (docs/re/frontend-flow.md "Attract
-    // mode", sub_42B9CE's idle path pseudo.c 30887-30894): getvalue(92) = 30 s
-    // (gated > 5, per the file's own legend — < 5 disables attract) of NO
-    // key/mouse/pad input resets `menu_idle_since_ms_`'s deadline; hitting it
-    // sets attract_, calls roll_attract_match() (the sub_4224E2 save + the
-    // roster/stage rolls), and returns StartMatch exactly as if row 0 (Play)
-    // had been selected — matching the original's own force of the selected
-    // row back to 0. This is
-    // presentation-level gating around the EXISTING Menu->StartMatch edge in
-    // app_flow.hpp; no new AppState/AppInput was needed (task brief: prefer
-    // the existing StartMatch edge). run_app's StartMatch handler checks
-    // attract_ and skips the goldman wheel / present_setup / present_map_select
-    // (doc: "neither the player screen nor the LEVEL & ROUNDS screen is
-    // shown"), going straight into run_match with the rolled roster/stage.
-    AppInput present_menu();
-    // roll_attract_match (the sub_4224E2 attract entry — the sub_422552 save +
-    // the roster/stage rolls) moved into MenuScreen (screens/menu_screen.hpp)
-    // with present_menu; it was only ever called by present_menu's idle/Alt+A
-    // branches. restore_from_attract stays here because run_app calls it.
-    // Attract-mode exit (sub_422552, doc "Menu re-entry restores everything"):
-    // writes attract_saved_ back over setup_type_/setup_sub_/setup_team_/
-    // selected_level_/team_play_ and clears attract_. Called on EVERY path
-    // back to the menu after an attract match — both a natural round end
-    // (doc point 2's "Round end skips ALL outcome screens": DRAW/RESULTS/
-    // VICTORY never render, so run_app's Results branch is bypassed entirely
-    // for an attract round) and an input-triggered abort (doc point 3: "ANY
-    // key/mouse/pad input ... aborts immediately back to the menu", run_match
-    // below). Idempotent no-op if attract_ is already false.
-    void restore_from_attract();
-    // Runs one match to its end (one player left or time up). Returns Quit if
-    // the window closed mid-match, else MatchOver.
-    //
-    // In attract_ mode this ALSO returns MatchOver the instant ANY key,
-    // mouse-button, or gamepad-button input arrives (docs/re/frontend-flow.md
-    // "Attract mode" point 3 / doc's abort requirement, mirroring sub_42A3F6's
-    // round-loop tail, which jumps to LABEL_34 as soon as a keypress has set
-    // dword_464938) — a
-    // real (non-attract) match only reacts to the specific keys already wired
-    // above (Ctrl+Q, Esc, F1), so this abort check is additive and attract_-
-    // gated, never firing for a human-played round. run_app's StartMatch
-    // caller calls restore_from_attract() unconditionally once this returns,
-    // whether the round ended naturally or was aborted (doc point 2 "Round
-    // end skips ALL outcome screens" applies to BOTH exits — attract never
-    // reaches Results).
-    AppInput run_match();
+    AppInput run_draw_tier();
 
-    // The match-outcome predicates below are thin forwarders to the free
-    // functions of the same names in bomber/game_util/match_outcome.hpp, where they
-    // were promoted VERBATIM (ADR-0009 §10) so the extracted ScoreboardScreen and
-    // MatchRunner can call the SAME clinch/outcome logic run_app uses without a
-    // GameApp&. Kept as methods for run_app, this file's last remaining caller;
-    // the full RE citations live on the free functions in that header.
-    //
-    // The winner of the round just ended (sole survivor index, or -1 for a draw).
-    int round_winner() const;
-    // (Campaign clauses 4-5 had a forwarder here too, until the campaign round
-    // end stopped being a special case inside the outcome tier. Its only caller
-    // is now MatchRunner, which reaches the free function directly.)
-    // At least two ACTIVE players share a MatchConfig team (dword_464964).
-    bool is_team_mode() const;
-    // The §1 v73 match-clinch check; the clinching player's index, or -1.
-    int match_clinch() const;
-    // Tally the round win, mirroring it onto the winner's teammates (sub_421B56).
-    void award_round_win(int winner);
-    // The DRAW/RESULTS screens may auto-advance after their dwell (all-AI/demo).
-    bool auto_advance_results() const;
-    // Reset the per-match win tally + read the win target getvalue(310) at the
-    // start of a fresh match (Menu -> StartMatch). Best-of-N, N = 2 by default.
-    void reset_match_scores();
-    // The between-round RESULTS scoreboard (sub_42A3F6): RESULTS.PCX + the
-    // running per-player win counts at the getvalue(785) list positions. Shown
-    // after a round that did not end the match; returns the dismiss input.
+    // Thin forwarders to the extracted screen classes, kept so the flow above reads as
+    // a vocabulary rather than as constructor calls. Each screen's citations are on
+    // the class that owns it.
+    AppInput present_screen(const ScreenDef& def);
+    AppInput present_bm_screen(const std::string& bm_name);
+    AppInput present_options_screen();
+    AppInput present_campaign_banner();
+    AppInput present_campaign_complete();
+    AppInput present_campaign_unsuccessful();
     AppInput present_scoreboard();
-    // Screen 1 of the pre-match flow — PLAYER INPUT TYPE SELECTION (sub_410F81):
-    // the 10-slot input-type list (OFF / COMPUTER / KEYBOARD) at getvalue 705-713,
-    // each slot tinted with its intrinsic colour (VALUELST 200-247), a per-slot
-    // team flag ('T'). Right cycles a slot's type, Left/'0' set it OFF. Returns
-    // Advance to go on to the level screen, Back to cancel to the menu, Quit on
-    // window close. (docs/re/setup-screens.md.)
-    AppInput present_setup();
-    // The Goldman Roulette wheel (docs/re/goldman-roulette.md), sub_4034BC:
-    // run at the head of the Play flow, before present_setup(), whenever
-    // goldman is on, we're not in attract, it's a local game, AND a gold
-    // player is pending (gold_player_ >= 0, doc §2's re-entry gate — the
-    // wheel is a silent no-op with no pending winner). Awards +1 born-with
-    // inventory (MatchConfig::born_with_extra, doc §4) to the gold player
-    // (whole team in team mode) at every subsequent round init for the
-    // following match. Returns Advance to continue into present_setup, Back
-    // if Esc aborted the wheel (the caller must then skip the whole Play
-    // flow and forfeit the gold player, doc §2/§5), Quit on window close.
     AppInput present_goldman_wheel();
-    // Screen 2 — LEVEL & ROUNDS (sub_406DDE, the VALUELST "OPTIONS SCREEN"): the
-    // RANDOM + 11 named levels and the win target, at getvalue 735-738. Left/Right
-    // cycle the highlighted row, Up/Down switch rows, Enter commits the level
-    // (selected_level_) + win target (win_target_), Escape backs to present_setup.
-    // Returns Advance to start the match, Back to the player screen, Quit on close.
+    AppInput present_setup();
     AppInput present_map_select();
+    AppInput present_menu();
+    AppInput run_boot_attract();
+    AppInput run_match();
+    // A GameApp method, not just a MatchRunner private, because the --demo path
+    // builds a match through it before ticking sim_ directly.
+    void start_match(std::uint32_t seed);
+    // Attract-mode exit (sub_422552, "Menu re-entry restores everything"), called on
+    // EVERY path back to the menu after an attract match. Idempotent, so callers need
+    // not know whether the round ended naturally or was aborted.
+    void restore_from_attract();
+
+    // Forwarders to the free functions of the same names in match_outcome.hpp,
+    // promoted there so ScoreboardScreen and MatchRunner can call the SAME logic
+    // without a GameApp&. The citations are on those.
+    int round_winner() const;
+    bool is_team_mode() const;
+    int match_clinch() const;
+    void award_round_win(int winner);
+    bool auto_advance_results() const;
+    void reset_match_scores();
+
+    AppOptions opts_;
 
     int menu_index_ = 0;  // highlighted main-menu row (persists across visits)
-    // The hidden scheme-editor trigger's same-key repeat counter (§5,
-    // sub_42B9CE pseudo.c 30876-30883): raw key code 5 (Ctrl+E) increments
-    // it; ANY OTHER key resets it to 0; `++counter > 5` (the 6th consecutive
-    // press) opens the editor. Lives here (not a local in present_menu)
-    // because it must persist across that function's per-frame event pump.
+    // The two hidden triggers' same-key repeat counters, here rather than as locals
+    // because they must survive their screen's per-frame event pump. Ctrl+E six
+    // consecutive times opens the editor (sub_42B9CE pseudo.c 30876-30883, `++counter
+    // > 5`); 'C' FIVE times opens the campaign picker (sub_410F81 pseudo.c
+    // 15357-15365, `== 5` — five, not a sixth).
     int editor_trigger_count_ = 0;
-    // The hidden campaign picker's same-key repeat counter (docs/re/
-    // campaign.md §4, sub_410F81 pseudo.c 15357-15365): raw key 'C' (0x43)
-    // increments it; ANY OTHER key resets it to 0; the 5th CONSECUTIVE press
-    // (`== 5`, not editor_trigger_count_'s `> 5` — the doc pins "5 consecutive
-    // 'C'", not a 6th) opens the campaign picker. Lives here for the same
-    // reason editor_trigger_count_ does: it must persist across
-    // present_setup's per-frame event pump. The original also gates this on
-    // "not net mode" (sub_40C06A()); this port has no netplay (ADR-0003
-    // defers it), so that guard is always-true here and simply omitted.
     int campaign_trigger_count_ = 0;
 
-    // Multi-round match state (sub_42A3F6): best-of-N. win_count_ tallies round
-    // wins per player; reaching win_target_ ends the MATCH (VICTORY). A draw
-    // scores nobody and replays. Presentation-only state — never sim::State,
-    // never hashed. win_target_ is seeded from options.ini's "num_to_win_match="
-    // (docs/re/results-and-options.md §3/§5) when present, else getvalue(310),
-    // by reset_match_scores(), and then owned by the LEVEL & ROUNDS screen
-    // (present_map_select, WINS row 1..100, docs/re/setup-screens.md); the
-    // in-class 2 only covers the dev fast-path (--match / BOMBER_BOOT_MATCH),
-    // which skips the pre-match screens entirely. A round that does not decide
-    // the match routes Results -> Match via AppInput::RoundContinue through the
-    // pure flow graph (app_flow.hpp) — run_app folds the scoreboard/draw
-    // dismissal into that event; there is no side-channel state override.
+    // Best-of-N match state (sub_42A3F6), presentation-only — never sim::State, never
+    // hashed. win_target_'s in-class 2 covers only the dev fast-path;
+    // reset_match_scores() seeds the real default and LEVEL & ROUNDS owns it.
     std::array<int, sim::kMaxPlayers> win_count_{};
     int win_target_ = 2;
-    // Kill tally (docs/re/results-and-options.md §1, sub_421B0F's field):
-    // the RESULTS row shows this alongside the match win count. §1's
-    // "Reproduction status" paragraph is explicit that this counter, like the
-    // win count, is "carried across rounds within one match" — i.e. despite
-    // being called the "round-kill count", it is CUMULATIVE for the whole
-    // match (packed in the same per-player 152-byte record as the win count),
-    // NOT reset every round. So this resets only in reset_match_scores() (a
-    // fresh match), exactly like win_count_. Tallied from the sim's
-    // PlayerDied events (Event::data = killer index, event.hpp) once per tick
-    // in run_match via results.hpp's tally_kills() — self-kills are excluded
-    // (our semantics; §1 does not pin this — see results.hpp's doc comment).
+    // CUMULATIVE for the whole match, despite the original's name for it ("round-kill
+    // count", sub_421B0F's field): docs/re/results-and-options.md §1 is explicit that
+    // it rides across rounds in the same 152-byte record as the win count.
     std::array<int, sim::kMaxPlayers> kill_count_{};
-    // options.ini "num_to_win_match=" (§3/§5), read once in init(). Seeds
-    // reset_match_scores()'s win_target_ default when getvalue(310) is
-    // absent; the LEVEL & ROUNDS screen's WINS row still overrides per-match.
-    std::optional<int> num_to_win_match_;
+    std::optional<int> num_to_win_match_;  // options.ini "num_to_win_match="
 
-    // Per-slot input type chosen in the PLAYER INPUT screen (sub_410F81):
-    // 0 = OFF, 1 = COMPUTER, 2 = KEYBOARD, 3 = JOYSTICK (human) — the original's
-    // player byte +16 (docs/re/setup-screens.md). Default: P1 keyboard + P2
-    // computer. SlotInputType (input.hpp) names these.
+    // The roster the PLAYER INPUT screen edits (sub_410F81): input type (byte +16, see
+    // SlotInputType), input sub-index (+17), team (+84). setup_team_'s all-0 default
+    // matches "every slot OFF"; present_setup re-derives the real one on every entry
+    // (alternating slot & 1, sub_4049C0).
     std::array<int, sim::kMaxPlayers> setup_type_{2, 1};
-    // Per-slot input SUB-index (the original's +17): for KEYBOARD, which key-set
-    // (0 or 1, both bound to the single physical KeyboardMapper); for JOYSTICK,
-    // which CONNECTED gamepad index (GamepadMapper::read(sub)).
     std::array<int, sim::kMaxPlayers> setup_sub_{};
-    // Per-slot TEAM (the original's +84, toggled by 'T'): 0 or 1. Fed into the
-    // config's non-hashed MatchConfig::team[]; team MODE itself is deferred.
-    // Defaulted here to all-0 (matches "every slot OFF" at construction /
-    // campaign roster reset); present_setup() re-derives the REAL default
-    // (alternating slot & 1, sub_4049C0) on every entry to the setup screen
-    // — see that function's comment.
     std::array<int, sim::kMaxPlayers> setup_team_{};
-    // The level chosen on the LEVEL screen (sub_406DDE dword_45E0B8/464998):
-    // -1 = RANDOM (keep pick_stage over the enabled rotation), else 0..10 = a
-    // specific built-in level whose stage index start_match uses directly.
-    int selected_level_ = -1;
-    // Presentation RNG for the glue pick (and the LEVEL & ROUNDS preview
-    // swatch's per-cell tile re-roll). The literal below is only a
-    // construction-time placeholder: GameApp::init() overwrites it (and the
-    // three sibling LCGs in this file) with a real per-process seed from
-    // random_boot_seed() (game_app.cpp), matching the original's boot-time
-    // `time_(); srand_();` (sub_41095A, pseudo.c 14610-14611/14639-14640 —
-    // the same wall-clock reseed docs/re/facts.md "Per-match brick fill"
-    // already cites). A hardcoded literal here would replay the exact same
-    // "random" sequence on every launch; `next_seed_` below has the same
-    // shape and feeds `match::pick_stage`, so leaving it constant was the
-    // root cause of the reported "RANDOM level always picks the same map"
-    // bug. Presentation-only: never bomber::sim::State::rng.
-    std::uint32_t setup_lcg_ = 0x5E7C0DE5u;
+    int selected_level_ = -1;  // -1 = RANDOM (pick_stage), else 0..10 (sub_406DDE)
 
-    // ATTRACT MODE (docs/re/frontend-flow.md "Attract mode", sub_42B9CE's idle
-    // path + sub_410F81's attract branch, dword_464938). Presentation/config-
-    // only, like campaign_active_ below — never sim::State, never hashed; the
-    // sim runs the demo match through the ordinary start_match seed path, so
-    // determinism (ADR-0003) is untouched.
-    //
-    // `menu_idle_since_ms_` is present_menu's own idle clock, reset to "now"
-    // on every real key/mouse/pad event it sees — separate from a Screen's
-    // getvalue(12)=7s dwell (this is getvalue(92)=30s, a different id/timer).
-    // present_menu compares elapsed time against it every frame and fires
-    // attract once it exceeds getvalue(92)*1000 ms (gated > 5 s, doc: "< 5
-    // disables attract"). 0 is a sentinel meaning "not yet initialised for
-    // this menu visit" — present_menu seeds it to the current tick on entry.
+    // The front end's presentation-only LCGs, NEVER sim::State::rng (ADR-0004). The
+    // literals are construction-time placeholders ONLY: init() overwrites all four
+    // from random_boot_seed(), mirroring the original's boot-time `time_(); srand_();`
+    // (sub_41095A pseudo.c 14610-14611/14639-14640). Leaving them fixed was the bug
+    // where a fresh process always picked the same RANDOM level and brick fill.
+    std::uint32_t setup_lcg_ = 0x5E7C0DE5u;    // glue pick, preview swatch
+    std::uint32_t attract_lcg_ = 0x0A77AC70u;  // attract roster + stage rolls
+    std::uint32_t goldman_lcg_ = 0x60D1BEEFu;  // the wheel's 5 draws
+    std::uint32_t next_seed_ = 0xB0BB1E5;      // per-round match seed
+
+    // ATTRACT MODE (docs/re/frontend-flow.md, sub_42B9CE's idle path). The idle clock
+    // is getvalue(92)=30s, a different id and timer from a Screen's getvalue(12)=7s
+    // dwell; 0 = not yet initialised for this menu visit.
     std::uint64_t menu_idle_since_ms_ = 0;
-    // dword_464938: true for the duration of an attract demo match. Set by
-    // roll_attract_match() (present_menu's idle-timeout branch), read by
-    // run_app's StartMatch handler (skip the goldman wheel / present_setup /
-    // present_map_select / the Results outcome screens) and by run_match
-    // (abort on any input). Cleared by restore_from_attract().
-    bool attract_ = false;
-    // The roster/level/team snapshot roll_attract_match() saves before
-    // overwriting them for the demo roster (sub_4224E2), restored by
-    // restore_from_attract() (sub_422552) — doc: "Menu re-entry restores
-    // everything", so the player's own pre-attract choices survive untouched.
-    // The AttractSaved type moved to screens/menu_state.hpp (ADR-0009's
-    // AttractState seam) so MenuScreen's roll_attract_match can name it too.
-    AttractSaved attract_saved_{};
-    // Dedicated presentation LCG (never State::rng) for the two attract rolls
-    // (roster-count, stage) — same shape as setup_lcg_/goldman_lcg_. Reseeded
-    // per-process by GameApp::init() (random_boot_seed(), see setup_lcg_'s
-    // comment above); the literal is only the construction-time placeholder.
-    std::uint32_t attract_lcg_ = 0x0A77AC70u;
+    bool attract_ = false;          // dword_464938
+    AttractSaved attract_saved_{};  // sub_4224E2's snapshot, put back by sub_422552
 
-    // Campaign mode (docs/re/campaign.md, dword_46489C): armed only by the
-    // 'C'x5 trigger + a successful *.cam pick on present_setup
-    // (present_campaign_picker). Presentation/config-only, like
-    // setup_type_/selected_level_ above — never sim::State, never hashed.
-    // While active, campaign_stages_[campaign_stage_index_]'s scheme/roster
-    // REPLACE the manual setup_type_/selected_level_ values for the
-    // duration (the doc's "replacing the normal manual level-pick and
-    // roster-pick screens"), and run_app's Menu/Results handlers skip
-    // present_map_select() and auto-advance dword_4648B0 between stages
-    // instead of returning to the menu.
+    // Campaign mode (docs/re/campaign.md), armed only by present_setup's 'C'x5 trigger
+    // plus a successful *.cam pick. While active the stage's scheme and roster REPLACE
+    // setup_type_/selected_level_, and run_app auto-advances between stages.
     bool campaign_active_ = false;                             // dword_46489C
-    std::vector<assets::res::CampaignStage> campaign_stages_;  // parsed .CAM (dword_45E010)
+    std::vector<assets::res::CampaignStage> campaign_stages_;  // dword_45E010
     int campaign_stage_index_ = 0;                             // dword_4648B0
-    // Stage display banner text, "(<stage name>)" (sub_40133F, getstring
-    // 1235="(%s)" — docs/re/campaign.md "Stage banner"), set by
-    // load_campaign_stage each time a campaign stage is (re)loaded. Drawn by
-    // present_setup for one frame-cycle at stage start alongside getstring
-    // 1230="Prepare to begin Campaign!"; empty when campaign mode is off.
-    std::string campaign_banner_;
-    // What sub_4016DA left behind at the end of a campaign round: dword_464894
-    // plus clause 5's stage decrement (campaign_round_end.hpp). Written by
-    // MatchRunner at the moment the round ends, read once by run_app's Results
-    // handler to choose between "stage clear" (no screen at all), "Oh Well!" and
-    // "replay this stage" — and reset by the runner before every round, exactly
-    // as sub_40151B clears the verdict per stage.
+    std::string campaign_banner_;                              // getstring 1235, "(%s)"
     CampaignPacing campaign_pacing_;  // dword_464894 (+ the 0x401786 decrement)
 
-    // The Goldman wheel's pending gold player (dword_46492C, docs/re/goldman-
-    // roulette.md §2): -1 = none pending, else a player index (solo) or a
-    // RAW 0/1 team id (team mode — our port's team-id space, unlike the
-    // original's internal 0/2 encoding; see doc §2) whose match-win, under
-    // the goldman option, arms the next Play entry's wheel spin. Default -1
-    // (boot init, doc's "Cleared to -1 by ... boot init 14661").
-    //
-    // ASSIGNMENT (doc §2, pseudo.c 30004-30022): written in run_app's
-    // Results case on every SURVIVOR round (w >= 0 — a draw never reaches
-    // the original's dword_46492C write and leaves this untouched), from
-    // match_clinch()'s v73 — the MATCH-CLINCH winner (win_target_/
-    // win_by_kills reached), NOT the per-round winner `w`. In team mode it's
-    // setup_team_[clinched], the raw team byte of the clinching player
-    // (mirrors present_scoreboard's own clinched_player -> setup_team_[]
-    // lookup). Cleared here on the documented events this file owns (Esc on
-    // the wheel, Esc on present_setup, the Options-screen Gold Bomberman
-    // toggle).
+    // The Goldman wheel's pending winner (dword_46492C, docs/re/goldman-roulette.md
+    // §2): -1 = none pending, else a player index — or, in team mode, a RAW 0/1 TEAM
+    // id, our port's team-id space rather than the original's internal 0/2 encoding.
+    // Set from match_clinch(), never from the per-round winner.
     int gold_player_ = -1;
-    // The prize awarded by the last successful (non-aborted) wheel spin, or
-    // -1 (doc §4: "dword_45E02C is never reset on consumption"). Consumed by
-    // start_match() into MatchConfig::born_with_extra every round while
-    // gold_player_ stays the same match's winner.
-    int gold_prize_ = -1;
-    // Presentation RNG seed for the wheel's 5 draws; reseeded per-process by
-    // GameApp::init() (random_boot_seed(), see setup_lcg_'s comment above).
-    std::uint32_t goldman_lcg_ = 0x60D1BEEFu;
-
-    Options opts_;
+    int gold_prize_ = -1;  // the last spin's award; never reset on consumption (§4)
 
     assets::sch::Scheme scheme_;
     assets::res::ValueList values_;
     sim::Tuning base_tuning_;  // VALUELST-applied (colors, stage rotation, taunts)
 
-    // The full options.ini snapshot this session is editing in memory
-    // (docs/re/results-and-options.md §2/§3). Loaded once in init(); every
-    // Options-screen row edits `options_` (via OptionsSnapshot round-trips in
-    // present_options_screen) and sets options_dirty_ rather than writing the
-    // file — flush_options() (run()'s tail / the destructor) is the ONLY
-    // writer, matching the confirmed exit-time write-back semantics.
+    // The options.ini snapshot this session is editing in memory: every Options row
+    // edits it and sets the dirty flag, and flush_settings() at exit is the ONLY
+    // writer (app_settings.hpp).
     OptionsSnapshot options_{};
     bool options_dirty_ = false;
-    // The Conveyor Speed game-option index actually applied to a fresh match's
-    // Tuning (dword_464930). Mirrors options_.conveyor_speed_index once
-    // loaded/edited; kept as a separate optional so "never set" (no
-    // options.ini key, ever) still falls back to Tuning's own confirmed
-    // default (1 = medium) rather than OptionsSnapshot's arbitrary default.
+    // Mirrors options_.conveyor_speed_index (dword_464930); a separate optional so "no
+    // key, ever" falls back to Tuning's confirmed 1 = medium, not OptionsSnapshot's.
     std::optional<int> conveyor_speed_index_;
-    // Team Play toggle (dword_464964). Mirrors options_.team_play; the
-    // game-type-level GATE, separate from each slot's own setup_team_[]
-    // (+84) byte. start_match() zeroes every slot's MatchConfig::team[] when
-    // this is false, regardless of what setup_team_[] holds (there is no
-    // separate MatchConfig::team_play field — team[]'s all-zero/non-zero
-    // state IS the hashed Player::team gate, docs/re/setup-screens.md
-    // "Roster/level -> match"). is_team_mode() also gates on this directly.
+    // The game-type-level team GATE (dword_464964), separate from each slot's own
+    // setup_team_[] byte: start_match zeroes every MatchConfig::team[] when this is
+    // false. There is no MatchConfig::team_play field — team[]'s all-zero state IS the
+    // hashed gate (docs/re/setup-screens.md "Roster/level -> match").
     bool team_play_ = false;
-    // The install-root options.ini path resolved in init(), used only by
-    // flush_options() (the write-on-exit hook, §2). Empty when no game_dir
-    // was resolvable (init() already failed in that case).
     std::filesystem::path options_path_;
-    // The install-root nodename.ini path (the net identity's OWN file — it is
-    // not one of options.ini's 22 keys), plus the value as it was read at boot
-    // so flush_node_name() can skip a rewrite that would change nothing.
-    std::filesystem::path node_name_path_;
-    std::string node_name_loaded_;
-    // PORT ENHANCEMENT — "fullscreen=" (see init()'s window-creation comment
-    // and toggle_fullscreen()): not one of the original's confirmed 22
-    // options.ini keys, since the 1997 binary has no fullscreen mode at all.
-    // Loaded once in init(), applied to the window there, flipped by
-    // Alt+Enter/F11 (handle_global_event), persisted by flush_options().
+    std::filesystem::path node_name_path_;  // the net identity's OWN file
+    std::string node_name_loaded_;          // as read at boot, to skip a no-op rewrite
+
+    // PORT-ONLY levers, none of them one of the original's 22 options.ini keys. The
+    // first five persist through the same read-modify-write machinery; show_netstats_
+    // deliberately does NOT, which is why is_capture_run() says nothing about it: no
+    // saved value can reach a capture at all, stronger than a capture-time pin.
     bool fullscreen_ = false;
-    // PORT ENHANCEMENT — F8 "uncapped framerate" toggle. Default OFF keeps the
-    // vsync-locked, refresh-boundary-paced 60 fps render (smooth, tear-free).
-    // ON drops vsync and paces to the sim's SUB-FRAME rate instead
-    // (tick_ns / kSubFrames ≈ 5.56 ms → ~180 fps), so every one of the 9
-    // canonical sub-frames player_interp exposes reaches the screen instead of
-    // only the ~3 a 60 Hz cadence samples. That reproduces the original's
-    // uncapped ~184 fps free-run (docs "Canonical frame cadence"): the AI's
-    // per-frame direction whims and the creamy motion the 60 fps blend smooths
-    // away both come back. Tears on a ≤60 Hz panel exactly as the 1997 build
-    // does; clean on a high-refresh display. Not an RE'd behaviour (the binary
-    // has no such toggle), so it lives outside any sub_XXXX path. Not persisted
-    // — a live A/B lever, reset to OFF each launch.
-    bool uncap_fps_ = false;
-    // PORT ENHANCEMENT / SPIKE — F9 "native cadence" toggle. Default OFF keeps
-    // the deterministic fixed 20 Hz sim + inter-tick interpolation. ON drives
-    // the sim through Simulation::frame() once per DISPLAYED frame with the
-    // measured wall-clock delta (movement/AI at true frame rate, low latency;
-    // 50 ms-quantized systems on their own accumulator) and renders it directly
-    // (no interp), reproducing the original's per-frame gameplay driver
-    // (sub_42A191). NON-DETERMINISTIC — a live A/B feel lever, never committed
-    // as default and never on the tests/oracle path. Best combined with F8's
-    // uncapped fps so movement actually runs at ~180 Hz. Reset OFF each launch.
-    bool native_cadence_ = false;
-    // F7 — draw the FPS / cadence indicator (next to the match clock). Default
-    // ON while this is a live A/B feature; will be driven by a persisted setting.
-    bool show_fps_ = true;
-    // PORT ENHANCEMENT — the F10 panel's "SOFT SCALING" row (scale_filter.hpp,
-    // "soft_scaling=" in options.ini). OFF = the crisp nearest-neighbour upscale
-    // the port has always used; ON = linear, the smoothed look a modern GPU/
-    // display scaler gives the original's 640x480 output. Explicitly NOT a
-    // fidelity setting — the 1997 build scales nothing — so it defaults OFF and
-    // nobody who does not ask for it sees a different picture. Applied through
-    // set_scale_filter() (sprites.hpp), which is live: no reload, no restart.
-    // PINNED OFF on a capture run (load_config), because it changes every scaled
-    // pixel of every tests/visual frame.
-    bool soft_scaling_ = false;
-    // F3 — the in-match NETPLAY diagnostic panel (screens/net_overlay.hpp).
-    //
-    // OFF by default and DELIBERATELY NOT PERSISTED: it is never read from or
-    // written to options.ini, so there is no path by which a saved value could
-    // reach a capture run — strictly stronger than the capture-time pin
-    // uncap_fps_/native_cadence_/show_fps_ need in load_config(), and the reason
-    // capture_run() says nothing about it. MatchRunner additionally refuses to
-    // draw the panel without a live netplay session, which a capture never has.
-    bool show_netstats_ = false;
+    bool uncap_fps_ = false;       // F8: vsync off + sub-frame pacing (~180 fps)
+    bool native_cadence_ = false;  // F9: per-frame wall-clock sim; NON-DETERMINISTIC
+    bool show_fps_ = true;         // F7: the fps/cadence indicator
+    bool soft_scaling_ = false;    // F10 row: linear instead of nearest upscale
+    bool show_netstats_ = false;   // F3: the in-match netplay diagnostic panel
 
     std::optional<sdl::VideoSubsystem> video_;
     sdl::WindowPtr window_;
@@ -779,27 +248,11 @@ private:
     SoundDirector sounds_{audio_};
     std::optional<Renderer> renderer_;
     KeyboardMapper keyboard_;
-    // JOYSTICK <n> slots (docs/re/setup-screens.md type==3). Refreshed once
-    // after SDL_INIT_GAMEPAD in init() and again on every hotplug event so the
-    // setup screen's joystick pane / type-cycle count stays live.
-    GamepadMapper gamepads_;
+    GamepadMapper gamepads_;  // refreshed at boot and on every hotplug
 
-    // Front-end presentation (constructed after assets_ is loaded in init()).
     std::optional<Screen> screen_;
-    // The bomber-dude row cursor's blink state (sub_413BD6's global
-    // dword_460559/46055D pair — one instance here stands in for the
-    // original's single global; the options screen keeps its own, which only
-    // de-phases the blink between screens).
-    CursorIndicator cursor_blink_;
-    FontTextures front_font_;  // FONT6.FON glyph textures for the .BM screens
-    // Per-match seed, advanced each round (`start_match(next_seed_++)`) and
-    // fed to `match::build_match_config`'s per-candidate brick fill/spawn
-    // shuffle AND `match::pick_stage`'s RANDOM level pick. GameApp::init()
-    // reseeds this from random_boot_seed() (see setup_lcg_'s comment above);
-    // the literal below is only the construction-time placeholder — leaving
-    // it fixed was the bug that made a fresh process's first RANDOM level
-    // pick (and first match's brick layout) identical on every launch.
-    std::uint32_t next_seed_ = 0xB0BB1E5;
+    CursorIndicator cursor_blink_;  // sub_413BD6's dword_460559/46055D pair
+    FontTextures front_font_;       // FONT6.FON glyphs for the .BM screens
 
     sim::Simulation sim_;
 };
