@@ -173,17 +173,23 @@ if(BOMBER_ENABLE_LOBBY)
   # rejection of a certificate that does not verify.
   #
   # ONE binary, TWO ctest entries, split on the `live:` case-name prefix. The
-  # offline cases (no downgrade to cleartext; a self-signed listener refused) run
-  # everywhere and must PASS; the two internet cases are opt-in behind
-  # BOMBER_TLS_LIVE and must report SKIP. A single entry has one status word for
-  # both facts and would have to lie about one of them — and the lie it told was
-  # PASSED, because doctest has no runtime skip and an early return prints the
-  # same word as a full pass.
+  # offline cases -- no downgrade to cleartext, and an untrusted certificate
+  # refused -- run everywhere and must PASS; the two internet cases are opt-in
+  # behind BOMBER_TLS_LIVE and must report SKIP. A single entry has one status
+  # word for both facts and would have to lie about one of them -- and the lie it
+  # told was PASSED, because doctest has no runtime skip and an early return
+  # prints the same word as a full pass.
   # Spelled out rather than via bomber_add_test, which registers exactly one
   # unfiltered ctest entry per binary.
   add_executable(bomber_net_lobby_tls_tests test_lobby_tls.cpp)
   target_link_libraries(bomber_net_lobby_tls_tests
     PRIVATE bomber::net doctest::doctest bomber::warnings)
+  if(BOMBER_LOBBY_TLS)
+    # The offline certificate-rejection case serves a self-signed certificate on
+    # loopback and GENERATES it at run time -- no private key in the tree. That
+    # needs mbedTLS's x509 writer directly; bomber::net only exposes the client.
+    target_link_libraries(bomber_net_lobby_tls_tests PRIVATE mbedtls mbedx509 mbedcrypto)
+  endif()
   # No SKIP_REGULAR_EXPRESSION on this half, deliberately: nothing in it may
   # skip, so the marker appearing here would be a fact worth failing over.
   add_test(NAME net_lobby_tls COMMAND bomber_net_lobby_tls_tests --test-case-exclude=live:*)
