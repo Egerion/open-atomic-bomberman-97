@@ -5454,6 +5454,118 @@ exactly but posterises the upscaled gradients; whether that reads as "the
 original's look in HD" or as banding is a call for the user's eyes, not a
 fact this document can settle.
 
+## Display-time audit: "native darker" with CLASSIC art — every remaining stage closed (2026-08-01)
+
+The DATA_HD root-cause above was refuted as INSUFFICIENT the same day: with
+classic art — the original's own files — the native game still reads darker
+than the port ("oyunun kendi artı da daha karanlık duruyor native'de"). The
+decode chain is arithmetic-identical (previous two sections), so any real
+difference had to be display-time. This audit closes every display-time stage
+that can be closed statically. Summary: **none of them can produce the
+report** — with classic art both programs hand DWM byte-identical 8-bit
+values, so what remains is per-monitor scanout and perception, and the
+one-screenshot arbiter at the end of this entry discriminates those.
+
+**1. BM95.EXE cannot touch the OS gamma ramp.** The full PE import table
+(parsed from the file, imagebase 0x400000): GDI32 imports exactly ONE function,
+`GetStockObject`; USER32/WINMM/KERNEL32/DINPUT/DDRAW/WSOCK32/DSOUND round out
+the list, with DDRAW importing only `DirectDrawCreate`. No
+`SetDeviceGammaRamp`/`GetDeviceGammaRamp` anywhere. The DirectDraw gamma
+interface is reached by QueryInterface, not import — but the image contains NO
+COM IIDs at all (scanned for the GUID bytes of IID_IDirectDrawGammaControl,
+IDirectDraw2/4/7, IDirectDrawSurface2/3/4/7, IDirectDrawPalette: all absent) —
+the game drives the flat DirectDraw-1 vtbl it got from `DirectDrawCreate` and
+never QueryInterfaces anything, and gamma control did not exist before
+DirectX 6 anyway. Dynamic resolution is ruled out too: the binary's ONLY
+`LoadLibraryA`+`GetProcAddress` pair resolves `MessageBoxExA` (pseudo.c
+53010-53014, the Watcom runtime's error box). No hardware ramp, full stop.
+
+**2. The 16-bit path is dead code — unreachable, not just unused.** The
+display library ships a family of mode-set helpers at 0x442DC8..0x442EA4
+(320x200x8, 320x240x8, 320x400x8, 640x480x8 at `sub_442E24`, **640x480x16 at
+0x442E38** — the one that passes bpp 16 into `sub_442ECC` — 640x400x8,
+800x600x8, 1024x768x8, 1280x1024x8, and a custom-mode entry). A scan of every
+`call`/`jmp`/dword reference in the image finds exactly ONE of them referenced:
+`sub_442E24` (640x480x8), registered via `sub_43C150(sub_442E24, 0)` from the
+boot init `sub_414DF4` (0x414E0A) and from 0x417980. The 16-bit helper has
+zero references, so `sub_443608`'s else-branch, `sub_4433AC`, `sub_4432B4`'s
+else-branch and the whole `word_4A39DE` table are linker cargo from the Watcom
+display library. And there is no failure fallback: if the 8-bit mode set or
+surface create fails, `sub_414DF4` prints "Unable to create win1" and calls
+`exit_()` (observed live pre-shim, 2026-07-11) — the game never retries at
+another depth. For the record, the unreachable conversion is pure TRUNCATION:
+`sub_443038` reads the surface's channel masks, `sub_442FEC` bit-scans each
+mask's top bit and the shift becomes `topbit - 7`, so a 565 target gets
+`(4v)>>3 | (4v)>>2 | (4v)>>3` per channel — FIELD1's dither pair would render
+(16,40,107)/(0,134,0) instead of (20,40,108)/(4,132,0) — but no configuration
+of this exe can reach it.
+
+**3. The compat shim is measured 1:1 on the reference machine.** The native
+run uses AppCompat layers `~ DWM8And16BitMitigation 8BITCOLOR 640X480
+DISABLEDXMAXIMIZEDWINDOWEDMODE` (HKCU) + `$ DWM8And16BitMitigation` (HKLM);
+CFG.INI carries no display or gamma keys (paths, debug, sound, net only). The
+worry "the 8-bit emulation shim adds a gamma of its own" is already refuted by
+a measurement THIS document holds: the 2026-07-13 live capture (two sections
+up) read the RUNNING original's FIELD4 floor through this exact
+shim-plus-DWM stack via GDI screen capture and matched the raw file bytes at
+scale 1.0, **err 0**. The shim's palette-to-DWM conversion bends nothing.
+
+**4. HDR/Auto HDR is inert.** The machine has `AutoHDREnable=1` globally
+(HKCU DirectX\UserGpuPreferences), which could have tone-mapped only the
+port's swapchain — but every attached monitor reports
+`HDREnabled=0`/`AdvancedColorEnabled=0` (GraphicsDrivers\MonitorDataStore), so
+the desktop is SDR and Auto HDR never engages. Both windows composite as SDR.
+
+**5. The port's swapchain adds no transform.** SDL3's renderer defaults to
+output colorspace `SDL_COLORSPACE_SRGB` (SDL_render.c:180 in the pinned SDL;
+the port sets no colorspace property). On the preferred GL backend
+(game_app.cpp `prefer_low_latency_backend`, 2026-07-29) SDL refuses any other
+output colorspace (SDL_render_gl.c:1777), creates the context with
+`SDL_GL_FRAMEBUFFER_SRGB_CAPABLE = 0` (:1846) and calls
+`glDisable(GL_FRAMEBUFFER_SRGB)` (:2017-2018) — for SDR content the 8-bit
+values pass through untransformed on every backend. Textures are plain
+RGBA32 uploads of the snapped pixels with no color mod, alpha mod or color
+scale (sprites.cpp `make_texture`), and `colorpal.cpp:19` builds the master
+exactly as `sub_443608` does (`v * 4`, entry 0 black, 252 ceiling). Bilinear
+`soft_scaling` and STRETCH presentation mix neighbours but cannot move a
+region's mean.
+
+**Conclusion.** With classic art, native and port deliver the SAME bytes to
+the SAME SDR compositor — every stage from COLOR.PAL to DWM is now measured
+or proven identical, on both sides. No code change is warranted. What no
+static audit can see: (a) **which monitor each window is on** — three panels
+are attached, and per-monitor ICC/vcgt ramps and panel tone curves apply at
+scanout, AFTER screen capture, differently per monitor; (b) **perception** —
+the native is a small 640x480 window framed by a bright desktop, the port a
+fullscreen bilinear-smoothed image framed by darkness, and simultaneous
+contrast plus dither-vs-smooth assimilation both push exactly toward "the
+small one looks darker and deeper"; (c) the ±3/channel own-palette front-end
+floor already documented above (port renders those screens up to 3/255
+brighter; imperceptible).
+
+**The arbiter (5 minutes, one screenshot).** Set the port windowed classic:
+`options.ini` → `fullscreen=0`, `soft_scaling=0` (restore after), do not
+press Tab (HD off). Start a match on Classic Green Acres (FIELD1) in BOTH
+programs, both windows visible side by side on the SAME monitor (the primary;
+the native opens top-left). Two seconds after round start, one PrintScreen,
+saved as PNG. Measure the per-channel mean of an empty floor patch (one full
+tile with no sprite/shadow) in each window. Predictions:
+
+| hypothesis | native floor mean | port floor mean |
+|---|---|---|
+| everything faithful (this audit) | (12,86,54) | (12,86,54) |
+| a real shim/DWM darkening survives | below (12,86,54), ratio = the ramp | (12,86,54) |
+| port snap inactive (raw decode look) | (12,86,54) | (21,85,79) |
+| port sRGB-encode brightening | (12,86,54) | ≈(64,161,130), unmistakable |
+
+The floor's BLUE mean is the single diagnostic number: **54** = snapped and
+faithful, **79** = raw/unsnapped, anything lower on the native side only =
+a real display transform whose per-channel ratios identify it. If both means
+read (12,86,54) and the two windows STILL look different side by side on the
+same monitor, the difference is perception; if they look the SAME side by
+side, the original complaint was cross-monitor (ICC/panel) or surround
+context, and no pixel anywhere is wrong.
+
 The original keeps a bomb's DRAWN COLOUR and its OWNER as two separate fields
 packed into one dword at bomb +60: the low BYTE (+60) is the colour, written
 once at creation by `sub_422EDE` from the placer's own colour byte — which
