@@ -3,6 +3,7 @@
 #include "bomber/ui/dialog_chrome.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstddef>
 #include <exception>
@@ -17,24 +18,12 @@ namespace bomber::game {
 
 namespace {
 
-// Layout constants, all confirmed literals in sub_41302D (BM95.EXE @ 0x41302D):
-//   - text lines start 34 px from the top of the scroll region, one line per
-//     row at the font's cell height (a row's y is its index times the line
-//     height, plus 34; the clip keeps only y >= 34);
-//   - the left inset is 34 px (the pen x starts at 34);
-//   - the visible region is 344 px tall, so the on-screen row count is
-//     344 / line_height (344 divided by dword_45C37C()'s reported line height);
-//   - PgUp/PgDn move by (visible_rows - 1) lines, one less than that count.
-// The original draws into a 600x256-ish scroll window (sub_43C734(20,440,600,
-// 256,4)); we paint the same inset text over a dark panel spanning the logical
-// surface, since our front-end is RGBA rather than the paletted VGA page.
-// The viewer WINDOW — CONFIRMED (chrome audit 2026-07-12): sub_43C734(20,
-// 440, 600, 256, 4) = y=20, h=440, w=600, x auto-centred -> (20, 20, 600,
-// 440), repainted every frame with the WINZ.PCX 9-patch (sub_41726B @
-// pseudo.c 16423) — the blue tiled border the user compared against. Text
-// insets 34/34 from the window origin (the pen x is set to 34 @ 16437 and the
-// row-y base to 34 @ 16456) -> screen (54, 54); per-line clip budget 532 px
-// (set @ 16406).
+// The viewer WINDOW — CONFIRMED (chrome audit 2026-07-12): sub_43C734(20, 440,
+// 600, 256, 4) -> (20, 20, 600, 440), repainted every frame with the WINZ
+// 9-patch (sub_41726B @ pseudo.c 16423). Text insets 34/34 from the window
+// origin (pen x @16437, row-y base @16456) -> screen (54, 54); per-line clip
+// budget 532 px (@16406); visible region 344 px, so the row count is
+// 344 / line_height and PgUp/PgDn move one less than that.
 constexpr float kWinX = 20.0f;
 constexpr float kWinY = 20.0f;
 constexpr float kWinW = 600.0f;
@@ -45,43 +34,46 @@ constexpr int kLineClipW = 532;
 constexpr int kVisibleHeight = 344;
 
 // Inline images are CENTERED on their text row and clipped to the window band
-// [34, height-62] (window-relative) — sub_41302D @ 16456-16497. In screen
-// space the band is [kTextTop, kImgClipBottom]. The render loop runs ±kImageBleed
-// lines beyond the visible rows (the original's row loop runs its index from
-// -16 up to the visible row count plus 16) so
-// a tall centered image whose OWN line is just off-screen still blits the half
-// that pokes into the visible area.
+// [34, height-62] (window-relative) — sub_41302D @16456-16497. The render loop
+// runs ±kImageBleed lines beyond the visible rows (the original's row index runs
+// -16 .. count+16), so a tall centred image whose own line is just off-screen
+// still blits the half that pokes into view.
 constexpr float kImgClipBottom = kWinY + (kWinH - 62.0f);  // 398: window height-62
 constexpr int kImageBleed = 16;
 
-// Text ink — CONFIRMED byte_49D38F pure white, drawn through the low-level
-// string blit dword_45C378 with NO outline (pseudo.c 16458-16461), unlike
-// every sub_41696C site. The old (230,230,210) tint was a port invention.
+// Text ink — CONFIRMED byte_49D38F pure white, drawn through the low-level blit
+// dword_45C378 with NO outline (pseudo.c 16458-16461), unlike every sub_41696C
+// site. The old (230,230,210) tint was a port invention.
 constexpr Uint8 kInkR = 255, kInkG = 255, kInkB = 255;
 
-// The bottom control row (pseudo.c 16408-16412): five sub_432298 bevel
-// buttons at window-relative y=388, posting key codes when clicked — up/down
-// arrows (FONT6 glyphs \x18/\x19, EXE bytes @ 0x459148), "Page" variants,
-// and "Done". Drawn for parity; this port's viewer is keyboard-driven (the
-// same codes the buttons would post).
 constexpr float kButtonRowY = 388.0f;  // window-relative
 
-// HelpBrowser's list dialog item ink — the general white draw colour
-// byte_49D38F (§4/§5, the SAME ink SchemeFilePicker's own list dialog uses
-// at the identical (100,100) sub_41485A call site); the SELECTED row inverts
-// to the dark base coat over a light band (draw_list_selection).
+// HelpBrowser's list item ink — byte_49D38F again, the SAME ink
+// SchemeFilePicker's list uses at the identical (100,100) call site (§4/§5).
 constexpr Uint8 kListInkR = 255, kListInkG = 255, kListInkB = 255;
 
-// The browser's two error dialogs (§4: "manual disabled" getstring(5)/(95),
-// "no .BM files found" getstring(4)/(95)) draw in byte_49D0DA — PINNED in
-// docs/re/results-and-options.md §1's LUT decode table: LUT offset 0x7D4A =
-// r5,g5,b5(31,10,10), nearest-palette RGB (252, 80, 80). The doc separately
-// confirms byte_49D0DA IS sub_4141F8's team-1 ink (its ELSE branch returns
-// byte_49D38F/white; the non-ELSE branch returns this SAME global) — i.e.
-// the error ink and the team-1 player ink are the identical LUT element, not
-// a coincidence of similar reds. Faithful hardcode, same rationale as §1's
-// scoreboard inks (no "active palette" concept in the truecolour renderer).
+// The browser's two error dialogs (§4) draw in byte_49D0DA — PINNED in
+// results-and-options.md §1's LUT table (offset 0x7D4A -> (252,80,80)), which
+// also confirms byte_49D0DA IS sub_4141F8's team-1 ink: the same LUT element,
+// not a coincidence of similar reds.
 constexpr Uint8 kErrorInkR = 252, kErrorInkG = 80, kErrorInkB = 80;
+
+// Expand a glyph's 0/255 coverage into white RGBA: the alpha carries the shape,
+// the colour is applied at draw time via SDL_SetTextureColorMod.
+assets::Image glyph_image(const assets::bmfont::Glyph& g, int height) {
+    assets::Image img;
+    img.width = g.width;
+    img.height = height;
+    img.rgba.assign(static_cast<std::size_t>(g.width) * height * 4, 0);
+    for (std::size_t i = 0; i < g.pixels.size(); ++i) {
+        const std::size_t o = i * 4;
+        img.rgba[o + 0] = 255;
+        img.rgba[o + 1] = 255;
+        img.rgba[o + 2] = 255;
+        img.rgba[o + 3] = g.pixels[i];
+    }
+    return img;
+}
 
 }  // namespace
 
@@ -102,26 +94,11 @@ void FontTextures::build(SDL_Renderer* ren, const assets::bmfont::Font& font) {
         const assets::bmfont::Glyph& g = font.glyphs[c];
         glyphs_[c].w = g.width;
         if (g.width <= 0 || g.pixels.empty()) continue;  // blank/zero-width: advance only
-        // Expand the 0/255 coverage into white RGBA (the alpha carries the shape,
-        // colour is applied at draw time via SDL_SetTextureColorMod).
-        assets::Image img;
-        img.width = g.width;
-        img.height = font.glyph_height;
-        img.rgba.assign(static_cast<std::size_t>(g.width) * font.glyph_height * 4, 0);
-        for (std::size_t i = 0; i < g.pixels.size(); ++i) {
-            std::uint8_t a = g.pixels[i];
-            std::size_t o = i * 4;
-            img.rgba[o + 0] = 255;
-            img.rgba[o + 1] = 255;
-            img.rgba[o + 2] = 255;
-            img.rgba[o + 3] = a;
-        }
-        sdl::TexturePtr tex{make_texture(ren, img)};
-        if (tex) {
-            SDL_SetTextureBlendMode(tex.get(), SDL_BLENDMODE_BLEND);
-            glyphs_[c].tex = tex.get();
-            owners_.push_back(std::move(tex));
-        }
+        sdl::TexturePtr tex{make_texture(ren, glyph_image(g, font.glyph_height))};
+        if (!tex) continue;
+        SDL_SetTextureBlendMode(tex.get(), SDL_BLENDMODE_BLEND);
+        glyphs_[c].tex = tex.get();
+        owners_.push_back(std::move(tex));
     }
 }
 
@@ -140,14 +117,14 @@ int FontTextures::measure(const std::string& s) const {
 float FontTextures::draw(SDL_Renderer* ren, const std::string& s, float x, float y, Uint8 r,
                          Uint8 g, Uint8 b, float scale) const {
     for (char ch : s) {
-        unsigned char c = static_cast<unsigned char>(ch);
+        const unsigned char c = static_cast<unsigned char>(ch);
         if (static_cast<std::size_t>(c) >= glyphs_.size()) continue;
         const GlyphTex& gt = glyphs_[c];
         if (gt.tex) {
             SDL_SetTextureColorMod(gt.tex, r, g, b);
-            // `scale` shrinks the destination rect only (glyph atlas untouched);
-            // scaling the dst here is self-contained, unlike SDL_SetRenderScale
-            // which perturbs the whole render transform.
+            // `scale` shrinks the destination rect only (the glyph atlas is
+            // untouched); scaling the dst is self-contained, unlike
+            // SDL_SetRenderScale, which perturbs the whole render transform.
             SDL_FRect dst{x, y, static_cast<float>(gt.w) * scale,
                           static_cast<float>(line_height_) * scale};
             SDL_RenderTexture(ren, gt.tex, nullptr, &dst);
@@ -161,8 +138,8 @@ float FontTextures::draw(SDL_Renderer* ren, const std::string& s, float x, float
 float FontTextures::draw_outlined(SDL_Renderer* ren, const std::string& s, float x, float y,
                                   Uint8 r, Uint8 g, Uint8 b, Uint8 outline_r, Uint8 outline_g,
                                   Uint8 outline_b, float max_w) const {
-    // Clip the run to max_w pixels of advance (sub_41696C 18542-18551): stop
-    // at the first glyph whose advance would cross the limit.
+    // Clip the run to max_w pixels of advance (sub_41696C 18542-18551): stop at
+    // the first glyph whose advance would cross the limit.
     std::string run = s;
     if (max_w > 0) {
         float w = 0;
@@ -175,17 +152,17 @@ float FontTextures::draw_outlined(SDL_Renderer* ren, const std::string& s, float
         }
         run = s.substr(0, n);
     }
-    // Four outline passes at the DIAGONAL corners, then the ink pass centred —
-    // the exact sub_41696C convention (batch_0x415C1F.cpp): it assembles the
-    // glyph into a (w+2)x(h+4) scratch buffer, drawing the outline colour 4x at
-    // buffer offsets (0,0),(2,2),(0,2),(2,0) and the ink ONCE at (1,1), i.e. the
-    // outline sits at the four DIAGONAL neighbours of the centred ink (not the
-    // cardinal N/S/E/W the port used before). The diagonal reach fills the glyph
-    // corners, giving the heavier black border the original shows on every
-    // sub_41696C string (menu, scoreboard, results, HUD).
-    static constexpr float kOff[4][2] = {{-1, -1}, {1, 1}, {-1, 1}, {1, -1}};
-    for (const auto& o : kOff)
-        draw(ren, run, x + o[0], y + o[1], outline_r, outline_g, outline_b);
+    // Outline at the four DIAGONAL neighbours of the centred ink, per
+    // batch_0x415C1F.cpp: sub_41696C assembles the glyph into a (w+2)x(h+4)
+    // scratch, drawing the outline 4x at buffer offsets (0,0),(2,2),(0,2),(2,0)
+    // and the ink ONCE at (1,1). The port used the cardinal neighbours before.
+    //
+    // UNRESOLVED: dialog_chrome.cpp's draw_dialog_text cites the SAME sub_41696C
+    // and uses the CARDINAL offsets. One of the two is wrong; both feed frames
+    // pinned by tests/visual, so reconciling them is a rendering change needing
+    // its own recapture, not a quiet edit here.
+    static constexpr std::array<std::array<float, 2>, 4> kOff{{{-1, -1}, {1, 1}, {-1, 1}, {1, -1}}};
+    for (const auto& o : kOff) draw(ren, run, x + o[0], y + o[1], outline_r, outline_g, outline_b);
     return draw(ren, run, x, y, r, g, b);
 }
 
@@ -195,32 +172,29 @@ void BmScreen::enter(const std::string& bm_name) {
     top_ = 0;
     done_ = false;
     doc_.lines.clear();
-    // The .BM files live in the install ROOT (CREDITS.BM, OPTIONS.BM, ...), not
-    // under DATA/. A missing/broken file logs and leaves an empty doc so the
-    // screen still dismisses on a key rather than aborting.
+    // The .BM files live in the install ROOT, not under DATA/. A missing or
+    // broken file logs and leaves an empty doc, so the screen still dismisses.
     try {
         doc_ = assets::bmtext::load(assets_->game_dir() / (bm_name + ".BM"));
     } catch (const std::exception& e) {
         log_warn("BM screen '%s' load failed: %s", bm_name.c_str(), e.what());
     }
-    // The port's own credits addendum, appended in memory only — the install's
+    // The port's own addendum, appended in memory only — the install's
     // CREDITS.BM is 1997 game data and is opened read-only (credits_addendum.hpp
-    // explains the choice). It is appended even when the load above failed, so a
-    // user whose CREDITS.BM is missing still gets a page rather than a blank
-    // window.
+    // explains the choice). Appended even when the load above failed, so a
+    // missing CREDITS.BM still gets a page rather than a blank window.
     if (bm_name == "CREDITS") append_credits_addendum(doc_);
 }
 
 int BmScreen::visible_rows() const {
     int lh = font_ && font_->loaded() ? font_->line_height() : 16;
     if (lh <= 0) lh = 16;
-    return kVisibleHeight / lh;  // the original's row count: 344 / line_height
+    return kVisibleHeight / lh;
 }
 
 int BmScreen::max_scroll() const {
-    int total = static_cast<int>(doc_.lines.size());
-    int vis = visible_rows();
-    int m = total - vis;  // sub_41302D clamps top to (count - visible rows)
+    // sub_41302D clamps the scroll top to (line count - visible rows).
+    const int m = static_cast<int>(doc_.lines.size()) - visible_rows();
     return m < 0 ? 0 : m;
 }
 
@@ -234,151 +208,176 @@ void BmScreen::on_key(SDL_Keycode key) {
             // (CORRECTED 2026-07-12; the old Space-dismiss was invented).
             done_ = true;
             break;
-        case SDLK_UP:
-            if (top_ > 0) --top_;  // one line up (the scroll top decrements)
-            break;
-        case SDLK_DOWN:
-            if (top_ < max_scroll()) ++top_;  // one line down (the scroll top increments)
-            break;
+        case SDLK_UP: top_ = std::max(0, top_ - 1); break;
+        case SDLK_DOWN: top_ = std::min(max_scroll(), top_ + 1); break;
         case SDLK_PAGEUP:
-        case SDLK_LEFT: {
-            // Left (331) pages up alongside PgUp (329) — sub_41302D treats
-            // both identically (chrome audit 2026-07-12).
-            top_ -= visible_rows() - 1;  // scroll top back by (visible rows - 1)
-            if (top_ < 0) top_ = 0;
+        case SDLK_LEFT:
+            // Left (331) pages up alongside PgUp (329) — sub_41302D treats both
+            // identically (chrome audit 2026-07-12).
+            top_ = std::max(0, top_ - (visible_rows() - 1));
             break;
-        }
         case SDLK_PAGEDOWN:
-        case SDLK_RIGHT: {
+        case SDLK_RIGHT:
             // Right (333) pages down alongside PgDn (337).
-            top_ += visible_rows() - 1;  // scroll top on by (visible rows - 1)
-            int m = max_scroll();
-            if (top_ > m) top_ = m;
+            top_ = std::min(max_scroll(), top_ + visible_rows() - 1);
             break;
-        }
-        default:
-            break;
+        default: break;
     }
 }
 
-void BmScreen::draw(SDL_Renderer* ren) const {
-    // assets_ is set from a reference in every constructor, so it is only null
-    // on a default-constructed-but-unused instance; guarding here (beside the
-    // ren/font_ guards) makes that impossible-in-practice state a clean no-op
-    // and lets the inline-image blit below deref it unconditionally.
-    if (!ren || !assets_) return;
-    // The WINZ-9-patch viewer window (see the kWin* block above) — the
-    // original repaints it every dirty frame (sub_41726B @ 16423); the old
-    // translucent black band was a port stand-in from before the 9-patch
-    // primitive existed.
-    draw_dialog_chrome(ren, DialogRect{kWinX, kWinY, kWinW, kWinH},
-                       &assets_->frontend_pcx("WINZ"));
+namespace {
 
+// The two asset sources one page row draws from, plus the pinned per-line clip
+// budget and row pitch.
+struct BmPage {
+    const AssetStore& assets;
+    const FontTextures& font;
+    float clip_right;
+    int line_height;
+};
+
+// The pen for one row: where the next segment lands, the row's top y, and
+// whether the row is inside the visible window. Rows in the ±kImageBleed margin
+// still advance the pen (so a trailing <IMG> lands at the right x) but draw no
+// text.
+struct RowPen {
+    float x;
+    float y;
+    bool visible;
+};
+
+void draw_text_segment(SDL_Renderer* ren, const BmPage& page, const std::string& text,
+                       RowPen& pen) {
+    // Trim the run to the remaining clip budget — sub_41302D consumes that
+    // budget per glyph advance.
+    std::string run = text;
+    float w = 0;
+    std::size_t n = 0;
+    for (char ch : run) {
+        const int a = page.font.advance(static_cast<unsigned char>(ch));
+        if (pen.x + w + static_cast<float>(a) > page.clip_right) break;
+        w += static_cast<float>(a);
+        ++n;
+    }
+    run.resize(n);
+    if (pen.visible) page.font.draw(ren, run, pen.x, pen.y, kInkR, kInkG, kInkB);
+    pen.x += w;
+}
+
+void draw_image_segment(SDL_Renderer* ren, const BmPage& page, const Sprite& sp, RowPen& pen) {
+    if (!sp.tex) return;  // a missing image has no texture and no width: nothing to advance by
+    // CENTER the image on the row: sub_41302D sets the blit Y to
+    // rowY - (imageHeight - lineHeight)/2 (integer div), NOT the row top.
+    // Top-aligning (the old port bug) shifted every inline image DOWN by ~half
+    // its height, so the credits' "----->" arrows no longer met their photos.
+    int img_top = static_cast<int>(pen.y) - (sp.h - page.line_height) / 2;
+    int src_y = 0;
+    int draw_h = sp.h;
+    // Vertical clip to the image band: a source-row offset at the top, a height
+    // clamp at the bottom.
+    if (img_top < kTextTop) {
+        src_y = kTextTop - img_top;
+        draw_h = sp.h - src_y;
+        img_top = kTextTop;
+    }
+    if (static_cast<float>(img_top + draw_h) > kImgClipBottom)
+        draw_h = static_cast<int>(kImgClipBottom) - img_top;
+    // Right clip to the 532-px line budget: the blit width is min(image width,
+    // remaining budget).
+    int draw_w = sp.w;
+    if (pen.x + static_cast<float>(draw_w) > page.clip_right)
+        draw_w = static_cast<int>(page.clip_right - pen.x);
+    if (draw_h > 0 && draw_w > 0) {
+        // The src rect is in the sprite's CLASSIC space; a 4x DATA_HD texture
+        // behind it would otherwise sample a sliver of the corner (sprites.hpp
+        // texture_src_rect). Identity when HD is off.
+        const SDL_FRect src =
+            texture_src_rect(sp.tex, sp.w, sp.h,
+                             SDL_FRect{0.0f, static_cast<float>(src_y), static_cast<float>(draw_w),
+                                       static_cast<float>(draw_h)});
+        SDL_FRect dst{pen.x, static_cast<float>(img_top), static_cast<float>(draw_w),
+                      static_cast<float>(draw_h)};
+        SDL_RenderTexture(ren, sp.tex, &src, &dst);
+    }
+    pen.x += static_cast<float>(sp.w);
+}
+
+// One line's segments, laid left to right — sub_41302D's per-line split-at-tag
+// draw.
+void draw_bm_row(SDL_Renderer* ren, const BmPage& page, const assets::bmtext::BmLine& segments,
+                 RowPen pen) {
+    for (const auto& seg : segments) {
+        if (seg.is_text()) {
+            draw_text_segment(ren, page, seg.value, pen);
+            continue;
+        }
+        // Inline image, through the VIEWER's own loader — keyed on palette index
+        // 0 and snapped to the master palette, which is what sub_41302D's
+        // sub_4150F0 load + sub_44AED5 blit do and frontend_pcx (the opaque
+        // backdrop path) does not. Base name, case as written.
+        const Sprite& sp = seg.value == kAuthorPhotoTag
+                               ? page.assets.author_photo()  // compiled-in, not DATA/RES
+                               : page.assets.bm_inline_pcx(seg.value);
+        draw_image_segment(ren, page, sp, pen);
+    }
+}
+
+// The bottom control row (pseudo.c 16408-16412): five sub_432298 buttons at
+// window-relative y=388 posting key codes when clicked — the \x18/\x19 FONT6
+// arrows (EXE bytes @0x459148), their "Page" variants and "Done", at the
+// original's literal x offsets. Drawn for parity; this viewer is keyboard-driven
+// with the same codes.
+void draw_bm_buttons(SDL_Renderer* ren, const FontTextures& font) {
+    struct ControlButton {
+        float x;
+        const char* label;
+    };
+    static constexpr std::array<ControlButton, 5> kButtons{{{30.0f, "\x18"},
+                                                            {60.0f, "\x19"},
+                                                            {120.0f, "Page \x18"},
+                                                            {190.0f, "Page \x19"},
+                                                            {516.0f, "Done"}}};
+    for (const ControlButton& b : kButtons)
+        draw_dialog_button(ren, font, kWinX + b.x, kWinY + kButtonRowY, b.label);
+}
+
+}  // namespace
+
+void BmScreen::draw(SDL_Renderer* ren) const {
+    // assets_ is set from a reference in every constructor, so it is only null on
+    // a default-constructed-but-unused instance; guarding makes that
+    // impossible-in-practice state a clean no-op.
+    if (!ren || !assets_) return;
+    // The WINZ 9-patch viewer window (see the kWin* block), repainted every
+    // frame like the original's dirty repaint.
+    draw_dialog_chrome(ren, DialogRect{kWinX, kWinY, kWinW, kWinH}, &assets_->frontend_pcx("WINZ"));
     if (!font_ || !font_->loaded()) return;
+
     const int lh = font_->line_height();
     const int vis = visible_rows();
     const int total = static_cast<int>(doc_.lines.size());
-
-    // One screen row per line (plus a ±kImageBleed margin, see that constant).
-    // Each line lays its segments left to right: text runs draw with the font,
-    // an <IMG> segment blits the named PCX CENTERED on the row and advances the
-    // pen by its full width — sub_41302D's per-line split-at-tag draw, clipped
-    // to the 532-px line budget and the vertical image band.
-    const float clip_right = static_cast<float>(kTextLeft + kLineClipW);
+    const BmPage page{*assets_, *font_, static_cast<float>(kTextLeft + kLineClipW), lh};
     for (int j = -kImageBleed; j < vis + kImageBleed; ++j) {
-        int li = top_ + j;
+        const int li = top_ + j;
         if (li < 0 || li >= total) continue;
-        const bool row_visible = (j >= 0 && j < vis);
-        const float y = static_cast<float>(kTextTop + j * lh);  // row top
-        float x = static_cast<float>(kTextLeft);
-        for (const auto& seg : doc_.lines[static_cast<std::size_t>(li)]) {
-            if (seg.is_text()) {
-                // Trim the run to the remaining clip budget (sub_41302D
-                // consumes that budget per glyph advance).
-                std::string run = seg.value;
-                float w = 0;
-                std::size_t n = 0;
-                for (char ch : run) {
-                    const int a = font_->advance(static_cast<unsigned char>(ch));
-                    if (x + w + static_cast<float>(a) > clip_right) break;
-                    w += static_cast<float>(a);
-                    ++n;
-                }
-                run.resize(n);
-                // Rows inside the ±kImageBleed margin still advance the pen (so a
-                // trailing <IMG> lands at the right X) but draw no text — only
-                // the vis-window rows are visible.
-                if (row_visible) font_->draw(ren, run, x, y, kInkR, kInkG, kInkB);
-                x += w;
-            } else {
-                // Inline image, through the VIEWER's own loader — keyed on
-                // palette index 0 and snapped to the master palette, which is
-                // what sub_41302D's sub_4150F0 load + sub_44AED5 blit do and
-                // what frontend_pcx (the opaque backdrop path) does not; see
-                // AssetStore::bm_inline_pcx. Looked up by base name, case as
-                // written (the install FS was case-insensitive). A missing image
-                // draws nothing but still advances (matching the original
-                // skipping an image whose palette/asset failed to load).
-                const Sprite& sp = seg.value == kAuthorPhotoTag
-                                       ? assets_->author_photo()  // compiled-in, not DATA/RES
-                                       : assets_->bm_inline_pcx(seg.value);
-                if (sp.tex) {
-                    // CENTER the image vertically on the row: sub_41302D sets the
-                    // blit Y to `rowY - (imageHeight - lineHeight)/2` (integer
-                    // div), NOT the row top. Top-aligning (the old port bug)
-                    // shifted every inline image DOWN by ~half its height, so the
-                    // credits' "----->" arrows no longer met their photos.
-                    int img_top = static_cast<int>(y) - (sp.h - lh) / 2;
-                    int src_y = 0;
-                    int draw_h = sp.h;
-                    // Vertical clip to the image band [kTextTop, kImgClipBottom]
-                    // (window 34 .. height-62): a centered tall image can extend
-                    // past the text rows both ways; the original skips the parts
-                    // outside the band (source-row offset at the top, height
-                    // clamp at the bottom).
-                    if (img_top < kTextTop) {
-                        src_y = kTextTop - img_top;
-                        draw_h = sp.h - src_y;
-                        img_top = kTextTop;
-                    }
-                    if (static_cast<float>(img_top + draw_h) > kImgClipBottom)
-                        draw_h = static_cast<int>(kImgClipBottom) - img_top;
-                    // Right clip to the 532-px line budget: the blit width is
-                    // min(image width, remaining budget), the remaining budget
-                    // being clip_right - pen.
-                    int draw_w = sp.w;
-                    if (x + static_cast<float>(draw_w) > clip_right)
-                        draw_w = static_cast<int>(clip_right - x);
-                    if (draw_h > 0 && draw_w > 0) {
-                        // The src rect is in the sprite's CLASSIC space; behind
-                        // it may be a 4x DATA_HD texture, which would otherwise
-                        // sample a sliver of the corner (sprites.hpp
-                        // texture_src_rect). Identity when HD is off.
-                        const SDL_FRect src = texture_src_rect(
-                            sp.tex, sp.w, sp.h,
-                            SDL_FRect{0.0f, static_cast<float>(src_y),
-                                      static_cast<float>(draw_w), static_cast<float>(draw_h)});
-                        SDL_FRect dst{x, static_cast<float>(img_top),
-                                      static_cast<float>(draw_w), static_cast<float>(draw_h)};
-                        SDL_RenderTexture(ren, sp.tex, &src, &dst);
-                    }
-                    x += static_cast<float>(sp.w);
-                }
-            }
-        }
+        const RowPen pen{static_cast<float>(kTextLeft), static_cast<float>(kTextTop + j * lh),
+                         j >= 0 && j < vis};
+        draw_bm_row(ren, page, doc_.lines[static_cast<std::size_t>(li)], pen);
     }
-
-    // Bottom control row (pseudo.c 16408-16412), window-relative x per the
-    // original's literals: \x18 @30, \x19 @60, "Page \x18" @120,
-    // "Page \x19" @190, "Done" @516.
-    draw_dialog_button(ren, *font_, kWinX + 30.0f, kWinY + kButtonRowY, "\x18");
-    draw_dialog_button(ren, *font_, kWinX + 60.0f, kWinY + kButtonRowY, "\x19");
-    draw_dialog_button(ren, *font_, kWinX + 120.0f, kWinY + kButtonRowY, "Page \x18");
-    draw_dialog_button(ren, *font_, kWinX + 190.0f, kWinY + kButtonRowY, "Page \x19");
-    draw_dialog_button(ren, *font_, kWinX + 516.0f, kWinY + kButtonRowY, "Done");
+    draw_bm_buttons(ren, *font_);
 }
 
 // --- HelpBrowser ------------------------------------------------------------
+
+namespace {
+
+bool has_extension(const std::filesystem::path& p, const char* upper_ext) {
+    std::string ext = p.extension().string();
+    for (auto& c : ext) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    return ext == upper_ext;
+}
+
+}  // namespace
 
 void HelpBrowser::enter(bool manual_enabled) {
     entries_.clear();
@@ -387,35 +386,28 @@ void HelpBrowser::enter(bool manual_enabled) {
     pressed_ = ListDialogWidget::None;
     viewing_ = false;
     done_ = false;
-    // sub_414235's own first act: gate on getvalue(15) ("is the online manual
-    // enabled?", default 1) BEFORE the *.BM glob even runs (docs/re/
-    // results-and-options.md §4). When disabled, the browser never lists
-    // anything — it shows the pinned getstring(5)/getstring(95) error pair
-    // instead (draw() below), same as the "no files found" case but with the
-    // "disabled" first line.
+    // sub_414235's own first act: gate on getvalue(15) BEFORE the *.BM glob even
+    // runs (§4).
     disabled_ = !manual_enabled;
-    if (disabled_) return;
-    if (!assets_) return;
-    // sub_41404B: DOS findfirst/findnext glob of "*.BM" over the install
-    // ROOT (not DATA/), qsort_-sorted. std::filesystem::directory_iterator +
-    // a case-insensitive extension check is the faithful modern equivalent
-    // (§4) — the original glob is case-insensitive on the FAT install media.
+    if (disabled_ || !assets_) return;
+    // sub_41404B: a DOS findfirst/findnext glob of "*.BM" over the install ROOT
+    // (not DATA/), qsort_-sorted. directory_iterator plus a case-insensitive
+    // extension check is the faithful equivalent — the original glob is
+    // case-insensitive on the FAT install media.
     std::error_code ec;
     const std::filesystem::path& root = assets_->game_dir();
     if (!std::filesystem::is_directory(root, ec)) return;
     for (const auto& entry : std::filesystem::directory_iterator(root, ec)) {
-        if (!entry.is_regular_file()) continue;
-        std::string ext = entry.path().extension().string();
-        for (auto& c : ext) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-        if (ext == ".BM") entries_.push_back(entry.path());
+        if (entry.is_regular_file() && has_extension(entry.path(), ".BM"))
+            entries_.push_back(entry.path());
     }
     std::sort(entries_.begin(), entries_.end());  // qsort_(sub_41400F, count)
-    // sub_42FEF0 @0x42DC16 — the widest ITEM alone drives the width (the
-    // widget folds the title in itself). Measured once here so the mouse
-    // handlers can rebuild the same layout cheaply.
-    if (font_)
-        for (const auto& e : entries_)
-            item_w_ = std::max(item_w_, static_cast<float>(font_->measure(e.filename().string())));
+    // sub_42FEF0 @0x42DC16 — the widest ITEM alone drives the width (the widget
+    // folds the title in itself). Measured once here so the mouse handlers can
+    // rebuild the same layout cheaply.
+    if (!font_) return;
+    for (const auto& e : entries_)
+        item_w_ = std::max(item_w_, static_cast<float>(font_->measure(e.filename().string())));
 }
 
 std::string HelpBrowser::header() const {
@@ -428,16 +420,36 @@ ListDialogGeometry HelpBrowser::layout() const {
                                   static_cast<int>(entries_.size()), nav_.top_row);
 }
 
+bool HelpBrowser::list_active() const {
+    return !viewing_ && !disabled_ && !entries_.empty() && font_ && font_->loaded();
+}
+
 void HelpBrowser::open_selected() {
-    // sub_41302D is called on the highlighted glob entry: open the selected
-    // topic through the same .BM viewer; the list re-shows once
-    // close_viewer() is called (the caller drives that on bm_.done(),
-    // matching sub_414235's do/while loop-back over the same glob array).
-    const int sel = nav_.top_row + nav_.highlight;  // @0x42E39A
+    // sub_41302D is called on the highlighted glob entry; the list re-shows once
+    // close_viewer() is called, matching sub_414235's do/while loop-back over
+    // the same glob array.
+    const int sel = nav_.top_row + nav_.highlight;                    // @0x42E39A
     if (sel < 0 || sel >= static_cast<int>(entries_.size())) return;  // @0x42E3A8
     bm_.enter(entries_[static_cast<std::size_t>(sel)].stem().string());
     viewing_ = true;
 }
+
+namespace {
+
+// sub_42FEB0 @0x42FEB0 — a letter selects the first entry starting with it
+// (case-insensitive). The match is pulled to the TOP of the window, not merely
+// scrolled into view, and in a list that fits nothing happens at all.
+// sub_42FEB0 is a leaf: it makes no calls, sound included.
+int first_entry_starting_with(const std::vector<std::filesystem::path>& entries, char want) {
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        const std::string f = entries[i].filename().string();
+        if (!f.empty() && std::tolower(static_cast<unsigned char>(f[0])) == want)
+            return static_cast<int>(i);
+    }
+    return -1;
+}
+
+}  // namespace
 
 void HelpBrowser::on_key(SDL_Keycode key, AudioEngine& audio) {
     if (viewing_) {
@@ -445,32 +457,23 @@ void HelpBrowser::on_key(SDL_Keycode key, AudioEngine& audio) {
         return;
     }
     if (disabled_ || entries_.empty()) {
-        // §4's two gated error dialogs — "manual disabled" (getstring(5)/(95))
-        // and "no .BM files found" (getstring(4)/(95)) — share the same
-        // sub_414340 two-line dismiss shape: any dismiss key closes the whole
-        // browser, same as SchemeFilePicker's empty-glob path.
-        //
-        // This branch is the ONE audible thing in the whole browser: sub_414340
-        // opens its key loop with an unconditional nav blip @0x414532 for every
-        // real key (only the -1/-2 no-key codes skip it), and dismisses on
-        // Enter/Space/Escape with NO accept sting. The LIST below is silent.
+        // §4's two gated error dialogs share sub_414340's two-line dismiss shape.
+        // This branch is the ONE audible thing in the browser: sub_414340 opens
+        // its key loop with an unconditional nav blip @0x414532 for every real
+        // key and dismisses with NO accept sting.
         audio.play(20);
         if (key == SDLK_ESCAPE || key == SDLK_RETURN || key == SDLK_SPACE) done_ = true;
         return;
     }
     // THE LIST DIALOG IS SILENT. sub_41431C -> sub_414235 -> sub_41485A ->
-    // sub_42DB80 -> sub_42DBCC: the transitive closure of the widget is 344
-    // functions and NOT ONE of them calls a play primitive (see the census in
-    // docs/re/sound-engine.md §8). No nav blip, no accept sting, no letter-jump
-    // click — the only audible thing the help browser can produce is the
-    // sub_414340 error box above, and that is a modal, not the list. The port
-    // invented every cue that used to be in this switch.
+    // sub_42DB80 -> sub_42DBCC: 344 functions of closure and NOT ONE calls a play
+    // primitive (census in docs/re/sound-engine.md §8). The port invented every
+    // cue that used to be in this handler.
     const int count = static_cast<int>(entries_.size());
     // Arrow-only: sub_42DBCC binds 0x0d/0x1b plus the 0x147..0x151 jump table
-    // @0x42DBA0 and nothing else, so there is no W/S alias. Space is kept as
-    // the port's own accept alias — in the original it is a printable
-    // character and would fall into the type-ahead default, which cannot
-    // match it, so it is inert there rather than bound to something else.
+    // @0x42DBA0 and nothing else, so there is no W/S alias. Space is the port's
+    // own accept alias — in the original it is a printable character that falls
+    // into the type-ahead default and matches nothing, so it is inert there.
     const int code = (key == SDLK_SPACE) ? kListKeyEnter : list_dialog_key_code(key);
     if (code != 0) {
         switch (list_dialog_key(nav_, code, kVisibleRows, count)) {
@@ -480,37 +483,25 @@ void HelpBrowser::on_key(SDL_Keycode key, AudioEngine& audio) {
         }
         return;
     }
-    // Letter-jump (sub_42FEB0 @0x42FEB0): a letter selects the first entry
-    // whose filename starts with it (case-insensitive). sub_42FEB0 is a leaf
-    // — it makes no calls at all, sound included.
-    if (key >= SDLK_A && key <= SDLK_Z) {
-        const char want = static_cast<char>('a' + (key - SDLK_A));
-        int match = -1;
-        for (int i = 0; i < count && match < 0; ++i) {
-            const std::string f = entries_[static_cast<std::size_t>(i)].filename().string();
-            if (!f.empty() && std::tolower(static_cast<unsigned char>(f[0])) == want) match = i;
-        }
-        // The match is pulled to the TOP of the window, not merely scrolled
-        // into view — and in a list that fits, nothing happens at all.
-        list_dialog_letter_jump(nav_, match, kVisibleRows, count);
-    }
+    if (key < SDLK_A || key > SDLK_Z) return;
+    const char want = static_cast<char>('a' + (key - SDLK_A));
+    list_dialog_letter_jump(nav_, first_entry_starting_with(entries_, want), kVisibleRows, count);
 }
 
 void HelpBrowser::on_mouse_move(float x, float y, bool buttons_held) {
-    if (viewing_ || disabled_ || entries_.empty() || !font_ || !font_->loaded()) return;
+    if (!list_active()) return;
     if (buttons_held) return;  // @0x4330A0: the enter id needs an idle mouse
-    const ListDialogGeometry g = layout();
-    list_dialog_mouse_move(nav_, list_dialog_hit_for(*font_, g, kVisibleRows, x, y),
+    list_dialog_mouse_move(nav_, list_dialog_hit_for(*font_, layout(), kVisibleRows, x, y),
                            static_cast<int>(entries_.size()));
 }
 
 void HelpBrowser::on_mouse_down(float x, float y) {
-    if (viewing_ || disabled_ || entries_.empty() || !font_ || !font_->loaded()) return;
+    if (!list_active()) return;
     const ListDialogGeometry g = layout();
     const ListDialogHit hit = list_dialog_hit_for(*font_, g, kVisibleRows, x, y);
     pressed_ = hit.widget;
-    switch (list_dialog_mouse_down(nav_, g, hit, kVisibleRows,
-                                   static_cast<int>(entries_.size()), static_cast<int>(y))) {
+    switch (list_dialog_mouse_down(nav_, g, hit, kVisibleRows, static_cast<int>(entries_.size()),
+                                   static_cast<int>(y))) {
         case ListDialogAction::Activate: open_selected(); break;
         case ListDialogAction::Cancel: done_ = true; break;
         case ListDialogAction::None: break;
@@ -518,54 +509,33 @@ void HelpBrowser::on_mouse_down(float x, float y) {
 }
 
 void HelpBrowser::on_mouse_up(float x, float y) {
-    if (viewing_ || disabled_ || entries_.empty() || !font_ || !font_->loaded()) return;
-    const ListDialogGeometry g = layout();
-    const ListDialogHit hit = list_dialog_hit_for(*font_, g, kVisibleRows, x, y);
+    if (!list_active()) return;
+    const ListDialogHit hit = list_dialog_hit_for(*font_, layout(), kVisibleRows, x, y);
     const ListDialogWidget was = pressed_;
     pressed_ = ListDialogWidget::None;
     if (list_dialog_mouse_up(hit, was) == ListDialogAction::Cancel) done_ = true;
 }
 
-void HelpBrowser::draw(SDL_Renderer* ren) const {
-    if (!ren) return;
-    if (viewing_) {
-        // The .BM viewer paints its own dark panel over whatever is already
-        // on screen (BmScreen::draw); the caller is expected to have drawn
-        // the persistent backdrop first, same as present_bm_screen.
-        bm_.draw(ren);
-        return;
-    }
-    // No backdrop paint here (class doc): sub_41485A's list is a floating
-    // panel composited over whatever the caller drew (the menu art, or the
-    // frozen match field).
-    if (!font_ || !font_->loaded()) return;
-    if (disabled_ || entries_.empty()) {
-        // §4's two gated error dialogs, both drawn through sub_414340 — the
-        // WINZ-9-patch acknowledge box (draw_acknowledge_dialog) with an " Ok "
-        // button, ink byte_49D0DA (RGB (252,80,80) team-1 red). "manual
-        // disabled" = getstring(5), "no .BM files found" = getstring(4); both
-        // share getstring(95) "NOTE!" as the header. (The old bare red text at
-        // (100,100) with no chrome was a port stand-in.)
-        const std::string body =
-            assets_ ? assets_->getstring(disabled_ ? 5 : 4,
-                                          disabled_ ? "Online manual disabled."
-                                                    : "No help files found!")
-                    : std::string(disabled_ ? "Online manual disabled." : "No help files found!");
-        const std::string head =
-            assets_ ? assets_->getstring(95, "NOTE!") : std::string("NOTE!");
-        // sub_414340's Ok button is getstring(27) (batch_0x413AED.cpp:503),
-        // the SAME id every other port call site uses — not getstring(90).
-        const std::string ok = assets_ ? assets_->getstring(27, " Ok ") : std::string(" Ok ");
-        draw_acknowledge_dialog(ren, *font_, assets_ ? &assets_->frontend_pcx("WINZ") : nullptr,
-                                head, body, ok, kErrorInkR, kErrorInkG, kErrorInkB);
-        return;
-    }
-    // The generic bevel list dialog at the LITERAL (100, 100), header
-    // getstring(600) — the SAME primitive and the SAME coordinates
-    // SchemeFilePicker's *.SCH picker uses (§4/§5c). Width comes from the
-    // widest ENTRY alone: the widget folds the title in itself
-    // (max(item_w + 16, title_w) + 20), so pre-maxing them here would inflate
-    // it by 16. The old 200-px floor was a port stand-in and is gone.
+void HelpBrowser::draw_error_dialog(SDL_Renderer* ren) const {
+    // §4's two gated dialogs, both drawn through sub_414340: "manual disabled" =
+    // getstring(5), "no .BM files found" = getstring(4), header getstring(95)
+    // "NOTE!", Ok label getstring(27) (batch_0x413AED.cpp:503 — the SAME id every
+    // other call site uses, not getstring(90)). The old bare red text at
+    // (100,100) with no chrome was a port stand-in.
+    const char* body_default = disabled_ ? "Online manual disabled." : "No help files found!";
+    const std::string body =
+        assets_ ? assets_->getstring(disabled_ ? 5 : 4, body_default) : std::string(body_default);
+    const std::string head = assets_ ? assets_->getstring(95, "NOTE!") : std::string("NOTE!");
+    const std::string ok = assets_ ? assets_->getstring(27, " Ok ") : std::string(" Ok ");
+    draw_acknowledge_dialog(ren, *font_, assets_ ? &assets_->frontend_pcx("WINZ") : nullptr, head,
+                            body, ok, kErrorInkR, kErrorInkG, kErrorInkB);
+}
+
+void HelpBrowser::draw_topic_list(SDL_Renderer* ren) const {
+    // The generic list dialog at the LITERAL (100, 100), header getstring(600) —
+    // the SAME primitive and coordinates SchemeFilePicker uses (§4/§5c). The
+    // width comes from the widest ENTRY alone; the widget folds the title in
+    // itself, so pre-maxing here would inflate it by 16.
     const int count = static_cast<int>(entries_.size());
     const int last = std::min(count, nav_.top_row + kVisibleRows);
     const ListDialogLayout lay = draw_list_dialog(ren, *font_, header(), 100.0f, 100.0f, item_w_,
@@ -573,14 +543,29 @@ void HelpBrowser::draw(SDL_Renderer* ren) const {
     for (int i = nav_.top_row; i < last; ++i) {
         const int vi = i - nav_.top_row;
         const float ty = lay.item_y0 + static_cast<float>(vi) * lay.item_h;
-        std::string name = entries_[static_cast<std::size_t>(i)].filename().string();
-        // sub_442C28 LIGHTENS the selected row rather than inverting it, so
-        // every row keeps the same ink (dialog_chrome.hpp's own note).
-        // The band tracks the highlight OFFSET, which is what the original
-        // draws @0x42E656 — it is not derived from an absolute selection.
+        // sub_442C28 LIGHTENS the selected row rather than inverting it, so every
+        // row keeps the same ink. The band tracks the highlight OFFSET, which is
+        // what the original draws @0x42E656 — not an absolute selection.
         if (vi == nav_.highlight) draw_list_selection(ren, lay, vi);
-        font_->draw(ren, name, lay.item_x, ty, kListInkR, kListInkG, kListInkB);
+        font_->draw(ren, entries_[static_cast<std::size_t>(i)].filename().string(), lay.item_x, ty,
+                    kListInkR, kListInkG, kListInkB);
     }
+}
+
+void HelpBrowser::draw(SDL_Renderer* ren) const {
+    if (!ren) return;
+    if (viewing_) {
+        // The .BM viewer paints its own window over whatever is on screen; the
+        // caller is expected to have drawn the persistent backdrop first.
+        bm_.draw(ren);
+        return;
+    }
+    if (!font_ || !font_->loaded()) return;
+    if (disabled_ || entries_.empty()) {
+        draw_error_dialog(ren);
+        return;
+    }
+    draw_topic_list(ren);
 }
 
 }  // namespace bomber::game
