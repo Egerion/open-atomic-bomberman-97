@@ -279,14 +279,19 @@ screens but not during the match, and setup traffic is host→guest only, so
 "silence" is not a valid signal there. Closing that fully needs a guest-side
 keepalive in `SetupSession` plus a late transport swap behind an indirection.
 
-### 4.2 A path that dies MID-MATCH (open; analysis only)
+### 4.2 A path that dies MID-MATCH (CLOSED 2026-08-01 — `path_failover.hpp`)
 
 Observed live, deep into a healthy session (round 53, ~1124 ticks in): `RX 0/s`,
 `~100% LOSS`, `BAD 0` — not malformed datagrams, *none at all* — with `PRED 8/8`
 and `STALL 10/s` as consequences of nothing arriving. Consistent with a NAT
 binding expiring or a transient network event. §4.1's verification runs before
-tick 0 and nothing re-verifies afterwards, so the match freezes rather than
-failing over or ending cleanly.
+tick 0 and nothing re-verifies afterwards, so the match froze rather than
+failing over or ending cleanly. By 2026-08-01 the signature had accumulated
+five times in one 45-minute session (`depth=8/8 lag=8t stalls=65..678
+rx=...(0/s) dup=1199..7297 loss~100%`), which settled the reading: the path
+died in ONE direction — the frontier frozen while the peer's retransmissions
+flood in, feeding the silence timer so the 600-pump drop detector can never
+fire (`live=1` on every stalled line).
 
 Host migration supplies part of the answer and is **not** the whole of it:
 
@@ -296,9 +301,9 @@ Host migration supplies part of the answer and is **not** the whole of it:
 - **For the 2-seat match this capture came from, §8 deliberately does nothing.**
   Migration is gated to a star precisely because the failure above is
   indistinguishable from a dead peer, and acting on the guess would give each
-  side a private divergent game rather than a visible stall. The observed
-  configuration therefore behaves exactly as it did before host migration
-  existed. This section stays open.
+  side a private divergent game rather than a visible stall. The 2-seat answer
+  is the failover below, which never guesses about the PEER — it moves the
+  PATH, and only once the peer has provably moved with it.
 
 **What the frozen protocol already allows, verified against the Go source** — so
 the remaining work needs no server change:
@@ -331,6 +336,45 @@ re-enable candidate relay, which looks like a free renegotiation and is a trap �
 it clears every ready flag, broadcasts a roster update every client's UI reads as
 "match over", re-opens the lobby to joins, and a second `StartMatch` would mint a
 new seed and desync the running match.
+
+**What shipped (2026-08-01), on exactly the affordances above and no server
+change.** `net::PathFailover` (`libs/net/include/bomber/net/path_failover.hpp`,
+pinned by `tests/net/test_path_failover.cpp`) sits beside the session for a
+2-seat direct online match, pumped every session pump and through the
+between-rounds gates:
+
+- **The detector measures NEW-INPUT PROGRESS, not datagram arrival**: the
+  confirmed frontier frozen ≥3 s while ≥30 datagrams arrived (the dup-flood
+  side of a one-way death), or frozen ≥10 s with nothing arriving at all (the
+  silent side, and the worst case where both directions died).
+- **A wedge is cured in place first.** An asymmetric outage that HEALS still
+  leaves both peers live, resending and frozen — the hearing side finalised the
+  deaf side's last ~cap ticks and resends from above the hole
+  (`RollbackSession::widen_resend_window`). The traffic arm widens the resend
+  window and gives the path a 1.5 s grace before condemning it; three of the
+  2026-08-01 stalls (`rx=20/s loss~0%`, frozen) have exactly this shape and
+  need no relay at all.
+- **The engine's pump IS the mid-match heartbeat** (`LobbyFlow::step` in phase
+  Ready), so the membership — and with it `AllocateRelay` — survives the match.
+  The peers AGREE structurally, not by message: both run the same detector, a
+  firing side detaches (its silence is the one signal it can still deliver),
+  both allocate idempotently, and the relay is absorbing. The mid-match
+  `RosterUpdate` stream doubles as §4.2's oracle: a seat that VANISHED is a
+  peer whose allocation could only be refused, so it is not chased.
+- **The switch is proven before the session moves** — the same mutual
+  `LinkProbe` as §4.1, over the relay allocation, behind the
+  `MigratingTransport` the session already runs over. On failure (refused
+  allocation, no answer, or a peer that never joins — an unpatched build) the
+  engine latches Failed and the EXISTING drop policy ends the match; the
+  traffic-arm side stays detached so the dup flood cannot keep `live=1` forever.
+- **netdiag answers the next "what happened"**: the session line carries
+  `failover=switched(...)/failed(...)/healed-in-place(...)/pending(...)` with
+  the trigger and the second it fired.
+
+Still open here: a star (>2 seats) has no relay topology to converge to, an
+already-relayed match has nothing to escalate to (a matchmaker restart still
+cuts it), and the between-rounds screens without a gate (DRAW held open for
+minutes) can still lapse the heartbeat.
 
 ---
 
