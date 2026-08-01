@@ -141,6 +141,37 @@ else in scenarios 1–5 moves. As tuned the run infects seat 0 at tick 129 and
 passes it to seat 1 on the way back; on a time-limited build both diseases have
 expired by tick 400, on a gate-honouring one both still read the full duration.
 
+### 7. Bomb kinds, driven
+
+Scenarios 1–6 reach neither a jelly bomb nor a trigger bomb. That was **measured
+rather than assumed**: reversing the jelly bounce direction left the digest
+byte-identical, so two peers disagreeing about it would have shaken hands and
+desynced on the first kicked jelly.
+
+Seat 0 places a jelly, kicks it into a solid wall so the reversal fires, and seat
+1 places a trigger bomb and detonates it. The witnesses the scenario carries —
+`jelly_bounces`, trigger bombs placed and fired — are why "driven" is in the name;
+CLAUDE.md's rule that placement is not coverage has been paid for three times.
+
+Measured, each against its own revert:
+
+| reverted fix | digest |
+|---|---|
+| jelly bounce `+2` → `+1` | 2776396481 → 508431178 |
+| trigger allowance `<` → `<=` | 2776396481 → 3126550495 |
+
+### 8. Campaign rovers
+
+Rovers had no scenario at all. Reverting the per-frame budget (`+100` → `+120`)
+moves the digest 2776396481 → 565646703 **while the golden fingerprint stands
+still** — the complementary direction to scenario 7's jelly probe, and the reason
+`tests/net/test_build_hash.cpp` now pins both numbers side by side rather than
+either alone.
+
+This scenario is also the clearest case for witnesses over placement: a probe run
+drove `rover_deaths` to **zero** while the digest still moved. A hash cannot tell
+you that; a counter can.
+
 ## Folding
 
 Order matters and is part of the digest: **append** new scenarios, never
