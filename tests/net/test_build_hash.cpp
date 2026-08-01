@@ -27,10 +27,10 @@ std::string hex64(std::uint64_t v) {
 //
 //   kGoldenFingerprint  what tests/sim/test_golden.cpp's six scenarios say sim
 //                       behaviour is (their final hashes, folded).
-//   kBuildHash          what libs/net/src/build_hash.cpp's six scenarios say it
-//                       is — the number two peers compare at the lobby door.
+//   kBuildHash          what libs/net/src/build_hash.cpp's eight scenarios say
+//                       it is — the number two peers compare at the lobby door.
 constexpr std::uint64_t kGoldenFingerprint = 0xd78286148efb2a98ull;
-constexpr std::uint32_t kBuildHash = 3364373141u;
+constexpr std::uint32_t kBuildHash = 2776396481u;
 
 // The cross-build compatibility digest (ADR-0011): peers compare it before a
 // match to reject incompatible builds.
@@ -98,4 +98,23 @@ TEST_CASE("determinism rule 7: a sim change the goldens can see must move build_
     // behaviour change (rule 5's discipline, applied to the digest).
     CHECK(fingerprint == kGoldenFingerprint);
     CHECK(digest == kBuildHash);
+}
+
+// PLACEMENT IS NOT COVERAGE, asserted rather than intended. Scenarios 7 and 8
+// exist because the digest was blind to jelly bombs, trigger bombs and rovers,
+// and the way that blindness comes BACK is not someone deleting a scenario — it
+// is an edit that leaves the scenario running while its mechanic stops being
+// reached. The hash is identical either way; these counts are not.
+TEST_CASE("build_hash's driven scenarios really execute their mechanics") {
+    const bomber::net::BuildHashCoverage cov = bomber::net::build_hash_coverage();
+    MESSAGE("jelly_bounces=" << cov.jelly_bounces << " trigger_bombs=" << cov.trigger_bombs
+                             << " trigger_detonations=" << cov.trigger_detonations
+                             << " rovers_spawned=" << cov.rovers_spawned << " rover_deaths="
+                             << cov.rover_deaths << " rover_kills=" << cov.rover_kills);
+    CHECK(cov.jelly_bounces > 0);
+    CHECK(cov.trigger_bombs > 0);
+    CHECK(cov.trigger_detonations > 0);
+    CHECK(cov.rovers_spawned > 0);
+    CHECK(cov.rover_deaths > 0);
+    CHECK(cov.rover_kills > 0);
 }
