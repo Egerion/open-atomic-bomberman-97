@@ -132,6 +132,17 @@ target_link_libraries(bomber_message_splice_tests PRIVATE doctest::doctest bombe
 target_include_directories(bomber_message_splice_tests PRIVATE ${CMAKE_SOURCE_DIR}/libs/game_util/include)
 add_test(NAME message_splice COMMAND bomber_message_splice_tests)
 
+# The options.ini round trip, EXHAUSTIVELY — the agreement suite
+# app_settings.hpp asks for: every typed assets::Options field set, saved,
+# loaded back and compared, so a key added to the writer and forgotten in the
+# reader (or vice versa) goes red instead of silently ceasing to persist.
+# SDL-free via bomber::assets, so it runs inside the pre-push gate — unlike
+# app_settings.cpp itself, which lives in libs/game behind SDL.
+add_executable(bomber_options_roundtrip_tests test_options_roundtrip.cpp)
+target_link_libraries(bomber_options_roundtrip_tests
+  PRIVATE bomber::assets doctest::doctest bomber::warnings)
+add_test(NAME options_roundtrip COMMAND bomber_options_roundtrip_tests)
+
 # The cross-screen helpers (frontend_util.hpp): the ONE shared presentation LCG
 # every pre-match screen steps through pick_glue, and the case-insensitive
 # DATA/SCHEMES resolve. Both were untested, and both are what the ADR-0008 screen

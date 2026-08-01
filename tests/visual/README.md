@@ -69,19 +69,19 @@ identical:
   a pinned frame must not depend on one. `GameApp::load_config` pins each
   such key:
 
-  > **The property holds today, but it is held by two predicates, not one.**
-  > Re-verified key by key 2026-08-01. `random_start`, `conveyor_speed`,
-  > `soft_scaling`, `show_fps`, `native_cadence` and `vsync` are pinned on
-  > `capture_run()` — the predicate that exists for exactly this. `team_play`
-  > and `playtime` are pinned on `opts_.demo` instead. Those two stay pinned
-  > only because all four capture entry points in `apps/game/main.cpp`
-  > (`--demo`, `--demo-shots`, `--bm-shot`, `--menu-shot`) *also* set
-  > `opts.demo = true`, and two of them set it for an unrelated stated reason
-  > ("reuse the demo path's audio skip / headless intent"). Drop that line from
-  > `--bm-shot`, or add a fifth capture entry point that does not set it, and
-  > `team_play`/`playtime` silently start reading the mutable file again — which
-  > is failure mode #4 of the four this harness has already suffered. Reported,
-  > not fixed: `libs/game` is outside this pass's scope.
+  > **One predicate again, fixed 2026-08-01.** An earlier re-verification found
+  > the property held by two predicates: `random_start`, `conveyor_speed`,
+  > `soft_scaling`, `show_fps`, `native_cadence` and `vsync` pinned on
+  > `is_capture_run()` — the predicate that exists for exactly this — while
+  > `team_play`, `playtime` and the BASIC.SCH scheme choice sat on `opts_.demo`
+  > and held only because all four capture entry points in `apps/game/main.cpp`
+  > happen to set `opts.demo = true` too. `capture` is a strict superset of
+  > `demo`, so all three now sit on `is_capture_run()` alongside the rest
+  > (`app_settings.cpp`), and the two nodename.ini touch points (the random-name
+  > seed, the exit write) moved with them. A fifth capture entry point that
+  > forgets `opts.demo` can no longer silently re-open the mutable file — which
+  > would have been failure mode #5 of the class this harness has already
+  > suffered four of.
 
   | key | pinned to | why it matters |
   |-----|-----------|----------------|
