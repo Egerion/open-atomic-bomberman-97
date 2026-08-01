@@ -27,6 +27,8 @@ documentation in this repository — the clean-room reimplementation authored by
 the contributors. It does NOT grant any rights to "Atomic Bomberman", Bomberman,
 or any related names, trademarks, artwork, audio, level data, or other assets,
 which remain the property of their respective owners (Interplay Entertainment /
-Konami). This project ships none of those assets; it reads them at runtime from
-a copy of the original game that the end user must already own. See the "Legal"
-section of README.md.
+Konami). This project ships no game data: the engine reads the original's assets
+at runtime from a copy the end user must already own. Two documentation images in
+this repository (docs/screenshots/) are screen captures of the engine running,
+and therefore depict the original's artwork; they are illustrative documentation
+and are not usable as game data. See the "Legal" section of README.md.
