@@ -251,7 +251,7 @@ Passability `sub_41E5C3(tx,ty)` = *(no bomb at tile)* **and** *(wall type 0)*.
   toward the tile centre; exactly centred → stop.
 
 Ported faithfully into `move_player` (sim.cpp); the old guessed
-`corner_threshold` is deleted. Verified by `tests/test_move.cpp` (speed 93 px /
+`corner_threshold` is deleted. Verified by `tests/sim/test_move.cpp` (speed 93 px /
 10 ticks matches the budget rule; 4-px lean rounds a corner the old 9-px gate
 would have ignored; centred-into-wall stops on the tile centre).
 
@@ -318,7 +318,7 @@ if (G > R && G > B) {                 // green-dominant (strict, no margin)
 
 The **baseline `(R+B)/2` is preserved**, so the sprite's casing/shading survives
 the tint — a white player {100,100,100} yields a *shaded* light bomb, not a flat
-white one. Ported to `libs/game/src/sprites.cpp recolor_image` (truecolour, so
+white one. Ported to `libs/render/src/sprites.cpp recolor_image` (truecolour, so
 the nearest-palette snap is dropped). Fixes the trigger-bomb "white blob": the
 desaturated TRIGBOMB art (mean 58,150,41, baseline ~49) exposed our earlier
 approximation (lum=G, no baseline, fabricated glint) which blew it to pure white
@@ -445,7 +445,7 @@ Because a bomb must already be underfoot, it takes **two presses**: the first
 (empty tile) drops one underfoot via the normal branch; the second (now standing
 on it) fires the run ahead. Ported to `spooge_ahead` in sim.cpp with the tick
 drop logic edge-gated to match; bombs carry the player's flame/fuse plus disease
-overrides. Verified by `tests/test_spooge.cpp` (single-press = underfoot only,
+overrides. Verified by `tests/sim/test_spooge.cpp` (single-press = underfoot only,
 bomb-count limit, wall stop, column direction, short-flame carry, non-spooge).
 
 ## Bomb machine — CONFIRMED (`sub_42331C`, the per-tick bomb updater)
@@ -492,7 +492,7 @@ budget (same +=speed / spend-100-per-px scheme as the player stepper).
 Ported: `Tuning::jelly_turn_chance` (id 667), exclusive kind at placement,
 jelly reverse-on-block in `BombSystem::slide`, jelly veer in
 `BombSystem::fly`, events BombStopped (130) / JellyBounced (135). Tests:
-`tests/test_jelly.cpp`. Golden scenario B constants refreshed for this
+`tests/sim/test_jelly.cpp`. Golden scenario B constants refreshed for this
 deliberate behaviour change (this section is the citation).
 
 ## Dud bombs — CONFIRMED (`sub_422EDE` roll, `sub_422C13` gate, `sub_42331C` window)
@@ -533,7 +533,7 @@ Read 2026-07-03. Bomb state (+0): 0 dead, 1 live, **2 = dud (fizzling)**.
 
 Ported: `Bomb::dud_left` (hashed) + `State::dud_gate` (hashed), roll in
 `BombSystem::place`, freeze in `tick_fuses`, DUDS.ANI wired through
-AssetStore/SequenceSet/Renderer. Tests: `tests/test_dud.cpp`. Golden fully
+AssetStore/SequenceSet/Renderer. Tests: `tests/sim/test_dud.cpp`. Golden fully
 recaptured (hash layout gained two fields; setup consumes one arm draw), and
 again 2026-07-10 for the seconds correction.
 
@@ -620,7 +620,7 @@ Read 2026-07-03. When a flying bomb lands on a live player:
   `20 + rand % getvalue(330)` — cosmetic (presentation `panic_lcg_`, not the
   sim). getvalue(330) = 13, CONFIRMED 2026-07-04 (see "Final in-game 1:1 gaps").
 
-Ported in `PowerupSystem::head_hit`/`scatter`; `tests/test_sim.cpp` covers
+Ported in `PowerupSystem::head_hit`/`scatter`; `tests/sim/test_sim.cpp` covers
 stun/scatter and (new) the goldflame drop. **UPDATE 2026-07-04:** goldflame
 (kind 8) added to the `surplus()` roll — the previous "skipped for now" note is
 resolved. This changes the per-hit RNG draw count ONLY when the victim has
@@ -740,9 +740,9 @@ GOLDEN: proven inert — no golden board has any stage actor, so the newly
 executing path moves nothing; the action-block skip is behaviourally
 identical to the old early-return (same prev_action1/2 updates); no RNG
 draw added/removed/reordered. Full suite before/after: every constant in
-`tests/test_golden.cpp` (all hashes, kExpectedRng at all four D checkpoints,
+`tests/sim/test_golden.cpp` (all hashes, kExpectedRng at all four D checkpoints,
 E's bounce count 10 and final rng) passes UNCHANGED — zero recapture.
-Pinned by `tests/test_conveyor.cpp` "a head-stunned player on a conveyor is
+Pinned by `tests/sim/test_conveyor.cpp` "a head-stunned player on a conveyor is
 still carried by the belt" / "a stunned player takes no new input and does
 not coast; input resumes after". One adjacent ordering fix rides along: a
 stunned player mid-bounce/mid-warp now ticks BOTH countdowns (the original's
@@ -757,7 +757,7 @@ a merely-stunned-but-alive player never sets. **Conclusion: stun is not flame
 immunity and does not block pickup, in the original.** `field_vs_players`
 (simulation.cpp) already matches — it gates on `!p.alive` only and has never
 checked `p.stun` — so **no production code changed**. Pinned by
-`tests/test_sim.cpp` "a stunned-but-alive player still burns and still picks
+`tests/sim/test_sim.cpp` "a stunned-but-alive player still burns and still picks
 up floor powerups" (added 2026-07-10; confirmed failing if a `stun == 0`
 guard is (re-)added to `field_vs_players`, so it is real regression coverage,
 not a tautology).
@@ -987,7 +987,7 @@ determinism rule 5 (the mixed value is 0 everywhere a grab isn't in its
 2-tick pause), so all five golden hash constants were recaptured in this
 commit; every `kExpectedRng` checkpoint, bounce count, and final-rng value is
 byte-identical, proving the recapture is layout-only, zero behaviour drift.
-Tests: `tests/test_state_machine.cpp` (new suite pinning the table's
+Tests: `tests/sim/test_state_machine.cpp` (new suite pinning the table's
 transitions and each forbidden combination).
 
 ## The bomb-action block runs in every alive state (standing-stun restructure) — RESOLVED (`sub_41F29B`, 2026-07-11 follow-up)
@@ -1101,7 +1101,7 @@ instant it sets `stun`.
 **GOLDEN: proven inert, zero recapture.** The full suite (`ctest --test-dir
 build/headless -C Debug`, all 42 registered suites incl. `test_golden`) is
 byte-identical before and after this restructure — every hash constant,
-`kExpectedRng` checkpoint, and bounce/warp count in `tests/test_golden.cpp`
+`kExpectedRng` checkpoint, and bounce/warp count in `tests/sim/test_golden.cpp`
 is UNCHANGED, so no scenario needed recapture. This matches the prior audits'
 own prediction ("it never fires in any current scenario/test"): none of the
 golden boards A-E combine a head-hit stun with either a carried bomb or an
@@ -1114,7 +1114,7 @@ the auto-drop's dud-roll (block 4c) and the grab/spooge primitives draw
 exactly where they always did, just now ALSO reachable from a stunned/
 bouncing/warping tick, which no current scenario reaches.
 
-Tests: `tests/test_state_machine.cpp` — "a standing head-hit stun releases a
+Tests: `tests/sim/test_state_machine.cpp` — "a standing head-hit stun releases a
 carried bomb (release-throw while stunned)", "diarrhea auto-drop still fires
 every tick during a standing head-hit stun", "diarrhea + grab keeps cycling
 grab/throw/drop through a whole trampoline flight" (the last one exercising
@@ -1130,7 +1130,7 @@ latches now also gate behaviour across stun/bounce/warp boundaries rather
 than plain edge detection alone. **They ARE hashed today**: `hash.cpp:174`
 mixes both as one packed word per present player, right after `pickup_pause`,
 under a comment naming them gameplay state. That landed as the usual one-time
-hash-layout growth (rule 5) with `tests/test_golden.cpp` recaptured in the
+hash-layout growth (rule 5) with `tests/sim/test_golden.cpp` recaptured in the
 same commit — golden A (0 players) stayed byte-identical, every
 player-bearing scenario's constants were re-pinned. This paragraph claimed
 the gap was still open long after it was closed; do not re-open it without
@@ -1218,7 +1218,7 @@ tick 300 + final rng). Golden A (no deaths) is UNCHANGED. Isolation proven by
 running this revision against `main`'s sim with identical instrumentation: the
 first-death TICK and the full hash+rng at the END of the tick BEFORE each first
 death are byte-identical across both builds, confining every divergence to the
-death tick's scatter draws. Tests: `tests/test_sim.cpp` ("a dying player
+death tick's scatter draws. Tests: `tests/sim/test_sim.cpp` ("a dying player
 scatters its whole surplus…", "…at its start-with baseline scatters nothing",
 "death scatter places the surplus token on the sole legal tile").
 
@@ -1235,7 +1235,7 @@ are the per-kind counts (86 bombs, 87 flame, 89 kick, 90 skate, 91 punch,
   switch and the rolled kind applies normally (a skull or super-skull is a
   legal outcome). Ported into the pickup path in `simulation.cpp`
   (`State::forbidden` now carries the scheme flags; one RNG draw per
-  attempt). Tests: `tests/test_random.cpp`.
+  attempt). Tests: `tests/sim/test_random.cpp`.
 - **Mutual exclusions** via the evict helper `sub_41E16A`: punch removes
   trigger; grab removes spooger; spooger removes grab; trigger removes punch
   AND jelly; jelly removes trigger. **DEEPENED 2026-07-10 (core-feel audit
@@ -1256,7 +1256,7 @@ are the per-kind counts (86 bombs, 87 flame, 89 kick, 90 skate, 91 punch,
   trigger bomb — `sub_424C47` matches on kind alone); `remove()` stays the
   head-hit primitive (the head hit `sub_421F7E` decrements + scatters
   itself and does NOT call `sub_424C47`). Tests:
-  `tests/test_trigger_allowance.cpp`. GOLDEN (new scatter RNG draws).
+  `tests/sim/test_trigger_allowance.cpp`. GOLDEN (new scatter RNG draws).
 - **Trigger pickup** also zeroes the live-trigger-bomb counter (+85); bomb
   creation lays trigger kind only while `+85 < +86 (max bombs)`.
 - **AWESOME cadence**: pickup counter +101 (not incremented by skulls):
@@ -1321,8 +1321,8 @@ extracted for the clogs wheel-slot fix, here transcribed in full.)
 | 12 | Random | random | "power random" | PWRANDOM.TGA (+ 11 more cycling steps) | PWRAND.PCX | correct |
 | 13 | (not a `PowerupType`; clogs) | clog | "power clog" (`clogs_anim`, outside the 13-kind loop) | TURT2.TGA | n/a | already ported, §9.5 |
 
-Every row's ANI sequence name (`libs/game/src/sequences.cpp`'s
-`kPowerNames[]`) and PCX fallback filename (`libs/game/src/asset_store.cpp`'s
+Every row's ANI sequence name (`libs/render/src/sequences.cpp`'s
+`kPowerNames[]`) and PCX fallback filename (`libs/render/src/asset_store.cpp`'s
 `kPowFiles[]`) already matched `off_45BE50` exactly, in the same order as
 `sim::PowerupType` (`libs/sim/include/bomber/sim/types.hpp`) — which itself
 matches the dispatcher's case numbers per "Powerup pickup dispatcher" above.
@@ -1377,7 +1377,7 @@ live trigger bombs, capped by their bomb count.
 Ported: `Player::trigger_placed` (hashed), gated in `BombSystem::place`
 (`make_trigger = trigger && trigger_placed < max_bombs`, then `++trigger_placed`;
 exhausted ⇒ normal timed bomb), refilled in `PowerupSystem::apply` Trigger case.
-No new RNG draws. Tests: `tests/test_trigger_allowance.cpp`. Golden must be
+No new RNG draws. Tests: `tests/sim/test_trigger_allowance.cpp`. Golden must be
 recaptured (new hashed field; a downgraded trigger bomb now also participates in
 the dud roll it previously skipped).
 
@@ -1400,7 +1400,7 @@ computed at drop time — it is not a stored flame stat.
 Ported: `Player::goldflame` (hashed) replaces the old `flame = 99` sentinel; set
 in `PowerupSystem::apply` Goldflame case; `BombSystem::place` computes
 `b.flame = short_flame ? 1 : flame; if (goldflame) b.flame = max(kGridWidth,
-kGridHeight);`. Tests: `tests/test_goldflame.cpp`. Golden must be recaptured
+kGridHeight);`. Tests: `tests/sim/test_goldflame.cpp`. Golden must be recaptured
 (stored `flame` value 99 → 15, plus the new flag).
 
 RESOLVED 2026-07-04 (the deferred head-hit follow-up, see "Goldflame on a head
@@ -1455,7 +1455,7 @@ Read 2026-07-04 ("devam" #8). Three gaps audited against the kicked-slide loop.
    bombs. Our `Tuning::kicked_bomb_speed` (id 300) already matches; no change.
 
 Ported: flame-into-explode in `BombSystem::slide` (now index-based). Tests:
-`tests/test_kick_nuances.cpp`. Golden: the flame-explode path only triggers when
+`tests/sim/test_kick_nuances.cpp`. Golden: the flame-explode path only triggers when
 a kicked bomb meets flame; golden scenarios that never do stay byte-identical,
 but recapture after the trigger/goldflame hash-layout change regardless.
 
@@ -1479,7 +1479,7 @@ kind-roll / scatter; the 550-block caps in the pickup tail; cure roll before
 dispatch; Random reroll `%12` ×200; skull rolls (1 vs 3, first announces);
 disease durations 50ms×getvalue(130+i); flame lifetime 10. Six deviations
 were found and fixed (each cites its sub above; GOLDEN recaptured in the
-same commit, `tests/test_golden.cpp` 2026-07-10 note has the per-scenario
+same commit, `tests/sim/test_golden.cpp` 2026-07-10 note has the per-scenario
 proofs):
 
 1. **Kick timing + redirect (`sub_41EC84`'s in-pixel-loop kick probe branch,
@@ -1685,7 +1685,7 @@ as inert:
 
 Ported: `BombSystem::fly`'s `clear` computation gained
 `s.actor_type[ty][tx] != ActorType::Warphole` alongside the existing
-wall/bomb/powerup checks. Tests: `tests/test_stage_actors.cpp` "a flying bomb
+wall/bomb/powerup checks. Tests: `tests/sim/test_stage_actors.cpp` "a flying bomb
 cannot land on a warphole; it hops onward instead" (plus a same-setup control
 over open ground, to isolate the actor check from the rest of the landing
 logic).
@@ -1699,7 +1699,7 @@ golden A-E are byte-identical (no warpholes there, so `s.actor_type[..] ==
 Warphole` is never true on any tile any golden bomb slides toward — the new
 `blocked` branch never evaluates true, and the removed teleport branch was
 equally never reached, so removing it changes nothing on those boards
-either). The dedicated `tests/test_stage_actors.cpp` warphole suite (which DOES
+either). The dedicated `tests/sim/test_stage_actors.cpp` warphole suite (which DOES
 place warpholes) is the only place behaviour changes, and it has been rewritten
 to assert the corrected (blocked, never-warps) behaviour: "a sliding bomb is
 blocked at a warphole (never warps, sub_4230A5)", "a jelly bomb bounces off a
@@ -2063,12 +2063,12 @@ Ported: `libs/sim/src/systems/flames.{hpp,cpp}` (`explode` skip_dir param,
 step 1b, right after the player pass), `libs/sim/include/bomber/sim/
 {state.hpp,bomb.hpp}` (`State::pending_chain`/`next_bomb_id`,
 `Bomb::id`), `libs/sim/src/hash.cpp` (all three newly hashed). Tests:
-`tests/test_sim.cpp` ("flame arm stops at a bomb it chain-detonates..." —
+`tests/sim/test_sim.cpp` ("flame arm stops at a bomb it chain-detonates..." —
 rewritten to check the intermediate one-tick state; "a chain-detonated bomb
-skips re-blasting back toward its trigger"), `tests/test_kick_nuances.cpp`
+skips re-blasting back toward its trigger"), `tests/sim/test_kick_nuances.cpp`
 ("a jelly bomb sliding into flame bounces, but still chain-detonates"),
-`tests/test_stage_actors.cpp` (flying-bomb-warphole, above).
-`tests/test_dud.cpp` and the renamed `tests/test_sim.cpp` "chained bombs
+`tests/sim/test_stage_actors.cpp` (flying-bomb-warphole, above).
+`tests/sim/test_dud.cpp` and the renamed `tests/sim/test_sim.cpp` "chained bombs
 explode within a tick of the trigger, not on bomb B's own fuse" already had
 enough slack in their numeric assertions to pass unchanged — only their
 names/comments (which had claimed "instantly"/"same tick") needed
@@ -2152,10 +2152,10 @@ the owner word (`--old.bombs_placed` (clamped, defensive) /
 unconditional word write is a no-op for a self-chain). `bombs_placed` remains
 a stored, hashed counter; with the transfer ported it tracks `sub_4245DA`'s
 derived value exactly at every tick boundary. Tests:
-`tests/test_chain_slot.cpp` (transfer timing — freed at transfer, charged to
+`tests/sim/test_chain_slot.cpp` (transfer timing — freed at transfer, charged to
 the chainer until explosion; the 4-bomb 5→1 collapse repro; the full
 diarrhea-cluster → enemy chain → recovery flow; a self-chain control) and
-`tests/test_head_hit_bounds.cpp` (the refuted-hypothesis bounds, pinned).
+`tests/sim/test_head_hit_bounds.cpp` (the refuted-hypothesis bounds, pinned).
 
 **GOLDEN IMPACT: none — proven, zero recapture.** The fix's ONLY behavioural
 delta is inside `if (hit->owner != owner)`; `bombs_placed` is hashed, and a
@@ -2533,7 +2533,7 @@ timing, which is genuinely earlier and player-visible (the token fades in
 over the still-burning brick instead of popping in when it's gone).
 
 Ported: `libs/sim/src/systems/flames.cpp` (`spread_to`'s brick branch,
-`age_flames_and_bricks`). Tests: `tests/test_sim.cpp` ("bomb explodes at
+`age_flames_and_bricks`). Tests: `tests/sim/test_sim.cpp` ("bomb explodes at
 its fuse and burns the brick" — extended to assert the cell stays Brick
 through the crumble and only opens after `brick_burn_frames` more ticks;
 "burned brick reveals its powerup, players pick it up" — extended to assert
@@ -2716,7 +2716,7 @@ further candidate tiles left for a LATER re-hit to matter; the port reads
 the source's kind from `s.hidden[ty][tx]` only, which is exactly what's
 populated on every reachable call.
 
-**Tests:** `tests/test_sim.cpp` — "a hidden Punch powerup relocates instead
+**Tests:** `tests/sim/test_sim.cpp` — "a hidden Punch powerup relocates instead
 of revealing near match start" (pass 1, swap), "...reveals normally once the
 relocation window is disabled" (gate closed via `overpowered_relocate_
 seconds = 0`), "...with no swap partner moves to an empty brick unrevealed"
@@ -2840,7 +2840,7 @@ existing port; no changes there):
    faithfully mirror `!player[2]`. GOLDEN: inert in scenario D (no head-hits
    there → no player is ever stunned), so every golden constant AND
    `kExpectedRng` stayed byte-identical (no RNG draw added/removed — verified;
-   `tests/test_golden.cpp`'s own CORRECTION note documents this). Points 1
+   `tests/sim/test_golden.cpp`'s own CORRECTION note documents this). Points 1
    (no move_budget swap) and 2 (age-then-spread) of this audit STAND
    unchanged. The two `test_disease.cpp` cases this entry originally added to
    pin "stun freezes aging/contagion" were themselves the mislabel and are
@@ -2880,7 +2880,7 @@ re-verified correct, unchanged.** The skull-relocate path (`FlameSystem::
 burn_powerup_here`, `BombSystem::slide`'s squash) only ever touches the FLOOR
 token before pickup; `DiseaseSystem` only ever runs after a pickup already
 happened. The two never interact within the same code path, so there is no
-ordering question — `tests/test_stomped_diseases.cpp` already covers this
+ordering question — `tests/sim/test_stomped_diseases.cpp` already covers this
 end to end (ON/OFF, flame-burned and slide-squashed skulls). `diseases_
 will_recycle` (id 122) remains genuinely unconsumed (`docs/valuelst-map.md`
 already flags this); out of scope here — it governs what happens to a
@@ -2915,8 +2915,8 @@ box above and the "Head hit / Stun does NOT gate flame-death or pickup" entry.
 any of the three fixes (state/ordering only). Full suite run before/after:
 golden A/B/C/E are byte-identical (proved — only "golden D: the disease
 gauntlet" changed, and only at the tick 600/800 checkpoints; tick 200/400 and
-`kExpectedRng` at all four checkpoints are byte-identical). `tests/test_golden.cpp`
-recaptured; `tests/test_disease.cpp` gained 5 new cases (swap-vs-move_budget,
+`kExpectedRng` at all four checkpoints are byte-identical). `tests/sim/test_golden.cpp`
+recaptured; `tests/sim/test_disease.cpp` gained 5 new cases (swap-vs-move_budget,
 stun-freezes-aging, stun-blocks-both-contagion-ends, freshly-infected-not-
 double-aged, multiply=off-stops-after-first) — the first four were confirmed
 to fail against the pre-fix code before being accepted as real coverage.
@@ -2945,7 +2945,7 @@ check in `sub_42A191` (~29531-29549), triggered by this repo's line-by-line
 fidelity audit workflow (same rigor as the Core-feel audit above). Full
 derivation, evidence, and the reconstructed spiral in `docs/re/enclosure.md`.
 Four deviations found and fixed (GOLDEN recaptured in the same commit,
-`tests/test_golden.cpp`'s 2026-07-10 enclosure-audit note has the
+`tests/sim/test_golden.cpp`'s 2026-07-10 enclosure-audit note has the
 per-scenario proofs — all RNG-neutral, every `kExpectedRng`/final-`rng`
 assertion in the golden suite is byte-identical before and after):
 
@@ -2983,7 +2983,7 @@ assertion in the golden suite is byte-identical before and after):
    machine tile-for-tile (a literal port, not a hand-derived ring-perimeter
    formula) so both quirks — and the degenerate innermost rings, which are
    only 1 tile wide/tall — fall out for free instead of needing hand
-   special-casing. Fully pinned: `tests/test_sim.cpp`'s "the enclosure
+   special-casing. Fully pinned: `tests/sim/test_sim.cpp`'s "the enclosure
    spiral's full ring-0 event order, phantoms and all" (all 52 events) and
    "a ring corner replays the wall-slam event before the next new tile".
 3. **Wall-triggered bomb detonation is deferred one tick, not synchronous
@@ -3172,7 +3172,7 @@ per-tick RNG draw contract is untouched, while identical seeds reproduce
 identical boards (the game advances the seed every round, so successive matches
 now vary). **No golden impact**: the golden scenarios build `MatchConfig.cells`
 by hand and never call `build_match_config`; `build_state`'s setup RNG
-(powerup-hide, dud-gate arm) is unchanged. Tests: `tests/test_match.cpp`.
+(powerup-hide, dud-gate arm) is unchanged. Tests: `tests/match/test_match.cpp`.
 
 ## Throw/punch flight lands with a sound — CORRECTED (`sub_42331C` case 2 ~25441)
 
@@ -3227,7 +3227,7 @@ be thrown (block 2 has no `+134` gate).
 Ported into `player_turn` (simulation.cpp) as the same four blocks with the
 forced-edge semantics (`a1_now/a1_last/drop_edge` override under auto-drop; throw
 outside the constipation gate; spooger `!auto_drop`). Tests:
-`tests/test_diarrhea_throw.cpp`. **Golden: scenario B must be recaptured** — its
+`tests/sim/test_diarrhea_throw.cpp`. **Golden: scenario B must be recaptured** — its
 players have the grab glove and can pick up skulls, so the grab-during-auto-drop
 path (new: grab instead of a plain drop) and the every-frame carried-throw now
 run, which changes both the hash and the RNG consumption (a grab draws no dud
@@ -3333,8 +3333,8 @@ never `State::rng`) on the FIRST `WallClosed` event since the last
 per-arm/per-round `dword_462244` draw — `game_app.cpp`'s `sounds_.reset()`
 runs once per round load, the same cadence the enclosure's own arm-once
 gating uses) and replays that SAME id for every subsequent `WallClosed` event
-until the next reset. See `libs/game/src/sound_director.cpp`/`.hpp`,
-`libs/game/src/audio_engine.cpp`/`.hpp`. No sim/golden-hash impact —
+until the next reset. See `libs/audio/src/sound_director.cpp`/`.hpp`,
+`libs/audio/src/audio_engine.cpp`/`.hpp`. No sim/golden-hash impact —
 `SoundDirector` reads unhashed events only.
 
 ## Final in-game 1:1 gaps — CONFIRMED (2026-07-04, "devam" #39)
@@ -3372,7 +3372,7 @@ lambda when it places a warphole, driven by the SAME setup-only LCG the `-T,H`
 trampoline placement uses (`roll()`), NEVER `State::rng`. It only mutates the
 static `cfg.cells` grid (→ Blank), so the per-tick RNG contract is untouched.
 GOLDEN: no golden scenario has warpholes (they build `cells` by hand and never
-call `apply_actors`) ⇒ UNCHANGED. Tests: `tests/test_match.cpp` (own tile + one
+call `apply_actors`) ⇒ UNCHANGED. Tests: `tests/match/test_match.cpp` (own tile + one
 cardinal neighbour cleared, per-seed determinism, edge warphole never writes out
 of bounds).
 
@@ -3401,7 +3401,7 @@ faithful skim of the line parser, surfacing `conveyor_speed` as
 default). `game_app::init` reads `<game_dir>/options.ini` and
 `game_app::start_match` sets `cfg.tuning.conveyor_speed_index` from it (empty ⇒
 keeps the confirmed default 1). GOLDEN: config-only, no per-tick RNG ⇒
-UNCHANGED. Tests: `tests/test_options.cpp` (present/absent key, missing file,
+UNCHANGED. Tests: `tests/assets/test_options.cpp` (present/absent key, missing file,
 case-insensitive, comments ignored).
 
 ### 3. getvalue(330) idle-fidget spread = 13 (`sub_41F29B` ~23011)
@@ -3429,7 +3429,7 @@ changes ONLY for a victim that HAS goldflame — so **golden B must be recapture
 (its players can pick up hidden goldflame tokens and be head-hit); **A/C/D/E are
 byte-identical** (A no players; C no punch/grab ⇒ no flying bombs; D forces no
 actions; E hides no powerups ⇒ no player ever has goldflame). Test:
-`tests/test_sim.cpp` "a head hit can drop goldflame (kind 8)".
+`tests/sim/test_sim.cpp` "a head hit can drop goldflame (kind 8)".
 
 ## Options toggles: stomped_bombs_detonate / diseases_destroyable / random_start — CONFIRMED (2026-07-08)
 
@@ -3584,7 +3584,7 @@ epicentre-only always-ignite path) is now distinct from `FlameSystem::
 spread_to` (the arm), which checks bomb-then-powerup-then-cell-type BEFORE
 igniting and returns `false` (stop, no ignite) on the first hit — mirroring
 the original's per-tile order and its "no `sub_426FCC` call on that branch"
-detail. Tests: `tests/test_sim.cpp` ("flame arm stops at a floor powerup,
+detail. Tests: `tests/sim/test_sim.cpp` ("flame arm stops at a floor powerup,
 without igniting its tile", "flame arm stops at a bomb it chain-detonates,
 without igniting past it").
 
@@ -3598,7 +3598,7 @@ pinned RNG stream (`kExpectedRng`) is completely unaffected at every
 checkpoint (the fix adds no RNG draws — it only changes which tile the
 blank-tile ignite loop reaches next, and whether/when the existing
 `scatter()` skull-relocation call fires, which was already in the RNG
-stream). Recaptured: `tests/test_golden.cpp` "golden D" ticks 600/800.
+stream). Recaptured: `tests/sim/test_golden.cpp` "golden D" ticks 600/800.
 
 (Provenance: `sub_42331C` epicentre block pseudo.c 25601-25636, arm loop
 25637-25682; `sub_422E48` 25031-25052; `sub_42542D` 26380-26389; `sub_4254F3`
@@ -3642,7 +3642,7 @@ onto one picks it up the same tick) but not the literal control flow.
 Fixed: `BombSystem::fly` now computes `clear = tile_open && !bomb_at &&
 floor[ty][tx] == None` first, and only checks for a player (head-hit) inside
 `clear`; the hop-vs-settle branch checks `!clear || victim >= 0`. Tests:
-`tests/test_punch_throw.cpp` "a punched bomb hops over a floor powerup
+`tests/sim/test_punch_throw.cpp` "a punched bomb hops over a floor powerup
 instead of landing on it" (asserts the powerup survives the whole flight
 untouched and the bomb settles elsewhere).
 
@@ -3698,7 +3698,7 @@ floor != None || grid::player_at` (flame dropped, player added). Added
 powerup (state 1, under a standing brick) needs no separate check: `cells !=
 Blank` already excludes Brick tiles before the occupancy branch runs, so
 `floor != None` alone is equivalent to "any record" on a reachable (blank)
-candidate. Tests: `tests/test_sim.cpp` "scattered token CAN land on a
+candidate. Tests: `tests/sim/test_sim.cpp` "scattered token CAN land on a
 burning (flamed) tile" and "scattered token NEVER lands on a tile a live
 player occupies" (the latter asserts no `PowerupPicked` event fires, per the
 masking behaviour above — checking `floor` alone would not have caught the
@@ -4203,7 +4203,7 @@ for implicit register reuse, not a hidden global). The FORMULA itself is not
 in doubt (own VALUELST comment + the `abs`+`abs` shape); the register
 mechanism is inferred, not literally read off the call site.
 
-**Port** (`libs/sim/src/systems/tile_regen.hpp/.cpp`, `TileRegenSystem`):
+**Port** (`libs/sim/src/systems/tile_regen.hpp`/`.cpp`, `TileRegenSystem`):
 `Tuning::regen_seconds[11]` (ids 340-350) and `Tuning::regen_clear_radius`
 (id 695), indexed by the new `Tuning::level_index` (NOT itself a VALUELST id
 — the "which of the 11 stages is this" selector, set by `bomber::match`/
@@ -4272,7 +4272,7 @@ added in the same commit) — see hash.cpp's own comments and `tests/
 test_golden.cpp`'s "UPDATE 2026-07-09 (per-level tile regeneration +
 ice/input-lag)" note for the recapture and the byte-for-byte proof that every
 non-hash assertion (RNG streams, jelly bounce count) is unchanged. New
-suite: `tests/test_regen.cpp`.
+suite: `tests/sim/test_regen.cpp`.
 
 ## Ice / input-lag — CONFIRMED (2026-07-09; RE-DERIVED, cold-start CORRECTED 2026-07-10, `sub_41F29B` ~23058-23078)
 
@@ -4295,8 +4295,8 @@ access in case the net screws up...") that the confirmed call site never
 reads (see below) — the real per-level block is **450-460**, one per stage,
 same index order as the ice-delay comments themselves (`450 = "new
 traditionalist"`, `451 = "classic green acres"`, `452 = "hockey rink"`, …
-`460 = "inner city trash"`) and as `libs/game/src/game_app.cpp`'s own
-`level_fallback` table. Shipped values: **all 0 except id 452 = 250** (level
+`460 = "inner city trash"`) and as `libs/frontend/src/map_select_screen.cpp`'s
+own `level_fallback` table. Shipped values: **all 0 except id 452 = 250** (level
 index **2**, Hockey Rink).
 
 **Call site — inside `sub_41F29B`** (the per-player-per-tick updater,
@@ -4383,6 +4383,35 @@ exactly 5 ticks ago, not the current one. For every other level (0 ms):
 fresh one, i.e. **zero effective delay**, functionally identical to no buffer
 at all.
 
+> **The port is per-SUB-FRAME, and since 2026-07-22 it is deliberately
+> FRAMERATE-COUPLED — read the two paragraphs below as the ORIGINAL's arithmetic,
+> not as a description of this code.** The derivation above is sound and stands:
+> the original ages by the frame delta, so at its own 20 Hz-equivalent reading
+> slot `k` is `k` ticks old and Hockey Rink resolves to `k = 5`. The port pushes
+> the buffer once per canonical sub-frame (`simulation.cpp`'s `player_turn`
+> sub-loop, and both flight paths, call `ice_delay` inside the
+> `for (sub = 0; sub < n_sub; ++sub)` loop), so slot `k` is `k` SUB-frames old —
+> ~5.56 ms each at `kSubFrames = 9`, and the 30 slots span only ~167 ms.
+> `MovementSystem::ice_delay` computes
+> `k = ceil(delay_ms * kSubFrames / kMsPerTick)` = 45 for Hockey Rink and then
+> **clamps it to slot 29**, so the delivered lag is ~161 ms rather than the
+> nominal 250 ms — about 3.2 ticks, not 5.
+>
+> That is a decision, not a bug: the original's buffer is 30 FRAMES, so on the
+> ~184 fps free-run this port calibrates to (`kSubFrames`, ADR-0006) the native
+> binary caps at the same ~161 ms. The port matches the native at that rate and
+> deliberately does not chase the 500–1000 ms window slower native hardware
+> would give. Honouring the nominal 250 ms would mean `kIceHistoryLen >= 46` —
+> hashed state, and a golden recapture. See the comment block in
+> `movement.cpp`'s `ice_delay` for the citation.
+>
+> Everything downstream of that shifts by the same factor: "the REST of that
+> tick's turn" below is really the rest of that SUB-frame's turn, and the
+> cold-start note's "frozen for 5 ticks, then the tick-1 input surfaces at tick 6"
+> is 29 sub-frames ≈ 3.2 ticks. `tests/sim/test_ice.cpp` was renamed to match —
+> the case is now "Hockey Rink delays a human's first step by the 250ms lag,
+> capped by the history", not the "exactly 5 ticks" the note below quotes.
+
 **Port** (`MovementSystem::ice_delay`, `libs/sim/src/systems/movement.hpp/
 .cpp`; `Player::ice_history`, `libs/sim/include/bomber/sim/player.hpp`):
 `Tuning::ice_delay_ms[11]` (ids 450-460), indexed by the SAME `Tuning::
@@ -4410,9 +4439,11 @@ init calls `sub_422D3B`/`sub_426CDB`/`sub_424F5E`/`sub_40151B`). So a fresh
 round starts with dir `-1` in every slot — exactly what `build_state`
 (`setup.cpp`) fills. Consequence, matching in both: for the first
 `ceil(delay/50)=5` ticks no slot has yet aged to 250 ms, so the resolve runs
-off the end and returns the reset `-1` — the player is frozen for 5 ticks, then
-the tick-1 input surfaces at tick 6 (pinned by `tests/test_ice.cpp` "delays a
-human player's first step by exactly 5 ticks"). `0` is a valid godir ("Up"),
+off the end and returns the reset `-1` — the player is frozen until the buffer
+fills (pinned by `tests/sim/test_ice.cpp` "Hockey Rink delays a human's first
+step by the 250ms lag, capped by the history"; that is 5 ticks at the original's
+frame rate and 29 sub-frames ≈ 3.2 ticks in the port, per the sub-frame note
+above). `0` is a valid godir ("Up"),
 NOT a "no input" sentinel, which is why a plain zero-init would be a phantom
 "Up" drift — but the original avoids that too, via the `-1` reset, so our fill
 reproduces the original's own behaviour rather than diverging from it.
@@ -4434,7 +4465,7 @@ exactly (`0 new traditionalist … 2 hockey rink … 7 haunted house (= regen id
 `MovementSystem::ice_delay` takes its early-return branch (buffer untouched,
 input unchanged) on every existing scenario. `Player::ice_history` was a
 NEW hashed field (added in the same commit as `State::regen_timer` above);
-see `tests/test_golden.cpp`'s recapture note. New suite: `tests/test_ice.cpp`.
+see `tests/sim/test_golden.cpp`'s recapture note. New suite: `tests/sim/test_ice.cpp`.
 
 ## `CFG.INI` / `soundonoff` — a THIRD config layer, boot-time only, N/A to port (2026-07-09)
 
@@ -4574,7 +4605,7 @@ This is structurally identical to the already-confirmed `"tile %u solid"`/
 `"tile %u brick"` per-level tileset lookup (`sub_425D22`, `dword_46499C`,
 `docs/re/sequence-map.md` row 58): `<stage>` is the FIXED per-level tileset
 index, resolved once, exactly matching `SequenceSet::resolve_stage`'s existing
-`"flame brick " + n` (`libs/game/src/sequences.cpp`). It does **not** advance
+`"flame brick " + n` (`libs/render/src/sequences.cpp`). It does **not** advance
 with burn/flame age — `sub_426D06`'s kind-9 branch never reads the flame
 cell's elapsed-ticks pair (**+66**/**+68**) when composing the name; that
 pair is only read
@@ -4725,7 +4756,7 @@ only — mirroring pseudo.c 25673-25677 exactly, including the cut-short-arm
 behaviour (a tile that stops the arm early, or the tile right before an
 obstacle, gets whatever the loop naturally assigns it — a MID, since
 `is_last_of_reach` is false there — never retroactively upgraded to a TIP).
-`Renderer::flame_piece` (`libs/game/src/renderer.cpp`) replaces the live
+`Renderer::flame_piece` (`libs/render/src/renderer.cpp`) replaces the live
 neighbour-scan with a plain switch from `FlameKind` to the matching
 `FlameSet` member — no more `(x + y) & 1` checkerboard.
 
@@ -4737,7 +4768,7 @@ or when. It's folded into the SAME packed per-tile hash word `cells`/
 previously unused padding in that word — `hash.cpp`), so this is a one-time
 constant-shift for every scenario with an explosion, exactly like the
 `next_bomb_id`/`Bomb::id`/`regen_timer` precedents above. Recaptured
-`tests/test_golden.cpp`'s hash constants for the affected scenarios in the
+`tests/sim/test_golden.cpp`'s hash constants for the affected scenarios in the
 same commit; every non-hash assertion (RNG streams, bounce counts) is
 unchanged — see that file's own updated comment for the specific proof run.
 
@@ -4860,7 +4891,7 @@ Contrast the three states for the *horizontal-arm* case, frame 20
   ~3px above centre, correctly on-tile.
 
 **Fixed:** `Renderer::draw_world`'s flame-arm draw (the one call site reading
-`sp.dx`/`sp.dy`; `libs/game/src/renderer.cpp`) now passes
+`sp.dx`/`sp.dy`; `libs/render/src/renderer.cpp`) now passes
 `draw_sprite(sp, sx + sp.dx, sy + sp.dy - sim::kTileH/2)`. The `Sprite` dx/dy
 fields (`sprites.hpp`, populated by `resolve_sequence` from `SeqStep::dx/dy`)
 are unchanged and stay inert for every other sequence — including this same
@@ -4940,17 +4971,17 @@ again (with recaptured golden constants) after §3; `windows-fetch`
 (`libs/game`/`bomber_game`, the actual changed presentation code) built
 clean.
 
-Ported: `libs/game/src/renderer.cpp` (`draw_bombs` split out of `draw_world`,
+Ported: `libs/render/src/renderer.cpp` (`draw_bombs` split out of `draw_world`,
 flame/burn pacing, flame `dx/dy`, powerup cell gate, `timed_step` removed,
 `flame_piece` replaces the live neighbour scan), `libs/game/include/bomber/
 game/renderer.hpp` (`draw_bombs`/`flame_piece` declared, `timed_step`
-removed), `libs/game/include/bomber/game/sprites.hpp` (`Sprite::dx/dy`),
-`libs/game/src/sprites.cpp` (`resolve_sequence` populates them),
+removed), `libs/render/include/bomber/render/sprites.hpp` (`Sprite::dx/dy`),
+`libs/render/src/sprites.cpp` (`resolve_sequence` populates them),
 `apps/abtool/commands.cpp` (`ani` dump prints `dx/dy`); `libs/sim/include/
 bomber/sim/types.hpp` (`FlameKind`), `libs/sim/include/bomber/sim/state.hpp`
 (`State::flame_kind`), `libs/sim/src/systems/flames.{hpp,cpp}`
 (`ignite_epicentre`/`spread_to` set it), `libs/sim/src/hash.cpp` (mixed in);
-`tests/test_golden.cpp` (recaptured hash constants).
+`tests/sim/test_golden.cpp` (recaptured hash constants).
 
 (Provenance: `sub_426D06` pseudo.c 27366-27463; `sub_426FCC` 27478-27504;
 `sub_42331C` arm-cast loop pseudo.c ~25619-25678; `sub_41DB41` 21840-21866;
@@ -5000,7 +5031,7 @@ cornerhead draw override no longer requires "not moving". Perceptual side
 note: this restores most of the original's characteristic AI "jitter" — its
 AI constantly steers into walls/corners while re-deciding, which reads as
 frantic leg-buzzing there and read as calm standing in our port. Tests:
-`tests/test_move.cpp` "PlayerWalking event follows the dispatch, not
+`tests/sim/test_move.cpp` "PlayerWalking event follows the dispatch, not
 displacement".
 
 (Provenance: the +78 state-machine audit's line cites [23006-23013,
@@ -5288,7 +5319,7 @@ tile/brick ANIs (`AniTextures::load`'s new snap param) — NEVER the DATA_HD
 truecolour overrides or the front-end screens (the original loads those
 through the non-snapping `sub_41BDA4`/`sub_41522D` path). A missing COLOR.PAL
 leaves the quantizer inert (raw decode, the pre-fix look). Tests:
-`tests/test_colorpal.cpp` (synthetic-file mechanics); visual goldens
+`tests/assets/test_colorpal.cpp` (synthetic-file mechanics); visual goldens
 recaptured. Applied to EVERY match-drawn asset (2026-07-13 follow-up, per the
 user's "it's everywhere"): field, tiles/bricks, and all sprites — bombs, duds,
 flames, powerups, players, the walk/stand/kick/carry/punch/pickup/cornerhead
@@ -5365,7 +5396,7 @@ into existing hash words, so zero-valued states digest identically;
 test_golden.cpp recaptured in the same commit), set at creation/ignition and
 never transferred; the renderer draws bombs, carried bombs and flames from
 the colour fields and keeps attribution (kill credit, capacity) on the owner
-fields. `tests/test_flame_colour.cpp` pins the split.
+fields. `tests/sim/test_flame_colour.cpp` pins the split.
 
 ## Round-start input freeze — CONFIRMED (2026-07-16, `sub_4214BC`/`sub_420F07`/`sub_41F29B`)
 
@@ -5393,8 +5424,8 @@ Ported: `Tuning::input_freeze_ticks` (id 30, default 20) →
 tick AFTER the player pass (run_tick step 1b — the post-pass decrement
 reproduces the original's exact t = 1000 ms gate-open boundary at tick
 granularity), gating the AI decide + human decode + bomb-action tail in
-`player_turn`. `tests/helpers.hpp` and the golden/demo fixtures disarm it to
-keep act-from-tick-0 scenarios; `tests/test_freeze.cpp` pins the window.
+`player_turn`. `tests/common/helpers.hpp` and the golden/demo fixtures disarm it to
+keep act-from-tick-0 scenarios; `tests/sim/test_freeze.cpp` pins the window.
 
 ## Round-start own-colour reveal (Team Play) — CONFIRMED (2026-07-27, `sub_4214BC`/`sub_420F07`/`sub_41F29B`)
 
@@ -5597,7 +5628,7 @@ corner spawn opening with a cross/plus pocket whose arms reach ~2 tiles, not
 1 — and (b) is actually sufficient: a flame-2 bomb dropped on the spawn tile
 no longer has its blast seal every cell of the pocket, giving the AI's flee
 logic room to reach a tile outside its own blast before the fuse expires.
-Empirically verified in `tests/test_spawn_pocket.cpp`: on a golden-B-shaped
+Empirically verified in `tests/sim/test_spawn_pocket.cpp`: on a golden-B-shaped
 dense 4-corner board with all 4 slots AI-controlled and no human input at
 all, every player survives the first 200 ticks (10 s) under the fix; reverting
 to the old radius-1 shape drops `alive_count` from 4 to 2 in the same window
@@ -5605,7 +5636,7 @@ to the old radius-1 shape drops `alive_count` from 4 to 2 in the same window
 
 The clear draws no RNG (a deterministic cell-array write keyed off already-
 resolved spawn coordinates), so this is a DELIBERATE but RNG-neutral
-behaviour change — see `tests/test_golden.cpp`'s 2026-07-19 UPDATE note for
+behaviour change — see `tests/sim/test_golden.cpp`'s 2026-07-19 UPDATE note for
 the golden-hash recapture this forced (goldens B and C, whose boards have
 real Brick cells within a spawn's new radius-2 reach; A/D/E are byte-
 identical, proven before recapturing).
@@ -5642,7 +5673,7 @@ original at the same point, which breaks the one comparison that IS available
 **Ported** in `FlameSystem::spread_to`'s brick branch as `(void)random_below(s,
 30)`, unconditional and BEFORE the relocate/reveal work (exactly where
 sub_425107 does it, also firing on a re-hit of an already-crumbling brick,
-matching the per-ignite call). `tests/test_flame_colour.cpp` pins that a lone
+matching the per-ignite call). `tests/sim/test_flame_colour.cpp` pins that a lone
 brick ignite advances `State::rng` by exactly one xorshift step (two identical
 sims, one blast into a plain brick, one into blank floor). Golden hashes are
 unaffected — every golden scenario's blasts stay inside the radius-2 spawn
@@ -5801,7 +5832,7 @@ clinch inside `sub_42A3F6` (around `0x42AADD`) asks `sub_421AC8` for the
 row does the same.
 
 **Port (2026-07-27).** `award_round_win()` in
-`libs/game/include/bomber/game/match_outcome.hpp`, called from both round-end
+`libs/game_util/include/bomber/game_util/match_outcome.hpp`, called from both round-end
 tails in `game_app.cpp` (local and netplay) through a `GameApp` forwarder.
 Before it, both sites did a bare `++win_count_[w]` where `w` is the
 lowest-indexed **alive** member of the surviving side, so a teammate who kept
@@ -5844,7 +5875,7 @@ the enclosure stepper consult — our "round decided" freeze edge. **Two
 distinct edges**, and neither is a fixed 3 s.
 
 **Port (2026-07-27).** `MatchRunner::run`'s `advance_round_end`
-(`libs/game/src/screens/match_runner.cpp`) waited a flat
+(`libs/frontend/src/match_runner.cpp`) waited a flat
 `3 * kTicksPerSecond` from the deciding kill. The shipped "die green"
 sequences run 12-93 steps, i.e. 0.6-4.65 s at 20 Hz, so half of them were
 truncated and the short ones left the finished field on screen for seconds.
@@ -5923,7 +5954,7 @@ port's `dword_464964`). Before this the 19 maps above played with whatever the
 parity default left behind, i.e. teams unrelated to the authored map.
 
 This also corrects a wrong conclusion that was sitting in
-`libs/game/src/screens/setup_screen.cpp`: that `sub_403EEE` "only ever
+`libs/frontend/src/setup_screen.cpp`: that `sub_403EEE` "only ever
 overwrites a slot's COLOUR from disk, never TEAM, unless a rare `-S`
 5-field profile line is present … a hidden colour-profile file this port
 doesn't implement". The `+0`/`+4` dwords it called colour are the spawn X and
@@ -6056,7 +6087,7 @@ branch does its own `cells[y][x] = Blank` before `knockout_neighbour`. The
 random `-T,H` trampoline branch already required `cells == Blank`, so it is
 unaffected. The "warphole looks closed" worry the old comment cited is the
 renderer's job and was already handled the original's way:
-`libs/game/src/renderer.cpp`'s actor pass skips a tile whose cell is not
+`libs/render/src/renderer.cpp`'s actor pass skips a tile whose cell is not
 `Blank`, which is exactly `!sub_425FB9(x,y)`.
 
 **Hash impact — and the hole it exposed.** This change moves NEITHER the
@@ -6239,7 +6270,7 @@ throw pose, and `BombThrown` is silent for the same reason (see
    carry pose LAST, so a carrying player who kicked a bomb (reachable: the kick
    probe lives in the mover and never checks `+148`) kept the carry pose where
    the original swings. Fixed; the precedence now lives in
-   `libs/game/include/bomber/game/carry_pose.hpp` (`select_player_pose`) so the
+   `libs/game_util/include/bomber/game_util/carry_pose.hpp` (`select_player_pose`) so the
    headless suite can pin it.
 2. **The pickup pose outlives the bomb.** State 4 exits on its own animation
    length (`+80 > statecnt`, 10 frames), while the grab's movement pause is

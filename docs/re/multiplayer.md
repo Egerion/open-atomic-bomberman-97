@@ -283,11 +283,11 @@ thing — "no netplay, guard omitted"):
 - `libs/sim/src/systems/flames.cpp`: *"No network-role gate: the original also
   requires a non-networked game (`!sub_40C06A()`), but this port has no netplay
   concept yet (ADR-0003 defers it)."*
-- `libs/game/src/screens/setup_screen.cpp`: *"no netplay (ADR-0003), so that
+- `libs/frontend/src/setup_screen.cpp`: *"no netplay (ADR-0003), so that
   guard is always-true and [omitted]."*
-- `libs/game/src/screens/match_runner.cpp`: *"(no network gate needed here
+- `libs/frontend/src/match_runner.cpp`: *"(no network gate needed here
   since this port has no network play)."*
-- `libs/game/src/screens/results_screens.cpp`: *"&& local game (always true, no
+- `libs/frontend/src/results_screens.cpp`: *"&& local game (always true, no
   network play) …"*
 - `libs/game/include/bomber/game/game_app.hpp`: *'"not net mode"
   (`sub_40C06A()`); this port has no netplay (ADR-0003 …)'.*

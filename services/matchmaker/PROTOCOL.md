@@ -9,12 +9,28 @@ Three channels:
 
 | channel | transport | carries |
 |---|---|---|
-| **control** | WebSocket text frames, `ws(s)://<host>:8080/ws` | lobby create/join/list/ready/start/roster/candidates/reanchor/relay allocation/chat |
+| **control** | WebSocket text frames, `ws(s)://<host>/ws` | lobby create/join/list/ready/start/roster/candidates/reanchor/relay allocation/heartbeat/match-over/chat |
 | **discovery** | UDP datagrams, `<host>:8081` | STUN reflexive-address echo |
 | **relay** | UDP datagrams, `<host>:8082` | opaque per-tick game traffic, forwarded when the punch failed (§6) |
 
 TLS terminates at the hosting edge (Fly/Render) → clients use `wss://`. The
 binary can also serve `wss://` directly with `-tls-cert`/`-tls-key`.
+
+**8080 / 8081 / 8082 are the LISTEN ports** (`-ws-addr`, `-stun-addr`,
+`-relay-addr`). They are what a locally-run server exposes and what the client's
+defaults assume, but the deployed URL carries no port: Fly terminates TLS on 443
+and forwards to internal 8080, so the shipping client dials
+`wss://<host>/ws` (`fly.toml`, and the compile-time default in
+`libs/netplay/src/netplay_runner.cpp`).
+
+> **Implementation status, added 2026-08-01, and NOT a contract change.** Every
+> limit, rate, cap, code alphabet, error string and message name below was
+> re-verified against both implementations and matches. What this document did
+> *not* say, and now does, is which of it the shipping client actually exercises:
+> a few fields are accepted-and-ignored, and two whole features are live on the
+> server with no client that speaks them. Those are marked inline. Nothing on
+> the wire changed; a deployed server and a shipping exe still interoperate
+> exactly as before.
 
 ---
 
@@ -41,6 +57,12 @@ Rules:
   uint32, fits exactly in a double). `match_config_digest` is a **hex string**
   like `build_hash`.
 - `seat` is a 0-based index into the ≤10-slot roster.
+- **`lobby_id` on a client→server frame is advisory and unread.** It appears in
+  `Candidates`, `StartMatch`, `MatchOver` and `AllocateRelay`; the server never
+  dereferences it. Membership is resolved from the connection alone, so a client
+  cannot address another lobby by putting its id in a frame, and a client that
+  omits it is not refused. Keep sending it — it is in the frozen shape and it is
+  useful in a capture — but do not read the field list as routing.
 
 ---
 
@@ -108,8 +130,21 @@ RosterUpdate is broadcast; an emptied lobby is evicted (its code freed).
 ```
 The server stores this seat's list and pushes a **PeerCandidates** to every
 other member; it also back-fills the sender with any peer lists already known,
-so the exchange converges regardless of arrival order. `kind` priority mirrors
-ICE: `host` > `reflexive` > `relay`.
+so the exchange converges regardless of arrival order.
+
+- `lobby_id` and `seat` are **accepted and ignored**: membership comes from the
+  connection, and the list always belongs to the SENDER's seat. Note the
+  asymmetry with §6.1's `AllocateRelay.seat`, which *is* cross-checked and
+  refused with `bad_message` on disagreement.
+- `kind` is **decorative today.** The documented ICE-style priority
+  (`host` > `reflexive` > `relay`) is not implemented on either side: the client
+  discards `kind` when it consumes a peer's list and pings every candidate in one
+  pass, and the server forwards the list opaquely without ordering it.
+- The `"relay"` kind and a candidate's `alloc` field are part of the shape but
+  **nothing produces them** — the client only ever publishes `"host"` and
+  `"reflexive"`. The relay path is negotiated by `AllocateRelay`/`RelayAllocated`
+  (§6), not by a candidate. (The `3478` in the example is the classic TURN port
+  and is not this service's relay port, which is 8082.)
 
 ### StartMatch (host only) → StartMatch (broadcast)
 ```json
@@ -125,6 +160,18 @@ ICE: `host` > `reflexive` > `relay`.
   lobby, and broadcasts **StartMatch** to every seat.
 
 ### ReanchorLobby → ReanchorAccepted (host migration, design §8.3)
+
+> **SERVER-ONLY as of 2026-08-01.** The handler and the digest are implemented
+> and correct, but **no shipping client ever sends this.** `encode_reanchor` /
+> `LobbyClient::reanchor` exist and are covered by `tests/net/test_lobby_protocol.cpp`,
+> yet nothing calls them: `LobbyFlow` has no migration state, and there is no
+> SHA-256 anywhere in `libs/`, so §5's "both server and the promoted hub MUST
+> compute this identically" currently has exactly one side. The client *does*
+> parse and act on `ReanchorAccepted` — a reply it cannot provoke. This matches
+> the README's open item "Host migration — the design is in ADR-0011 and the
+> server half is built". Kept in the frozen contract deliberately: the server
+> half is deployed, so the shape must not drift before the client half lands.
+
 ```json
 {"type":"ReanchorLobby","code":"K7Q2MP","roster_digest":"<hex sha-256>"}
 ```
@@ -138,12 +185,23 @@ ICE: `host` > `reflexive` > `relay`.
   replies **ReanchorAccepted** + broadcasts RosterUpdate. On mismatch it replies
   **Error** `{"code":"reanchor_rejected"}`.
 
-### MatchOver  (rematch, design §5.2)
+### MatchOver  (design §5.2)
 ```json
-{"type":"MatchOver","lobby_id":"…"}
+{"type":"MatchOver"}
 ```
 Any member may send it. The lobby returns to `OPEN`, ready flags clear, roster
-is kept, and a RosterUpdate is broadcast. Enables rematch and re-opens joins.
+is kept, and a RosterUpdate is broadcast — re-opening joins.
+
+> **SERVER-ONLY as of 2026-08-01, and it is not how rematch works.** The handler
+> never unmarshals the frame at all, so any `lobby_id` in it is ignored (the
+> example above used to show one). More importantly the shipping client never
+> sends `MatchOver`: **rematch is peer-to-peer** over the already-connected game
+> transport (`net::RematchSession`), deliberately not through the matchmaker.
+> `netplay_runner.cpp` says why — the server reaps a lobby about 30 s into a
+> match (heartbeat 10 s × 3 misses) and the client stops pumping `LobbyFlow` once
+> the match begins, so by the time a match ends the control plane is already
+> gone and there is nothing left to tell. Read this entry as "re-open a lobby
+> that is still alive", not as the rematch mechanism.
 
 ### Chat → Chat (fan-out — see §7)
 ```json
@@ -203,7 +261,9 @@ arrays.)
 ```
 Only `public` + `OPEN` lobbies appear. `build_ok` is false when the browser's
 `build_hash` differs (the row is still listed so the UI can grey it out).
-`host_region`/`server_rtt_ms` are placeholders in Phase 1a.
+`host_region`/`server_rtt_ms` are placeholders in Phase 1a — always `""`/`0` on
+the wire, and the client does not parse either; it reads `code`, `name`,
+`players`, `max`, `build_ok` and nothing else.
 
 ### RosterUpdate (pushed on any roster change)
 ```json
@@ -211,6 +271,8 @@ Only `public` + `OPEN` lobbies appear. `build_ok` is false when the browser's
 ```
 `RosterEntry`: `seat`(int), `name`(string), `ready`(bool), `is_host`(bool),
 optional `rtt_to_host_ms`(int). Roster is always sorted by ascending seat.
+`rtt_to_host_ms` is declared and `omitempty` but is **never set**, so it never
+appears on the wire; the client parses it defensively.
 
 ### HeartbeatAck
 ```json
@@ -252,6 +314,8 @@ included**, so all members hold one identically-ordered transcript.
 ```json
 {"type":"ReanchorAccepted","lobby_id":"…","code":"K7Q2MP","host_token":"…"}
 ```
+Parsed and acted on by the client, but unreachable in practice — see the
+server-only note on `ReanchorLobby` in §3.
 
 ### RelayAllocated
 ```json
@@ -269,13 +333,16 @@ See §6.
 `chat_invalid`, `server_full`, `internal`.
 
 `message` is diagnostic text. It never quotes a client string back beyond a
-short, printable, valid-UTF-8 excerpt (§8.1).
+short, printable, valid-UTF-8 excerpt — **40 bytes**, and at exactly one site,
+the `unknown_type` reply. (This used to cite §8.1, whose table has no such row.)
 
 ---
 
 ## 5. roster_digest algorithm (host migration)
 
-Both server and the promoted hub MUST compute this identically. Over the
+Both server and the promoted hub MUST compute this identically — **today only
+the server does**, since no client sends `ReanchorLobby` and `libs/` contains no
+SHA-256 at all. Over the
 **surviving** roster, in **ascending seat order**, using only the `(seat, name)`
 pairs (ready/is_host are excluded so the digest identifies "the same players in
 the same seats"):
@@ -390,7 +457,7 @@ no in-game text entry, and no network message that could carry a line of text
 (`docs/re/network-screens.md`). This exists because the maintainer asked for it,
 and it is called out as an addition everywhere it appears so nobody later
 mistakes it for reverse-engineered behaviour. Server side is `handleChat` in
-`manager.go`; the client's overlay is `libs/game/.../chat_overlay.hpp`.
+`manager.go`; the client's overlay is `libs/netui/.../chat_overlay.hpp`.
 
 It rides the **control plane** rather than the game's UDP path because players
 chat *in the lobby* — before any hole punch has happened, when the WebSocket is
@@ -471,7 +538,7 @@ one. The reasoning behind each is in [`SECURITY.md`](./SECURITY.md).
 | `player` | 48 bytes | `Error{code:"bad_message"}` |
 | lobby `name` | 48 bytes | `Error{code:"bad_message"}` |
 | `code` | 16 bytes | `Error{code:"bad_message"}` |
-| `build_hash` | 32 bytes | `Error{code:"bad_message"}` |
+| `build_hash` | 32 bytes | `Error{code:"bad_message"}` — on `CreateLobby`/`JoinByCode` only; see below |
 | `host_token` | 64 bytes | `Error{code:"bad_message"}` |
 | `roster_digest`, `match_config_digest` | 96 bytes | `Error{code:"bad_message"}` |
 | `Candidates.list` | 16 entries | `Error{code:"bad_message"}` |
@@ -484,6 +551,14 @@ one. The reasoning behind each is in [`SECURITY.md`](./SECURITY.md).
 **Reject, never repair.** Every one of these refuses the whole frame. Nothing is
 truncated, stripped or substituted. Every text field must also be valid UTF-8
 with no control runes and no U+FFFD; non-ASCII otherwise passes untouched.
+
+One documented exception, found 2026-08-01: **`ListPublic.build_hash` is not
+validated.** `CreateLobby` and `JoinByCode` both run it through the 32-byte text
+check; `ListPublic` does not, because the field is an optional filter there. An
+over-long or control-character value is accepted silently. It is only compared,
+never stored and never echoed, so nothing escapes — but "every one of these
+refuses the whole frame" is not true of that one field, and the honest fix is to
+say so rather than to change a frozen server's behaviour.
 
 `JoinByCode` additionally requires `code` to be exactly 6 Crockford base-32
 symbols after upper-casing; anything else answers `JoinRejected{not_found}`.

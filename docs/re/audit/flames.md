@@ -13,7 +13,7 @@ arm-shape (tip/mid/center) selection", "Bomb/flame colour is not the
 owner").**
 
 Scope: `libs/sim/src/systems/flames.{hpp,cpp}` only. Renderer-layer
-consumers of this system's data (`libs/game/src/renderer.cpp`) are system
+consumers of this system's data (`libs/render/src/renderer.cpp`) are system
 #9 in `docs/re/fidelity-audit.md`'s ledger and out of scope here except
 where noted as a data-gap this system would need to close first.
 
@@ -99,7 +99,7 @@ never the original's to diverge from — see `docs/re/ai.md` §8. What is lost
 here is the branch-order fidelity that makes the two implementations
 *comparable*, plus the port's own reproducibility across the change.) This
 is silent: no assertion catches it, no golden scenario
-currently triggers it (per `tests/test_golden.cpp`'s existing coverage),
+currently triggers it (per `tests/sim/test_golden.cpp`'s existing coverage),
 and the visible symptom would only surface as "the game feels like it
 rolled different powerups/AI moves than a from-scratch replay would" in a
 scenario with dense bricks/disease tokens around a high-reach bomb.
