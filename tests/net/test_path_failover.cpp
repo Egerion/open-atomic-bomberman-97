@@ -161,8 +161,7 @@ struct Peer {
     }
 
     void frame(std::int64_t now) {
-        driver.frame(session, now,
-                     [this, now](net::RollbackSession& s) { engine.pump(now, &s); });
+        driver.frame(session, now, [this, now](net::RollbackSession& s) { engine.pump(now, &s); });
     }
 
     MsTransport direct;
@@ -188,8 +187,9 @@ bool fired(const net::PathFailover& e) {
 
 }  // namespace
 
-TEST_CASE("failover: the netdiag signature fires — dups fast, silence slower — and the "
-          "relay switch completes tick-identical") {
+TEST_CASE(
+    "failover: the netdiag signature fires — dups fast, silence slower — and the "
+    "relay switch completes tick-identical") {
     // Side 0's OUTBOUND dies at t=5 s (the user's logged seat: it keeps hearing
     // the peer's duplicate flood while the peer hears nothing at all). Both
     // engines run production thresholds and the production 600-pump drop
@@ -281,8 +281,8 @@ TEST_CASE("failover: the jitter corpus — bad but alive — never trips the det
         int spread_ms;
         int persist_pct;
     };
-    for (const Cond c : {Cond{"clean", 0, 0}, Cond{"low (live 5ms)", 16, 0},
-                         Cond{"high (live 90ms)", 420, 35}}) {
+    for (const Cond c :
+         {Cond{"clean", 0, 0}, Cond{"low (live 5ms)", 16, 0}, Cond{"high (live 90ms)", 420, 35}}) {
         for (const unsigned seed : kSeeds) {
             std::int64_t now = 0;
             MsLink direct(kOneWayMs, kOneWayMs, c.spread_ms, c.persist_pct, seed);
@@ -349,8 +349,8 @@ TEST_CASE("failover: a one-way blip that heals is cured IN PLACE — no relay sp
     CHECK(b.session.confirmed_tick() > confirmed_at_kill + 80);
     CHECK_FALSE(a.session.desynced());
     CHECK_FALSE(b.session.desynced());
-    const std::string token = a.engine.widen_heals() > 0 ? a.engine.log_token()
-                                                         : b.engine.log_token();
+    const std::string token =
+        a.engine.widen_heals() > 0 ? a.engine.log_token() : b.engine.log_token();
     CHECK(token.rfind("healed-in-place(", 0) == 0);
 }
 
@@ -388,8 +388,9 @@ TEST_CASE("failover: a short SYMMETRIC blip needs neither widen nor relay") {
     CHECK_FALSE(b.session.desynced());
 }
 
-TEST_CASE("failover: a refused allocation degrades to the existing drop path — an end, "
-          "not a hang") {
+TEST_CASE(
+    "failover: a refused allocation degrades to the existing drop path — an end, "
+    "not a hang") {
     // The server says no (cap, budget, or a lapsed membership). The engines
     // latch Failed and the 600-pump drop policy must still be REACHABLE: the
     // traffic-arm side stays detached precisely so the peer's duplicate flood
@@ -429,8 +430,9 @@ TEST_CASE("failover: a refused allocation degrades to the existing drop path —
     CHECK(a.engine.log_token().rfind("failed(relay-refused,starved-with-dups@", 0) == 0);
 }
 
-TEST_CASE("failover: a peer that never joins the relay — an unpatched build — expires the "
-          "probe and the drop path ends it") {
+TEST_CASE(
+    "failover: a peer that never joins the relay — an unpatched build — expires the "
+    "probe and the drop path ends it") {
     // Side 1 models an OLD build: same session code, no engine, no allocator.
     // Side 0 fires, is granted, and probes into a relay whose far seat never
     // allocates — drop_unknown_dst eats every probe, the deadline expires, and

@@ -166,7 +166,8 @@ void PathFailover::fire(std::int64_t now_ms, Trigger t) {
 void PathFailover::await_allocation(std::int64_t now_ms) {
     switch (allocator_->answer()) {
         case RelayAllocator::Answer::Pending:
-            if (now_ms - detect_ms_ >= cfg_.alloc_timeout_ms) fail(now_ms, FailReason::AllocTimeout);
+            if (now_ms - detect_ms_ >= cfg_.alloc_timeout_ms)
+                fail(now_ms, FailReason::AllocTimeout);
             return;
         case RelayAllocator::Answer::Refused: fail(now_ms, FailReason::RelayRefused); return;
         case RelayAllocator::Answer::Granted: break;
@@ -239,9 +240,8 @@ std::string PathFailover::log_token() const {
     const long long at_s = first_pump_ms_ >= 0 ? (detect_ms_ - first_pump_ms_) / 1000 : 0;
     switch (state_) {
         case State::Switched:
-            return formatted("switched(%s@%llds,alloc=%lldms,probe=%lldms)",
-                             trigger_name(trigger_), at_s,
-                             static_cast<long long>(alloc_ms_ - detect_ms_),
+            return formatted("switched(%s@%llds,alloc=%lldms,probe=%lldms)", trigger_name(trigger_),
+                             at_s, static_cast<long long>(alloc_ms_ - detect_ms_),
                              static_cast<long long>(switch_ms_ - alloc_ms_));
         case State::Failed:
             return formatted("failed(%s,%s@%llds)", fail_reason_name(fail_reason_),
