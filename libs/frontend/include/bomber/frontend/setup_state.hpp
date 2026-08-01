@@ -8,58 +8,38 @@
 #include "bomber/assets/sch.hpp"       // assets::sch::Scheme
 #include "bomber/sim/constants.hpp"    // sim::kMaxPlayers
 
-// Seam 2 (ADR-0009 §"shared front-end state"): the non-service state the PLAYER
-// INPUT TYPE SELECTION screen (present_setup + cycle_input_type, sub_410F81)
-// reads/writes, bundled so SetupScreen can be its own class without threading a
-// GameApp& — GameApp owns the members and hands a fresh SetupState to the runner
-// ctor alongside the ScreenContext services bundle. A cheap value type
-// (references only), copied by value into the runner; the referenced members are
-// GameApp members that outlive every screen. ScreenContext stays front-end-
-// service-only, so the setup-specific mutable state lives here instead.
+// The non-service state the PLAYER INPUT TYPE SELECTION screen (sub_410F81)
+// reads and writes, bundled by reference so SetupScreen needs no GameApp&.
+// GameApp owns the members and outlives every screen; ScreenContext stays
+// front-end-service-only, so screen-specific mutable state lives in seams like
+// this one.
 //
-// The reference set is EXACTLY what present_setup + cycle_input_type touch:
-//  - setup_type/setup_sub/setup_team — the 10-slot roster (dword_46481C): the
-//    type list Right cycles / Left/'0' clears, each slot's KEYBOARD/JOYSTICK
-//    sub-index, and the per-slot team flag 'T' toggles. On entry setup_team is
-//    reseeded twice, in the original's own order: reset_setup_teams lays down
-//    the alternating 0/1 parity default (sub_4049C0), then
-//    match::scheme_setup_teams overlays the loaded scheme's per-spawn "-S"
-//    team field (sub_403EEE's tail loop into the +84 byte) — hence the
-//    `scheme` reference below.
-//  - setup_lcg — the shared presentation LCG (never sim::State::rng): advanced by
-//    pick_glue for the GLUE<n> backdrop. Shared with every other pre-match screen
-//    (frontend_util.hpp's pick_glue); the draw order/count is observable.
-//  - campaign_trigger_count — the hidden 'C'×5 counter (sub_410F81 pseudo.c
-//    15357-15365) that arms the campaign picker; lives on GameApp so it persists
-//    across the per-frame event pump.
-//  - team_play — the game-type TEAM gate (dword_464964): drives the per-row team
-//    marker and the start-guard's "at least two teams" test.
-//  - gold_player — Escape aborts the whole Play flow and forfeits the pending
-//    Goldman winner (dword_46492C = -1, goldman-roulette.md §2's "Cleared to -1
-//    by" list — "Esc on the player-setup screen").
-//  - campaign_active/campaign_stages/campaign_stage_index — Escape also tears down
-//    any campaign armed by THIS visit's 'C'×5 pick that hasn't started a match yet
-//    (docs/re/campaign.md "Campaign-exit key"). These three ALSO live in
-//    CampaignState, which SetupScreen carries ONLY to construct the picker; the
-//    two reference bundles independently alias the same GameApp members, which is
-//    benign — the body reads/writes them through state_ so every direct member
-//    access on this screen goes through one seam (campaign_ is used solely as the
-//    CampaignPickerScreen ctor argument).
+// Three of these carry a rule the field name does not:
+//  - setup_team is reseeded TWICE on entry, in the original's own order — the
+//    alternating parity default, then the scheme's per-spawn "-S" team field,
+//    hence `scheme` below (docs/frontend-setup-screens.md).
+//  - setup_lcg is the shared presentation LCG (never sim::State::rng); its draw
+//    ORDER and COUNT are observable across screens.
+//  - campaign_active/stages/stage_index are ALSO aliased by CampaignState, which
+//    this screen carries only to construct the picker. Benign, because the screen
+//    body reads and writes them through this bundle.
 
 namespace bomber::game {
 
 struct SetupState {
-    std::array<int, sim::kMaxPlayers>& setup_type;  // GameApp::setup_type_
-    std::array<int, sim::kMaxPlayers>& setup_sub;   // GameApp::setup_sub_
-    std::array<int, sim::kMaxPlayers>& setup_team;  // GameApp::setup_team_
-    const assets::sch::Scheme& scheme;              // GameApp::scheme_ (-S teams)
-    std::uint32_t& setup_lcg;                       // GameApp::setup_lcg_ (pick_glue)
-    int& campaign_trigger_count;                    // GameApp::campaign_trigger_count_
-    bool& team_play;                                // GameApp::team_play_
-    int& gold_player;                               // GameApp::gold_player_ (Esc forfeit)
-    bool& campaign_active;                          // GameApp::campaign_active_
-    std::vector<assets::res::CampaignStage>& campaign_stages;  // GameApp::campaign_stages_
-    int& campaign_stage_index;                                 // GameApp::campaign_stage_index_
+    std::array<int, sim::kMaxPlayers>& setup_type;  // the 10-slot roster (dword_46481C)
+    std::array<int, sim::kMaxPlayers>& setup_sub;   // KEYBOARD/JOYSTICK sub-index
+    std::array<int, sim::kMaxPlayers>& setup_team;  // the per-slot team flag 'T' toggles
+    const assets::sch::Scheme& scheme;              // the -S per-spawn teams
+    std::uint32_t& setup_lcg;                       // pick_glue's backdrop roll
+    int& campaign_trigger_count;                    // the hidden 'C'x5 counter
+    bool& team_play;                                // the game-type TEAM gate (dword_464964)
+    // Escape forfeits any pending Goldman winner (dword_46492C = -1) and tears
+    // down a campaign armed by THIS visit that has not started a match yet.
+    int& gold_player;
+    bool& campaign_active;
+    std::vector<assets::res::CampaignStage>& campaign_stages;
+    int& campaign_stage_index;
 };
 
 }  // namespace bomber::game

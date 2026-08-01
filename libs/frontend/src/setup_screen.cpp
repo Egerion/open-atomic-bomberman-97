@@ -2,6 +2,8 @@
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -20,24 +22,15 @@
 
 namespace bomber::game {
 
-// The Play-handler music (sub_42A3F6, docs/re/in-match-shell.md §2): id 1020
-// (0x3FC, "win" in SOUNDLST) is the SETUP-SCREENS backdrop track, not victory
-// music. This screen and the LEVEL & ROUNDS screen both merely INHERIT it, so
-// the constant is not needed here at all — game_app.cpp owns kWinMusicId and
-// starts it once per Play entry (docs/re/sound-engine.md §9).
+// The PLAYER INPUT TYPE SELECTION screen — sub_410F81 @0x410F81. The RE pins,
+// the two corrected TEAM defaults, the campaign trigger and the start guards are
+// all in docs/frontend-setup-screens.md.
 
 namespace {
 
-// The screen's VALUELST-driven geometry, read once on entry. A parameter object
-// (§3) rather than the eighteen consecutive `const float` locals that used to
-// open run(): each draw helper below takes the whole layout instead of growing a
-// six-anchor signature.
-//
-// Layout ids (VALUELST X,Y,YS,clip -> consecutive getvalue columns): header 705,
-// slot list 710, joystick pane heading 715, joystick pane list 720, footer 790,
-// cursor blink 690. Column 3 of each row is the CLIP WIDTH handed to the text
-// primitive (sub_41696C's max-width arg; setup-screens.md's earlier "colour"
-// label for this column was wrong — colour never comes from VALUELST here).
+// The screen's VALUELST geometry, read once on entry — a parameter object (§3)
+// rather than eighteen consecutive `const float` locals. Column 3 of each id is a
+// CLIP WIDTH, never a colour.
 struct SetupLayout {
     float hx, hy, hw;              // header 705
     float lx, ly, lys, lw;         // slot rows 710
@@ -73,9 +66,8 @@ SetupLayout read_layout(const assets::res::ValueList& v) {
                        static_cast<int>(v.column_or(690, 1, 2))};
 }
 
-// The four injected seams SetupScreen's header names, bundled so the frame loop
-// below takes three constructor arguments rather than six (§3). All four are
-// cheap reference/pointer value types; `chat` is BORROWED and may be null.
+// The four injected seams, bundled so the frame loop takes three constructor
+// arguments rather than six (§3). `chat` is BORROWED and may be null.
 struct SetupSeams {
     CampaignState campaign;  // the 'C'x5 picker's state...
     MatchBackdrop backdrop;  // ...and the frame it composites over
@@ -83,18 +75,21 @@ struct SetupSeams {
     ChatOverlay* chat;
 };
 
+// The screen's ten roster rows (dword_46481C).
+constexpr int kSetupSlots = 10;
+
 // Start guard 1 (sub_42223E, batch_0x410401.cpp 1148-1168): at least two ACTIVE
 // slots, or in TEAM mode at least two DISTINCT team values among the active
 // slots — else the game refuses to start.
 bool count_ok(const SetupState& s) {
     if (!s.team_play) {
         int active = 0;
-        for (int i = 0; i < 10; ++i)
+        for (int i = 0; i < kSetupSlots; ++i)
             if (s.setup_type[i] != 0) ++active;
         return active >= 2;
     }
     bool seen0 = false, seen1 = false;
-    for (int i = 0; i < 10; ++i) {
+    for (int i = 0; i < kSetupSlots; ++i) {
         if (s.setup_type[i] == 0) continue;  // OFF slots don't count
         (s.setup_team[i] ? seen1 : seen0) = true;
     }
@@ -108,25 +103,29 @@ bool is_human_slot(int type) {
            type == core::to_underlying(SlotInputType::Joystick);
 }
 
+// A human slot's (input type, sub-index) pair, packed into one comparable id.
+int controller_id(const SetupState& s, int slot) {
+    return s.setup_type[slot] * 256 + s.setup_sub[slot];
+}
+
 // Start guard 2 (sub_422085, batch_0x410401.cpp 1172): two ACTIVE HUMAN slots may
 // not share the same input type AND sub-index — same keyboard set or same stick.
 bool dup_controller(const SetupState& s) {
-    for (int i = 0; i < 10; ++i) {
+    std::array<int, kSetupSlots> seen{};
+    std::size_t count = 0;
+    for (int i = 0; i < kSetupSlots; ++i) {
         if (!is_human_slot(s.setup_type[i])) continue;
-        for (int j = i + 1; j < 10; ++j) {
-            if (!is_human_slot(s.setup_type[j])) continue;
-            if (s.setup_type[i] == s.setup_type[j] && s.setup_sub[i] == s.setup_sub[j]) return true;
-        }
+        const int id = controller_id(s, i);
+        const auto end = seen.begin() + static_cast<std::ptrdiff_t>(count);
+        if (std::find(seen.begin(), end, id) != end) return true;
+        seen[count++] = id;
     }
     return false;
 }
 
-// The screen's frame loop, as its own object — the shape the netplay extraction
-// established. The per-run state that used to be captured by two 100-line
-// lambdas (the layout, the cursor row, the debounce deadline, the publish flag)
-// becomes members, so each step below is a named method a reader takes one at a
-// time. A method returning `std::optional<AppInput>` uses nullopt for "keep
-// looping" and a value for "run() returns this now".
+// The screen's frame loop as its own object. A method returning
+// std::optional<AppInput> uses nullopt for "keep looping" and a value for
+// "run() returns this now".
 class SetupLoop {
 public:
     SetupLoop(ScreenContext ctx, SetupState state, SetupSeams seams)
@@ -135,13 +134,10 @@ public:
           seams_(seams),
           layout_(read_layout(ctx.values)),
           // pick_glue advances the shared presentation LCG and its draw
-          // order/count is observable (setup_state.hpp), so it stays exactly
-          // where the old run() had it — first, before any other work.
+          // order/count is observable, so it stays FIRST, before any other work.
           glue_(pick_glue(state.setup_lcg, ctx.values)),
-          // Enter/Space accept debounce (mirrors present_map_select's 1 s
-          // accept_after_ms, 8100/8220-8228): ignore an accept for 1 s after
-          // entry so a held Enter carried from the previous screen can't blast
-          // the start.
+          // Accept debounce (8100/8220-8228): ignore an accept for 1 s after
+          // entry so a held Enter from the previous screen can't blast the start.
           accept_after_ms_(SDL_GetTicks() + 1000),
           net_mode_(net_setup_active(seams.net)),
           net_guest_(net_setup_readonly(seams.net)) {}
@@ -217,14 +213,11 @@ std::optional<AppInput> SetupLoop::pump_events() {
 
 std::optional<AppInput> SetupLoop::handle_event(const SDL_Event& ev) {
     if (ev.type == SDL_EVENT_QUIT) return AppInput::Quit;
-    // The F2 lobby-chat overlay gets first refusal (chat_overlay.hpp — PORT-ONLY,
-    // not RE'd). While it is open it consumes every key, so typing a message never
-    // also cycles a slot or toggles teams behind it; while it is closed it takes
-    // only F2 and this screen behaves exactly as it did before chat existed.
+    // The F2 chat overlay gets first refusal (PORT-ONLY): open, it consumes every
+    // key; closed, it takes only F2.
     if (seams_.chat != nullptr && seams_.chat->handle_event(ev, ctx_)) return std::nullopt;
-    // Hotplug (sub_429628 "joystick present" is polled live in the original; SDL3
-    // gives us an event instead): rescan so the pane and the Right-cycle's
-    // joystick count reflect what's plugged in right now, without a restart.
+    // Hotplug (sub_429628 polls "joystick present" live; SDL3 gives us an event):
+    // rescan so the pane and the Right-cycle reflect what is plugged in now.
     if (ev.type == SDL_EVENT_GAMEPAD_ADDED || ev.type == SDL_EVENT_GAMEPAD_REMOVED) {
         ctx_.gamepads.refresh();
         return std::nullopt;
@@ -238,76 +231,40 @@ std::optional<AppInput> SetupLoop::on_key(SDL_Keycode k) {
     // row-navigation keys below.
     if (k == SDLK_C) return on_campaign_key();
     if (k == SDLK_ESCAPE) return on_escape();
-    // Enter/Space (batch_0x410401.cpp 1148-1182: Space, 0x20, routes through the
-    // SAME accept path as Enter) leaves this screen for match init / the LEVEL
-    // screen — but only past the debounce and the two start guards.
+    // Space routes through the SAME accept path as Enter (batch_0x410401.cpp
+    // 1148-1182), past the debounce and the two start guards.
     if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) return on_accept();
     ctx_.audio.play(20);  // any real key blips first (sub_427961(20))
-    // sub_410F81 15432-15436: key 0x13B (F1) dispatches the SAME generic *.BM
-    // help browser as menu row 5 / the options screen / the in-round key (one
-    // routine, sub_41431C), composited over this screen like every sub_41431C
-    // site.
+    // 0x13B (F1) dispatches the SAME generic *.BM browser every other F1 site
+    // opens — one routine, sub_41431C (sub_410F81 15432-15436).
     if (k == SDLK_F1) return run_help_browser();
     on_edit_key(k);
     return std::nullopt;
 }
 
-// Hidden campaign-mode trigger (docs/re/campaign.md §4, sub_410F81 pseudo.c
-// 15357-15365): five 'C' presses open the *.cam picker.
+// The hidden campaign-mode trigger (docs/re/campaign.md §4, sub_410F81 pseudo.c
+// 15357-15365): five 'C' presses open the *.cam picker. Three things here are
+// counter-intuitive and all three were port bugs — the blip comes FIRST, the
+// count is CUMULATIVE rather than consecutive, and there is NO accept sting.
+// docs/frontend-setup-screens.md "The hidden 'C'x5 campaign trigger".
 std::optional<AppInput> SetupLoop::on_campaign_key() {
-    // THE BLIP COMES FIRST, ALWAYS. sub_410F81's key loop fires sub_427961(20)
-    // @0x411724 for every real key BEFORE its dispatch switch at 0x411729 — 'c'
-    // (0x63) is just another case in that switch (it lands at 0x41186D). The
-    // port's early exit used to jump the queue and swallow the blip.
     ctx_.audio.play(20);
-    // LOCAL ONLY — the original gates the whole campaign trigger on `sub_40C06A()`
-    // (docs/re/campaign.md §4). That guard used to be omitted here because the
-    // port had no netplay; now it does, so it is real again: a campaign
-    // roster/stage pick is a local-only concept that would never reach the peer.
-    //
-    // The guard is SILENT: 0x41186D tests sub_40C06A() and, when it is non-zero,
-    // jumps straight to the loop tail (0x41188E) with no sound at all. The SFX-40
-    // buzz that used to be here was invented — there is no "you can't do that"
-    // for this key.
-    if (net_mode_) return std::nullopt;
-    // CUMULATIVE, not consecutive (sub_410F81 pseudo.c 840, 1193-1197): ONLY the
-    // 'C' handler touches this counter — no other key resets it — so 5 total 'C'
-    // presses across the visit arm the picker. (The old any-other-key reset
-    // required 5 CONSECUTIVE presses, which the original never demanded.)
+    if (net_mode_) return std::nullopt;  // local only, and SILENTLY so
     if (++state_.campaign_trigger_count != 5) return std::nullopt;
     state_.campaign_trigger_count = 0;
-    // NO accept sting. This trigger is NOT the menu's Ctrl+E x6 editor trigger it
-    // was written to "mirror": that one really does play 10 (0x42BD50, right
-    // before sub_40330E), but the campaign arm at 0x411882 calls sub_4015C6 and
-    // zeroes its counter with nothing in between. The 20 blip above is the only
-    // sound five C presses make.
     CampaignPickerScreen(ctx_, seams_.campaign, seams_.backdrop).run();
     return std::nullopt;
 }
 
+// Cancelling the Play flow also forfeits any pending gold player. The campaign
+// teardown is a faithful CONVENIENCE, not a citation: NO key in the binary clears
+// dword_46489C, which is left stale until the next "Play" resets it at entry, so
+// clearing it now reaches the identical observable outcome
+// (docs/frontend-setup-screens.md "Escape and campaign state").
 AppInput SetupLoop::on_escape() {
     ctx_.audio.play(20);
     ctx_.audio.play(10);
-    // doc §2: "Cleared to -1 by: ... Esc on the player-setup screen" — cancelling
-    // the whole Play flow here also forfeits any gold player pending from an
-    // earlier match.
     state_.gold_player = -1;
-    // Campaign quit semantics — CONFIRMED negative, docs/re/campaign.md
-    // "Campaign-exit key": grepped every read/write of dword_46489C in the binary;
-    // it is written in exactly TWO places total (sub_4015C6's `=1` and
-    // sub_42A3F6's own entry `=0`, pseudo.c 29692) — there is NO key anywhere,
-    // Escape or otherwise, that explicitly clears it. The original's own
-    // Escape-on-setup just aborts the current sub_42A3F6 call to the menu
-    // (dword_464A68=2); dword_46489C is left stale until the NEXT "Play" click
-    // resets it at entry, which is behaviourally invisible (that stale value is
-    // never read before being overwritten). Our explicit clear here produces the
-    // identical observable outcome (back at the menu, campaign not running) via an
-    // immediate reset instead of an implicit one — a faithful convenience, not a
-    // guess. This only fires if a *.cam pick from THIS visit hasn't been confirmed
-    // into a running match yet; an in-progress campaign is abandoned via
-    // run_match's own Esc/Ctrl+Q, which — matching the original — doesn't touch
-    // state_.campaign_active either; it only clears on the NEXT Menu->StartMatch
-    // transition (see that path's own comment).
     state_.campaign_active = false;
     state_.campaign_stages.clear();
     state_.campaign_stage_index = 0;
@@ -323,12 +280,9 @@ std::optional<AppInput> SetupLoop::on_accept() {
         return std::nullopt;
     }
     if (SDL_GetTicks() < accept_after_ms_) return std::nullopt;  // held-Enter debounce
-    // Guard 2 first (sub_422085): same-controller humans -> error getstring(45)
-    // over getstring(96).
+    // Guard 2 (sub_422085) is checked FIRST, then guard 1 (sub_42223E).
     if (dup_controller(state_))
         return show_error(ctx_.assets.getstring(45, "Two players cannot use the same controls!"));
-    // Guard 1 (sub_42223E): too few players/teams -> getstring(46) (solo) or
-    // getstring(48) (team) over getstring(96).
     if (!count_ok(state_))
         return show_error(state_.team_play
                               ? ctx_.assets.getstring(48, "You need at least two teams!")
@@ -338,10 +292,10 @@ std::optional<AppInput> SetupLoop::on_accept() {
     return std::nullopt;
 }
 
-// §7's read-only gate: Up/Down (pure navigation) and F1 stay live on a guest;
-// every EDIT key buzzes SFX 40, the same shape as `sub_410F81`'s
-// `sub_40C06A() != 1` guards. A slot the wire seat assignment owns is likewise
-// frozen (net_setup_link.hpp "SEAT LOCKING").
+// §7's read-only gate: on THIS screen Up/Down and F1 stay live on a guest and
+// every EDIT key buzzes — the LEVEL screen has no such carve-out
+// (docs/frontend-setup-screens.md). A slot the wire seat assignment owns is
+// likewise frozen (net_setup_link.hpp "SEAT LOCKING").
 bool SetupLoop::edit_denied() const {
     return net_guest_ || (net_mode_ && net_setup_slot_locked(seams_.net, cursor_));
 }
@@ -355,9 +309,9 @@ void SetupLoop::on_edit_key(SDL_Keycode k) {
         cursor_ = (cursor_ + 1) % 10;  // 336
         return;
     }
-    // 'T' has its own gate: a LOCKED slot still toggles online, because the team
-    // byte travels in the confirmed config — only the input TYPE of a wire seat is
-    // fixed. So it must not go through edit_denied() with the others.
+    // 'T' has its OWN gate and must not go through edit_denied(): a LOCKED slot
+    // still toggles online, because the team byte travels in the confirmed config
+    // and only the input TYPE of a wire seat is fixed.
     if (k == SDLK_T) {  // 'T' team toggle (+84)
         toggle_slot_team();
         return;
@@ -375,12 +329,9 @@ void SetupLoop::cycle_slot_right() {
         return;
     }
     if (!net_mode_) {
-        // Cycle a slot's input type FORWARD one step (sub_421E80 @0x421E80): 0 off
-        // -> 1 computer -> 2 keyboard sub 0 -> 2 keyboard sub 1 -> 3 joystick per
-        // present stick -> back to 0. The pure wrap-order logic lives in
-        // cycle_slot_input_type (input.hpp, unit-tested); this just supplies the
-        // live connected-gamepad count so the cycle offers exactly the sticks in
-        // ctx_.gamepads right now.
+        // sub_421E80's wrap order (off -> computer -> keyboard 0/1 -> one step per
+        // present stick -> off) is the unit-tested cycle_slot_input_type; this only
+        // supplies the live connected-gamepad count.
         cycle_slot_input_type(state_.setup_type[cursor_], state_.setup_sub[cursor_],
                               ctx_.gamepads.count());
         return;
@@ -437,11 +388,9 @@ std::optional<AppInput> SetupLoop::run_help_browser() {
     return std::nullopt;
 }
 
-// sub_414340 error modal (batch_0x410401.cpp ~1152/1176): the start guards pop a
-// WINZ-9-patch acknowledge box — the reason line over getstring(96), dark-red ink,
-// dismissed by Enter/Space/Escape (nav-blip on any key) — drawn over the frozen
-// setup frame. Returns Quit if the window closed while it was up, else nullopt
-// (the screen stays open).
+// The start guards' sub_414340 acknowledge box over the frozen setup frame — the
+// reason line over getstring(96) in byte_49A390 DARK RED (164,0,0), NOT white.
+// Quit if the window closed while it was up, else nullopt (the screen stays up).
 std::optional<AppInput> SetupLoop::show_error(const std::string& reason) {
     const std::string sub = ctx_.assets.getstring(96, "Cannot start the game!");
     const std::string ok = ctx_.assets.getstring(27, " Ok ");
@@ -456,19 +405,12 @@ std::optional<AppInput> SetupLoop::show_error(const std::string& reason) {
                 return std::nullopt;
         }
         // Keep the setup link alive under the modal: the guest fails after
-        // `timeout_ms` of silence, so a host sitting on a start-guard error must
-        // still be re-broadcasting. Same for the lobby link — the matchmaker reaps
-        // a member that stops heart-beating. The chat OVERLAY is not driven here:
-        // it can only be reached from the main loop, which swallows Enter while it
-        // is open, so it cannot be up.
+        // timeout_ms of silence and the matchmaker reaps a silent member, so a
+        // host sitting on a start-guard error must still be re-broadcasting.
         net_setup_pump(seams_.net);
         if (seams_.chat != nullptr) seams_.chat->pump();
         ctx_.audio.update_music();
         draw_frame();
-        // Ink = byte_49A390 = DARK RED (164,0,0): the setup start-guard errors are
-        // sub_414340(getstring(46/48/45)|getstring(96), color1, byte_49A390)
-        // (batch_0x410401.cpp:1161/1175), and byte_49A390 resolves to (164,0,0)
-        // warning red (docs/re/frontend-flow.md), NOT white.
         draw_acknowledge_dialog(ctx_.sdl, ctx_.front_font, &ctx_.assets.frontend_pcx("WINZ"),
                                 reason, sub, ok, 164, 0, 0);
         SDL_RenderPresent(ctx_.sdl);
@@ -492,12 +434,11 @@ std::optional<AppInput> SetupLoop::pump_link() {
     // Read-only: the displayed roster IS the host's newest preview.
     net_setup_apply_roster(seams_.net, state_.setup_type, state_.setup_sub, state_.setup_team,
                            state_.team_play);
-    // The host moved on (its preview now carries a real win target), or it
-    // confirmed outright and we already hold the config: follow it.
+    // The host moved on, or confirmed outright and we already hold the config.
     if (net_setup_final(seams_.net) || net_setup_on_level_screen(seams_.net))
         return AppInput::Advance;
-    // Timed out / the host vanished. Back returns to the caller, which reads
-    // net_setup_failed() to tell this from an Esc.
+    // Timed out / the host vanished. The caller reads net_setup_failed() to tell
+    // this Back from an Esc.
     if (net_setup_failed(seams_.net)) return AppInput::Back;
     return std::nullopt;
 }
@@ -559,37 +500,22 @@ std::string SetupLoop::slot_type_text(int i) const {
     }
 }
 
+// One combined splice (msg 51) in the slot's authentic colour, NEVER the team
+// override, black-outlined except index 1 (the BLACK player, which gets white).
+// The team marker is drawn for EVERY slot whenever Team Play is on — gated on the
+// GLOBAL dword_464964, not this slot's team byte — and is CONFIRMED unformatted,
+// because the COLOUR alone tells the teams apart
+// (docs/frontend-setup-screens.md "Slot rows").
 void SetupLoop::draw_slot_row(int i) {
-    // One combined "Player %u: %s" splice (msg 51) — the original sprintf's the
-    // slot number and the type text in ONE call (pseudo.c 15169-15195); the old
-    // two-piece concat left a literal "%s" on screen with the install's real
-    // MESSAGES.TXT.
     const std::string line =
         fmt_us(ctx_.assets.getstring(51, "Player %u: %s"), i + 1, slot_type_text(i));
-    // Ink = the slot's authentic colour via sub_41672F(i) (the .RMP tail quantised
-    // min(c/3,31) -> RGB555 -> LUT), which AssetStore::slot_color reproduces.
-    // CONFIRMED never the team red/white override: sub_410F81 saves+zeroes
-    // dword_464964 around this lookup (pseudo.c 15191-15204) — only the separate
-    // TEAM marker below is team-inked. And the ink is NEVER state-dimmed or
-    // selection-boosted (no OFF/COM dimming exists; the old selected-row +70 nudge
-    // was invented — the cursor sprite alone marks the selection).
     std::uint8_t sc[3];
     ctx_.assets.slot_color(i, sc);
-    // Outline: black for every slot EXCEPT index 1 — the BLACK player's row gets a
-    // WHITE outline (sub_416867, pseudo.c 18496-18503) so it stays legible over a
-    // dark glue backdrop.
     const Uint8 oc = i == 1 ? 255 : 0;
     const float row_y = layout_.ly + layout_.lys * static_cast<float>(i);
     const float lx_end = ctx_.front_font.draw_outlined(ctx_.sdl, line, layout_.lx, row_y, sc[0],
                                                        sc[1], sc[2], oc, oc, oc, layout_.lw);
     if (!state_.team_play) return;
-    // Team marker: getstring(230), drawn for EVERY slot whenever Team Play is on
-    // (gated on the GLOBAL dword_464964, pseudo.c ~15212 — NOT on this slot's own
-    // team byte). CONFIRMED unformatted (no sprintf before the two sub_4124A4(230)
-    // reads at ~15221/15223) — the COLOUR alone tells the teams apart, via
-    // sub_4141F8(team): team byte != 0 -> byte_49D0DA red (252,80,80), else
-    // byte_49D38F white — the same split as the in-match sprite override
-    // (docs/re/player-colour.md).
     const std::string marker = "  " + ctx_.assets.getstring(230, "TEAM");
     const bool team1 = state_.setup_team[i] != 0;  // sub_4141F8's `a1 ?` branch
     ctx_.front_font.draw_outlined(
@@ -598,10 +524,9 @@ void SetupLoop::draw_slot_row(int i) {
 }
 
 // Joystick pane (getvalue 715/720): heading msg 40, then one line per detected
-// stick (msg 41 "Joy %u - %s", the stick's own name in the %s — sub_429A61(i))
-// or, if none, the single msg-42 line. ALL of it plain white ink / black outline
-// (pseudo.c 15227-15263) — the old grey (200,200,200)/(150,150,150) tints were
-// invented.
+// stick (msg 41, the stick's own name from sub_429A61(i)) or, if none, the single
+// msg-42 line. ALL of it plain white ink over a black outline (pseudo.c
+// 15227-15263) — the old grey tints were invented.
 void SetupLoop::draw_joystick_pane() {
     ctx_.front_font.draw_outlined(ctx_.sdl, ctx_.assets.getstring(40, "JOYSTICKS"), layout_.jhx,
                                   layout_.jhy, 255, 255, 255, 0, 0, 0, layout_.jhw);
@@ -629,14 +554,10 @@ void SetupLoop::draw_footer() {
                                   96, 252, 252, 0, 0, 0, layout_.ffw);
 }
 
-// The bomber-dude row cursor (sub_413BD6, called at pseudo.c 15205-15211):
-// MISC.ANI "cursor1", hotspot-anchored at (getvalue(710) - 15, row_y + 16) — this
-// screen alone uses -15; the options/level screens use -20. The +16 y nudge is
-// pinned EMPIRICALLY from a 1:1 native capture of the level screen (2026-07-12;
-// VALUELST 736 = 170, measured sprite rows 155..186 -> anchor = row_y + 16): the
-// dude's feet stand just under the row text's baseline. The decompile loses the
-// +16 to register mangling at every call site, so the capture is the authority.
-// Idle step 0 + timed blink: cursor_indicator.hpp.
+// The row cursor (sub_413BD6): MISC.ANI "cursor1" at (getvalue(710) - 15,
+// row_y + 16). This screen alone uses -15; the options/level screens use -20. The
+// +16 is pinned EMPIRICALLY from a native capture, because the decompile loses it
+// to register mangling at every call site (docs/frontend-setup-screens.md).
 void SetupLoop::draw_cursor() {
     const Anim cur = resolve_sequence(ctx_.assets.misc(), "cursor1");
     if (cur.steps.empty()) return;
@@ -653,50 +574,17 @@ void SetupLoop::draw_cursor() {
 
 }  // namespace
 
-// The PLAYER INPUT TYPE SELECTION screen (sub_410F81 @0x410F81, VALUELST "PLAYER
-// INPUT TYPE SELECTION" getvalue 705-713). Screen 1 of the pre-match flow reached
-// from Play. A random GLUE<n> backdrop under the 1020 track (inherited from the
-// Play handler sub_42A3F6 — this screen starts no music), header getstring(50),
-// and the 10-slot list: each slot's input type via getstring(220..224), PREFIXED
-// by getstring(51) (Player %u) and TINTED with the slot's intrinsic colour
-// (VALUELST 200-247 = Tuning::color_rgb — there is no colour picker; colour is
-// fixed per slot index, applied in-game via i.rmp), plus a team marker when the
-// slot's team flag is set. Keys mirror the confirmed table
-// (docs/re/setup-screens.md): Up/Down pick a slot, Right cycles its type
-// (OFF->CPU->KBD0->KBD1->OFF), Left/'0' set it OFF, 'T' toggles its team, Enter
-// goes on to the LEVEL screen, Escape cancels to the menu. Presentation only.
+// Screen 1 of the pre-match flow (sub_410F81 @0x410F81). Presentation only.
+//
+// NO music call here, deliberately: the 1020 track is already running. Restarting
+// it restarted WIN.RSS from the top whenever the goldman wheel ran first — the
+// wheel had the identical bug (docs/re/sound-engine.md §9).
+//
+// The TWO team seeds below run in the original's own order and both were
+// corrected against earlier readings: getting the first wrong made Team Play put
+// everyone on the same side and clinch on tick 0. docs/frontend-setup-screens.md
+// "The TEAM default, corrected twice".
 AppInput SetupScreen::run() {
-    // NO music call here, deliberately. sub_410F81 starts none: the 1020 track is
-    // already running, started by its caller sub_42A3F6 at 0x42A436 (the port's
-    // run_app StartMatch handler does the same). This screen used to restart it,
-    // which restarted WIN.RSS from the top whenever the goldman wheel ran first —
-    // the wheel had the identical bug. docs/re/sound-engine.md §9.
-    //
-    // TEAM default — CORRECTED 2026-07-09 (docs/re/setup-screens.md "TEAM default
-    // — CORRECTED"): sub_410F81 unconditionally calls sub_4046CC() first thing,
-    // which (CD present) calls sub_403EEE(), which itself unconditionally calls
-    // sub_4049C0() before anything else. sub_4049C0 sets `dword_46481C[12*j+8] =
-    // j & 1` for j in [0,10) — i.e. every slot's TEAM byte resets to an ALTERNATING
-    // 0/1/0/1 pattern by slot parity every time this screen loads, not to a flat 0.
-    // Getting this wrong (old behaviour: every slot defaulted to 0) meant Team Play
-    // ON without anyone pressing 'T' put every player on the SAME side: (a)
-    // everybody got the team-1/WHITE 0.RMP override instead of half going red
-    // (render_colour, docs/re/player-colour.md), and (b) sides_remaining() read <=1
-    // from tick 0, clinching the round instantly.
-    //
-    // ...and then THE SCHEME OVERRIDES IT, per slot — CORRECTED AGAIN 2026-07-28
-    // (docs/re/facts.md "The .SCH -S row's 4th field is the per-slot TEAM"). The
-    // paragraph that stood here claimed sub_403EEE's parse loop "only ever
-    // overwrites a slot's COLOUR from disk, never TEAM, unless a rare 5-field
-    // profile line is present — a hidden colour-profile file this port doesn't
-    // implement". All three parts are wrong: the dwords it called colour are the
-    // spawn X and Y, the file being parsed is the scheme itself, and a four-field
-    // "-S slot,x,y,team" row appears in 19 of the 67 shipped schemes (E_VS_W,
-    // N_VS_S, TENNIS, VOLLEY, … — the two-sided maps). The reader stores that field
-    // and its tail loop pushes every slot into the player record's +84 byte via
-    // sub_422437, so the map author's layout is already in place before this screen
-    // draws a frame. The 'T' key still overrides it, exactly as in the original,
-    // where the key loop runs after the load.
     reset_setup_teams(state_.setup_team);
     match::scheme_setup_teams(state_.scheme, state_.setup_team);
     return SetupLoop(ctx_, state_, SetupSeams{campaign_, backdrop_, net_, chat_}).run();

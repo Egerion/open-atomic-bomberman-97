@@ -20,24 +20,18 @@ namespace bomber::game {
 
 namespace {
 
-// The generic level-name fallback (RANDOM is getstring(149)). The level list,
-// count, and per-level fallback names all come from the level registry now
-// (ctx_.assets.levels(), seeded with the 11 built-ins named VALUELST 450-460 /
-// getstring(150+n)); a name still comes from the user's MESSAGES.TXT at runtime
-// via getstring and is never committed. Sourcing from the registry means a
-// custom map added there shows up here with no edit to this screen.
+// The generic level-name fallback (RANDOM is getstring(149)). The list, count and
+// fallback names all come from the level registry, so a custom map added there
+// shows up here with no edit to this screen; the displayed name still comes from
+// the user's MESSAGES.TXT at runtime and is never committed.
 const char* level_fallback(const match::LevelRegistry& levels, int idx) {
     const match::LevelDef* def = levels.find(idx);
     return def != nullptr ? def->name_fallback.c_str() : "LEVEL";
 }
 
 // The screen's VALUELST-driven geometry, read once on entry — a parameter object
-// (§3) in place of the twelve consecutive locals that used to open run().
-//
-// Row list 735 (X,Y,YS,clip), sample-block preview 730 (X,Y = grid origin,
-// XSize/YSize = grid size IN CELLS, 5x5 — docs/re/setup-screens.md "The sample
-// block preview", sub_406AA3), footer 790, cursor blink 690. Cell pitch is the
-// same 40x36 the in-match renderer uses (sim::kTileW/kTileH), 1:1, no stretching.
+// (§3) in place of twelve consecutive locals. Cell pitch is the same 40x36 the
+// in-match renderer uses, 1:1, no stretching.
 struct MapSelectLayout {
     float lx, ly, lys, lw;         // the 2 text rows (735)
     float fcx, ffy;                // footer 790
@@ -70,11 +64,8 @@ bool is_solid_cell(int col, int row) {
     return (col & 1) != 0 && (row & 1) != 0;
 }
 
-// The screen's frame loop as its own object (the shape the netplay extraction
-// established): the layout, the WORKING level/wins copies, the debounce deadline
-// and the rolled preview pattern become members, so each step below is a named
-// method. `std::optional<AppInput>` means nullopt = keep looping, a value =
-// run() returns it now.
+// The screen's frame loop as its own object. std::optional<AppInput> means
+// nullopt = keep looping, a value = run() returns it now.
 class MapSelectLoop {
 public:
     MapSelectLoop(ScreenContext ctx, MapSelectState state, NetSetupLink net, ChatOverlay* chat)
@@ -86,24 +77,20 @@ public:
           // pick_glue advances the shared presentation LCG and its draw
           // order/count is observable — it stays the first thing the loop does.
           glue_(pick_glue(state.setup_lcg, ctx.values)),
-          // Level count from the registry. For the stock 11 built-ins this equals
-          // the original getvalue(35)=11, so the cycle bounds and the RANDOM
-          // per-cell pick are unchanged; a registered custom map extends the cycle
-          // with no edit here.
+          // For the stock 11 built-ins this equals the original getvalue(35)=11,
+          // so the cycle bounds and the RANDOM per-cell pick are unchanged.
           level_count_(static_cast<int>(ctx.assets.levels().all().size())),
-          // WORKING COPIES (sub_406DDE 8092-8093: dword_45E0B8/45E0B4 seeded from
-          // the committed globals on entry): edits touch only these; Enter/Space
-          // commits them (LABEL_101, 8261-8271) and Escape DISCARDS them — the old
-          // in-place member edits leaked cancelled changes into the next visit.
+          // WORKING COPIES (sub_406DDE 8092-8093): edits touch only these,
+          // Enter/Space commits them and Escape DISCARDS them. The old in-place
+          // member edits leaked cancelled changes into the next visit.
           level_(state.selected_level),
           wins_(state.win_target),
-          // Enter/Space debounce (8100/8220-8228): accept is IGNORED until 1 s
-          // (sub_4148AC() = 1 locally) after entry or the last value change — the
-          // original's guard against a held Enter from the previous screen
-          // committing instantly.
+          // Accept debounce (8100/8220-8228): IGNORED until 1 s after entry or the
+          // last value change — the original's guard against a held Enter from the
+          // previous screen committing instantly.
           accept_after_ms_(SDL_GetTicks() + 1000),
-          // tile_of[row][col]: the stage index whose "tile <n> solid/brick" art
-          // that cell draws, or -1 for a blank cell.
+          // tile_of[row][col]: the stage index whose solid/brick art that cell
+          // draws, or -1 for a blank cell.
           tile_of_(static_cast<std::size_t>(layout_.pysize),
                    std::vector<int>(static_cast<std::size_t>(layout_.pxsize), -1)),
           net_mode_(net_setup_active(net)),
@@ -128,11 +115,13 @@ private:
     std::optional<AppInput> run_help_browser();
 
     // --- drawing ---
+    int roll_cell(int col, int row, int max_n);
     void roll_pattern();
     void draw_frame();
     void draw_backdrop();
     void draw_preview();
     void draw_preview_cells();
+    void draw_preview_cell(int col, int row);
     void draw_rows();
     std::string local_level_name() const;
     std::string displayed_level_name() const;
@@ -216,15 +205,9 @@ std::optional<AppInput> MapSelectLoop::on_key(SDL_Keycode k) {
     }
     if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) return on_accept();
     ctx_.audio.play(20);
-    // §7's read-only gate — CORRECTED 2026-07-28. The old comment here claimed
-    // "Up/Down (pure navigation) and F1 stay live on a guest; every value-changing
-    // key buzzes", citing sub_406DDE. sub_406DDE has no such carve-out: EVERY arm
-    // of its dispatch opens with the same `sub_40C06A() == 1` test and the same
-    // SFX-40 buzz — Up (0x4071A5), Down (0x4071D6), the 0x174 stepper (0x407209),
-    // Right (0x4072B3), Left (0x407355), Enter/Space (0x4073F4), F1 (0x407490)
-    // and Alt+D (0x4074AD). The ONLY ungated key is Escape (0x407464), which sets
-    // its flags and leaves silently. The host owns this screen completely; a guest
-    // can look and leave.
+    // §7's read-only gate — CORRECTED 2026-07-28: there is NO navigation
+    // carve-out. Every arm of sub_406DDE's dispatch buzzes on a guest, Up/Down and
+    // F1 included; the ONLY ungated key is Escape (docs/frontend-setup-screens.md).
     if (net_guest_) {
         ctx_.audio.play(40);
         return std::nullopt;
@@ -233,15 +216,11 @@ std::optional<AppInput> MapSelectLoop::on_key(SDL_Keycode k) {
     return std::nullopt;
 }
 
+// sub_406DDE's Esc handler (pseudo.c 8186-8191) is called straight from
+// sub_410F81's TAIL with NO loop back to the player screen, so this aborts the
+// WHOLE Play flow to the menu — NOT "back one screen" — and forfeits any pending
+// gold player. The working level/wins copies are simply dropped.
 AppInput MapSelectLoop::on_escape() {
-    // sub_406DDE's own Esc handler (pseudo.c 8186-8191) is called straight from
-    // sub_410F81's TAIL (pseudo.c 15516, gated `if (!dword_464A68)`) with NO loop
-    // back to the player screen afterwards — so this aborts the WHOLE Play flow to
-    // the menu, exactly like the Goldman wheel's own Esc (doc §5), NOT "back one
-    // screen" to present_setup. It also forfeits any pending gold player
-    // (`dword_46492C = -1`, doc §2's "Cleared to -1 by" list). The WORKING
-    // level/wins copies are simply dropped (8092-8093 re-seed on the next entry) —
-    // the committed selections stay untouched.
     ctx_.audio.play(20);
     state_.gold_player = -1;
     return AppInput::Back;
@@ -324,10 +303,9 @@ std::optional<AppInput> MapSelectLoop::run_help_browser() {
     return std::nullopt;
 }
 
-// The HOST broadcasts each change (§7: level kind 43, rounds kind 44) — on the
-// edit, not every frame. `rounds = wins` (never 0 here, the row clamps to 1..100)
-// is also what tells the guest the host has LEFT the roster screen
-// (net_setup_link.hpp's sentinel), so the first publish fires on entry.
+// The HOST broadcasts each change on the EDIT, not every frame. `rounds = wins`
+// (never 0 here — the row clamps to 1..100) is also what tells the guest the host
+// has LEFT the roster screen, so the first publish fires on entry.
 std::optional<AppInput> MapSelectLoop::pump_link() {
     if (net_mode_ && !net_guest_ && (net_dirty_ || !net_setup_on_level_screen(net_))) {
         net_setup_publish_level(net_, level_, local_level_name(), wins_);
@@ -339,10 +317,8 @@ std::optional<AppInput> MapSelectLoop::pump_link() {
     // Read-only: the level/rounds ARE the host's newest preview.
     net_setup_apply_level(net_, level_count_, level_, wins_, net_level_name_);
     if (net_setup_final(net_)) {
-        // COMMIT the mirrored working copies, exactly as the host's own Enter does
-        // above. The WIN TARGET is not part of the confirmed MatchConfig (it is a
-        // front-end match-scope value, the original's dword_464A7C, broadcast as
-        // its own kind-44 message), so without this the guest ran the host's board
+        // COMMIT the mirrored working copies. The WIN TARGET is not part of the
+        // confirmed MatchConfig, so without this the guest ran the host's board
         // with ITS OWN stale target and the two peers disagreed about when the
         // match was over — one starting round N+1 while the other showed VICTORY.
         state_.selected_level = level_;
@@ -363,31 +339,34 @@ void MapSelectLoop::present_frame() {
     SDL_Delay(2);
 }
 
-// Re-roll the sample-block pattern on entry and whenever the LEVEL changes
-// (sub_406AA3 re-arms its own roll flag) — never every frame. Solid/brick-ness
-// itself is re-derived at draw time from the (col&1,row&1) parity rule, which is
-// pure geometry and does not need rolling; what is rolled is WHICH cells carry
-// art and which level's tileset each drawn cell uses.
+// One preview cell: -1 for blank, else the stage index whose tileset it draws.
+// LCG-ORDER-SENSITIVE — 0..2 draws, brick roll first and the RANDOM per-cell
+// stage pick second, over a row-major walk. Every screen shares one LCG.
+int MapSelectLoop::roll_cell(int col, int row, int max_n) {
+    const bool solid = is_solid_cell(col, row);
+    bool brick_cell = false;
+    if (!solid && (col > 1 || row > 1)) {
+        state_.setup_lcg = state_.setup_lcg * 1664525u + 1013904223u;
+        brick_cell = (state_.setup_lcg >> 16) % 5 != 0;  // rand()%5 != 0
+    }
+    if (!solid && !brick_cell) return -1;
+    if (level_ >= 0) return level_;
+    // RANDOM: re-pick per cell (pinned quirk).
+    state_.setup_lcg = state_.setup_lcg * 1664525u + 1013904223u;
+    return static_cast<int>((state_.setup_lcg >> 16) % static_cast<unsigned>(max_n));
+}
+
+// Re-rolled on entry and on a LEVEL change (sub_406AA3 re-arms its own flag) —
+// NEVER every frame. Solid/brick-ness is re-derived at draw time from the parity
+// rule, so what is rolled is only WHICH cells carry art and whose tileset.
 void MapSelectLoop::roll_pattern() {
     pattern_level_ = level_;
     const int max_n = level_count_ > 1 ? level_count_ : 1;
-    for (int i = 0; i < layout_.pysize; ++i) {
-        for (int j = 0; j < layout_.pxsize; ++j) {
-            bool brick_cell = false;
-            if (!is_solid_cell(j, i) && (j > 1 || i > 1)) {
-                state_.setup_lcg = state_.setup_lcg * 1664525u + 1013904223u;
-                brick_cell = (state_.setup_lcg >> 16) % 5 != 0;  // rand()%5 != 0
-            }
-            int n = -1;
-            if (is_solid_cell(j, i) || brick_cell) {
-                n = level_;
-                if (n < 0) {  // RANDOM: re-pick per cell (pinned quirk)
-                    state_.setup_lcg = state_.setup_lcg * 1664525u + 1013904223u;
-                    n = static_cast<int>((state_.setup_lcg >> 16) % static_cast<unsigned>(max_n));
-                }
-            }
-            tile_of_[static_cast<std::size_t>(i)][static_cast<std::size_t>(j)] = n;
-        }
+    for (int cell = 0; cell < layout_.pysize * layout_.pxsize; ++cell) {
+        const int row = cell / layout_.pxsize;
+        const int col = cell % layout_.pxsize;
+        tile_of_[static_cast<std::size_t>(row)][static_cast<std::size_t>(col)] =
+            roll_cell(col, row, max_n);
     }
     field_stage_ = level_;
     if (field_stage_ >= 0) return;
@@ -414,14 +393,10 @@ void MapSelectLoop::draw_backdrop() {
     SDL_RenderTexture(ctx_.sdl, bg.tex, nullptr, &dst);
 }
 
-// Sample-block preview panel (sub_406AA3, level&rounds audit 2026-07-12): border
-// fill = the general WHITE byte_49D38F — (240,248,252), NOT the old invented
-// (40,40,60) — at (378,80, 224x202); the field swatch is a 1:1 CROP of FIELDn.PCX
-// starting 48 rows down (the source is taken 12*640 int-sized steps into the
-// 640-byte-wide bitmap — 4 bytes a step, so 48 scanlines; NOT a stretch —
-// sub_4428B4 is a plain rect copy), 220x198 at (380,82), which lines the
-// backdrop's own board grid up under the drawn tiles; then the 5x5 solid/brick
-// grid at native 40x36 cells.
+// Sample-block preview panel (sub_406AA3, level & rounds audit 2026-07-12).
+// Border fill is the general WHITE byte_49D38F, NOT the old invented (40,40,60);
+// the field swatch is a 1:1 CROP of FIELDn.PCX starting 48 rows down and NOT a
+// stretch. docs/frontend-setup-screens.md "The sample-block preview".
 void MapSelectLoop::draw_preview() {
     const float bx = static_cast<float>(layout_.px - 22);
     const float by = static_cast<float>(layout_.py - 20);
@@ -445,21 +420,22 @@ void MapSelectLoop::draw_preview() {
 }
 
 void MapSelectLoop::draw_preview_cells() {
-    for (int i = 0; i < layout_.pysize; ++i) {
-        for (int j = 0; j < layout_.pxsize; ++j) {
-            const int n = tile_of_[static_cast<std::size_t>(i)][static_cast<std::size_t>(j)];
-            if (n < 0) continue;
-            const AssetStore::StagePreview& prev = ctx_.assets.stage_preview(n);
-            const Anim& a = is_solid_cell(j, i) ? prev.solid : prev.brick;
-            if (a.steps.empty()) continue;
-            const Sprite& sp = a.steps[0];
-            if (sp.tex == nullptr) continue;
-            SDL_FRect cell{static_cast<float>(layout_.px + j * sim::kTileW),
-                           static_cast<float>(layout_.py + i * sim::kTileH),
-                           static_cast<float>(sim::kTileW), static_cast<float>(sim::kTileH)};
-            SDL_RenderTexture(ctx_.sdl, sp.tex, nullptr, &cell);
-        }
-    }
+    for (int cell = 0; cell < layout_.pysize * layout_.pxsize; ++cell)
+        draw_preview_cell(cell % layout_.pxsize, cell / layout_.pxsize);
+}
+
+void MapSelectLoop::draw_preview_cell(int col, int row) {
+    const int n = tile_of_[static_cast<std::size_t>(row)][static_cast<std::size_t>(col)];
+    if (n < 0) return;
+    const AssetStore::StagePreview& prev = ctx_.assets.stage_preview(n);
+    const Anim& a = is_solid_cell(col, row) ? prev.solid : prev.brick;
+    if (a.steps.empty()) return;
+    const Sprite& sp = a.steps[0];
+    if (sp.tex == nullptr) return;
+    SDL_FRect dst{static_cast<float>(layout_.px + col * sim::kTileW),
+                  static_cast<float>(layout_.py + row * sim::kTileH),
+                  static_cast<float>(sim::kTileW), static_cast<float>(sim::kTileH)};
+    SDL_RenderTexture(ctx_.sdl, sp.tex, nullptr, &dst);
 }
 
 // This install's own name for the working level — getstring(150+n), or
@@ -477,18 +453,14 @@ std::string MapSelectLoop::displayed_level_name() const {
     return net_level_name_.empty() ? local_level_name() : net_level_name_;
 }
 
-// Both text rows in the SAME white ink + black outline (sub_41696C; byte_49D38F
-// decodes to (240,248,252) — LUT 0x7FFF -> idx 72, level&rounds audit), clip
-// getvalue(738)=300. The original marks the active row with the cursor sprite
-// ALONE — the old per-row colour highlight and the grey key legend were invented.
+// Both rows in the SAME white ink over black; the original marks the active row
+// with the cursor sprite ALONE, and the old per-row highlight was invented. The
+// wins line takes TWO specifiers (pseudo.c 8124-8127) — the old single-%u splice
+// left a literal "%s" on screen with the real MESSAGES.TXT.
 void MapSelectLoop::draw_rows() {
     const std::string level_line = fmt_s(ctx_.assets.getstring(210, "%s"), displayed_level_name());
     ctx_.front_font.draw_outlined(ctx_.sdl, level_line, layout_.lx, layout_.ly, 240, 248, 252, 0, 0,
                                   0, layout_.lw);
-    // Wins line: getstring(211) "%u %s to win match" with the %s picked by the
-    // "win by kills" option — getstring(208) "Wins" / getstring(209) "Kills"
-    // (pseudo.c 8124-8127; the old single-%u splice left a literal "%s" on screen
-    // with the real MESSAGES.TXT).
     const std::string wins_word = ctx_.assets.getstring(
         state_.options.win_by_kills ? 209 : 208, state_.options.win_by_kills ? "Kills" : "Wins");
     const std::string wins_line =
@@ -524,20 +496,10 @@ void MapSelectLoop::draw_cursor() {
 
 }  // namespace
 
-// The LEVEL & ROUNDS screen (sub_406DDE @0x406DDE, the VALUELST "OPTIONS SCREEN"
-// getvalue 730/735). Screen 2 of the pre-match flow. A 2-row list on a random
-// GLUE<n> backdrop (1020 track inherited): row 0 = LEVEL (-1 RANDOM else 0..10 of
-// getvalue(35)=11 built-ins, named getstring(150+n) / getstring(149)); row 1 =
-// NUMBER OF WINS (1..100). Left/Right cycle the highlighted row's value (level
-// wraps [-1 .. 10]; wins +-1 or +-5 on PgUp/PgDn), Up/Down switch rows. Enter
-// commits the level (state_.selected_level -> dword_464998) and win target
-// (state_.win_target -> dword_464A7C) and starts; Escape backs to the player
-// screen. Presentation only — the committed level drives start_match's stage
-// choice.
-//
-// ONLINE LEVEL & ROUNDS (docs/re/network-screens.md §7, net_setup_link.hpp): the
-// same screen wired to the host-authoritative setup session. `net_mode` false is
-// the ordinary local path and every branch below it is inert.
+// The LEVEL & ROUNDS screen (sub_406DDE @0x406DDE, VALUELST getvalue 730/735) —
+// screen 2 of the pre-match flow, presentation only. Rows, keys and the online
+// half are in docs/frontend-setup-screens.md. A default NetSetupLink is ordinary
+// local play and every net branch is inert.
 AppInput MapSelectScreen::run() {
     return MapSelectLoop(ctx_, state_, net_, chat_).run();
 }

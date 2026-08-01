@@ -1,59 +1,58 @@
 #pragma once
 
+#include <optional>
 #include <string>
 
-#include "bomber/frontend/options_screen.hpp"  // OptionsScreen (SchemePickerRunner param)
+#include "bomber/frontend/keyremap_screen.hpp"  // KeyRemapScreen (the pump's param)
+#include "bomber/frontend/options_screen.hpp"   // OptionsScreen
 #include "bomber/frontend/options_state.hpp"
 #include "bomber/game_util/app_flow.hpp"
 #include "bomber/ui/screen_context.hpp"
 
-// The Options-cluster screens, extracted VERBATIM from GameApp (ADR-0009 §4):
-// the interactive Options screen and its two modal sub-screens (the key-remap
-// grid and the *.SCH file picker). Each owns its own nested SDL event loop and
-// returns exactly what the GameApp method it replaced returned. Two seams,
-// both stored BY VALUE: ScreenContext (the shared front-end services) and
-// OptionsEditState (the Options-specific mutable state GameApp still owns).
-//
-// Named ...Runner so they do NOT collide with the OptionsScreen / KeyRemapScreen
-// / SchemeFilePicker *components* (options_screen.hpp / keyremap_screen.hpp /
-// editor_screen.hpp) each runner drives — the runner is the outer event loop,
-// the component is the widget it pumps.
+// The Options-cluster screens: the interactive Options screen and its two modal
+// sub-screens. Named ...Runner so they do NOT collide with the OptionsScreen /
+// KeyRemapScreen / SchemeFilePicker *components* each one drives — the runner is
+// the outer event loop, the component is the widget it pumps.
 
 namespace bomber::game {
 
-// The interactive Options screen (was GameApp::present_options_screen): random
-// GLUE<n> backdrop, Up/Down select a row, Left/Right change a value, Enter/Esc
-// leave; F1 opens the generic *.BM help browser, and the "Define keyboard
-// layouts" / "Scheme File" rows push the two sub-runners below modally. Returns
-// Advance (Enter/Esc route the leaf back to the menu) or Quit on window close.
+// Random GLUE<n> backdrop; Esc leaves, F1 opens the generic *.BM help browser,
+// and three rows push a sub-screen modally.
 class OptionsScreenRunner {
 public:
     OptionsScreenRunner(ScreenContext ctx, OptionsEditState state) : ctx_(ctx), state_(state) {}
     AppInput run();
 
 private:
+    std::optional<AppInput> pump_events(OptionsScreen& opt, const std::string& glue);
+    void open_sub_screens(OptionsScreen& opt, const std::string& glue);
+    void commit(const OptionsScreen& opt);
+
     ScreenContext ctx_;
     OptionsEditState state_;
+    // How the screen was dismissed, latched during the pump: Esc routes the leaf
+    // Back, anything else Advance. Both persist an already-made change.
+    AppInput result_ = AppInput::Advance;
 };
 
-// The key-remap sub-screen (was GameApp::present_keyremap_screen, sub_407B9D):
-// the mouse-driven 2x6 button grid, re-blitting the Options screen's own GLUE
-// backdrop each frame. Applies its edits to the live KeyboardMapper and marks
-// options_dirty_ on exit.
+// The key-remap sub-screen (sub_407B9D), re-blitting the Options screen's own
+// GLUE backdrop each frame. Applies its edits to the live KeyboardMapper on exit.
 class KeyRemapScreenRunner {
 public:
     KeyRemapScreenRunner(ScreenContext ctx, OptionsEditState state) : ctx_(ctx), state_(state) {}
     void run(const std::string& backdrop);
 
 private:
+    bool pump_events(KeyRemapScreen& remap);
+    void handle_mouse(KeyRemapScreen& remap, const SDL_Event& ev);
+
     ScreenContext ctx_;
     OptionsEditState state_;
 };
 
-// The Options row-8 *.SCH file picker (was GameApp::present_scheme_picker,
-// sub_407582): run modally over the Options screen's GLUE backdrop; a selection
-// writes the picked stem into `opt` and reloads the live scheme_. Takes the
-// OptionsScreen& the same way the original did.
+// The Options row-8 *.SCH file picker (sub_407582), run modally over the Options
+// screen's GLUE backdrop; a selection writes the picked name into `opt` and
+// reloads the live scheme.
 class SchemePickerRunner {
 public:
     SchemePickerRunner(ScreenContext ctx, OptionsEditState state) : ctx_(ctx), state_(state) {}
