@@ -1,0 +1,18 @@
+# Main-menu composite pin (tests/visual/README.md). One row: `<label> <sha256>`.
+#
+# This frame exists for one reason: it is the ONLY capture path that renders
+# through FontTextures::draw_outlined -- the sub_41696C corner outliner -- via
+# run_menu_capture's "V1.0" stamp (libs/game/src/capture_runs.cpp). The in-match
+# shots cannot reach it (libs/render never includes libs/ui) and the .BM rows
+# draw through the no-outline blit, so before this pin the outliner had no
+# regression coverage at all -- which is how two contradicting ports of
+# sub_41696C coexisted for weeks under a green harness.
+#
+# KNOWN, DELIBERATE divergence pinned here as-is: the original blits its scratch
+# top-left at (x, y) so the ink lands at (x+1, y+1); the port centres on (x, y),
+# so every outlined string sits one pixel up-left of the original. Fixing that
+# moves this hash (and only this hash) -- recapture in the same commit, citing
+# the facts.md sub_41696C entry.
+#
+# label   sha256
+menu      eca0fb871d216681b55d971de1cdf34ddbfde0d75f3152e287956ee6872eb2a5

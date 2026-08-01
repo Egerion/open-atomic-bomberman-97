@@ -140,18 +140,22 @@ endif()
 #
 # Row format: `<label> <BM_NAME> <scroll_lines> <sha256>`.
 set(bm_file "${BOMBER_SHOTS_DIR}/bm_shots.txt")
+# A missing manifest is a broken checkout, not a smaller test. This used to be a
+# silent `return()`, which is the "green having verified nothing" shape this repo
+# has now been bitten by six times -- an independent read of this script found
+# three such paths (this one, an all-comment manifest leaving the count at zero,
+# and a mid-loop skip that discarded mismatches already found). All three are
+# closed below the same way: nothing exits this file successfully without either
+# comparing every pinned frame or printing the SKIP marker ctest looks for.
 if(NOT EXISTS "${bm_file}")
-  if(BOMBER_RECAPTURE)
-    message(STATUS "Recapture complete -- paste the RECAPTURE lines above into "
-                   "${shots_file}, after confirming the rendered BMPs under "
-                   "${BOMBER_WORK_DIR} look right.")
-  endif()
-  return()
+  message(FATAL_ERROR "missing ${bm_file}")
 endif()
 
 file(STRINGS "${bm_file}" bm_lines)
 set(bm_mismatches "")
 set(bm_count 0)
+set(bm_rows 0)
+set(bm_skipped FALSE)
 foreach(line IN LISTS bm_lines)
   string(STRIP "${line}" line)
   if(line STREQUAL "" OR line MATCHES "^#")
@@ -166,6 +170,7 @@ foreach(line IN LISTS bm_lines)
   list(GET fields 1 bm_name)
   list(GET fields 2 scroll)
   list(GET fields 3 expect_hash)
+  math(EXPR bm_rows "${bm_rows} + 1")
   set(bmp "${BOMBER_WORK_DIR}/${label}.bmp")
   execute_process(
     COMMAND "${BOMBER_GAME_EXE}" --bm-shot "${bm_name}" "${bmp}" "${scroll}"
@@ -175,8 +180,11 @@ foreach(line IN LISTS bm_lines)
   )
   if(NOT rc EQUAL 0)
     if(rc EQUAL 2)
+      # No install: stop capturing, but do NOT jump the verdict -- mismatches
+      # already collected this run must still fail below.
       message(STATUS "VISUAL_GOLDEN_SKIP: no install for --bm-shot ${bm_name}")
-      return()
+      set(bm_skipped TRUE)
+      break()
     endif()
     message(FATAL_ERROR "bomber_game --bm-shot ${bm_name} exited ${rc}: ${bm_stderr}")
   endif()
@@ -194,12 +202,9 @@ foreach(line IN LISTS bm_lines)
   endif()
 endforeach()
 
-if(BOMBER_RECAPTURE)
-  message(STATUS "Recapture complete -- paste the RECAPTURE lines into "
-                 "${shots_file} and the RECAPTURE-BM lines into ${bm_file}, "
-                 "after confirming the rendered BMPs under ${BOMBER_WORK_DIR} "
-                 "look right.")
-  return()
+if(bm_rows EQUAL 0)
+  message(FATAL_ERROR "${bm_file}: no .BM rows defined -- an all-comment "
+                      "manifest would otherwise pass having compared nothing")
 endif()
 if(bm_mismatches)
   string(REPLACE ";" "\n  " bm_str "${bm_mismatches}")
@@ -207,4 +212,91 @@ if(bm_mismatches)
     "Visual golden mismatch on a front-end .BM screen -- recapture and update "
     "${bm_file} in the same commit if the change is deliberate.\n  ${bm_str}")
 endif()
-message(STATUS "Visual golden: all ${bm_count} pinned .BM frames match")
+if(NOT BOMBER_RECAPTURE AND NOT bm_skipped)
+  message(STATUS "Visual golden: all ${bm_count} pinned .BM frames match")
+endif()
+
+# ---------------------------------------------------------------------------
+# MENU pin: menu_shot.txt, one `--menu-shot` capture per row.
+#
+# This is the ONLY capture path that renders through FontTextures::draw_outlined
+# (the sub_41696C outliner) -- the in-match frames cannot reach it even in
+# principle (libs/render never includes libs/ui), and the .BM rows draw their
+# text through the no-outline blit. Until this section existed, --menu-shot had
+# no manifest at all, which is how two contradicting ports of sub_41696C
+# coexisted for weeks under a green harness. Same hermetic terms as the rows
+# above: --menu-shot is a capture_run().
+#
+# Row format: `<label> <sha256>`.
+set(menu_file "${BOMBER_SHOTS_DIR}/menu_shot.txt")
+if(NOT EXISTS "${menu_file}")
+  message(FATAL_ERROR "missing ${menu_file}")
+endif()
+
+file(STRINGS "${menu_file}" menu_lines)
+set(menu_mismatches "")
+set(menu_count 0)
+set(menu_rows 0)
+set(menu_skipped FALSE)
+foreach(line IN LISTS menu_lines)
+  string(STRIP "${line}" line)
+  if(line STREQUAL "" OR line MATCHES "^#")
+    continue()
+  endif()
+  separate_arguments(fields UNIX_COMMAND "${line}")
+  list(LENGTH fields nfields)
+  if(NOT nfields EQUAL 2)
+    message(FATAL_ERROR "${menu_file}: malformed row (want 'label sha256'): ${line}")
+  endif()
+  list(GET fields 0 label)
+  list(GET fields 1 expect_hash)
+  math(EXPR menu_rows "${menu_rows} + 1")
+  set(bmp "${BOMBER_WORK_DIR}/${label}.bmp")
+  execute_process(
+    COMMAND "${BOMBER_GAME_EXE}" --menu-shot "${bmp}"
+    RESULT_VARIABLE rc
+    OUTPUT_VARIABLE menu_stdout
+    ERROR_VARIABLE menu_stderr
+  )
+  if(NOT rc EQUAL 0)
+    if(rc EQUAL 2)
+      message(STATUS "VISUAL_GOLDEN_SKIP: no install for --menu-shot")
+      set(menu_skipped TRUE)
+      break()
+    endif()
+    message(FATAL_ERROR "bomber_game --menu-shot exited ${rc}: ${menu_stderr}")
+  endif()
+  if(NOT EXISTS "${bmp}")
+    list(APPEND menu_mismatches "${label}: MISSING -- expected ${bmp}")
+    continue()
+  endif()
+  file(SHA256 "${bmp}" actual_hash)
+  math(EXPR menu_count "${menu_count} + 1")
+  if(BOMBER_RECAPTURE)
+    message(STATUS "RECAPTURE-MENU ${label} ${actual_hash}")
+  elseif(NOT actual_hash STREQUAL expect_hash)
+    list(APPEND menu_mismatches "${label}: expected ${expect_hash}, got ${actual_hash}")
+  endif()
+endforeach()
+
+if(menu_rows EQUAL 0)
+  message(FATAL_ERROR "${menu_file}: no rows defined")
+endif()
+if(menu_mismatches)
+  string(REPLACE ";" "\n  " menu_str "${menu_mismatches}")
+  message(FATAL_ERROR
+    "Visual golden mismatch on the menu frame -- this is the one pin through "
+    "the sub_41696C outliner; recapture and update ${menu_file} in the same "
+    "commit if the change is deliberate.\n  ${menu_str}")
+endif()
+
+if(BOMBER_RECAPTURE)
+  message(STATUS "Recapture complete -- paste the RECAPTURE lines into "
+                 "${shots_file}, the RECAPTURE-BM lines into ${bm_file}, and "
+                 "the RECAPTURE-MENU lines into ${menu_file}, after confirming "
+                 "the rendered BMPs under ${BOMBER_WORK_DIR} look right.")
+  return()
+endif()
+if(NOT menu_skipped)
+  message(STATUS "Visual golden: menu frame matches (${menu_count} pin)")
+endif()

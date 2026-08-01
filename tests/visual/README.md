@@ -147,12 +147,22 @@ Recapture uses the same command as above — `BOMBER_RECAPTURE=1` prints
 `RECAPTURE-BM <label> <name> <scroll> <hash>` rows alongside the match ones, and
 both manifests are refreshed in one pass.
 
-## What these ten frames do NOT cover: outlined text
+## Outlined text: the eleventh pin, and what it does and does not cover
 
-Established 2026-08-01, and worth stating because the gap is invisible from the
-manifests: **no pinned frame renders a single outlined glyph.** `sub_41696C` —
-ink over a four-pass 1-px outline — draws very nearly every string in the front
-end, and nothing here would notice if it broke.
+**Closed 2026-08-01, the same day it was established**: `menu_shot.txt` now pins
+one `--menu-shot` frame, and it exists solely because it is the only capture
+path through `FontTextures::draw_outlined` — the `sub_41696C` corner outliner.
+The harness fails loudly if the manifest is missing or empty, and the pin was
+proven to discriminate (a corrupted hash turns the run red naming the menu
+frame). Still uncovered: `draw_dialog_text`'s real call sites — the
+acknowledge/confirm/list dialogs — since "V1.0" is one short string; a
+dialog-bearing frame remains worth adding. The paragraphs below record why the
+gap existed and are kept as the argument for that follow-up.
+
+Established 2026-08-01, and worth stating because the gap was invisible from the
+manifests: before this pin, **no pinned frame rendered a single outlined
+glyph.** `sub_41696C` — ink over a four-pass 1-px outline — draws very nearly
+every string in the front end, and nothing here would have noticed if it broke.
 
 - `shots.txt`'s five in-match frames draw only through `Renderer::draw_frame`.
   `libs/render` sits *below* `libs/ui` in the dependency graph
