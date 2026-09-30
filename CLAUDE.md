@@ -416,3 +416,8 @@ do. For a block that deliberately mirrors the binary's structure, wrap it in
 - Keep responses in Turkish with Ege; repo docs and comments in English.
 - After changing CMake targets, remind Ege to re-run the CMake configure in
   Rider (and drop the CMake cache if targets moved).
+- `origin` is SSH (`git@github.com:Egerion/open-atomic-bomberman-97.git`),
+  authenticated with a passphrase-less deploy key generated for this purpose
+  (2026-09-30). Ege has authorized pushing to `main` without asking first —
+  commit and push once the working tree is in a good state, no per-push
+  confirmation needed.
