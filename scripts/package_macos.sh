@@ -44,7 +44,7 @@ cmake --build "$BUILD" --target bomber_game -j
 BIN="$BUILD/OPEN-BM95"
 [ -x "$BIN" ] || { echo "error: build did not produce $BIN" >&2; exit 1; }
 
-echo ">> Assembling $APP…"
+echo ">> Assembling ${APP}…"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
@@ -83,12 +83,28 @@ PLIST
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 # Bundle your own game data, if provided.
+#
+# Only the original game's runtime assets go in — never the RE working
+# material (IDA databases, decompiler output, the EXE itself, logs) that may
+# be sitting next to it in a dev copy of the install dir. CLAUDE.md's rule
+# ("NEVER commit exe-derived material... those stay in the BOMBRMAN folder")
+# applies just as much to a shipped .app as to a git commit.
 if [ -n "$GAME_DATA" ]; then
   if [ ! -d "$GAME_DATA/DATA" ] && [ ! -d "$GAME_DATA/data" ]; then
     echo "warning: '$GAME_DATA' has no DATA/ subfolder — is it your BOMBRMAN dir?" >&2
   fi
-  echo ">> Copying game data from $GAME_DATA into the app…"
-  cp -R "$GAME_DATA"/. "$APP/Contents/Resources/"
+  echo ">> Copying game data from ${GAME_DATA} into the app…"
+  rsync -a \
+    --exclude='*.idb' \
+    --exclude='*.EXE' --exclude='*.exe' \
+    --exclude='pseudo.c' \
+    --exclude='decompile_all.py' --exclude='decompile.bat' --exclude='decompile_done.txt' \
+    --exclude='idalog.txt' --exclude='*.log' \
+    --exclude='WINEREG/' \
+    --exclude='bomber_hd_toolkit/' --exclude='bomber_hd_toolkit.zip' \
+    --exclude='TOOLS/' \
+    --exclude='.DS_Store' \
+    "$GAME_DATA"/ "$APP/Contents/Resources/"
 fi
 
 echo ""
