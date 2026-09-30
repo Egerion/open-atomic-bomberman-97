@@ -16,6 +16,9 @@ nodename.ini
 # Claude Code's local scratch: agent worktrees are full checkouts and this tree
 # has reached multiple GB. Never committable.
 .claude/
+# Per-developer agent instructions (credentials setup, push authorization).
+# Anything here would be read as a project rule by every clone's agent.
+CLAUDE.local.md
 
 # Never commit original Atomic Bomberman assets (Interplay/Konami property).
 # The engine reads them from your own game install (see README). Both cases:
